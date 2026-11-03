@@ -365,6 +365,52 @@ _EMBEDDED_ACTIONS = (
 )
 
 
+_REAL_WHICH = shutil.which
+
+
+@pytest.fixture(autouse=True)
+def _no_real_claude_login(monkeypatch):
+    """Hide the developer's real ``claude`` CLI and login from credential choice.
+
+    CI has no ``claude``, so by default no test sees one and no login. A test
+    that stubs ``shutil.which`` sees its stub; one that needs a login uses the
+    ``claude_login`` fixture.
+    """
+    from gaia.eval import claude_credential
+
+    monkeypatch.setattr(
+        claude_credential,
+        "_claude_bin",
+        lambda: None if shutil.which is _REAL_WHICH else shutil.which("claude"),
+    )
+    monkeypatch.setattr(
+        claude_credential,
+        "_auth_status",
+        lambda _bin, _env: {"loggedIn": False, "authMethod": "none"},
+    )
+    monkeypatch.setattr(claude_credential, "_login_cache", {})
+    monkeypatch.setattr(claude_credential, "_announced", set())
+
+
+@pytest.fixture
+def claude_login(monkeypatch):
+    """A ``claude`` CLI on PATH, logged in to a subscription."""
+    from gaia.eval import claude_credential
+
+    def which(name, *args, **kwargs):
+        if name == "claude":
+            return "/usr/bin/claude"
+        return _REAL_WHICH(name, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "which", which)
+    monkeypatch.setattr(
+        claude_credential,
+        "_auth_status",
+        lambda _bin, _env: {"loggedIn": True, "authMethod": "claude.ai"},
+    )
+    return "/usr/bin/claude"
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _guard_real_gaia_home():
     """Fail a test that would act on the developer's real ``~/.gaia`` Lemonade.

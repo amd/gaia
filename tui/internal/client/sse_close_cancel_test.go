@@ -14,22 +14,27 @@ import (
 func TestSSEClientCloseDeliversTheAbandonedRunsCancel(t *testing.T) {
 	f := newFakeRelay(t)
 	f.cancelDelay = 300 * time.Millisecond
+	started := make(chan struct{})
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
 		frame(w, `{"type":"status","message":"thinking"}`)
 		flush()
+		close(started)
 		<-release
 	}
 
 	c := f.client(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
+	// The deadline fires by hand once the run is live: a timer would also
+	// bound Send, which a slow runner can outlast.
+	ctx, deadline := context.WithCancel(context.Background())
+	defer deadline()
 	ch, err := c.Send(ctx, "triage")
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	<-ctx.Done()
+	<-started
+	deadline()
 	// The one-shot stops reading at its deadline; it does not drain.
 	_ = ch
 
@@ -168,8 +173,10 @@ func TestSSEClientCloseReportsAnUndeliverableCancel(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 	<-started
-	f.srv.CloseClientConnections()
+	// Listener first: dropping the stream starts the cancel, which must not
+	// find the daemon still accepting.
 	f.srv.Listener.Close()
+	f.srv.CloseClientConnections()
 	err := c.Close()
 	if err == nil || !strings.Contains(err.Error(), "could not tell the 'email' agent to stop run") {
 		t.Fatalf("Close error = %v, want an undeliverable-cancel report", err)

@@ -7,7 +7,7 @@ Tests the pure functions in gaia.agents.tools.rag_tools that were
 modified in the Agent UI PR to improve nil-RAG handling and page extraction.
 """
 
-from gaia.agents.tools.rag_tools import extract_page_from_chunk
+from gaia.agents.tools.rag_tools import extract_page_from_chunk, split_entries_at_pages
 
 
 class TestExtractPageFromChunk:
@@ -168,3 +168,41 @@ class TestExtractPageFromChunk:
         """With multiple markers in one chunk, returns the first match."""
         result = extract_page_from_chunk("[Page 3] text [Page 7] more text")
         assert result == 3
+
+
+class TestSplitEntriesAtPages:
+    """Every entry's 'page' field holds for all its text, which is what gets cited."""
+
+    @staticmethod
+    def _entry(content, page=22):
+        return {"chunk_id": 1, "content": content, "page": page}
+
+    def test_a_chunk_crossing_a_page_splits_at_the_marker(self):
+        entries = split_entries_at_pages(
+            [self._entry("Tail of 22. [Page 23]\nWater main breaks: 137.")]
+        )
+        assert [(e["page"], e["content"]) for e in entries] == [
+            (22, "Tail of 22."),
+            (23, "[Page 23]\nWater main breaks: 137."),
+        ]
+
+    def test_entries_are_renumbered_for_display(self):
+        entries = split_entries_at_pages(
+            [self._entry("a [Page 23]\nb [Page 24]\nc"), self._entry("d", page=30)]
+        )
+        assert [e["chunk_id"] for e in entries] == [1, 2, 3, 4]
+        assert [e["page"] for e in entries] == [22, 23, 24, 30]
+
+    def test_a_chunk_starting_at_its_marker_stays_whole(self):
+        entries = split_entries_at_pages([self._entry("[Page 22]\nbody", page=22)])
+        assert [(e["page"], e["content"]) for e in entries] == [(22, "[Page 22]\nbody")]
+
+    def test_an_in_page_label_does_not_split(self):
+        text = "Slide body [Page 3] **Speaker Notes:**\nnotes"
+        assert split_entries_at_pages([self._entry(text, page=3)]) == [
+            {"chunk_id": 1, "content": text, "page": 3}
+        ]
+
+    def test_a_chunk_with_no_page_is_left_alone(self):
+        entry = {"chunk_id": 1, "content": "a note quoting [Page 9] of a book"}
+        assert split_entries_at_pages([entry]) == [entry]

@@ -2057,6 +2057,8 @@ port it started on (`gaia lemonade embedded status` shows it).
 **Available Agents:**
 chat, bash, talk, rag, vlm, minimal, mcp, sd
 
+`gaia download --agent talk` also fetches the Kokoro voice model (`kokoro-v1`), which the GAIA agent's `text_to_speech` tool needs and never downloads itself.
+
 **Examples:**
 
 List all models:
@@ -2500,7 +2502,7 @@ gaia eval sessions [--control PATH] [--limit N] [--project DIR] [--out DIR] [--d
 | `--out` | `eval/results/sessions-<timestamp>` | Output directory |
 | `--dataset-only` | false | Build the dataset and stop; no agent run, no judge |
 
-Judging needs `ANTHROPIC_API_KEY`.
+Judging uses your Claude Code login first, then `ANTHROPIC_API_KEY`.
 
 ### Code Benchmark
 
