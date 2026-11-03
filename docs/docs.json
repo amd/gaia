@@ -413,6 +413,7 @@
             "group": "Agent UI",
             "pages": [
               "plans/gaia-ui-redesign",
+              "plans/voice",
               "plans/security-model",
               "plans/email-triage-skill",
               "plans/messaging-integrations-plan",

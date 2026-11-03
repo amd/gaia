@@ -1,0 +1,470 @@
+---
+title: Dictation and voice mode
+description: Talk to GAIA in the Agent UI and the TUI, with dictation into the composer and a fast hands-free voice mode that speaks short answers and shows the full work on screen
+---
+
+**Status: Design approved; implementation starting. Target: v0.26.0 ("Fast, focused flagship").**
+Baseline: `aaa056b7` on `main`, November 2, 2026, with Lemonade 2026.44.1. Builds on read-aloud
+(`feat/read-aloud`, not merged yet).
+
+GAIA can already speak a reply (read-aloud) and `gaia talk` can hold a spoken conversation in a
+terminal, but neither app can listen. This plan adds two ways to talk to GAIA in both the Agent
+UI and the TUI:
+
+1. **Dictation.** A microphone button in the composer. You talk, and when you stop, the text lands
+   in the box for you to edit before sending.
+2. **Voice mode.** A screen of its own for a hands-free conversation. GAIA listens, answers in one
+   or two spoken sentences, and keeps the detailed text of what it did on screen: tool steps,
+   results and files. Captions of both sides are optional.
+
+**The experience must feel instant.** Voice is where running locally can beat the cloud: no
+network round trip, small models made for streaming, and every model already loaded. GAIA should
+start speaking about 1.5 s after you stop talking on a turn that needs no tools, and you should
+hear that it heard you within 100 ms. Every choice below is made against that bar.
+
+**Everything is 100% local.** Speech recognition, speech output and the reply model all run on
+the user's machine through Lemonade. There is no browser Web Speech API, no cloud speech service
+and no remote Lemonade. If any part can't run locally, voice refuses to start and says why (see
+[Privacy](#privacy)).
+
+Related: #702 (voice-first parity), #372 (streaming transcription through Lemonade's realtime
+WebSocket), #2985 (untested voice-stack paths), #3494 (the mic hearing GAIA's own voice).
+
+## Decisions made in review
+
+| Question | Decision |
+|----------|----------|
+| Dictation flow | Record; when the user stops, the transcript is inserted into the composer, never sent. |
+| Where voice mode lives | Its own screen in each app, not a toggle inside the chat view. |
+| Who runs the loop | **A server-side voice session.** One Python implementation listens, runs the turn, and streams speech straight from the answer tokens. The apps keep one socket open and render. |
+| Turn-taking | Hands-free by default: GAIA notices when you stop talking and answers. Talking over GAIA stops it. Push-to-talk is a setting. |
+| Speech recognition | **Moonshine Streaming for English, Whisper for other languages**, chosen from the voice language. |
+| Reply model | **The chat model already loaded**, with a spoken-summary prompt contract, reasoning turned down for voice turns, and the prompt prefilled when voice mode opens. No model swap. |
+| Short spoken answer + detail | The final answer opens with a short spoken summary in a marked block. One model call. If the block is missing, GAIA speaks a fixed line and marks the turn. |
+| Feedback while working | A soft earcon the moment GAIA hears you stop. Then **the model's own short status line** before each tool call is spoken ("Let me check what's in your Downloads folder"), so updates vary and describe the real work instead of repeating a script. |
+| Local only | Voice runs only against a Lemonade on this machine with a local chat model. Never the browser's speech APIs or any cloud service. |
+| Arabic | Whisper listens in Arabic. Spoken replies stay off, with a notice, and captions are forced on until an Arabic voice exists. |
+| TUI microphone and speaker | The GAIA daemon records and plays audio. The TUI shows state and text. |
+| PRs | Dictation ships before voice mode, in separate PRs, on a shared voice-session core. |
+
+### Options considered and why they lost
+
+- **Each app runs the loop.** The app would chain the listen socket, the chat SSE and one
+  `POST /api/speech` per sentence. It reuses read-aloud as it is, but costs extra hops. Every
+  sentence would come back as a whole WAV, and in the TUI as a temp file played by a freshly
+  started PowerShell, hundreds of ms per sentence on Windows. Turn-taking would also be written
+  twice, once in TypeScript and once in Go.
+- **Whisper-Base for everything.** Whisper isn't a streaming model, so Lemonade re-decodes
+  windows and the final transcript lands later. Moonshine Streaming (0.2–0.4 GB) is built for
+  live captions. Whisper stays for the languages Moonshine doesn't cover.
+- **NPU Whisper (`whisper-v3-turbo-FLM`) by default.** Running ASR on the NPU would leave the GPU
+  to the LLM, and it would make a strong showcase. Its latency is unmeasured, so it becomes the
+  default on NPU PCs only if it wins the PR 1 benchmark.
+- **A small dedicated voice model** (Qwen3-1.7B, Gemma-4-E2B) that chats instantly and hands
+  tasks to the flagship. Lemonade holds one LLM at a time (`max_models.llm = 1`), so each handoff
+  would evict and reload. That is slower, not faster. Revisit if FLM models on the NPU turn out to
+  sit in a separate slot.
+- **Audio straight into Gemma** (`gemma4-it-e2b-FLM` accepts audio). It skips ASR but gives no
+  live captions, and E2B's tool use is unproven. Not for v0.26.
+- **Silence while tools run.** It feels broken.
+- **Scripted per-tool cues** ("Searching the web" every time). They're cheap, but they get tiring
+  fast and say nothing about what this particular step is for. The model already writes a line
+  before a tool call; speaking it costs ~10–15 output tokens per step.
+- **Browser speech APIs** (`SpeechRecognition`, `speechSynthesis`). Chrome's recognizer sends
+  audio to a cloud service, and system voices can be online. Both break the local-only rule.
+
+## What the current code establishes
+
+- **Lemonade has everything needed.** As of 2026.44.1, Lemonade provides:
+  - a realtime transcription WebSocket (`websocket_port` in `/api/v1/health`, protocol in #372)
+    with server-side voice-activity detection
+  - one resident model per type (`max_models`: `llm`, `transcription` and `tts` are separate), so
+    the chat model, a recognizer and Kokoro can all stay loaded together
+  - `pinned_models` to keep them there
+  - catalog entries `Moonshine-{Tiny,Small,Medium}-Streaming`, `Whisper-{Tiny,Base,Small,…}` and
+    `whisper-v3-turbo-FLM`, all labelled `realtime-transcription`
+- **GAIA's speech recognition is file-at-a-time.** `LemonadeASRClient` uploads one WAV per
+  utterance to `POST /audio/transcriptions` (`src/gaia/audio/lemonade_asr.py`). `WhisperAsr`
+  hard-codes `"en"`.
+- **`gaia talk` detects speech by loudness** (`audio_recorder.py`), cuts after ~1.3 s of quiet,
+  and mutes the mic while speaking. Only Enter interrupts.
+- **Speech output** is `POST /audio/speech` with `kokoro-v1`, 24 kHz 16-bit PCM
+  (`lemonade_tts.py`). Read-aloud adds:
+  - `POST /api/speech` (whole WAV, ≤1000 characters)
+  - `GET/PUT /api/speech/settings`
+  - the `read_aloud_voice` / `read_aloud_speed` / `read_aloud_auto` config keys
+  - a TUI player that shells out to the OS per file (`tui/internal/speech/`)
+- **Neither the chat request nor the flagship has a per-request style option.** `ChatRequest`
+  (`src/gaia/ui/models.py`) and the flagship's strict `QueryRequest` (`gaia_agent/server.py`)
+  need a new field.
+- **The agent stream already separates the work from the answer:** `step`, `tool_*`,
+  `thinking`, `chunk`, `answer` and `done` (`_chat_helpers.py`, `sse_handler.py`, and the TUI's
+  `tui/internal/event/canonical.go`). That separation lets voice mode speak the summary and show
+  the steps.
+- **No microphone code exists in either app.** There is no `getUserMedia` in the webui, no
+  Electron media-permission handler, and no TUI capture.
+
+## Architecture
+
+```
+ Agent UI (browser / Electron)                      TUI
+  mic: getUserMedia → AudioWorklet (16 kHz PCM16)    renders state, captions, work log
+  speaker: AudioWorklet ring buffer (24 kHz PCM16)        │ control + events only
+        │  WS /api/voice/session                          │ WS /v1/voice/session
+        ▼  audio up, events + audio down                  ▼
+  Agent UI server ──────────┐              ┌──── GAIA daemon (sounddevice mic + speaker)
+                            ▼              ▼
+                gaia.voice.VoiceSession  (one implementation)
+       ┌───────────────────┬──────────────┴─────┬─────────────────────────┐
+  RealtimeListener    turn runner (injected)   SpeechStreamer           Earcon
+  Lemonade realtime   UI: chat pipeline that   status lines + spoken    bundled tone on
+  WS, Moonshine /     saves to the session DB  summary → Kokoro, PCM    end of speech
+  Whisper, server VAD daemon: flagship query   out as tokens arrive
+```
+
+- **`gaia.voice` (new package, `src/gaia/voice/`)** owns the whole loop. It runs the turn state
+  machine, endpointing, barge-in, warm-up and timing. It reports errors as typed exceptions with
+  stable codes. Parts:
+  - **`RealtimeListener`** holds one Lemonade realtime connection. It takes PCM16 frames from any
+    source and emits `partial`, `final`, `speech_started` and `speech_stopped`. It picks Moonshine
+    or Whisper from the voice language.
+  - **Turn runner** (injected) runs one agent turn and yields the canonical agent events. The
+    Agent UI server passes its existing chat pipeline, so voice turns are saved to the chat
+    session like typed ones. The daemon passes the flagship query relay. `VoiceSession` never
+    talks to an agent directly.
+  - **`SpeechStreamer`** reads `spoken_chunk` events as tokens arrive. It cuts the first piece at
+    the first clause break or 8 words, and later pieces at sentence ends. Each piece goes to
+    Kokoro while the model is still writing, and the PCM goes out as soon as it is synthesized.
+    Pending pieces are cancelled on barge-in.
+  - **Status lines:** `SpeechStreamer` also speaks `commentary` events, the text the model
+    writes just before a tool call, which `sse_handler.py` already separates from the answer.
+    Each line is trimmed to its first sentence. A line still queued when the next step starts is
+    dropped, so speech never falls behind the work. The earcon is a short bundled tone.
+- **The Agent UI server hosts it for the browser.** The browser streams mic frames up and plays
+  PCM frames through an AudioWorklet ring buffer. Barge-in flushes that buffer locally, with no
+  server round trip, then tells the server.
+- **The daemon hosts it for the TUI.** The daemon records and plays through `sounddevice` (the
+  `talk` extra), so there are no temp files or per-sentence player processes. The TUI receives
+  events only. This keeps cgo and per-OS recorders out of the Go build. The cost is that the
+  daemon bundle must carry PortAudio; PR 5 verifies that on all three OSes.
+- **Why the server relays and the browser doesn't call Lemonade directly:** Lemonade's port, its
+  API key (embeddable Lemonade sets `LEMONADE_API_KEY`) and model-slot leases belong to GAIA.
+  Speech has to be generated from the agent's token stream on the server anyway.
+- **Read-aloud's speaker button keeps `POST /api/speech`.** Only voice mode uses the streaming
+  path.
+
+### Making it fast
+
+| Lever | What it does |
+|-------|--------------|
+| **Warm-up on intent** | When the voice screen opens, or the user focuses the mic button, the recognizer and Kokoro load and are pinned (`pinned_models`) for as long as voice is in use, and the flagship's system prompt is prefilled with a 1-token request so the first turn hits a warm KV cache. A cold first turn is the biggest snappiness killer. |
+| **Streaming recognizer** | Moonshine Streaming finishes the transcript right after VAD fires. Partials drive live captions. |
+| **Short endpointing** | 500 ms of silence ends a turn by default (setting: 300–1200 ms). Server VAD, not loudness. |
+| **Instant acknowledgement** | The earcon plays on `speech_stopped`, before the transcript is final. |
+| **Status lines overlap the work** | A status line is spoken while its tool runs, so it adds no wait. |
+| **Reasoning down for voice turns** | Qwen3.6 runs with thinking off and gpt-oss with `set_reasoning_effort` low, so the spoken block isn't waiting on thinking. Text turns are unchanged. |
+| **Speak the first clause** | TTS starts on the first clause of the spoken block while the rest is still generating. |
+| **Streamed PCM** | 24 kHz PCM frames over the open socket, with no WAV container, HTTP request or file per sentence. |
+| **Local barge-in** | Playback stops in the client the instant speech is detected or a key is pressed. |
+
+### Latency budget
+
+Targets on a warm session, measured by PR 4's benchmark on the Strix Halo pool and a mid-range
+Ryzen AI laptop. These are budgets until that harness records real numbers.
+
+| Stage | Budget |
+|-------|--------|
+| End of speech → VAD fires | 500 ms (the silence window) |
+| VAD fires → earcon audible | ≤ 100 ms |
+| VAD fires → final transcript (Moonshine) | ≤ 150 ms |
+| Turn sent → first answer token, no tools, warm prefix (Gemma-4-E4B) | ≤ 600 ms |
+| First clause → first audio (Kokoro) | ≤ 250 ms |
+| **End of speech → GAIA starts talking, no tools** | **≤ 1.5 s** |
+
+Every turn emits a `timing` event with these stage marks. The Agent UI shows them in a developer
+overlay, and both hosts log them. A regression shows up as a number, not a feeling.
+
+### Session protocol
+
+One WebSocket per voice session: `WS /api/voice/session` (Agent UI server) and
+`WS /v1/voice/session` (daemon).
+
+- **Client → server:**
+  - JSON `start {purpose: "dictation"|"voice", session_id}`
+  - JSON `stop`, `interrupt`, `ptt_down`, `ptt_up`
+  - binary PCM16 16 kHz mic frames, about 100 ms each. Agent UI only; the daemon captures
+    itself.
+- **Server → client:**
+  - JSON events:
+    - `state` (`warming` · `listening` · `thinking` · `speaking` · `paused`)
+    - `partial`, `final`
+    - the turn's canonical agent events (steps, tools, files)
+    - `spoken_text`, `answer`, `timing`
+    - `error {code}`
+  - binary PCM16 24 kHz speech frames. Agent UI only; the daemon plays them itself.
+- **Status endpoints:** `GET /api/voice/status` and `GET /v1/voice/status` report readiness:
+  Lemonade reachable, models downloaded, mic present (daemon). The daemon also has
+  `GET /v1/voice/devices`.
+
+`error` codes are stable so each app shows a translated message and its own recovery action. Raw
+exception text is never the user-facing string. The codes are `lemonade_unreachable`,
+`model_missing`, `mic_denied`, `mic_missing`, `mic_busy`, `remote_lemonade`, `cloud_model`,
+`tts_failed` and `session_lost`.
+
+## Dictation
+
+Dictation is a voice session with `purpose: "dictation"`: listening only, with no turn runner
+and no speech.
+
+### Agent UI
+
+- **Mic button** in the composer's `leftControls` slot (`Composer.tsx`), after attach.
+  - Click to start. A level meter and timer replace the placeholder while recording.
+  - Click again, press Esc, or press Enter to stop. Enter stops and does **not** send.
+- **Live partials** show in a strip above the composer. On stop, the final transcript is
+  inserted at the cursor, with a leading space where needed, and focus returns to the box.
+- **Pauses don't end dictation.** VAD segments are joined. A 5-minute cap stops the recording with
+  a notice.
+- **Capture:** `getUserMedia({audio: {echoCancellation: true, noiseSuppression: true}})`, then an
+  AudioWorklet that resamples to 16 kHz mono PCM16.
+- **Electron:** `session.setPermissionRequestHandler` and `setPermissionCheckHandler` in
+  `main.cjs` grant `media` (audio only) to the app's own origin and deny everything else. macOS
+  needs `NSMicrophoneUsageDescription` and the `com.apple.security.device.audio-input`
+  entitlement in `electron-builder.yml`.
+
+### TUI
+
+- **`Ctrl+R`** (free in the chat view) toggles dictation. `/dictate` does the same, and both are
+  listed in the palette (`palette.go`) and the help overlay.
+- While recording, the composer border shows `● Listening — Ctrl+R or Esc to stop` and the
+  partial transcript in dim text. On stop, the final text is inserted at the cursor.
+- The daemon's microphone is the daemon machine's. Over SSH the status line says
+  `Listening on <host>`.
+
+## Voice mode
+
+### The turn loop
+
+```
+Listening ─(speech_stopped: earcon)─▶ final transcript ─▶ Thinking (steps on screen, status lines spoken)
+    ▲                                                          │ answer opens with <spoken>
+    │                                                          ▼
+    └──────── playback ends ◀── Speaking (first clause starts TTS)
+             barge-in: speech or a key while Speaking → playback stops at once → Listening
+```
+
+- **Each voice turn is an ordinary message in the current chat session.** The same agent, tools,
+  permissions and memory apply. Leaving voice mode returns to the chat with the voice turns in
+  the history. Text and voice stay at parity (#702).
+- **Status lines come from the model.** Before each tool call the model writes one short
+  sentence about what it is doing and why ("Let me look for last week's invoices in Downloads").
+  The voice prompt asks it to vary the wording and never repeat the previous line. If the model
+  writes none for a step, GAIA stays quiet; it doesn't fill in a scripted line. A line is
+  skipped when its step finished before speech could start.
+- **Permission prompts and questions** pause the loop. GAIA speaks the question ("I need your OK
+  to run a shell command. It's on screen."), and the card takes the answer. Approving gated tools
+  by voice is out of scope.
+- **Stop:** Esc, the on-screen Stop button, or 2 minutes of silence. That pauses listening; it
+  doesn't leave the screen.
+
+### Turn-taking and barge-in
+
+- **Hands-free (default):** server VAD ends the user's turn after the silence window.
+- **Push-to-talk (setting):** hold Space or the on-screen button.
+- **Barge-in, Agent UI:** browser echo cancellation removes GAIA's own voice, so the mic stays
+  open while GAIA speaks. Speech flushes the playback buffer locally and cancels pending
+  synthesis. If the agent is still working, it keeps going; Stop cancels the task.
+- **Barge-in, TUI:** the daemon's capture has no echo cancellation, so leaving the mic open would
+  bring back #3494. The daemon pauses capture while speaking, and **any key** stops playback and
+  resumes listening. Spoken barge-in in the TUI waits for AEC or a headphones setting.
+
+### Agent UI screen
+
+- **Entry:** a waveform button in the composer's `rightControls`, next to send. It opens the voice
+  screen for the current session and starts warm-up. Esc closes it.
+- **Layout:**
+  - Top: a large state indicator (Warming · Listening · Thinking · Speaking · Paused) with a
+    level-reactive ring.
+  - Middle: captions, when on: your words live, then GAIA's spoken summary word by word as it
+    plays.
+  - Below: **"What GAIA did"**, the turn's work log, rendered with the existing step, tool and
+    file components. This is the detailed text, and it scrolls.
+  - Bottom: Stop / Pause, captions toggle, push-to-talk button when that mode is on, settings
+    gear.
+- With captions off, the indicator and "What GAIA did" stay. The detail never hides; only the
+  live captions do.
+
+### TUI screen
+
+- **Entry:** `/talk`. `/voice` is read-aloud's voice picker, and `/talk` matches `gaia talk`.
+- A full-screen view on the same chat session:
+  - Header: a state line.
+  - Middle: caption area (toggle `c`).
+  - Below: the expanded work log (`worklog.go`).
+- Keys: Esc leaves, Space is push-to-talk when that mode is on, `p` pauses, and any key
+  interrupts speech.
+
+## The spoken-reply contract
+
+- **Request:** `ChatRequest.reply_style: "text" | "voice"` (default `"text"`), forwarded to the
+  flagship's `QueryRequest.reply_style`. That class is `_Strict`, so the field is added
+  explicitly. The daemon's turn runner sets it on `POST /v1/gaia/query`.
+- **Prompt:** when `reply_style == "voice"`, `GaiaAgent` appends one **volatile** fragment after
+  the tools block, and turns reasoning down for the turn. The cached static prompt for text turns
+  is unchanged:
+
+  > This turn is spoken aloud. Before each tool call, write one short sentence (under 12 words)
+  > saying what you are about to do, in plain words; vary it and don't claim a result you don't
+  > have yet. Begin your final answer with `<spoken>` … `</spoken>`: one or two plain sentences,
+  > at most 40 words, that tell the user the outcome. No markdown, file paths, URLs, code or
+  > lists in anything spoken. If something failed or you are unsure, say so. Then write the
+  > detailed answer as usual.
+
+- **Opening, not closing.** The final answer comes after every tool call, so the model already
+  knows the outcome. Putting the summary first lets speech start on its first clause while the
+  detail still streams.
+- **Parsing:** `sse_handler.py` (UI) and the flagship event relay (daemon) detect
+  `<spoken>…</spoken>` at the start of the answer stream. They emit `spoken_chunk` / `spoken` and
+  strip the block from `chunk` / `answer`, so the transcript shows only the detail. `<spoken>`
+  inside thinking is ignored.
+- **When the block is missing or malformed:** GAIA speaks one fixed, translated line ("Done. The
+  details are on screen.") and marks the turn. The slip is logged as
+  `voice_reply.missing_spoken` for evals and telemetry. Speaking the detail's first sentence
+  instead was rejected because it would hide format regressions behind plausible audio.
+- **Cost:** about 150 prompt tokens, 40–60 output tokens for the summary, and 10–15 per tool step
+  for status lines. Turning reasoning down
+  on Qwen3.6 saves more than that. PR 3 measures both models.
+- **Compact tier:** voice mode needs no withheld tool, so it works on Gemma-4-E4B's `compact`
+  tier.
+
+## Settings
+
+A **Settings › Voice** section replaces read-aloud's **Read aloud** section, which hasn't merged
+yet. Coordinate with that branch so the keys and section id land once.
+
+| Group | Setting | Config key | Default |
+|-------|---------|-----------|---------|
+| Speaking | Voice (by accent and gender) | `read_aloud_voice` | `af_bella` |
+| | Speed 50–200% | `read_aloud_speed` | 100 |
+| | Read replies aloud automatically | `read_aloud_auto` | off |
+| Listening | Microphone | Agent UI: browser `deviceId` in local storage; daemon: `voice_input_device` | system default |
+| | Language | `voice_language`: an ISO code or `auto` | follows UI language |
+| | Speech recognition | `voice_asr_model`: `auto` or a listed model | `auto` (see below) |
+| Voice mode | Turn-taking | `voice_turn_taking`: `hands_free` · `push_to_talk` | `hands_free` |
+| | Pause before GAIA answers | `voice_silence_ms` 300–1200 | 500 |
+| | Speak status updates while working | `voice_status_updates` | on |
+| | Captions | `voice_captions` | on |
+
+- **`voice_asr_model: auto`** picks `Moonshine-Tiny-Streaming` for English. Small replaces Tiny
+  if PR 1's word-error check shows Tiny misses too much. It picks `Whisper-Base` for other
+  languages and for `auto` language, because Moonshine doesn't detect languages. It picks
+  `whisper-v3-turbo-FLM` on NPU PCs only if PR 1's benchmark shows it is faster. Choosing a model
+  explicitly overrides `auto`.
+- Every key is validated like the read-aloud keys (`check_*` in `gaia/config.py`). A bad value in
+  `config.json` is an error naming the key, not a silent reset.
+- A model that isn't downloaded is offered for download from the setting itself, with its size.
+
+### Arabic and other non-English languages
+
+- Whisper transcribes Arabic, so **dictation works fully in Arabic.**
+- Kokoro speaks only English. When the voice language isn't English, voice mode:
+  - turns spoken replies and status lines off; the earcon stays (status lines still show as captions)
+  - forces captions on and shows the spoken summary as a highlighted caption
+  - shows one notice: "Spoken replies are English-only for now. GAIA will answer on screen."
+- The prompt contract still applies, so the user gets the short answer and the detail, in Arabic
+  text.
+
+## Failure states and recovery
+
+The apps recover by themselves wherever they can. Users are never told to run a command.
+
+| Failure | Agent UI | TUI |
+|---------|----------|-----|
+| No microphone | Buttons stay visible. Clicking shows "No microphone found". A newly plugged mic is picked up via `devicechange` without a reload | Same message in the status line. The daemon re-lists devices on the next start |
+| Permission denied | Inline card naming where to allow it (browser site settings, macOS or Windows privacy), with a button that opens that pane in Electron, and Retry | Daemon reports `mic_denied` with the OS pane to open |
+| Mic busy | "Your microphone is in use by another app." Retry | Same |
+| Lemonade down | The daemon starts it (`LemonadeManager.ensure_ready`) while the screen shows "Warming up…". If GAIA can't own the process, the message comes from `describe_start_hint()` | Same, through the daemon |
+| Speech model not downloaded | First use shows "Voice needs the speech models (≈ size)" with a Download button. Progress is shown inline, and the session resumes when done. Nothing downloads without that click | The same prompt as a one-key fix (preflight `FixKind`) |
+| Socket drops mid-turn | "Lost the connection to speech." Reconnects on the user's next action, not in a hidden loop | Same |
+| Spoken summary missing | Fixed line and marker | Same |
+| TTS fails | Turn completes in text with "Couldn't speak this reply" and a speaker button to retry | Same |
+
+### Privacy
+
+- Audio is streamed to Lemonade and never written to disk. There is no recording history.
+- The mic indicator is always visible while capture is live. Pausing or leaving the screen closes
+  the stream and unpins the speech models.
+- **Local only, enforced.** If `LEMONADE_BASE_URL` points off this machine, voice refuses to
+  start (`remote_lemonade`) and explains that voice only runs on a local Lemonade. Dictation and
+  voice mode never use the browser's `SpeechRecognition` / `speechSynthesis`; a test fails the
+  build if the webui references them.
+- **Voice mode needs a local chat model.** If the selected model is a cloud provider, the voice
+  screen offers to switch to the local default (`resolve_default_chat_model()`) for the session.
+  It doesn't silently reroute. Dictation only touches speech recognition, and the user decides
+  whether to send the text, so it works with any chat model.
+
+## Test and eval strategy
+
+- **`gaia.voice` unit tests** run against fake Lemonade realtime and speech servers:
+  - partials, finals, VAD events, socket drop, a missing model, auth headers
+  - turn state machine, barge-in cancelling pending synthesis, clause chunking, dropping stale
+    status lines, refusing a remote Lemonade
+  - assert the shape of outgoing frames (base64 PCM16 at 16 kHz, `input_audio_buffer.append`, the
+    model param), not just that a call was made
+- **Integration:** a `require_lemonade` test streams a committed WAV through the real realtime
+  endpoint from a **cold** state, with the model not downloaded, so the download path is
+  exercised (the #1655 lesson).
+- **Latency benchmark** (`util/voice_latency.py`): it replays recorded utterances through a real
+  session and writes the stage table above. PR 1 runs it to pick the default recognizer. PR 4
+  runs it for the release notes, on the Strix Halo pool and a laptop. Budgets are reported, not
+  gated, until there is a baseline.
+- **Agent UI:** component tests for the mic button, voice screen states and every failure card.
+  The `reviewing-agent-ui` pass covers English and Arabic, empty, warming, listening, speaking,
+  failed, long transcript and modal-open states. The mic button joins "composer chips stay whole
+  at phone width" in `visual/rtl.visual.ts`. Electron permissions are checked in the packaged
+  app.
+- **TUI:** Go tests for the voice screen model and the dictation insert. A `driving-the-tui`
+  session with a stubbed daemon socket for screenshots.
+- **Evals (LLM-affecting, PR 3):**
+  - A new category, **`gaia_voice_mode`**, run with `reply_style: voice`. Scenarios check:
+    - the block is present and ≤ 40 words, with no markdown, paths or URLs
+    - each tool call has a short status line; consecutive lines differ; none claims a result
+      before the tool returned
+    - the summary agrees with the detail
+    - a failed tool is admitted in the summary (honesty)
+    - a multi-tool task keeps its full detail
+    - reasoning-down doesn't break tool choice
+  - Re-run `gaia_voice`, `gaia_honesty` and `gaia_tool_selection` with the field unset; they
+    should match baseline. Name these categories in the PR for the next v0.26 RC.
+
+## Delivery sequence (v0.26.0)
+
+| PR | Scope | Depends on |
+|----|-------|-----------|
+| 1 | **Voice session core**: `gaia.voice` (listener, state machine, speech streamer and status lines, earcon, warm-up and pinning, timing), `WS /api/voice/session` and `/api/voice/status`, config keys, latency benchmark and recognizer choice, unit and integration tests, this plan | — |
+| 2 | **Agent UI dictation**: mic button, capture worklet, Electron permissions and macOS entitlement, Settings › Voice Listening group, failure cards, en/ar strings, RTL checks, docs | 1, read-aloud merged |
+| 3 | **Spoken-reply contract**: `reply_style` on both request models, flagship fragment and reasoning-down, `<spoken>` parsing, `gaia_voice_mode` scenarios with harness support | — (parallel to 1–2) |
+| 4 | **Agent UI voice screen**: playback worklet, barge-in, earcon and status lines, captions, timing overlay, Arabic notice, benchmark numbers for the release notes | 1, 3 |
+| 5 | **Daemon host and TUI dictation**: sounddevice mic and speaker in the daemon, `WS /v1/voice/session`, `/v1/voice/devices`, PortAudio on all three OSes, `Ctrl+R` / `/dictate`, optional preflight row | 1 |
+| 6 | **TUI voice screen** (`/talk`) | 3, 5 |
+
+Each PR updates the docs it touches:
+- `docs/guides/voice.mdx` (new), linked from `docs/guides/agent-ui.mdx` and `docs/guides/talk.mdx`
+- `docs/reference/cli.mdx` for the TUI commands
+- `docs/sdk/sdks/agent-ui.mdx` for the endpoints
+
+## Out of scope and open questions
+
+- **Out of scope for v0.26:**
+  - wake word
+  - approving gated tools by voice
+  - spoken barge-in in the TUI
+  - keeping recordings
+  - non-English speech output
+  - audio-native LLM input
+  - voice on mobile browsers (#896)
+- **Open:**
+  - Should `gaia talk` (CLI) move onto `gaia.voice`, or retire in favor of the TUI's `/talk`,
+    after PR 6?
+  - PR #6204 (open, outside contributor) exposes Kokoro as a flagship `text_to_speech` tool. Both
+    touch `lemonade_tts.py`; land one before the other.
