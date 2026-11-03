@@ -259,6 +259,17 @@ def _forbid_daemon_spawn(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _empty_hub_skill_catalog(monkeypatch):
+    """Capture consults the hub catalog; unit tests see an empty one.
+
+    Tests of that check patch ``published_skill_names`` back in themselves.
+    """
+    from gaia.skills import capture
+
+    monkeypatch.setattr(capture, "published_skill_names", lambda: frozenset())
+
+
+@pytest.fixture(autouse=True)
 def _no_automatic_lemonade_lease(monkeypatch):
     """Keep every LemonadeClient a test builds from leasing Lemonade.
 
