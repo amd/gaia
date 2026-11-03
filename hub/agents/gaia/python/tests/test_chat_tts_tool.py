@@ -67,3 +67,31 @@ def test_tts_tool_uses_configured_model_and_reports_real_chunks(tts_tool):
     assert result["chunks"] == 2
     assert result["model"] == "kokoro-v1"
     assert result["output_path"] == str(target)
+
+
+def test_tts_tool_speaks_in_the_voice_and_speed_chosen_for_reading_aloud(
+    tts_tool, tmp_path, monkeypatch
+):
+    from gaia import config as config_mod
+    from gaia.config import GaiaConfig
+
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
+    tool, allowed = tts_tool
+    GaiaConfig.save_keys({"read_aloud_voice": "bm_george", "read_aloud_speed": 125})
+
+    with patch("gaia.audio.lemonade_tts.LemonadeTTSClient") as client:
+        instance = client.return_value
+
+        def synthesize(_text, destination, **_kwargs):
+            Path(destination).write_bytes(b"wav")
+            return 1.0, 1
+
+        instance.synthesize_to_wav_long.side_effect = synthesize
+        result = tool("Hello.", str(allowed / "speech.wav"))
+        named = tool("Hello.", str(allowed / "named.wav"), voice="af_sky", speed=0.75)
+
+    assert result["voice"] == "bm_george"
+    first, second = instance.synthesize_to_wav_long.call_args_list
+    assert (first.kwargs["voice"], first.kwargs["speed"]) == ("bm_george", 1.25)
+    assert named["voice"] == "af_sky"
+    assert (second.kwargs["voice"], second.kwargs["speed"]) == ("af_sky", 0.75)
