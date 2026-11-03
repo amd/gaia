@@ -1185,7 +1185,9 @@ async function revertUpdate() {
 
 /** True for the first few launches after an update landed, the only time a failed start blames it. */
 function _updateIsRecent() {
-  if (_readJsonFile(INSTALL_ATTEMPT_PATH).from) return true;
+  // An attempt from the running version is a failed install, not an update.
+  const { from } = _readJsonFile(INSTALL_ATTEMPT_PATH);
+  if (from && from !== _runningVersion()) return true;
   const launches = _readJsonFile(UPDATE_CONFIG_PATH)[LAUNCHES_SINCE_UPDATE_KEY];
   return Number.isInteger(launches) && launches <= START_FAILURE_REVERT_LAUNCHES;
 }
