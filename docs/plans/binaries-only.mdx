@@ -1,0 +1,277 @@
+---
+title: Binaries-Only Apps
+description: Audit of every place the Agent UI and the TUI install a PyPI package or run the GAIA agent in-process, and the plan to ship both apps, and the app core itself, as binaries
+---
+
+# Binaries-Only Apps
+
+<Note>
+**Status:** Plan, audited against `main` at `adcd189f2` (2026-11-02).
+**Decision being planned:** the Agent UI and the TUI never install a PyPI package on a
+user's PC. Everything they run is a shipped binary: the GAIA agent from
+`hub.amd-gaia.ai`, and the app's own Python core, frozen.
+**Related:** [Desktop Installer Plan](/plans/desktop-installer),
+[Flagship Installer Plan](/plans/flagship-installer),
+[Daemon Convergence](/plans/daemon-convergence), [#2014](https://github.com/amd/gaia/issues/2014),
+[#5840](https://github.com/amd/gaia/issues/5840).
+</Note>
+
+## §0 Summary
+
+Every desktop install still builds a Python environment from PyPI, and several features
+still try to import the GAIA agent's Python package, which a normal install never has.
+
+- **Installs.** The Agent UI downloads Python 3.12 and `amd-gaia[ui]` into `~/.gaia/venv`
+  on first run and again on every update, then `gaia init` pip-installs the same extras a
+  second time. The TUI's installers ship no `gaia` CLI at all, so its setup, daemon start,
+  model links and Slack setup tell the user to run the install script, which also installs
+  from PyPI.
+- **In-process agent.** Chat already relays to the hub binary. `gaia -p`, background goals,
+  skill preferences and the "agent not installed" message still look for the `gaia_agent`
+  package and fail, or show a `pip install git+…` command, on every packaged install.
+- **Why tests missed it.** A developer's `~/.gaia/venv` is an editable install of a
+  checkout, so `gaia_agent` imports fine there. On the machine this audit ran on,
+  `~/.gaia/venv` resolves `gaia_agent` from a worktree. Every check below must run on a
+  machine with no checkout and no `~/.gaia/venv`.
+
+The fix is a frozen `gaia` core shipped inside the Agent UI and TUI installers, every agent
+turn relayed to the hub binary, and no pip remedy anywhere a user can see it. §5 orders it
+into 11 reviewable PRs.
+
+---
+
+## §1 PyPI installs the apps trigger
+
+"User hits it" means a packaged install (Windows setup, `.dmg`, `.deb`/`.rpm`, `.pkg`,
+AppImage, npm) reaches it with no developer action.
+
+| # | Where | What it installs | Surface | User hits it? |
+|---|---|---|---|---|
+| A1 | `src/gaia/apps/webui/services/backend-installer.cjs:1707`, `:1743`, `:1791` | `uv venv ~/.gaia/venv --python 3.12` (uv downloads CPython), then `uv pip install amd-gaia[ui]==<app version>` from PyPI | Agent UI first run and the first launch after every update (`main.cjs:941`) | **Yes, every desktop install** |
+| A2 | `backend-installer.cjs:2023` (`prefetchBackend`), offline install at `:1811` | A scratch venv and `uv pip install --refresh` to warm uv's cache while an update downloads | Agent UI auto-update (`auto-updater.cjs:1329`, `main.cjs:859`) | **Yes, every update** |
+| A3 | `backend-installer.cjs:1306` (`ensureUv`), `:1462`, `:1394` | Copies the bundled uv (`electron-builder.yml:64`). Packaged Windows with no bundled uv runs astral.sh's PowerShell installer; dev runs its shell installer | Agent UI | **Yes** (Windows rescue path) |
+| A4 | `src/gaia/apps/webui/bin/gaia-ui.cjs:342` | Same `ensureBackend` as A1 | npm `@amd-gaia/agent-ui` | **Yes**, npm users |
+| A5 | `src/gaia/installer/init_command.py:149`, `:232` (`pip_extras: ["ui"]`), `_install_pip_extras` at `:1333`, frontend chosen by `src/gaia/agents/install_hints.py:149` | `python -m pip install` or `uv pip install --python <venv>` of every `[ui]` requirement | `gaia init --profile gaia` / `npu`, run by the Agent UI install (`backend-installer.cjs:1586`), the Agent UI setup screen (`src/gaia/ui/setup_runner.py:162`) and the TUI's `/setup` (`tui/internal/gaiainit/gaiainit.go`) | **Yes.** Redundant after A1, and in a frozen build it fails outright with `FROZEN_NO_INSTALL` |
+| A6 | `installer/scripts/install.ps1:107`, `:134`, `:147`; `install.sh:209`, `:231`, `:243` | `uv venv` and `uv pip install amd-gaia[api]` | The install the TUI tells users to run when `gaia` is missing (§3, C10) | **Yes**, TUI users who follow the hint |
+| A7 | `src/gaia/audio/diarize.py:216` | `python -m pip install sherpa-onnx` at runtime | Speaker identification in an in-process agent | Not on packaged installs: the frozen agent bundles it (`hub/agents/gaia/python/packaging/freeze.py:106`). Reachable again if any in-process path (§2) survives |
+| A8 | `src/gaia/hub/installer.py:589`, `:1371` | `uv pip install --target ~/.gaia/agents/<id>` for a wheel-only hub manifest | Agent UI agent install route (`routers/hub.py`, `flagshipInstall.ts`), `gaia init` | Latent. The flagship and email publish binaries; any wheel-only manifest would trigger it |
+
+`gaia uninstall`'s `pip uninstall lemonade-sdk` (`src/gaia/installer/uninstall_command.py:1534`)
+removes rather than installs. It leaves with the venv in step 8.
+
+---
+
+## §2 Code that runs the GAIA agent in-process
+
+The hub install is `~/.gaia/agents/gaia/gaia-agent.exe`, run by the daemon as a sidecar.
+These paths import `gaia_agent` (the `gaia-agent-gaia` package) instead.
+
+| # | Where | What happens on a packaged install | Surface | User hits it? |
+|---|---|---|---|---|
+| B1 | `src/gaia/print_mode.py:283` | `gaia -p` imports `GaiaAgent`, fails with "install it from source" | `gaia -p` from a terminal or script | **Yes**, anyone using `gaia -p` on a packaged install. The setup Test step that first hit this lives on an unmerged branch and is being moved to the binary there |
+| B2 | `src/gaia/cli.py:502` (`gaia chat`), `:992` (`_launch_interactive_cli`) | Same import failure | `gaia chat` without `--ui` | Yes, if a user runs it from the venv. Not reached by either app |
+| B3 | `src/gaia/ui/agent_loop.py:504`, `:528` | A sidecar install raises `SIDECAR_TICKS_UNSUPPORTED` (`:67`); only a wheel install runs ticks | Agent UI background goals | **Yes, the feature is dead on desktop** ([#5840](https://github.com/amd/gaia/issues/5840)) |
+| B4 | `src/gaia/ui/server.py:336` | In-process branch of `_run_scheduled_prompt`; the relay at `:332` runs first | Agent UI schedules | No, unless the package is importable |
+| B5 | `src/gaia/ui/_chat_helpers.py:195` (`_should_relay_to_sidecar`), in-process `registry.create_agent` at `:3822` and `:4339` | Relays when the registration is a sidecar | Agent UI chat | No. Source checkouts and `gaia eval agent` use the in-process branch on purpose |
+| B6 | `src/gaia/ui/_chat_helpers.py:1395` (`_agent_unavailable_message`) | `find_spec("gaia_agent")` is always `None` on desktop, so a missing flagship shows a `pip install git+…` command | Agent UI chat on a legacy `chat`/`doc`/`file` session | **Yes**, whenever the flagship is missing |
+| B7 | `src/gaia/ui/routers/skills.py:92` (`_preference_schema`) | HTTP 503 "agent package is not installed beside the UI". Listing (`:32`) already falls back to the sidecar (`:41`) | Agent UI skill preferences | **Yes, skill preferences can't be read or saved** |
+| B8 | `src/gaia/api/agent_registry.py:39`, `:170` | Model `gaia` imports the package; error names a source install | `gaia api` | Not from the apps |
+| B9 | `src/gaia/hub/installer.py:1428`, `:1856` | `.pth` priming so `import gaia_agent` works after a wheel install | `gaia init` | Latent (wheel kind only) |
+| B10 | `src/gaia/eval/flagship_tasks.py:1009`, `eval/retrieval/harness.py:108`, `eval/tool_cost.py:54`, `eval/benchmark.py:972`, `eval/*_quality.py` | In-process agent by design | `gaia eval` | Developers only (§4.5) |
+| B11 | `src/gaia/cli.py:6719` | `gaia email --spec` imports `gaia_agent_email` | CLI | Developers only |
+
+---
+
+## §3 User-facing text that says to pip-install something
+
+Each breaks the rule that users are never handed a command. The fix is an in-app action
+(Repair, Update, `/setup`) or an install the app runs itself.
+
+| # | Where | Text | Surface |
+|---|---|---|---|
+| C1 | `backend-installer.cjs:1898`, `:1422`, `:1447`, `:1518`, `:1770` | "Try installing manually: uv pip install …", "Install uv manually: …" | Agent UI install error dialog |
+| C2 | `src/gaia/agents/install_hints.py:331`, `:358`, `:393`; used by B1–B3, B6, B8 and `ui/server.py:382` | `pip install "gaia-agent-gaia @ git+…"` | Agent UI chat, goals, schedules; CLI |
+| C3 | `install_hints.py:136` (`FROZEN_NO_INSTALL`) | "Use a source install of GAIA to add packages" | Frozen agent's missing-dependency errors |
+| C4 | `src/gaia/daemon/client.py:125` (`UPGRADE_CORE_GUIDANCE`), `:352` | `pip install --upgrade amd-gaia`, `pip install "amd-gaia[api]"` | Agent UI and TUI on daemon version skew |
+| C5 | `src/gaia/hub/catalog.py:508` (`CORE_UPGRADE_COMMAND`), used at `hub/installer.py:1262`, `:1278` | `pip install --upgrade amd-gaia` | Agent UI flagship install when the core is too old |
+| C6 | `src/gaia/daemon/sidecars/manager.py:143`, `src/gaia/engineering/store.py:64` | `pip install pywin32` | Agent UI, rare |
+| C7 | `src/gaia/connectors/_keyring.py:81` | `pip install keyring` | Agent UI connectors, rare |
+| C8 | `src/gaia/ui/routers/memory.py:820` | `pip install faiss-cpu` | Agent UI memory, rare |
+| C9 | `src/gaia/cli.py:948`, `:9523` | Agent UI or daemon extras missing | CLI |
+| C10 | `tui/internal/daemon/client.go:358`; `tui/internal/daemon/errors.go:39`, `:122`; `tui/internal/ui/preflight/ladder.go:142`, `:153` (offered as a runnable command); `tui/internal/gaiainit/gaiainit.go:84`; `tui/internal/gaiaslack/gaiaslack.go:47` | `pip install amd-gaia`, `pip install -e .`, `pip install --upgrade amd-gaia` | TUI |
+| C11 | `src/gaia/audio/audio_client.py:212`, `audio/kokoro_tts.py:176`, `audio/audio_recorder.py:32`, `browser/errors.py:24`, `browser/session.py:99`, `agents/tools/document_text.py:85`, `chat/sdk.py:1190`, `agents/base/console.py:53` | `pip install` of an optional extra | Through the frozen agent whenever that dependency isn't bundled (Playwright isn't) |
+
+Developer tools (`gaia eval`, `gaia agent init/pack`, `src/gaia/cli_agent.py`) keep their
+pip text; they are not app surfaces.
+
+---
+
+## §4 Freezing the app
+
+### §4.1 What has to be frozen
+
+Both apps depend on the Python core today, not just on the agent:
+
+- **Agent UI backend.** Electron spawns `gaia chat --ui` from the venv (`main.cjs:372`,
+  located by `findGaiaBin`, `backend-installer.cjs:568`). That FastAPI server does RAG
+  indexing in-process (`faiss`, `pypdf`, `pypdfium2`, office formats), so those stay in
+  the core.
+- **The `gaia` CLI the backend shells out to.** `gaia init` (setup and its `--check`), the
+  daemon, `gaia diagnostics`, and the Agent UI MCP server. These launch as
+  `sys.executable -m …`, which a frozen build can't do (D1–D3 below).
+- **The TUI.** Its installers ship `gaia-tui` and `gaia-agent` only. Setup, daemon start,
+  model links and Slack all call `exec.LookPath("gaia")` (D7) and fail on a TUI-only
+  install.
+
+Code that assumes an interpreter:
+
+| # | Where | Assumption |
+|---|---|---|
+| D1 | `src/gaia/ui/setup_runner.py:137` | `[sys.executable, "-m", "gaia.cli", …]` |
+| D2 | `src/gaia/daemon/client.py:659`; launcher identity check in `daemon/instance.py:164` | `[sys.executable, "-m", "gaia.daemon"]` |
+| D3 | `src/gaia/ui/routers/mcp.py:270` | `-m gaia.mcp.servers.agent_ui_mcp` |
+| D4 | `src/gaia/daemon/sidecars/manager.py:421` | `-m uvicorn` (sidecar dev mode only) |
+| D5 | `init_command.py:1333` | pip extras step (A5) |
+| D6 | `main.cjs:372`, `backend-installer.cjs:568` | `gaia` lives in `~/.gaia/venv`, else PATH |
+| D7 | `tui/internal/daemon/client.go:365`, `gaiainit/gaiainit.go:78`, `gaiamodel/gaiamodel.go:32`, `gaiaslack/gaiaslack.go:41`, `ui/preflight/autostart.go:135` | `gaia` on PATH |
+
+### §4.2 Reuse, don't rebuild
+
+The flagship freeze already solves most of this, and the core freeze should copy it.
+
+- **`hub/agents/gaia/python/packaging/freeze.py`:** PyInstaller with the ML stack excluded
+  (~170 MB instead of ~2 GB), `faiss`/`keyring`/`uvicorn`/`pydantic` collected, the
+  tiktoken bundle, the Linux CA runtime hook, a preflight that fails the build when a
+  collect target is missing, GPL excludes, and the license and glibc checks beside it.
+- **`smoke_test.py`:** boots the frozen binary and checks it answers.
+- **`release_agent_gaia.yml` and `build_flagship_sidecar.yml`:** a per-platform freeze
+  matrix and an approval-gated publish.
+- **`hub.amd-gaia.ai` (`POST /publish`, immutable per filename) and
+  `src/gaia/daemon/sidecars/fetch.py`:** the SHA-256-verified fetch, with no unverified
+  fallback.
+
+### §4.3 Recommended shape
+
+- **One frozen `gaia` core, one-dir, shipped inside the app installers.** The entry is
+  `gaia.cli:main`, so `gaia chat --ui`, `gaia daemon`, `gaia init` and `gaia diagnostics`
+  are the same executable. One-dir because the CLI and daemon start often: one-file
+  unpacks the whole bundle to a temp folder on every launch, and antivirus scans it each
+  time.
+- **Ship it inside the installers, not from the hub.** The backend is already pinned 1:1 to
+  the app version (`amd-gaia[ui]==<app version>`). Bundling it makes an update one atomic
+  electron-updater step, works offline, and removes A1–A4, the uv bundle and its checksums.
+- **The agent stays a separate hub binary.** It updates on its own cadence, the daemon
+  already supervises it, and the TUI already spawns it.
+- **A frozen core never imports `gaia_agent`.** Exclude `gaia_agent`, `gaia.eval` and the
+  ML stack, and add a test that the frozen build can't import them. That turns B4 and B5
+  into dead code on shipped builds instead of a silent second path.
+- **One self-launch helper.** It returns `[sys.executable, <subcommand>…]` when frozen and
+  `[sys.executable, "-m", "gaia.cli", …]` from source. D1–D3 use it.
+
+### §4.4 Build, release, update, size
+
+- **Build.** A new `installer/core/freeze.py` modelled on the agent's, plus a matrix job
+  (win-x64, darwin-arm64, darwin-x64, linux-x64) that the Electron and TUI installer jobs
+  consume as an artifact. Smoke test: `gaia --version`,
+  `gaia init --check --profile gaia --json`, `gaia daemon start` then `status`, and
+  `gaia chat --ui` answering `/api/health`.
+- **Release.** Built on every RC and final, like the installers. It needs no hub publish
+  of its own.
+- **Update.** The Agent UI updates through electron-updater alone, with no prefetch, and
+  restarts the daemon when its host API changed. The TUI updates through its installers.
+  The agent updates through the hub install route the Agent UI already has
+  (`flagshipInstall.ts`). Today the TUI runs the `gaia-agent` it ships on PATH while the
+  daemon runs `~/.gaia/agents/gaia/gaia-agent.exe`. They should resolve to one copy, or
+  they drift apart on update.
+- **Size.**
+  - Measured here: `~/.gaia/venv` is 342 MB without GAIA's own source (editable install),
+    and the one-file agent is 173 MB.
+  - Expect a one-dir core of 250–350 MB on disk and roughly a third of that compressed in
+    the installer. Measure it in step 7 before committing to a number.
+  - The installer grows. First run no longer downloads Python, uv and the venv.
+  - The core and the agent each carry a Python runtime, `faiss` and the shared deps. One
+    binary that also serves the agent would save ~150 MB but tie agent updates to app
+    releases. Revisit once [#5982](https://github.com/amd/gaia/pull/5982) (C++ agent)
+    settles the agent's size.
+
+### §4.5 What breaks
+
+- **Editable dev installs keep working.** `uv pip install -e .`, `npm run dev`, and
+  `start-agent-ui` still run from source. An unpackaged Electron app (`!app.isPackaged`)
+  must keep using the PATH or venv `gaia`, and a `GAIA_CORE_BIN` override should point a
+  packaged app at a local build.
+- **`gaia eval agent` stays source-only.** It runs the agent in-process on purpose (B5,
+  B10). The frozen core leaves it out. The gap: eval scores the in-process agent while
+  users run the frozen binary, which differs in bundled dependencies. A later PR can add
+  an option to score the sidecar binary. Until then, the agent's own smoke and judged eval
+  in `release_agent_gaia.yml` are the only checks on the binary.
+- **Optional extras can't be added later:** talk, browser, mcp, slack, telegram, diarize.
+  Each one is either bundled and tested, or hidden in the frozen core. Per the
+  "only expose what's proven" rule, nothing is offered with a pip hint.
+- **Wheel-kind hub agents and custom Python agents** (`~/.gaia/agents/`, `gaia agent init`)
+  have no interpreter to install into. A frozen core must refuse a wheel artifact with a
+  plain message (A8, B9), never attempt `uv pip install --target`.
+- **`gaia api` model `gaia`** (B8) must relay to the sidecar or be removed from the frozen
+  core.
+- **Upgrading from a venv install.**
+  - A running `gaia chat --ui` or daemon from `~/.gaia/venv` must be stopped first. The
+    existing kill-before-install logic (`main.cjs:1268`) carries over.
+  - A daemon from the old venv speaks an older host API, so restart it.
+  - Delete `~/.gaia/venv` only after the frozen core starts.
+  - The `.deb` `postrm` message (`installer/debian/postrm:35`) names
+    `~/.gaia/venv/bin/gaia` and has to change.
+- **Signing and antivirus.** PyInstaller executables draw SmartScreen and antivirus false
+  positives. The core needs the same signing the agent still lacks
+  ([Flagship Installer Plan §9.2](/plans/flagship-installer)).
+
+---
+
+## §5 Recommended order
+
+Each step is one PR. Steps 1–6 need no freezing and fix real user failures now.
+Steps 7–10 depend on 7.
+
+| Step | Change | Fixes | Depends on |
+|---|---|---|---|
+| 1 | `gaia` and `npu` init profiles stop installing pip extras. The app installs them already, and a frozen core bundles them | A5, D5 | — |
+| 2 | `gaia -p` and `gaia chat` relay through the daemon to the sidecar, reusing the scheduled-prompt relay (`ui/server.py:390`) | B1, B2 | — |
+| 3 | Skill preference schema comes from the sidecar | B7 | sidecar route |
+| 4 | Background goals run on the sidecar | B3 ([#5840](https://github.com/amd/gaia/issues/5840)) | sidecar contract |
+| 5 | "Flagship missing" becomes a Set up action in the Agent UI and `/setup` in the TUI. `agent_not_installed_message` and `CORE_UPGRADE_COMMAND` leave app surfaces | B6, C2, C4, C5 | — |
+| 6 | Remaining app-surface pip strings, in Python and Go, become in-app actions or plain "not included in this build" text | C1, C3, C6–C8, C10, C11 | 5 |
+| 7 | Frozen core: `installer/core/freeze.py`, the self-launch helper, a frozen-build guard against `gaia_agent` and `gaia.eval`, wheel-artifact refusal, CI matrix and smoke test | D1–D4, A8, B9 | 1 |
+| 8 | Agent UI ships the frozen core: `extraResources`, spawn it, retire `backend-installer.cjs`'s venv/uv/prefetch code, the uv bundle and the `fetch-uv-binary` job, migrate `~/.gaia/venv` | A1–A4, D6 | 7 |
+| 9 | TUI installers ship the frozen core on PATH. The TUI looks beside itself before PATH. One agent location | D7, A6 for TUI users | 7 |
+| 10 | `install.ps1`/`install.sh` download the frozen core instead of running uv. pip stays a documented developer route | A6 | 7 |
+| 11 | Optional: `gaia eval agent --sidecar` scores the shipped binary | §4.5 eval gap | 7 |
+
+---
+
+## §6 Risks
+
+- **Every check needs a clean machine.** Each in-process path passes on a developer box,
+  because the editable venv makes `gaia_agent` importable. Steps 2–10 need a test-plan
+  item on a machine or VM with no checkout and no `~/.gaia/venv`. The headless installer
+  journeys (`installer/headless/`, `test_installers_headless.yml`) are the place to add it.
+- **Installer size and download time grow.** Measure in step 7. If the compressed core is
+  too large, split it into a hub-fetched component with the same checksum rules as
+  `fetch.py` rather than keep PyPI.
+- **Frozen builds can silently lose a capability.** PyInstaller turns a missing collect
+  target into a warning. The agent freeze already fails the build on a missing target; the
+  core freeze must too, plus a smoke test per surface (RAG indexing, connectors keyring,
+  scheduler, MCP server).
+- **Two Python runtimes on disk.** The core and the agent each carry one. Accepted for now
+  (§4.4).
+- **Migration from venv installs** can strand a running process or a stale daemon (§4.5).
+  Step 8 needs an upgrade test from the last venv-based release.
+- **Eval no longer measures what ships** while it stays in-process (§4.5). Name it in
+  release notes until step 11 lands.
+- **Unsigned binaries** will draw antivirus and SmartScreen warnings until signing lands.
+
+## §7 Open questions
+
+1. Should the frozen core bundle the talk/voice stack (`sounddevice`, Kokoro client), or
+   leave voice out of the frozen app until it has evals?
+2. Does `gaia api` stay in the frozen core at all, given neither app uses it?
+3. Does the npm `@amd-gaia/agent-ui` package keep shipping? If so, does it download the
+   frozen core from the release, or retire?

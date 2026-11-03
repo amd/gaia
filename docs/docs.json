@@ -442,6 +442,7 @@
               "plans/docker-containers",
               "plans/mcp-docs",
               "plans/desktop-installer",
+              "plans/binaries-only",
               "plans/tool-loader",
               "plans/nightly-benchmarks",
               "plans/eval-hillclimbing",
