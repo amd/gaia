@@ -773,7 +773,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="DELETE /api/sessions/{session_id}">
-    Delete a session and all its messages (cascading delete). If a chat turn is running on the session, it is stopped and the request returns once that turn has finished.
+    Delete a session and all its messages (cascading delete), and its conversation turns and tool history in memory. Facts learned from it are kept. If a chat turn is running on the session, it is stopped and the request returns once that turn has finished. If the memory rows can't be removed, it returns **500** and the session is left in place, so the delete can be retried.
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/messages">

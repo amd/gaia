@@ -65,6 +65,7 @@ const messages: Messages = {
     'row.deleteConfirm': 'حذف؟',
     'row.confirmDeleteAria': 'تأكيد حذف {title}',
     'row.clickAgain': 'انقر مرة أخرى للحذف',
+    'row.deleteMemoryNote': 'يزيلها هذا من الذاكرة أيضًا. يبقى ما تعلّمه GAIA عنك في «About you».',
     'row.tapAgain': '{label} اضغط مرة أخرى',
 
     // New-chat screen
@@ -939,7 +940,7 @@ const messages: Messages = {
     'settings.privacy.dataFolder': 'مجلد البيانات',
     'settings.privacy.undo': 'سجل التراجع',
     'settings.privacy.deleteTitle': 'حذف المحادثات',
-    'settings.privacy.deleteWarning': 'يحذف كل محادثة ورسائلها. تبقى المستندات والذاكرة.',
+    'settings.privacy.deleteWarning': 'يحذف كل محادثة ورسائلها ويزيلها من الذاكرة. تبقى المستندات، ويبقى ما تعلّمه GAIA عنك في «About you».',
     'settings.privacy.delete': 'حذف كل المحادثات',
     'settings.privacy.nothingToDelete': 'لا توجد محادثات لحذفها بعد.',
     'settings.privacy.deleteConfirm': 'انقر مرة أخرى لحذف كل المحادثات',
