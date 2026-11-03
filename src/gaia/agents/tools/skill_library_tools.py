@@ -304,7 +304,7 @@ class SkillLibraryToolsMixin:
                 payload["hint"] = (
                     "Searching and installing skills from the hub needs a larger "
                     "model. If the user wants a skill not listed here, tell them "
-                    "so; they can pick one in the model list."
+                    "so; they can switch to a larger model in the model list."
                 )
             return payload
 

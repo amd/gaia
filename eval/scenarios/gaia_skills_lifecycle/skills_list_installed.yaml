@@ -25,7 +25,7 @@ turns:
     objective: "Ask specifically whether experimental-notes is installed"
     user_message: "is experimental-notes one of them?"
     ground_truth:
-      expected_answer: "No — experimental-notes is not installed (it can be searched/installed from the hub)"
+      expected_answer: "No — experimental-notes is not installed (the hub refuses to install it: it is unsigned)"
     success_criteria: "Agent correctly says experimental-notes is NOT currently installed, based on the real list. Offering to search the hub for it is a plus."
 
 expected_outcome: |
