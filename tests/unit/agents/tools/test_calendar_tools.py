@@ -8,6 +8,7 @@ inferred. No network, no real calendar, no keychain.
 """
 
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -1155,6 +1156,7 @@ class TestEventsStateTheirWeekday:
             == "Friday"
         )
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="time.tzset is POSIX only")
     def test_timed_event_uses_the_local_day_it_displays(self, monkeypatch):
         import time
 

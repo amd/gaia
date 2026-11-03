@@ -755,7 +755,7 @@ class CalendarToolsMixin:
             Refused unless expected_title, expected_start and notify_attendees
             match the real event, so take them from list_calendar_events, without
             the untrusted-text markers. For a recurring event this changes that one occurrence, never the series.
-            Attendees can't be changed here.
+            Attendees can't be changed here, and a location or description can't be cleared.
 
             Args:
                 event_id: The event or occurrence id from list_calendar_events

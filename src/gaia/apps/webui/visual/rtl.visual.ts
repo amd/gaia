@@ -486,7 +486,9 @@ for (const locale of ['ar', 'en'] as const) {
             await expect(facts).toBeVisible();
             // The buttons stay reachable however many people are on the event.
             await expect(page.locator('.perm-card-actions')).toBeInViewport();
-            expect(await facts.locator('bdi[dir="ltr"]').count()).toBeGreaterThan(0);
+            // Dates follow the UI's language, so Arabic shows no English month names.
+            if (locale === 'ar') await expect(facts).not.toContainText(/Nov|AM|PM/);
+            else await expect(facts).toContainText('Nov');
             await page.locator('.perm-card').screenshot({ path: info.outputPath(`calendar-${kind}-${locale}.png`) });
             await page.screenshot({ path: info.outputPath(`calendar-${kind}-${locale}-page.png`) });
             expect(await audit(page)).toEqual([]);

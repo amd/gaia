@@ -173,7 +173,8 @@ def _this_computers_zone() -> str:
     try:
         name = tzlocal.get_localzone_name()
         ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError) as exc:
+    # TypeError: tzlocal returns None when it can't find a zone at all.
+    except (ZoneInfoNotFoundError, ValueError, OSError, TypeError) as exc:
         raise CalendarError(
             "This computer's time zone can't be named, so an all-day Outlook event "
             "might land on the wrong day. Nothing was changed. Set the system time "

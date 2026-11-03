@@ -418,7 +418,7 @@ class TestGraphWrites:
                 "timeZone": "America/Los_Angeles",
             }
 
-    @pytest.mark.parametrize("name", ["local", "Not/AZone"])
+    @pytest.mark.parametrize("name", ["local", "Not/AZone", None])
     def test_all_day_refuses_when_the_zone_cant_be_named(self, monkeypatch, name):
         monkeypatch.setattr("tzlocal.get_localzone_name", lambda: name)
         seen, handler = _recording(GRAPH_RAW, status=201)

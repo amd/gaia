@@ -22,8 +22,8 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   at a time. Consent now
   asks for `calendar.events` (Google) and `Calendars.ReadWrite` (Microsoft). Existing
   connections keep reading mail, and a calendar call names the command that adds
-  the scope. Larger models only; Gemma 4 E4B doesn't get these tools. The calendar has
-  not yet been tried on a real account or measured by the agent evals.
+  the scope. Larger models only; Gemma 4 E4B doesn't get these tools. The calendar was
+  tried on real Google and Outlook calendars but not yet measured by the agent evals.
 
 ### Changed
 

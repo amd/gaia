@@ -1,9 +1,10 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PermissionPrompt } from '../PermissionPrompt';
+import { useChatStore } from '../../stores/chatStore';
 import { useNotificationStore } from '../../stores/notificationStore';
 import type { GaiaNotification } from '../../types/agent';
 
@@ -235,7 +236,20 @@ describe('PermissionPrompt', () => {
             expect(facts).toHaveTextContent('sam@x.com');
             expect(facts).toHaveTextContent('Room 4');
             expect(facts).toHaveTextContent('Bring the Q3 numbers');
-            expect(facts.querySelector('bdi[dir="ltr"]')).not.toBeNull();
+        });
+
+        it('dates follow the interface language', () => {
+            act(() => useChatStore.getState().setLocale('ar'));
+            try {
+                const facts = ask('create_calendar_event', {
+                    title: 'Budget review', start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00',
+                    notify_attendees: [], calendar_account: 'me@x.com',
+                });
+                expect(facts).toHaveTextContent('نوفمبر');
+                expect(facts).not.toHaveTextContent('Nov');
+            } finally {
+                act(() => useChatStore.getState().setLocale('en'));
+            }
         });
 
         it('update: the event and what changes', () => {

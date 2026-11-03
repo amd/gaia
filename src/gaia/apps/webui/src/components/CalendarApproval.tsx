@@ -8,11 +8,25 @@ import { useT } from '../i18n/useT';
 export const CALENDAR_WRITE_TOOLS = new Set(['create_calendar_event', 'update_calendar_event', 'cancel_calendar_event']);
 
 const BARE_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
-const TIME_FORMAT = new Intl.DateTimeFormat('en-US', {
-    year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
-});
-const TIME_ONLY_FORMAT = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
-const DATE_FORMAT = new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+const DAY = { year: 'numeric', month: 'short', day: 'numeric' } as const;
+const CLOCK = { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' } as const;
+
+interface Formats { time: Intl.DateTimeFormat; timeOnly: Intl.DateTimeFormat; date: Intl.DateTimeFormat }
+const FORMATS = new Map<string, Formats>();
+
+/** Dates in the UI's language, built once per locale. */
+function formatsFor(locale: string): Formats {
+    let formats = FORMATS.get(locale);
+    if (!formats) {
+        formats = {
+            time: new Intl.DateTimeFormat(locale, { ...DAY, ...CLOCK }),
+            timeOnly: new Intl.DateTimeFormat(locale, CLOCK),
+            date: new Intl.DateTimeFormat(locale, DAY),
+        };
+        FORMATS.set(locale, formats);
+    }
+    return formats;
+}
 
 /** A model may copy an event's fence back into the call (`wrap_untrusted_field`). */
 function text(value: unknown): string {
@@ -27,25 +41,24 @@ function bareDate(value: string): Date | null {
 
 function When({ start, end }: { start: string; end: string }) {
     const t = useT();
+    const { time, timeOnly, date } = formatsFor(t.locale);
     const firstDay = bareDate(start);
     if (firstDay) {
         const lastDay = bareDate(end);
         const range = lastDay && lastDay > firstDay
-            ? `${DATE_FORMAT.format(firstDay)} – ${DATE_FORMAT.format(lastDay)}`
-            : DATE_FORMAT.format(firstDay);
-        return <><bdi dir="ltr">{range}</bdi> ({t('permission.calendar.allDay')})</>;
+            ? `${date.format(firstDay)} – ${date.format(lastDay)}`
+            : date.format(firstDay);
+        return <><bdi dir="auto">{range}</bdi> ({t('permission.calendar.allDay')})</>;
     }
     const begins = new Date(start);
     const ends = new Date(end);
-    let shown = start;
-    if (!Number.isNaN(begins.getTime())) {
-        shown = TIME_FORMAT.format(begins);
-        if (!Number.isNaN(ends.getTime()) && ends > begins) {
-            const sameDay = DATE_FORMAT.format(begins) === DATE_FORMAT.format(ends);
-            shown += ` – ${(sameDay ? TIME_ONLY_FORMAT : TIME_FORMAT).format(ends)}`;
-        }
+    if (Number.isNaN(begins.getTime())) return <bdi dir="ltr">{start}</bdi>;
+    let shown = time.format(begins);
+    if (!Number.isNaN(ends.getTime()) && ends > begins) {
+        const sameDay = date.format(begins) === date.format(ends);
+        shown += ` – ${(sameDay ? timeOnly : time).format(ends)}`;
     }
-    return <bdi dir="ltr">{shown}</bdi>;
+    return <bdi dir="auto">{shown}</bdi>;
 }
 
 function Name({ value }: { value: string }) {
