@@ -372,6 +372,11 @@ gaia skill info gpu-restock-watch
   catalogue tells the model to load both. A name that is not installed is
   ignored, and no starter skill uses it today. See
   [Companion skills](/spec/agent-skills#companion-skills).
+- **`loads_with` names tools only your skill drives**, so GAIA loads the skill
+  when a model calls one of them without loading it first. Each name must also be
+  in `tools_required`. `analyze-recording` lists `analyze_transcript` and
+  `export_transcript`. See
+  [Skills that load with their tools](/spec/agent-skills#skills-that-load-with-their-tools).
 - **Never put a secret in a skill file.** Reference it as a
   `requirements.env_vars` entry and configure it through
   `gaia connectors configure`.

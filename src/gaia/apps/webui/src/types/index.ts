@@ -863,6 +863,7 @@ export type StreamEventType =
     | 'tool_end'     // Tool execution completed
     | 'tool_result'  // Tool result summary
     | 'tool_args'    // Tool arguments detail
+    | 'skill_use'    // A turn runs on a skill (skill, how, loaded)
     | 'answer'       // Final answer from agent
     | 'agent_error'  // Agent-level error (non-fatal)
     | 'permission_request' // Tool confirmation request
@@ -907,6 +908,12 @@ export interface StreamEvent {
     current_step?: number;
     /** What a tool call does, in plain words (for tool_start and tool_args). */
     narration?: string;
+    /** The skill a turn runs on (skill_use). */
+    skill?: string;
+    /** How that skill came to be loaded (skill_use): 'model', 'auto' or 'loaded'. */
+    how?: 'model' | 'auto' | 'loaded';
+    /** Every skill now loaded in the chat (skill_use). */
+    loaded?: string[];
     title?: string;
     detail?: string;
     args?: Record<string, unknown>;

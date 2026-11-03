@@ -954,6 +954,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
+                // A load_skill call is already its own row; other pickups get one.
+                if (event.type === 'skill_use') {
+                    useChatStore.getState().addSkillStep(
+                        event.how === 'model' ? null : agentEventToStep(event, stepIdRef),
+                    );
+                    return;
+                }
+
                 // The text streamed so far narrated the call that follows: it leaves the answer for the timeline.
                 if (event.type === 'commentary') {
                     fullContent = '';

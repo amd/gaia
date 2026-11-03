@@ -13,6 +13,9 @@ metadata:
       - export_transcript
       - query_documents
       - read_file
+    loads_with:
+      - analyze_transcript
+      - export_transcript
     provenance:
       source: starter-pack
 ---

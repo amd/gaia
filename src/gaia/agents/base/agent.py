@@ -2206,6 +2206,12 @@ class Agent(abc.ABC):
     # Instance-level once set, so one agent's skills never leak into a sibling.
     _skill_manager: Optional[Any] = None
     _loaded_skills: Optional[Dict[str, Any]] = None
+    # loads_with tool -> skill name, and how each skill came to be loaded.
+    _loads_with_index: Optional[Dict[str, str]] = None
+    _skill_origins: Optional[Dict[str, str]] = None
+    # Skills already announced to the console, and the turn they belong to.
+    _skills_announced: Optional[set] = None
+    _skills_announced_turn: Optional[int] = None
     # ``shell:execute:<binary>`` grants held by the currently loaded skills.
     _granted_binaries: Optional[Any] = None
 
@@ -4146,6 +4152,73 @@ Do NOT wrap conversational replies in JSON.
         if getattr(self, "_loaded_skills", None) is None:
             self._loaded_skills = {}
         return self._loaded_skills
+
+    def _skill_loaded_by(self, tool_name: str) -> Optional[str]:
+        """The installed skill whose ``loads_with`` names *tool_name*, if any."""
+        index = self._loads_with_index
+        if index is None:
+            index = {}
+            for skill in self.skill_manager.discover().values():
+                for tool in skill.gaia.loads_with:
+                    index.setdefault(tool, skill.name)
+            self._loads_with_index = index
+        return index.get(tool_name)
+
+    def _announce_skill(self, name: str, how: str) -> None:
+        """Tell the console a turn runs on *name*, once per skill per turn.
+
+        *how* is ``"model"`` (the model called ``load_skill``), ``"auto"`` (GAIA
+        loaded it for a ``loads_with`` tool) or ``"loaded"`` (already loaded).
+        """
+        seq = getattr(self, "_turn_seq", 0)
+        if self._skills_announced is None or self._skills_announced_turn != seq:
+            self._skills_announced_turn = seq
+            self._skills_announced = set()
+        if how != "loaded":
+            if self._skill_origins is None:
+                self._skill_origins = {}
+            self._skill_origins.setdefault(name, how)
+        if name in self._skills_announced:
+            return
+        self._skills_announced.add(name)
+        self.console.print_skill_use(name, list(self.loaded_skills), how)
+
+    def describe_skills(self) -> List[Dict[str, str]]:
+        """``[{"name", "how"}]`` for each loaded skill, in load order.
+
+        *how* is ``"model"`` or ``"auto"`` as in :meth:`_announce_skill`, or
+        ``"always"`` for a skill the agent loads on its own at startup.
+        """
+        origins = self._skill_origins or {}
+        return [
+            {"name": name, "how": origins.get(name, "always")}
+            for name in self.loaded_skills
+        ]
+
+    def _note_skill_tool_use(self, tool_name: str) -> None:
+        """Load and announce the skill a ``loads_with`` tool belongs to."""
+        name = self._skill_loaded_by(tool_name)
+        if name is None:
+            return
+        how = "loaded" if name in self.loaded_skills else "auto"
+        if how == "auto":
+            from gaia.skills.errors import SkillError
+
+            try:
+                self.load_skill(name)
+            except SkillError as e:
+                # The tool still runs; only the skill's instructions are missing.
+                logger.warning(
+                    "%s belongs to skill '%s', which could not be loaded: %s",
+                    tool_name,
+                    name,
+                    e,
+                )
+                return
+            logger.info(
+                "Loaded skill '%s' because the model called %s", name, tool_name
+            )
+        self._announce_skill(name, how)
 
     #: The tool a ``shell:execute:<binary>`` grant is exercised through.
     _SKILL_SHELL_TOOL: ClassVar[str] = "run_shell_command"
@@ -7175,6 +7248,10 @@ Do NOT wrap conversational replies in JSON.
         # an unlisted tool still runs it (free non-tool-calling recovery), and
         # the loader logs that as an escape-hatch signal.
         self._on_tool_invoked(tool_name)
+        # getattr: test stubs copy _execute_tool onto a plain class.
+        note_skill = getattr(self, "_note_skill_tool_use", None)
+        if note_skill is not None:
+            note_skill(tool_name)
 
         tool = self._tools_registry[tool_name]["function"]
         sig = inspect.signature(tool)

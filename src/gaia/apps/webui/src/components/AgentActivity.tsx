@@ -108,6 +108,7 @@ const TOOL_ICON: Record<string, LucideIcon> = {
     request_user_input: MessageCircleQuestionMark,
     // Skills
     load_skill: Sparkles,
+    use_skill: Sparkles,
     unload_skill: Sparkles,
     list_skills: Sparkles,
     search_skill_hub: Sparkles,
@@ -124,8 +125,8 @@ for (const name of Object.keys(TOOL_ICON)) {
     }
 }
 
-/** Tools whose row marks the agent picking up a skill. */
-const SKILL_USE_TOOLS = new Set(['load_skill']);
+/** Rows that mark the agent picking up a skill; use_skill is one GAIA adds itself. */
+const SKILL_USE_TOOLS = new Set(['load_skill', 'use_skill']);
 
 // Memory works in the background: its steps show only when they fail.
 const BACKGROUND_TOOLS = new Set(['remember', 'recall', 'update_memory', 'forget']);
@@ -182,6 +183,8 @@ function toolFallbackLabel(step: AgentStep, t: Translate): string {
 export function toolRowText(step: AgentStep, t: Translate = tEn): string {
     // Narration can only humanize the prefixed tool id; the connector's own name says more.
     if (step.mcpServerLabel) return toolFallbackLabel(step, t);
+    // GAIA writes this row itself, so it can say it in the UI's language.
+    if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: step.detail });
     return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step, t);
 }
 

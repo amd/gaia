@@ -190,6 +190,10 @@ interface ChatState {
     appendThinkingContent: (content: string) => void;
     /** Update the last tool step (not the absolute last step). */
     updateLastToolStep: (updates: Partial<AgentStep>) => void;
+    /** Note a skill_use event; with a step, add it before the running tool call that brought the skill in. */
+    addSkillStep: (step: AgentStep | null) => void;
+    /** Counts skill_use events, so the session panel's Skills section re-reads mid-reply. */
+    skillUses: number;
     clearAgentSteps: () => void;
     /** What the model is doing right now, from the latest phase status event; null before one arrives. */
     liveStatus: string | null;
@@ -462,6 +466,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // No tool step found — don't corrupt non-tool steps
             return state;
         }),
+    addSkillStep: (step) =>
+        set((state) => {
+            if (!step) return { skillUses: state.skillUses + 1 };
+            const steps = [...state.agentSteps];
+            let at = steps.length;
+            for (let i = steps.length - 1; i >= 0; i--) {
+                if (steps[i].type !== 'tool') continue;
+                if (steps[i].active) at = i;
+                break;
+            }
+            steps.splice(at, 0, step);
+            return { agentSteps: steps, skillUses: state.skillUses + 1 };
+        }),
+    skillUses: 0,
     clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, recordingStages: null, awaitingUser: false }),
     liveStatus: null,
     livePhase: null,

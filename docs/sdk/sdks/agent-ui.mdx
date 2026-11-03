@@ -1469,8 +1469,8 @@ of that router's connector types.
 
 ### Session environment, outputs and agent info
 
-What one chat may reach, what it produced, and which tools its agent has,
-behind the session panel's Environment, Outputs and Agent info sections. Folder and internet changes are stored with
+What one chat may reach, what it produced, and which tools and skills its agent
+has, behind the session panel's Environment, Outputs, Skills and Agent info sections. Folder and internet changes are stored with
 the chat, applied to its agent before every turn, and applied to a running
 agent at once, so they take effect on its next step.
 
@@ -1567,8 +1567,8 @@ agent at once, so they take effect on its next step.
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/capabilities">
-    The tools this chat's agent can call, behind the session panel's Agent
-    info section:
+    The tools this chat's agent can call and the skills it has loaded, behind
+    the session panel's Agent info and Skills sections:
 
     ```json
     {
@@ -1577,9 +1577,19 @@ agent at once, so they take effect on its next step.
       "tools": [
         {"name": "query_documents", "description": "Search the indexed documents ...", "category": "rag"},
         {"name": "mcp_github_list_issues", "description": "[MCP:github] List issues ...", "category": "mcp"}
+      ],
+      "skills": [
+        {"name": "gaia-voice", "how": "always"},
+        {"name": "analyze-recording", "how": "auto"}
       ]
     }
     ```
+
+    `skills` is in load order. `how` is `model` (the model called
+    `load_skill`), `auto` (GAIA loaded it when the model called one of its
+    [`loads_with`](/spec/agent-skills#skills-that-load-with-their-tools)
+    tools) or `always` (the agent loads it at startup). It is `null` for an
+    agent that runs as its own process, which doesn't report its skills.
 
     Read from the agent the chat talks to: the one GAIA keeps for the chat
     between turns, or, for an agent that runs as its own process (the Hub
