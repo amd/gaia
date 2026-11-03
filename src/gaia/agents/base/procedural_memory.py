@@ -19,6 +19,7 @@ import functools
 import re
 import threading
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
@@ -873,11 +874,13 @@ class ProceduralMemoryMixin:
             return list(window), set()
 
         marks = store.get_synthesis_marks([s["session_id"] for s in window])
+        # Parsed, not compared as text: the stored local offset changes with DST.
         marks = {
             s["session_id"]: marks[s["session_id"]]
             for s in window
             if s["session_id"] in marks
-            and (s.get("last_at") or "") <= marks[s["session_id"]]["marked_at"]
+            and datetime.fromisoformat(s["last_at"])
+            <= datetime.fromisoformat(marks[s["session_id"]]["marked_at"])
         }
         if not marks:
             return list(window), set()

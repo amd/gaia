@@ -921,6 +921,20 @@ class TestDeleteSession:
         assert "pineapple prices" in tools[0][1]
         assert store.get_by_category("fact")[0]["content"] == "User likes pineapple"
 
+    def test_writes_after_the_delete_file_nothing(self, store):
+        """A turn still finishing under a deleted id leaves nothing behind."""
+        store.store_turn("gone", "user", "first")
+        store.delete_session("gone")
+
+        store.store_turn("gone", "assistant", "late answer")
+        _log_tool(store, "gone", "late search")
+        store.store_turn("kept", "user", "still here")
+
+        assert store.get_history(session_id="gone") == []
+        tools = store._conn.execute("SELECT session_id FROM tool_history").fetchall()
+        assert tools == []
+        assert [s["session_id"] for s in store.get_sessions()] == ["kept"]
+
     def test_nothing_left_behind(self, store):
         """No row, FTS entry or tool call of the deleted session survives."""
         store.store_turn("gone", "user", "zanzibar question")

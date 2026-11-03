@@ -131,21 +131,36 @@ def test_the_chat_agent_files_memory_under_the_chat_id(store):
     assert seen == ["chat-123", "chat-123"]
 
 
-def test_a_stopped_turn_finishing_after_the_delete_files_nothing(client, store):
-    """Deleting a busy relayed chat stops its turn, but the agent's thread can
-    still reach the post-turn hook after the delete has run."""
+def test_a_turn_finishing_after_the_delete_files_nothing(client, store):
+    """A busy relayed chat's turn runs in the agent's own process and can
+    reach the post-turn hook after the delete has run."""
+    sid = client.post("/api/sessions", json={}).json()["id"]
+    agent = _Agent()
+    with patch.object(MemoryMixin, "_start_memory_embedder", return_value=True):
+        agent.init_memory(db_path=store._db_path, session_id=sid)
+
+    assert client.delete(f"/api/sessions/{sid}").status_code == 200
+    agent._after_process_query("late question", "late answer")
+    agent.memory_store.log_tool_call(sid, "web_search", {"q": "late"}, "ok", True)
+    agent.memory_store.close()
+
+    assert _history_ids(client) == []
+    assert _tool_sessions(store) == []
+
+
+def test_a_stopped_turn_in_a_kept_chat_is_still_filed(client, store):
+    """Only deleting the chat drops its turns; pressing Stop does not."""
     sid = client.post("/api/sessions", json={}).json()["id"]
     agent = _Agent()
     with patch.object(MemoryMixin, "_start_memory_embedder", return_value=True):
         agent.init_memory(db_path=store._db_path, session_id=sid)
     agent._cancel_event = threading.Event()
-
-    assert client.delete(f"/api/sessions/{sid}").status_code == 200
     agent._cancel_event.set()
-    agent._after_process_query("late question", "late answer")
+
+    agent._after_process_query("stopped question", "partial answer")
     agent.memory_store.close()
 
-    assert _history_ids(client) == []
+    assert _history_ids(client) == [sid]
 
 
 def test_deleting_all_chats_empties_history_and_keeps_facts(client, store):
