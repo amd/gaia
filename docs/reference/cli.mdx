@@ -300,12 +300,17 @@ GAIA_ALLOWED_PATHS=/home/me/evals/task-17 gaia-tui
 $env:GAIA_ALLOWED_PATHS = "C:\evals\task-17"; gaia-tui
 ```
 
-- **It only narrows.** The agent's scope becomes the overlap of its normal scope
+- **It narrows, with one exception below.** The agent's scope becomes the overlap of its normal scope
   and this list. An entry wider than the normal scope (`C:\`, `/`) narrows
   nothing, and one outside it (another drive) is ignored with a warning — neither
   grants anything. If no entry overlaps, the agent can reach no files at all
   except its scratch folder. Out-of-scope paths are refused without an approval
   prompt, and full access does not lift that.
+- **One exception: an Agent UI chat with no attached documents.** Its default
+  scope is GAIA's documents folder plus the folder the backend started in. When
+  no entry overlaps that default, the folders this list names become the chat's
+  scope instead, skipping any too broad to grant (a drive root, your home
+  folder, a protected system folder).
 - **Every file tool honours it:** reading, writing, listing, `tree`, name and
   content searches (including the Documents/Downloads sweep and deep search),
   indexing a document, code search and its index, the project map, saving

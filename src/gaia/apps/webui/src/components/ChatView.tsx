@@ -42,6 +42,7 @@ import { useAttachments } from '../hooks/useAttachments';
 import { useAnswerComparison } from '../hooks/useAnswerComparison';
 import { useContextUsage } from '../hooks/useContextUsage';
 import { useJumpToMessage } from '../hooks/useJumpToMessage';
+import { useFollowScroll } from '../hooks/useFollowScroll';
 import { useChatExport } from '../hooks/useChatExport';
 import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { usePolicyToast } from '../hooks/usePolicyToast';
@@ -217,6 +218,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
      *  Auto-scroll only fires when this is true, so scrolling up to read
      *  earlier messages won't be interrupted by new streaming content. */
     const isNearBottomRef = useRef(true);
+    const { userScrolling, clearUserScroll, listProps: followListProps } =
+        useFollowScroll(messagesScrollRef, isNearBottomRef, (dist) => setShowScrollBtn(dist > 200));
 
     // True once the user has navigated to another session. The store's
     // currentSessionId flips synchronously on switch (the displayed view lags
@@ -337,8 +340,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const THROTTLE_MS = 100;
 
         const doScroll = () => {
+            // Re-check: the user may have scrolled up since this was scheduled.
+            if (!isNearBottomRef.current || userScrolling()) return;
             lastScrollRef.current = Date.now();
-            messagesEndRef.current?.scrollIntoView({ behavior: scrollBehavior() });
+            // Instant: a smooth follow still in flight would override the reader's wheel.
+            messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
         };
 
         if (elapsed >= THROTTLE_MS) {
@@ -407,16 +413,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setPendingReceiptScroll(null);
     }, [pendingReceiptScroll, notificationPanelVisible]);
 
-    // Track scroll position — drives both the scroll-to-bottom button and
-    // the isNearBottom flag that gates auto-scroll during streaming.
-    const handleScroll = useCallback(() => {
-        const el = messagesScrollRef.current;
-        if (!el) return;
-        const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-        isNearBottomRef.current = distFromBottom <= 80;
-        setShowScrollBtn(distFromBottom > 200);
-    }, []);
-
     const panelWidth = useSessionPanelStore((s) => s.width);
     const revealPanelSection = useSessionPanelStore((s) => s.reveal);
 
@@ -424,8 +420,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const scrollToBottom = useCallback(() => {
         isNearBottomRef.current = true;
+        clearUserScroll();
         messagesEndRef.current?.scrollIntoView({ behavior: scrollBehavior() });
-    }, []);
+    }, [clearUserScroll]);
 
     // Stop: ask the server to cancel, but keep reading the stream. The run
     // outlives the connection (#1580) and closes with a `done` carrying the
@@ -1703,7 +1700,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 );
             })()}
 
-            <div className="messages-scroll" ref={messagesScrollRef} onScroll={handleScroll}>
+            <div className="messages-scroll" ref={messagesScrollRef} {...followListProps}>
                 <div className="messages-column">
                     {isLoadingMessages && (
                         <div className="skeleton-messages" aria-label="Loading messages">

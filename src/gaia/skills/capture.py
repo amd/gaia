@@ -489,6 +489,8 @@ def capture_skill(
         )
 
     resolver = manager if manager is not None else SkillManager()
+    from gaia.skills.audit.findings import content_digest
+
     kind = _classify_source(source)
     failed_verification = tuple(failed_verification)
     if kind == "url":
@@ -565,6 +567,7 @@ def capture_skill(
             landed.name = final_name
             previous_tier = reset_security_tier(landed)
             landed.write(target / SKILL_FILENAME)
+            landed_digest = content_digest(target)
 
             with SkillLock.locked(destination_root) as lock:
                 lock.record(
@@ -574,6 +577,7 @@ def capture_skill(
                         requested="*",
                         source=SOURCE_CAPTURED,
                         origin=origin,
+                        content_digest=landed_digest,
                         claimed_tier=previous_tier,
                         installed_tier=LOWEST_TIER,
                         permissions=list(landed.gaia.permissions),

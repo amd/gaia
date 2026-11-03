@@ -78,6 +78,9 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Added-lines check diffs against the PR base.
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -100,3 +103,11 @@ jobs:
           GAIA_REQUIRE_HUB_AGENTS: '1'
         run: |
           python util/lint.py --all
+
+      - name: Check added lines
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          git fetch origin "$BASE_REF"
+          python util/check_added_lines.py --base "origin/$BASE_REF"

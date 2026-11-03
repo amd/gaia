@@ -123,6 +123,22 @@ class TestCaptureFromText:
         assert entry.captured is True
         assert entry.code_trusted is False
         assert entry.version == "1.0.0"
+        from gaia.skills.audit.findings import content_digest
+
+        assert entry.content_digest == content_digest(manager.user_root / entry.name)
+
+    def test_captured_skill_edits_are_reported_as_content_drift(self, manager):
+        capture_skill(_markdown(), manager=manager)
+        target = manager.user_root / "meeting-notes" / "SKILL.md"
+        target.write_text(
+            target.read_text(encoding="utf-8") + "\n<!-- edited after capture -->\n",
+            encoding="utf-8",
+        )
+
+        from gaia.skills.drift import DRIFT_CONTENT, check_drift
+
+        report = check_drift(manager.user_root)
+        assert any(d.kind == DRIFT_CONTENT for d in report.drifts)
 
     def test_name_override(self, manager):
         result = capture_skill(_markdown(), name="my-notes", manager=manager)
