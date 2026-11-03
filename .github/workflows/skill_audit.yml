@@ -18,6 +18,8 @@
 #      claims. BLOCK (exit 6) and unparseable (exit 4) FAIL and cannot be
 #      overridden. REVIEW (exit 5) FAILS until a maintainer applies the
 #      `skill-audit-reviewed` label — held for sign-off, not waved through.
+#      Under `hub/skills/` REVIEW fails like BLOCK, with no label override:
+#      release publishing accepts only ALLOW (`audit_gate.assert_gate_cleared`).
 #   2. REASONING layer (Claude) — ADVISORY, never a gate. Reads each changed
 #      skill's instruction body and tools and judges what regex and AST cannot:
 #      instructions that are individually innocuous but hostile in combination,
@@ -89,6 +91,7 @@ jobs:
       skills: ${{ steps.detect.outputs.skills }}
       block_count: ${{ steps.audit.outputs.block_count }}
       review_count: ${{ steps.audit.outputs.review_count }}
+      hub_review_count: ${{ steps.audit.outputs.hub_review_count }}
       invalid_count: ${{ steps.audit.outputs.invalid_count }}
     steps:
       - uses: actions/checkout@v7
@@ -161,7 +164,7 @@ jobs:
           mkdir -p skill-audit-reports
           cp skill-dirs.txt skill-audit-reports/skill-dirs.txt
           : > skill-audit-reports/exit-codes.txt
-          block=0; review=0; invalid=0; allow=0; other=0
+          block=0; review=0; hub_review=0; invalid=0; allow=0; other=0
 
           while IFS= read -r d; do
             [ -n "$d" ] || continue
@@ -179,7 +182,12 @@ jobs:
             echo "$d $slug $rc" >> skill-audit-reports/exit-codes.txt
             case "$rc" in
               0) allow=$((allow + 1)); echo "ALLOW  $d" ;;
-              5) review=$((review + 1)); echo "REVIEW $d" ;;
+              5)
+                case "$d" in
+                  hub/skills/*) hub_review=$((hub_review + 1)); echo "REVIEW $d (hub/skills/ needs ALLOW)" ;;
+                  *) review=$((review + 1)); echo "REVIEW $d" ;;
+                esac
+                ;;
               6) block=$((block + 1)); echo "BLOCK  $d" ;;
               4) invalid=$((invalid + 1)); echo "UNPARSEABLE $d (see the error above)" ;;
               *) other=$((other + 1)); echo "UNEXPECTED exit $rc for $d" ;;
@@ -191,10 +199,11 @@ jobs:
           {
             echo "block_count=$block"
             echo "review_count=$review"
+            echo "hub_review_count=$hub_review"
             echo "invalid_count=$invalid"
             echo "allow_count=$allow"
           } >> "$GITHUB_OUTPUT"
-          echo "Totals: $allow allow, $review review, $block block, $invalid unparseable"
+          echo "Totals: $allow allow, $((review + hub_review)) review, $block block, $invalid unparseable"
 
       # SARIF locations are already repo-anchored: `gaia skill audit` prefixes
       # them with the audited path relative to the working directory, and this
@@ -251,14 +260,20 @@ jobs:
                   f"{cleared} | {counts_text} | {rules_text} |"
               )
 
-          blocked = [r for r in rows if r[1] in ("BLOCK", "UNPARSEABLE")]
-          review = [r for r in rows if r[1] == "REVIEW"]
+          # A hub/skills/ skill publishes on release, which accepts only ALLOW.
+          blocked = [
+              r for r in rows
+              if r[1] in ("BLOCK", "UNPARSEABLE")
+              or (r[1] == "REVIEW" and r[0].startswith("hub/skills/"))
+          ]
+          review = [r for r in rows if r[1] == "REVIEW" and r not in blocked]
           lines.append("")
           if blocked:
               lines.append(
-                  "❌ **Blocking — no override.** A skill was blocked or could not be parsed, "
-                  "so this check fails and no label bypasses it. Fix the findings and push "
-                  "again; the hub would refuse to publish it in this state either."
+                  "❌ **Blocking — no override.** A skill was blocked, could not be parsed, "
+                  "or is under `hub/skills/` without an ALLOW verdict, so this check fails "
+                  "and no label bypasses it. Fix the findings and push again; the hub "
+                  "would refuse to publish it in this state either."
               )
           elif review:
               lines.append(
@@ -297,12 +312,15 @@ jobs:
             skill-audit-summary.md
           if-no-files-found: warn
 
-      # Same-repo PRs only: a fork PR's GITHUB_TOKEN is read-only.
+      # Same-repo PRs only: a fork PR's GITHUB_TOKEN is read-only. The comment
+      # is best-effort reporting, not the audit verdict: an installation API
+      # rate limit must not turn a passing deterministic audit into a red gate.
       - name: Post summary-only PR comment
         if: |
           always() && steps.detect.outputs.skills != '[]' &&
           github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
         uses: actions/github-script@v9
         with:
           script: |
@@ -314,11 +332,15 @@ jobs:
             const body = fs.readFileSync('skill-audit-summary.md', 'utf8');
             const marker = '<!-- gaia-skill-audit -->';
             const issue_number = context.payload.pull_request.number;
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number,
-            });
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number,
+                per_page: 100,
+              },
+            );
             // Update in place so a re-audit on each push doesn't stack comments.
             const existing = comments.find(c => c.body.includes(marker));
             if (existing) {
@@ -345,7 +367,8 @@ jobs:
       # Skills are contributed by pull request, so this check is the thing
       # standing between a contributed skill and users:
       #   BLOCK / unparseable -> fail. No override; a rejected skill is rejected.
-      #   REVIEW              -> fail UNTIL a maintainer applies SIGNOFF_LABEL.
+      #   REVIEW, hub/skills/ -> fail. No override; release publishing accepts only ALLOW.
+      #   REVIEW, elsewhere   -> fail UNTIL a maintainer applies SIGNOFF_LABEL.
       #   ALLOW               -> pass.
       #
       # The label unblocks the MERGE only. It does not alter the recorded verdict
@@ -357,6 +380,7 @@ jobs:
         env:
           BLOCK_COUNT: ${{ steps.audit.outputs.block_count }}
           REVIEW_COUNT: ${{ steps.audit.outputs.review_count }}
+          HUB_REVIEW_COUNT: ${{ steps.audit.outputs.hub_review_count }}
           INVALID_COUNT: ${{ steps.audit.outputs.invalid_count }}
           SIGNED_OFF: ${{ contains(github.event.pull_request.labels.*.name, 'skill-audit-reviewed') }}
         run: |
@@ -370,6 +394,11 @@ jobs:
 
           if [ "${BLOCK_COUNT:-0}" -gt 0 ]; then
             echo "::error title=Skill audit::$BLOCK_COUNT skill(s) BLOCKED. Fix the findings and push again — sign-off does not override a BLOCK. Findings are in the Security > Code scanning tab."
+            failed=1
+          fi
+
+          if [ "${HUB_REVIEW_COUNT:-0}" -gt 0 ]; then
+            echo "::error title=Skill audit::$HUB_REVIEW_COUNT skill(s) under hub/skills/ returned REVIEW. Skills there are published on release, which accepts only ALLOW, so sign-off does not override this. Fix the findings and push again. Findings are in the Security > Code scanning tab."
             failed=1
           fi
 

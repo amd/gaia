@@ -434,7 +434,8 @@ func runPackage(ctx context.Context, p Plan, stdout, stderr io.Writer) error {
 	case KindDeb:
 		cmd = exec.CommandContext(ctx, "sudo", "dpkg", "-i", file)
 	case KindRpm:
-		cmd = exec.CommandContext(ctx, "sudo", "rpm", "-U", "--oldpackage", file)
+		// Unsigned, so RPM 6 refuses it by default; the checksum above vouches for it.
+		cmd = exec.CommandContext(ctx, "sudo", "rpm", "-U", "--oldpackage", "--nosignature", file)
 	default:
 		return fmt.Errorf("no installer for %s installs", p.Kind)
 	}

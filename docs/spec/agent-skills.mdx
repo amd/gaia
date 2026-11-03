@@ -5,12 +5,12 @@ icon: "puzzle-piece"
 ---
 
 <Note>
-**Tracking issue:** [#285](https://github.com/amd/gaia/issues/285) · **Milestone:** Agent Hub Platform [OSS] · **Status:** **Phase 1** ([#888](https://github.com/amd/gaia/issues/888)) **and the marketplace** ([#2467](https://github.com/amd/gaia/issues/2467)) **shipped** — the local-capability sandbox and the `/api/skills` UI surface remain proposed
+**Tracking issue:** [#285](https://github.com/amd/gaia/issues/285) · **Milestone:** Agent Hub Platform [OSS] · **Status:** **Phase 1** ([#888](https://github.com/amd/gaia/issues/888)) **and the marketplace** ([#2467](https://github.com/amd/gaia/issues/2467)) **shipped** — the local-capability sandbox remains proposed, as does installing or removing skills from the Agent UI
 
 **Shipped:** the `gaia.skills` runtime — `SKILL.md` parser + validator, the three
 discovery roots with auditable precedence, progressive disclosure,
 `<skill>/<tool>` tool registration, `Agent.load_skill` / `unload_skill`, and
-`gaia skill list|info|create|import|export`. Plus the declarative
+the 16 `gaia skill` verbs (`list|info|create|import|export|migrate|audit|search|install|remove|lock|promote|publish|keygen|trust|deltas`). Plus the declarative
 `skills:` / `skill_sets:` manifest blocks and per-launch
 [skill-set selection](#skill-sets) ([#2466](https://github.com/amd/gaia/issues/2466)),
 whose reference implementation is the email agent (which currently ships with its
@@ -35,9 +35,9 @@ engine that produces the verdict the hub gate checks
 **capture** (`capture_skill` from pasted text / URL / folder, code inert until
 `gaia skill promote` — see [Capture](#capture-code-inert-until-promoted)).
 
-**Still proposed:** the local-capability permission **sandbox**
-([#1019](https://github.com/amd/gaia/issues/1019)), plus the `/api/skills` router
-and Agent UI Skills panel.
+**Still proposed:** the local-capability permission **sandbox**, and installing
+or removing skills from the Agent UI. The `/api/skills` router and the Skills
+settings panel are shipped.
 
 This spec defines the **architecture and integration model** for skills. The
 on-disk `SKILL.md` schema (full field reference, permission grammar, tier
@@ -187,7 +187,7 @@ typed tools, security tier, requirements — defined in full in
 |-------|:---------------------:|:----:|----------------------|
 | `name` | required | required | — |
 | `description` | required | required | — |
-| `license` | optional | optional | unset (`gaia skill create` scaffolds `MIT`; GAIA's own skills are always MIT) |
+| `license` | optional | optional | unset (`gaia skill create` scaffolds `MIT`; the hub's starter skills are MIT) |
 | `version` (top-level) | — | recommended (superset) | unset — reported as unversioned; publishing will require it |
 | `metadata.gaia.permissions` | — | optional | none (instruction-only) |
 | `metadata.gaia.tools` | — | optional | none (instruction-only) |
@@ -196,15 +196,15 @@ typed tools, security tier, requirements — defined in full in
 
 GAIA-specific fields are nested under `metadata.gaia` so a standard runtime
 ignores them losslessly — the full grammar is in
-[Skill Format](/plans/skill-format#the-metadatagaia-namespace). The standard's
+[Skill Format](/plans/skill-format#the-metadata-gaia-namespace). The standard's
 optional `compatibility` and `allowed-tools` keys are **not** part of GAIA's
 adopted base (they overlap `metadata.gaia`); a skill using them still parses, and
 GAIA ignores them.
 
 **The compatibility rule:** GAIA reads a bare standard `SKILL.md` as a valid
 instruction-only skill. Missing GAIA fields take conservative defaults —
-`security_tier: experimental` (the most restrictive tier — installing one takes an
-explicit `--allow-experimental`), no tools, no permissions. A skill author adopts
+`security_tier: experimental` (the most restrictive tier — installing one from the hub takes an
+explicit `--allow-experimental`, and so does importing one that ships code), no tools, no permissions. A skill author adopts
 GAIA features incrementally; nothing is required to make an existing standard
 skill load.
 
@@ -253,7 +253,9 @@ The user root is **also** the registry-lock root: `gaia skill install` writes
 ([#2467](https://github.com/amd/gaia/issues/2467)). The lock is provenance, not a
 fourth discovery root — discovery still reads the directory, and a skill created
 locally has no lock entry until `gaia skill lock --relock` records one
-as `source: local` (an import records its own, as `source: imported`). Loading a skill from the user root does check it against the
+as `source: local` (an import or migration records its own, as `source: imported` /
+`source: migrated`). Until it has one, a user-root skill is held to the
+`experimental` permission ceiling when it loads. Loading a skill from the user root does check it against the
 lock: a `community` / `verified` install whose files changed since is refused,
 because those are not the bytes its signature covered. If the lock itself is
 unreadable, **every** user-root skill is refused — including local ones — since
@@ -351,14 +353,15 @@ mismatch, a required/optional flip, or a type contradiction. There is **no
 partial load** — the tool registry is restored byte-for-byte on any failure.
 
 <Note>
-**Tier ceilings are enforced at install, not at load.**
-`gaia skill install` verifies the bundle's signature, collapses the claimed tier to
-the one that signature earned, and refuses a permission above the resulting
-ceiling ([#2467](https://github.com/amd/gaia/issues/2467)). What is still absent is
-the **load-time** ceiling and the run-time sandbox behind it
-([#1019](https://github.com/amd/gaia/issues/1019)): a skill placed in a discovery
-root by hand — `gaia skill create`, `gaia skill import`, or a plain `cp` — never
-passed through install, so `load_skill` gates on *domain* (below), not on tier.
+**Tier ceilings are enforced at install, import and capture, and re-checked at
+load and on promote.** `gaia skill install` verifies the bundle's signature,
+collapses the claimed tier to the one that signature earned, and refuses a
+permission above the resulting ceiling ([#2467](https://github.com/amd/gaia/issues/2467)).
+`gaia skill import` and capture apply the same ceiling at the `experimental` tier.
+`load_skill` checks the ceiling again against the tier recorded in
+`skill-lock.json`, so a skill placed in a discovery root by hand, or edited after
+install, cannot reach past it. What is still absent is the run-time sandbox: a
+tier is a provenance claim, not containment.
 </Note>
 
 ### Capture: code inert until promoted
@@ -543,7 +546,7 @@ with, rundown).
 
 The list depends only on what is installed, so it is identical on every turn and
 stays in the cached head of the prompt. It costs about one line per skill (roughly
-1,000 tokens for the starter pack) plus a ~96-token sourcing rule: facts about live
+1,300 tokens for the 20 skills the `gaia` agent bundles) plus a ~96-token sourcing rule: facts about live
 external state must come from a tool call, never from memory. A description is
 cut at 480 characters in the list, so put the "use when" triggers early. A skill
 already under LOADED SKILLS stays listed, and the model is told not to load it
@@ -760,23 +763,24 @@ injected into the model's context and can attempt prompt injection. Tool skills
 carry the full risk of the code they run. The model gates both.
 
 <Warning>
-**The shipped rule: connector-bridged permissions only. Everything else is
+**The shipped rule: only permissions GAIA can enforce load. Everything else is
 refused, not faked.**
 
-| Domain | Levels | Phase 1 behavior |
+| Domain | Levels | Behavior |
 |---|---|---|
 | `network` | `read`, `write`, `none` | **Bridged** — resolves to a `ConnectorRequirement`. |
 | `mcp` | `connect`, `none` | **Bridged** — resolves to a `ConnectorRequirement`. |
-| `filesystem` | `read`, `write` | **Refused** — needs the sandbox. |
-| `shell` | `execute` | **Refused** — needs the sandbox. |
-| `database` | `read`, `write` | **Refused** — needs the sandbox. |
-| `desktop` | `control` | **Refused** — needs the sandbox. |
-| `env` | `read` | **Refused** — needs the sandbox. |
+| `filesystem` | `read`, `write`, `none` | **Refused at load** — needs the sandbox. |
+| `shell` | `execute`, `none` | **Bridged** when scoped to one binary (`shell:execute:gh`): reads run, writes ask. A bare `shell:execute` is refused. |
+| `database` | `read`, `write`, `none` | **Refused at load** — needs the sandbox. |
+| `desktop` | `control`, `none` | **Refused at load** — needs the sandbox. |
+| `env` | `read`, `none` | **Refused at load** — needs the sandbox. |
+| `program` | `run`, `none` | **Bridged** — one named program the skill's own code starts, through `gaia.skills.context.run_program` only. |
+| `scratch` | `write`, `none` | **Bridged** — a fresh temporary folder per tool call, through `gaia.skills.context`. |
 | *any* | `none` | **Inert** — grants nothing, so it neither refuses nor produces a requirement. |
 
 A skill declaring **any** local-capability permission raises
-`SkillPermissionError` at load time, naming the offending grants and pointing at
-[#1019](https://github.com/amd/gaia/issues/1019). It is never silently loaded and
+`SkillPermissionError` at load time, naming the offending grants. It is never silently loaded and
 never wrapped in a sandbox that does not exist — an unenforceable grant is a
 refusal, not a warning. To load such a skill today, drop those permissions and use
 the agent's own tools for local access.
@@ -823,7 +827,7 @@ Highlights as they apply at the agent boundary:
 | Concern | How it's handled | State |
 |---------|------------------|-------|
 | Bridged permissions | `network:*` / `mcp:connect` become per-agent `ConnectorRequirement`s | Shipped (declaration; egress not enforced) |
-| Local-capability permissions | `filesystem` / `shell` / `database` / `desktop` / `env` refuse the load outright | Shipped (refusal); enforcement deferred |
+| Local-capability permissions | `filesystem` / `database` / `desktop` / `env` and an unscoped `shell:execute` refuse the load outright | Shipped (refusal); enforcement deferred |
 | Per-agent least privilege | An agent receives a skill's tools only after the skill is explicitly loaded; no ambient activation. Tools are namespaced and instance-scoped, and gated by their bare name like core tools | Shipped |
 | Bundled code | Skills shipped inside GAIA are trusted by provenance; every one that ships code must pass the audit with `ALLOW` in CI | Shipped |
 | Instruction-only bodies | Loaded as context under a `==== LOADED SKILLS ====` prompt fragment (on the flagship agent, split into an `(active this turn)` bodies section and a collapsed one-line menu for the rest — per-turn semantic selection); treated as untrusted input, never as system-level instructions | Shipped |
@@ -831,7 +835,7 @@ Highlights as they apply at the agent boundary:
 | Resource escape | A skill may only read files inside its own directory; `SkillManager.resource_path` rejects traversal, as does `.zip` import. The read-only folder grant a loaded skill gets resolves `..` and symlinks first, so it never reaches a file outside that folder | Shipped |
 | Tier ceiling | A permission above the effective tier's ceiling refuses the install, import, or capture, and is re-checked on promote and load against the tier recorded in `skill-lock.json` | Shipped ([#2467](https://github.com/amd/gaia/issues/2467)) |
 | Signing | Ed25519 signature over every bundled file, verified at install; the claimed tier is collapsed to what the signature earned, so no unsigned skill installs as `verified` | Shipped ([#2467](https://github.com/amd/gaia/issues/2467)) |
-| Pre-publish audit | Every skill scanned before it enters the catalog; publish fails loudly if the audit engine is absent | Gate shipped; the scanning engine is [#2468](https://github.com/amd/gaia/issues/2468) |
+| Pre-publish audit | Every skill scanned before it enters the catalog; publish fails loudly if the audit engine is absent | Shipped ([#2467](https://github.com/amd/gaia/issues/2467), [#2468](https://github.com/amd/gaia/issues/2468)) |
 
 This ties the skill layer to the broader
 [security model](/plans/security-model): skills are a grant surface, audited and
@@ -899,9 +903,10 @@ agent id (the hub rejects the publish).
   release.
 - **Skills enter the catalog by pull request.** Publishing is not open to the
   public — the Worker authenticates against a maintainer-held `PUBLISH_TOKENS`
-  secret, the same curation model agents use. A contributor opens a PR against
-  `skills/community/<name>/`, the audit runs as a required check, and a maintainer
-  publishes after merge. Merging is not itself a tier promotion.
+  secret, the same curation model agents use. A contributor opens a PR adding
+  `hub/skills/<name>/`, the audit runs as a required check, and the next final
+  release publishes it, signed by AMD's key. See
+  [Build and Publish a Skill](/guides/building-skills). Merging is not itself a tier promotion.
 - The **pre-publish security audit**
   ([#2468](https://github.com/amd/gaia/issues/2468)) gates the tier a skill may
   claim. `community` and `verified` are refused without a cleared report, and a
@@ -1016,8 +1021,8 @@ ignored by runtimes that don't understand it rather than breaking the parse.
 | Invocation control (`allowed-tools`) | ✓ (Claude Code) | **parsed and ignored** — never a permission mechanism; preserved verbatim on round-trip |
 | Typed tool declarations | — | `tools:` → `@tool` registry, namespaced `<skill>/<tool>` |
 | Granular permissions | coarse (`allowed-tools`) | `<domain>:<level>[:scope]` grants — bridged for `network`/`mcp`, refused for local capabilities |
-| Security tiers | — | `verified` / `community` / `experimental` (declared + reset on import; ceilings deferred) |
-| Signing / audit | — | per-tier — **deferred** to the marketplace phase (see [Skill Format → Security tiers](/plans/skill-format#security-tiers)) |
+| Security tiers | — | `verified` / `community` / `experimental` (declared, reset on import; ceilings enforced at install, import, capture and load) |
+| Signing / audit | — | Ed25519-signed bundles and a pre-publish audit — shipped ([#2467](https://github.com/amd/gaia/issues/2467), [#2468](https://github.com/amd/gaia/issues/2468)); see [Skill Format → Security tiers](/plans/skill-format#security-tiers) |
 
 The principle: **be a strict superset of the open standard.** Anything that runs
 as an Agent Skills skill runs in GAIA; GAIA adds the enforcement and typing the
@@ -1054,6 +1059,6 @@ standard intentionally leaves open.
 
 - [Skill Format](/plans/skill-format) — `SKILL.md` schema, permission grammar, tiers, CLI
 - [Composing skills and skill sets](/guides/composing-skills) — author walkthrough
-- [CLI Reference → Skills](/reference/cli#skills) — `gaia skill list|info|create|import|export`
+- [CLI Reference → Skills](/reference/cli#skills) — all 16 `gaia skill` verbs
 - [Security Model](/plans/security-model) — grants, audit trail, sandboxing
 - [Agent Skills standard](https://agentskills.io) · [Claude Code skills](https://code.claude.com/docs/en/skills)
