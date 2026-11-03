@@ -41,6 +41,15 @@ itself with an **App registration** that you create once in the Azure portal,
 credentials; do not reuse one registration's client ID for both). For a
 single-developer machine each registration takes a few minutes and is free.
 
+<Warning>
+  Microsoft no longer lets an Outlook.com, Hotmail or Live account register an
+  app on its own. The Azure portal refuses until the account has a directory,
+  which means signing up for Azure (a card and phone number are required, even
+  on the free account) or qualifying for the Microsoft 365 Developer Program.
+  GAIA does not ship a client ID yet, so personal accounts need one of these, or
+  a client ID from someone who has already registered an app.
+</Warning>
+
 You will register an app and paste a single value into the GAIA Agent UI: an
 **Application (client) ID**. Unlike Google, the standard desktop flow needs
 **no client secret** — Microsoft forbids secrets for public (desktop) clients.
