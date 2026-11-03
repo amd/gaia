@@ -247,6 +247,7 @@ func (m FlagshipModel) BeforeExit() error {
 func (m FlagshipModel) Close() error {
 	if m.chat != nil {
 		m.chat.CancelActiveTurn()
+		m.chat.StopReadAloud()
 	}
 	if m.chatClient != nil {
 		// Returned, not dropped: app.go prints it, and a wedged agent that

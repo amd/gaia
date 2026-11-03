@@ -21,6 +21,7 @@ export type SettingsSection =
     | 'memory'
     | 'privacy'
     | 'notifications'
+    | 'voice'
     | 'advanced';
 
 /**

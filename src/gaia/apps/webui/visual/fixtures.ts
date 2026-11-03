@@ -158,6 +158,16 @@ const ROUTES: Record<string, unknown> = {
     'GET /connectors': { connectors: [] },
     'GET /skills': { skills: [] },
     'GET /system/model-server': { reachable: true, error: null, base_url: 'http://127.0.0.1:13305', port: 13305, owner: 'gaia' },
+    'GET /speech/settings': {
+        voice: 'bf_emma', speed: 125, auto: true, min_speed: 50, max_speed: 200,
+        voices: [
+            { id: 'af_bella', name: 'Bella', accent: 'american', gender: 'female', quality: 'A-' },
+            { id: 'af_nicole', name: 'Nicole', accent: 'american', gender: 'female', quality: 'B-' },
+            { id: 'am_michael', name: 'Michael', accent: 'american', gender: 'male', quality: 'C+' },
+            { id: 'bf_emma', name: 'Emma', accent: 'british', gender: 'female', quality: 'B-' },
+            { id: 'bm_george', name: 'George', accent: 'british', gender: 'male', quality: 'C' },
+        ],
+    },
     'GET /lemonade/target': { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: 'http://127.0.0.1:13305', saved_base_url: null, api_key_stored: false, env_override: null },
 };
 

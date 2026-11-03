@@ -323,6 +323,13 @@ type ChatModel struct {
 	// workspace run unasked. Set only after the transport confirmed it.
 	acceptEdits bool
 
+	// readAloud is the reply being read aloud, nil when none is; readAloudSeq
+	// tells a stopped reading's late messages from the current one's.
+	readAloud    *readAloudRun
+	readAloudSeq int
+	// readAloudAuto mirrors read_aloud_auto: read each finished reply.
+	readAloudAuto bool
+
 	// warming is the warm-up stage before the first chat turn — see warmup.go.
 	// warmHidden is Esc on the stage: the chat shows while the warm-up turn
 	// keeps running. warmStep is what the agent is doing now; warmDone what it
@@ -676,6 +683,7 @@ func (m ChatModel) Init() tea.Cmd {
 		// or /memory has already run negotiate once — see
 		// probeCapabilitiesCmd.
 		m.probeCapabilitiesCmd(),
+		loadReadAloudAutoCmd,
 	}
 	if m.agentID == setupAgentID {
 		// Whether /gpu applies here: only a PC with an integrated GPU has a
@@ -906,6 +914,9 @@ func queuedSendWatchdogAfter(turnSeq int, d time.Duration) tea.Cmd {
 }
 
 func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if next, cmd, handled := m.handleReadAloudMsg(msg); handled {
+		return next, cmd
+	}
 	var setupCmd tea.Cmd
 	if m.modelSetup != nil {
 		next, cmd, handled := m.updateModelSetup(msg)
@@ -1538,9 +1549,9 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Reset()
 		m.syncComposerHeight()
 
-		// Copying is local and read-only: there is no reason to make it wait
-		// for the turn to end.
-		if isCopyCommand(query) {
+		// Copying and reading aloud are local: there is no reason to make
+		// them wait for the turn to end.
+		if isCopyCommand(query) || isReadAloudCommand(query) || isVoiceCommand(query) {
 			return m.submit(query)
 		}
 
@@ -1815,6 +1826,13 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	// dispatched before the exact-match switch.
 	if isUpdateCommand(query) {
 		return m.runUpdateCommand(updateCommandArg(query))
+	}
+	// Free-form arguments too (a voice id, a speed), so also before the switch.
+	if isReadAloudCommand(query) {
+		return m.runReadAloudCommand(commandArg(query, readAloudCommand))
+	}
+	if isVoiceCommand(query) {
+		return m.runVoiceCommand(commandArg(query, voiceCommand))
 	}
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched
@@ -2279,8 +2297,12 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		})
 		m.streaming = false
 		m.totalSteps = e.Steps
+		readable := !m.cancelPending && !m.awaitingModelSwitch && !m.warming
 		m.settleTurn()
 		m.updateViewport()
+		if readable {
+			return m.autoReadAloud(content)
+		}
 		return m, nil
 
 	case event.ChunkEvent:

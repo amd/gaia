@@ -246,6 +246,65 @@ export async function updateSettings(data: Partial<Settings>): Promise<Settings>
     return apiFetch<Settings>('PUT', '/settings', data);
 }
 
+// -- Read aloud ------------------------------------------------------------------
+
+export interface Voice {
+    id: string;
+    name: string;
+    accent: 'american' | 'british';
+    gender: 'female' | 'male';
+    quality: string;
+}
+
+export interface SpeechSettings {
+    voice: string;
+    /** Percent of normal speed. */
+    speed: number;
+    /** Read every finished reply aloud. */
+    auto: boolean;
+    min_speed: number;
+    max_speed: number;
+    voices: Voice[];
+}
+
+export async function getSpeechSettings(): Promise<SpeechSettings> {
+    return apiFetch<SpeechSettings>('GET', '/speech/settings');
+}
+
+export async function updateSpeechSettings(
+    data: Partial<Pick<SpeechSettings, 'voice' | 'speed' | 'auto'>>,
+): Promise<SpeechSettings> {
+    return apiFetch<SpeechSettings>('PUT', '/speech/settings', data);
+}
+
+/** Longest text one `/speech` request takes; mirrors MAX_SPEECH_CHARS. */
+export const MAX_SPEECH_CHARS = 1000;
+
+/** Speak *text* as WAV audio, in the saved voice unless one is given. */
+export async function speak(
+    text: string,
+    opts: { voice?: string; speed?: number; signal?: AbortSignal } = {},
+): Promise<Blob> {
+    const url = `${API_BASE}/speech`;
+    const t = log.api.time();
+    log.api.info(`POST ${url}`, { chars: text.length, voice: opts.voice });
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: { ...UI_HEADER, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voice: opts.voice, speed: opts.speed }),
+        signal: opts.signal,
+    });
+    if (!res.ok) {
+        const errorText = await res.text().catch(() => '');
+        log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
+        const detail = parseErrorDetail(errorText);
+        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
+    }
+    const audio = await res.blob();
+    log.api.timed(`POST ${url} -> ${res.status} (${audio.size} bytes)`, t);
+    return audio;
+}
+
 export async function loadModel(modelName: string, ctxSize?: number, force = false): Promise<{ status: string; model: string; ctx_size: number }> {
     return apiFetch('POST', '/system/load-model', { model_name: modelName, ctx_size: ctxSize, force });
 }

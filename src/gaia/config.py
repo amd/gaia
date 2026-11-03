@@ -54,6 +54,10 @@ GAIA_CONFIG_FILE = Path(
     os.getenv("GAIA_CONFIG_FILE", str(GAIA_CONFIG_DIR / "config.json"))
 )
 
+# Read-aloud speed, as a percentage of Kokoro's normal speed.
+READ_ALOUD_MIN_SPEED = 50
+READ_ALOUD_MAX_SPEED = 200
+
 
 class GaiaConfigError(Exception):
     """Raised when the persistent config exists but cannot be used.
@@ -62,6 +66,31 @@ class GaiaConfigError(Exception):
     but corrupt/unreadable* file is, so it surfaces loudly instead of being
     silently swallowed into defaults.
     """
+
+
+def check_read_aloud_voice(value: Any) -> Optional[str]:
+    """A Kokoro voice id, or None for the default voice; raises on any other value."""
+    from gaia.audio.lemonade_tts import KOKORO_VOICES
+
+    voice = str(value or "").strip()
+    if not voice:
+        return None
+    if voice not in KOKORO_VOICES:
+        raise GaiaConfigError(
+            f"read_aloud_voice must be a Kokoro voice, got {value!r}. "
+            f"Use one of: {', '.join(KOKORO_VOICES)}."
+        )
+    return voice
+
+
+def check_read_aloud_speed(value: int) -> int:
+    """*value* when it is a read-aloud speed GAIA accepts; raises otherwise."""
+    if not READ_ALOUD_MIN_SPEED <= value <= READ_ALOUD_MAX_SPEED:
+        raise GaiaConfigError(
+            "read_aloud_speed is a percentage of normal speed from "
+            f"{READ_ALOUD_MIN_SPEED} to {READ_ALOUD_MAX_SPEED}, got {value}."
+        )
+    return value
 
 
 class UnsafeGaiaHomeError(RuntimeError):
@@ -160,6 +189,12 @@ class GaiaConfig:
             ``.claude/skills`` the agent puts in its prompt: ``full``, ``off``,
             or ``None`` (set it to ``auto``) to decide per model. See
             :mod:`gaia.project_context`.
+        read_aloud_voice: The Kokoro voice replies are read aloud in, e.g.
+            ``af_bella``. ``None`` uses the default voice. The Agent UI and the
+            TUI share it.
+        read_aloud_speed: How fast replies are read aloud, as a percentage of
+            normal speed (50-200).
+        read_aloud_auto: Read every finished reply aloud without being asked.
     """
 
     profile: str = "chat"
@@ -178,6 +213,9 @@ class GaiaConfig:
     undo_max_mb: int = 500
     skipped_models: List[str] = field(default_factory=list)
     project_context: Optional[str] = None
+    read_aloud_voice: Optional[str] = None
+    read_aloud_speed: int = 100
+    read_aloud_auto: bool = False
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None
@@ -224,6 +262,10 @@ class GaiaConfig:
             return cls._coerce_model_list(value)
         if key == "project_context":
             return cls._check_project_context(value, "gaia config", "Use one of those.")
+        if key == "read_aloud_voice":
+            return check_read_aloud_voice(value)
+        if key == "read_aloud_speed":
+            return check_read_aloud_speed(cls._whole_number(key, value))
         if cls._is_int_field(key):
             return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):
