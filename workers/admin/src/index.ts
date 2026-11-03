@@ -25,7 +25,9 @@ function deliberate(req: Request, url: URL, action: string): boolean {
   const sameSite = (() => {
     if (!origin) return true;
     try {
-      return new URL(origin).hostname === url.hostname; // port ignored: wrangler dev rewrites Origin without it
+      const o = new URL(origin);
+      if (o.protocol !== url.protocol || o.hostname !== url.hostname) return false;
+      return o.port === url.port || url.hostname === "localhost"; // wrangler dev rewrites Origin without the port
     } catch {
       return false; // "null" (sandboxed frames, file:) or anything unparseable is not this site
     }
@@ -33,8 +35,14 @@ function deliberate(req: Request, url: URL, action: string): boolean {
   return req.headers.get("x-admin-action") === action && sameSite;
 }
 
+/** Largest core-team save accepted; a real team is a few hundred bytes. */
+const MAX_TEAM_BYTES = 8192;
+
 const text = (body: string, status: number, type = "text/plain"): Response =>
-  new Response(body, { status, headers: { "content-type": `${type}; charset=utf-8`, "cache-control": "no-store" } });
+  new Response(body, {
+    status,
+    headers: { "content-type": `${type}; charset=utf-8`, "cache-control": "no-store", "x-content-type-options": "nosniff" },
+  });
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -58,9 +66,13 @@ export default {
       if (!deliberate(req, url, "core-team")) {
         return text("Refused: send the header 'x-admin-action: core-team' from the same site.", 403);
       }
+      if (!who.includes("@")) return text("Refused: sign in as a person to change the core team; a service token cannot.", 403);
+      if (Number(req.headers.get("content-length") ?? 0) > MAX_TEAM_BYTES) return text(`Refused: a core-team save is at most ${MAX_TEAM_BYTES} bytes.`, 413);
+      const body = await req.text();
+      if (new TextEncoder().encode(body).length > MAX_TEAM_BYTES) return text(`Refused: a core-team save is at most ${MAX_TEAM_BYTES} bytes.`, 413);
       let raw: unknown;
       try {
-        raw = ((await req.json()) as { maintainers?: unknown }).maintainers;
+        raw = (JSON.parse(body) as { maintainers?: unknown } | null)?.maintainers;
       } catch {
         return text('Send JSON: {"maintainers": "alice+alice-work,bob"}.', 400);
       }
@@ -72,6 +84,7 @@ export default {
         return text((e as Error).message, 400);
       }
       await saveCoreTeam(env.DB, people, who);
+      console.log(JSON.stringify({ event: "core-team-saved", by: who, maintainers: formatPeople(people) }));
       return text(JSON.stringify({ maintainers: formatPeople(people) }), 200, "application/json");
     }
 

@@ -101,7 +101,8 @@ organisation counts as an outside contributor.
 
 `MAINTAINER_LOGINS` is only the starting value. Once someone saves a team from the dashboard
 (Developers → **Core team…**), the saved list is used instead, with who changed it and when;
-no redeploy is needed. To go back to the secret, delete the saved row:
+no redeploy is needed. Only a person signed in through Access can save, not a service token,
+and each save is written to the Worker log. To go back to the secret, delete the saved row:
 `npx wrangler d1 execute gaia-admin --remote --command "DELETE FROM settings WHERE key = 'maintainers'"`.
 
 ### 4. Set up the email-code sign-in

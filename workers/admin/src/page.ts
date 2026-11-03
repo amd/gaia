@@ -559,7 +559,7 @@ function drawTeamEditor(){var box=el('team');if(!P.editTeam){box.innerHTML='';bo
   var from=TEAM.source==='dashboard'?'Last changed by '+esc(TEAM.by||'unknown')+' on '+esc((TEAM.at||'').slice(0,10))+'.':'Set at deploy (MAINTAINER_LOGINS) until saved here.';
   box.innerHTML='<label for="team-in" class="kl">Core team</label><input id="team-in" type="text" spellcheck="false" autocomplete="off" value="'+esc(TEAM.raw)+'" placeholder="alice+alice-work,bob">'
     +'<button type="button" class="toggle" id="team-save">Save</button><button type="button" class="chip" id="team-cancel">Cancel</button>'
-    +'<div class="ks">GitHub logins separated by commas; join one person’s accounts with +, e.g. <code>alice+alice-work,bob</code>. Organisation members count as core team too. '+from+'</div><div id="team-msg" class="ks" role="status"></div>';
+    +'<div class="ks">GitHub logins separated by commas; join one person’s accounts with +, e.g. <code>alice+alice-work,bob</code>. Organisation members count as core team too. Saving an empty box counts nobody else as core and replaces the deploy value. '+from+'</div><div id="team-msg" class="ks" role="status"></div>';
   el('team-cancel').onclick=function(){P.editTeam=false;drawPeople();el('edit-team').focus();};
   el('team-in').onkeydown=function(e){if(e.key==='Enter')el('team-save').click();if(e.key==='Escape')el('team-cancel').click();};
   el('team-save').onclick=function(){var b=el('team-save');b.disabled=true;el('team-msg').textContent='Saving…';

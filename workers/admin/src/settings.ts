@@ -24,8 +24,15 @@ export async function coreTeam(db: D1Database, deployDefault: string | undefined
   return { people: parseMaintainerGroups(deployDefault), source: "deploy", updatedAt: null, updatedBy: null };
 }
 
-/** Validates a core team typed in the dashboard; throws naming any entry that is not a login. */
-export const parseCoreTeam = (raw: string): string[][] => parseMaintainerGroups(raw, "The core team");
+/** Validates a core team typed in the dashboard; throws naming any entry that is not a login or is listed twice. */
+export function parseCoreTeam(raw: string): string[][] {
+  const people = parseMaintainerGroups(raw, "The core team");
+  const seen = new Set<string>();
+  const twice = new Set<string>();
+  for (const login of people.flat().map((x) => x.toLowerCase())) (seen.has(login) ? twice : seen).add(login);
+  if (twice.size) throw new Error(`The core team lists these accounts more than once: ${[...twice].join(", ")}. Give each account to one person.`);
+  return people;
+}
 
 /** Stores a validated core team. */
 export async function saveCoreTeam(db: D1Database, people: string[][], by: string, now = new Date()): Promise<void> {
