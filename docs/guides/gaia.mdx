@@ -22,7 +22,7 @@ GAIA is the agent a new user meets first. One agent handles the everyday work yo
 - **Web research** — search the web, fetch and read pages, download files. A long page is read in marked parts, or searched for one detail such as a price, rather than cut off unannounced.
 - **Files** — read, search by name or content, and walk directory trees inside your allowed scope. Writing and editing are available too, behind an explicit confirmation (see [Tools that need your approval](#tools-that-need-your-approval)).
 - **Images** — describe a local image or answer a question about it, using the local vision model. It can also *generate* one from a description with local Stable Diffusion; that swaps the resident model, so the reply after an image takes an extra moment while the chat model reloads.
-- **Skills** — short playbooks loaded into the agent's own prompt. One ships always-on; the rest are opt-in. See [Skills](#skills) below for what this release ships.
+- **Skills** — short playbooks loaded into the agent's own prompt. One ships always-on; the rest are built in and load when asked for. See [Skills](#skills) below for what ships.
 
 ## Requirements
 
@@ -243,7 +243,9 @@ The mechanism, storage location, and how to disable it are covered in the [Memor
 
 **One skill ships enabled: `gaia-voice`.** It is declared in the manifest's always-on `skills:` list, so it is in the prompt on every call — 790 tokens of it, and it registers no tools. It isn't a task recipe but the agent's honesty floor: don't claim work you didn't do, don't present empty output as a result, don't substitute a near-miss and report success. Those failures spoil an answer whatever the task is, which is why it can't sit in a bundle you have to opt into.
 
-**No skill *set* loads by default, and v0.1.1 declares none.** Loading several skill bodies into every prompt costs tokens and shrinks the room left for an answer, and no eval has measured that trade for this agent yet. The manifest's skill-set declarations ship commented out; enabling them is uncommenting two blocks, with no code change.
+**The rest are built in and load on demand.** The agent bundles the 17 [starter skills](/guides/starter-skills) from `hub/skills/`, plus `document-extract` (lists every item in a long document or transcript) and `gaia-harness-engineering` (helps a developer report a GAIA problem). Ask for one by name, or let the agent load it when the task matches. Skills from the hub that GAIA does not ship install with `gaia skill install`.
+
+**No skill *set* loads by default, and none is declared.** Loading several skill bodies into every prompt costs tokens and shrinks the room left for an answer, and no eval has measured that trade for this agent yet. The manifest's skill-set declarations ship commented out; enabling them is uncommenting two blocks, with no code change.
 
 Once a release declares sets, you select one at launch:
 

@@ -51,8 +51,8 @@ the human runs ``gaia skill promote <name>`` in a terminal.
 Loading stays opt-in
 --------------------
 Registering these tools does not load anything. Skill bodies cost prompt tokens
-(#2848), so the agent still starts with no skill set active; the model — or the
-user through it — has to ask.
+(#2848), so the agent starts with no task skills active (always-on manifest
+skills excepted); the model — or the user through it — has to ask.
 
 Once loaded, a skill's body is not permanently resident either. GaiaAgent
 re-evaluates every loaded skill each turn (``gaia.agents.base.skill_loader``)
@@ -66,7 +66,7 @@ this turn's query matched it.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 from gaia.agents.base.model_features import FULL
 from gaia.agents.tools.search_scope import in_env_scope
@@ -114,6 +114,16 @@ def _failure(action: str, exc: Exception) -> Dict[str, Any]:
     }
 
 
+def _failed_verification(agent: Any) -> Set[str]:
+    """Skill names whose hub install failed verification in this agent session."""
+    session = getattr(getattr(agent, "current_session", None), "session_id", None)
+    state = getattr(agent, "_skills_failed_verification", None)
+    if state is None or state[0] != session:
+        state = (session, set())
+        agent._skills_failed_verification = state
+    return state[1]
+
+
 def _reject_bad_name(action: str, name: str) -> Dict[str, Any] | None:
     """Refuse anything that is not a bare skill name; ``None`` when it is fine.
 
@@ -149,6 +159,12 @@ def _refuse_ungated_code(skill: Any) -> Dict[str, Any]:
     tier gate). Declaring the skill in ``gaia-agent.yaml``, or importing it into
     ``~/.gaia/skills``, keeps that decision with the human where it belongs.
     """
+    from gaia.skills.capture import shell_path
+
+    # Importing code is refused without the opt-in, and this skill ships code.
+    import_command = (
+        f"gaia skill import {shell_path(skill.directory)} --allow-experimental"
+    )
     logger.warning(
         "Refusing model-issued load of '%s': it ships tool(s) %s from the "
         "un-gated '%s' root",
@@ -166,8 +182,8 @@ def _refuse_ungated_code(skill: Any) -> Dict[str, Any]:
             f"into this agent's own process, and it comes from "
             f"{skill.directory} — a read-only .claude/skills import that GAIA's "
             "install path never signature-, tier-, or audit-checked. Ask the "
-            f"user to run 'gaia skill import {skill.directory}' to bring it "
-            "under ~/.gaia/skills deliberately, or to add it to the agent's "
+            f"user to run `{import_command}` to bring it under ~/.gaia/skills "
+            "deliberately, or to add it to the agent's "
             f"gaia-agent.yaml. Instruction-only imported skills still load "
             f"normally. See {_DOCS_URL}"
         ),
@@ -279,8 +295,10 @@ class SkillLibraryToolsMixin:
                 )
             elif not skills:
                 payload["hint"] = (
-                    "No skills are installed, and installing them needs a larger "
-                    f"model. Tell the user so. See {_DOCS_URL}"
+                    "No skills are installed, and installing them from the hub "
+                    "needs a larger model. Tell the user so; a skill they paste "
+                    "or point to can still be added with capture_skill. "
+                    f"See {_DOCS_URL}"
                 )
             return payload
 
@@ -368,8 +386,13 @@ class SkillLibraryToolsMixin:
             Returns:
                 Version, path, the tier it landed on, and its permissions.
             """
+            from gaia.skills.capture import failed_verification_message
             from gaia.skills.errors import SkillError
+            from gaia.skills.hub import SkillChecksumError
+            from gaia.skills.install import SkillBundleMismatchError
             from gaia.skills.install import install_skill as _hub_install
+            from gaia.skills.manager import ROOT_USER
+            from gaia.skills.signing import SkillSignatureError
 
             rejection = _reject_bad_name("install_skill", name)
             if rejection is not None:
@@ -393,6 +416,17 @@ class SkillLibraryToolsMixin:
                     manager=agent.skill_manager,
                     confirm=_refuse_dangerous_grant,
                 )
+            except (
+                SkillSignatureError,
+                SkillChecksumError,
+                SkillBundleMismatchError,
+            ) as exc:
+                _failed_verification(agent).add(skill_name)
+                payload = _failure("install_skill", exc)
+                payload["error"] = (
+                    f"{payload['error']} {failed_verification_message(skill_name)}"
+                )
+                return payload
             except SkillError as exc:
                 return _failure("install_skill", exc)
 
@@ -409,6 +443,26 @@ class SkillLibraryToolsMixin:
                     "to use it in this session."
                 ),
             }
+            winner = agent.skill_manager.discover().get(result.name)
+            if winner is None:
+                payload["next_step"] = (
+                    f"Installed, but this agent has '{result.name}' turned off, so "
+                    "load_skill cannot use it here. Tell the user so."
+                )
+            elif winner.root != ROOT_USER:
+                # Precedence is unchanged: a higher root's copy is what loads.
+                bundled = winner.version or "(unversioned)"
+                payload["shadowed_by"] = {
+                    "root": winner.root,
+                    "version": winner.version,
+                    "path": str(winner.directory),
+                }
+                payload["next_step"] = (
+                    f"GAIA already includes '{result.name}' {bundled}, and "
+                    f"load_skill('{result.name}') loads that copy, not this "
+                    f"install. The installed {result.version} is only used by "
+                    "agents that don't include it. Tell the user so."
+                )
             if result.downgraded:
                 payload["warning"] = (
                     f"'{result.name}' claimed tier '{result.claimed_tier}' but its "
@@ -464,6 +518,7 @@ class SkillLibraryToolsMixin:
                     source,
                     name=name.strip() or None,
                     manager=agent.skill_manager,
+                    failed_verification=_failed_verification(agent),
                 )
             except SkillError as exc:
                 return _failure("capture_skill", exc)
@@ -565,10 +620,10 @@ class SkillLibraryToolsMixin:
                     with install_skill if list_skills does not show it.
 
             Returns:
-                The skill's tier, its directory (resolve relative paths
-                against it), the tools it registered, companion skills it
-                pairs with that are not loaded yet, and a warning if a
-                needed tool or command is missing.
+                Tier, directory (resolve relative paths against it), tools
+                registered, unloaded companion skills, and a warning for a
+                missing tool or a substituted command. A missing command
+                with no substitute refuses the load.
             """
             from gaia.skills.errors import SkillError
             from gaia.skills.manager import CLAUDE_ROOTS

@@ -9,6 +9,7 @@ The hub is :class:`FakeHub`, filled by the real ``publish_skill`` path, so the
 
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -171,7 +172,8 @@ def test_a_new_version_of_a_published_skill_is_published(
     publish_to_hub(directory)
     skill_md = directory / "SKILL.md"
     text = skill_md.read_text(encoding="utf-8")
-    skill_md.write_text(text.replace("version: 1.0.3", "version: 1.0.4"), "utf-8")
+    bumped = re.sub(r"^version: .*$", "version: 99.0.0", text, count=1, flags=re.M)
+    skill_md.write_text(bumped, "utf-8")
 
     runner = Runner()
     outcome = _process(directory, hub, fetch, runner)
