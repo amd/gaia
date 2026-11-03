@@ -210,6 +210,8 @@ function ServerProblem({ problem, onRetry, onUseGaia }: { problem: SetupProblem;
 interface SetupScreenProps {
     /** Setup is done; `first` is a task the user picked to start with. */
     onReady: (first?: StartCard) => void;
+    /** Opened from the app to add local models: offers a way back, and ends with them in use. */
+    onClose?: () => void;
 }
 
 /** Where the user is: each phase is one numbered step, with Back to the one before. */
@@ -258,11 +260,11 @@ function Step({ n, status, label, labelId, children }: StepProps) {
  * Nothing downloads until the user has seen the models and the totals. A cloud
  * choice downloads only the embedding model. Ends on a first task.
  */
-export function SetupScreen({ onReady }: SetupScreenProps) {
+export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const t = useT();
     const refreshModel = useModelStore((s) => s.refresh);
     const selectModel = useModelStore((s) => s.select);
-    const [choice, setChoice] = useState<ProviderId>(() => readChoice() ?? 'local');
+    const [choice, setChoice] = useState<ProviderId>(() => (onClose ? 'local' : readChoice() ?? 'local'));
     const [phase, setPhase] = useState<Phase>('where');
     const [hardware, setHardware] = useState<PreflightReport | null>(null);
     const [hardwareError, setHardwareError] = useState<string | null>(null);
@@ -354,6 +356,8 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
         api.getSetupStatus()
             .then((s) => {
                 if (s.state === 'idle' && !s.models?.length) return;
+                // A finished run, likely the cloud one, is not this visit's starting point.
+                if (onClose && s.state !== 'running' && s.state !== 'verifying') return;
                 setRun(s);
                 if (s.server_only) {
                     setServerStep(true);
@@ -366,7 +370,7 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
                 if (s.skip_chat_model && !readChoice()) setChoice('fireworks');
             })
             .catch((err) => setStartError(`Could not read setup progress: ${errorText(err)}`));
-    }, [loadHardware, loadPlan]);
+    }, [loadHardware, loadPlan, onClose]);
 
     // The plan seeds the checklist once, from what is planned and on disk.
     useEffect(() => {
@@ -610,13 +614,21 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
         setKeyState({ busy: false, error: null, done: false });
     }, []);
 
-    const finish = useCallback(async (first?: StartCard) => {
-        await refreshModel();
-        onReady(first);
-    }, [onReady, refreshModel]);
-
     const canFinish = installed && (!cloud || keyState.done);
     const answering = cloud ? cloudModel : fullRun?.chat_model ?? (plan && !plan.decided_after_server ? plan.chat_model.id : null);
+
+    const finish = useCallback(async (first?: StartCard) => {
+        setActionError(null);
+        try {
+            // Setup leaves the active model alone, so a cloud user would stay on the cloud.
+            if (onClose && !cloud && answering) await selectModel(answering);
+            await refreshModel();
+        } catch (err) {
+            setActionError(errorText(err));
+            return;
+        }
+        onReady(first);
+    }, [answering, cloud, onClose, onReady, refreshModel, selectModel]);
 
     useEffect(() => {
         if (!canFinish) return;
@@ -659,6 +671,7 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
             <div className="setup-inner">
                 <h1 id="setup-title" className="setup-title">{t('setup.title')}</h1>
                 <p className="setup-lede">{lede}</p>
+                {onClose && <button type="button" className="btn-secondary setup-close" onClick={onClose}>{t('setup.backToGaia')}</button>}
 
                 {resumeOffer && phase !== 'download' && (
                     <div className="setup-banner" role="status">
