@@ -76,7 +76,18 @@ The agent uses three tools:
 
 ## Requirements
 
-- **GAIA** installed: `uv pip install amd-gaia`
+- **Install path:** developer install from a clone. The example script lives in the repo's `examples/` folder, which the `amd-gaia` wheel does not ship. See [For developers](/quickstart#for-developers) and [Manual Install](/quickstart#manual-install):
+
+  ```bash
+  git clone https://github.com/amd/gaia.git
+  cd gaia
+  uv venv .venv --python 3.12
+  source .venv/bin/activate        # Windows: .venv\Scripts\activate
+  uv pip install -e .
+  ```
+
+- **Extras required:** none. The script imports only `gaia` and its Lemonade client.
+- **Model server:** nothing to start. If Lemonade isn't installed yet, run `gaia init`.
 
 <Tip>
 Hardware detection reads from the model server, but you don't start that yourself — `gaia daemon` resolves, starts and supervises it.

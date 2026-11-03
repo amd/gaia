@@ -169,7 +169,7 @@ def test_real_host_keeps_skill_resident_and_tools_out_of_normal_mode(monkeypatch
 
 
 def test_dynamic_tool_selection_keeps_handoff_tools_reachable(monkeypatch):
-    from gaia_agent_chat.agent import ChatAgent
+    from gaia_agent.chat_agent import ChatAgent
 
     agent = object.__new__(GaiaAgent)
     agent.config = GaiaAgentConfig(developer_mode=True)
@@ -221,7 +221,7 @@ def test_code_scope_approval_binds_the_displayed_revision(registered):
 
 
 def test_overlapping_chat_construction_never_sees_developer_tools(monkeypatch):
-    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
     monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
     monkeypatch.setattr(GaiaAgent, "_start_engineering_setup", lambda self: None)

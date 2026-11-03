@@ -609,7 +609,11 @@ var downloadedLocalModels = func(ctx context.Context) ([]lemonade.Model, error) 
 // checkPickedModel confirms the chosen local model is on disk; setup was told
 // to leave the chat model alone, so nothing else would notice it missing.
 func (l localRunner) checkPickedModel(ctx context.Context, row Row) Row {
-	picked := l.pickedLocalModel()
+	return checkLocalModelDownloaded(ctx, l.pickedLocalModel(), row)
+}
+
+// checkLocalModelDownloaded confirms a local model the user picked is on disk.
+func checkLocalModelDownloaded(ctx context.Context, picked string, row Row) Row {
 	models, err := downloadedLocalModels(ctx)
 	if err != nil {
 		row.State = StateUnknown
@@ -771,10 +775,19 @@ func (l localRunner) verifyModelsWith(ctx context.Context) (Row, string, string,
 		row.Disposition = status.DispositionNotify
 		row.Line = "could not be checked"
 		row.Detail = err.Error()
-		row.Remedy = Remedy{
-			Action:  "Run setup yourself if anything below behaves oddly.",
-			Command: gaiainit.RunCommand(l.skipChatModel()),
-			Where:   installDocs,
+		if errors.Is(err, gaiainit.ErrNoCLI) {
+			row.Remedy = Remedy{
+				Action:     "Install the GAIA CLI first; setup can run after it is on PATH.",
+				Command:    gaiainit.InstallCommand,
+				PowerShell: gaiainit.InstallPowerShellCommand,
+				Where:      installDocs,
+			}
+		} else {
+			row.Remedy = Remedy{
+				Action:  "Run setup yourself if anything below behaves oddly.",
+				Command: gaiainit.RunCommand(l.skipChatModel()),
+				Where:   installDocs,
+			}
 		}
 		row.Raw = err.Error()
 		return row, "", "", st
@@ -931,11 +944,11 @@ func (l localRunner) downloadStep(models []gaiainit.Model) string {
 	case l.asksWhereChatRuns():
 		return "download what your choice needs"
 	case size != "":
-		return fmt.Sprintf("download the models (%s)", size)
+		return fmt.Sprintf("choose and download the models (%s)", size)
 	case l.skipChatModel():
 		return embeddingStep
 	}
-	return "download the models (" + gaiainit.ProfileSize + ")"
+	return "choose and download the models (" + gaiainit.ProfileSize + ")"
 }
 
 // embeddingStep is the model step when chat does not run on a local model.

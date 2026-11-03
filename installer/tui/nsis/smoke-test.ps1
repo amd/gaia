@@ -85,6 +85,25 @@ function Wait-Writable([string]$Path, [int]$Seconds = 60) {
 
 function Get-UiDir { (Get-ItemProperty -Path $uiKey -Name InstallLocation).InstallLocation }
 
+function Write-LockDiagnostics([string[]]$Paths) {
+    Write-Host 'setup failed; checking GAIA executable locks:'
+    foreach ($path in $Paths) {
+        try {
+            Wait-Writable $path -Seconds 5
+            Write-Host "$path is writable after the failed setup (any lock that tripped setup has since cleared)"
+        } catch {
+            Write-Host "lock diagnostic: $($_.Exception.Message)"
+        }
+    }
+    $processes = Get-Process -Name 'gaia-desktop', 'gaia-tui', 'gaia-agent' -ErrorAction SilentlyContinue
+    if ($processes) {
+        Write-Host (($processes | Select-Object Id, ProcessName, Path | Format-Table -AutoSize | Out-String).TrimEnd())
+    } else {
+        Write-Host 'no GAIA processes were running after the failed setup'
+    }
+}
+
+
 if ((Test-Path $tuiDir) -or (Test-Path $uiKey)) { throw "GAIA is already installed - this runner is not clean" }
 
 # ── 1. Refusals change nothing ─────────────────────────────────────────────
@@ -217,9 +236,13 @@ if (-not (Get-ItemProperty -Path $runKey -Name 'GAIA' -ErrorAction SilentlyConti
 if ((Get-FileHash "$tuiDir\gaia-tui.exe" -Algorithm SHA256).Hash -ne $before.Hash) { throw "adding the desktop app changed the terminal" }
 
 # ── 5. Plain /S with both installed updates both, and leaves one of each ──
-foreach ($exe in "$uiDir\gaia-desktop.exe", "$tuiDir\gaia-tui.exe", "$tuiDir\gaia-agent.exe") { Wait-Writable $exe }
+$bothExecutables = @("$uiDir\gaia-desktop.exe", "$tuiDir\gaia-tui.exe", "$tuiDir\gaia-agent.exe")
+foreach ($exe in $bothExecutables) { Wait-Writable $exe }
 $rc = Invoke-Setup @('/S')
-if ($rc -ne 0) { throw "re-running with both installed exited $rc" }
+if ($rc -ne 0) {
+    Write-LockDiagnostics $bothExecutables
+    throw "re-running with both installed exited $rc"
+}
 $entries = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
     ForEach-Object { Get-ItemProperty $_.PSPath } |
     Where-Object { $_.DisplayName -in @('GAIA', $tuiName, 'GAIA Terminal Hub') }

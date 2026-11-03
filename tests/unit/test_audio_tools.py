@@ -103,7 +103,7 @@ class TestSystemPromptAgreesWithTheToolset:
     def _chat_agent_source(self):
         path = (
             Path(__file__).resolve().parents[2]
-            / "hub/agents/chat/python/gaia_agent_chat/agent.py"
+            / "hub/agents/gaia/python/gaia_agent/chat_agent.py"
         )
         if not path.is_file():
             pytest.skip(f"chat agent not present at {path}")
@@ -679,7 +679,7 @@ def _repo_profiles():
 
     path = (
         Path(__file__).resolve().parents[2]
-        / "hub/agents/chat/python/gaia_agent_chat/profiles.py"
+        / "hub/agents/gaia/python/gaia_agent/profiles.py"
     )
     if not path.is_file():
         pytest.skip(f"chat profiles not present at {path}")

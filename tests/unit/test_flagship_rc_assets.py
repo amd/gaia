@@ -120,9 +120,11 @@ def test_an_rc_cannot_be_approved_or_released_without_its_flagship():
 
 
 def test_the_rc_windows_setup_bundles_this_runs_flagship():
-    setup = _jobs("publish.yml")["rc-windows-setup"]
+    setup = _jobs("publish.yml")["windows-setup"]
     assert "rc-flagship" in setup["needs"]
-    assert setup["with"]["sidecar"] == "artifact"
+    assert setup["with"]["sidecar"].startswith(
+        "${{ needs.validate.outputs.is_rc == 'true' && 'artifact'"
+    )
 
 
 def test_the_rc_release_attaches_the_flagship():

@@ -32,7 +32,7 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 - [`CLAUDE.md`](../../CLAUDE.md) — project conventions, "No Silent Fallbacks" rule, agent registry table
 - [`src/gaia/agents/base/agent.py`](../../src/gaia/agents/base/agent.py) — base `Agent`
 - [`src/gaia/agents/registry.py`](../../src/gaia/agents/registry.py) — `KNOWN_TOOLS`, `AgentRegistration`, `class_factory`, and the entry-point groups
-- [`hub/agents/hello-world/python/`](../../hub/agents/hello-world/python/) — the smallest complete hub package; copy its shape
+- [`tests/fixtures/agents/hello-world/`](../../tests/fixtures/agents/hello-world/) — the smallest complete agent package, the shape `gaia agent init` scaffolds
 - [`docs/sdk/patterns.mdx`](../../docs/sdk/patterns.mdx) — canonical copy-pasteable patterns
 
 ## Agent shape
@@ -74,7 +74,7 @@ Fastest path to a package: `gaia agent init <id> -o hub/agents/ --layout hub` sc
 
 **Optional:**
 - `_create_console(self) -> AgentConsole` — only override if you need a custom console; the base class provides a default
-- `AGENT_ID` / `AGENT_NAME` / `AGENT_DESCRIPTION` / `CONVERSATION_STARTERS` — read by the registry for display metadata (see `_registration_from_class` in `src/gaia/agents/registry.py`). `ChatAgent` and `GaiaAgent` don't declare them — the registry falls back to the entry-point name when `AGENT_ID` is absent. `hub/agents/hello-world`, `hub/agents/word-count` and `hub/agents/email` do declare them.
+- `AGENT_ID` / `AGENT_NAME` / `AGENT_DESCRIPTION` / `CONVERSATION_STARTERS` — read by the registry for display metadata (see `_registration_from_class` in `src/gaia/agents/registry.py`). `ChatAgent` and `GaiaAgent` don't declare them — the registry falls back to the entry-point name when `AGENT_ID` is absent. `tests/fixtures/agents/hello-world` and `hub/agents/email` do declare them.
 
 ### 2. Tools
 - [ ] Every tool decorated with `@tool` inside `_register_tools` so `self` is in closure scope
@@ -141,7 +141,7 @@ The registry discovers packaged agents by scanning the `gaia.agent` entry-point 
 
 That's the full `KNOWN_TOOLS` set — re-read `registry.py` rather than trusting this table if it looks short.
 
-**MRO rule (GAIA convention, verified against the tree):** TOOL mixins go **after** `Agent`; a STATE mixin like `MemoryMixin` may precede `Agent` (see `ChatAgent(MemoryMixin, Agent, RAGToolsMixin, …)`). `hub/agents/hello-world`'s `HelloWorldAgent` follows the simpler `class X(Agent)` shape. Works because `Agent.__init__` does not call `super().__init__()` and the mixins that do have `__init__` (e.g. `ShellToolsMixin`) defensively initialize state lazily with `hasattr` guards. If you ever add a tool mixin whose `__init__` must run at construction, either (a) make it lazy-init like `ShellToolsMixin` or (b) override `__init__` on the concrete agent class and call the mixin's setup explicitly — do **not** silently flip the MRO, which would diverge from every other agent in the tree.
+**MRO rule (GAIA convention, verified against the tree):** TOOL mixins go **after** `Agent`; a STATE mixin like `MemoryMixin` may precede `Agent` (see `ChatAgent(MemoryMixin, Agent, RAGToolsMixin, …)`). The reference `HelloWorldAgent` (`tests/fixtures/agents/hello-world/`) follows the simpler `class X(Agent)` shape. Works because `Agent.__init__` does not call `super().__init__()` and the mixins that do have `__init__` (e.g. `ShellToolsMixin`) defensively initialize state lazily with `hasattr` guards. If you ever add a tool mixin whose `__init__` must run at construction, either (a) make it lazy-init like `ShellToolsMixin` or (b) override `__init__` on the concrete agent class and call the mixin's setup explicitly — do **not** silently flip the MRO, which would diverge from every other agent in the tree.
 
 ## Default models (verified)
 

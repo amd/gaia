@@ -1,0 +1,44 @@
+# Cloudflare Worker for the GAIA admin dashboard (/admin).
+#
+# Deploy needs (provided by the maintainer — see README.md):
+#   1. A D1 database; paste its id into `database_id` below
+#        wrangler d1 create gaia-admin && wrangler d1 migrations apply gaia-admin --remote
+#   2. A Cloudflare Access application covering amd-gaia.ai/admin*, then set
+#      ACCESS_TEAM_DOMAIN and ACCESS_AUD (vars below).
+#   3. A GITHUB_TOKEN secret (read-only: public repo + Actions read):
+#        wrangler secret put GITHUB_TOKEN
+#
+# Local development uses a local D1 and `.dev.vars` (see README.md); nothing
+# here is needed to run it.
+
+name = "gaia-admin"
+main = "src/index.ts"
+compatibility_date = "2025-01-29"
+
+# More specific than website-router's amd-gaia.ai/*, so Cloudflare sends /admin
+# here and everything else to the Railway site. No workers.dev hostname: it
+# would be a second way in that the Access policy does not cover.
+routes = [{ pattern = "amd-gaia.ai/admin*", zone_name = "amd-gaia.ai" }]
+workers_dev = false
+
+[[d1_databases]]
+binding = "DB"
+database_name = "gaia-admin"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# Nightly snapshot, 03:17 UTC (off the :00 mark on purpose).
+[triggers]
+crons = ["17 3 * * *"]
+
+[vars]
+GITHUB_REPO = "amd/gaia"
+NPM_PACKAGE = "@amd-gaia/gaia"
+PYPI_PACKAGE = "amd-gaia"
+# Workflow whose pytest summary line gives the test count over time.
+TEST_WORKFLOW = "Unit Tests"
+# Required in production: the Access team domain (<team>.cloudflareaccess.com)
+# and the application AUD tag. Left empty here so an unconfigured deploy fails
+# loudly instead of serving the dashboard unauthenticated.
+ACCESS_TEAM_DOMAIN = ""
+ACCESS_AUD = ""

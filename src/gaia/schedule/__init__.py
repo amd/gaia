@@ -1,3 +1,6 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """Cron-based recurring execution for GAIA skills and prompts (issue #892).
 
 A minimal scheduler: register a skill or prompt to run on a cron schedule, and

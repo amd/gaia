@@ -203,6 +203,65 @@ describe('a new chat', () => {
     });
 });
 
+describe('the Settings default for new chats, without a reload', () => {
+    const TOGGLE = 'Start new chats in full access';
+
+    function backendDefault(mode: 'ask' | 'full_access') {
+        mocked.listAllPermissions.mockResolvedValue({ default_mode: mode, sessions: [] });
+    }
+
+    beforeEach(() => {
+        mocked.setDefaultPermissionMode.mockImplementation(async (mode) => {
+            backendDefault(mode);
+            return { default_mode: mode };
+        });
+    });
+
+    async function flipInSettings(confirm: boolean) {
+        act(() => useChatStore.getState().openSettings('permissions'));
+        const toggle = await screen.findByRole('checkbox', { name: TOGGLE });
+        await waitFor(() => expect(toggle).toBeEnabled());
+        const before = mocked.listAllPermissions.mock.calls.length;
+        await userEvent.click(toggle);
+        if (confirm) await userEvent.click(screen.getByRole('button', { name: 'Turn on full access for new chats' }));
+        await waitFor(() => expect(mocked.listAllPermissions.mock.calls.length).toBeGreaterThan(before));
+        act(() => useChatStore.getState().closeSettings());
+    }
+
+    it('turning it off makes the next new chat ask', async () => {
+        backendDefault('full_access');
+        render(<App />);
+        await waitFor(() => expect(useChatStore.getState().draftPermissionMode).toBe('full_access'));
+
+        await flipInSettings(false);
+        await sendFirstMessage('go');
+
+        await waitFor(() => expect(mocked.setPermissionMode).toHaveBeenCalledWith('sess-new-0001', 'ask'));
+        expect(mocked.setPermissionMode).not.toHaveBeenCalledWith('sess-new-0001', 'full_access');
+    });
+
+    it('turning it on makes the next new chat start in full access', async () => {
+        render(<App />);
+        await waitFor(() => expect(useChatStore.getState().defaultPermissionModeKnown).toBe(true));
+
+        await flipInSettings(true);
+        await sendFirstMessage('go');
+
+        await waitFor(() => expect(mocked.setPermissionMode).toHaveBeenCalledWith('sess-new-0001', 'full_access'));
+    });
+
+    it('keeps a mode the user picked on the chip for this draft', async () => {
+        render(<App />);
+        await waitFor(() => expect(useChatStore.getState().defaultPermissionModeKnown).toBe(true));
+        act(() => useChatStore.getState().setDraftPermissionMode('ask'));
+
+        await flipInSettings(true);
+        await sendFirstMessage('go');
+
+        await waitFor(() => expect(mocked.setPermissionMode).toHaveBeenCalledWith('sess-new-0001', 'ask'));
+    });
+});
+
 describe('a new chat sent several times before it opens', () => {
     async function typeFirstMessage(text: string) {
         const box = await screen.findByLabelText('Message');
@@ -316,12 +375,18 @@ describe('first-run setup', () => {
         expect(screen.queryByText('Starting GAIA…')).not.toBeInTheDocument();
     });
 
+    /** Where GAIA runs, then setup's own model set (this suite has no plan to choose from). */
+    async function runSetup() {
+        await userEvent.click(await screen.findByRole('button', { name: 'Continue' }));
+        await userEvent.click(await screen.findByRole('button', { name: 'Use the recommended set' }));
+    }
+
     async function finishSetupWith(card: StartCard) {
         mocked.checkSetup.mockResolvedValue(NOT_READY);
         mocked.startSetup.mockResolvedValue({ state: 'ready', steps: [] });
         mocked.getStartScreen.mockResolvedValue({ cards: [card], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
         render(<App />);
-        await userEvent.click(await screen.findByRole('button', { name: 'Start setup' }));
+        await runSetup();
         await userEvent.click(await screen.findByRole('button', { name: new RegExp(card.title) }));
     }
 
@@ -347,7 +412,7 @@ describe('first-run setup', () => {
             agents: [{ id: 'gaia', name: 'GAIA', namespaced_agent_id: 'installed:gaia' }] as never, total: 1,
         });
 
-        await userEvent.click(await screen.findByRole('button', { name: 'Start setup' }));
+        await runSetup();
         await userEvent.click(await screen.findByRole('button', { name: 'Start chatting' }));
 
         expect(await screen.findByLabelText('Message')).toBeInTheDocument();

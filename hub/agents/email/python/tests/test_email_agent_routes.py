@@ -622,7 +622,7 @@ class TestAutonomyRoutes:
                     "and grant it in one command — no Agent UI required: "
                     "`gaia connectors connect microsoft --scopes <scopes> "
                     "--grant-agent installed:email`, or use Settings -> "
-                    "Connections in the Agent UI."
+                    "Connectors in the Agent UI."
                 )
 
         client.built["next"] = _ConnectorsErrorAgent()
@@ -836,6 +836,15 @@ class TestWorkerDiesWithoutTerminalEvent:
     completion carrying an empty reply, indistinguishable to any client from
     the agent genuinely having nothing to say.
     """
+
+    @pytest.fixture(autouse=True)
+    def _worker_deaths(self, monkeypatch):
+        """Record the worker's escaping exception instead of letting the default
+        hook print it to stderr from a thread (#2786)."""
+        deaths = []
+        monkeypatch.setattr(threading, "excepthook", deaths.append)
+        yield deaths
+        assert [type(d.exc_value) for d in deaths] == [KeyboardInterrupt]
 
     def test_dead_worker_streams_an_error_before_completing(self, client):
         class _Killed:

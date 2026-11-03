@@ -79,15 +79,6 @@ agent::email:
   - changed-files:
     - any-glob-to-any-file: ['hub/agents/email/python/**/*', 'hub/agents/email/npm/**/*', 'docs/guides/email.mdx']
 
-agent::connectors-demo:
-  - changed-files:
-    - any-glob-to-any-file: ['hub/agents/connectors-demo/python/**/*']
-
-# Tutorial / reference example agents (hello-world, word-count)
-agent::examples:
-  - changed-files:
-    - any-glob-to-any-file: ['hub/agents/hello-world/python/**/*', 'hub/agents/word-count/python/**/*']
-
 # Evaluation framework changes
 eval:
   - changed-files:

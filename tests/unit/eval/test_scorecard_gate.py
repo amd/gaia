@@ -844,3 +844,49 @@ class TestBaselineRefResolution:
 
         with pytest.raises(ValueError, match="does not resolve to a commit"):
             _parse_baseline_ref(card, blob)
+
+
+class TestBaselineRefHangs:
+    """A hung git is an error, never a silent "first adoption" pass."""
+
+    @pytest.mark.parametrize(
+        "hung", ["--show-toplevel", "--verify", "show"], ids=["root", "ref", "show"]
+    )
+    def test_a_hung_git_call_raises_naming_the_command(
+        self, tmp_path, monkeypatch, hung
+    ):
+        import gaia.eval.scorecard_gate as gate
+
+        repo, card = _repo_with_scorecard(tmp_path)
+        monkeypatch.chdir(repo)
+        real_run = subprocess.run
+        seen = []
+
+        def run(cmd, **kwargs):
+            seen.append(kwargs.get("timeout"))
+            if hung in cmd:
+                raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr(gate.subprocess, "run", run)
+
+        with pytest.raises(ValueError, match=r"did not finish within 60s"):
+            _parse_baseline_ref(card, "base")
+        assert seen and all(t == 60 for t in seen)
+
+    def test_every_git_call_is_bounded(self, tmp_path, monkeypatch):
+        import gaia.eval.scorecard_gate as gate
+
+        repo, card = _repo_with_scorecard(tmp_path)
+        monkeypatch.chdir(repo)
+        real_run = subprocess.run
+        timeouts = []
+
+        def run(cmd, **kwargs):
+            timeouts.append(kwargs.get("timeout"))
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr(gate.subprocess, "run", run)
+
+        assert _parse_baseline_ref(card, "base").strip() == "# scorecard"
+        assert timeouts == [60, 60, 60]

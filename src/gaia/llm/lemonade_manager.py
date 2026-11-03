@@ -7,6 +7,7 @@ Provides singleton initialization shared by CLI and SDK flows.
 Operates at the LLM level (not agent level) for flexibility with community agents.
 """
 
+import math
 import sys
 import threading
 import time
@@ -22,6 +23,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
+    _model_ids_match,
     cloud_model_provider,
     fit_ctx_to_free_memory,
     is_llm_model_entry,
@@ -30,6 +32,7 @@ from gaia.llm.lemonade_client import (
     resolve_effective_ctx_size,
     resolve_lemonade_base_url,
     running_embedded_lemonade_url,
+    runs_on_npu,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
 from gaia.logger import get_logger
@@ -166,19 +169,28 @@ def _iter_gpu_entries(devices) -> Iterator[Dict[str, Any]]:
 
 
 def _coerce_vram_gb(raw) -> Optional[float]:
-    """Parse a device entry's ``vram_gb``, or ``None`` when it is unusable."""
-    if raw is None:
+    """Parse a plausible finite ``vram_gb``, or ``None`` when it is unusable.
+
+    Lemonade's device contract is GiB. A malformed byte count can otherwise be
+    displayed as exabytes and drive an unsafe context recommendation, so reject
+    values outside the largest plausible single-GPU range instead of guessing a
+    unit conversion.
+    """
+    if raw is None or isinstance(raw, bool):
         return None
     try:
-        return float(raw)
+        vram_gb = float(raw)
     except (TypeError, ValueError):
+        vram_gb = None
+    if vram_gb is None or not math.isfinite(vram_gb) or not 0.0 <= vram_gb <= 1024.0:
         log = get_logger(__name__)
         log.warning(
-            "Lemonade reported a non-numeric vram_gb (%r); "
+            "Lemonade reported an implausible vram_gb (%r); "
             "reporting VRAM as undetected rather than guessing.",
             raw,
         )
         return None
+    return vram_gb
 
 
 def _gpu_rank(entry: Dict[str, Any]) -> Tuple[int, float, int, int]:
@@ -307,6 +319,8 @@ class LemonadeManager:
     # Server confirmed up for a cloud-model caller. Kept apart from
     # ``_initialized`` so a later local-model caller still gets the idle preload.
     _ready_for_cloud = False
+    # Models whose skipped tool-calling probe was already reported.
+    _probe_skip_reported: set = set()
     _log = get_logger(__name__)
 
     # Rate-limit the per-turn context re-check that fires when context_size==0.
@@ -734,7 +748,12 @@ class LemonadeManager:
         requested_ctx = min_context_size
         chat_model = model or resolve_default_chat_model()
         is_cloud = cloud_model_provider(chat_model) is not None
-        if min_context_size is None:
+        own_window_of = None
+        if min_context_size is None and runs_on_npu(chat_model):
+            # An FLM model's window is its own; the device profile's would reload it.
+            own_window_of = chat_model
+            min_context_size = resolve_ctx_size(model=chat_model, base_url=base_url)
+        elif min_context_size is None:
             min_context_size = resolve_ctx_size(device=device)
             if not is_cloud:
                 # The window the chat model's own load gets when memory is short.
@@ -910,7 +929,12 @@ class LemonadeManager:
                                 return True
 
                             if cls._try_reload_with_ctx(
-                                client, status, min_context_size, quiet, cls._lock
+                                client,
+                                status,
+                                min_context_size,
+                                quiet,
+                                cls._lock,
+                                own_window_of=own_window_of,
                             ):
                                 return True
                             # The reload can have failed because it just
@@ -1016,7 +1040,9 @@ class LemonadeManager:
 
                 if is_cloud:
                     # Lemonade holds cloud keys in memory only; a fresh start has none.
-                    client._replay_cloud_key(chat_model)
+                    if client._replay_cloud_key(chat_model):
+                        # After the key replay: without a key it can only fail.
+                        cls.learn_tool_calling(client, chat_model, key_replayed=True)
                     cls._ready_for_cloud = True
                     cls._remember_server(client)
                     cls._log.debug(
@@ -1150,7 +1176,12 @@ class LemonadeManager:
                         return True
 
                     if cls._try_reload_with_ctx(
-                        client, status, min_context_size, quiet, cls._lock
+                        client,
+                        status,
+                        min_context_size,
+                        quiet,
+                        cls._lock,
+                        own_window_of=own_window_of,
                     ):
                         return True
                     # As above (#2992): a reload that failed because it just
@@ -1256,6 +1287,79 @@ class LemonadeManager:
         )
         if not quiet and not already_announced:
             cls.print_ceiling_message(cls._context_size, min_context_size)
+
+    @classmethod
+    def learn_tool_calling(
+        cls, client: "LemonadeClient", model: str, key_replayed: bool = False
+    ) -> None:
+        """Probe a cloud model's native tool calling once, when nothing says.
+
+        A failed or inconclusive probe is logged and remembered for
+        ``PROBE_RETRY_AFTER_S``, so a down gateway is not probed again at every
+        start; until a probe succeeds the model runs on the in-text tool format.
+        """
+        from gaia.llm.lemonade_client import (
+            PROBE_RETRY_AFTER_S,
+            ToolCallingProbeStopped,
+            cloud_model_info,
+            learned_tool_calling,
+            probe_cloud_tool_calling,
+            probe_recently_failed,
+            record_probe_failure,
+        )
+
+        info = cloud_model_info(model)
+        if (
+            info is None
+            or info.get("tool_calling")
+            or learned_tool_calling(model) is not None
+        ):
+            return
+        retry_in = f"{PROBE_RETRY_AFTER_S // 60} minutes"
+        if probe_recently_failed(model):
+            if model not in cls._probe_skip_reported:
+                cls._probe_skip_reported.add(model)
+                cls._log.warning(
+                    "The native tool-calling probe for %s failed within the last "
+                    "%s; it runs on the in-text tool format until the next try. "
+                    "Remove it from tool_calling_probe_failures in "
+                    "~/.gaia/gateway.json to probe it now.",
+                    model,
+                    retry_in,
+                )
+            return
+        # A restarted server has no key until it is replayed, and a keyless
+        # probe can only fail; that is not the model's answer.
+        if not key_replayed and not client._replay_cloud_key(model):
+            cls._log.warning(
+                "Skipped the native tool-calling probe for %s: its cloud provider "
+                "has no usable key on this server yet.",
+                model,
+            )
+            return
+        try:
+            supported = probe_cloud_tool_calling(client, model)
+        except ToolCallingProbeStopped as e:
+            cls._log.info("%s; it is probed again at the next start.", e)
+            return
+        except LemonadeClientError as e:
+            record_probe_failure(model)
+            cls._log.warning(
+                "Could not probe native tool calling for %s (%s); it runs on the "
+                "in-text tool format, and the probe is retried in %s.",
+                model,
+                e,
+                retry_in,
+            )
+            return
+        if supported is None:
+            record_probe_failure(model)
+            cls._log.warning(
+                "The native tool-calling probe for %s was inconclusive; it runs "
+                "on the in-text tool format, and the probe is retried in %s.",
+                model,
+                retry_in,
+            )
 
     @classmethod
     def _autostart(
@@ -1415,7 +1519,7 @@ class LemonadeManager:
             raise LemonadeClientError(
                 f"Failed to preload Lemonade model {model!r} with "
                 f"ctx_size={requested_ctx} on idle server at "
-                f"{client.base_url}.\n"
+                f"{client.base_url}: {e}\n"
                 f"To recover manually: stop the running server, then restart it "
                 f"({describe_start_hint(requested_ctx).instruction}) and "
                 f"re-run your GAIA command.\n"
@@ -1463,6 +1567,7 @@ class LemonadeManager:
         min_context_size: int,
         quiet: bool,
         lock: "threading.Lock",
+        own_window_of: Optional[str] = None,
     ) -> bool:
         """Attempt to reload the current LLM model with a larger context size.
 
@@ -1487,6 +1592,9 @@ class LemonadeManager:
         model_id = llm_models[0].get("model_name") or llm_models[0].get("id", "")
         if not model_id:
             return False
+        if own_window_of and not _model_ids_match(model_id, own_window_of):
+            # The window is the incoming model's; its load replaces this one.
+            return True
 
         # Proactive clamp (#2992): the model is already loaded, so its
         # catalog entry (and often ``status`` itself) already carries its

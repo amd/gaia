@@ -270,18 +270,18 @@ class TestSystemStatus:
 
         health_data = {
             "status": "ok",
-            "model_loaded": "Qwen3.5-35B-A3B-GGUF",
+            "model_loaded": "Gemma-4-E4B-it-GGUF",
             "version": "9.2.0",
             "all_models_loaded": [
                 {
-                    "model_name": "Qwen3.5-35B-A3B-GGUF",
+                    "model_name": "Gemma-4-E4B-it-GGUF",
                     "type": "llm",
                     "device": "amd_npu",
                     "recipe_options": {"ctx_size": 4096},  # Way too small
                 }
             ],
         }
-        models_data = {"data": [{"id": "Qwen3.5-35B-A3B-GGUF", "downloaded": True}]}
+        models_data = {"data": [{"id": "Gemma-4-E4B-it-GGUF", "downloaded": True}]}
 
         # Map URL suffix → response
         async def mock_get(url, **kwargs):
@@ -301,7 +301,7 @@ class TestSystemStatus:
         resp = client.get("/api/system/status")
         data = resp.json()
         assert data["lemonade_running"] is True
-        assert data["model_loaded"] == "Qwen3.5-35B-A3B-GGUF"
+        assert data["model_loaded"] == "Gemma-4-E4B-it-GGUF"
         assert data["model_context_size"] == 4096
         assert data["context_size_sufficient"] is False
 
@@ -820,9 +820,11 @@ class TestSystemStatus:
         assert data["expected_model_loaded"] is True
 
     @patch("httpx.AsyncClient")
-    def test_system_status_wrong_model_and_small_context(self, mock_httpx_cls, client):
-        """Both expected_model_loaded=False and context_size_sufficient=False when
-        the wrong model is loaded with an insufficient context window."""
+    def test_system_status_other_model_window_is_not_judged(
+        self, mock_httpx_cls, client
+    ):
+        """Indexing's small vision model is not chat's model, so its window can't
+        make chat's window "too small"; chat reloads its own model at full size."""
         mock_client = AsyncMock()
 
         def make_response(status_code, json_data):
@@ -859,7 +861,7 @@ class TestSystemStatus:
         data = resp.json()
         assert data["model_loaded"] == "TinyModel-0.5B-GGUF"
         assert data["expected_model_loaded"] is False
-        assert data["context_size_sufficient"] is False
+        assert data["context_size_sufficient"] is True
         assert data["model_context_size"] == 4096
 
     @patch("httpx.AsyncClient")
@@ -1256,8 +1258,21 @@ class TestSessionEndpoints:
         assert resp.status_code == 422
         detail = resp.json()["detail"]
         assert "'data'" in detail
-        assert "chat, email, gaia" in detail
+        assert "email, gaia" in detail
         assert client.get("/api/sessions").json()["total"] == 0
+
+    def test_a_legacy_chat_id_is_accepted_but_not_listed(
+        self, client, gaia_only_registry
+    ):
+        """``chat`` resolves to the flagship (#6099): a client still sending it
+        gets a session, but it is not offered as an id of its own."""
+        assert (
+            client.post("/api/sessions", json={"agent_type": "chat"}).status_code == 200
+        )
+        detail = client.post("/api/sessions", json={"agent_type": "data"}).json()[
+            "detail"
+        ]
+        assert "chat" not in detail.split("Registered agent ids:")[1]
 
     def test_create_session_registered_agent_type_accepted(
         self, client, gaia_only_registry
@@ -1299,7 +1314,7 @@ class TestSessionEndpoints:
         detail = client.post("/api/sessions", json={"agent_type": "data"}).json()[
             "detail"
         ]
-        assert "Registered agent ids: chat, email, gaia." in detail
+        assert "Registered agent ids: email, gaia." in detail
 
     def test_update_session_mail_provider(self, client):
         sid = client.post("/api/sessions", json={}).json()["id"]
@@ -1632,6 +1647,42 @@ class TestChatSendEndpoint:
         assert "content" in data
         assert data["content"] == "This is a response."
         assert "message_id" in data
+
+    @patch("gaia.ui.agent_loop.agent_loop.yield_to_user")
+    @patch("gaia.ui.routers.chat.turn_takes_the_line", return_value=True)
+    @patch("gaia.ui.server._get_chat_response")
+    def test_local_chat_request_preempts_a_goal_tick(
+        self, mock_chat, mock_takes_line, mock_yield, client
+    ):
+        mock_chat.return_value = "This is a response."
+        session_id = client.post("/api/sessions", json={}).json()["id"]
+
+        response = client.post(
+            "/api/chat/send",
+            json={"session_id": session_id, "message": "Hello", "stream": False},
+        )
+
+        assert response.status_code == 200
+        mock_takes_line.assert_called_once()
+        mock_yield.assert_called_once_with()
+
+    @patch("gaia.ui.agent_loop.agent_loop.yield_to_user")
+    @patch("gaia.ui.routers.chat.turn_takes_the_line", return_value=False)
+    @patch("gaia.ui.server._get_chat_response")
+    def test_cloud_chat_request_does_not_preempt_a_goal_tick(
+        self, mock_chat, mock_takes_line, mock_yield, client
+    ):
+        mock_chat.return_value = "This is a response."
+        session_id = client.post("/api/sessions", json={}).json()["id"]
+
+        response = client.post(
+            "/api/chat/send",
+            json={"session_id": session_id, "message": "Hello", "stream": False},
+        )
+
+        assert response.status_code == 200
+        mock_takes_line.assert_called_once()
+        mock_yield.assert_not_called()
 
     @patch("gaia.ui.server._get_chat_response")
     def test_non_streaming_saves_both_messages(self, mock_chat, client, db):

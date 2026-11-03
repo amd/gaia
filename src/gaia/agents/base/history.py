@@ -137,6 +137,23 @@ def select_history(
 ) -> list[dict]:
     """Replay whole turns, evicting to half the estimated budget on overflow.
 
+    The flat message list :func:`fit_turns` keeps.
+    """
+    return [
+        message
+        for turn in fit_turns(turns, budget, on_cut, reporter)
+        for message in turn
+    ]
+
+
+def fit_turns(
+    turns: list[list[dict[str, Any]]],
+    budget: int,
+    on_cut: Optional[Callable[[HistoryCut], None]] = None,
+    reporter: Optional[CutReporter] = None,
+) -> list[list[dict[str, Any]]]:
+    """The whole turns that fit *budget*, evicting to half of it on overflow.
+
     A turn larger than the whole budget is replayed shortened, never dropped
     while its question and answer can fit: long tool results become stubs,
     then its longest texts are cut with a marker the model sees. Only a turn
@@ -180,7 +197,7 @@ def select_history(
         plan.hidden_tokens,
         on_cut,
     )
-    return [message for index, _ in plan.retained for message in plan.turn(index)]
+    return [plan.turn(index) for index, _ in plan.retained]
 
 
 def _turn_cost(turn: list[dict[str, Any]]) -> int:

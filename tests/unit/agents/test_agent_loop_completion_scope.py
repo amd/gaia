@@ -826,3 +826,112 @@ def test_a_large_file_written_by_write_file_still_needs_a_full_read(tmp_path):
     result = {"file_path": str(target), "content": "ref,amount\n", "start_line": 1}
     ledger.delivered("read_file", {"file_path": str(target)}, result, result)
     assert any("out.csv" in g and "read back" in g for g in _gaps(ledger))
+
+
+@pytest.mark.parametrize("name", ["`_daemon_alive`", "`run()`", "`Foo::bar`", "`a=b`"])
+def test_a_quoted_code_name_after_in_is_not_a_missing_destination(tmp_path, name):
+    ledger = CompletionEvidence("Explain the bug.", str(tmp_path))
+    gaps = _gaps(ledger, f"The bug is in {name}, which drops the error.")
+    assert not any(name.strip("`") in g for g in _missing(gaps))
+
+
+# --------------------------------------------------------------------------
+# Framework read-back of a whole-file write
+# --------------------------------------------------------------------------
+
+
+# Stand-in carrying the real read-back size cap.
+_AGENT = MagicMock(_MAX_FRAMEWORK_READBACK=Agent._MAX_FRAMEWORK_READBACK)
+
+
+def _write_and_verify(tmp_path, name, content, on_disk=None):
+    """A requested output written with write_file, then the framework check."""
+    ledger = CompletionEvidence(f"Write the report to {name}.", str(tmp_path))
+    target = tmp_path / name
+    target.write_text(content if on_disk is None else on_disk, encoding="utf-8")
+    args = {"file_path": name, "content": content}
+    ledger.record("write_file", args, {"status": "success"}, True)
+    Agent._verify_whole_write(_AGENT, ledger, "write_file", args)
+    return _gaps(ledger, f"The report is saved to `{name}`.")
+
+
+def test_a_whole_write_the_framework_matched_needs_no_read_back(tmp_path):
+    gaps = _write_and_verify(tmp_path, "report.md", "# Report\n\nAll good.\n")
+    assert not any("read back" in g for g in gaps)
+
+
+def test_crlf_on_disk_still_matches_what_was_written(tmp_path):
+    target = tmp_path / "r.md"
+    ledger = CompletionEvidence("Write the report to r.md.", str(tmp_path))
+    target.write_bytes(b"a\r\nb\r\n")
+    args = {"file_path": "r.md", "content": "a\nb\n"}
+    ledger.record("write_file", args, {"status": "success"}, True)
+    Agent._verify_whole_write(_AGENT, ledger, "write_file", args)
+    assert not any("read back" in g for g in _gaps(ledger, "Saved to `r.md`."))
+
+
+def test_a_file_that_differs_from_the_write_still_needs_reading(tmp_path):
+    # A hook, a formatter or a partial write changed what landed on disk.
+    gaps = _write_and_verify(tmp_path, "report.md", "full text", on_disk="full te")
+    assert any("report.md" in g and "read back" in g for g in gaps)
+
+
+@pytest.mark.parametrize(
+    "tool, args",
+    [
+        (
+            "edit_file",
+            {"file_path": "report.md", "old_content": "a", "new_content": "b"},
+        ),
+        ("write_file", {"file_path": "report.md"}),
+        ("write_file", {"file_path": "report.md", "content": 5}),
+        ("write_file", {"file_path": "bad\x00name", "content": "x"}),
+    ],
+)
+def test_only_a_whole_text_write_is_verified_by_the_framework(tmp_path, tool, args):
+    ledger = MagicMock()
+    ledger.root = str(tmp_path)
+    (tmp_path / "report.md").write_text("b", encoding="utf-8")
+    Agent._verify_whole_write(_AGENT, ledger, tool, args)
+    ledger.read_by_framework.assert_not_called()
+
+
+def test_an_oversized_write_is_left_for_the_model(tmp_path):
+    fake = MagicMock()
+    fake._MAX_FRAMEWORK_READBACK = 4
+    ledger = MagicMock()
+    ledger.root = str(tmp_path)
+    (tmp_path / "big.md").write_text("12345", encoding="utf-8")
+    Agent._verify_whole_write(
+        fake, ledger, "write_file", {"file_path": "big.md", "content": "12345"}
+    )
+    ledger.read_by_framework.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "text", ["saved in `<folder>/<name>`", r"written to <folder>\<name>"]
+)
+def test_a_placeholder_path_is_not_a_missing_destination(tmp_path, text):
+    ledger = CompletionEvidence("Fix the download bug.", str(tmp_path))
+    gaps = _gaps(ledger, f"Each download is {text} after the user agrees.")
+    assert not any("<folder>" in g for g in gaps)
+
+
+def test_a_write_under_project_dir_is_read_back_from_there(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "r.md").write_text("done", encoding="utf-8")
+    ledger = CompletionEvidence("Write r.md in the project.", str(tmp_path))
+    args = {"file_path": "r.md", "content": "done", "project_dir": str(project)}
+    ledger.record("write_file", args, {"status": "success"}, True)
+    Agent._verify_whole_write(_AGENT, ledger, "write_file", args)
+    assert ledger.files[ledger.key("r.md", str(project))].verified
+
+
+def test_a_network_share_is_never_read_back(tmp_path):
+    ledger = MagicMock()
+    ledger.key.return_value = r"\\server\share\r.md"
+    Agent._verify_whole_write(
+        _AGENT, ledger, "write_file", {"file_path": "x", "content": "y"}
+    )
+    ledger.read_by_framework.assert_not_called()

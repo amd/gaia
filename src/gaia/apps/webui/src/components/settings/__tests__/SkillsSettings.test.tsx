@@ -87,6 +87,36 @@ describe('SkillsSettings', () => {
         expect(within(imported).queryByText('web-research')).not.toBeInTheDocument();
     });
 
+    it('shows every skill, flat, when one comes from a source it has no group for', async () => {
+        mockedApi.listSkills.mockResolvedValue({
+            skills: [
+                skill('web-research', 'Research', null, 'agent-bundled'),
+                skill('future-helper', 'From a newer agent', null, 'some-future-root' as SkillSource),
+            ],
+            invalid: {},
+        });
+        render(<SkillsSettings onUseSkill={vi.fn()} />);
+        expect(await screen.findByText('future-helper')).toBeInTheDocument();
+        expect(screen.getByText('web-research')).toBeInTheDocument();
+        expect(screen.queryByRole('region', { name: 'Built into GAIA' })).not.toBeInTheDocument();
+    });
+
+    it("shows the project's own skills apart from other Claude Code skills", async () => {
+        mockedApi.listSkills.mockResolvedValue({
+            skills: [
+                skill('deploy-helper', 'Deploys the app', null, 'claude-project'),
+                skill('old-helper', 'Imported', null, 'claude-import'),
+            ],
+            invalid: {},
+        });
+        render(<SkillsSettings onUseSkill={vi.fn()} />);
+        const project = await screen.findByRole('region', { name: 'From this project' });
+        expect(within(project).getByText('deploy-helper')).toBeInTheDocument();
+        expect(within(project).queryByText('old-helper')).not.toBeInTheDocument();
+        const imported = screen.getByRole('region', { name: 'From Claude Code' });
+        expect(within(imported).queryByText('deploy-helper')).not.toBeInTheDocument();
+    });
+
     it('says how to add your own skills when there are none', async () => {
         mockedApi.listSkills.mockResolvedValue({ skills: [skill('web-research', 'Research', null, 'agent-bundled')], invalid: {} });
         render(<SkillsSettings onUseSkill={vi.fn()} />);

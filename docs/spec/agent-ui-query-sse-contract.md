@@ -33,10 +33,10 @@ which is **not** the v2 contract below.
 
 This document defines two things and freezes the boundary between them:
 
-1. **The target wire contract** (§3–§5) — the seven canonical event types plus
+1. **The target wire contract** (§3–§5) — the nine canonical event types plus
    the `/query` request body. Integrators depend on this and nothing else.
 2. **The translation map** (§6) — a total, source-exhaustive mapping from the
-   in-process handler's vocabulary onto the seven canonical types, so the v2
+   in-process handler's vocabulary onto the nine canonical types, so the v2
    translation layer (built in #2016) can be implemented with **no source event
    left unmapped**.
 
@@ -83,6 +83,13 @@ net-new agent instrumentation.
 | `session_id` | string, `^[A-Za-z0-9_-]{1,128}$` | no | Opaque conversation id, host-minted once per conversation and reused across turns (#2829). **Send only to a peer at contract ≥ 2.12** — an older sidecar 422s the unknown field (see §7). Omitted ⇒ today's stateless behaviour: a throwaway agent per call. Present ⇒ the run resolves the SAME agent every other turn on this id used, so a reference to something an earlier turn surfaced (e.g. "reply to number 1") can resolve. See §2.4. |
 | `reasoning` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.22** — an older sidecar 422s the unknown field (see §7). `true` streams the model's reasoning as `reasoning` events (§4) instead of folding it into `status` lines, for a client that shows reasoning on its own. Omitted ⇒ `false`, today's behaviour. |
 | `documents` | array of strings (absolute file paths) | no | **Flagship (`gaia`) only, contract ≥ 2.16** (#4166) — the email agent and an older flagship 422 the unknown field (see §7). The files the user attached to this conversation. Send the whole set on every turn; the agent indexes the ones it has not indexed yet before the turn runs, so a file attached mid-conversation is read on the next turn. Each path is granted as that exact file — never its folder — and a relative path is a 422. A file that is missing, a folder, or a secret the path policy refuses is named as not indexed in the turn's `index_documents` step, and the turn still runs. See §2.5. |
+| `allowed_paths` | array of absolute path strings | no | **Flagship (`gaia`) only, contract ≥ 2.18** — the email agent and an older flagship 422 the unknown field (see §7). Caller-computed conversation scope. A new session gets exactly this scope; a retained session gains newly supplied entries and keeps what the user granted; `GAIA_ALLOWED_PATHS` can only narrow it. A relative path is a 422. This is an access allowlist, not the chat working directory. Omitted ⇒ the agent's default scope. |
+| `memory` | `"on"` \| `"private"` \| `"off"` | no | **Flagship (`gaia`) only, contract ≥ 2.18** — the email agent and an older flagship 422 the unknown field (see §7). Controls whether this turn may write memory. `private` and `off` suppress all writes, including errors and lessons. Send it every turn when the caller owns the setting; omit it to retain the agent's current mode. |
+| `changes_turn_id` | string matching `^\d{14}-[0-9a-f]{8}$` | no | **Flagship (`gaia`) only, contract ≥ 2.19** — the email agent and older flagship 422 the unknown field (see §7). Records file changes for this turn's Undo history. Requires `session_id`; omit it to record no changes. |
+| `surface` | `"agent_ui"` \| `"tui"` \| `"cli"` | no | **Flagship (`gaia`) only, contract ≥ 2.20** — identifies the front-end so provider errors and feature wording fit the caller. Omit for headless callers. |
+| `internet_off` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.23** — when true, blocks tools and commands that contact another host for this retained session. Send it every turn when the caller owns the setting; omit it to retain the current mode. |
+| `working_directory` | string (absolute path) | no | **Flagship (`gaia`) only, contract ≥ 2.24** — chat workspace for resolving relative file paths. It is separate from `allowed_paths`, which controls access. Relative paths are rejected with 422. |
+| `turns` | array of arrays of objects | no | **Flagship (`gaia`) only, contract ≥ 2.25** — earlier turns as the model saw them, including tool calls and results. Send `turns` instead of `context`; `context` must then be `[]`. `turns: []` clears retained history and enables `final.model_messages`. |
 
 ```jsonc
 // JSON Schema (draft 2020-12) — request body
@@ -112,8 +119,35 @@ net-new agent instrumentation.
     "can_answer_questions": { "type": "boolean", "default": false },
     "session_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$" },
     "documents": { "type": "array", "items": { "type": "string" } },
+    "allowed_paths": { "type": "array", "items": { "type": "string" } },
+    "memory": { "enum": ["on", "private", "off"] },
+    "changes_turn_id": { "type": "string", "pattern": "^\\d{14}-[0-9a-f]{8}$" },
+    "surface": { "enum": ["agent_ui", "tui", "cli"] },
+    "internet_off": { "type": "boolean" },
+    "working_directory": { "type": "string" },
+    "turns": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "role": { "enum": ["user", "assistant", "system", "tool"] }
+          }
+        }
+      }
+    },
     "reasoning": { "type": "boolean", "default": false }
-  }
+  },
+  "dependentRequired": {
+    "changes_turn_id": ["session_id"]
+  },
+  "allOf": [
+    {
+      "if": { "required": ["turns"] },
+      "then": { "properties": { "context": { "maxItems": 0 } } }
+    }
+  ]
 }
 ```
 
@@ -174,7 +208,7 @@ as "no documents are indexed" about a file the user can see attached.
 
 ---
 
-## 4. The seven canonical event types
+## 4. The nine canonical event types
 
 The contract is exactly these `type` values (design §0.2 — the original seven,
 plus `needs_input` added as an additive MINOR by #2469, and `reasoning`, sent
@@ -188,9 +222,9 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 | `reasoning` | `{delta}` | stream the model's reasoning, apart from the answer. Sent only when the request asked for it (`reasoning: true`, contract ≥ 2.22); pieces keep their own spacing, so a client joins them as they come |
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
-| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) and `risk_note` (why the agent's checks don't cover the call) |
+| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) and `risk_note` (why the agent's checks don't cover the call) |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
-| `final` | `{answer, usage?, failed?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done |
+| `final` | `{answer, usage?, failed?, performance?, context?, context_error?, model_messages?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done. `performance` reports measured turn timings, `context` reports the context-meter payload, `context_error` explains why that measurement was unavailable, and `model_messages` carries the model-facing trace when the caller sent `turns` (contract >= 2.25) |
 | `error` | `{detail, status}` | surface the actionable error verbatim; terminal |
 
 A `:`-prefixed SSE comment may appear at any point as a heartbeat. It carries no
@@ -293,14 +327,29 @@ indistinguishable from a dead one.
     "timeout_seconds": { "type": "integer" }   // after this the run fails loudly
   } }
 
+// reasoning (contract >= 2.22; emitted only when requested)
+{ "type": "object", "additionalProperties": false,
+  "required": ["type", "delta"],
+  "properties": {
+    "type":  { "const": "reasoning" },
+    "delta": { "type": "string" }
+  } }
+
 // final
 { "type": "object", "additionalProperties": false,
   "required": ["type", "answer"],
   "properties": {
-    "type":   { "const": "final" },
-    "answer": { "type": "string" },
-    "usage":  { "type": "object" },  // optional {steps?, tools_used?, elapsed?, tokens?, ttft?, tok_per_s?}
-    "failed": { "const": true }      // optional; a model failure ended the turn
+    "type":           { "const": "final" },
+    "answer":         { "type": "string" },
+    "usage":          { "type": "object" },
+    "failed":         { "const": true },
+    "performance":    { "type": "object" },
+    "context":        { "type": "object" },
+    "context_error":  { "type": "string" },
+    "model_messages": {
+      "type": "array",
+      "items": { "type": "object" }
+    }
   } }
 
 // error
@@ -327,7 +376,7 @@ unknown `render` degrades to the generic result card (see §7).
 
 ### 4.3 Generic render primitives (#2108)
 
-Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers five
+Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers six
 **generic primitives** any agent can emit on `tool_result.render` without
 shipping its own frontend component. `data` must match the schema for the key:
 
@@ -336,7 +385,8 @@ shipping its own frontend component. `data` must match the schema for the key:
 | `table` | `{ title?: string, columns: string[], rows: Array<Array<string\|number\|boolean\|null>> }` |
 | `key_value` | `{ title?: string, items: Array<{key: string, value: string\|number\|boolean\|null}> }` |
 | `list` | `{ title?: string, ordered?: boolean, items: Array<string\|number> }` |
-| `image` | `{ src: string, alt?: string, caption?: string }` |
+| `image` | `{ src: string, alt?: string, caption?: string, path?: string }` |
+| `audio` | `{ src: string, caption?: string, path?: string, duration_seconds?: number }` — added (additive, MINOR) for generated music and sound effects (#540) |
 | `diff` | `{ title?: string, unified: string }` — a unified-diff text; lines are styled by their `+` / `-` / `@@` prefix |
 
 Rules every receiver implements and every producer can rely on:
@@ -347,9 +397,22 @@ Rules every receiver implements and every producer can rely on:
   raw `data` so the turn stays debuggable. A card is never silently dropped
   and a bad card never blanks the message.
 - **`image.src` accepts only inline base64 raster data** matching
-  `^data:image/(png|jpe?g|gif|webp);base64,` — SVG is deliberately excluded
-  (it can carry script), and remote URLs (`http(s)://`) are rejected. Anything
-  else is an invalid payload.
+  `^data:image/(png|jpe?g|gif|webp);base64,`, **or a generated-media
+  reference** `/api/media/image/<name>` — SVG is deliberately excluded (it can
+  carry script), and remote URLs (`http(s)://`) are rejected. Anything else is
+  an invalid payload.
+- **`audio.src` accepts only a generated-media reference**
+  `/api/media/audio/<name>`. A generated-media reference names one
+  URL-encoded file name (no separators, no `..`) that the Agent UI backend
+  serves from GAIA's own generation folder (`GET /api/media/{kind}/{name}`);
+  `path` is that file on disk. A terminal can show neither, so the TUI draws
+  the caption, `path` and (for audio) the length instead.
+- **No sidecar emits `image`-by-reference or `audio` today.** The Agent UI
+  host builds them from a successful `generate_image` / `generate_music` /
+  `generate_sound_effect` result's `image_path` / `audio_path` (carried in
+  `tool_result.data`), whether the agent ran in-process or behind `/query`,
+  so no sidecar `apiVersion` changes. An older sidecar that omits
+  `audio_path` simply gets no audio card.
 - **500-item render cap.** `table` rows, `list` items, and `key_value` items
   render at most 500 entries; the card shows a visible `+N more (truncated)`
   row when capped. Producers should pre-trim to what the user actually needs.
@@ -501,6 +564,35 @@ moment the next turn starts.
 
 **Send only to a peer at contract ≥ 2.15**; an older sidecar 404s the path
 itself, which a client must not misread as "the run ended" (see §7).
+
+### 5.3 Listing and revoking "always" answers (schema 2.26, flagship)
+
+**`GET /v1/gaia/sessions/{session_id}/grants`** →
+`{session_id, grants: [{key, label}]}` and
+**`DELETE /v1/gaia/sessions/{session_id}/grants[?key=<key>]`** → the same shape
+after revoking one grant, or all without `key`.
+
+An `always` answer to `needs_confirmation` is held by the session, so a host
+that offers it must be able to show the user what it granted and take it back.
+`label` is the prompt's `always_scope`; `key` is the handle to revoke it by.
+The list includes answers given in a turn still running, and a revoke applies
+from the very next gated call, including one in that turn. An unknown session,
+or a `key` the session does not hold, is a `404`. **Offer `always` only to a
+peer at contract ≥ 2.26**: an older one grants it with no way to list or revoke
+it.
+
+### 5.4 Listing a session's tools (schema 2.27, flagship)
+
+**`GET /v1/gaia/sessions/{session_id}/tools`** →
+`{session_id, tools: [{name, description, category}]}`.
+
+The tools the session's own agent can call now, in registry order, skills
+loaded in earlier turns included. `description` is the text the model is
+given. `category` is a `KNOWN_TOOLS` mixin name (`rag`, `file_io`, `shell`,
+...), `mcp`, `skill`, or `agent` for a tool the agent class defines itself. An
+unknown session is a `404`: the route never builds an agent just to answer,
+since that agent would not be the one the session talks to. **Ask only a peer
+at contract ≥ 2.27**; an older one 404s the path itself.
 
 ---
 

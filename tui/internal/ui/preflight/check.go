@@ -205,6 +205,7 @@ func checkDaemon(ctx context.Context, t Transport, cfg Config, rep *Report) Stat
 		return row.commit(rep)
 	}
 
+	rep.CoreVersion = inf.GaiaVersion
 	row.State = StateOK
 	row.Line = fmt.Sprintf("running (pid %d) · host API v%s", inf.PID, inf.APIVersion)
 	return row.commit(rep)
@@ -790,6 +791,15 @@ func probeInit(ctx context.Context, t Transport, cfg Config, rep *Report) (State
 		return row.State, false
 	}
 
+	// A cloud default_model arrives as the sidecar's model; a launch on a picked
+	// local model never uses it, so check the picked one instead. No window check:
+	// the sidecar's ctx describes the default, not the pick.
+	if cfg.Model != "" && gaiaLemonade.IsCloudID(body.Model.ID) {
+		row := checkLocalModelDownloaded(ctx, cfg.Model, model)
+		setRow(rep, row)
+		return row.State, false
+	}
+
 	// KeyModel is not agent-repairable either — a missing model blocks the
 	// same way a down daemon does.
 	if !body.Model.Present {
@@ -989,8 +999,8 @@ const emailAgentGrantID = "installed:email"
 // union; only the daemon's forward-out mint narrows to what it enforces.
 var connectScopes = map[string][]string{
 	"google": {
-		// catalog/google.py default_scopes
-		"openid", "email", "profile",
+		// providers/google.py GOOGLE_IDENTITY_SCOPES (the catalog's default_scopes)
+		"openid", "https://www.googleapis.com/auth/userinfo.email",
 		// gaia_agent_email.scopes.ALL_SCOPES (GMAIL_SCOPES + CALENDAR_SCOPES)
 		"https://www.googleapis.com/auth/gmail.modify",
 		"https://www.googleapis.com/auth/gmail.send",

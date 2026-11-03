@@ -119,6 +119,8 @@ def test_the_flag_reports_plan_progress_and_done(capsys):
         "id": "Qwen3.6-35B-A3B-GGUF",
         "bytes_total": int(21.7 * GB),
         "downloaded": False,
+        # The store is not on this PC, so what a pull left there is unknown.
+        "bytes_on_disk": None,
     }
     assert plan["models"][2]["downloaded"] is True
 

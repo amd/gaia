@@ -148,11 +148,11 @@ class TestNotifyDesktopScript:
     @pytest.fixture(autouse=True)
     def _requires_chat_wheel(self):
         pytest.importorskip(
-            "gaia_agent_chat", reason="gaia-agent-chat wheel not installed in this env"
+            "gaia_agent", reason="gaia-agent-gaia wheel not installed in this env"
         )
 
     def test_script_constant_reads_both_values_from_the_environment(self):
-        from gaia_agent_chat import agent as chat_agent
+        from gaia_agent import chat_agent
 
         script = chat_agent.NOTIFY_DESKTOP_PS_SCRIPT
         assert f"[string]$env:{chat_agent.NOTIFY_MESSAGE_ENV_VAR}" in script
@@ -162,7 +162,7 @@ class TestNotifyDesktopScript:
 
     def test_quote_in_message_cannot_alter_the_command(self, monkeypatch):
         """Drive the real tool body with a breakout message and inspect the argv."""
-        from gaia_agent_chat import agent as chat_agent
+        from gaia_agent import chat_agent
 
         notify = _notify_desktop_tool()
         captured = {}
@@ -238,7 +238,7 @@ def _notify_desktop_tool():
     registrars stubbed registers the agent's own ``@tool`` closures and nothing
     else, which keeps this hermetic.
     """
-    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
     from gaia.agents.base.tools import _TOOL_REGISTRY
 

@@ -36,6 +36,12 @@ from gaia.agents.tools.file_edit import (
 )
 from gaia.agents.tools.path_access import missing_file_error, readable_entry
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
+from gaia.agents.tools.workspace_paths import (
+    _project_target_for,
+    _resolve_target,
+    _workspace_default,
+    _workspace_target,
+)
 from gaia.logger import get_logger
 from gaia.security import BackupError
 
@@ -100,56 +106,6 @@ def _python_syntax_error(path: Path, content: str) -> Optional[str]:
         # a successful write into a reported failure.
         return f"{e} — the file was saved but will not run. Fix it before answering."
     return None
-
-
-def _resolve_target(
-    file_path: str,
-    project_dir: Optional[str] = None,
-    default_dir: Optional[str] = None,
-) -> Path:
-    """Resolve a file path using an explicit or session workspace base.
-
-    ``project_dir`` is the caller's explicit override.  When it is omitted,
-    ``default_dir`` is the workspace supplied by the host; only hosts that do
-    not expose one fall back to the process working directory.  A sidecar's
-    process cwd is its package directory, not the chat's workspace.
-    """
-    path = Path(file_path).expanduser()
-    if not path.is_absolute():
-        base = project_dir or default_dir
-        if base:
-            path = Path(base).resolve() / path
-    return path.resolve()
-
-
-def _workspace_default(host: Any) -> Optional[str]:
-    """The session workspace a host supplied for relative file paths.
-
-    An allowlist says where a tool *may* go; it is not an ordering or a default
-    directory.  In particular, a sidecar's allowed paths may contain exact
-    documents, its scratch directory, and the managed documents directory.
-    Selecting the first one would make a relative write unpredictable.  Only
-    an explicit session workspace changes the historical process-cwd fallback.
-    """
-    config = getattr(host, "config", None)
-    workspace = getattr(config, "working_directory", None) or getattr(
-        host, "working_directory", None
-    )
-    if not workspace:
-        return None
-    return str(Path(workspace).expanduser().resolve())
-
-
-def _project_target_for(host: Any, args: Dict[str, Any]) -> Path:
-    return _resolve_target(
-        args["file_path"],
-        args.get("project_dir"),
-        _workspace_default(host),
-    )
-
-
-def _gaia_md_target(args: Dict[str, Any]) -> str:
-    return os.path.join(args.get("project_root", "."), "GAIA.md")
 
 
 def _directory_path_error(file_path: str) -> Dict[str, Any]:
@@ -969,7 +925,7 @@ class FileIOToolsMixin:
                 Dictionary with search results
             """
             path_validator = _require_path_validator(self)
-            directory = os.path.expanduser(directory)
+            directory = str(_workspace_target(self, directory))
             try:
                 is_allowed, reason = path_validator.validate_read(directory)
                 if not is_allowed:
@@ -1412,9 +1368,11 @@ class FileIOToolsMixin:
                 # Backup before editing
                 backup_path = path_validator.create_backup(str(path))
 
-                # Generate diff before writing
+                # Generate diff before writing. keepends lets a line-ending-only
+                # change still diff; stripping it terminates each line once.
                 diff = "\n".join(
-                    difflib.unified_diff(
+                    line.rstrip("\r\n")
+                    for line in difflib.unified_diff(
                         current_content.splitlines(keepends=True),
                         updated_content.splitlines(keepends=True),
                         fromfile=f"a/{os.path.basename(str(path))}",
@@ -1494,7 +1452,14 @@ class FileIOToolsMixin:
                     path_validator.audit_write("edit", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, _gaia_md_target, "overwriting"))
+        def _workspace_gaia_md_target(args: Dict[str, Any]) -> Path:
+            return _workspace_target(self, args.get("project_root", ".")) / "GAIA.md"
+
+        @tool(
+            preflight=read_first_preflight(
+                self, _workspace_gaia_md_target, "overwriting"
+            )
+        )
         def update_gaia_md(
             project_root: str = ".",
             project_name: str = None,
@@ -1516,34 +1481,15 @@ class FileIOToolsMixin:
             Returns:
                 Dictionary with update results
             """
-            path_validator = _require_path_validator(self)
+            # Report missing setup instead of writing without a check.
+            path_validator = getattr(self, "path_validator", None)
+            if path_validator is None:
+                return _missing_path_validator_write_error(self)
+            gaia_path = "GAIA.md"
             try:
                 from datetime import datetime
 
-                gaia_path = os.path.join(os.path.expanduser(project_root), "GAIA.md")
-
-                is_blocked, reason = path_validator.is_write_blocked(gaia_path)
-                if is_blocked:
-                    return {**NOT_EXECUTED, "status": "error", "error": reason}
-                if not path_validator.is_path_allowed(gaia_path):
-                    return {
-                        **NOT_EXECUTED,
-                        "status": "error",
-                        "error": f"Access denied: {gaia_path} is not in allowed paths."
-                        f"{path_validator.scratch_hint(gaia_path)}",
-                    }
-
-                reads = file_read_record(self)
-                refusal = reads.refusal(gaia_path, "overwriting")
-                if refusal is not None:
-                    path_validator.audit_write(
-                        "write",
-                        gaia_path,
-                        0,
-                        "denied",
-                        refusal.get("error_type", "read_required"),
-                    )
-                    return refusal
+                gaia_path = str(_workspace_target(self, project_root) / "GAIA.md")
 
                 # Start building content
                 content = "# GAIA.md\n\n"
@@ -1589,22 +1535,61 @@ class FileIOToolsMixin:
                 content += "- Use Black formatter for consistent style\n"
                 content += "- Ensure proper error handling\n\n"
 
+                content_size = len(content.encode("utf-8"))
+                is_allowed, reason = path_validator.validate_write(
+                    gaia_path, content_size=content_size
+                )
+                if not is_allowed:
+                    path_validator.audit_write(
+                        "write", gaia_path, content_size, "denied", reason
+                    )
+                    return {**NOT_EXECUTED, "status": "error", "error": reason}
+
+                reads = file_read_record(self)
+                refusal = reads.refusal(gaia_path, "overwriting")
+                if refusal is not None:
+                    path_validator.audit_write(
+                        "write",
+                        gaia_path,
+                        content_size,
+                        "denied",
+                        refusal.get("error_type", "read_required"),
+                    )
+                    return refusal
+
                 before_change(gaia_path, "update_gaia_md")
                 # Check existence BEFORE writing for accurate created/updated msg
                 is_new_file = not os.path.exists(gaia_path)
+                backup_path = (
+                    None if is_new_file else path_validator.create_backup(gaia_path)
+                )
 
-                # Write the file
                 with open(gaia_path, "w", encoding="utf-8", newline="") as f:
                     f.write(content)
                 reads.note(gaia_path)
 
-                return {
+                path_validator.audit_write(
+                    "write",
+                    gaia_path,
+                    content_size,
+                    "success",
+                    f"backup={backup_path}" if backup_path else "",
+                )
+                result = {
                     "status": "success",
                     "file_path": gaia_path,
                     "created": is_new_file,
                     "message": f"GAIA.md {'created' if is_new_file else 'updated'} at {gaia_path}",
                 }
+                if backup_path:
+                    result["backup_path"] = backup_path
+                return result
+            except BackupError as e:
+                # Nothing was written, so this must not become a durable lesson.
+                path_validator.audit_write("write", gaia_path, 0, "denied", str(e))
+                return {**NOT_EXECUTED, "status": "error", "error": str(e)}
             except Exception as e:
+                path_validator.audit_write("write", gaia_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
         @tool(preflight=read_first_preflight(self, target_of))

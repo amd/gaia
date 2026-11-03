@@ -23,6 +23,8 @@ test.afterEach(() => {
 const themeOf = (name: string) => (name === 'dark' ? 'dark' : 'light');
 
 test('new chat', async ({ page }, info) => {
+    // The backdrop animates; reduced motion holds it to one still frame.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
     await open(page, themeOf(info.project.name));
     await expect(page.getByPlaceholder('Ask GAIA anything')).toBeVisible();
     await expect(page).toHaveScreenshot('new-chat.png');

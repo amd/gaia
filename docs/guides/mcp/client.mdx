@@ -271,6 +271,8 @@ GAIA looks for `mcp_servers.json` in two locations (in order):
 2. **Global config** - `~/.gaia/mcp_servers.json` in user's home directory (`$GAIA_HOME/mcp_servers.json` when `GAIA_HOME` is set)
 
 This allows project-specific MCP server configurations while maintaining a global default.
+Sessions the GAIA daemon hosts run from the daemon's own folder, so they read only
+the global file.
 
 ### Config File Format
 

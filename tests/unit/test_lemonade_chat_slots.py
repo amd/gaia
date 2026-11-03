@@ -111,6 +111,7 @@ def test_an_unreadable_catalog_loads_without_the_chat_flags(client, caplog):
     assert sent == {
         "model_name": "Qwen3-30B-A3B-Instruct-2507-GGUF",
         "ctx_size": 65536,
+        "save_options": True,
     }
     assert "without the two-slot chat flags" in caplog.text
 
@@ -126,16 +127,18 @@ def test_an_auth_failure_on_the_catalog_still_fails_the_load(client):
     post.assert_not_called()
 
 
-def test_a_known_recipe_skips_the_catalog_round_trip(client):
+def test_a_known_recipe_reads_the_catalog_once_for_saved_args(client):
+    # The recipe comes from the cache; the user's saved args are read fresh.
     client._model_metadata["Qwen3-30B-A3B-Instruct-2507-GGUF"] = {"recipe": "llamacpp"}
-    with responses.RequestsMock() as rsps:  # any GET would raise ConnectionError
+    with responses.RequestsMock() as rsps:
+        rsps.add(responses.GET, f"{BASE}/models", json={"data": CATALOG})
         with patch.object(
             client, "_post_load_with_transient_retry", return_value={}
         ) as post:
             client.load_model(
                 "Qwen3-30B-A3B-Instruct-2507-GGUF", ctx_size=65536, prompt=False
             )
-        assert len(rsps.calls) == 0
+        assert len(rsps.calls) == 1
     assert post.call_args.args[1]["llamacpp_args"] == CHAT_LLAMACPP_ARGS
 
 

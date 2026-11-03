@@ -773,6 +773,19 @@ def test_search_file_count_matches_returned_files(
     assert result["count"] == 10
 
 
+@pytest.mark.parametrize("extension", [".epub", ".pptx"])
+def test_search_file_finds_indexable_documents_by_default(
+    search_file_fn, tmp_path, monkeypatch, extension
+):
+    (tmp_path / f"handbook{extension}").write_bytes(b"PK\x03\x04")
+    monkeypatch.chdir(tmp_path)
+
+    result = search_file_fn("handbook", deep_search=False)
+
+    assert result["status"] == "success"
+    assert [Path(f).name for f in result["files"]] == [f"handbook{extension}"]
+
+
 # ===========================================================================
 # 9. read_file: binary document guard
 # ===========================================================================
@@ -788,21 +801,11 @@ def read_file_fn():
 class TestReadFileBinaryGuard:
     """Tests for the binary document early-exit guard in read_file."""
 
-    @pytest.mark.parametrize(
-        "extension",
-        [
-            ".doc",
-            ".pptx",
-            ".ppt",
-            ".xls",
-            ".odt",
-            ".ods",
-            ".odp",
-            ".epub",
-        ],
-    )
-    def test_binary_extension_returns_error(self, read_file_fn, extension, tmp_path):
-        """read_file must return an error dict for formats it cannot extract."""
+    @pytest.mark.parametrize("extension", [".pptx", ".epub"])
+    def test_index_only_extension_points_at_index_document(
+        self, read_file_fn, extension, tmp_path
+    ):
+        """read_file must send formats only RAG can parse to index_document."""
         fake_doc = tmp_path / f"document{extension}"
         fake_doc.write_bytes(b"%PDF-1.4 fake content")
 
@@ -811,6 +814,23 @@ class TestReadFileBinaryGuard:
         assert result["status"] == "error"
         assert "index_document" in result["error"]
         assert extension in result["error"]
+
+    @pytest.mark.parametrize(
+        "extension", [".doc", ".ppt", ".xls", ".odt", ".ods", ".odp"]
+    )
+    def test_unreadable_extension_says_to_convert(
+        self, read_file_fn, extension, tmp_path
+    ):
+        """Formats no GAIA tool parses must not be sent to index_document."""
+        fake_doc = tmp_path / f"document{extension}"
+        fake_doc.write_bytes(b"%PDF-1.4 fake content")
+
+        result = read_file_fn(str(fake_doc))
+
+        assert result["status"] == "error"
+        assert "index_document" not in result["error"]
+        assert extension in result["error"]
+        assert "Re-save it as" in result["error"]
 
     def test_text_file_not_blocked(self, read_file_fn, tmp_path):
         """Plain .txt files must pass through the binary guard."""
@@ -1462,6 +1482,82 @@ class TestSpreadsheetHeaderBelowATitle:
 
         assert result["columns"] == ["Name", "Email", "Column_2"]
         assert result["row_count"] == 2
+
+
+class TestMultiSheetWorkbook:
+    """Every sheet of a workbook is reachable, and the result says which was read.
+
+    analyze_data_file read only the active sheet and never said others existed,
+    so asked for total assets in a workbook whose second sheet is a balance
+    sheet, the agent told the user the file had no balance sheet.
+    """
+
+    @pytest.fixture
+    def workbook(self, sandboxed_read_tools):
+        openpyxl = pytest.importorskip("openpyxl")
+        tools, safe_dir, _ = sandboxed_read_tools
+        wb = openpyxl.Workbook()
+        income = wb.active
+        income.title = "Income Statement"
+        for row in (("Period", "Revenue"), ("Q1", 100), ("Q2", 120)):
+            income.append(list(row))
+        balance = wb.create_sheet("Balance Sheet")
+        for row in (("Item", "Amount"), ("Total Assets", 186010000)):
+            balance.append(list(row))
+        path = safe_dir / "financials.xlsx"
+        wb.save(path)
+        return tools, path
+
+    def test_the_result_names_every_sheet(self, workbook):
+        tools, path = workbook
+
+        result = tools["analyze_data_file"](str(path))
+
+        assert result["sheet"] == "Income Statement"
+        assert result["sheets"] == ["Income Statement", "Balance Sheet"]
+        assert "'Balance Sheet'" in result["other_sheets_note"]
+        assert result["columns"] == ["Period", "Revenue"]
+
+    def test_a_named_sheet_is_read(self, workbook):
+        tools, path = workbook
+
+        result = tools["analyze_data_file"](str(path), sheet="balance sheet")
+
+        assert result["sheet"] == "Balance Sheet"
+        assert result["columns"] == ["Item", "Amount"]
+        assert result["row_count"] == 1
+
+    def test_an_unknown_sheet_is_an_error_naming_the_real_ones(self, workbook):
+        tools, path = workbook
+
+        result = tools["analyze_data_file"](str(path), sheet="Cash Flow")
+
+        assert result["status"] == "error"
+        assert "Income Statement" in result["error"]
+        assert "Balance Sheet" in result["error"]
+
+    def test_a_one_sheet_workbook_has_no_note(self, sandboxed_read_tools):
+        openpyxl = pytest.importorskip("openpyxl")
+        tools, safe_dir, _ = sandboxed_read_tools
+        wb = openpyxl.Workbook()
+        wb.active.append(["region", "revenue"])
+        wb.active.append(["East", 1])
+        path = safe_dir / "one.xlsx"
+        wb.save(path)
+
+        result = tools["analyze_data_file"](str(path))
+
+        assert result["sheets"] == ["Sheet"]
+        assert "other_sheets_note" not in result
+
+    def test_csv_results_carry_no_sheet_fields(self, sandboxed_read_tools):
+        tools, safe_dir, _ = sandboxed_read_tools
+        data = safe_dir / "plain.csv"
+        data.write_text("a,b\n1,2\n", encoding="utf-8")
+
+        result = tools["analyze_data_file"](str(data))
+
+        assert "sheets" not in result and "sheet" not in result
 
 
 def test_browse_directory_status_counts_read_naturally(tmp_path):

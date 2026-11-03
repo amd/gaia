@@ -6,8 +6,9 @@ import json
 import logging
 import re
 import time
-from typing import Callable, Iterator, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Callable, Iterator, List, Optional, Tuple, Union
 
+from gaia.llm.local_only import CloudDisabledError
 from gaia.utils import perf_trace
 
 from ..base_client import LLMClient
@@ -26,9 +27,13 @@ from ..lemonade_client import (
     local_sampling_defaults,
     requested_thinking,
     resolve_ctx_size,
+    runs_on_npu,
 )
 from ..lemonade_launcher import describe_client_hint
 from ..surface_hints import TUI_MODEL_SWITCH_HINT, TUI_PROVIDER_AUTH_HINT
+
+if TYPE_CHECKING:
+    from gaia.audio.lemonade_asr import Transcript
 
 logger = logging.getLogger(__name__)
 
@@ -370,6 +375,14 @@ class LemonadeAuthRejectedError(LemonadeError):
     user_message = f"The request was rejected as unauthorized. {TUI_PROVIDER_AUTH_HINT}"
 
 
+class LemonadeLocalOnlyError(LemonadeError):
+    """Local only refused a cloud model. Not a fault: no retry can change it,
+    and the refusal already says how to turn it off, so it is carried as-is."""
+
+    retryable = False
+    user_message = "Local only is on, so GAIA won't use a cloud AI model."
+
+
 def _classify_lemonade_response(
     response: dict, model: Optional[str] = None
 ) -> Tuple[Optional[LemonadeError], bool]:
@@ -494,11 +507,18 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
             return LemonadeAuthRejectedError(user_message=str(cur))
         if isinstance(cur, CloudModelUnavailableError):
             return LemonadeCloudModelUnavailableError(cur.model_id, cur.provider)
+        if isinstance(cur, CloudDisabledError):
+            return LemonadeLocalOnlyError(user_message=str(cur))
         chain_text.append(str(cur))
         cur = cur.__cause__ or cur.__context__
 
     raw = str(exc)
     text = raw.lower()
+    # A CloudDisabledError flattened to text by a wrapper: keep its own words,
+    # or a "couldn't read the catalog" refusal reads as a network outage.
+    local_only = re.search(r"Local only is on[^\n]*", "\n".join(chain_text))
+    if local_only:
+        return LemonadeLocalOnlyError(user_message=local_only.group(0).strip())
     # Wording from ``lemonade_client._cloud_request_error`` for HTTP 402/412. The
     # message itself is kept: it names the provider and where to add funds.
     refused = re.search(
@@ -814,7 +834,8 @@ class LemonadeProvider(LLMClient):
         finish_reason = choice.get("finish_reason", "")
         self._last_finish_reason = finish_reason or None
         tool_calls = message.get("tool_calls")
-        self._last_reasoning = message.get("reasoning_content") or None
+        reasoning = message.get("reasoning_content") or None
+        self._last_reasoning = reasoning
 
         if tool_calls:
             logger.debug(
@@ -843,7 +864,7 @@ class LemonadeProvider(LLMClient):
             )
 
         content = message.get("content") or ""
-        if not content and finish_reason == "stop" and self._last_reasoning:
+        if not content and finish_reason == "stop" and reasoning:
             # Some llama.cpp builds route a completed answer into
             # ``reasoning_content``. A reply cut off by the token limit
             # (``finish_reason="length"``) is left empty on purpose — that text
@@ -853,7 +874,7 @@ class LemonadeProvider(LLMClient):
                 "treating 'reasoning_content' as the answer (model=%s)",
                 effective_model,
             )
-            content = self._last_reasoning
+            content = reasoning
             self._last_reasoning = None
         logger.debug(
             "tool_call_path=%s model_id=%s tool_calling_flag=%s finish_reason=%s",
@@ -874,6 +895,31 @@ class LemonadeProvider(LLMClient):
 
         vlm = VLMClient(base_url=self._backend.base_url)
         return vlm.extract_from_image(images[0], prompt=prompt)
+
+    def generate_image(self, prompt: str, **kwargs) -> dict:
+        """Generate an image; see :meth:`LemonadeClient.generate_image`."""
+        return self._backend.generate_image(prompt, **kwargs)
+
+    def transcribe_audio(
+        self, audio_path: str, model: Optional[str] = None, **kwargs
+    ) -> "Transcript":
+        """Transcribe a 16 kHz mono WAV on this provider's Lemonade server.
+
+        *model* defaults to ``DEFAULT_ASR_MODEL``; other keyword arguments go to
+        :meth:`LemonadeASRClient.transcribe`.
+        """
+        from gaia.audio.lemonade_asr import DEFAULT_ASR_MODEL, LemonadeASRClient
+
+        asr = LemonadeASRClient(
+            base_url=self._backend.base_url,
+            model=DEFAULT_ASR_MODEL if model is None else model,
+            api_key=self._backend.api_key,
+        )
+        return asr.transcribe(audio_path, **kwargs)
+
+    def create_image_variation(self, image_path: str, **kwargs) -> dict:
+        """Vary a PNG; see :meth:`LemonadeClient.create_image_variation`."""
+        return self._backend.create_image_variation(image_path, **kwargs)
 
     def get_performance_stats(self) -> dict:
         if self._backend.cloud_model_provider(self._last_model or DEFAULT_MODEL_NAME):
@@ -968,6 +1014,7 @@ class LemonadeProvider(LLMClient):
         usage_seen = False
         text_seen: list[str] = []
         reasoning_seen: list[str] = []
+        ran_past_call = False
 
         def close_thinking():
             nonlocal in_thinking, thought
@@ -1009,6 +1056,16 @@ class LemonadeProvider(LLMClient):
                             time.perf_counter() + TOOL_CALL_PROGRESS_INTERVAL_S
                         )
                 content = delta.get("content")
+                if (
+                    tool_calls
+                    and (content or choice.get("text"))
+                    and runs_on_npu(self._last_model)
+                ):
+                    # FastFlowLM does not stop at a tool call: what follows is an
+                    # invented tool result, then an answer from it.
+                    ran_past_call = True
+                    finish_reason = finish_reason or "tool_calls"
+                    break
                 if content:
                     # Close thinking block before yielding actual content
                     if in_thinking:
@@ -1056,6 +1113,15 @@ class LemonadeProvider(LLMClient):
                                 yield close_thinking()
                             text_seen.append(text)
                             yield text
+        if ran_past_call:
+            logger.warning(
+                "%s kept writing after its tool call; stopped the stream there",
+                self._last_model,
+            )
+            # Closing the stream stops the server generating the rest.
+            close = getattr(response, "close", None)
+            if close is not None:
+                close()
         self._last_reasoning = "".join(reasoning_seen) or None
         self._last_finish_reason = finish_reason or None
         if not finish_reason and not usage_seen:

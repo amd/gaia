@@ -14,14 +14,20 @@ import {
 // ── Pure utility tests ─────────────────────────────────────────────────
 
 describe('getUnsupportedCategory', () => {
-    it('returns "Image" for .png', () => {
-        const cat = getUnsupportedCategory('.png');
+    it('returns "Image" for .heic', () => {
+        const cat = getUnsupportedCategory('.heic');
         expect(cat).not.toBeNull();
         expect(cat!.label).toBe('Image');
     });
 
     it('is case-insensitive', () => {
-        expect(getUnsupportedCategory('.JPG')?.label).toBe('Image');
+        expect(getUnsupportedCategory('.HEIC')?.label).toBe('Image');
+    });
+
+    it('returns null for raster images — the vision model reads them', () => {
+        for (const ext of ['.png', '.jpg', '.jpeg', '.webp']) {
+            expect(getUnsupportedCategory(ext)).toBeNull();
+        }
     });
 
     it('works without leading dot', () => {
@@ -62,6 +68,11 @@ describe('isExtensionSupported', () => {
 
     it('returns true for .docx — modern Word is indexable', () => {
         expect(isExtensionSupported('.docx')).toBe(true);
+    });
+
+    it('returns true for .png and .JPG — images are indexable', () => {
+        expect(isExtensionSupported('.png')).toBe(true);
+        expect(isExtensionSupported('.JPG')).toBe(true);
     });
 
     it('returns false for .exe', () => {
@@ -123,7 +134,7 @@ describe('UploadErrorToast', () => {
 
         render(
             <UploadErrorToast
-                filename="photo.png"
+                filename="photo.heic"
                 error="Unsupported file type"
                 onDismiss={onDismiss}
                 timeout={0}

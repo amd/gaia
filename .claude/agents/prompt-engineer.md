@@ -32,7 +32,7 @@ say each point once. The prompt text itself is always shown in full.
 
 | Surface | Location |
 |---------|----------|
-| Agent system prompt | `_get_system_prompt()` on each agent, e.g. `hub/agents/chat/python/gaia_agent_chat/agent.py` |
+| Agent system prompt | `_get_system_prompt()` on each agent, e.g. `hub/agents/gaia/python/gaia_agent/chat_agent.py` |
 | Tool descriptions | `@tool` docstring inside `_register_tools` |
 | Prompt assembly | `_compose_system_prompt` / `_format_tools_for_prompt` in `src/gaia/agents/base/agent.py` |
 | Chat defaults | `src/gaia/chat/prompts.py` |

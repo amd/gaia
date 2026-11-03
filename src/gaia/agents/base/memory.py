@@ -108,28 +108,45 @@ _MEMORY_SETTINGS_PATH = Path.home() / ".gaia" / "memory_settings.json"
 
 
 def _load_memory_settings() -> Dict:
-    """Read ~/.gaia/memory_settings.json.  Returns {} if missing or unreadable."""
+    """Read ~/.gaia/memory_settings.json, returning {} if it is unusable."""
     try:
-        if _MEMORY_SETTINGS_PATH.exists():
-            return json.loads(_MEMORY_SETTINGS_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
+        loaded = json.loads(_MEMORY_SETTINGS_PATH.read_text(encoding="utf-8"))
+        return loaded if isinstance(loaded, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as exc:
         logger.warning(
-            "failed to load memory settings from %s: %s", _MEMORY_SETTINGS_PATH, e
+            "failed to load memory settings from %s: %s", _MEMORY_SETTINGS_PATH, exc
         )
-    return {}
+        return {}
 
 
 def _save_memory_settings(settings: Dict) -> None:
-    """Merge *settings* into ~/.gaia/memory_settings.json (creates file if absent)."""
+    """Merge *settings* into ~/.gaia/memory_settings.json or raise on failure."""
     try:
-        current = _load_memory_settings()
-        current.update(settings)
+        current = json.loads(_MEMORY_SETTINGS_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        current = {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Could not read memory settings from {_MEMORY_SETTINGS_PATH}: {exc}"
+        ) from exc
+
+    if not isinstance(current, dict):
+        raise RuntimeError(
+            f"Could not read memory settings from {_MEMORY_SETTINGS_PATH}: "
+            "the JSON root must be an object"
+        )
+    current.update(settings)
+    try:
         _MEMORY_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         _MEMORY_SETTINGS_PATH.write_text(
             json.dumps(current, indent=2), encoding="utf-8"
         )
-    except Exception as e:
-        logger.warning("[MemoryMixin] failed to save memory settings: %s", e)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not save memory settings to {_MEMORY_SETTINGS_PATH}: {exc}"
+        ) from exc
 
 
 def _system_context_is_enabled() -> bool:
@@ -216,7 +233,7 @@ def _changed_software_versions(existing: List[Dict]) -> List[str]:
 #: Default embedder served by Lemonade — EmbeddingGemma 300M, 768-dim GGUF
 #: (GPU/CPU profiles). The active embedder is per-instance
 #: (``self._embedding_model``) and may be the NPU-native FLM embedder instead;
-#: see ``init_memory`` (#1744). These module constants remain the fallback default.
+#: see ``init_memory``. These module constants remain the fallback default.
 EMBEDDING_MODEL = DEFAULT_EMBEDDING_MODEL
 
 #: Default embedding dimensionality (EmbeddingGemma 300M is 768).
@@ -811,7 +828,7 @@ def _blob_to_embedding(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=np.float32).copy()
 
 
-#: Reason codes for why memory is unavailable this session (#2519). Distinct
+#: Reason codes for why memory is unavailable this session. Distinct
 #: codes because the remedies differ: an unset env var, a model that was
 #: never pulled into a *running* Lemonade, a pulled model Lemonade cannot
 #: load, and Lemonade not running at all each have a different fix.
@@ -829,7 +846,7 @@ MEMORY_DOCS_URL = "https://amd-gaia.ai/docs/reference/troubleshooting"
 _MODEL_NOT_FOUND_MARKERS = ("model_not_found", "was not found", "404")
 
 #: Lemonade answered and has the model, but its backend died loading it —
-#: status 500 ``{"error":{"code":"model_load_error", ...}}`` (#1831).
+#: status 500 ``{"error":{"code":"model_load_error",...}}``.
 _MODEL_LOAD_FAILED_MARKERS = ("model_load_error", "llama-server failed to start")
 
 
@@ -871,6 +888,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         context: str = "global",
         embedding_model: Optional[str] = None,
         incognito: bool = False,
+        session_id: Optional[str] = None,
     ) -> None:
         """Initialize the memory subsystem (v2 startup sequence).
 
@@ -896,6 +914,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                 loaded until memory is actually used — a turn with memory back
                 on, a ``recall``, or a dashboard reconcile/consolidate — so a
                 session that never uses memory never pays for it.
+            session_id: Id to file this session's conversation turns under.
+                The Agent UI passes its chat id so deleting the chat can
+                delete them. Defaults to a fresh random id.
 
         Does not raise when the embedding service is unreachable: it logs a
         warning and degrades to a memory-disabled session (``memory_store`` is
@@ -912,7 +933,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Pre-probe default; refined from the live embedder below.
         self._embedding_dim = EMBEDDING_DIM
         # Why memory is unavailable this session, or None while it's live.
-        # Set on every path below (#2519) so callers can report the REAL
+        # Set on every path below so callers can report the REAL
         # cause instead of guessing between "env var" / "not pulled" /
         # "unreachable" after the fact.
         self._memory_unavailable_reason: Optional[str] = None
@@ -938,7 +959,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._recalled_skill_prompt = ""
             self._recalled_skills = []
             self._memory_post_init_pending = False
-            self._memory_session_id = str(uuid4())
+            self._memory_session_id = session_id or str(uuid4())
             self._reminders_surfaced = set()
             self._reminder_last_turn_at = None
             return
@@ -966,19 +987,19 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Procedures FAISS index state — a SEPARATE index over
         # procedures.embedding (the when_to_use trigger vector), distinct from
         # the knowledge index above so goal→procedure recall never pollutes, or
-        # is polluted by, knowledge search (#887 procedural memory).
+        # is polluted by, knowledge search (procedural memory).
         self._proc_faiss_index = None
         self._proc_faiss_id_map: List[str] = []  # faiss_position -> procedure_id
 
-        # Per-turn recalled-skill injection (#887 RECALL).  Holds the rendered
+        # Per-turn recalled-skill injection (RECALL). Holds the rendered
         # procedure body(ies) recall_skill matched for the current goal; it rides
         # in this turn's memory context, never the system prompt.
         self._recalled_skill_prompt = ""
         # The stable memory section, rendered once per session (see
         # get_memory_system_prompt). None until the first composition.
         self._stable_memory_prompt: Optional[str] = None
-        # The matched DistilledProcedure objects from the same per-turn recall
-        # (#1451): the tool loader reads their tools_required via
+        # The matched DistilledProcedure objects from the same per-turn recall:
+        # the tool loader reads their tools_required via
         # _recalled_skill_tools as the SKILL signal.  Empty list = no recall =
         # no SKILL signal this turn.
         self._recalled_skills = []
@@ -988,7 +1009,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         self._reminder_last_turn_at: Optional[float] = None
 
         # Step 9, before the embedder: a degraded session still needs an id.
-        self._memory_session_id = str(uuid4())
+        self._memory_session_id = session_id or str(uuid4())
 
         self._memory_embedder_pending = False
         if incognito:
@@ -1200,7 +1221,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             return False
 
         # (Embedder-change migration is handled above via the store's
-        # reconcile_embedder, #1744.)
+        # reconcile_embedder.)
 
         # Step 3: Backfill embeddings for items missing them
         backfilled = self._backfill_embeddings(limit=100)
@@ -1210,7 +1231,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Step 4: Rebuild FAISS index from stored embeddings
         self._rebuild_faiss_index()
 
-        # Step 4b: Rebuild the SEPARATE procedures FAISS index (#887). Empty
+        # Step 4b: Rebuild the SEPARATE procedures FAISS index. Empty
         # until skill synthesis stores procedures, so this is a no-op cost for
         # users without procedural memory yet.
         self._rebuild_proc_faiss_index()
@@ -1418,7 +1439,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         self._faiss_add(knowledge_id, vec)
 
     # ------------------------------------------------------------------
-    # Degraded-state reporting (#2519)
+    # Degraded-state reporting
     # ------------------------------------------------------------------
 
     def memory_unavailable_message(self) -> Optional[str]:
@@ -1472,7 +1493,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 f"{backend_crash_remedy(model)} {restart_note}"
             )
         # MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE, or an unclassified failure —
-        # treat as unreachable, the safer default (matches the pre-#2519
+        # treat as unreachable, the safer default (matches the earlier
         # behavior for anything we can't positively identify).
         detail = getattr(self, "_memory_unavailable_detail", None)
         detail_suffix = f" ({detail})" if detail else ""
@@ -2662,7 +2683,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         except Exception as e:
             logger.warning("[MemoryMixin] post-init consolidation failed: %s", e)
 
-        # Step 8: skill synthesis (procedural memory, #887) — started on a
+        # Step 8: skill synthesis (procedural memory) — started on a
         # background thread, so distillation never sits in front of the user's
         # first answer.  The pass logs its own start, outcome and failures;
         # this wrapper only keeps a failure to *start* it off the first query.
@@ -3283,7 +3304,10 @@ class MemoryMixin(ProceduralMemoryMixin):
             "  'remind me', 'add a journal entry', 'log this') → call `remember` FIRST,\n"
             "  even when they say 'just acknowledge'. A verbal 'Got it' WITHOUT a tool\n"
             "  call does NOT persist across sessions.\n"
-            "- Reminders/deadlines → remember(category='reminder', due_at='YYYY-MM-DD')\n"
+            "- Reminders/deadlines → remember(category='reminder', due_at='YYYY-MM-DD').\n"
+            "  This only stores a memory; it does NOT send an alert or run at the due\n"
+            "  time. Never promise an automatic notification. Say you will bring it up\n"
+            "  the next time the user chats; for timed work, point them to Scheduled tasks.\n"
             "- Journal entries/notes → remember(category='note', domain='journal')\n"
             "- Facts, preferences, commitments → remember() immediately\n"
             "- Save only what the USER says or asks you to keep. Text from a file,\n"
@@ -3752,7 +3776,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._turn_tool_record = []
             self._memory_turn_query = user_input
 
-            # Recall procedures for this goal (#887 RECALL) from the clean goal,
+            # Recall procedures for this goal (RECALL) from the clean goal,
             # not the augmented message; the dynamic context below carries it.
             with turn_metrics.pre_turn_span(self, "skill_recall"):
                 self._refresh_recalled_skills(user_input)
@@ -3943,9 +3967,11 @@ class MemoryMixin(ProceduralMemoryMixin):
             # keyword directly adjacent to a value: "password is X", "secret: X"
             r"\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token"
             r"|auth[_ -]?token|credential)s?\b\s*(?:is|:|=)\s*\S+",
-            # generic dash/underscore-joined high-entropy-looking token, e.g.
-            # HALIBUT-4417-ZULU: 2+ alnum groups with at least one numeric group.
-            r"\b[A-Z][A-Z0-9]{2,}[-_][0-9]{2,}[-_][A-Z][A-Z0-9]{2,}\b",
+            # dash/underscore-joined token in any case, e.g. HALIBUT-4417-ZULU
+            # or tango-9921-delta; a file extension right after it
+            # (sales_2024_report.pdf) marks a filename, not a secret.
+            r"\b[A-Z][A-Z0-9]{2,}[-_][0-9]{2,}[-_][A-Z][A-Z0-9]{2,}\b"
+            r"(?!\.[A-Za-z0-9]{1,5}\b)",
             # A PIN/passcode or card security code in a user-owned context.
             # Keep the PIN forms bounded: generic uses such as GPIO pins,
             # and page numbers are ordinary data.

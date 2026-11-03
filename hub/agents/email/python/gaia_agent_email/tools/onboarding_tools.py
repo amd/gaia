@@ -673,7 +673,7 @@ class OnboardingToolsMixin:
             except InputUnsupportedError as exc:
                 return _envelope_err(
                     f"{exc} Until then, connect the mailbox from Settings → "
-                    "Connections in the Agent UI."
+                    "Connectors in the Agent UI."
                 )
             except InputUnansweredError as exc:
                 return _envelope_err(str(exc))
@@ -688,7 +688,7 @@ class OnboardingToolsMixin:
                     "Mailbox setup failed "
                     f"({type(exc).__name__} — see the agent log for details). "
                     "Nothing was changed. You can also connect from Settings → "
-                    "Connections in the Agent UI."
+                    "Connectors in the Agent UI."
                 )
 
 

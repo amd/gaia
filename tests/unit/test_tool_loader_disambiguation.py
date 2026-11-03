@@ -29,11 +29,11 @@ from gaia.agents.base.tool_loader import (
     ToolLoader,
 )
 
-# DOC_BUNDLES ships with the standalone gaia-agent-chat wheel (#1102); skip the
+# DOC_BUNDLES ships in the flagship gaia-agent-gaia wheel (#6099); skip the
 # whole module when a framework-only env lacks it.
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS  # noqa: E402
+from gaia_agent.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS  # noqa: E402
 
 DIM = 768
 

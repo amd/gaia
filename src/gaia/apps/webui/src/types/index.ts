@@ -4,6 +4,9 @@
 /** Types shared across the GAIA Agent UI frontend. */
 
 import type { TurnSummaryResponse } from './api.gen';
+import type { SetupCatalogEntry, SetupModelProgress, SetupOverall } from './setup';
+
+export * from './setup';
 
 export interface Session {
     id: string;
@@ -369,10 +372,10 @@ export interface ChatPerformance {
         tokens_in: number | null;
         tokens_cached: number | null;
         tokens_out: number | null;
-        tool_calls: number;
+        tool_calls: number | null;
         loads: number;
         load_seconds: number | null;
-        usd: number;
+        usd: number | null;
         unpriced_turns: number;
     };
     /** The model as Lemonade reports it now. */
@@ -438,6 +441,10 @@ export interface Message {
     stopState?: 'stopped' | 'unconfirmed';
     /** Error the server reported while a stopped turn was closing. */
     stopError?: string;
+    /** Client-side: this reply stands in for a turn that failed before answering. */
+    failed?: boolean;
+    /** Client-side: the raw error, to recognize the server's saved copy of this failure. */
+    failureText?: string;
     /** Set when this turn pushed older turns out of the model's view. */
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */
@@ -526,7 +533,7 @@ export interface DownloadProgress {
     downloaded_bytes: number;
     /** Sum of every file's ``bytes_total`` in this download. */
     total_bytes: number;
-    /** Populated only when state === 'error'. */
+    /** Set on 'error', and on 'starting' while a backend installs first. */
     message: string | null;
 }
 
@@ -700,6 +707,8 @@ export interface Schedule {
     description: string;
     /** The last run's error; null when it succeeded. */
     last_error: string | null;
+    /** A run is in flight right now, timed or Run now. */
+    running?: boolean;
 }
 
 /** A single execution result for a scheduled task. */
@@ -734,6 +743,10 @@ export interface TunnelStatus {
     token: string | null;
     startedAt: string | null;
     error: string | null;
+    /** `ngrok_not_installed` when the failure is a one-time setup step. */
+    reason?: 'ngrok_not_installed' | null;
+    /** This OS's ngrok install commands, set only with that reason. */
+    installCommands?: string[];
     publicIp: string | null;
     /** The device behind the latest authenticated remote request. */
     device?: { name: string; lastSeen: string } | null;
@@ -820,6 +833,10 @@ export interface AgentStep {
     mcpOutput?: McpOutput;
     /** Tool call latency in milliseconds. */
     latencyMs?: number;
+    /** Card key the tool's result drew, persisted for reload (for type='tool'). */
+    render?: string;
+    /** That card's payload. */
+    data?: unknown;
 }
 
 /** The text an MCP tool returned, capped by the server. */
@@ -852,6 +869,7 @@ export type StreamEventType =
     | 'agent_created' // New agent created — triggers agent list refresh
     | 'followup_taken'    // The running turn took a message sent mid-turn
     | 'followup_returned' // The turn ended without taking these mid-turn messages
+    | 'followup_unavailable' // The running turn can't take a message mid-turn
     | 'context_usage';    // What this turn's model call holds, by kind
 
 export interface StreamEvent {
@@ -1027,8 +1045,15 @@ export interface SetupRunStatus {
     skip_chat_model?: boolean;
     /** The run is switching to GAIA's own server; a retry must keep switching. */
     gaia_lemonade?: boolean;
+    /** A model's download failed in this run; its row says why. */
+    model_failed?: boolean;
+    /** The run only starts the model server; models are chosen and pulled after. */
+    server_only?: boolean;
     /** The chat model setup chose, once it has said. */
     chat_model?: string | null;
+    /** Each model's download, the run's and any single download's. */
+    models?: SetupModelProgress[];
+    overall?: SetupOverall;
 }
 
 /** GET /api/setup/plan: what setup will use and download, before it starts. */
@@ -1044,6 +1069,12 @@ export interface SetupPlan {
     options: Array<{ id: string; size_gb: number | null; fits: boolean | null; reason: string | null }>;
     models: Array<{ id: string; role: 'chat' | 'embedding'; size_gb: number | null }>;
     download_gb: number | null;
+    capacity_gb?: number | null;
+    /** The drive Lemonade stores models on; `free_gb` null when it couldn't be read. */
+    disk?: { path: string | null; free_gb: number | null; source: 'lemonade' | 'local' | null };
+    disk_warning?: string | null;
+    skipped_models?: string[];
+    catalog?: SetupCatalogEntry[];
 }
 
 /** A task a new chat offers, from what is set up on this PC. */
@@ -1115,6 +1146,8 @@ export interface ProviderInfo {
     registered?: boolean;
     /** Where Lemonade's key comes from; null when none is configured. */
     key_source?: 'environment' | 'lemonade' | 'stored' | null;
+    /** The saved key's last four characters; null when there is none to read. */
+    key_hint?: string | null;
     /**
      * `waiting_for_os_permission` while the OS holds the saved-key read for the
      * user's permission (a macOS keychain dialog): `key_source` is then unknown,
@@ -1123,6 +1156,8 @@ export interface ProviderInfo {
     key_state?: 'read' | 'waiting_for_os_permission';
     key_message?: string | null;
     models_discovered?: boolean;
+    /** The provider's model list is down, so GAIA offers models it already knows. */
+    known_models?: boolean;
     env_var?: string;
     base_url?: string | null;
     error?: string;
@@ -1185,6 +1220,50 @@ export interface ProviderModel {
     download_progress?: DownloadProgress | null;
     /** List price per million tokens; null when unknown (never shown as $0). Cloud models only. */
     price?: ModelPrice | null;
+    /** Added by the user from a Hugging Face link, so it can be removed. */
+    custom?: boolean;
+    /** The link it was added from. */
+    source_url?: string | null;
+}
+
+/** One check run on a pasted Hugging Face link. */
+export interface CustomModelCheck {
+    id: 'link' | 'repo' | 'gguf' | 'chat' | 'architecture' | 'fit' | 'new';
+    label: string;
+    ok: boolean;
+    detail: string;
+}
+
+/** POST /api/providers/local/custom/check — what a pasted link would add. */
+export interface CustomModelReport {
+    ok: boolean;
+    url: string;
+    checks: CustomModelCheck[];
+    error: string | null;
+    warnings: string[];
+    /** Every quantization, by its first file (two can share a quant name). */
+    variants: { quant: string; file: string; size_gb: number; fits: boolean; reason: string | null }[];
+    repo?: string;
+    model_id?: string;
+    display_name?: string;
+    quant?: string;
+    /** The chosen quantization's first file. */
+    file?: string;
+    checkpoint?: string;
+    size_gb?: number;
+    architecture?: string | null;
+    context_length?: number | null;
+    vision?: boolean;
+    tool_calling?: boolean;
+    llamacpp_version?: string;
+}
+
+/** DELETE /api/providers/local/custom/{id}. */
+export interface CustomModelRemoved {
+    removed: string;
+    display_name: string;
+    /** Config keys that named the model and were cleared: default_model, last_model. */
+    cleared: string[];
 }
 
 export type LocalModelState = 'loaded' | 'downloaded' | 'not_downloaded';
@@ -1298,7 +1377,7 @@ export interface SessionPermissions {
 // ── Skills (GET /api/skills) ──────────────────────────────────────────────
 
 /** Which discovery root a skill was found in. */
-export type SkillSource = 'agent-bundled' | 'user' | 'claude-import';
+export type SkillSource = 'agent-bundled' | 'user' | 'claude-project' | 'claude-import';
 
 export interface SkillInfo {
     name: string;

@@ -19,6 +19,8 @@ import { displayModelName, useModelNames } from '../stores/modelStore';
 import { log } from '../utils/logger';
 import { safeUrlTransform } from '../utils/markdown';
 import type { Message, TurnSummary } from '../types';
+import { pluralKey, type Say } from '../i18n/registry';
+import { tEn, useT, type Translate } from '../i18n/useT';
 import './SideRail.css';
 
 /** What the rail shows: the latest answer's summary, a turn in progress, or nothing. */
@@ -46,19 +48,22 @@ function hostOf(url: string): string {
     }
 }
 
-function pagesLabel(pages: number[] | undefined): string | null {
-    if (!pages || pages.length === 0) return null;
-    return `${pages.length === 1 ? 'p.' : 'pp.'} ${pages.join(', ')}`;
+/** "pp. 5, 6, 8 · 6 passages", written once per language. */
+function documentMeta(say: Say, pages: number[] | undefined, passages: number): string {
+    const parts: string[] = [];
+    if (pages && pages.length > 0) parts.push(say(pluralKey('rail.pages', pages.length), { list: pages.join(', ') }));
+    parts.push(say(pluralKey('rail.passages', passages), { n: passages }));
+    return parts.join(' · ');
 }
 
-function costText(summary: TurnSummary): string {
+function costText(summary: TurnSummary, t: Translate = tEn): string {
     const { cost } = summary;
-    if (cost.kind === 'local') return 'No cloud charges';
+    if (cost.kind === 'local') return t('rail.costLocal');
     if (cost.kind === 'estimate' && typeof cost.usd === 'number') {
         const usd = cost.usd < 0.01 ? cost.usd.toFixed(4) : cost.usd.toFixed(2);
-        return `About $${usd} at list price`;
+        return t('rail.costAbout', { usd });
     }
-    return summary.model ? 'Not known for this model' : 'Not known';
+    return t(summary.model ? 'rail.costUnknownModel' : 'rail.costUnknown');
 }
 
 function errorText(err: unknown): string {
@@ -74,6 +79,7 @@ interface ThisAnswerProps {
 
 /** The latest answer's sources, files and where its data went: the session panel's first section. */
 export function ThisAnswer({ messages, busy = false }: ThisAnswerProps) {
+    const t = useT();
     const state = railState(messages, busy);
     if (!state) return null;
     const summary = state.kind === 'turn' ? state.turn.turnSummary ?? null : null;
@@ -82,21 +88,21 @@ export function ThisAnswer({ messages, busy = false }: ThisAnswerProps) {
         <div className="side-rail-body">
             {!summary && (
                 <p className="side-rail-pending" role="status">
-                    Working on this answer. Its sources, files and where its data went appear here when it finishes.
+                    {t('rail.pending')}
                 </p>
             )}
             {noLiveData && (
                 <div className="side-rail-warn" role="status">
                     <AlertTriangle size={14} aria-hidden="true" />
                     <div>
-                        <strong>Couldn't get live data</strong>
-                        <span>Every web lookup this turn failed, so the answer isn't based on current information.</span>
+                        <strong>{t('rail.noLive')}</strong>
+                        <span>{t('rail.noLiveWhy')}</span>
                     </div>
                 </div>
             )}
             {summary && (summary.error ? (
                 <p className="side-rail-error" role="alert">
-                    Couldn't put together this turn's sources and details: {summary.error}
+                    {t('rail.error', { error: summary.error })}
                 </p>
             ) : (
                 <>
@@ -128,11 +134,12 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 
 function SourcesSection({ summary }: { summary: TurnSummary }) {
+    const t = useT();
     const pages = summary.pages ?? [];
     const documents = summary.documents ?? [];
     if (pages.length === 0 && documents.length === 0) return null;
     return (
-        <Section title="Sources">
+        <Section title={t('rail.sources')}>
             <ul className="side-rail-list">
                 {pages.map((p) => (
                     <li key={p.url} className="side-rail-item">
@@ -143,21 +150,20 @@ function SourcesSection({ summary }: { summary: TurnSummary }) {
                                 <ExternalLink size={10} aria-hidden="true" className="side-rail-link-icon" />
                             </a>
                             <span className="side-rail-meta">
-                                {hostOf(p.url)}{p.kind === 'search_result' ? ' · search result' : ''}
+                                {hostOf(p.url)}{p.kind === 'search_result' ? ` · ${t('rail.searchResult')}` : ''}
                             </span>
                         </div>
                     </li>
                 ))}
                 {documents.map((d) => {
-                    const where = pagesLabel(d.pages);
                     const count = d.passages ?? 0;
                     return (
                         <li key={d.path} className="side-rail-item">
                             <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
                             <div className="side-rail-item-text">
-                                <span className="side-rail-name" title={d.name}>{d.name}</span>
+                                <span className="side-rail-name" title={d.name} dir="auto">{d.name}</span>
                                 <span className="side-rail-meta">
-                                    {[where, `${count} passage${count === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}
+                                    {t.compose((say) => documentMeta(say, d.pages, count))}
                                 </span>
                             </div>
                         </li>
@@ -213,6 +219,7 @@ function useFileStatus(paths: string[]) {
 }
 
 function FilesSection({ summary }: { summary: TurnSummary }) {
+    const t = useT();
     const files = summary.files ?? [];
     const [error, setError] = useState<string | null>(null);
     const { status, error: checkError } = useFileStatus(files.map((f) => f.path));
@@ -222,12 +229,12 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
         setError(null);
         action.catch((err) => {
             log.ui.error(`Failed to open ${name}`, err);
-            setError(`Couldn't open ${name}: ${errorText(err)}`);
+            setError(t('sp.couldntOpen', { name, error: errorText(err) }));
         });
     };
 
     return (
-        <Section title="Files">
+        <Section title={t('rail.files')}>
             <ul className="side-rail-list">
                 {files.map((f) => {
                     const now = status.get(f.path);
@@ -237,7 +244,7 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
                                 <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
                                 <div className="side-rail-item-text">
                                     <span className="side-rail-name" title={f.path}>{f.name}</span>
-                                    <span className="side-rail-meta">No longer on disk</span>
+                                    <span className="side-rail-meta">{t('sp.gone')}</span>
                                 </div>
                             </li>
                         );
@@ -249,16 +256,16 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
                             <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
                             <div className="side-rail-item-text">
                                 <span className="side-rail-name" title={f.path}>{f.name}</span>
-                                {changed && <span className="side-rail-meta">Changed since this turn</span>}
+                                {changed && <span className="side-rail-meta">{t('rail.changedSince')}</span>}
                                 <span className="side-rail-actions">
                                     {f.openable && (
                                         <button type="button" className="side-rail-action" onClick={() => run(api.openFileInApp(f.path), f.name)}>
-                                            Open
+                                            {t('sp.open')}
                                         </button>
                                     )}
                                     <button type="button" className="side-rail-action" onClick={() => run(api.openFileOrFolder(f.path, true), f.name)}>
                                         <FolderOpen size={11} aria-hidden="true" />
-                                        Show in folder
+                                        {t('sp.showInFolder')}
                                     </button>
                                 </span>
                             </div>
@@ -268,48 +275,47 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
             </ul>
             {error && <p className="side-rail-error" role="alert">{error}</p>}
             {checkError && (
-                <p className="side-rail-error">Couldn't check whether these files changed: {checkError}</p>
+                <p className="side-rail-error">{t('rail.checkFailed', { error: checkError })}</p>
             )}
         </Section>
     );
 }
 
 function ThisTurnSection({ summary }: { summary: TurnSummary }) {
+    const t = useT();
     useModelNames();
     const { model } = summary;
     const sites = summary.sites ?? [];
     const usedDocs = (summary.documents ?? []).length > 0;
     return (
-        <Section title="This turn">
+        <Section title={t('rail.thisTurn')}>
             <dl className="side-rail-facts">
-                <dt>Model</dt>
+                <dt>{t('rail.model')}</dt>
                 <dd>
                     {model ? (
                         <span className={`side-rail-where${model.remote ? ' remote' : ''}`}>
                             {model.remote ? <Cloud size={12} aria-hidden="true" /> : <Monitor size={12} aria-hidden="true" />}
-                            {model.remote ? `${model.provider_name} (cloud)` : 'This PC'}
+                            {model.remote ? t('rail.cloudModel', { name: model.provider_name }) : t('rail.thisPc')}
                         </span>
                     ) : (
-                        <span className="side-rail-where">Not reported</span>
+                        <span className="side-rail-where">{t('rail.notReported')}</span>
                     )}
-                    {model?.name && <span className="side-rail-meta" title={model.name}>{displayModelName(model.name)}</span>}
+                    {model?.name && <span className="side-rail-meta" title={model.name} dir="ltr">{displayModelName(model.name)}</span>}
                 </dd>
                 {usedDocs && (
                     <>
-                        <dt>Documents</dt>
+                        <dt>{t('rail.documents')}</dt>
                         <dd>
                             {model?.remote
-                                ? `Searched on this PC. The passages used were sent to ${model.provider_name}.`
-                                : model
-                                    ? 'Read on this PC and stayed here.'
-                                    : 'Searched on this PC.'}
+                                ? t('rail.docsSent', { provider: model.provider_name })
+                                : t(model ? 'rail.docsLocal' : 'rail.docsSearched')}
                         </dd>
                     </>
                 )}
-                <dt>Websites</dt>
-                <dd>{sites.length > 0 ? sites.join(', ') : "None from GAIA's web tools"}</dd>
-                <dt>Cost</dt>
-                <dd>{costText(summary)}</dd>
+                <dt>{t('rail.websites')}</dt>
+                <dd>{sites.length > 0 ? <span dir="ltr">{sites.join(', ')}</span> : t('rail.noSites')}</dd>
+                <dt>{t('rail.cost')}</dt>
+                <dd>{costText(summary, t)}</dd>
             </dl>
         </Section>
     );

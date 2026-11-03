@@ -172,6 +172,13 @@ def test_open_url_opens_a_public_url(full_profile_tools):
     opener.assert_called_once_with("https://example.com/")
 
 
+def test_open_url_docstring_defers_to_the_policy_check(full_profile_tools):
+    _, registry = full_profile_tools
+    description = _tool(registry, "open_url").__doc__
+    assert "Call this tool for a URL the user supplied" in description
+    assert "do not refuse it based on this description alone" in description
+
+
 @pytest.mark.parametrize(
     "ip",
     ["100.64.0.1", "100.127.255.254", "::ffff:100.64.0.1", "::ffff:10.0.0.1"],

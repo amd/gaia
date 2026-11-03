@@ -49,6 +49,10 @@ DEFERRED: dict[str, str] = {
     "github-triage": "Requires a live GitHub connector; not available in the lane.",
     "image-gen": "Needs Stable Diffusion loaded; out of scope for the text lanes.",
     "inbox-triage": "Requires a mailbox connector; covered by the email eval lane.",
+    "music-gen": (
+        "Needs downloaded ACE-Step/ThinkSound models and an audio-quality rubric; "
+        "the separate live Lemonade integration test covers the API path."
+    ),
     "price-watch": "Requires live web fetch; non-deterministic ground truth.",
     "recommendations": "Subjective output; no stable rubric yet.",
     "research-report": "Requires live web search; non-deterministic ground truth.",

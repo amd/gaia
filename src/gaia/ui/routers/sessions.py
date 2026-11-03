@@ -10,8 +10,9 @@ and session-document attachments.
 import asyncio
 import json
 import logging
+import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
@@ -44,11 +45,13 @@ from ..models import (
     SessionListResponse,
     SessionPinRequest,
     SessionResponse,
+    SessionSearchResponse,
     UpdateSessionRequest,
 )
 from ..run_manager import run_manager
 from ..security import flagship_only
 from ..utils import message_to_response, session_to_response
+from .memory import _get_store as get_memory_store
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +189,6 @@ def _reject_unknown_agent_type(agent_type: str | None) -> None:
     # here told the user 'gaia' was both unknown and registered.
     valid_ids = sorted(
         {reg.id for reg in registry.list()}
-        | {"chat"}
         | {aid for aid in _SIDECAR_AGENT_TYPES if profile_for(aid).always_relay}
     )
     load_error = registry.get_load_error(agent_type)
@@ -309,6 +311,27 @@ async def session_events():
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
+# Declared before /api/sessions/{session_id}, which would otherwise claim "search".
+@router.get("/api/sessions/search", response_model=SessionSearchResponse)
+async def search_sessions(
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = 20,
+    include_automated: bool = False,
+    db: ChatDatabase = Depends(get_db),
+):
+    """Find chats by title or message text, ignoring case and accents.
+
+    Eval and scheduled chats are left out unless *include_automated*, as the
+    sidebar leaves them out. Private chats are included: the search runs on
+    this PC and its results go only to the local UI that already lists them.
+    """
+    limit = max(1, min(limit, 50))
+    results, truncated = await asyncio.to_thread(
+        db.search_sessions, q, limit, include_automated
+    )
+    return SessionSearchResponse(query=q, results=results, truncated=truncated)
+
+
 @router.post("/api/sessions/{session_id}/activate", status_code=200)
 async def activate_session(session_id: str, db: ChatDatabase = Depends(get_db)):
     """Signal the frontend to switch to this session (MCP automation support).
@@ -424,6 +447,19 @@ async def delete_session(
     session_locks = http_request.app.state.session_locks
     # Every turn and goal tick holds this lock for its whole run.
     async with session_locks.setdefault(session_id, asyncio.Lock()):
+        # First, so a failure leaves the chat in place to delete again.
+        try:
+            await asyncio.to_thread(get_memory_store().delete_session, session_id)
+        except (sqlite3.Error, OSError) as e:
+            logger.error("Could not delete the memory of %s: %s", session_id, e)
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"The chat was not deleted: its conversation in Memory "
+                    f"could not be removed ({e}). Try again; the GAIA log has "
+                    f"the details."
+                ),
+            ) from e
         if not db.delete_session(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
         session_locks.pop(session_id, None)
