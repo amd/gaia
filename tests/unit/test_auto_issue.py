@@ -678,6 +678,15 @@ def test_the_agent_notice_expects_what_the_eval_ran_against_its_baseline():
     # A category the notice does not expect is never reported as missing.
     assert env["EVAL_CATEGORIES"] == release["jobs"]["gaia-eval"]["with"]["categories"]
     assert env["BASELINE_DIR"] == callee["env"]["BASELINE_DIR"]
+    # #5197: the flagship baseline, same pool, model and judge as this eval,
+    # with a scorecard for every category the release runs.
+    assert env["BASELINE_DIR"] == "tests/fixtures/eval_baselines/gaia-flagship"
+    baseline = REPO / env["BASELINE_DIR"]
+    meta = json.loads((baseline / "meta.json").read_text(encoding="utf-8"))
+    assert meta["model"] == "Gemma-4-E4B-it-GGUF"
+    assert meta["eval_model"]
+    for category in env["EVAL_CATEGORIES"].split(","):
+        assert (baseline / f"scorecard_{category}.json").is_file(), category
 
 
 # --- the action's body-file input ---------------------------------------------

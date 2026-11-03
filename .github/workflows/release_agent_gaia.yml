@@ -432,8 +432,9 @@ jobs:
 
   # Puts the advisory eval's verdict where a maintainer sees it: the run summary
   # always, and the agent's one `eval-failure` issue only when the eval measured
-  # a quality drop (a breached quality bar, or a scenario that passed in the
-  # baseline and now fails). A run that measured nothing (no Claude quota, a
+  # a quality drop (a breached quality bar, or a stable smoke-set scenario that
+  # passed in the baseline and now fails; other flips are "watch" lines in the
+  # summary). A run that measured nothing (no Claude quota, a
   # category that never ran, a crash) files nothing and says why in the
   # summary. A clean, complete run closes the open issue.
   # util/eval_failure_notice.py decides.
@@ -459,6 +460,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: setup.py
 
       # compare_scorecards lives in gaia.eval.runner.
       - name: Install gaia
@@ -481,7 +483,7 @@ jobs:
         env:
           RESULT: ${{ needs.gaia-eval.result }}
           EVAL_CATEGORIES: 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_skills_capture'
-          BASELINE_DIR: tests/fixtures/eval_baselines/gaia-gemma-4-e4b
+          BASELINE_DIR: tests/fixtures/eval_baselines/gaia-flagship
           REF: ${{ github.event_name == 'push' && github.ref_name || format('agent-pkg-gaia-v{0} (dispatch)', inputs.version) }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |

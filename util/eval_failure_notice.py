@@ -12,9 +12,12 @@ This reads the run's scorecards, diffs each category against its committed
 baseline with ``gaia.eval.runner.compare_scorecards`` (the same diff
 ``gaia eval agent --compare`` prints), and returns one of three verdicts:
 
-* ``regressed`` -- a scenario that passed in the baseline now fails, or the
-  quality bar in the run's ``quality_gate_report.json`` was breached. Writes
-  ``title.txt`` and ``body.md`` for the tracking issue.
+* ``regressed`` -- a scenario in the stable smoke set (eval/ci_tiers.json)
+  that passed in the baseline now fails, or the quality bar in the run's
+  ``quality_gate_report.json`` was breached. Writes ``title.txt`` and
+  ``body.md`` for the tracking issue. A PASS -> FAIL outside the stable set is
+  listed as "watch" and never filed: the baseline is one run, and about 18% of
+  scenarios flip between two runs of the same code (#5493).
 * ``passed`` -- every required job succeeded, every expected category was
   compared, every scenario was measured, and nothing regressed. Open issues
   for the target may be closed.
@@ -79,6 +82,9 @@ NO_SCORE_STATUSES = {
 #: Rows in the visible table; the rest are counted, never dropped silently.
 MAX_ROWS = 40
 ROOT_CAUSE_CHARS = 220
+#: Scenarios that passed at least 90% of 10+ runs (eval/ci_tiers.json, smoke).
+#: A flip there is a signal; anywhere else a lone flip is often noise (#5493).
+DEFAULT_STABLE_FILE = Path(__file__).resolve().parents[1] / "eval" / "ci_tiers.json"
 SAFE_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,120}$")
 
 
@@ -110,6 +116,9 @@ class Notice:
     artifacts: list[str] = field(default_factory=list)
     baseline_dir: str = ""
     tier: str = ""
+    #: PASS -> FAIL outside the stable set: reported, never filed.
+    watch: list[Regression] = field(default_factory=list)
+    stable: frozenset = frozenset()
 
 
 # --- untrusted text -----------------------------------------------------------
@@ -136,7 +145,13 @@ def clean(text, limit: int = ROOT_CAUSE_CHARS) -> str:
         text = text[: limit - 1].rstrip() + "…"
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     text = text.replace("|", "\\|").replace("`", "'")
-    return text.replace("@", "@\u200b")
+    # Scenarios plant hostile links: no clickable link, image, URL, issue
+    # reference or mention may survive from judge text.
+    text = text.replace("://", ":\u200b//").replace("www.", "www\u200b.")
+    text = re.sub(r"(?i)\b(gh)-(\d)", "\\1-\u200b\\2", text)
+    text = text.replace("#", "#\u200b").replace("@", "@\u200b")
+    # Last: these entities carry a `#` the line above would break.
+    return text.replace("[", "&#91;").replace("]", "&#93;")
 
 
 def code_id(value: str) -> str:
@@ -235,6 +250,21 @@ def compare(baseline: Path, current: Path) -> dict:
         return compare_scorecards(baseline, current)
 
 
+def load_stable(path: Path) -> frozenset:
+    """The smoke tier's scenario ids: the set a lone PASS -> FAIL is filed for."""
+    doc = read_json(path)
+    if doc is None:
+        raise ValueError(
+            f"stable-scenario file {path} not found; it decides which flips are "
+            "filed. Pass --stable-scenarios eval/ci_tiers.json from the checkout"
+        )
+    machines = ((doc.get("tiers") or {}).get("smoke") or {}).get("machines") or []
+    ids = frozenset(e["id"] for m in machines for e in m.get("scenarios") or [])
+    if not ids:
+        raise ValueError(f"{path} lists no smoke-tier scenarios")
+    return ids
+
+
 def build(args) -> Notice:
     from gaia.eval.runner import ScorecardMismatchError
 
@@ -244,6 +274,7 @@ def build(args) -> Notice:
         run_url=args.run_url,
         baseline_dir=str(args.baseline_dir or ""),
         tier=args.tier,
+        stable=load_stable(args.stable_scenarios),
     )
     jobs = dict(args.job or [])
 
@@ -379,7 +410,8 @@ def add_diff(notice: Notice, category: str, diff: dict, base: dict, card: dict):
     rows = scenario_rows(card)
     for e in diff.get("regressed") or []:
         current = rows.get(e["scenario_id"], {})
-        notice.regressions.append(
+        stable = e["scenario_id"] in notice.stable
+        (notice.regressions if stable else notice.watch).append(
             Regression(
                 scenario_id=e["scenario_id"],
                 category=category,
@@ -504,10 +536,14 @@ def body(notice: Notice) -> str:
         f"- Transcripts and judge rationales: artifact {artifacts} (kept 14 days; "
         "the eval machines are gone, so this is the only copy)",
         "",
-        "About 18% of scenarios flip between two runs of the same code (#5493), so "
-        "re-run the tag before treating a lone flip as a bug. This issue is updated "
-        "in place by the next tag that regresses, and closed by the next one that "
-        "passes.",
+        (
+            "Every row is in the stable smoke set (each passed at least 90% of 10+ "
+            "runs), where a flip is rarely noise. "
+            if notice.regressions and notice.regressions[0].baseline_status
+            else ""
+        )
+        + "This issue is updated in place by the next tag that regresses, and "
+        "closed by the next one that passes.",
         "",
         "<details>",
         "<summary>🔍 Technical details</summary>",
@@ -528,6 +564,9 @@ def body(notice: Notice) -> str:
     if fixes:
         out += ["", "Judge's recommended fix, per scenario:", ""]
         out += [f"- {code_id(r.scenario_id)} → {r.fix}" for r in fixes]
+    if notice.watch:
+        out += ["", "Also PASS → FAIL, outside the stable set (watch, not filed):", ""]
+        out += [watch_line(r) for r in notice.watch[:MAX_ROWS]]
     if notice.score_drops:
         out += [
             "",
@@ -545,6 +584,14 @@ def body(notice: Notice) -> str:
         "</details>",
     ]
     return "\n".join(out) + "\n"
+
+
+def watch_line(r: Regression) -> str:
+    return (
+        f"- {code_id(r.scenario_id)} ({code_id(r.category)}): "
+        f"{fmt_score(r.baseline_status, r.baseline_score)} → "
+        f"{fmt_score(r.current_status, r.current_score)}"
+    )
 
 
 def summary(notice: Notice) -> str:
@@ -572,6 +619,15 @@ def summary(notice: Notice) -> str:
     if notice.not_measured:
         out.append("")
         out += [f"- {line}" for line in notice.not_measured]
+    if notice.watch:
+        out += [
+            "",
+            f"**Watch:** {len(notice.watch)} scenario(s) went PASS → FAIL outside "
+            "the stable smoke set, where one run against a one-run baseline flips "
+            "about 18% of the time (#5493). Not filed; a stable-set flip would be.",
+            "",
+        ]
+        out += [watch_line(r) for r in notice.watch[:MAX_ROWS]]
     return "\n".join(out) + "\n"
 
 
@@ -598,6 +654,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--categories", help="Comma-separated, for a one-artifact run")
     p.add_argument("--artifact-name", default="gaia-agent-eval")
     p.add_argument("--quality-report", type=Path)
+    p.add_argument(
+        "--stable-scenarios",
+        type=Path,
+        default=DEFAULT_STABLE_FILE,
+        help="Tier file whose smoke scenarios are filed on a lone flip",
+    )
     p.add_argument("--job", type=_job, action="append", help="KEY=RESULT")
     p.add_argument("--outcomes-failed", default="")
     p.add_argument("--out-dir", type=Path, required=True)

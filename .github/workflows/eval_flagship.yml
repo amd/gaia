@@ -2616,8 +2616,11 @@ jobs:
         run: python util/eval_tiers.py verify-final
 
   # A release or RC tag run files an `eval-failure` issue only when it MEASURED
-  # a quality drop: a scenario that passed in the committed baseline now fails.
-  # The issue names each one with the judge's root cause. A run that measured
+  # a quality drop: a scenario in the stable smoke set (eval/ci_tiers.json, each
+  # passed 90%+ of 10+ runs) that passed in the committed baseline now fails.
+  # A PASS -> FAIL anywhere else is a "watch" line in the summary: the baseline
+  # is one run and ~18% of scenarios flip between runs (#5493). The issue names
+  # each regression with the judge's root cause. A run that measured
   # nothing - lanes skipped or cancelled, Claude out of quota, no baseline for
   # the model under test, a final tag (which only checks a full sweep exists) -
   # files nothing and says in its job summary what was not measured and why.
@@ -2656,6 +2659,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: setup.py
 
       # compare_scorecards lives in gaia.eval.runner.
       - name: Install gaia

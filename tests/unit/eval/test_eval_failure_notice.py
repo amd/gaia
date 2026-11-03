@@ -88,7 +88,11 @@ def flagship(*extra):
     return ("--target", "flagship", *extra)
 
 
-def regressed_args(baseline=FIX / "baseline_qwen", artifacts=FIX / "regressed_run"):
+def regressed_args(
+    baseline=FIX / "baseline_qwen",
+    artifacts=FIX / "regressed_run",
+    stable=FIX / "stable_set_memory.json",
+):
     return flagship(
         "--artifacts-dir",
         str(artifacts),
@@ -96,6 +100,8 @@ def regressed_args(baseline=FIX / "baseline_qwen", artifacts=FIX / "regressed_ru
         str(baseline),
         "--matrix-json",
         matrix(**{"gaia-signal": "gaia_memory"}),
+        "--stable-scenarios",
+        str(stable),
     )
 
 
@@ -425,3 +431,79 @@ def test_a_breach_alongside_pass_to_fail_rows_is_named_in_the_details(tmp_path):
     assert out["title"] == "Flagship eval: 2 scenarios regressed on v0.26.0-rc1"
     details = body.partition("<details>")[2]
     assert "Quality bar also breached: avg_score 4.90 &lt; bar 5.0" in details
+
+
+# --- noise guard: a lone flip outside the stable set is "watch", not an issue ---
+
+
+def test_a_lone_flip_outside_the_stable_set_is_watch_not_an_issue(tmp_path):
+    # The real stable set (eval/ci_tiers.json smoke) holds neither flipped
+    # scenario: one run against a one-run baseline flips ~18% (#5493).
+    _, out, body, summary = run(
+        tmp_path, *regressed_args(stable=REPO_ROOT / "eval" / "ci_tiers.json")
+    )
+    assert out == {"verdict": "passed"}
+    assert body is None
+    assert "**Watch:** 2 scenario(s) went PASS → FAIL outside the stable" in summary
+    assert "- `mem_contradiction_resolution` (`gaia_memory`): PASS 9.2 → FAIL 8.1" in (
+        summary
+    )
+
+
+def test_only_the_stable_flip_is_filed_and_the_rest_is_watched(tmp_path):
+    stable = tmp_path / "tiers.json"
+    stable.write_text(
+        json.dumps(
+            {
+                "tiers": {
+                    "smoke": {
+                        "machines": [
+                            {
+                                "machine": "m",
+                                "scenarios": [{"id": "mem_false_premise_recall"}],
+                            }
+                        ]
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    _, out, body, summary = run(tmp_path, *regressed_args(stable=stable))
+    assert out["verdict"] == "regressed"
+    assert out["title"] == "Flagship eval: 1 scenario regressed on v0.26.0-rc1"
+    head, _, details = body.partition("<details>")
+    assert "mem_false_premise_recall" in head
+    assert "mem_contradiction_resolution" not in head
+    assert "outside the stable set (watch, not filed)" in details
+    assert "mem_contradiction_resolution" in details
+    assert "**Watch:** 1 scenario(s)" in summary
+
+
+def test_a_missing_stable_set_fails_loudly(tmp_path, capsys):
+    code, out, _, _ = run(tmp_path, *regressed_args(stable=tmp_path / "nope.json"))
+    assert code == 1 and out == {}
+    assert "stable-scenario file" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "hostile, gone",
+    [
+        ("see [the fix](https://evil.example/x) now", ["[the fix]", "https://"]),
+        ("![pixel](http://evil.example/p.png)", ["![", "http://"]),
+        ("plain https://evil.example/a and www.evil.example", ["https://", "www."]),
+        ("closes #123 and amd/gaia#45 and GH-7", ["#123", "#45", "GH-7"]),
+        ("[ref]: https://evil.example", ["[ref]", "https://"]),
+    ],
+)
+def test_judge_text_cannot_plant_links_images_or_issue_refs(hostile, gone):
+    out = notice_mod.clean(hostile, 400)
+    for fragment in gone:
+        assert fragment not in out, (fragment, out)
+    # Still readable: the words survive.
+    assert "evil" in out or "123" in out
+
+
+def test_neutralised_brackets_render_as_brackets_not_broken_entities():
+    out = notice_mod.clean("a [b] c", 100)
+    assert out == "a &#91;b&#93; c"
