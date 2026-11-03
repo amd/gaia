@@ -1150,7 +1150,7 @@ jobs:
 
   # issue-triage labels with GITHUB_TOKEN, and that `labeled` event starts no workflow, so
   # a `bug` it adds never reached auto-fix. Dispatch it instead. An issue that already had
-  # `bug` when opened (the bug template) got auto-fix from the `opened` event.
+  # `bug` when opened (the bug template) got auto-fix from that label's `labeled` event.
   triage-autofix-handoff:
     needs: issue-triage
     if: |
@@ -1184,9 +1184,10 @@ jobs:
 
   # Auto-fix: attempt to implement a fix for bulletproof, easy bug reports
   #
-  # Runs in parallel with issue-handler on `issues: opened` (issue-handler posts a
-  # diagnosis comment ~2 min in). On the `labeled` / `reopened` paths auto-fix runs
-  # alone — issue-handler stays opened-only to avoid spurious replies on triage label
+  # For a template-filed bug it runs beside issue-handler, started by the `labeled`
+  # event the template's `bug` label emits at filing (issue-handler posts a diagnosis
+  # comment ~2 min in). On a later label or a reopen auto-fix runs alone —
+  # issue-handler stays opened-only to avoid spurious replies on triage label
   # churn. Either way this job independently triages the bug, and if the fix passes
   # lint + unit tests, opens a PR and comments on the issue with the PR link and how
   # to verify the fix.
@@ -1220,9 +1221,10 @@ jobs:
   # is no per-fix dollar cost — only shared subscription rate-pool usage. Most
   # issues decline in triage (few turns); full fix attempts use up to max-turns 100.
   auto-fix:
-    # Fires on: issue opened/reopened with `bug` already attached, the `bug` label
-    # being added later, OR a dispatch from triage-autofix-handoff or
-    # scripts/audit/promote_autofix.py. The
+    # Fires on: the `bug` label being added (including by the bug template when the
+    # issue is filed, which emits `labeled` too), a bug issue being reopened, OR a
+    # dispatch from triage-autofix-handoff or scripts/audit/promote_autofix.py. Not on
+    # `opened`: that would start a second run beside the template's `labeled` one. The
     # `labeled` clause checks the specific label so adding an unrelated label to a
     # bug issue doesn't re-trigger a fix attempt. The dispatch exists because a label
     # added with GITHUB_TOKEN creates no `issues` run.
@@ -1230,7 +1232,7 @@ jobs:
       github.repository == 'amd/gaia' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'issues' &&
-        (github.event.action == 'opened' || github.event.action == 'reopened' ||
+        (github.event.action == 'reopened' ||
          (github.event.action == 'labeled' && github.event.label.name == 'bug')) &&
         contains(github.event.issue.labels.*.name, 'bug')))
     runs-on: ubuntu-latest
@@ -1238,14 +1240,16 @@ jobs:
       contents: write        # create the autofix branch + commit
       issues: write          # comment on the issue
       pull-requests: write   # open the fix PR
+    # Queue, never cancel: a second start must not kill a fix mid-push. It waits, then
+    # the first step skips it if the first run opened a PR.
     concurrency:
       group: claude-auto-fix-${{ github.event.issue.number || inputs.issue_number }}
-      cancel-in-progress: true
+      cancel-in-progress: false
     env:
       ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
     steps:
       # A relabel or a second dispatch must not redo a fix, or push over commits a
-      # maintainer added to its branch.
+      # maintainer added to its branch. A lookup that keeps failing stops the run.
       - name: Skip if a fix PR is already open
         id: existing
         env:
@@ -1253,8 +1257,24 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          pr=$(gh pr list --repo "$REPO" --head "autofix/issue-$ISSUE_NUMBER" --state open \
-                 --json number --jq '.[0].number // empty')
+          # Open PRs that fix this issue: from its autofix branch, or any PR linked to close
+          # it (a human's fix under another branch name). Retried: one API blip is not news.
+          open_fix_prs() {
+            local attempt branch linked
+            for attempt in 1 2 3; do
+              if branch=$(gh pr list --repo "$REPO" --head "autofix/issue-$ISSUE_NUMBER" \
+                            --state open --json number --jq '.[].number') &&
+                 linked=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" \
+                            --json closedByPullRequestsReferences \
+                            --jq '.closedByPullRequestsReferences[].number'); then
+                printf '%s\n%s\n' "$branch" "$linked" | sed '/^$/d' | sort -un | head -n 1
+                return 0
+              fi
+              sleep $((attempt * 10))
+            done
+            return 1
+          }
+          pr=$(open_fix_prs)
           echo "pr=$pr" >> "$GITHUB_OUTPUT"
           if [ -n "$pr" ]; then
             echo "Issue #$ISSUE_NUMBER already has fix PR #$pr open, so auto-fix did not run." >> "$GITHUB_STEP_SUMMARY"
@@ -1617,15 +1637,35 @@ jobs:
             echo
             cat "$OUTCOME_FILE"
           } >> "$GITHUB_STEP_SUMMARY"
+          # Open PRs that fix this issue: from its autofix branch, or any PR linked to close
+          # it (a human's fix under another branch name). Retried: one API blip is not news.
+          open_fix_prs() {
+            local attempt branch linked
+            for attempt in 1 2 3; do
+              if branch=$(gh pr list --repo "$REPO" --head "autofix/issue-$ISSUE_NUMBER" \
+                            --state open --json number --jq '.[].number') &&
+                 linked=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" \
+                            --json closedByPullRequestsReferences \
+                            --jq '.closedByPullRequestsReferences[].number'); then
+                printf '%s\n%s\n' "$branch" "$linked" | sed '/^$/d' | sort -un | head -n 1
+                return 0
+              fi
+              sleep $((attempt * 10))
+            done
+            return 1
+          }
           case "$outcome" in
             A)
-              pr=$(gh pr list --repo "$REPO" --head "autofix/issue-$ISSUE_NUMBER" --state open \
-                     --json number --jq '.[0].number // empty')
+              if ! pr=$(open_fix_prs); then
+                # GitHub's API, not the fix, failed: no red X and no issue comment for it.
+                echo "::warning title=Auto-fix PR not verified::#$ISSUE_NUMBER: outcome A, but the PR lookup kept failing, so nothing confirms the PR."
+                exit 0
+              fi
               if [ -z "$pr" ]; then
-                echo "::error title=Auto-fix PR missing::#$ISSUE_NUMBER: outcome A, but no open PR comes from autofix/issue-$ISSUE_NUMBER."
+                echo "::error title=Auto-fix PR missing::#$ISSUE_NUMBER: outcome A, but no open PR comes from autofix/issue-$ISSUE_NUMBER or is linked to close the issue."
                 exit 1
               fi
-              echo "Opened PR #$pr for #$ISSUE_NUMBER." ;;
+              echo "Fix PR #$pr is open for #$ISSUE_NUMBER." ;;
             B|C) echo "Outcome $outcome for #$ISSUE_NUMBER; the job summary says why." ;;
             # An abandoned fix already told the issue why, so a second comment would be noise.
             FAILED) echo "::warning title=Auto-fix abandoned::#$ISSUE_NUMBER: the job summary says why." ;;
