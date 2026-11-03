@@ -19,7 +19,7 @@ from typing import Any, Dict
 import requests
 
 TELEGRAM_API = "https://api.telegram.org"
-_NOTIFICATION_SYSTEMS = ("Darwin", "Linux")
+_NOTIFICATION_SYSTEMS = ("Darwin", "Linux", "Windows")
 
 
 def validate(sink: str, sink_args: Dict[str, Any]) -> None:
@@ -108,7 +108,7 @@ def _to_notification(output: str, sink_args: Dict[str, Any]) -> None:
             subprocess.run(["osascript", "-e", script], check=True, timeout=30)
         elif system == "Linux":
             subprocess.run(["notify-send", title, output], check=True, timeout=30)
-        else:
+        elif system == "Windows":`n            _to_windows_notification(title, output)`n        else:
             raise NotImplementedError(
                 f"notification sink is not implemented for {system!r}; "
                 f"use --sink stdout, file:<path>, or telegram instead"
@@ -130,6 +130,50 @@ def _to_notification(output: str, sink_args: Dict[str, Any]) -> None:
             f"Choose a different --sink or check the desktop notification daemon."
         ) from e
 
+
+
+def _to_windows_notification(title: str, output: str) -> None:
+    """Show a Windows notification through plyer, then a safe PowerShell fallback."""
+    try:
+        from plyer import notification
+
+        notification.notify(title=title, message=output, timeout=5)
+        return
+    except Exception as plyer_error:
+        script = (
+            "Add-Type -AssemblyName System.Windows.Forms; "
+            "[System.Windows.Forms.MessageBox]::Show("
+            "[string]$env:GAIA_NOTIFY_MESSAGE, [string]$env:GAIA_NOTIFY_TITLE)"
+        )
+        env = os.environ.copy()
+        env["GAIA_NOTIFY_TITLE"] = title
+        env["GAIA_NOTIFY_MESSAGE"] = output
+        try:
+            proc = subprocess.Popen(
+                ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                code = proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                return
+            if code == 0:
+                return
+            stderr = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
+            raise RuntimeError(f"PowerShell exited with code {code}: {stderr[:200]}")
+        except FileNotFoundError as powershell_error:
+            raise FileNotFoundError(
+                "Windows notification needs plyer or PowerShell on PATH; "
+                f"plyer failed with {plyer_error}, PowerShell failed with {powershell_error}."
+            ) from powershell_error
+        except OSError as powershell_error:
+            raise RuntimeError(
+                "Windows notification failed after plyer fallback: "
+                f"{powershell_error}. Install plyer or choose another sink."
+            ) from powershell_error
 
 def _osa(text: str) -> str:
     """Quote a string for embedding inside an AppleScript literal."""
