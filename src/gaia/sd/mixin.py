@@ -313,8 +313,6 @@ class SDToolsMixin:
                 model must already be downloaded in Lemonade. The output is saved
                 beside generated images and is never silently downloaded.
                 """
-                from gaia.agents.tools.path_access import read_access_error
-
                 refusal = read_access_error(self, image_path)
                 if refusal:
                     return refusal
@@ -534,8 +532,6 @@ class SDToolsMixin:
         n: int = 1,
     ) -> Dict[str, Any]:
         """Vary *image_path* through Lemonade and save each result as a PNG."""
-        from gaia.agents.tools.path_access import read_access_error
-
         refusal = read_access_error(self, image_path)
         if refusal:
             return refusal
