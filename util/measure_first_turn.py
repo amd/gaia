@@ -48,6 +48,8 @@ MAX_EXTRA_STEPS = 2
 #: Tokens re-read beyond new content, as a share of the prompt, that still
 #: counts as a cache hit. A broken cache re-reads nearly all of it.
 MAX_FOLLOWUP_REREAD_RATIO = 0.5
+#: One leg's six turns, model load included; a hung server fails the run.
+LEG_TIMEOUT_SECONDS = 1800
 
 
 def _evict_prompt_cache(model: str) -> None:
@@ -154,6 +156,7 @@ def _run_leg(model: str, dynamic: bool) -> List[Dict[str, Any]]:
             [sys.executable, __file__, "--leg", str(out), "--model", model],
             env=env,
             check=True,
+            timeout=LEG_TIMEOUT_SECONDS,
         )
         return json.loads(out.read_text("utf-8"))
     finally:
