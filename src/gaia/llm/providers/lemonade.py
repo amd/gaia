@@ -900,6 +900,14 @@ class LemonadeProvider(LLMClient):
         """Generate an image; see :meth:`LemonadeClient.generate_image`."""
         return self._backend.generate_image(prompt, **kwargs)
 
+    def edit_image(self, image_path: str, prompt: str, **kwargs) -> dict:
+        """Edit an image through the provider interface."""
+        return self._backend.edit_image(image_path, prompt, **kwargs)
+
+    def upscale_image(self, image_path: str, **kwargs) -> dict:
+        """Upscale an image through the provider interface."""
+        return self._backend.upscale_image(image_path, **kwargs)
+
     def transcribe_audio(
         self, audio_path: str, model: Optional[str] = None, **kwargs
     ) -> "Transcript":

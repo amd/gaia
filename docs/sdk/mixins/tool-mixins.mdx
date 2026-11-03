@@ -190,10 +190,11 @@ class MyImageAgent(Agent, SDToolsMixin):
             min_context_size=8192,  # 8K sufficient for SD
         )
 
-        # Initialize SD tools (auto-registers generate_image, list_sd_models, etc.)
-        # Images save to ~/.gaia/cache/sd/images unless you pass output_dir=.
+        # Standalone SD profiles include edit/upscale by default. Images save
+        # to ~/.gaia/cache/sd/images unless you pass output_dir=.
         self.init_sd(
             default_model="SDXL-Turbo",  # Fast, good quality
+            enable_edit_tools=True,
         )
 
     def _register_tools(self):
@@ -210,6 +211,8 @@ result = agent.process_query("create a sunset over mountains")
 
 **Available Tools:**
 - `generate_image(prompt, model, size, steps, cfg_scale, seed)` - Generate images with SD
+- `edit_image(image_path, prompt, model, size, n)` - Edit an allowed local PNG/JPEG with a text prompt
+- `upscale_image(image_path, model)` - Upscale an allowed local PNG (Lemonade requires base64 PNG input)
 - `list_sd_models()` - List the image models downloaded in Lemonade, with each one's `image_defaults`
 - `get_generation_history(limit)` - See generated images from session
 
