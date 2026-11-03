@@ -62,11 +62,7 @@ class TestValidate:
         mocker.patch(_PLATFORM_SYSTEM, return_value=system)
         sinks.validate("notification", {})
 
-    def test_notification_rejected_on_windows(self, mocker):
-        mocker.patch(_PLATFORM_SYSTEM, return_value="Windows")
-        with pytest.raises(NotImplementedError, match="Windows"):
-            sinks.validate("notification", {})
-
+    def test_notification_is_valid_on_windows(self, mocker):`n        mocker.patch(_PLATFORM_SYSTEM, return_value="Windows")`n        sinks.validate("notification", {})`n
 
 # ===========================================================================
 # 1. dispatch routing table
@@ -188,6 +184,11 @@ class TestTelegramSink:
 
 class TestNotificationSink:
 
+    def test_windows_dispatch_uses_windows_helper(self, mocker):
+        mocker.patch(_PLATFORM_SYSTEM, return_value="Windows")
+        helper = mocker.patch("gaia.schedule.sinks._to_windows_notification")
+        sinks.dispatch("notification", {"title": "T"}, "body")
+        helper.assert_called_once_with("T", "body")
     def test_unsupported_os_raises_not_implemented(self, mocker):
         mocker.patch(_PLATFORM_SYSTEM, return_value="Plan9")
         with pytest.raises(NotImplementedError, match="not implemented for 'Plan9'"):
