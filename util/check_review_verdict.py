@@ -8,11 +8,12 @@ merged with no later push, and 8 reviewed bugs shipped that way. A reply does no
 clear this status. Only a push that re-review passes, or a maintainer adding
 ``review-override``, does.
 
-claude-run.yml stamps each review with the commit it read, so a push is detected
-from commits and never from comment dates. Reviews with no stamp predate this check
-and are ignored.
+The verdict is read from the ``review-verdict`` artifact that claude-run.yml uploads
+from a review run of claude.yml, never from comment text: a comment proves nothing
+about which job wrote it. The artifact exists only when the review job finished on
+the requested model and posted what it wrote (or, on a re-review, chose silence).
 
-Reads comments and posts a status; it never runs PR code. stdlib only.
+Reads run records and labels, and posts a status; it never runs PR code. stdlib only.
 """
 
 from __future__ import annotations
@@ -22,47 +23,136 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
+from urllib.parse import quote
 
-BOT_AUTHORS = {"github-actions", "app/github-actions", "github-actions[bot]"}
 OVERRIDE_LABEL = "review-override"
+OVERRIDE_ROLES = {"admin", "maintain", "write"}
 CONTEXT = "PR review verdict"
-STAMP = re.compile(r"<!-- reviewed-sha: ([0-9a-f]{40}) -->")
+ARTIFACT = "review-verdict"
+REVIEW_WORKFLOW = "claude.yml"
 VERDICT = re.compile(r"^\*\*Verdict: ([A-Za-z ]+?)\*\*", re.MULTILINE)
+SHA = re.compile(r"^[0-9a-f]{40}$")
 BLOCKING = "Request changes"
+#: Silent re-review: the reviewer finished and found nothing blocking.
+CLEAR = "clear"
+VERDICTS = {"Approve", "Approve with suggestions", BLOCKING, CLEAR}
 MAX_DESCRIPTION = 140
 GH_TIMEOUT = 60
 
 
 def _gh(*args: str) -> str:
-    result = subprocess.run(
-        ["gh", *args],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=False,
-        timeout=GH_TIMEOUT,
-    )
+    try:
+        result = subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=GH_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"gh {args[0]} {args[1]} timed out after {GH_TIMEOUT}s"
+        ) from e
     if result.returncode != 0:
         raise RuntimeError(f"gh {args[0]} {args[1]} failed: {result.stderr.strip()}")
     return result.stdout
 
 
-def latest_review(comments: list[dict]) -> tuple[str, str] | None:
-    """``(reviewed_sha, verdict)`` of the newest stamped bot review; verdict may be ''."""
-    for comment in reversed(comments):
-        if (comment.get("author") or {}).get("login") not in BOT_AUTHORS:
+def parse_record(text: str, number: int) -> tuple[str, str] | None:
+    """``(reviewed_sha, verdict)`` from an artifact, or None if it isn't this PR's."""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict) or data.get("pr") != number:
+        return None
+    sha, verdict = data.get("sha"), data.get("verdict")
+    if not isinstance(sha, str) or not SHA.match(sha) or not isinstance(verdict, str):
+        return None
+    # An unknown verdict is a review with no readable verdict line.
+    return sha, verdict if verdict in VERDICTS else ""
+
+
+def review_runs(repo: str, branch: str, head_repo: str) -> list[dict]:
+    """claude.yml review runs for this head branch, newest first."""
+    pages = _gh(
+        "api",
+        "--paginate",
+        f"repos/{repo}/actions/workflows/{REVIEW_WORKFLOW}/runs"
+        f"?event=pull_request_target&branch={quote(branch, safe='')}&per_page=100",
+        "--jq",
+        ".workflow_runs[] | {id, created_at, conclusion, "
+        "head: .head_repository.full_name}",
+    )
+    runs = [json.loads(line) for line in pages.splitlines() if line.strip()]
+    runs = [
+        r
+        for r in runs
+        if r["head"] == head_repo and r["conclusion"] in ("success", "failure")
+    ]
+    return sorted(runs, key=lambda r: r["created_at"], reverse=True)
+
+
+def read_artifact(repo: str, run_id: int) -> str | None:
+    names = _gh(
+        "api",
+        f"repos/{repo}/actions/runs/{run_id}/artifacts?name={ARTIFACT}",
+        "--jq",
+        ".artifacts[] | select(.expired | not) | .name",
+    )
+    if not names.strip():
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        _gh("run", "download", str(run_id), "--repo", repo, "-n", ARTIFACT, "-D", tmp)
+        path = Path(tmp) / "verdict.json"
+        return path.read_text(encoding="utf-8") if path.is_file() else None
+
+
+def latest_review(
+    repo: str, number: int, branch: str, head_repo: str
+) -> tuple[str, str] | None:
+    for run in review_runs(repo, branch, head_repo):
+        text = read_artifact(repo, run["id"])
+        if text is None:
             continue
-        body = comment.get("body") or ""
-        stamps = STAMP.findall(body)
-        if stamps:
-            verdict = VERDICT.search(body)
-            # Last: the workflow appends its stamp after anything the model wrote.
-            return stamps[-1], verdict.group(1) if verdict else ""
+        record = parse_record(text, number)
+        if record is not None:
+            return record
     return None
 
 
+def override_by_maintainer(repo: str, number: int, labels: set[str]) -> bool:
+    """The label counts only when a person with write access or above added it last."""
+    if OVERRIDE_LABEL not in labels:
+        return False
+    events = _gh(
+        "api",
+        "--paginate",
+        f"repos/{repo}/issues/{number}/events?per_page=100",
+        "--jq",
+        f'.[] | select(.event == "labeled" and .label.name == "{OVERRIDE_LABEL}") '
+        "| {login: .actor.login, type: .actor.type}",
+    )
+    added = [json.loads(line) for line in events.splitlines() if line.strip()]
+    if not added:
+        return False
+    actor = added[-1]
+    if actor.get("type") != "User":
+        return False
+    role = _gh(
+        "api",
+        f"repos/{repo}/collaborators/{actor['login']}/permission",
+        "--jq",
+        ".role_name",
+    ).strip()
+    return role in OVERRIDE_ROLES
+
+
 def decide(
-    review: tuple[str, str] | None, head_sha: str, overridden: bool, rereviewed: bool
+    review: tuple[str, str] | None, head_sha: str, overridden: bool
 ) -> tuple[str, str]:
     """Commit status ``(state, description)`` for this PR's head."""
     if overridden:
@@ -78,20 +168,7 @@ def decide(
         return "failure", (
             f"Review requested changes. Push a fix, or a maintainer adds {OVERRIDE_LABEL}"
         )
-    if rereviewed:
-        return "success", "Re-review found nothing still blocking on this commit"
     return "pending", "Waiting for re-review of this commit"
-
-
-def rereview_finished(repo: str, head_sha: str) -> bool:
-    runs = _gh(
-        "api",
-        f"repos/{repo}/actions/workflows/claude.yml/runs"
-        f"?head_sha={head_sha}&status=success&event=pull_request_target",
-        "--jq",
-        ".total_count",
-    )
-    return int(runs.strip()) > 0
 
 
 def pulls_for(repo: str, sha: str) -> list[int]:
@@ -120,15 +197,19 @@ def evaluate(repo: str, number: int) -> None:
             "--repo",
             repo,
             "--json",
-            "comments,headRefOid,labels",
+            "headRefOid,headRefName,headRepository,headRepositoryOwner,labels",
         )
     )
     head_sha = pr["headRefOid"]
-    review = latest_review(pr["comments"])
-    overridden = OVERRIDE_LABEL in {label["name"] for label in pr["labels"]}
-    stale = review is not None and review[0] != head_sha
-    rereviewed = stale and rereview_finished(repo, head_sha)
-    state, description = decide(review, head_sha, overridden, rereviewed)
+    if not pr.get("headRepository"):
+        raise RuntimeError(
+            f"#{number}: its head repository is gone, so no review is found"
+        )
+    head_repo = f"{pr['headRepositoryOwner']['login']}/{pr['headRepository']['name']}"
+    labels = {label["name"] for label in pr["labels"]}
+    overridden = override_by_maintainer(repo, number, labels)
+    review = latest_review(repo, number, pr["headRefName"], head_repo)
+    state, description = decide(review, head_sha, overridden)
     _gh(
         "api",
         f"repos/{repo}/statuses/{head_sha}",

@@ -47,6 +47,12 @@ while the latest review says Request changes, and a reply does not clear it. It 
 push passes re-review or a maintainer adds the `review-override` label. It blocks a merge
 only if branch protection requires that status.
 
+It reads the verdict from the `review-verdict` artifact the review run uploads, never from
+comment text, and only a review that finished on the pinned model records one. A re-review
+that never finished leaves the status pending. The label counts only when a person with
+write, maintain or admin access added it last. A PR opened by `GITHUB_TOKEN` (auto-fix) gets
+no review and no status until a human pushes to it or changes a label.
+
 ## 2. `claude-run.yml` — reusable runner (not triggered directly)
 
 Called by the three *conversational* jobs (pr-review, pr-comment, issue-handler). Centralizes

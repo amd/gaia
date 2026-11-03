@@ -606,6 +606,7 @@ jobs:
       # Posting must not be the model's own final `gh` call — when that call doesn't
       # happen the job still goes green with nothing published, which is undetectable.
       - name: Post Claude's comment
+        id: post
         if: "!cancelled() && inputs.comment_file != ''"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -636,10 +637,12 @@ jobs:
             echo "No comment at $COMMENT_FILE — nothing to post (silence is a valid outcome for this job)."
             exit 0
           fi
+          # Only this step may stamp a comment, on every event: drop any stamp the model wrote.
+          sed -E -i 's/<!--[^>]*reviewed-sha[^>]*-->//g' "$COMMENT_FILE"
           if [ -n "$COMMENT_MARKER" ]; then
             printf '\n\n%s\n' "$COMMENT_MARKER" >> "$COMMENT_FILE"
           fi
-          # util/check_review_verdict.py keys on this stamp, so it must stay the file's last one.
+          # Shows which commit a review read; the merge check reads the artifact below.
           if [ -n "${REVIEWED_SHA:-}" ]; then
             printf '\n<!-- reviewed-sha: %s -->\n' "$REVIEWED_SHA" >> "$COMMENT_FILE"
           fi
@@ -664,6 +667,7 @@ jobs:
       # model did the work — a silent downgrade unless this step goes red. The comment is
       # already posted by then; the red check is what flags it.
       - name: Claude run completed on the requested model
+        id: model_ok
         if: "!cancelled() && steps.harness.outputs.status == 'ok'"
         env:
           TURNS: ${{ steps.harness.outputs.turns }}
@@ -691,6 +695,44 @@ jobs:
           done < <(printf '%s\n' "$MODELS" | tr ',' '\n')
           echo "::error title=Claude ran on a different model::The $KIND for $TARGET asked for $requested but the CLI billed only [${MODELS:-none}], so a model this job did not pin wrote it. Check the CLI's model support at the pinned claude-code-action SHA and the subscription's model limits. Log: $RUN_URL"
           exit 1
+
+      # The only verdict the merge check trusts (util/check_review_verdict.py): written by
+      # this step, only for a review that ran on the pinned model and was posted. An absent
+      # comment here is a silent re-review, recorded as "clear".
+      - name: Record the review verdict
+        if: >-
+          !cancelled() && github.event_name == 'pull_request_target' &&
+          inputs.comment_file != '' &&
+          steps.post.outcome == 'success' && steps.model_ok.outcome == 'success'
+        env:
+          COMMENT_FILE: ${{ inputs.comment_file }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEWED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/review-verdict"
+          mkdir -p "$RUNNER_TEMP/review-verdict"
+          if [ -s "$COMMENT_FILE" ]; then
+            verdict=$(grep -m1 -oE '^\*\*Verdict: [A-Za-z ]+\*\*' "$COMMENT_FILE" \
+                        | sed -E 's/^\*\*Verdict: (.*)\*\*$/\1/' || true)
+          else
+            verdict=clear
+          fi
+          jq -n --argjson pr "$PR_NUMBER" --arg sha "$REVIEWED_SHA" --arg verdict "$verdict" \
+            '{pr: $pr, sha: $sha, verdict: $verdict}' > "$RUNNER_TEMP/review-verdict/verdict.json"
+          echo "Recorded verdict '${verdict:-<none>}' for PR #$PR_NUMBER at ${REVIEWED_SHA:0:9}"
+
+      - name: Upload the review verdict
+        if: >-
+          !cancelled() && github.event_name == 'pull_request_target' &&
+          inputs.comment_file != '' &&
+          steps.post.outcome == 'success' && steps.model_ok.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: review-verdict
+          path: ${{ runner.temp }}/review-verdict/verdict.json
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Claude errored after reaching the model — a real run went wrong
         if: "!cancelled() && steps.harness.outputs.status == 'errored'"

@@ -4,6 +4,10 @@
 # Posts the "PR review verdict" commit status: failing while the latest review says
 # Request changes. It blocks a merge only once branch protection requires that context.
 #
+# The verdict comes from the review-verdict artifact a claude.yml review run uploads,
+# never from comment text, and review-override counts only when a person with write
+# access or above added it.
+#
 # workflow_run is what catches a new review: the review comment is posted with
 # GITHUB_TOKEN, so an issue_comment trigger would never fire. pull_request_target covers
 # pushes and the override label. Both run this file and the script from the default
@@ -49,11 +53,16 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      actions: read
+      actions: read          # download the review-verdict artifact
+      issues: read           # who added review-override
       pull-requests: read
       statuses: write
+    # One queue per commit, for both triggers: the status is per commit, so a slow
+    # push-triggered run can't post `pending` over a later review's result. Each run
+    # reads the state when it starts, so the last one queued posts the latest answer.
     concurrency:
-      group: pr-review-verdict-${{ github.event.pull_request.number || github.event.workflow_run.head_sha }}
+      group: pr-review-verdict-${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
         with:
