@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from gaia import config as config_mod
+from gaia.llm.gpu_memory import GB_PER_GIB
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAME
 from gaia.ui import warmup
 from gaia.ui.database import ChatDatabase
@@ -209,6 +210,8 @@ def test_local_list_reports_state_device_fit_and_speed(client, lemonade, db):
     assert by_id[LARGE_DEFAULT_MODEL_NAME]["state"] == "not_downloaded"
     assert by_id[LARGE_DEFAULT_MODEL_NAME]["available"] is True
     assert body["memory_source"] == "AMD iGPU"
+    # 96 + 16 GiB from Lemonade, in the decimal GB the GPU memory pane uses.
+    assert body["memory_gb"] == round(112 * GB_PER_GIB, 1)
 
 
 def test_cloud_list_is_unchanged(client, lemonade):

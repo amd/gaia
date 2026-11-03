@@ -405,7 +405,7 @@ def test_discover_no_control_file(tmp_path, monkeypatch):
     assert error["status"] == "error"
     assert "No GAIA TUI is running" in error["detail"]
     assert "control.json" in error["detail"]
-    assert "gaia tui --control" in error["detail"]
+    assert "gaia-tui --control" in error["detail"]
 
 
 def test_discover_malformed_file(tmp_path, monkeypatch, caplog):
@@ -416,7 +416,7 @@ def test_discover_malformed_file(tmp_path, monkeypatch, caplog):
     assert info is None
     assert "malformed" in error["detail"]
     assert "control.json" in error["detail"]
-    assert "gaia tui --control" in error["detail"]
+    assert "gaia-tui --control" in error["detail"]
     assert any("malformed" in r.getMessage() for r in caplog.records)
 
 
@@ -439,7 +439,7 @@ def test_discover_dead_pid(tmp_path, monkeypatch):
     assert str(PID) in error["detail"]
     assert "not running" in error["detail"]
     assert "stale control file" in error["detail"]
-    assert "gaia tui --control" in error["detail"]
+    assert "gaia-tui --control" in error["detail"]
 
 
 def test_discover_probe_unreachable(tmp_path, monkeypatch):
@@ -450,7 +450,7 @@ def test_discover_probe_unreachable(tmp_path, monkeypatch):
     assert info is None
     assert "did not answer the control status probe" in error["detail"]
     assert "recycled" in error["detail"]
-    assert "gaia tui --control" in error["detail"]
+    assert "gaia-tui --control" in error["detail"]
 
 
 def test_discover_probe_wrong_service(tmp_path, monkeypatch):
@@ -460,7 +460,7 @@ def test_discover_probe_wrong_service(tmp_path, monkeypatch):
     info, error = tui_mcp.discover()
     assert info is None
     assert "Another process now owns the port" in error["detail"]
-    assert "gaia tui --control" in error["detail"]
+    assert "gaia-tui --control" in error["detail"]
 
 
 def test_discover_probe_pid_mismatch(tmp_path, monkeypatch):
@@ -503,7 +503,7 @@ def test_discovery_errors_are_distinct_and_never_leak_the_token(tmp_path, monkey
 
     assert len(set(details)) == len(details), details
     for detail in details:
-        assert "gaia tui --control" in detail
+        assert "gaia-tui --control" in detail
         assert TOKEN not in detail
         assert str(PORT) not in detail
 
@@ -566,7 +566,7 @@ def test_normalize_error_connection_error_is_actionable():
     out = tui_mcp._normalize_error(
         requests.exceptions.ConnectionError("refused"), BASE_URL
     )
-    assert "gaia tui --control" in out["detail"]
+    assert "gaia-tui --control" in out["detail"]
     assert BASE_URL not in out["detail"]
 
 
@@ -574,7 +574,7 @@ def test_normalize_error_connection_error_is_actionable():
 
 
 def test_every_tool_errors_cleanly_when_no_tui(monkeypatch):
-    error = tui_mcp._err("No GAIA TUI is running. Start one with: gaia tui --control")
+    error = tui_mcp._err("No GAIA TUI is running. Start one with: gaia-tui --control")
     monkeypatch.setattr(tui_mcp, "discover", lambda *a, **k: (None, error))
 
     results = {
@@ -587,7 +587,7 @@ def test_every_tool_errors_cleanly_when_no_tui(monkeypatch):
     }
     for name, result in results.items():
         assert result["status"] == "error", name
-        assert "gaia tui --control" in result["detail"], name
+        assert "gaia-tui --control" in result["detail"], name
 
 
 def test_bad_arguments_are_rejected_before_discovery(monkeypatch):
@@ -857,6 +857,6 @@ def test_request_layer_failure_is_not_reported_as_a_non_json_response(monkeypatc
 
 def test_start_hint_names_a_runnable_command():
     """A remedy the reader cannot type is not a remedy."""
-    assert "gaia tui --control" in tui_mcp.START_HINT
-    assert "./tui/bin/gaia --control" in tui_mcp.START_HINT
-    assert "gaia tui --control" in tui_mcp.RESTART_HINT
+    assert "gaia-tui --control" in tui_mcp.START_HINT
+    assert "./tui/bin/gaia-tui --control" in tui_mcp.START_HINT
+    assert "gaia-tui --control" in tui_mcp.RESTART_HINT

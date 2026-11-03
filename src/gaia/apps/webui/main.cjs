@@ -47,11 +47,18 @@ const _MAIN_LOG_PATH = path.join(_GAIA_DIR, "electron-main.log");
 // very handler we are trying to install, falling through to Electron's bare
 // JS-error dialog.
 let installSafetyNet, installLogTee, _fatalHandler;
+let readCount, runSafeModePrompt, SAFE_MODE_THRESHOLD;
 // Set when a fatal error quits the app: the crash dialog was the question,
 // so the quit guard must not ask again.
 let fatalQuitting = false;
 try {
-  ({ installSafetyNet, installLogTee } = require("./main-safety-net.cjs"));
+  ({
+    installSafetyNet,
+    installLogTee,
+    readCount,
+    runSafeModePrompt,
+    SAFE_MODE_THRESHOLD,
+  } = require("./main-safety-net.cjs"));
   ({ fatal: _fatalHandler } = installSafetyNet({
     logPath: _MAIN_LOG_PATH,
     dialogModule: dialog,
@@ -67,6 +74,12 @@ try {
   // handler installed, so execution cannot safely continue.
   process.exit(1);
 }
+
+// ── Safe mode (issue #938) ────────────────────────────────────────────────────
+// After SAFE_MODE_THRESHOLD crashes in a row, skip the log tee (the #934 crash
+// path) and ask the user what to do before any other start-up work runs.
+const _crashCount = readCount(() => os.homedir());
+const _inSafeMode = _crashCount >= SAFE_MODE_THRESHOLD;
 
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
@@ -119,7 +132,7 @@ for (const [name, value] of chromiumSwitches({ platform: process.platform, env: 
 // Users often launch AppImages by double-click, not from a terminal, so
 // console output vanishes. Mirror console.log/error to a file so the
 // diagnostics bundler has something to attach.
-(function installMainLogTee() {
+function installMainLogTee() {
   try {
     try { fs.mkdirSync(_GAIA_DIR, { recursive: true }); } catch { /* ignore */ }
     const logPath = _MAIN_LOG_PATH;
@@ -186,7 +199,8 @@ for (const [name, value] of chromiumSwitches({ platform: process.platform, env: 
     // not refuse to launch over a log-tee failure.
     process.stderr.write(`[main] log tee failed: ${err.message}\n`);
   }
-})();
+}
+if (!_inSafeMode) installMainLogTee();
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -1170,6 +1184,16 @@ app.on("second-instance", (_event, argv, _cwd) => {
 });
 
 app.whenReady().then(async () => {
+  if (_inSafeMode) {
+    await runSafeModePrompt({
+      count: _crashCount,
+      dialogModule: dialog,
+      appModule: app,
+      shellModule: shell,
+    });
+    return;
+  }
+
   // Phase 0: seed bundled agents BEFORE the Python backend starts, so the
   // agent registry sees them on its first discovery pass. Failures here are
   // non-fatal — the app must still launch even if seeding is blocked (e.g.

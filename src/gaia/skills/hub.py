@@ -62,6 +62,10 @@ class SkillHubError(SkillError):
     """A hub request failed, or the hub rejected a publish."""
 
 
+class SkillChecksumError(SkillHubError):
+    """A downloaded bundle does not match the checksum the hub manifest lists."""
+
+
 # ---------------------------------------------------------------------------
 # URLs
 # ---------------------------------------------------------------------------
@@ -137,12 +141,15 @@ def search_skills(
 ) -> SkillSearchResult:
     """Catalog skill entries matching *query* (empty query = every skill).
 
-    Matches case-insensitively against name, description, and declared tool
-    names — the three things a user would type. Ordering is catalog order (by id),
-    so results are stable between runs.
+    The query is split into words, and an entry matches when at least one word
+    appears (case-insensitive substring) in its id, name, description, or declared
+    tool names. Words of one or two letters are ignored when the query also has a
+    longer word. Results are ordered by how many distinct query words matched, most
+    first; ties keep catalog order (by id), so results are stable between runs.
 
     Args:
-        query: Substring to match; empty returns the whole skills lane.
+        query: Words to match; empty returns the whole skills lane in catalog
+            order.
         base_url: Hub origin override (defaults to ``GAIA_HUB_URL``).
         fetcher: Injected transport (see :data:`gaia.hub.catalog.Fetcher`).
         cache_path: Offline-cache location; pass a temp path in tests so the
@@ -171,7 +178,11 @@ def search_skills(
 
     entries = skill_entries(index.agents)
 
-    needle = query.strip().lower()
+    words = list(dict.fromkeys(query.lower().split()))
+    # "a"/"of" hit nearly every description; keep them only if they are all there is.
+    long_words = [word for word in words if len(word) > 2]
+    if long_words:
+        words = long_words
 
     def haystack(entry: dict[str, Any]) -> str:
         metadata = entry.get("skill_metadata") or {}
@@ -189,11 +200,18 @@ def search_skills(
             ]
         ).lower()
 
-    matched = (
-        entries
-        if not needle
-        else [entry for entry in entries if needle in haystack(entry)]
-    )
+    if words:
+        scored = []
+        for entry in entries:
+            text = haystack(entry)
+            hits = sum(1 for word in words if word in text)
+            if hits:
+                scored.append((hits, entry))
+        # sort() is stable, so equal scores keep catalog order.
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        matched = [entry for _, entry in scored]
+    else:
+        matched = entries
     if index.offline:
         log.warning(
             "Serving %d skill(s) from the offline catalog cache, last refreshed %s "
@@ -260,9 +278,8 @@ class RemoteSkill:
             wanted = spec or "*"
             raise SkillNotFoundError(
                 f"No published version of skill '{self.name}' satisfies {wanted!r}. "
-                f"Published: {', '.join(available) or '(none)'}. Loosen the pin, or "
-                f"run 'gaia skill info {self.name} --remote' to see the versions. "
-                f"See {_DOCS}"
+                f"Published: {', '.join(available) or '(none)'}. Loosen the pin, "
+                f"e.g. 'gaia skill install {self.name}' for the latest. See {_DOCS}"
             )
         return chosen
 
@@ -383,8 +400,8 @@ def fetch_skill_doc(
         raise SkillHubError(
             f"Could not fetch SKILL.md for '{name}' {version} from {url}: {exc}. The "
             "version's manifest is missing from the hub, or the hub is unreachable. "
-            "Retry, or pick another version with "
-            f"'gaia skill info {name} --remote'."
+            f"Retry, or pin another version with 'gaia skill install {name}@<version>' "
+            f"('gaia skill search {name}' shows the latest)."
         ) from exc
     text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
     if not text.strip():
@@ -435,7 +452,7 @@ def download_artifact(
 
     actual = hashlib.sha256(payload).hexdigest()
     if actual != artifact.sha256:
-        raise SkillHubError(
+        raise SkillChecksumError(
             f"Checksum mismatch for '{name}' {version}: the hub manifest says "
             f"sha256={artifact.sha256} but the downloaded bundle hashes to "
             f"{actual}. Nothing was installed. Retry — if it persists, the artifact "

@@ -57,9 +57,7 @@ services sit alongside integration tests for individual apps:
 
 - `test_electron_chat_app.js` - Chat/Agent UI app
 - `test_electron_chat_installer.js` - First-run installer flow
-- `test_electron_emr_dashboard.js` - EMR dashboard
 - `test_electron_example_app.js` - Example app template verification
-- `test_electron_jira_app.js` - Jira app configuration and structure
 
 Shared setup lives in `tests/electron/setup.js`; mocks live under
 `tests/electron/mocks/`.
@@ -230,8 +228,6 @@ Add your app to `.github/workflows/test_electron.yml`:
 ```yaml
 matrix:
   app:
-    - name: jira
-      path: src/gaia/apps/jira/webui
     - name: example
       path: src/gaia/apps/example/webui
     - name: my-app
@@ -366,8 +362,8 @@ it('slow test', async () => {
 cd src/gaia/electron
 npm audit
 
-# Audit specific app
-cd src/gaia/apps/jira/webui
+# Audit a specific app workspace
+cd src/gaia/apps/example/webui
 npm audit
 
 # Fix vulnerabilities automatically
@@ -399,7 +395,7 @@ describe('App E2E', () => {
   beforeEach(async () => {
     app = new Application({
       path: '/path/to/electron',
-      args: [path.join(__dirname, '../../src/gaia/apps/jira/webui')]
+      args: [path.join(__dirname, '../../src/gaia/apps/example/webui')]
     });
     await app.start();
   });

@@ -8,6 +8,7 @@ import { useModelStore, displayModelName, distinctModelLabels, sameModelId } fro
 import { useChatStore } from '../../stores/chatStore';
 import { ModelContextSize } from './ModelContextSize';
 import { AddCustomModel } from './AddCustomModel';
+import { LocalModelsSections } from './LocalModelsSections';
 import { STATE_LABELS, isDownloading, placementText } from '../modelMeta';
 import '../ModelPicker.css';
 import { CloudPrices } from './CloudPrices';
@@ -294,7 +295,7 @@ export function ModelSettings() {
                 {current ? (
                     <span className="model-row-current"><Check size={13} aria-hidden="true" /> In use</span>
                 ) : m.available === false ? null : progress ? (
-                    <span className="model-row-current"><Loader2 size={13} className="spin" /> {Math.round(progress.percent)}%</span>
+                    <span className="model-row-current"><Loader2 size={13} className="spin" /> {progress.message ?? `${Math.round(progress.percent)}%`}</span>
                 ) : !m.downloaded ? (
                     <button type="button" className="btn-secondary" onClick={() => void download(m.id)} disabled={busy !== null} aria-label={`Download ${labels[m.id]}`}>
                         {busy === `dl:${m.id}` ? <Loader2 size={13} className="spin" /> : null} Download
@@ -526,6 +527,8 @@ export function ModelSettings() {
                     )}
 
                     {provider.id === 'local' && connected && <AddCustomModel onAdded={(name) => void added(name)} />}
+
+                    {provider.id === 'local' && connected && <LocalModelsSections />}
 
                     {provider.remote && <SpendingLimit />}
                 </section>

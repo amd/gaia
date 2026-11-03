@@ -170,9 +170,22 @@ def chat_agent_build_context(
             os.chdir(prev_cwd)
 
 
-def build_agent_for_row(profile: str, **kwargs) -> Tuple[str, List[str]]:
-    """Build one fixture row's agent, register tools, and capture (prompt, tools)."""
-    with chat_agent_build_context(profile, **kwargs) as agent:
+def build_agent_for_row(
+    profile: str, tool_calling: Optional[bool] = None, **kwargs
+) -> Tuple[str, List[str]]:
+    """Build one fixture row's agent, register tools, and capture (prompt, tools).
+
+    *tool_calling* overrides whether the row's model takes native tool calls.
+    """
+    with contextlib.ExitStack() as stack:
+        if tool_calling is not None:
+            stack.enter_context(
+                patch(
+                    "gaia.llm.lemonade_client.is_tool_calling_model",
+                    return_value=tool_calling,
+                )
+            )
+        agent = stack.enter_context(chat_agent_build_context(profile, **kwargs))
         agent._register_tools()
         tools = sorted(agent._tools_registry.keys())
         prompt = agent._get_system_prompt()
@@ -241,10 +254,14 @@ ROWS: List[Tuple[str, Dict]] = [
     ),
     (
         "row10_doc_loader_on_non_tool_calling_model",
-        # gemma4-it-e2b-FLM: MODELS["gemma-4-e2b"], tool_calling=False
-        # (lemonade_client.py) — the FLM/NPU server 500s on a native `tools=`
-        # payload, so is_tool_calling_model() is False for this id.
-        dict(profile="doc", dynamic_tools=True, model_id="gemma4-it-e2b-FLM"),
+        # No local chat model lacks native tool calls any more, so the row
+        # forces that path rather than naming a model that takes it.
+        dict(
+            profile="doc",
+            dynamic_tools=True,
+            model_id="gemma4-it-e2b-FLM",
+            tool_calling=False,
+        ),
     ),
     ("row11_file_no_docs_baseline", dict(profile="file")),
     (

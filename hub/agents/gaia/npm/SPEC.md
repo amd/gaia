@@ -83,7 +83,7 @@ delivers one binary from one lane. A `1.x`-shaped lock is likewise rejected.
 
 The TUI is **consumed, not built here**. It is the same `tui/cmd/gaia` binary the
 core release publishes as the `terminal-hub` component and a core install runs as
-`gaia tui` — so behaviour is identical by construction rather than by convention.
+`gaia-tui` — so behaviour is identical by construction rather than by convention.
 Building a second copy under this package's lane would put the same bytes at a
 different version under a third naming convention, and the two would drift.
 
@@ -258,7 +258,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.26"`                  |
+| Contract version   | `API_VERSION = "2.27"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -275,10 +275,11 @@ the header.
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |
 | `POST` | `/v1/gaia/query/{run_id}/tool_decision` | Answer a confirmation-gated tool (≥ 2.14) |
-| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Stop the prompts for gated tools in one session (≥ 2.14); the shell gates stay on, so a gated shell command still answers `needs_confirmation` |
+| `POST` | `/v1/gaia/sessions/{session_id}/bypass` | Stop the prompts for gated tools in one session (≥ 2.14), and on a run the caller can answer, grant out-of-scope paths unasked (still inside `GAIA_ALLOWED_PATHS`); the shell gates stay on, so a gated shell command still answers `needs_confirmation` |
 | `POST` | `/v1/gaia/sessions/{session_id}/internet` | Turn one session's internet on or off from its next tool call, including in a turn already running (≥ 2.23) |
 | `GET`  | `/v1/gaia/sessions/{session_id}/grants` | The session's "always" answers, `{ key, label }` each (≥ 2.26) |
 | `DELETE` | `/v1/gaia/sessions/{session_id}/grants` | Revoke one (`?key=`) or all of them (≥ 2.26) |
+| `GET`  | `/v1/gaia/sessions/{session_id}/tools` | The tools the session's agent can call now, `{ name, description, category }` each; an unknown session is a `404` (≥ 2.27) |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
 #### `/query` request body
@@ -317,8 +318,14 @@ caller computed it, so the agent works in the folders the caller's UI shows. A
 new session is built with exactly that scope; a retained session gains any
 entry it lacks and drops none until the session ends — neither what the user
 granted mid-chat nor an entry the caller has since stopped sending. `GAIA_ALLOWED_PATHS`
-still narrows it, and a path outside it is asked about, never silently
-granted. Omit it for the agent's default scope. Pre-2.18 binaries `422` the
+still narrows it. In the normal permission mode, a path outside the supplied
+scope is asked about before it is granted. If the session has full access
+(enabled through the session bypass route) and the caller can answer for the
+session, that path is granted without a separate path prompt; this is the same
+full-access behavior as in-process. Full access does not override
+`GAIA_ALLOWED_PATHS`, the secret-path denylist, the write denylist, or the
+refusal of grants that cover the home folder or a drive root. Omit
+`allowed_paths` for the agent's default scope. Pre-2.18 binaries `422` the
 field. Whatever the scope, its existing folders are named in the system prompt
 once, when the session is built, with GAIA's documents folder first; a folder
 added to a retained session later is usable but not named. A caller that omits
@@ -450,10 +457,12 @@ paths call the same `build_memory_dump()` and return the identical shape.
 the same roots the agent does — its bundled skills, `~/.gaia/skills`, Claude
 Code skill folders — so a host without the Python package (the bundled skills
 live inside the binary) can still show them. `source` names the root a skill
-came from: `agent-bundled`, `user` or `claude-import`, or `null` for any other
-root. An agent that predates `source` omits the field; a host must treat a list
-where any skill lacks it as ungrouped and show it flat, not drop the skill. A skill root that cannot be read is a `500`
-naming it.
+came from: `agent-bundled`, `user`, `claude-project` (contract ≥ 2.26: the
+`.claude/skills` of the project the agent works in) or `claude-import` (other
+Claude Code skill folders), or `null` for any other root. An agent that predates
+`source` omits the field; a host must treat a list where any skill lacks it, or
+carries a value the host does not know, as ungrouped and show it flat, never
+drop the skill. A skill root that cannot be read is a `500` naming it.
 
 `/query` streams the answer as `token` events before its terminal `final`. A
 run cancelled mid-answer (`/cancel`, or a dropped connection) ends with an
@@ -619,6 +628,12 @@ server — never inherit the sidecar token or GAIA's other internal credentials
 (the model-broker token, custody secret and engineering pairing token): their
 environment comes from `gaia.env.child_env`, which also drops any name listed
 in `GAIA_CHILD_ENV_DENY` (comma or space separated). User credentials such as `GH_TOKEN` pass through unchanged.
+From a `.env` in its working directory the sidecar reads only
+`ANTHROPIC_API_KEY`, for its own Claude calls; it ignores every other name in
+that file and logs one warning listing them. Export other settings in the
+launch environment instead. A sidecar run from a source checkout still loads
+the `.env` at or above GAIA's install (the repo's `.env`) in full, as before;
+the packaged binary has no install `.env`.
 `GAIA_NO_DOTENV=1` in the sidecar's launch environment stops it loading `.env`
 files; a `.env` file cannot set that switch itself.
 

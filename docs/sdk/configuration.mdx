@@ -42,6 +42,31 @@ export GAIA_CHILD_ENV_DENY="MY_APP_TOKEN,MY_DB_PASSWORD"
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
+### `.env` files
+
+GAIA reads two kinds of `.env` file. A variable already set in your environment
+always wins over both, and `GAIA_NO_DOTENV` turns both off.
+
+- **The `.env` at or above GAIA's install** (the repo's `.env` in a source
+  checkout) loads in full, as an ordinary set of environment variables. The
+  packaged agent binaries have no install `.env`.
+- **The nearest `.env` at or above the working directory**, when it is a
+  different file, may belong to any project you run GAIA from. GAIA reads only
+  `ANTHROPIC_API_KEY` from it, uses that key for its own Claude calls, and does
+  not pass it to any program it starts. The eval judge prefers your Claude Code
+  login over that key. Every other name in that file is ignored, and GAIA logs
+  one warning naming them.
+
+If you launch GAIA or its terminal UI from a project folder and kept settings
+such as `TAVILY_API_KEY` or `LEMONADE_BASE_URL` in that project's `.env`,
+export them in your shell instead; GAIA no longer reads them from there.
+
+<Warning>
+A virtual environment created inside a project (`project/.venv`) puts GAIA's
+install under that project, so the project's `.env` counts as GAIA's own and
+loads in full. Install GAIA outside any repository you don't trust.
+</Warning>
+
 <Note>
 GAIA has no `GAIA_LOG_LEVEL` environment variable. Log levels are set
 programmatically through `gaia.logger` (`set_level(name, level)`); the default

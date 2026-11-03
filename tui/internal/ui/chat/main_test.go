@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/setupapi"
+	"github.com/amd/gaia/tui/internal/setupapi/setupapitest"
 )
 
 // TestMain keeps the package off the developer's own GAIA home: a fake
@@ -27,6 +29,11 @@ func TestMain(m *testing.M) {
 	lemonade.StubEnsureEmbeddedForTest(func(context.Context) error {
 		return errors.New("test: no daemon")
 	})
+	// The setup screens and the /gpu probe must never start a real daemon.
+	newChatSetupAPI = func() setupapi.API {
+		return &setupapitest.Fake{PlanErr: errors.New("test: no daemon"), GPUErr: errors.New("test: no daemon")}
+	}
+	newGPUProbeAPI = newChatSetupAPI
 	code := m.Run()
 	os.RemoveAll(home)
 	os.Exit(code)

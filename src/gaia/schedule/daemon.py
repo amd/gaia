@@ -3,8 +3,9 @@
 
 """Long-running scheduler daemon.
 
-Reads the schedule store, arms an APScheduler cron trigger per enabled schedule,
-and blocks until interrupted. Each trigger fires :func:`runner.fire`.
+Reads the schedule store, arms an APScheduler cron trigger per enabled
+schedule (or a date trigger per pending one-time schedule), and blocks until
+interrupted. Each trigger fires :func:`runner.fire`.
 """
 
 from __future__ import annotations
@@ -24,12 +25,14 @@ from apscheduler.events import (
 )
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 
 from gaia.logger import get_logger
 from gaia.schedule import runner
 from gaia.schedule.lock import daemon_lock
 from gaia.schedule.store import (
     DEFAULT_STORE_PATH,
+    ONE_SHOT_PENDING,
     MissedRuns,
     Schedule,
     ScheduleStore,
@@ -69,6 +72,52 @@ def _job(schedule: Schedule, store: ScheduleStore) -> None:
     )
 
 
+def run_one_shot(schedule: Schedule, store: ScheduleStore) -> str:
+    """Run a one-time schedule this caller has claimed and record how it ended.
+
+    It is marked completed or failed either way and never runs again; a
+    failure is re-raised for the caller to report.
+    """
+    try:
+        output = runner.fire(schedule)
+    except BaseException:
+        _finish_one_shot(schedule, store, ok=False)
+        raise
+    _finish_one_shot(schedule, store, ok=True)
+    return output
+
+
+def _finish_one_shot(schedule: Schedule, store: ScheduleStore, ok: bool) -> None:
+    try:
+        store.finish_one_shot(schedule, datetime.now(timezone.utc).isoformat(), ok=ok)
+    except KeyError:
+        # Removed mid-run: nothing left to mark, and the run's own error wins.
+        log.warning(
+            "one-time schedule %r was removed while it ran; its outcome (%s) "
+            "was not recorded",
+            schedule.name,
+            "completed" if ok else "failed",
+        )
+
+
+def _one_shot_job(schedule: Schedule, store: ScheduleStore) -> None:
+    try:
+        claimed = store.claim_one_shot(schedule.name, datetime.now(timezone.utc))
+        if claimed is None:
+            log.debug(
+                "skipping one-time %r: already run, paused, removed or not due",
+                schedule.name,
+            )
+            return
+        run_one_shot(claimed, store)
+    except Exception:
+        log.exception(
+            "one-time schedule %r failed; it is marked failed and will not run "
+            "again",
+            schedule.name,
+        )
+
+
 def _log_skipped_run(event: JobExecutionEvent | JobSubmissionEvent) -> None:
     if isinstance(event, JobExecutionEvent):
         log.warning(
@@ -92,8 +141,14 @@ def _log_skipped_run(event: JobExecutionEvent | JobSubmissionEvent) -> None:
 _MAX_MISSED_COUNTED = 100_000
 
 
+def _as_utc(moment: datetime) -> datetime:
+    # Local times in a DST fold compare wrongly: never equal across zones, and
+    # by wall clock within one. Compare the UTC instants instead.
+    return moment.astimezone(timezone.utc)
+
+
 def _utc(moment: datetime) -> str:
-    return moment.astimezone(timezone.utc).isoformat()
+    return _as_utc(moment).isoformat()
 
 
 def _parse(schedule: Schedule, field: str) -> Optional[datetime]:
@@ -121,8 +176,11 @@ def _latest_fire(trigger: CronTrigger, until: datetime, inclusive: bool):
     ):
         latest = None
         fire = trigger.get_next_fire_time(None, until - span)
-        while fire is not None and (fire < until or (inclusive and fire == until)):
-            latest = fire
+        while fire is not None:
+            due = _as_utc(fire)
+            if due > until or (due == until and not inclusive):
+                break
+            latest = due
             fire = trigger.get_next_fire_time(fire, fire)
         if latest is not None:
             return latest
@@ -141,6 +199,7 @@ def _missed_runs(
     time, so ``last_missed`` is still right.
     """
     trigger = CronTrigger.from_crontab(schedule.cron)
+    until = _as_utc(until)
     floor = max(
         moment
         for moment in (
@@ -159,10 +218,11 @@ def _missed_runs(
     )
     missed: List[datetime] = []
     while fire is not None and len(missed) < _MAX_MISSED_COUNTED:
-        if fire > until or (fire == until and not including_until):
+        due = _as_utc(fire)
+        if due > until or (due == until and not including_until):
             break
-        if fire > floor:
-            missed.append(fire)
+        if due > floor:
+            missed.append(due)
         fire = trigger.get_next_fire_time(fire, fire)
     capped = len(missed) >= _MAX_MISSED_COUNTED
     if capped:
@@ -189,10 +249,13 @@ def _account(
     """Record what *name* missed before *until*; expect its next run after it."""
 
     def decide(schedule: Schedule) -> Optional[MissedRuns]:
-        if not schedule.enabled:
+        # A one-time schedule is never missed: it runs late instead.
+        if not schedule.enabled or schedule.one_shot:
             return None
         trigger = CronTrigger.from_crontab(schedule.cron)
-        following = trigger.get_next_fire_time(until, until)
+        # In the trigger's zone: from UTC it returns the repeated DST hour again.
+        local = until.astimezone(trigger.timezone)
+        following = trigger.get_next_fire_time(local, local)
         next_run = _utc(following) if following else None
         if schedule.missed_since is None:
             # Saved before misses were counted: start counting from now.
@@ -216,7 +279,7 @@ def catch_up_missed_runs(store: ScheduleStore, now: datetime) -> None:
     """At start: record the runs that came due while the daemon was not
     running. They are not run late; `gaia schedule show` lists them."""
     for name, schedule in store.load().items():
-        if schedule.enabled:
+        if schedule.enabled and not schedule.one_shot:
             _account(store, name, now, including_until=True)
 
 
@@ -228,7 +291,7 @@ def _account_for_submission(store: ScheduleStore, event: JobSubmissionEvent) -> 
     misfire grace; the executor then sends EVENT_JOB_MISSED from another
     thread, so it is decided here instead, once.
     """
-    latest = max(event.scheduled_run_times)
+    latest = max(_as_utc(due) for due in event.scheduled_run_times)
     too_late = (datetime.now(timezone.utc) - latest).total_seconds() > (
         MISFIRE_GRACE_SECONDS
     )
@@ -252,36 +315,74 @@ def build_scheduler(store: ScheduleStore) -> BackgroundScheduler:
     return scheduler
 
 
+def _trigger(schedule: Schedule, now: datetime):
+    if not schedule.one_shot:
+        return CronTrigger.from_crontab(schedule.cron)
+    # Past due (the daemon was down at that time): run once, now.
+    return DateTrigger(run_date=max(schedule.due_at(), now))
+
+
+#: Bad one-time entries already logged, so a reload tick doesn't repeat it.
+_reported_unarmable: set = set()
+
+
+def _report_unarmable(store: ScheduleStore, schedule: Schedule, error: Exception):
+    key = (getattr(store, "path", None), schedule.name, repr(schedule.at))
+    if key in _reported_unarmable:
+        return
+    _reported_unarmable.add(key)
+    log.error(
+        "not arming one-time schedule %r from %s: %s",
+        schedule.name,
+        getattr(store, "path", "the schedule store"),
+        error,
+    )
+
+
 def refresh_schedules(scheduler: BackgroundScheduler, store: ScheduleStore) -> None:
     """Reconcile running timers with the schedules currently persisted on disk."""
     schedules = store.load()
-    enabled = {
-        name: schedule for name, schedule in schedules.items() if schedule.enabled
+    armed = {
+        name: schedule
+        for name, schedule in schedules.items()
+        if schedule.enabled
+        and (not schedule.one_shot or schedule.state == ONE_SHOT_PENDING)
     }
+    now = datetime.now(timezone.utc)
     # Validate all triggers before changing timers, so a bad edit fails loudly.
-    triggers = {
-        name: CronTrigger.from_crontab(schedule.cron)
-        for name, schedule in enabled.items()
-    }
+    triggers = {}
+    for name, schedule in list(armed.items()):
+        try:
+            triggers[name] = _trigger(schedule, now)
+        except ValueError as e:
+            if not schedule.one_shot:
+                raise
+            # One bad hand-edited one-time entry must not stop the others.
+            del armed[name]
+            _report_unarmable(store, schedule, e)
     existing = {job.id: job for job in scheduler.get_jobs()}
-    for name in existing.keys() - enabled.keys():
+    for name in existing.keys() - armed.keys():
         scheduler.remove_job(name)
-    for schedule in schedules.values():
-        if not schedule.enabled:
-            continue
+    for schedule in armed.values():
         job = existing.get(schedule.name)
         if job is not None:
-            if job.args[0].cron != schedule.cron:
+            armed_as = job.args[0]
+            if (armed_as.cron, armed_as.at) == (schedule.cron, schedule.at):
+                continue
+            if armed_as.cron and schedule.cron:
                 scheduler.reschedule_job(schedule.name, trigger=triggers[schedule.name])
                 scheduler.modify_job(schedule.name, args=[schedule, store])
-            continue
+                continue
+            scheduler.remove_job(schedule.name)
         scheduler.add_job(
-            _job,
+            _one_shot_job if schedule.one_shot else _job,
             trigger=triggers[schedule.name],
             args=[schedule, store],
             id=schedule.name,
             name=schedule.name,
             replace_existing=True,
+            # A one-time run is never dropped for being late.
+            **({"misfire_grace_time": None} if schedule.one_shot else {}),
         )
 
 
@@ -326,6 +427,17 @@ def run_daemon(store_path: Path = DEFAULT_STORE_PATH) -> None:
         finally:
             scheduler.shutdown(wait=False)
             log.info("schedule daemon stopped")
+
+
+def next_fire(schedule: Schedule) -> Optional[str]:
+    """When *schedule* next runs (local time, ISO), or None if it never will."""
+    if not schedule.enabled:
+        return None
+    if schedule.one_shot:
+        if schedule.state != ONE_SHOT_PENDING:
+            return None
+        return schedule.due_at().astimezone().isoformat()
+    return next_fire_time(schedule.cron)
 
 
 def next_fire_time(cron: str) -> Optional[str]:

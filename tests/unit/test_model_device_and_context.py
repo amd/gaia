@@ -11,6 +11,7 @@ and asserts the ``/load`` body Lemonade receives.
 # pylint: disable=protected-access
 
 import json
+from dataclasses import replace
 from unittest import mock
 
 import pytest
@@ -96,8 +97,13 @@ def loaded(name, device="gpu", recipe="llamacpp", backend_dir="vulkan", ctx=6553
     }
 
 
-def _cap(memory_gb, source="AMD iGPU", disk=None):
-    return MachineCapacity(memory_gb=memory_gb, memory_source=source, disk_free_gb=disk)
+def _cap(memory_gb, source="AMD iGPU", disk=None, npu=None):
+    return MachineCapacity(
+        memory_gb=memory_gb,
+        memory_source=source,
+        disk_free_gb=disk,
+        npu_memory_gb=npu,
+    )
 
 
 # ── #5214: the device each model runs on ──────────────────────────────────
@@ -199,7 +205,7 @@ _MODELS = [
         # Strix Halo with an NPU: every model loads.
         (
             "halo",
-            _cap(64),
+            replace(_cap(64), npu_memory_gb=64.0),
             {"Gemma-4-E4B-it-GGUF", LARGE_DEFAULT_MODEL_NAME, "gemma4-it-e2b-FLM"},
         ),
         # 16 GB GPU, no NPU: the 35B does not fit and FLM has no NPU.
@@ -230,7 +236,9 @@ def test_too_large_model_says_why():
         speeds={},
     )
     assert out[0]["fits"] is False
-    assert "16 GB" in out[0]["unavailable_reason"]
+    # Lemonade's 16 GiB, in the decimal GB the model picker shows beside it.
+    assert "this PC has 17.2 GB" in out[0]["unavailable_reason"]
+    assert "16 GB" not in out[0]["unavailable_reason"]
 
 
 def test_each_model_has_exactly_one_state():

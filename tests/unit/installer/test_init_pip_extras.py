@@ -28,7 +28,7 @@ UV = "/home/u/.local/bin/uv"
 #: What `gaia_extra_requirements(["rag"])` resolves to: real PyPI requirements
 #: read off amd-gaia's own install metadata, never the ``amd-gaia[rag]``
 #: bracket form -- that form reinstalls GAIA itself (#4672).
-FAKE_RAG_REQUIREMENTS = ["faiss-cpu", "pymupdf"]
+FAKE_RAG_REQUIREMENTS = ["faiss-cpu", "pypdfium2"]
 
 
 @pytest.fixture

@@ -65,6 +65,14 @@
 
 .settings-body {
     position: relative;
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}
+
+/* Scroll here, not on .settings-body, so the close button stays pinned. */
+.settings-scroll {
     flex: 1;
     min-width: 0;
     overflow-y: auto;
@@ -75,12 +83,14 @@
     position: absolute;
     top: 14px;
     inset-inline-end: 14px;
+    z-index: 1;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 32px;
     height: 32px;
     border-radius: var(--radius-md);
+    background: var(--bg-primary);
     color: var(--text-secondary);
 }
 
@@ -533,7 +543,7 @@
         inset-inline-end: 10px;
     }
 
-    .settings-body {
+    .settings-scroll {
         padding: 18px 16px 28px;
     }
 }

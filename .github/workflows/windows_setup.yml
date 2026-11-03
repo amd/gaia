@@ -55,6 +55,11 @@ on:
         required: false
         default: ''
         type: string
+      agent_ui_release_sha256:
+        description: "SHA-256 of agent_ui_release's desktop app setup. Empty checks it against that release's latest.yml instead."
+        required: false
+        default: ''
+        type: string
       agent_ui_publish_run_sha:
         description: "Take the desktop app setup from publish.yml's push run for this commit."
         required: false
@@ -101,17 +106,25 @@ jobs:
           name: ${{ inputs.agent_ui_artifact }}
           path: agent-ui-artifact
 
+      - uses: actions/cache@v6
+        if: inputs.agent_ui_release != ''
+        with:
+          path: agent-ui
+          key: agent-ui-setup-${{ inputs.agent_ui_release }}
+
       - name: Fetch
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ inputs.agent_ui_release }}
+          RELEASE_SHA256: ${{ inputs.agent_ui_release_sha256 }}
           RUN_SHA: ${{ inputs.agent_ui_publish_run_sha }}
           ARTIFACT: ${{ inputs.agent_ui_artifact }}
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           if [ -n "${RELEASE}" ] && [ -z "${RUN_SHA}" ] && [ -z "${ARTIFACT}" ]; then
-            python installer/tui/fetch_agent_ui_setup.py --release "${RELEASE}" --out agent-ui
+            python installer/tui/fetch_agent_ui_setup.py --release "${RELEASE}" \
+              ${RELEASE_SHA256:+--sha256 "${RELEASE_SHA256}"} --out agent-ui
           elif [ -n "${RUN_SHA}" ] && [ -z "${RELEASE}" ] && [ -z "${ARTIFACT}" ]; then
             python installer/tui/fetch_agent_ui_setup.py \
               --publish-run-sha "${RUN_SHA}" --version "${VERSION}" \

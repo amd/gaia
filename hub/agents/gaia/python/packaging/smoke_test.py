@@ -107,10 +107,10 @@ RUN_PYTHON_FILE_FLAG = "--gaia-run-python-file"
 #: chart, and stdlib modules nothing in GAIA itself imports.
 RUN_PYTHON_SCRIPT = """\
 import sys, statistics, sqlite3, zipfile, xml.etree.ElementTree, csv, decimal
-import subprocess
+import shelve, subprocess
 from concurrent.futures import ProcessPoolExecutor
 
-import openpyxl, docx, pptx, pandas, numpy, reportlab, pypdf, pymupdf, xlsxwriter
+import openpyxl, docx, pptx, pandas, numpy, reportlab, pypdf, pypdfium2, xlsxwriter
 import matplotlib.pyplot as plt
 
 
@@ -127,6 +127,16 @@ def main():
     assert openpyxl.load_workbook("bom.xlsx").active["B2"].value == 4
     docx.Document().save("notes.docx")
     pptx.Presentation().save("deck.pptx")
+    from reportlab.pdfgen import canvas
+    page = canvas.Canvas("page.pdf", pagesize=(100, 50))
+    page.drawString(10, 20, "hi")
+    page.save()
+    # Rendering proves the native pdfium library is in the binary, not just the
+    # Python wrapper.
+    assert pypdfium2.PdfDocument("page.pdf")[0].render(scale=2).to_pil().size == (200, 100)
+    # GNU dbm is excluded; shelve must still work on dbm's other backends.
+    with shelve.open("kv") as db:
+        db["k"] = 1
     plt.plot([1, 2, 3])
     plt.savefig("chart.png")
     frame = pandas.DataFrame({"qty": [4, 6]})
@@ -134,7 +144,7 @@ def main():
     # file as __mp_main__, as CPython does, so the work sits under the guard.
     with ProcessPoolExecutor(2) as pool:
         assert list(pool.map(abs, [-1, -2])) == [1, 2]
-    nested = py("-c", "import pypdf, pymupdf, xlsxwriter; print('nested ok')")
+    nested = py("-c", "import pypdf, pypdfium2, xlsxwriter; print('nested ok')")
     assert nested.stdout.strip().endswith("nested ok"), (nested.stdout, nested.stderr)
     pip = py("-m", "pip", "install", "pypdf")
     assert pip.returncode == 1 and "can't be installed" in pip.stderr, pip.stderr

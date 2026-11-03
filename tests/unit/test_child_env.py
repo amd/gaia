@@ -240,13 +240,14 @@ def _import_gaia_in(cwd, extra_env):
     env = {
         k: v
         for k, v in os.environ.items()
-        if k not in ("GAIA_NO_DOTENV", "FROM_DOTENV")
+        if k.upper() not in ("GAIA_NO_DOTENV", "ANTHROPIC_API_KEY")
     }
     env["PYTHONPATH"] = str(REPO_ROOT / "src")
     env.update(extra_env)
     code = (
-        "import os, gaia.cli, gaia.env; "
-        "print(os.environ.get('FROM_DOTENV', '<unset>'), gaia.env.dotenv_disabled())"
+        "import gaia.cli, gaia.env; "
+        "print(gaia.env.credential('ANTHROPIC_API_KEY') or '<unset>', "
+        "gaia.env.dotenv_disabled())"
     )
     proc = subprocess.run(
         [sys.executable, "-c", code],
@@ -263,7 +264,7 @@ def _import_gaia_in(cwd, extra_env):
 
 @pytest.fixture
 def dotenv_dir(tmp_path):
-    (tmp_path / ".env").write_text("FROM_DOTENV=loaded\n")
+    (tmp_path / ".env").write_text("ANTHROPIC_API_KEY=loaded\n")
     return tmp_path
 
 
@@ -277,13 +278,13 @@ def test_gaia_no_dotenv_skips_dotenv(dotenv_dir):
 
 
 def test_a_dotenv_file_cannot_set_gaia_no_dotenv(tmp_path):
-    (tmp_path / ".env").write_text("GAIA_NO_DOTENV=1\nFROM_DOTENV=loaded\n")
+    (tmp_path / ".env").write_text("GAIA_NO_DOTENV=1\nANTHROPIC_API_KEY=loaded\n")
 
     assert _import_gaia_in(tmp_path, {}) == "loaded False"
 
 
 def test_a_dotenv_file_cannot_clear_gaia_no_dotenv(tmp_path):
-    (tmp_path / ".env").write_text("GAIA_NO_DOTENV=0\nFROM_DOTENV=loaded\n")
+    (tmp_path / ".env").write_text("GAIA_NO_DOTENV=0\nANTHROPIC_API_KEY=loaded\n")
 
     assert _import_gaia_in(tmp_path, {"GAIA_NO_DOTENV": "1"}) == "<unset> True"
 
