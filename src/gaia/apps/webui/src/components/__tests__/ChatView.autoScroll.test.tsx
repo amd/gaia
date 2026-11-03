@@ -54,10 +54,15 @@ afterEach(() => {
     vi.restoreAllMocks();
 });
 
-/** Place the transcript at `scrollTop` in a 2000px list shown through a 500px window. */
-function scrollTo(el: HTMLElement, scrollTop: number) {
-    Object.defineProperty(el, 'scrollHeight', { configurable: true, value: 2000 });
-    Object.defineProperty(el, 'clientHeight', { configurable: true, value: 500 });
+/** Size the transcript; resizes and content changes fire no scroll event unless scrollTop moves. */
+function layout(el: HTMLElement, scrollHeight: number, clientHeight = 500) {
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, value: scrollHeight });
+    Object.defineProperty(el, 'clientHeight', { configurable: true, value: clientHeight });
+}
+
+/** Place the transcript at `scrollTop` (default: a 2000px list shown through a 500px window). */
+function scrollTo(el: HTMLElement, scrollTop: number, scrollHeight = 2000, clientHeight = 500) {
+    layout(el, scrollHeight, clientHeight);
     el.scrollTop = scrollTop;
     fireEvent.scroll(el);
 }
@@ -98,5 +103,143 @@ describe('auto-scroll during streaming', () => {
         scrollTo(list, 900);
         await act(async () => { await new Promise((r) => setTimeout(r, 150)); });
         expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+});
+
+async function followsNext(text: string) {
+    scrollIntoView.mockClear();
+    await stream(text);
+    return scrollIntoView.mock.calls.length > 0;
+}
+
+async function mountList() {
+    const { container } = render(<ChatView sessionId={session.id} />);
+    await waitFor(() => expect(screen.getByText('Write a long essay')).toBeInTheDocument());
+    return container.querySelector<HTMLElement>('.messages-scroll')!;
+}
+
+describe('auto-scroll edge cases', () => {
+    it('keeps following when a card above collapses and the browser pulls scrollTop up', async () => {
+        const list = await mountList();
+        scrollTo(list, 1500);
+        // Mid smooth-scroll (20px short of the end), a 300px card above collapses; anchoring moves scrollTop up.
+        scrollTo(list, 1480);
+        scrollTo(list, 1180, 1700);
+        expect(await followsNext('After the collapse')).toBe(true);
+    });
+
+    it('keeps following when content above grows and anchoring pushes scrollTop past the 80px band', async () => {
+        const list = await mountList();
+        scrollTo(list, 1500);
+        scrollTo(list, 1900, 2600);
+        expect(await followsNext('After an image above loaded')).toBe(true);
+    });
+
+    it('keeps following through the intermediate events of its own smooth scroll', async () => {
+        const list = await mountList();
+        scrollTo(list, 1500);
+        scrollTo(list, 1800, 3000);
+        scrollTo(list, 2200, 3000);
+        expect(await followsNext('Still streaming')).toBe(true);
+    });
+
+    it('keeps following when the window gets shorter at the bottom', async () => {
+        const list = await mountList();
+        scrollTo(list, 1500);
+        layout(list, 2000, 300);
+        expect(await followsNext('After the resize')).toBe(true);
+    });
+
+    it('keeps following when a wider window shortens the content and clamps scrollTop', async () => {
+        const list = await mountList();
+        scrollTo(list, 1500);
+        scrollTo(list, 1100, 1600);
+        expect(await followsNext('After the resize')).toBe(true);
+    });
+
+    it('resumes at a fractional bottom left by browser zoom', async () => {
+        const list = await mountList();
+        scrollTo(list, 1500);
+        scrollTo(list, 1200);
+        expect(await followsNext('Held')).toBe(false);
+        scrollTo(list, 1499.4);
+        expect(await followsNext('Following again')).toBe(true);
+    });
+
+    it('stays put when the reader expands a tool call above', async () => {
+        const list = await mountList();
+        scrollTo(list, 1500);
+        scrollTo(list, 900);
+        // Anchoring pushes scrollTop down as content above grows; still far from the bottom.
+        scrollTo(list, 1300, 2400);
+        expect(await followsNext('More text')).toBe(false);
+    });
+
+    it('stays put when the reader expands a tool call while inside the 80px band', async () => {
+        const list = await mountList();
+        scrollTo(list, 1500);
+        scrollTo(list, 1460);
+        layout(list, 2400);
+        expect(await followsNext('More text')).toBe(false);
+    });
+
+    it('stays put when the window is resized while the reader is above', async () => {
+        const list = await mountList();
+        scrollTo(list, 1500);
+        scrollTo(list, 900);
+        layout(list, 2000, 300);
+        expect(await followsNext('After a shorter window')).toBe(false);
+        scrollTo(list, 700, 1800, 300);
+        expect(await followsNext('After a wider window')).toBe(false);
+    });
+
+    it('stays put while tool steps stream in', async () => {
+        const list = await mountList();
+        scrollTo(list, 1500);
+        scrollTo(list, 1000);
+        scrollIntoView.mockClear();
+        act(() => {
+            useChatStore.setState({
+                agentSteps: [{ id: 1, type: 'tool', label: 'Reading file', tool: 'read_file', active: true, timestamp: 1 }],
+            });
+        });
+        await act(async () => { await new Promise((r) => setTimeout(r, 150)); });
+        act(() => {
+            useChatStore.setState({
+                agentSteps: [{
+                    id: 1, type: 'tool', label: 'Reading file', tool: 'read_file',
+                    active: false, success: true, result: 'x'.repeat(500), timestamp: 1,
+                }],
+            });
+        });
+        await act(async () => { await new Promise((r) => setTimeout(r, 150)); });
+        expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+
+    it('stays put on every small step up, one after another', async () => {
+        const list = await mountList();
+        scrollTo(list, 1500);
+        for (const top of [1498, 1496, 1493]) {
+            scrollTo(list, top);
+            expect(await followsNext(`step ${top}`)).toBe(false);
+        }
+    });
+
+    it('does not resume on a downward scroll that stops above the 80px band', async () => {
+        const list = await mountList();
+        scrollTo(list, 1500);
+        scrollTo(list, 800);
+        scrollTo(list, 1300);
+        expect(await followsNext('Still reading')).toBe(false);
+        scrollTo(list, 1450);
+        expect(await followsNext('Back near the end')).toBe(true);
+    });
+
+    it('resumes from the scroll-to-bottom button', async () => {
+        const list = await mountList();
+        scrollTo(list, 1500);
+        scrollTo(list, 200);
+        fireEvent.click(screen.getByRole('button', { name: 'Scroll to bottom' }));
+        expect(await followsNext('Following')).toBe(true);
     });
 });

@@ -62,6 +62,8 @@ export const STOP_GRACE_MS = 15_000;
 export { QUEUE_BUSY_WAIT_MS } from '../services/queueDispatch';
 
 const NO_QUEUE: QueuedMessage[] = [];
+// Slack for fractional scrollTop at non-100% zoom.
+const AT_BOTTOM_PX = 1;
 
 /** Notices by server message id: a refetch replaces messages, so they cannot live on them alone. */
 const historyNotices = new Map<number, string>();
@@ -216,6 +218,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
      *  earlier messages won't be interrupted by new streaming content. */
     const isNearBottomRef = useRef(true);
     const lastScrollTopRef = useRef(0);
+    const lastScrollHeightRef = useRef(0);
 
     // True once the user has navigated to another session. The store's
     // currentSessionId flips synchronously on switch (the displayed view lags
@@ -414,10 +417,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const el = messagesScrollRef.current;
         if (!el) return;
         const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-        // Any upward move stops auto-follow, even one that stays inside the 80px band.
-        const movedUp = el.scrollTop < lastScrollTopRef.current;
+        // Shrinking content (a collapsed card, a wider window) moves scrollTop up without the user.
+        const shrank = el.scrollHeight < lastScrollHeightRef.current;
+        const movedUp = !shrank && el.scrollTop < lastScrollTopRef.current;
         lastScrollTopRef.current = el.scrollTop;
-        isNearBottomRef.current = distFromBottom <= 1 || (!movedUp && distFromBottom <= 80);
+        lastScrollHeightRef.current = el.scrollHeight;
+        // Any upward move stops auto-follow, even inside the 80px band; nothing else does.
+        if (distFromBottom <= AT_BOTTOM_PX) isNearBottomRef.current = true;
+        else if (movedUp) isNearBottomRef.current = false;
+        else if (distFromBottom <= 80) isNearBottomRef.current = true;
         setShowScrollBtn(distFromBottom > 200);
     }, []);
 
