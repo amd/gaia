@@ -2503,7 +2503,7 @@ gaia eval sessions [--control PATH] [--limit N] [--project DIR] [--out DIR] [--d
 | `--out` | `eval/results/sessions-<timestamp>` | Output directory |
 | `--dataset-only` | false | Build the dataset and stop; no agent run, no judge |
 
-Judging needs `ANTHROPIC_API_KEY`.
+Judging uses your Claude Code login first, then `ANTHROPIC_API_KEY`.
 
 ### Code Benchmark
 

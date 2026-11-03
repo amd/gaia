@@ -301,6 +301,9 @@ jobs:
         timeout-minutes: 1980
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # An empty Claude config, so a login left on this runner can't win
+          # over the key (the eval tries the subscription first).
+          CLAUDE_CONFIG_DIR: ${{ runner.temp }}\claude-key-only
         run: |
           $ErrorActionPreference = "Continue"
           $ProgressPreference = "SilentlyContinue"

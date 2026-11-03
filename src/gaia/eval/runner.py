@@ -23,7 +23,6 @@ import logging
 import os
 import re
 import shutil
-import signal
 import statistics
 import subprocess
 import sys
@@ -35,20 +34,19 @@ from typing import Optional
 import requests
 import yaml
 
+from gaia.eval.claude_credential import announce, resolve_claude_credential
 from gaia.eval.claude_outage import (
-    API_KEY_VAR,
     CREDENTIAL,
     HEADLINES,
     QUOTA,
     UNREACHABLE,
     classify_driver_failure,
-    dotenv_only_api_key,
-    driver_api_key,
     switch_to_backup_account,
 )
 from gaia.eval.claude_usage import describe, merge_scenario_usage, usage_from_cli
 from gaia.eval.config import DEFAULT_AGENT_TYPE
 from gaia.eval.eval_lock import exclusive_eval
+from gaia.eval.process_tree import kill_tree as _kill_tree
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
 from gaia.eval.scorecard import NOT_RUN, SKIPPED_STATUSES
 from gaia.llm.local_only import assert_provider_permitted, cloud_blocked
@@ -1711,6 +1709,10 @@ def preflight_check(backend_url, scenarios=None):
                 )
         except FileNotFoundError:
             errors.append("'claude' CLI not found on PATH — install Claude Code CLI")
+        try:
+            announce(resolve_claude_credential(), role="Claude eval driver")
+        except (ValueError, RuntimeError) as e:
+            errors.append(str(e))
 
     # Memory-category preflight — required only when memory scenarios are queued.
     # Memory scenarios call memory_clear(scope=all) to reset state between turns;
@@ -2123,51 +2125,19 @@ def run_scripted_scenario(
 _DRIVER_DRAIN_S = 30
 
 
-def _kill_tree(proc: subprocess.Popen) -> None:
-    """Kill *proc* and every process it started.
-
-    Killing only ``claude`` leaves its MCP server holding the output pipes, so
-    reading them blocks and the timeout fires minutes late.
-    """
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-            capture_output=True,
-            check=False,
-        )
-    else:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)  # pylint: disable=no-member
-    with contextlib.suppress(OSError):
-        proc.kill()
-
-
-_warned_dotenv_api_key = False
-
-
 def _driver_auth():
     """Return ``(flags, env)`` for the ``claude -p`` driver's authentication.
 
-    ``--bare`` gives a clean subprocess (no hooks, no CLAUDE.md auto-load) but
-    also restricts auth to ``ANTHROPIC_API_KEY`` / ``apiKeyHelper`` — OAuth and
-    the keychain are never read. So it is used only with a key the operator
-    exported. A key that only a ``.env`` supplied is ignored *and* removed from
-    the child's environment, since the CLI prefers it over OAuth. ``env`` is
-    ``None`` when the child should inherit this process's environment as is.
+    Follows :func:`gaia.eval.claude_credential.resolve_claude_credential`. On
+    the subscription the child loses ``ANTHROPIC_API_KEY``, which the CLI would
+    prefer over OAuth. On a key, ``--bare`` gives a clean subprocess (no hooks,
+    no CLAUDE.md auto-load) and restricts auth to that key. ``env`` is ``None``
+    when the child should inherit this process's environment as is.
     """
-    global _warned_dotenv_api_key  # pylint: disable=global-statement
-    if driver_api_key():
-        return ["--bare"], None
-    if dotenv_only_api_key():
-        if not _warned_dotenv_api_key:
-            _warned_dotenv_api_key = True
-            logger.warning(
-                "Ignoring ANTHROPIC_API_KEY from a .env file for the eval driver "
-                "— it would disable your Claude Code login. Export it in the "
-                "shell to drive the eval with that key instead."
-            )
-        return [], {k: v for k, v in os.environ.items() if k != API_KEY_VAR}
-    return [], None
+    credential = resolve_claude_credential()
+    announce(credential, role="Claude eval driver")
+    env = credential.cli_env(os.environ)
+    return credential.cli_flags(), (None if env == dict(os.environ) else env)
 
 
 def _run_driver(
