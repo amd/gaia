@@ -10,6 +10,7 @@ installer or the user put on the machine, and removes it for
 ``gaia uninstall --purge-lemonade``.
 """
 
+import copy
 import hashlib
 import logging
 import ntpath
@@ -830,11 +831,10 @@ class LemonadeInstaller:
             # Try both minimal and full MSI variants
             for use_minimal in [True, False]:
                 variant = "minimal" if use_minimal else "full"
-                uninstall_installer = LemonadeInstaller(
-                    target_version=installed_version,
-                    minimal=use_minimal,
-                    console=self.console,
-                )
+                # Same platform as this one; only the version and variant differ.
+                uninstall_installer = copy.copy(self)
+                uninstall_installer.target_version = installed_version.lstrip("v")
+                uninstall_installer.minimal = use_minimal
                 url = uninstall_installer.get_download_url()
                 self._print_status(
                     f"Downloading {variant} MSI v{installed_version} for uninstall..."
