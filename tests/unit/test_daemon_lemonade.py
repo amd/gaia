@@ -101,6 +101,30 @@ class TestEnsure:
             upgrade_older=True,
         )
 
+    def test_older_version_owned_by_another_live_daemon_is_upgraded(self):
+        """An older daemon cannot start a newer server, so there is no flip-flop."""
+        other = OWNER + 1
+        embedded = _embedded(_running(version="0.0.1", owner_pid=other))
+        ensured = _owner(embedded, alive=(other,)).ensure()
+
+        assert ensured.started is True
+        embedded.stop.assert_not_called()
+        embedded.start.assert_called_once_with(
+            install_if_missing=False,
+            owner_pid=OWNER,
+            owner_started=mock.ANY,
+            upgrade_older=True,
+        )
+
+    def test_newer_version_owned_by_another_live_daemon_is_left_alone(self):
+        other = OWNER + 1
+        embedded = _embedded(_running(version="9999.1.0", owner_pid=other))
+        with pytest.raises(EmbeddedLemonadeError, match="needs v"):
+            _owner(embedded, alive=(other,)).ensure()
+
+        embedded.stop.assert_not_called()
+        embedded.start.assert_not_called()
+
     def test_newer_version_is_reported_not_replaced(self):
         """A newer GAIA's server is not this one's to downgrade."""
         embedded = _embedded(_running(version="9999.1.0", owner_pid=OWNER))
