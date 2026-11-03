@@ -1052,3 +1052,46 @@ def test_the_correction_keeps_the_answer_addressed_to_the_user():
 
     assert "language of their question" in correction
     assert "don't mention this check" in correction
+
+
+_TO_THE_USER = (
+    "Write it for the user, in the language of their question, and don't mention "
+    "this check or what changed."
+)
+
+
+def test_every_gap_mix_ends_on_the_user_addressed_ask_once():
+    """The ask must be the last thing the model reads, however many gates fired."""
+    look = ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
+    content = content_findings(
+        "| variant | median |\n|---|---|\n| bilinear | 342 µs |\n| lanczos | 287 µs |",
+        [_run_python(MS_BENCH)],
+    )
+    assert look and content
+
+    for findings in (look, content, look + content):
+        correction = grounding_correction(findings)
+        assert correction.endswith(_TO_THE_USER)
+        assert correction.count("language of their question") == 1
+
+
+def test_the_ask_names_no_language_of_its_own():
+    """Naming one would pull every reply into it, the leak this guards against."""
+    correction = grounding_correction(
+        ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
+    )
+    ask = correction[correction.index("Then give your complete answer") :]
+
+    for language in ("English", "Arabic", "Chinese", "Spanish"):
+        assert language not in ask
+
+
+def test_the_correction_the_model_gets_ends_on_the_user_addressed_ask(agent):
+    sent = _stub_chat(agent, _answer(GUESSED_SUMMARY), _read_call(), _answer(GROUNDED))
+
+    result = agent.process_query("ماذا يفعل toybox/dates.py ؟", max_steps=10)
+
+    correction = sent[1][-1]["content"]
+    assert correction.startswith("[check:grounding] ")
+    assert correction.endswith(_TO_THE_USER)
+    assert _final_text(result) == GROUNDED
