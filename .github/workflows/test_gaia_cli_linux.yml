@@ -434,7 +434,7 @@ jobs:
             local name="$1"
             shift
             echo "Testing ${name}:"
-            if timeout 30s "$@"; then
+            if timeout "${SMOKE_TIMEOUT:-30s}" "$@"; then
               echo "✅ ${name} completed"
             else
               local rc=$?
@@ -445,7 +445,8 @@ jobs:
             fi
           }
 
-          run_core_smoke "chat command with Qwen3-0.6B-GGUF" \
+          # The flagship loads its embedder and full prompt on a CPU runner first.
+          SMOKE_TIMEOUT=180s run_core_smoke "chat command with Qwen3-0.6B-GGUF" \
             gaia chat --model "Qwen3-0.6B-GGUF" --device cpu \
             -q "Hello, this is a test message. Please respond briefly."
           run_core_smoke "prompt command with Qwen3-0.6B-GGUF" \
