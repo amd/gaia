@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import stat
 import zipfile
 from pathlib import Path
@@ -615,3 +616,59 @@ def test_export_skips_yaml_only_dirs(tmp_path, fake_home, agents_root, caplog):
         "warning should explain why the dir was skipped and what to do — "
         f"got: {skip_warnings[0].getMessage()!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Build artefacts stay out of the bundle (#1090)
+# ---------------------------------------------------------------------------
+
+
+def test_export_skips_bytecode_and_os_junk(tmp_path, fake_home, agents_root):
+    agent_dir = _make_agent(agents_root, "bytecode-agent")
+    (agent_dir / "__pycache__").mkdir()
+    (agent_dir / "__pycache__" / "agent.cpython-313.pyc").write_bytes(b"\0")
+    (agent_dir / "sub" / "__pycache__").mkdir(parents=True)
+    (agent_dir / "sub" / "__pycache__" / "helper.cpython-312.pyc").write_bytes(b"\0")
+    (agent_dir / "sub" / "helper.py").write_text("x = 1\n")
+    (agent_dir / "stray.pyc").write_bytes(b"\0")
+    (agent_dir / "LOUD.PYC").write_bytes(b"\0")
+    (agent_dir / "opt.pyo").write_bytes(b"\0")
+    (agent_dir / ".DS_Store").write_bytes(b"\0")
+    (agent_dir / "sub" / ".DS_Store").write_bytes(b"\0")
+    # Look-alikes that are real content and must survive.
+    (agent_dir / "__pycache__.md").write_text("notes")
+    (agent_dir / "pyc_notes.txt").write_text("notes")
+    (agent_dir / "tool.pyc.py").write_text("y = 2\n")
+    (agent_dir / ".env.example").write_text("KEY=\n")
+
+    out = tmp_path / "export.zip"
+    export_custom_agents(out)
+
+    with zipfile.ZipFile(out) as zf:
+        names = set(zf.namelist())
+    assert names == {
+        BUNDLE_JSON_NAME,
+        "bytecode-agent/agent.py",
+        "bytecode-agent/sub/helper.py",
+        "bytecode-agent/__pycache__.md",
+        "bytecode-agent/pyc_notes.txt",
+        "bytecode-agent/tool.pyc.py",
+        "bytecode-agent/.env.example",
+    }
+
+
+def test_export_agent_with_only_bytecode_extras_round_trips(
+    tmp_path, fake_home, agents_root
+):
+    agent_dir = _make_agent(agents_root, "clean-agent")
+    (agent_dir / "__pycache__").mkdir()
+    (agent_dir / "__pycache__" / "agent.cpython-313.pyc").write_bytes(b"\0")
+
+    out = tmp_path / "export.zip"
+    export_custom_agents(out)
+
+    shutil.rmtree(agent_dir)
+    import_agent_bundle(out)
+    restored = agents_root / "clean-agent"
+    assert (restored / "agent.py").is_file()
+    assert not (restored / "__pycache__").exists()

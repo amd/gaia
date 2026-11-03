@@ -48,7 +48,8 @@ from gaia.skills.errors import (
     SkillValidationError,
 )
 from gaia.skills.format import SECURITY_TIERS
-from gaia.skills.lock import SOURCE_LOCAL, SkillLock
+from gaia.skills.lock import LOCK_FILENAME, SOURCE_LOCAL, SkillLock
+from gaia.skills.manager import ROOT_USER
 from gaia.skills.permissions import Permission
 
 if TYPE_CHECKING:
@@ -191,15 +192,19 @@ def held_tier(skill: "Skill") -> str | None:
     """The tier a recorded install, capture, or import holds *skill* to.
 
     The front matter is editable after landing, so the lock's
-    ``installed_tier`` caps the claim. ``None`` when no such decision exists
-    (authored, agent-bundled, or ``local`` relock): the tier is then only the
-    author's own claim, which they could raise at will, so it bounds nothing.
+    ``installed_tier`` caps the claim. A user-root skill the lock does not
+    track is held to :data:`LOWEST_TIER`: nothing recorded how it got there.
+    ``None`` when no landing decision applies (agent-bundled, ``.claude``, or a
+    ``local`` relock): the tier is then only the author's own claim, which they
+    could raise at will, so it bounds nothing.
     """
     directory = skill.directory
     if directory is None:
         return None
     entry = SkillLock.load(directory.parent).get(skill.name)
-    if entry is None or entry.source == SOURCE_LOCAL or not entry.installed_tier:
+    if entry is None:
+        return LOWEST_TIER if _in_user_root(skill) else None
+    if entry.source == SOURCE_LOCAL or not entry.installed_tier:
         return None
     return effective_tier(skill.security_tier, entry.installed_tier)
 
@@ -217,11 +222,35 @@ def enforce_skill_tier_ceiling(skill: "Skill") -> str | None:
         SkillPermissionError: a declared permission sits above the ceiling.
     """
     tier = held_tier(skill)
-    if tier is not None:
+    if tier is None:
+        return None
+    try:
         enforce_tier_ceiling(
             skill.parsed_permissions(), tier=tier, skill_name=skill.name
         )
+    except SkillPermissionError as exc:
+        if not _untracked(skill):
+            raise
+        raise SkillPermissionError(
+            f"{exc} '{skill.name}' is in your skills folder with no "
+            f"{LOCK_FILENAME} entry, so it is held to '{LOWEST_TIER}'. If you "
+            "wrote it yourself, record it with 'gaia skill lock --relock'; "
+            f"otherwise remove it with 'gaia skill remove {skill.name}'."
+        ) from exc
     return tier
+
+
+def _in_user_root(skill: "Skill") -> bool:
+    return skill.root == ROOT_USER
+
+
+def _untracked(skill: "Skill") -> bool:
+    directory = skill.directory
+    return (
+        directory is not None
+        and _in_user_root(skill)
+        and SkillLock.load(directory.parent).get(skill.name) is None
+    )
 
 
 def _lowest_tier_allowing(permissions: Sequence[Permission]) -> str | None:

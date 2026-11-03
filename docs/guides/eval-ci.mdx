@@ -126,7 +126,7 @@ This writes `eval/results/baseline.json`. Commit this file to your repository.
 On subsequent runs, compare the current results against the saved baseline:
 
 ```bash
-gaia eval agent --compare eval/results/latest/scorecard.json
+gaia eval agent --compare eval/results/eval-20261021-141300/scorecard.json
 ```
 
 When only one path is provided, it's compared against `eval/results/baseline.json` automatically.
@@ -196,7 +196,7 @@ jobs:
 
           # Compare against committed baseline
           gaia eval agent \
-            --compare eval/results/latest/scorecard.json
+            --compare "$(ls -dt eval/results/eval-*/ | head -1)scorecard.json"
 
       - name: Upload results
         if: always()
@@ -468,6 +468,15 @@ gaia eval agent \
   --scenario-dir ~/project-a/scenarios \
   --scenario-dir ~/project-b/scenarios
 ```
+
+Scenarios in `~/.gaia/eval/scenarios` are picked up automatically. A scenario from
+either place whose `id` matches a built-in one replaces it. The run warns when that
+happens, and the scorecard records it: `config.scenario_provenance` lists every
+scenario's source path and a SHA-256 of its parsed content, and
+`overridden_builtins` names the replaced ids. A `--resume` re-checks the scenarios
+it re-runs and updates that record. `--compare` prints a `Different questions`
+warning when either scorecard replaced a built-in, or when a scenario's content
+differs between the two runs.
 
 Similarly, use `--corpus-dir` for additional corpus directories:
 

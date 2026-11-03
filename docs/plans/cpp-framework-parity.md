@@ -376,7 +376,7 @@ the fallback; all current agents keep working.
 New `cpp/include/gaia/chunking.h`. Sentence-aware splitter with configurable
 `chunkSize`/`chunkOverlap` matching `RAGSDK._split_text_into_chunks`. Extractors for plain text,
 Markdown, and source files. **PDF/DOCX/XLSX/PPTX are explicitly out of scope** — they need
-PyMuPDF-class dependencies, and the coding-agent target does not need them; the header leaves a
+PDFium-class dependencies, and the coding-agent target does not need them; the header leaves a
 documented extension point and unsupported types fail loudly with the reason.
 
 **P2.2 — RAG SDK**

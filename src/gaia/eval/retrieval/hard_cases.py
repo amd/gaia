@@ -269,22 +269,46 @@ def near_duplicate_filings(ctx: CaseContext) -> dict:
     )
 
 
+def image_only_pdf(src: Path, dest: Path, dpi: int = 150) -> None:
+    """Write *dest*: every page of *src* rendered to an image, with no text layer."""
+    import pypdfium2 as pdfium  # pylint: disable=import-outside-toplevel
+
+    from gaia.utils.parsing import (  # pylint: disable=import-outside-toplevel
+        PDFIUM_LOCK,
+    )
+
+    pages = []
+    with PDFIUM_LOCK:
+        original = pdfium.PdfDocument(src)
+        try:
+            for index in range(len(original)):
+                page = original[index]
+                try:
+                    bitmap = page.render(scale=dpi / 72)
+                    try:
+                        # convert() copies out of the bitmap's buffer.
+                        pages.append(bitmap.to_pil().convert("RGB"))
+                    finally:
+                        bitmap.close()
+                finally:
+                    page.close()
+        finally:
+            original.close()
+    # Saved at the render DPI, each image page keeps the original page size.
+    pages[0].save(
+        dest, format="PDF", save_all=True, append_images=pages[1:], resolution=dpi
+    )
+
+
 def scanned_pdf(ctx: CaseContext) -> dict:
     """Pass when an image-only PDF is either read (VLM) or refused loudly, never indexed empty."""
-    import pymupdf  # pylint: disable=import-outside-toplevel
-
     from gaia.llm import VLMClient  # pylint: disable=import-outside-toplevel
 
     src = _doc(ctx.repo, "oil_gas_manual")
     work = ctx.workdir / "scanned"
     work.mkdir(parents=True, exist_ok=True)
     scanned = work / "scanned_oil_gas_manual.pdf"
-    with pymupdf.open(src.path) as original, pymupdf.open() as out:
-        for page in original:
-            pix = page.get_pixmap(dpi=150)
-            image_page = out.new_page(width=page.rect.width, height=page.rect.height)
-            image_page.insert_image(image_page.rect, pixmap=pix)
-        out.save(scanned)
+    image_only_pdf(src.path, scanned)
 
     rag = make_rag(work / "rag-cache", [work], ctx.model, **ctx.rag_overrides)
     vlm_on = (

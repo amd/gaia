@@ -9,6 +9,7 @@ import {
 import { useShallow } from 'zustand/react/shallow';
 import { useChatStore } from '../stores/chatStore';
 import { ModelStatusPill } from './ModelStatusPill';
+import { DownloadChip } from './setup/DownloadChip';
 import { useNotificationStore, selectUnreadCount, selectPromptingSessionIds } from '../stores/notificationStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -239,6 +240,7 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                                     ? t('row.tapAgain', { label: unsent > 0 ? `Delete ${unsent} unsent?` : ref('row.deleteConfirm') })
                                     : t('row.delete')}
                             </button>
+                            {confirm && <p className="sb-row-menu-note">{t('row.deleteMemoryNote')}</p>}
                         </div>
                     </Popover>
                 </>
@@ -275,7 +277,7 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                                 : t('row.confirmDeleteAria', { title: session.title }))
                             : t('row.deleteAria', { title: session.title })}
                         title={confirm
-                            ? (unsent > 0 ? `Click again to delete this chat and its ${unsentWords}` : t('row.clickAgain'))
+                            ? `${unsent > 0 ? `Click again to delete this chat and its ${unsentWords}` : t('row.clickAgain')}\n${t('row.deleteMemoryNote')}`
                             : t('row.delete')}
                     >
                         {confirm
@@ -655,6 +657,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                 </nav>
             )}
 
+            {!isCollapsed && <DownloadChip />}
             <div className="sb-bottom">
                 {!isCollapsed && <ModelStatusPill />}
                 <div className="sb-bottom-actions">

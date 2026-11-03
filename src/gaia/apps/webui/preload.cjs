@@ -159,6 +159,9 @@ contextBridge.exposeInMainWorld("gaiaUpdater", {
    */
   installVersion: (tag) => ipcRenderer.invoke("gaia:update:install-version", tag),
 
+  /** Go back to the version before the last update, and pin it. */
+  revertUpdate: () => ipcRenderer.invoke("gaia:update:revert"),
+
   /**
    * Resume normal auto-updates — clears the version pin set by installVersion.
    * Resolves with the updated state.

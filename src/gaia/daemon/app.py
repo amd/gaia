@@ -315,6 +315,14 @@ def create_app(
     from gaia.daemon.provider_key_routes import build_provider_key_router
 
     app.include_router(build_provider_key_router(token))
+    # The TUI's GPU memory step; the Agent UI serves the same under /api/gpu-memory.
+    from gaia.daemon.gpu_memory_routes import build_gpu_memory_router
+
+    app.include_router(build_gpu_memory_router(token))
+    # The TUI's model setup; the Agent UI serves the same under /api/setup.
+    from gaia.daemon.setup_routes import build_setup_router
+
+    app.include_router(build_setup_router(token))
 
     if registry is not None:
         from gaia.daemon.relay import build_relay_router

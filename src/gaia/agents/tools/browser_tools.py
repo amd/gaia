@@ -403,8 +403,10 @@ class BrowserToolsMixin:
             except ValueError as e:
                 return f"Error: {e}"
             except Exception as e:
+                from gaia.web.client import fetch_error_text
+
                 logger.error(f"Error fetching {url}: {e}")
-                return f"Error fetching page: {e}"
+                return f"Error fetching page: {fetch_error_text(e)}"
 
             content_type = response.headers.get("Content-Type", "")
 

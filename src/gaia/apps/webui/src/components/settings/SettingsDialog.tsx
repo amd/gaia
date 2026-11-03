@@ -89,9 +89,11 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
                     <button type="button" className="settings-close" onClick={close} aria-label={t('settings.close')}>
                         <X size={18} />
                     </button>
-                    <Suspense fallback={<p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}>
-                        {pane}
-                    </Suspense>
+                    <div className="settings-scroll">
+                        <Suspense fallback={<p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}>
+                            {pane}
+                        </Suspense>
+                    </div>
                 </div>
             </div>
         </div>

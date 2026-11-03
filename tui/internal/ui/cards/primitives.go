@@ -377,6 +377,7 @@ type imagePayload struct {
 	Src     string `json:"src"`
 	Alt     string `json:"alt"`
 	Caption string `json:"caption"`
+	Path    string `json:"path"`
 }
 
 // renderImage degrades rather than draws: `image.src` is inline base64 raster
@@ -388,8 +389,8 @@ func renderImage(data json.RawMessage, width int) string {
 	if err := json.Unmarshal(data, &p); err != nil {
 		return renderInvalid("image", err.Error(), data, width)
 	}
-	if !isInlineRaster(p.Src) {
-		return renderInvalid("image", "src must be an inline base64 raster data: URI", data, width)
+	if !isInlineRaster(p.Src) && !isGeneratedMediaRef("image", p.Src) {
+		return renderInvalid("image", "src must be an inline base64 raster data: URI or a generated image", data, width)
 	}
 
 	// Both caption and alt when both exist: the picture is never drawn, so every
@@ -400,6 +401,9 @@ func renderImage(data json.RawMessage, width int) string {
 	}
 	b := newBox("Image", width)
 	b.addWrapped("  ", "[image: "+label+"]")
+	if path := strings.TrimSpace(p.Path); path != "" {
+		b.addWrapped("  ", "Saved: "+path)
+	}
 	b.addWrapped("  ", "Not shown — a terminal cannot display it.")
 	return b.render()
 }
@@ -445,4 +449,82 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// ---------------------------------------------------------------------------
+// diff
+// ---------------------------------------------------------------------------
+
+type diffPayload struct {
+	Title   string  `json:"title"`
+	Badge   string  `json:"badge"`
+	Note    string  `json:"note"`
+	Unified *string `json:"unified"`
+}
+
+// renderDiff draws a unified diff as plain text. Colour is not available here —
+// box.add strips escapes — so the +/-/@@ prefixes carry the meaning, as in a
+// plain `git diff`.
+func renderDiff(data json.RawMessage, width int) string {
+	var p diffPayload
+	if err := json.Unmarshal(data, &p); err != nil {
+		return renderInvalid("diff", err.Error(), data, width)
+	}
+	if p.Unified == nil {
+		return renderInvalid("diff", "unified is required", data, width)
+	}
+
+	title := strings.TrimSpace(p.Title)
+	if title == "" {
+		title = "Diff"
+	}
+	if badge := strings.TrimSpace(p.Badge); badge != "" {
+		title = badge + " · " + title
+	}
+	b := newBox(title, width)
+	if note := strings.TrimSpace(p.Note); note != "" {
+		b.addWrapped("  ", note)
+	}
+
+	text := strings.TrimRight(*p.Unified, "\n")
+	if text == "" {
+		b.add("  (no changes)")
+		return b.render()
+	}
+	lines := strings.Split(text, "\n")
+	shown := lines[:visibleRows(len(lines), 1)]
+	for _, line := range shown {
+		b.add("  " + expandDiffTabs(strings.TrimSuffix(line, "\r")))
+	}
+	if n := len(lines) - len(shown); n > 0 {
+		b.add("  … " + itoa(n) + " more lines (truncated)")
+	}
+	return b.render()
+}
+
+// diffTabWidth is the tab stop a diff line's content is expanded to.
+const diffTabWidth = 4
+
+// expandDiffTabs turns tabs into spaces so tab-indented code keeps its shape;
+// clean would otherwise collapse each tab to one space. Stops are counted from
+// after the +/-/space marker, so the file's own columns line up.
+func expandDiffTabs(line string) string {
+	if !strings.ContainsRune(line, '\t') {
+		return line
+	}
+	var out strings.Builder
+	col := 0
+	for i, r := range line {
+		if r == '\t' && i > 0 {
+			n := diffTabWidth - col%diffTabWidth
+			out.WriteString(strings.Repeat(" ", n))
+			col += n
+			continue
+		}
+		out.WriteRune(r)
+		if i > 0 {
+			col += visualLen(string(r))
+		}
+	}
+	return out.String()
 }

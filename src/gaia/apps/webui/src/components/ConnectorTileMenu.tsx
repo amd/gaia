@@ -25,6 +25,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import * as api from '../services/api';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useT } from '../i18n/useT';
 import type { ConnectorRow } from '../types';
 
 interface Props {
@@ -43,6 +44,7 @@ function shouldRenderMenu(connector: ConnectorRow): boolean {
 }
 
 export function ConnectorTileMenu({ connector, onChanged }: Props) {
+    const t = useT();
     const [open, setOpen] = useState(false);
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState<string | null>(null);
@@ -139,7 +141,7 @@ export function ConnectorTileMenu({ connector, onChanged }: Props) {
                 className="connector-tile-menu-trigger"
                 aria-haspopup="menu"
                 aria-expanded={open}
-                aria-label="Connector actions"
+                aria-label={t('settings.connectors.actions')}
                 onClick={handleTriggerClick}
                 disabled={busy}
             >
@@ -165,7 +167,7 @@ export function ConnectorTileMenu({ connector, onChanged }: Props) {
                             }
                             disabled={busy}
                         >
-                            Disable
+                            {t('settings.connectors.disable')}
                         </button>
                     ) : (
                         <button
@@ -179,7 +181,7 @@ export function ConnectorTileMenu({ connector, onChanged }: Props) {
                             }
                             disabled={busy}
                         >
-                            Enable
+                            {t('settings.connectors.enable')}
                         </button>
                     )}
                     <div className="connector-tile-menu-divider" />
@@ -194,7 +196,7 @@ export function ConnectorTileMenu({ connector, onChanged }: Props) {
                         }
                         disabled={busy}
                     >
-                        Disconnect
+                        {t('settings.connectors.disconnect')}
                     </button>
                     {err && (
                         <div className="connector-tile-menu-error">{err}</div>

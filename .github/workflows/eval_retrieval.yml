@@ -86,6 +86,13 @@ jobs:
       run: |
         "GAIA_RETRIEVAL_CACHE=${{ runner.tool_cache }}\gaia-retrieval-corpus" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
+    # A re-pinned upstream file leaves its old copy in the cache, which fetch refuses.
+    - name: Drop cached files the manifest no longer pins
+      shell: powershell
+      run: |
+        python -c "import sys; from gaia.eval.retrieval import sources as s; s.set_repo_root(sys.argv[1]); [print(f'Dropped stale cached file: {p}') for p in s.drop_stale()]" $env:GITHUB_WORKSPACE
+        if ($LASTEXITCODE -ne 0) { throw "Stale-cache cleanup failed with exit code $LASTEXITCODE" }
+
     - name: Download the corpora
       shell: powershell
       run: |
