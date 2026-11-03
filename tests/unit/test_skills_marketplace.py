@@ -937,7 +937,11 @@ def test_search_matches_any_word_of_a_multi_word_query(tmp_path):
     """The whole phrase never appears verbatim, but each word does somewhere."""
     search = _word_search_hub(tmp_path)
 
-    assert search("summarize documents") == ["rss-digest", "summarize"]
+    assert search("summarize documents") == [
+        "summarize",
+        "document-brief",
+        "rss-digest",
+    ]
     assert search("meeting notes") == ["transcribe-meeting", "summarize"]
     assert search("email triage") == ["inbox-triage", "summarize"]
 
@@ -954,6 +958,21 @@ def test_search_ranks_by_distinct_words_matched(tmp_path):
     ]
     # A repeated word counts once, so it cannot outrank a two-word match.
     assert search("brief brief brief document") == ["document-brief", "summarize"]
+
+
+def test_search_uses_conservative_word_stems_after_exact_match(tmp_path):
+    search = _word_search_hub(tmp_path)
+
+    assert search("summarization") == ["rss-digest", "summarize"]
+    assert search("summarizing") == ["rss-digest", "summarize"]
+    assert search("summaries") == ["rss-digest", "summarize"]
+
+
+def test_search_does_not_stem_short_words(tmp_path):
+    search = _word_search_hub(tmp_path)
+
+    assert search("pdf") == []
+    assert search("pr") == []
 
 
 def test_search_ties_keep_catalog_order(tmp_path):
@@ -982,7 +1001,7 @@ def test_search_with_no_matching_word_is_empty(tmp_path):
     search = _word_search_hub(tmp_path)
 
     assert search("kubernetes helm chart") == []
-    assert search("summarization") == []  # substring per word, no stemming
+    assert search("summarization") == ["rss-digest", "summarize"]
     assert search("!!! ??? ...") == []
 
 

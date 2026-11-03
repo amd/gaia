@@ -146,6 +146,8 @@ def search_skills(
     tool names. Words of one or two letters are ignored when the query also has a
     longer word. Results are ordered by how many distinct query words matched, most
     first; ties keep catalog order (by id), so results are stable between runs.
+    When an exact word misses, a conservative suffix fallback covers common
+    variants such as ``summarization`` and ``summarizing`` without a full stemmer.
 
     Args:
         query: Words to match; empty returns the whole skills lane in catalog
@@ -200,11 +202,42 @@ def search_skills(
             ]
         ).lower()
 
+    def stem_fallback(word: str) -> str:
+        """Return a conservative fallback stem for a query word.
+
+        Exact substring matches are always tried first.  The short suffix list
+        handles common skill-search variants without adding a language-specific
+        stemmer or allowing very short stems to match unrelated skills.
+        """
+        suffixes = (
+            ("ization", "iz"),
+            ("ations", ""),
+            ("ation", ""),
+            ("ies", ""),
+            ("ing", ""),
+            ("es", ""),
+            ("s", ""),
+        )
+        for suffix, replacement in suffixes:
+            if word.endswith(suffix):
+                stem = word[: -len(suffix)] + replacement
+                if len(stem) >= 4:
+                    return stem
+                break
+        return ""
+
     if words:
         scored = []
         for entry in entries:
             text = haystack(entry)
-            hits = sum(1 for word in words if word in text)
+            hits = 0
+            for word in words:
+                if word in text:
+                    hits += 1
+                    continue
+                stem = stem_fallback(word)
+                if stem and stem in text:
+                    hits += 1
             if hits:
                 scored.append((hits, entry))
         # sort() is stable, so equal scores keep catalog order.
