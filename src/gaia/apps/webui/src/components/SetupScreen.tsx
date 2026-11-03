@@ -16,7 +16,7 @@ import { isMessageKey, type MessageKey } from '../i18n/registry';
 import { ConfirmSheet } from './setup/ConfirmSheet';
 import { DownloadContents } from './setup/DownloadContents';
 import { DownloadProgress, downloadsActive } from './setup/DownloadProgress';
-import { formatFitGb, formatSize } from './setup/format';
+import { formatFitGb, formatSize, totalMemory } from './setup/format';
 import { GpuMemoryPanel } from './setup/GpuMemoryPanel';
 import { tooBigText } from './setup/ModelChecklist';
 import { StageLogs } from './setup/StageLogs';
@@ -28,7 +28,7 @@ import { SetupChecks } from './setup/SetupChecks';
 import { SetupRail, type RailStep } from './setup/SetupRail';
 import { TestStep } from './setup/TestStep';
 import {
-    canCreateImages, catalogOf, extraModels, initialSelection, isEmbedding, isOptional, overallFromPlan,
+    canCreateImages, catalogOf, extraModels, initialSelection, isEmbedding, isNpu, isOptional, overallFromPlan,
     pendingDownloads, resolveVision, savedVision, shortfall, skipChanges, toggle, tooBig, totals, type Selection,
 } from './setup/selection';
 import type {
@@ -554,6 +554,16 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 setConfirm({ kind: 'server', detail, then: 'run' });
                 return false;
             }
+            // Another window, or an earlier click, already started it: show that run.
+            if (err instanceof api.ApiError && err.httpStatus === 409) {
+                const live = await api.getSetupStatus().catch(() => null);
+                if (live && (live.state === 'running' || live.state === 'verifying')) {
+                    setRun(live);
+                    setViewing(null);
+                    if (!live.server_only) setPhase('download');
+                    return true;
+                }
+            }
             setStartError(errorText(err));
             return false;
         } finally {
@@ -862,7 +872,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const checkNotes: string[] = [];
     if (hardware) {
         const memory = [
-            plan?.system?.physical_memory ? `${plan.system.physical_memory} installed` : null,
+            plan?.system?.physical_memory ? `${totalMemory(plan.system.physical_memory, null)} installed` : null,
             hardware.ram_gb != null ? `${hardware.ram_gb} GB the OS can use` : null,
         ].filter(Boolean).join(', ');
         const disk = hardware.disk_free_gb != null ? `${Math.round(hardware.disk_free_gb)} GB free on disk` : null;
@@ -927,7 +937,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     for (const e of catalog) {
         if (selection && isOptional(e) && selection.ticked.has(e.id) && !e.downloaded) expectedTests.push(e.roles[0]);
     }
-    if (!cloud) expectedTests.push('agent');
+    expectedTests.push('agent');
 
     const optional = selection && !cloud ? catalog.filter((e) => isOptional(e) && !selection.ticked.has(e.id) && !e.downloaded
         && (canCreateImages(chatEntry) || !e.roles.includes('image_creation'))) : [];
@@ -1019,7 +1029,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 <p className="setup-hero-title"><bdi>{t('setup.plan.run', { name: chatEntry?.name ?? '' })}</bdi></p>
                                 <dl className="setup-facts">
                                     <div><dt>{t('setup.summary.download')}</dt><dd><bdi dir="ltr">{formatSize(totals(plan, selection).downloadGb ?? 0)}</bdi></dd></div>
-                                    <div><dt>{t('setup.plan.runsOn')}</dt><dd><bdi>{hardware?.gpu_name ?? t('setup.plan.cpu')}</bdi></dd></div>
+                                    <div><dt>{t('setup.plan.runsOn')}</dt><dd><bdi>{chatEntry && isNpu(chatEntry) ? t('setup.checks.npu') : hardware?.gpu_name ?? t('setup.plan.cpu')}</bdi></dd></div>
                                     <div><dt>{t('setup.plan.diskAfter')}</dt><dd><bdi dir="ltr">{totals(plan, selection).afterGb != null ? formatSize(Math.max(0, totals(plan, selection).afterGb as number)) : '—'}</bdi></dd></div>
                                 </dl>
                                 <ul className="setup-reasons">

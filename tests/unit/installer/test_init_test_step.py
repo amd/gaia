@@ -4,7 +4,6 @@
 """The Test step: every chosen model runs for real, not just downloads."""
 
 import base64
-import json
 import struct
 import threading
 import wave

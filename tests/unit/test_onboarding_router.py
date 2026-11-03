@@ -69,6 +69,20 @@ def test_preflight_full_tier_compatible(client, monkeypatch):
     assert not any("NPU" in w for w in body["warnings"])
 
 
+def test_preflight_reports_memory_and_disk_in_the_gb_model_sizes_use(
+    client, monkeypatch
+):
+    # The probe reads GiB; setup shows these beside model sizes in decimal GB.
+    monkeypatch.setattr(onboarding_mod, "_probe_lemonade_devices", _stub_devices())
+    monkeypatch.setattr(compatibility, "detect_total_memory_gb", lambda: 32.0)
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 631.0)
+
+    body = client.get("/api/onboarding/preflight").json()
+    assert body["ram_gb"] == 34.4
+    assert body["disk_free_gb"] == 677.5
+    assert body["tier"] == "full"
+
+
 @pytest.mark.allow_network
 def test_preflight_recommends_the_model_chat_will_load(
     client, monkeypatch, default_model

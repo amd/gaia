@@ -78,7 +78,7 @@ describe('Checking this PC', () => {
         // 128 GB installed with 64 GB set aside for the GPU: Windows reports 63.6 GB.
         const plan = { ...DOWN, system: { physical_memory: '128.00 GB' } } as unknown as SetupPlan;
         show({ hardware: { ...HARDWARE, ram_gb: 63.6 }, plan });
-        expect(row('Memory')).toHaveTextContent('128.0 GB');
+        expect(row('Memory')).toHaveTextContent('137.4 GB');
     });
 
     it('marks the hardware rows failed when they could not be read, inventing no value', () => {

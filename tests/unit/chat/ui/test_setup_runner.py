@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 
 import pytest
 from fastapi import FastAPI
@@ -485,6 +486,7 @@ def test_a_clean_run_is_verified_then_ready(monkeypatch):
         return {"ready": True}
 
     monkeypatch.setattr(sr, "check", check)
+    _saved_cloud_model(monkeypatch, "fireworks.deepseek-v4p1-flash")
     runner = sr.SetupRunner()
     first = runner.start(skip_chat_model=True)
     assert first["state"] == "running"
@@ -496,6 +498,46 @@ def test_a_clean_run_is_verified_then_ready(monkeypatch):
     assert argv[3:] == sr.run_args(True)
     assert kwargs["stdin"] is subprocess.DEVNULL
     assert "[====] 100% (5 MB/5 MB)" in view["log_tail"]
+
+
+def _saved_cloud_model(monkeypatch, model):
+    import gaia.config
+
+    monkeypatch.setattr(
+        gaia.config.GaiaConfig,
+        "load",
+        classmethod(lambda cls: types.SimpleNamespace(last_model=model)),
+    )
+
+
+def test_a_cloud_run_tests_a_chat_on_the_cloud_model(monkeypatch):
+    turns = []
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    monkeypatch.setattr(sr, "check", lambda *a, **k: {"ready": True})
+    monkeypatch.setattr(
+        sr, "_agent_turn_problem", lambda model_id=None: turns.append(model_id)
+    )
+    _saved_cloud_model(monkeypatch, "fireworks.deepseek-v4p1-flash")
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=True)
+    view = _wait_done(runner)
+    assert view["state"] == "ready"
+    assert turns == ["fireworks.deepseek-v4p1-flash"]
+    assert [t["job"] for t in view["tests"] if t["state"] == "passed"][-1] == "agent"
+
+
+def test_a_cloud_run_with_no_saved_cloud_model_fails_its_chat_test(monkeypatch):
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    monkeypatch.setattr(sr, "check", lambda *a, **k: {"ready": True})
+    monkeypatch.setattr(
+        sr, "_agent_turn_problem", lambda model_id=None: pytest.fail("no turn expected")
+    )
+    _saved_cloud_model(monkeypatch, None)
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=True)
+    view = _wait_done(runner)
+    assert view["state"] == "failed"
+    assert view["error"] == sr.NO_CLOUD_MODEL
 
 
 def test_a_server_only_run_is_ready_without_loading_models(monkeypatch):

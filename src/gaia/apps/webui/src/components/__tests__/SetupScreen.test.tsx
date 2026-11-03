@@ -306,6 +306,15 @@ describe('SetupScreen: the recommendation', () => {
         expect(hero).toHaveTextContent('Works offline, and your chats stay on this PC.');
     });
 
+    it('says an NPU pick runs on the NPU, not the graphics chip', async () => {
+        mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
+        mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED, FLM], { chat_model: { id: FLM.id, user_set: true, size_gb: 9.1, downloaded: false } }));
+        await open();
+        const hero = within(await planScreen());
+        expect(hero.getByText('Ryzen AI NPU')).toBeInTheDocument();
+        expect(hero.queryByText('AMD Radeon 8060S')).not.toBeInTheDocument();
+    });
+
     it('calls a saved pick the user\'s choice, not a recommendation', async () => {
         mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED], { chat_model: { id: QWEN.id, user_set: true, size_gb: 23.3, downloaded: false } }));
         await open();
@@ -361,6 +370,16 @@ describe('SetupScreen: first run, local', () => {
         expect(mockedApi.skipSetupModel).not.toHaveBeenCalled();
         expect(await startChatting()).toBeInTheDocument();
         expect(screen.getByRole('heading', { name: 'GAIA is ready' })).toBeInTheDocument();
+    });
+
+    it('joins a run another window already started instead of showing an error', async () => {
+        const live = runStatus([progress({ id: QWEN.id, state: 'downloading', bytes_done: 1e9, bytes_total: 23.3e9 })]);
+        mockedApi.startSetup.mockRejectedValueOnce(new api.ApiError('busy', 409, 'busy', null));
+        await open();
+        mockedApi.getSetupStatus.mockResolvedValue(live);
+        clickStart();
+        expect(await screen.findByRole('heading', { name: 'Downloading' })).toBeInTheDocument();
+        expect(screen.queryByText(/Something went wrong|already running/)).not.toBeInTheDocument();
     });
 
     it('shows the models before any byte downloads; nothing starts until Continue', async () => {

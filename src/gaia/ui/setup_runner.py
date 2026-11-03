@@ -311,10 +311,11 @@ def describe(line: str) -> Optional[Progress]:
     return None
 
 
-def _agent_turn_problem() -> Optional[str]:
+def _agent_turn_problem(model_id: Optional[str] = None) -> Optional[str]:
     """Why one turn through the installed GAIA assistant failed, or None when it answered.
 
-    The turn goes through the assistant's own program, the way chat reaches it.
+    The turn goes through the assistant's own program, the way chat reaches it,
+    on *model_id* (a cloud model) or else the assistant's local default.
     """
     from gaia.hub import installer as hub_installer
     from gaia.ui._chat_helpers import relay_one_prompt
@@ -327,7 +328,7 @@ def _agent_turn_problem() -> Optional[str]:
             SSEOutputHandler(background_mode=True),
             _AGENT_TEST_PROMPT,
             agent_type=_AGENT_ID,
-            model_id=None,
+            model_id=model_id,
             memory="off",
             max_steps=1,
         )
@@ -336,6 +337,13 @@ def _agent_turn_problem() -> Optional[str]:
     if not (answer or "").strip():
         return "GAIA didn't answer a test message: it ended without an answer."
     return None
+
+
+#: The Test step's reason when a cloud setup has no cloud model saved to chat with.
+NO_CLOUD_MODEL = (
+    "No cloud model is saved, so GAIA can't test a chat. Go back to Your setup "
+    "and connect the cloud provider again."
+)
 
 
 #: Setup's own record, in GAIA's home, which ``gaia diagnostics`` bundles.
@@ -1352,7 +1360,7 @@ class SetupRunner:
                 run.note(f"Not ready: {run.error}")
         if not ready:
             return
-        problem = None if run.skip_chat_model else self._test_agent(run)
+        problem = self._test_agent(run)
         with self._lock:
             if run.state == "cancelled":
                 return
@@ -1368,8 +1376,15 @@ class SetupRunner:
             self._record_test(
                 run, {"job": "agent", "subject": None, "state": "running"}
             )
+        from gaia.config import GaiaConfig
+
         started = time.monotonic()
-        problem = _agent_turn_problem()
+        # A cloud setup chats on the cloud model connecting saved, as chat will.
+        cloud = GaiaConfig.load().last_model if run.skip_chat_model else None
+        if run.skip_chat_model and not cloud:
+            problem = NO_CLOUD_MODEL
+        else:
+            problem = _agent_turn_problem(cloud)
         with self._lock:
             self._record_test(
                 run,

@@ -48,7 +48,7 @@ describe('what setup found', () => {
         const found = screen.getByRole('region', { name: 'What setup found' });
         expect(found).toHaveTextContent('AMD Radeon(TM) 8060S Graphics');
         expect(found).toHaveTextContent('NPU');
-        expect(found).toHaveTextContent('103.1 GB of 128.0 GB');
+        expect(found).toHaveTextContent('103.1 GB of 137.4 GB');
         expect(found).toHaveTextContent('653.2 GB');
         expect(found).toHaveTextContent('GAIA 0.25.4 · Lemonade 2026.44.1 · llama.cpp b11393 · FastFlowLM v1.0.7');
         // Folders are links that open them; the long path is only in the tooltip.
@@ -107,7 +107,7 @@ describe('what setup found', () => {
         const text = writeText.mock.calls[0][0] as string;
         expect(text).toContain("Model server: GAIA's own Lemonade 2026.44.1 at http://127.0.0.1:13305/api/v1");
         expect(text).toContain('llama.cpp: vulkan b11393 (installed)');
-        expect(text).toContain('Memory: 128.0 GB, 103.1 GB for models (AMD iGPU)');
+        expect(text).toContain('Memory: 137.4 GB, 103.1 GB for models (AMD iGPU)');
         expect(text).toContain('Models folder: C:\\Users\\you\\.cache\\huggingface\\hub (653.2 GB free)');
         expect(text).toContain('GAIA data and logs: C:\\Users\\you\\.gaia');
     });

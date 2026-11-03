@@ -1327,7 +1327,9 @@ class InitCommand:
         """Print message to stdout."""
         if RICH_AVAILABLE and self.console:
             if end == "":
-                self.console.print(message, end="")
+                # Rich drops the \r a progress redraw starts with, so the redraws pile up.
+                self.console.file.write(message)
+                self.console.file.flush()
             else:
                 self.console.print(message)
         else:
@@ -1342,6 +1344,8 @@ class InitCommand:
                     "[bold cyan]GAIA Initialization[/bold cyan]",
                     border_style="cyan",
                     padding=(0, 2),
+                    # Setup runs this unwrapped at 1000 columns; size the box to its text.
+                    expand=False,
                 )
             )
             self.console.print()

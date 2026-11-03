@@ -25,7 +25,7 @@ def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:1")
     monkeypatch.setattr(sr, "users_lemonade_url", lambda: None)
     monkeypatch.setattr(sr, "server_problem", lambda: None)
-    monkeypatch.setattr(sr, "_agent_turn_problem", lambda: None)
+    monkeypatch.setattr(sr, "_agent_turn_problem", lambda model_id=None: None)
     monkeypatch.setattr(sr, "check", lambda *a, **k: pytest.fail("no check expected"))
 
 

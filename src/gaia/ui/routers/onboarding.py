@@ -129,6 +129,11 @@ async def _probe_lemonade_devices() -> Dict[str, Any]:
     return result
 
 
+def _decimal_gb(gib: Optional[float]) -> Optional[float]:
+    """GiB from the compatibility probe as the decimal GB setup shows next to model sizes."""
+    return round(gib * 1024**3 / 1e9, 1) if gib is not None else None
+
+
 def _classify_tier(ram_gb: Optional[float], npu: Optional[bool]) -> str:
     """Coarse hardware tier used only to phrase the recommendation."""
     if ram_gb is None:
@@ -206,8 +211,8 @@ async def onboarding_preflight() -> PreflightReport:
     return PreflightReport(
         os=report.detected_platform,
         detected_platform=report.detected_platform,
-        ram_gb=round(ram_gb, 1) if ram_gb is not None else None,
-        disk_free_gb=report.free_disk_gb,
+        ram_gb=_decimal_gb(ram_gb),
+        disk_free_gb=_decimal_gb(report.free_disk_gb),
         npu_detected=npu_detected,
         gpu_name=devices["gpu_name"],
         gpu_vram_gb=gpu_vram,
