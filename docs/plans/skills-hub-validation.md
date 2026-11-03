@@ -1,6 +1,6 @@
 # Skills hub validation
 
-**Status:** Phases 1–5 built; Phase 6 (baselines) waits on a real sweep on the eval pool.
+**Status:** Phases 1–5 built and run locally (results below); Phase 6 (baselines) waits on a real sweep on the eval pool.
 **Goal:** every skill published to the hub is proven usable by the flagship agent: the agent can find it in the hub, install it, pick it for a plain request, and do the job with it, on each model tier GAIA ships.
 
 Before this work, checks proved a skill was well-formed and safe to merge, not that the agent could find or use it. Four of the 17 published skills had no behavioural eval, 22 of 23 task evals told the agent which skill to load, hub search missed most plain-language queries, and the last baseline scored the skill categories at 50–57%.
@@ -45,6 +45,24 @@ Scenarios that need a model the machine may lack skip with `SKIPPED_NO_MODEL` an
 
 - `requires_sd` (SDXL-Turbo) and `requires_music` (ACE-Step-Music).
 - `requires_full_tier` / `requires_compact_tier`: run only when the agent model has that feature tier, so a skill's use scenario and its honest-refusal scenario never score against the wrong model.
+
+## Local run, 2026-11-02 (Strix Halo dev box, judge claude-sonnet-4-6)
+
+Every new or changed scenario passes on Qwen3.6-35B-A3B; on Gemma-4-E4B (compact), 1 of 3 passes. Not a baseline: one machine, partial categories, and lone failures were re-run.
+
+| Model | Scenarios | Result |
+|---|---|---|
+| Qwen3.6 | 10 new task scenarios | 7 passed (avg 9.6); 2 music skipped (ACE-Step not downloaded), 1 compact-only skipped |
+| Qwen3.6 | 9 selection scenarios | 7 passed after re-runs; 2 compact-only skipped. `select_none_fits` and `select_research_report` each failed once, then passed |
+| Qwen3.6 | 3 corrected lifecycle scenarios | All pass (hub search 10.0, install 9.3, list 9.4 in run order) |
+| Gemma-4-E4B | 3 compact-tier scenarios | `task_imagegen_compact_refuses` passed (9.1); the inbox and hub-install honesty scenarios fail |
+
+What the run found:
+
+- **Lifecycle scenarios tested an impossible state.** The flagship bundles every `hub/skills/` skill, so "install `rss-digest`" never needed an install. They now use fixture-only skills. This explains the old baseline's `skills_hub_search` and `skills_install_from_hub` failures.
+- **Compact models kept three email tools.** Gemma read the mailbox through `list_waiting_on_you` and called it empty. Fixed; a test checks the withheld list against every email tool.
+- **Compact models don't explain their limits (open).** With email gone, Gemma triaged GitHub notifications as the "inbox"; asked for a hub skill, it ignored the new "needs a larger model" hint and offered a workaround. Needs prompt work measured across Gemma's full eval.
+- **Harness flake.** Three scenarios returned `INFRA_ERROR` because the driver's `gaia-agent-ui` MCP tools were unavailable; each passed when re-run.
 
 ## Phase 6 — Baselines and targets (open)
 

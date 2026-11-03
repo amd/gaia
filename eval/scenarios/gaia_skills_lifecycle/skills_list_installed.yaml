@@ -11,7 +11,7 @@ persona: casual_user
 
 setup:
   index_documents: []
-  notes: "github-triage installed (the hub skills ship with the flagship); unit-convert, a fixture-hub-only skill, NOT installed."
+  notes: "github-triage installed (the hub skills ship with the flagship); experimental-notes, a fixture-hub-only skill no scenario can install (the hub refuses it unsigned), NOT installed."
 
 turns:
   - turn: 1
@@ -22,11 +22,11 @@ turns:
     success_criteria: "agent_tools[] must include list_skills, and the answer must name github-triage among the installed skills. Naming skills without the call, or inventing skills the tool didn't return, is a FAIL."
 
   - turn: 2
-    objective: "Ask specifically whether unit-convert is installed"
-    user_message: "is unit-convert one of them?"
+    objective: "Ask specifically whether experimental-notes is installed"
+    user_message: "is experimental-notes one of them?"
     ground_truth:
-      expected_answer: "No — unit-convert is not installed (it can be searched/installed from the hub)"
-    success_criteria: "Agent correctly says unit-convert is NOT currently installed, based on the real list. Offering to search the hub for it is a plus."
+      expected_answer: "No — experimental-notes is not installed (it can be searched/installed from the hub)"
+    success_criteria: "Agent correctly says experimental-notes is NOT currently installed, based on the real list. Offering to search the hub for it is a plus."
 
 expected_outcome: |
   Installed-skill answers come from real list_skills output, including an
