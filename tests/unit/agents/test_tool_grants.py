@@ -127,6 +127,17 @@ class TestPathGrants:
         )
         assert one.key == two.key
 
+    @pytest.mark.parametrize("other", ["/tmp/a/b/notes.md", "/tmp/c/notes.md"])
+    def test_a_folder_grant_stops_at_its_folder(self, other):
+        granted = grant_scope(
+            "write_file",
+            {"file_path": "/tmp/a/notes.md", "_resolved_file_path": "/tmp/a/notes.md"},
+        )
+        elsewhere = grant_scope(
+            "write_file", {"file_path": other, "_resolved_file_path": other}
+        )
+        assert granted.key not in elsewhere.keys
+
     def test_a_bare_filename_stays_exact(self):
         scope = grant_scope("write_file", {"file_path": "notes.md"})
         assert scope.key == "write_file:notes.md"
