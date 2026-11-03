@@ -165,10 +165,32 @@ def test_signoff_cannot_override_an_unparseable_skill(enforce_step):
 
 
 def test_only_the_review_branch_consults_the_signoff_label(enforce_step):
-    review_branch = _shell_block(enforce_step["run"], 'REVIEW_COUNT:-0}" -gt 0 ')
+    review_branch = _shell_block(enforce_step["run"], '"${REVIEW_COUNT:-0}" -gt 0 ')
     assert "SIGNED_OFF" in review_branch
     # Still fails when unsigned.
     assert "failed=1" in review_branch
+
+
+def _audit_step(gate: dict) -> dict:
+    return next(s for s in gate["steps"] if s.get("name") == "Audit each changed skill")
+
+
+def test_a_hub_skill_review_is_counted_apart_from_other_reviews(gate):
+    """Release publishing accepts only ALLOW, so a hub/skills/ REVIEW can't share
+    the label-releasable REVIEW counter."""
+    run = _audit_step(gate)["run"]
+    assert "hub/skills/*) hub_review=$((hub_review + 1))" in run
+    assert 'echo "hub_review_count=$hub_review"' in run
+    assert "hub_review_count" in gate["outputs"]
+
+
+def test_signoff_cannot_override_a_hub_skill_review(enforce_step):
+    """A merged hub/skills/ REVIEW skill would fail at release, not at review."""
+    env = enforce_step.get("env", {})
+    assert "hub_review_count" in str(env.get("HUB_REVIEW_COUNT", ""))
+    hub_branch = _shell_block(enforce_step["run"], 'HUB_REVIEW_COUNT:-0}" -gt 0 ')
+    assert "failed=1" in hub_branch
+    assert "SIGNED_OFF" not in hub_branch
 
 
 def test_the_gate_runs_even_on_fork_pull_requests(gate):
@@ -178,6 +200,34 @@ def test_the_gate_runs_even_on_fork_pull_requests(gate):
         "the deterministic gate must not be restricted to same-repo PRs; only "
         "the secret-dependent jobs (SARIF upload, Claude, PR comment) may be"
     )
+
+
+# ----------------------------------------------------------------------
+# Best-effort PR summary
+# ----------------------------------------------------------------------
+
+
+def _summary_comment_step(gate: dict) -> dict:
+    steps = [
+        step
+        for step in gate["steps"]
+        if step.get("name") == "Post summary-only PR comment"
+    ]
+    assert steps, "the workflow must retain its same-repo summary-comment step"
+    return steps[0]
+
+
+def test_rate_limited_summary_comment_cannot_fail_the_audit_gate(gate):
+    """The deterministic verdict, not a GitHub API call, decides this check."""
+    assert _summary_comment_step(gate).get("continue-on-error") is True
+
+
+def test_summary_comment_lookup_is_paginated_to_update_existing_marker(gate):
+    """A marker beyond GitHub's default page must not create a duplicate."""
+    script = _summary_comment_step(gate)["with"]["script"]
+    assert "github.paginate" in script
+    assert "github.rest.issues.listComments" in script
+    assert "per_page: 100" in script
 
 
 # ----------------------------------------------------------------------

@@ -32,7 +32,6 @@ Catalog reads reuse :mod:`gaia.hub.catalog` (its cache, its offline fallback, it
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -61,6 +60,10 @@ _DOCS = "https://amd-gaia.ai/docs/plans/skill-format"
 
 class SkillHubError(SkillError):
     """A hub request failed, or the hub rejected a publish."""
+
+
+class SkillChecksumError(SkillHubError):
+    """A downloaded bundle does not match the checksum the hub manifest lists."""
 
 
 # ---------------------------------------------------------------------------
@@ -128,69 +131,6 @@ class SkillSearchResult:
         return len(self.entries)
 
 
-#: Words that say nothing about which skill fits a request.
-_SEARCH_STOPWORDS = frozenset(
-    """a an and or the to for of in on at by with from into about is are be
-    i me my we our you your it its this that these those what which who there
-    any some can could would should will do does did get got find want need
-    help please something anything thing things how up out skill skills""".split()
-)
-
-_SEARCH_SUFFIXES = ("ings", "ing", "ies", "es", "ed", "s")
-
-
-def _stem(word: str) -> str:
-    """Strip one common suffix, keeping at least four letters ("feeds" -> "feed")."""
-    for suffix in _SEARCH_SUFFIXES:
-        if word.endswith(suffix) and len(word) - len(suffix) >= 4:
-            return word[: -len(suffix)]
-    return word
-
-
-def _words(text: str) -> list[str]:
-    return re.findall(r"[a-z0-9]+", text.lower())
-
-
-def rank_skill_entries(
-    entries: list[dict[str, Any]], query: str
-) -> list[dict[str, Any]]:
-    """*entries* that match *query*, best match first.
-
-    Each query word (stopwords dropped, one suffix stemmed) counts when it starts
-    a word in the skill's name, description, or declared tool names. A hit in the
-    name outweighs one in the description, and an exact phrase match ranks first.
-    Entries matching no word are dropped; ties keep catalog order. A query of
-    only stopwords falls back to an exact-phrase match.
-    """
-    needle = query.strip().lower()
-    if not needle:
-        return list(entries)
-    terms = [_stem(w) for w in _words(needle) if w not in _SEARCH_STOPWORDS]
-
-    scored = []
-    for position, entry in enumerate(entries):
-        metadata = entry.get("skill_metadata") or {}
-        tools = " ".join(
-            str(t.get("name", ""))
-            for t in (metadata.get("tools") or [])
-            if isinstance(t, dict)
-        )
-        name = f"{entry.get('id', '')} {entry.get('name', '')}".lower()
-        haystack = f"{name} {entry.get('description', '')} {tools}".lower()
-        name_words = _words(name)
-        all_words = _words(haystack)
-
-        score = 100 if needle in haystack else 0
-        for term in terms:
-            if any(w.startswith(term) for w in name_words):
-                score += 3
-            elif any(w.startswith(term) for w in all_words):
-                score += 1
-        if score:
-            scored.append((-score, position, entry))
-    return [entry for _score, _position, entry in sorted(scored, key=lambda t: t[:2])]
-
-
 def search_skills(
     query: str = "",
     *,
@@ -201,11 +141,15 @@ def search_skills(
 ) -> SkillSearchResult:
     """Catalog skill entries matching *query* (empty query = every skill).
 
-    Matching is per word (see :func:`rank_skill_entries`), so "summarizing RSS
-    feeds" finds ``rss-digest`` without the user guessing an exact phrase.
+    The query is split into words, and an entry matches when at least one word
+    appears (case-insensitive substring) in its id, name, description, or declared
+    tool names. Words of one or two letters are ignored when the query also has a
+    longer word. Results are ordered by how many distinct query words matched, most
+    first; ties keep catalog order (by id), so results are stable between runs.
 
     Args:
-        query: Substring to match; empty returns the whole skills lane.
+        query: Words to match; empty returns the whole skills lane in catalog
+            order.
         base_url: Hub origin override (defaults to ``GAIA_HUB_URL``).
         fetcher: Injected transport (see :data:`gaia.hub.catalog.Fetcher`).
         cache_path: Offline-cache location; pass a temp path in tests so the
@@ -234,7 +178,40 @@ def search_skills(
 
     entries = skill_entries(index.agents)
 
-    matched = rank_skill_entries(entries, query)
+    words = list(dict.fromkeys(query.lower().split()))
+    # "a"/"of" hit nearly every description; keep them only if they are all there is.
+    long_words = [word for word in words if len(word) > 2]
+    if long_words:
+        words = long_words
+
+    def haystack(entry: dict[str, Any]) -> str:
+        metadata = entry.get("skill_metadata") or {}
+        tools = " ".join(
+            str(t.get("name", ""))
+            for t in (metadata.get("tools") or [])
+            if isinstance(t, dict)
+        )
+        return " ".join(
+            [
+                str(entry.get("id", "")),
+                str(entry.get("name", "")),
+                str(entry.get("description", "")),
+                tools,
+            ]
+        ).lower()
+
+    if words:
+        scored = []
+        for entry in entries:
+            text = haystack(entry)
+            hits = sum(1 for word in words if word in text)
+            if hits:
+                scored.append((hits, entry))
+        # sort() is stable, so equal scores keep catalog order.
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        matched = [entry for _, entry in scored]
+    else:
+        matched = entries
     if index.offline:
         log.warning(
             "Serving %d skill(s) from the offline catalog cache, last refreshed %s "
@@ -301,9 +278,8 @@ class RemoteSkill:
             wanted = spec or "*"
             raise SkillNotFoundError(
                 f"No published version of skill '{self.name}' satisfies {wanted!r}. "
-                f"Published: {', '.join(available) or '(none)'}. Loosen the pin, or "
-                f"run 'gaia skill info {self.name} --remote' to see the versions. "
-                f"See {_DOCS}"
+                f"Published: {', '.join(available) or '(none)'}. Loosen the pin, "
+                f"e.g. 'gaia skill install {self.name}' for the latest. See {_DOCS}"
             )
         return chosen
 
@@ -424,8 +400,8 @@ def fetch_skill_doc(
         raise SkillHubError(
             f"Could not fetch SKILL.md for '{name}' {version} from {url}: {exc}. The "
             "version's manifest is missing from the hub, or the hub is unreachable. "
-            "Retry, or pick another version with "
-            f"'gaia skill info {name} --remote'."
+            f"Retry, or pin another version with 'gaia skill install {name}@<version>' "
+            f"('gaia skill search {name}' shows the latest)."
         ) from exc
     text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
     if not text.strip():
@@ -476,7 +452,7 @@ def download_artifact(
 
     actual = hashlib.sha256(payload).hexdigest()
     if actual != artifact.sha256:
-        raise SkillHubError(
+        raise SkillChecksumError(
             f"Checksum mismatch for '{name}' {version}: the hub manifest says "
             f"sha256={artifact.sha256} but the downloaded bundle hashes to "
             f"{actual}. Nothing was installed. Retry — if it persists, the artifact "

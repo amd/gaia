@@ -208,6 +208,12 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="Replace an existing skill of the same name",
     )
     p_migrate.add_argument(
+        "--allow-experimental",
+        action="store_true",
+        help=f"Required to migrate a skill that ships code ({SKILL_TOOLS_FILENAME} "
+        "or scripts/); that code runs in your agent's process",
+    )
+    p_migrate.add_argument(
         "--dry-run",
         action="store_true",
         help="Report what would be migrated without writing anything",
@@ -303,7 +309,7 @@ def _add_marketplace_subparsers(sub: argparse._SubParsersAction) -> None:
         "search", help="Search the Agent Hub's skills lane for a published skill"
     )
     p_search.add_argument(
-        "query", nargs="?", default="", help="Substring to match (omit to list all)"
+        "query", nargs="?", default="", help="Words to match (omit to list all)"
     )
     p_search.add_argument(
         "--json",
@@ -351,7 +357,8 @@ def _add_marketplace_subparsers(sub: argparse._SubParsersAction) -> None:
             "tracks that are gone. Exits "
             f"{EXIT_INVALID} when anything differs, {EXIT_OK} when the lock and "
             "the disk agree. Untracked skills are expected right after "
-            "'gaia skill create' / 'migrate' — --relock records them."
+            "'gaia skill create' — --relock records them; until then they are "
+            "held to the experimental tier's permission ceiling."
         ),
     )
     lock_mode = p_lock.add_mutually_exclusive_group()
@@ -715,8 +722,9 @@ def _handle_create(args: argparse.Namespace) -> int:
 
 
 def _handle_import(args: argparse.Namespace) -> int:
-    from gaia.skills.capture import import_bundle
+    from gaia.skills.capture import import_bundle, refuse_hub_url
 
+    refuse_hub_url(args.source)
     with tempfile.TemporaryDirectory(prefix="gaia-skill-import-") as tmp:
         source_dir = _materialize_source(args.source, Path(tmp))
         result = import_bundle(
@@ -898,7 +906,12 @@ def _handle_migrate(args: argparse.Namespace) -> int:
             if not outcome.migrated:
                 continue
             try:
-                target = install_migrated(outcome, destination, force=args.force)
+                target = install_migrated(
+                    outcome,
+                    destination,
+                    force=args.force,
+                    allow_experimental=getattr(args, "allow_experimental", False),
+                )
             except SkillError as exc:
                 # One collision must not hide the report for the rest of a batch.
                 # Tracked apart from `blockers`: the skill migrated fine, it just
@@ -954,10 +967,12 @@ def _handle_migrate(args: argparse.Namespace) -> int:
             return EXIT_INVALID
     if refused:
         print(
-            f"\n{len(refused)} skill(s) could not be migrated (see ✗ above). v1 accepts "
-            "instruction-only and connector-backed skills; a skill needing local "
-            "shell, filesystem, database, desktop, or env access is refused rather "
-            "than silently stripped of the permission.",
+            f"\n{len(refused)} skill(s) could not be migrated (see ✗ above). A "
+            "migrated skill lands at the experimental tier and gets the same checks "
+            "as 'gaia skill import', so a skill needing a CLI, files, or another "
+            "capability above that tier is refused rather than silently stripped "
+            "of the permission. Install a signed copy from the hub to get it at a "
+            "higher tier.",
             file=sys.stderr,
         )
         return EXIT_INVALID
@@ -1384,6 +1399,17 @@ def _download(url: str, destination: Path) -> Path:
             "not https. Ask the publisher for an https download link, or download "
             "the .zip yourself and pass its local path."
         )
+
+    final_url = str(response.url)
+    if final_url != url:
+        from gaia.skills.capture import refuse_hub_url
+
+        # A redirect can land on the hub, same as capture's fetch.
+        try:
+            refuse_hub_url(final_url)
+        except SkillError:
+            response.close()
+            raise
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("wb") as handle:

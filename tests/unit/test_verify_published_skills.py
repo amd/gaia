@@ -9,6 +9,7 @@ checksum and verify.
 
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -102,12 +103,15 @@ def test_a_stale_hub_version_fails(tmp_path, hub, skills_dir, amd_key):
         _publish(tmp_path, hub, d, "amd-skills")
     skill_md = skills_dir / "summarize" / "SKILL.md"
     text = skill_md.read_text(encoding="utf-8")
-    skill_md.write_text(text.replace("version: 1.0.3", "version: 1.0.4"), "utf-8")
+    published = re.search(r"^version: (\S+)$", text, re.M).group(1)
+    skill_md.write_text(
+        text.replace(f"version: {published}", "version: 99.0.0"), "utf-8"
+    )
 
     checks = {c.name: c for c in _run(skills_dir, hub, tmp_path)}
 
     assert not checks["summarize"].ok
-    assert checks["summarize"].detail == "hub lists 1.0.3"
+    assert checks["summarize"].detail == f"hub lists {published}"
 
 
 def test_a_skill_signed_by_another_key_fails(tmp_path, hub, skills_dir):
