@@ -234,7 +234,10 @@ CJK_IDEOGRAPHS = (
 )
 _KEYCAP_BASES = frozenset("0123456789#*")
 
-HIDDEN_NOTE = "Hidden characters are shown as [U+XXXX]."
+HIDDEN_NOTE = (
+    "This text holds characters that don't show. Those that hide or reorder text "
+    "appear as [U+XXXX]; ideograph variant marks are kept as written."
+)
 
 _ADDRESS_RE = re.compile(r"[^@\s<>\",;]+@[^@\s<>\",;]+")
 
@@ -311,6 +314,15 @@ def has_hidden(text: str) -> bool:
     return any(hidden for _, hidden in _marked(text))
 
 
+def has_unseen(text: str) -> bool:
+    """True when *text* holds anything a reader can't see, even kept as written.
+
+    An ideograph variation selector stays as written after an ideograph, but
+    each can still carry a byte, so its presence is worth a note.
+    """
+    return has_hidden(text) or any(0xE0100 <= ord(c) <= 0xE01EF for c in text)
+
+
 def visible(text: str) -> str:
     """*text* with every hiding or reordering character written as ``[U+XXXX]``."""
     return "".join(
@@ -375,6 +387,7 @@ __all__ = [
     "VARIATION_SELECTORS",
     "a_person_can_answer",
     "has_hidden",
+    "has_unseen",
     "is_hidden",
     "is_variation_selector",
     "preapproved",

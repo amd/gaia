@@ -138,6 +138,21 @@ function visibleText(value: string, multiline: boolean): string {
     return multiline ? shown : shown.replace(/\n/g, '[U+000A]');
 }
 
+/** `HIDDEN_NOTE` plus what `calendar_tools.py` adds to it; a Python test keeps them equal. */
+const UNSEEN_NOTE = "This text holds characters that don't show. Those that hide or reorder text " +
+    'appear as [U+XXXX]; ideograph variant marks are kept as written. They are saved as written.';
+
+/** Mirrors `has_unseen`: a code would show, or an ideograph variant mark is kept as written. */
+function unseen(value: unknown): boolean {
+    if (typeof value !== 'string') return false;
+    const chars = [...value.replace(/\r\n/g, '\n')];
+    return chars.some((char, at) => {
+        const point = char.codePointAt(0) ?? 0;
+        if (point >= 0xE0100 && point <= 0xE01EF) return true;
+        return variationSelector(char) ? !selectorFits(chars, at) : hidden(char);
+    });
+}
+
 const FENCE_OPEN = '<<<UNTRUSTED_TEXT>>>';
 const FENCE_CLOSE = '<<<END_UNTRUSTED_TEXT>>>';
 
@@ -244,7 +259,12 @@ export function CalendarApproval({ tool, args }: { tool: string; args: Record<st
         named(t('permission.calendar.newDescription'), args.new_description, true);
     }
 
+    // GAIA's own note covers this when it sent one; otherwise the card says it.
+    const values = [...Object.values(args), ...(Array.isArray(args.notify_attendees) ? args.notify_attendees : [])];
+    const note = typeof args._risk_note !== 'string' && values.some(unseen) ? UNSEEN_NOTE : '';
+
     return (
+        <>
         <dl className="perm-card-facts" data-testid="perm-calendar">
             {rows.map(([label, value]) => (
                 <Fragment key={label}>
@@ -261,5 +281,7 @@ export function CalendarApproval({ tool, args }: { tool: string; args: Record<st
                 )}
             </dd>
         </dl>
+        {note && <p className="perm-card-risk" role="note" data-testid="perm-calendar-unseen">{note}</p>}
+        </>
     );
 }

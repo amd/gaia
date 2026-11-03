@@ -29,9 +29,11 @@ from gaia.agents.base.person_approval import (
     DEFAULT_IGNORABLE,
     EXTENDED_PICTOGRAPHIC,
     HIDDEN_CATEGORIES,
+    HIDDEN_NOTE,
     KEPT_AS_WRITTEN,
     VARIATION_SELECTORS,
     has_hidden,
+    has_unseen,
     is_hidden,
     is_variation_selector,
     sendable_address,
@@ -1623,6 +1625,11 @@ class TestTheHiddenCharacterFilter:
         assert ranges("EXTENDED_PICTOGRAPHIC") == EXTENDED_PICTOGRAPHIC
         assert ranges("CJK_IDEOGRAPHS") == CJK_IDEOGRAPHS
         assert "new Set([...'0123456789#*'])" in block("KEYCAP_BASES")
+        start = source.index("const UNSEEN_NOTE")
+        literal = source[start : source.index("';\n", start) + 1]
+        parts = re.findall(r"\"([^\"]*)\"|'([^']*)'", literal)
+        note = "".join(a or b for a, b in parts)
+        assert note == f"{HIDDEN_NOTE} They are saved as written."
         categories = re.findall(r"p\{(\w+)\}", block("HIDDEN_CATEGORY"))
         assert set(categories) == set(HIDDEN_CATEGORIES)
         assert "<<<UNTRUSTED_TEXT>>>" in block("FENCE_OPEN")
@@ -2097,6 +2104,8 @@ def _parity_inputs():
         "Q\ufe01u\ufe05a\ufe0e",
         "Q\U000e0151u\U000e0175a",
         "\u845b \U000e0100",
+        "\u845b\U000e0100\u98fe\u533a",
+        "".join(f"\u5c71{chr(0xE0100 + b)}" for b in b"key=42"),
         "\U0001f3f4\U000e0067\U000e0062\U000e007f",
         "\u1838\u180b \u17b4",
         "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645",
@@ -2110,7 +2119,11 @@ def _parity_inputs():
 
 def _parity_cases():
     return [
-        {"input": text, "shown": visible_line(strip_untrusted_field_markers(text))}
+        {
+            "input": text,
+            "shown": visible_line(strip_untrusted_field_markers(text)),
+            "unseen": has_unseen(text),
+        }
         for text in _parity_inputs()
     ]
 
@@ -2145,3 +2158,39 @@ class TestAChangeNeedsItsCheckedEvent:
         agent._calendar_targets = None
         with pytest.raises(CalendarError, match="list_calendar_events"):
             preflight.prompt_args_of(dict(TARGET))
+
+
+@pytest.mark.usefixtures("no_env_preapproval")
+class TestIdeographVariantMarksAreNoted:
+    def test_a_real_place_name_is_unchanged_and_noted(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        name = "\u845b\U000e0100\u98fe\u533a"
+        _run(agent, "create_calendar_event", **{**CREATE, "location": name})
+        shown = agent.console.asked[0][1]
+        assert shown["location"] == name
+        assert shown[RISK_NOTE_ARG] == f"{HIDDEN_NOTE} They are saved as written."
+
+    def test_marks_carrying_bytes_after_ideographs_are_noted(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        title = "".join(f"\u5c71{chr(0xE0100 + b)}" for b in b"key=42")
+        _run(agent, "create_calendar_event", **{**CREATE, "title": title})
+        shown = agent.console.asked[0][1]
+        assert shown["title"] == title and RISK_NOTE_ARG in shown
+
+    def test_plain_cjk_carries_no_note(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        _run(agent, "create_calendar_event", **{**CREATE, "title": "\u5c71\u7530"})
+        assert RISK_NOTE_ARG not in agent.console.asked[0][1]
+
+    @pytest.mark.parametrize(
+        "text,expected",
+        [
+            ("\u845b\U000e0100", True),
+            ("a\U000e0100", True),
+            ("\u2764\ufe0f", False),
+            ("plain", False),
+            ("a\u202e", True),
+        ],
+    )
+    def test_has_unseen(self, text, expected):
+        assert has_unseen(text) is expected

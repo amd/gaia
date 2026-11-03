@@ -25,7 +25,7 @@ from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, RISK_NOTE_ARG
 from gaia.agents.base.person_approval import (
     HIDDEN_NOTE,
     a_person_can_answer,
-    has_hidden,
+    has_unseen,
     preapproved,
     sendable_address,
     visible,
@@ -428,7 +428,7 @@ class _CalendarPreflight:
             shown["expected_title"] = visible_line(event.title.strip())
             shown["notify_attendees"] = [_shown_invitee(a) for a in told]
             written += [event.title, *told]
-        if any(has_hidden(text) for text in written):
+        if any(has_unseen(text) for text in written):
             shown[RISK_NOTE_ARG] = f"{HIDDEN_NOTE} They are saved as written."
         # Marked wherever a person can answer, so Full access turned on while
         # this prompt is being built still reaches them.

@@ -357,6 +357,15 @@ describe('PermissionPrompt', () => {
             expect(shown).toContain('sam@x.com');
         });
 
+        it("leaves GAIA's own note to say what it found", () => {
+            const facts = ask('create_calendar_event', {
+                title: 'a‮', start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00',
+                notify_attendees: [], calendar_account: 'me@x.com', _risk_note: 'From GAIA.',
+            });
+            expect(facts).toBeTruthy();
+            expect(screen.queryByTestId('perm-calendar-unseen')).toBeNull();
+        });
+
         it('keeps a byte-order mark at either end visible', () => {
             const facts = ask('create_calendar_event', {
                 title: '\ufeffBudget\ufeff', start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00',
@@ -365,13 +374,14 @@ describe('PermissionPrompt', () => {
             expect(facts.textContent).toContain('[U+FEFF]Budget[U+FEFF]');
         });
 
-        it.each(parity.map((c) => [JSON.stringify(c.input), c] as const))('shows %s exactly as GAIA does', (_label, { input, shown }) => {
+        it.each(parity.map((c) => [JSON.stringify(c.input), c] as const))('shows %s exactly as GAIA does', (_label, { input, shown, unseen }) => {
             const facts = ask('create_calendar_event', {
                 title: input, start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00',
                 notify_attendees: [], calendar_account: 'me@x.com',
             });
             const title = [...facts.querySelectorAll('dt')].find((dt) => dt.textContent === 'Title');
             expect(title?.nextElementSibling?.textContent).toBe(shown);
+            expect(screen.queryByTestId('perm-calendar-unseen') !== null).toBe(unseen);
         });
 
         it('an unreadable time still shows, as written', () => {
