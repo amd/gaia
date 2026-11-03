@@ -86,3 +86,36 @@ def test_index_over_budget_is_cut_to_the_limit():
     kept = top_or_whole_index(ranked, ["a" * 6, "b" * 6], limit=1, chunk_chars=10)
 
     assert kept == [("b" * 6, 0.9)]
+
+
+def test_counts_match_the_chunks_returned_after_a_page_split(tmp_path):
+    rag = _reports(tmp_path)
+    rag.chunks[0] = "[Page 1] West Q2 revenue. [Page 2] West Q3 outlook."
+    rag._retrieve_chunks.return_value = (rag.chunks[:5], [0.9, 0.8, 0.7, 0.6, 0.5])
+
+    result = _query_documents(rag)
+
+    assert result["status"] == "success", result
+    assert len(result["chunks"]) == len(_REGIONS) + 1
+    assert result["num_chunks"] == len(result["chunks"])
+    assert (
+        result["message"] == f"Found {len(result['chunks'])} relevant document chunks"
+    )
+
+
+def test_query_specific_file_message_counts_split_chunks(tmp_path):
+    rag = _reports(tmp_path)
+    target = rag.chunk_to_file[0]
+    rag.chunks[0] = "[Page 1] West Q2 revenue. [Page 2] West Q3 outlook."
+    rag.indexed_files = {target}
+    rag.file_metadata = {}
+    rag._retrieve_chunks_from_file.return_value = ([rag.chunks[0]], [0.9])
+    _RagHost(rag).register_rag_tools()
+
+    result = _TOOL_REGISTRY["query_specific_file"]["function"](
+        file_path=target, query="West revenue"
+    )
+
+    assert result["status"] == "success", result
+    assert len(result["chunks"]) == 2
+    assert result["message"].startswith("Found 2 relevant chunks in ")

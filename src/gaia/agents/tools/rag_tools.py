@@ -900,7 +900,7 @@ class RAGToolsMixin:
 
                 # Update debug info with final chunks
                 if debug_info:
-                    debug_info["final_chunks_returned"] = len(top_chunks)
+                    debug_info["final_chunks_returned"] = len(formatted_chunks)
                     debug_info["score_distribution"] = {
                         "max": float(max(top_scores)) if top_scores else 0,
                         "min": float(min(top_scores)) if top_scores else 0,
@@ -936,7 +936,7 @@ class RAGToolsMixin:
                 # Return chunks for agent to use in answer generation
                 result = {
                     "status": "success",
-                    "message": f"Found {len(top_chunks)} relevant document chunks",
+                    "message": f"Found {len(formatted_chunks)} relevant document chunks",
                     "chunks": formatted_chunks,
                     "num_chunks": len(formatted_chunks),
                     "search_keys_used": search_keys,
@@ -1395,7 +1395,7 @@ class RAGToolsMixin:
 
                 result = {
                     "status": "success",
-                    "message": f"Found {len(top_chunks)} relevant chunks in {Path(target_file).name}",
+                    "message": f"Found {len(formatted_chunks)} relevant chunks in {Path(target_file).name}",
                     "chunks": formatted_chunks,
                     "file": str(target_file),
                     "source_files": [source_path],

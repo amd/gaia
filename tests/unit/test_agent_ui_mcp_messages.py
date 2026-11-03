@@ -171,12 +171,22 @@ def test_mcp_client_gets_transcript_through_live_http_route(
         assert not worker.is_alive(), "HTTP test backend did not shut down"
 
 
-def test_a_reply_is_never_clipped_so_a_judge_can_see_all_of_it(server):
-    rows = [{"role": "assistant", "content": "z" * 5000}]
-
+def _long_transcript(server, **kwargs):
+    rows = [
+        {"role": "user", "content": "u" * 5000},
+        {"role": "assistant", "content": "z" * 5000},
+    ]
     with patch(
         "gaia.mcp.servers.agent_ui_mcp._api",
-        return_value={"messages": rows, "total": 1},
+        return_value={"messages": rows, "total": 2},
     ):
-        result = server._tool_manager._tools["get_messages"].fn("session")
-    assert len(result["messages"][0]["content"]) == 5000
+        result = server._tool_manager._tools["get_messages"].fn("session", **kwargs)
+    return [len(m["content"]) for m in result["messages"]]
+
+
+def test_messages_are_clipped_by_default(server):
+    assert _long_transcript(server) == [2000, 2000]
+
+
+def test_full_replies_keeps_assistant_replies_whole_for_a_judge(server):
+    assert _long_transcript(server, full_replies=True) == [2000, 5000]
