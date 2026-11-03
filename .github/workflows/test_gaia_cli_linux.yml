@@ -446,7 +446,7 @@ jobs:
           }
 
           run_core_smoke "chat command with Qwen3-0.6B-GGUF" \
-            gaia chat --model "Qwen3-0.6B-GGUF" \
+            gaia chat --model "Qwen3-0.6B-GGUF" --device cpu \
             -q "Hello, this is a test message. Please respond briefly."
           run_core_smoke "prompt command with Qwen3-0.6B-GGUF" \
             gaia prompt --model "Qwen3-0.6B-GGUF" "What is 2+2?"
