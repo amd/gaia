@@ -3242,10 +3242,15 @@ class InitCommand:
         BINARY, which no import can ever see, so its install sentinel under
         ``~/.gaia/agents`` is the only evidence it is there. Probing the
         module alone would re-download it from the hub on every run and
-        report a finished setup as "incomplete".
+        report a finished setup as "incomplete". The flagship counts only as
+        its binary: the apps run it that way, so an importable package from a
+        checkout must not stand in for it.
         """
         module = _AGENT_IMPORT_NAMES.get(agent_id, f"gaia_agent_{agent_id}")
-        if importlib.util.find_spec(module) is not None:
+        if (
+            agent_id != FLAGSHIP_AGENT_ID
+            and importlib.util.find_spec(module) is not None
+        ):
             return True
 
         # Function-local: gaia.hub.installer imports gaia.agents.registry at

@@ -264,31 +264,50 @@ def real_agent_turn(monkeypatch):
     monkeypatch.setattr(setup_runner, "_agent_turn_problem", real)
 
 
-@pytest.mark.usefixtures("real_agent_turn")
-def test_a_real_agent_turn_passes_when_gaia_answers():
-    with patch.object(
-        setup_runner.subprocess, "run", return_value=_ran(0, json.dumps({"ok": 1}))
-    ) as run:
-        assert setup_runner._agent_turn_problem() is None
-    argv = run.call_args.args[0]
-    assert "-p" in argv and "--output-format" in argv
+@pytest.fixture
+def installed_agent():
+    with patch(
+        "gaia.hub.installer.read_sentinel", return_value=MagicMock()
+    ) as sentinel:
+        yield sentinel
 
 
-@pytest.mark.usefixtures("real_agent_turn")
-@pytest.mark.parametrize("result", [_ran(1, "", "agent crashed"), _ran(0, "   ", "")])
-def test_an_agent_turn_that_fails_says_so(result):
-    with patch.object(setup_runner.subprocess, "run", return_value=result):
-        assert "didn't answer" in setup_runner._agent_turn_problem()
-
-
-@pytest.mark.usefixtures("real_agent_turn")
-def test_an_agent_turn_that_hangs_says_so():
-    with patch.object(
-        setup_runner.subprocess,
-        "run",
-        side_effect=setup_runner.subprocess.TimeoutExpired("gaia", 1),
+@pytest.mark.usefixtures("real_agent_turn", "installed_agent")
+def test_the_agent_turn_goes_through_the_installed_binary_not_gaia_p():
+    with (
+        patch("gaia.ui._chat_helpers.relay_one_prompt", return_value="ok") as relay,
+        patch.object(setup_runner.subprocess, "run") as run,
     ):
-        assert "minutes" in setup_runner._agent_turn_problem()
+        assert setup_runner._agent_turn_problem() is None
+    run.assert_not_called()
+    kwargs = relay.call_args.kwargs
+    assert kwargs["agent_type"] == "gaia"
+    # A test message must not land in the user's memory.
+    assert kwargs["memory"] == "off"
+
+
+@pytest.mark.usefixtures("real_agent_turn")
+def test_no_installed_binary_says_the_assistant_is_missing():
+    with (
+        patch("gaia.hub.installer.read_sentinel", return_value=None),
+        patch("gaia.ui._chat_helpers.relay_one_prompt") as relay,
+    ):
+        assert setup_runner._agent_turn_problem() == setup_runner.AGENT_MISSING
+    relay.assert_not_called()
+
+
+@pytest.mark.usefixtures("real_agent_turn", "installed_agent")
+@pytest.mark.parametrize(
+    "outcome", [RuntimeError("The GAIA agent could not start."), None, "   "]
+)
+def test_an_agent_turn_that_fails_says_so(outcome):
+    kwargs = (
+        {"side_effect": outcome}
+        if isinstance(outcome, Exception)
+        else {"return_value": outcome}
+    )
+    with patch("gaia.ui._chat_helpers.relay_one_prompt", **kwargs):
+        assert "didn't answer" in setup_runner._agent_turn_problem()
 
 
 @pytest.mark.parametrize(

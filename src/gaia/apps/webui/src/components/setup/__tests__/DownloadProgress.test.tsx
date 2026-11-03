@@ -19,8 +19,25 @@ function rowOf(name: string): HTMLElement {
 }
 
 describe('DownloadProgress', () => {
+    it('offers no log while it only repeats the row: the model name, its bar, and Downloaded', () => {
+        render(<DownloadProgress status={runStatus([
+            progress({ id: QWEN.id, state: 'downloading', bytes_done: 7.6e9, bytes_total: 23.3e9, log: ['Downloading: Qwen3.6-35B-A3B-GGUF', '[====------] 33% (7.6 GB/23.3 GB)'] }),
+            progress({ id: EMBED.id, roles: ['embedding'], state: 'ready', bytes_done: 0.3e9, bytes_total: 0.3e9, log: ['   Downloading: embeddinggemma-300m-GGUF', '[==========] 100% (330 MB/330 MB)', 'Downloaded'] }),
+        ])} names={NAMES} />);
+        expect(screen.queryByRole('button', { name: /Download log/ })).toBeNull();
+    });
+
+    it('shows a failed download its log once, under Details, with no chevron as well', () => {
+        render(<DownloadProgress status={runStatus([
+            progress({ id: QWEN.id, state: 'failed', error_kind: 'lemonade', log: ['Downloading: Qwen3.6-35B-A3B-GGUF', 'Failed: boom'] }),
+        ])} names={NAMES} />);
+        const row = within(rowOf('Qwen3.6-35B-A3B'));
+        expect(row.queryByRole('button', { name: /Download log/ })).toBeNull();
+        expect(row.getByText('Details')).toBeInTheDocument();
+    });
+
     it("opens each download's own log from a chevron on its row, closed at first", () => {
-        const log = ['Downloading: Qwen3.6-35B-A3B-GGUF', '[====------] 33% (7.6 GB/23.3 GB)'];
+        const log = ['Downloading: Qwen3.6-35B-A3B-GGUF', 'Fetching unsloth/Qwen3.6-35B-A3B-GGUF from huggingface.co', '[====------] 33% (7.6 GB/23.3 GB)'];
         const { rerender } = render(<DownloadProgress status={runStatus([
             progress({ id: QWEN.id, state: 'downloading', bytes_done: 7.6e9, bytes_total: 23.3e9, log }),
             progress({ id: EMBED.id, roles: ['embedding'], state: 'queued', bytes_total: 0.3e9 }),
@@ -38,20 +55,20 @@ describe('DownloadProgress', () => {
 
         // It keeps up while the download runs.
         rerender(<DownloadProgress status={runStatus([
-            progress({ id: QWEN.id, state: 'downloading', bytes_done: 9e9, bytes_total: 23.3e9, log: [log[0], '[======----] 39% (9.0 GB/23.3 GB)'] }),
+            progress({ id: QWEN.id, state: 'downloading', bytes_done: 9e9, bytes_total: 23.3e9, log: [log[0], log[1], '[======----] 39% (9.0 GB/23.3 GB)'] }),
             progress({ id: EMBED.id, roles: ['embedding'], state: 'queued', bytes_total: 0.3e9 }),
         ])} names={NAMES} />);
         expect(row.getByText(/39% \(9\.0 GB/)).toBeInTheDocument();
     });
 
-    it('shows each state as a word, with the embedder first, then chat, then the rest', () => {
+    it('shows each state as a word, with the download under way first, then what is done, then what waits', () => {
         render(<DownloadProgress status={runStatus([
             progress({ id: GEMMA.id, roles: ['vision'], state: 'queued', bytes_total: 5.97e9 }),
-            progress({ id: QWEN.id, state: 'downloading', bytes_done: 7.6e9, bytes_total: 23.3e9 }),
             progress({ id: EMBED.id, roles: ['embedding'], state: 'ready', bytes_done: 0.3e9, bytes_total: 0.3e9 }),
+            progress({ id: QWEN.id, state: 'downloading', bytes_done: 7.6e9, bytes_total: 23.3e9 }),
         ])} names={NAMES} />);
         const names = [...document.querySelectorAll('.dl-name')].map((n) => n.textContent);
-        expect(names).toEqual(['embeddinggemma-300m', 'Qwen3.6-35B-A3B', 'Gemma-4-E4B-it']);
+        expect(names).toEqual(['Qwen3.6-35B-A3B', 'embeddinggemma-300m', 'Gemma-4-E4B-it']);
         expect(within(rowOf('embeddinggemma-300m')).getByText('Ready')).toBeInTheDocument();
         expect(within(rowOf('Qwen3.6-35B-A3B')).getByText('Downloading')).toBeInTheDocument();
         expect(within(rowOf('Gemma-4-E4B-it')).getByText('Queued')).toBeInTheDocument();

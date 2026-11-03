@@ -14,15 +14,29 @@ import { usePageVisible } from './motion';
 /** Cancelling past this much asks first. */
 const CONFIRM_CANCEL_BYTES = 1e9;
 
-/** Embedder first, then chat, then the rest: the order setup pulls them. */
-function order(m: SetupModelProgress): number {
+/** What is happening now on top, then what went wrong, what is done, and what waits. */
+const STATE_ORDER: Record<SetupModelState, number> = {
+    downloading: 0, verifying: 1, failed: 2, ready: 3, unchecked: 3, cancelled: 4, queued: 5, skipped: 6,
+};
+
+/** Within a state: embedder, then chat, then the rest. */
+function roleOrder(m: SetupModelProgress): number {
     if (m.roles.includes('embedding')) return 0;
     if (m.roles.includes('chat')) return 1;
     return 2;
 }
 
 export function sortedModels(models: SetupModelProgress[]): SetupModelProgress[] {
-    return [...models].filter((m) => m.state !== 'skipped').sort((a, b) => order(a) - order(b));
+    return [...models].filter((m) => m.state !== 'skipped')
+        .sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || roleOrder(a) - roleOrder(b));
+}
+
+/** A log line the row already says: which model, its progress bar, or that it finished. */
+const REPEATS_ROW = /^\s*(Downloading:|Downloaded\b|\[[=\-\s>#]*\])/;
+
+/** The log is worth opening only once it says something the row doesn't. */
+export function logAddsDetail(lines: string[]): boolean {
+    return lines.some((l) => l.trim() && !REPEATS_ROW.test(l));
 }
 
 const STATE_KEY: Record<SetupModelState, Parameters<Translate>[0]> = {
@@ -137,7 +151,7 @@ function ProgressRow({ model: m, name, estimate, now, freeGb, onRetry, onResume,
                 <span className="dl-name"><bdi title={m.id}>{name}</bdi></span>
                 <span className="dl-state">{state}</span>
                 {m.state === 'downloading' && <bdi className="dl-pct">{Math.floor(pct)}%</bdi>}
-                {lines.length > 0 && (
+                {m.state !== 'failed' && logAddsDetail(lines) && (
                     <button
                         type="button"
                         className="dl-log-toggle"
@@ -163,7 +177,7 @@ function ProgressRow({ model: m, name, estimate, now, freeGb, onRetry, onResume,
                 <span className="dl-fill" style={{ inlineSize: `${m.state === 'verifying' ? 100 : pct}%` }} />
             </div>
             {detail && <p className="dl-detail"><bdi>{detail}</bdi></p>}
-            {showLog && lines.length > 0 && <FollowLog lines={lines} id={logId} className="dl-log" />}
+            {showLog && m.state !== 'failed' && logAddsDetail(lines) && <FollowLog lines={lines} id={logId} className="dl-log" />}
             {m.state === 'failed' && (
                 <div className="dl-fail">
                     <p className="dl-error" id={errId}>{failureText(m, name, freeGb, t)}</p>

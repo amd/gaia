@@ -36,9 +36,10 @@ PROFILE = "gaia"
 CHECK_TIMEOUT_S = 180
 #: The check plus a cold model load on a slow disk.
 VERIFY_TIMEOUT_S = CHECK_TIMEOUT_S + 150
-# One real agent turn: a cold first turn on a large prompt takes minutes.
-AGENT_TEST_TIMEOUT_S = 300
+_AGENT_ID = "gaia"
 _AGENT_TEST_PROMPT = "Reply with the single word: ok"
+#: The Test step's reason when the assistant's program isn't on this PC.
+AGENT_MISSING = "GAIA's assistant isn't installed on this PC."
 _NOT_READY_EXIT = 1
 _LOAD_FAILED_EXIT = 3
 _UNWRAPPED_COLUMNS = 1000
@@ -310,31 +311,29 @@ def describe(line: str) -> Optional[Progress]:
 
 
 def _agent_turn_problem() -> Optional[str]:
-    """Why one headless agent turn failed, or None when GAIA answered."""
+    """Why one turn through the installed GAIA assistant failed, or None when it answered.
+
+    The turn goes through the assistant's own program, the way chat reaches it.
+    """
+    from gaia.hub import installer as hub_installer
+    from gaia.ui._chat_helpers import relay_one_prompt
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    if hub_installer.read_sentinel(_AGENT_ID) is None:
+        return AGENT_MISSING
     try:
-        proc = subprocess.run(
-            _gaia_argv("-p", _AGENT_TEST_PROMPT, "--output-format", "json"),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=AGENT_TEST_TIMEOUT_S,
-            check=False,
-            env=_child_env(),
-            **windows_hidden_popen_kwargs(),
+        answer = relay_one_prompt(
+            SSEOutputHandler(background_mode=True),
+            _AGENT_TEST_PROMPT,
+            agent_type=_AGENT_ID,
+            model_id=None,
+            memory="off",
+            max_steps=1,
         )
-    except subprocess.TimeoutExpired:
-        return (
-            f"GAIA didn't answer a test message within "
-            f"{AGENT_TEST_TIMEOUT_S // 60} minutes."
-        )
-    except OSError as e:
-        return f"GAIA's agent couldn't start: {e}"
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return (
-            "GAIA didn't answer a test message: "
-            f"{_last_line(proc.stderr + chr(10) + proc.stdout) or 'no output'}"
-        )
+    except RuntimeError as e:
+        return f"GAIA didn't answer a test message: {e}"
+    if not (answer or "").strip():
+        return "GAIA didn't answer a test message: it ended without an answer."
     return None
 
 
@@ -416,7 +415,7 @@ def _start_hint(host: Optional[str]) -> Optional[str]:
 
 
 def server_problem() -> Optional[Dict[str, Any]]:
-    """Plain words and next steps when the user's own Lemonade isn't answering.
+    """Plain words and next steps when the user's own Lemonade isn't answering or is too old.
 
     None when GAIA uses its own server or the user's answers: the failure was
     something else, and ``gaia init``'s own error line says what.
@@ -439,18 +438,29 @@ def server_problem() -> Optional[Dict[str, Any]]:
     if not configured:
         return None
     url = resolve_lemonade_base_url(configured)
-    if choice.probe(url).status != choice.UNREACHABLE:
+    probed = choice.probe(url)
+    if probed.status not in (choice.UNREACHABLE, choice.TOO_OLD):
         return None
     parsed = urlparse(url)
-    try:
-        start = _start_hint(parsed.hostname)
-    except OSError as e:
-        # The hint is extra; losing it must not hide that the server isn't answering.
-        logger.warning("Could not work out how to start Lemonade: %s", e)
-        start = None
+    if probed.status == choice.TOO_OLD:
+        # Upgrading happens outside GAIA, so the way on from here is GAIA's own.
+        kind, start = "server_too_old", None
+        message = (
+            f"Your Lemonade Server at {parsed.netloc or url} is v{probed.version}; "
+            f"GAIA needs v{probed.minimum} or newer."
+        )
+    else:
+        kind = "server_unreachable"
+        message = f"Your Lemonade Server at {parsed.netloc or url} isn't answering."
+        try:
+            start = _start_hint(parsed.hostname)
+        except OSError as e:
+            # The hint is extra; losing it must not hide that the server isn't answering.
+            logger.warning("Could not work out how to start Lemonade: %s", e)
+            start = None
     return {
-        "kind": "server_unreachable",
-        "message": f"Your Lemonade Server at {parsed.netloc or url} isn't answering.",
+        "kind": kind,
+        "message": message,
         "start": start,
         # LEMONADE_BASE_URL outranks a saved choice, so only unsetting it switches.
         "use_gaia": not from_env,
@@ -1357,7 +1367,11 @@ class SetupRunner:
                     "subject": None,
                     "state": "failed" if problem else "passed",
                     "error": problem,
-                    "kind": "broken" if problem else None,
+                    "kind": (
+                        None
+                        if not problem
+                        else "missing" if problem == AGENT_MISSING else "agent"
+                    ),
                     "seconds": round(time.monotonic() - started, 1),
                 },
             )

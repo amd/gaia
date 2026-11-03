@@ -90,7 +90,7 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
     const [key, setKey] = useState('');
     const [needsKey, setNeedsKey] = useState(false);
     const [more, setMore] = useState(false);
-    const [busy, setBusy] = useState(false);
+    const [busy, setBusy] = useState<'external' | 'gaia' | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [chosen, setChosen] = useState<'external' | 'gaia' | null>(null);
 
@@ -131,7 +131,7 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
 
     const choose = useCallback(async (mode: 'external' | 'gaia') => {
         if (!offer) return;
-        setBusy(true);
+        setBusy(mode);
         setError(null);
         try {
             await api.setLemonadeTarget(mode === 'external'
@@ -144,7 +144,7 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
             if (lemonadeKeyRejected(err)) setNeedsKey(true);
             setError(err instanceof Error ? err.message : String(err));
         } finally {
-            setBusy(false);
+            setBusy(null);
         }
     }, [offer, key, onChosen]);
 
@@ -178,7 +178,13 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
         );
     }
     if (found.status === 'too_old') {
-        return <p className="setup-hint"><bdi dir="ltr">{found.message}</bdi></p>;
+        // Nothing for the user to do: setup carries on with GAIA's own, and theirs is left alone.
+        return (
+            <p className="setup-hint" role="status">
+                {t('setup.offer.tooOld')}{' '}
+                <bdi dir="ltr" className="setup-choice-note">Lemonade {found.version ?? ''} · {found.url}</bdi>
+            </p>
+        );
     }
     return (
         <form id="setup-lemonade-form" className="setup-lemonade" aria-label={t('setup.offer.label')} onSubmit={(e) => { e.preventDefault(); void choose('external'); }}>
@@ -201,11 +207,11 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
             )}
             {error && <p className="setup-error" role="alert">{error}</p>}
             <SetupFooter>
-                <button type="button" className="btn-secondary" disabled={busy} onClick={() => void choose('gaia')}>
-                    {t('setup.offer.useOwn')}
+                <button type="submit" form="setup-lemonade-form" className="btn-secondary" disabled={!!busy || (needsKey && !key.trim())}>
+                    {busy === 'external' && <Loader2 size={13} className="spin" />} {t('setup.offer.useMine')}
                 </button>
-                <button type="submit" form="setup-lemonade-form" className="btn-primary" disabled={busy || (needsKey && !key.trim())}>
-                    {busy && <Loader2 size={13} className="spin" />} {t('setup.offer.useMine')}
+                <button type="button" className="btn-primary" disabled={!!busy} onClick={() => void choose('gaia')}>
+                    {busy === 'gaia' && <Loader2 size={13} className="spin" />} {t('setup.offer.useOwn')}
                 </button>
             </SetupFooter>
         </form>
@@ -215,15 +221,17 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
 /** The user's Lemonade isn't answering: start it, or set up GAIA's own instead. */
 function ServerProblem({ problem, onRetry, onUseGaia }: { problem: SetupProblem; onRetry: () => void; onUseGaia: () => void }) {
     const t = useT();
+    // A too-old server is upgraded outside GAIA, so switching to GAIA's own is the way on.
+    const switchFirst = problem.kind === 'server_too_old' && problem.use_gaia;
     return (
         <>
             {problem.start && <p className="setup-hint"><bdi dir="ltr">{problem.start}</bdi></p>}
-            <div className="setup-row">
-                <button type="button" className="btn-primary" onClick={onRetry}>{t('setup.tryAgain')}</button>
+            <SetupFooter>
+                <button type="button" className={switchFirst ? 'btn-secondary' : 'btn-primary'} onClick={onRetry}>{t('setup.tryAgain')}</button>
                 {problem.use_gaia && (
-                    <button type="button" className="btn-secondary" onClick={onUseGaia}>{t('setup.server.useGaia')}</button>
+                    <button type="button" className={switchFirst ? 'btn-primary' : 'btn-secondary'} onClick={onUseGaia}>{t('setup.server.useGaia')}</button>
                 )}
-            </div>
+            </SetupFooter>
             {problem.use_gaia && (
                 <p className="setup-hint">{t('setup.server.useGaiaNote')}</p>
             )}
@@ -235,7 +243,17 @@ function ServerProblem({ problem, onRetry, onUseGaia }: { problem: SetupProblem;
 /** A stopped run: the words for a problem GAIA understands, the raw output behind Details. */
 function RunError({ run }: { run: SetupRunStatus }) {
     const t = useT();
-    if (run.problem && run.error) return <p className="setup-error" role="alert"><bdi dir="ltr">{run.error}</bdi></p>;
+    if (run.problem) {
+        return (
+            <div className="setup-error" role="alert">
+                <p>{t(run.problem.kind === 'server_too_old' ? 'setup.server.tooOld' : 'setup.server.unreachable')}</p>
+                <details className="dl-details">
+                    <summary>{t('setup.progress.details')}</summary>
+                    <pre dir="ltr">{run.problem.message}</pre>
+                </details>
+            </div>
+        );
+    }
     return (
         <div className="setup-error" role="alert">
             <p>{t('setup.stopped')}</p>
@@ -1190,7 +1208,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 onDownloadAgain={(id) => void retryModel(id, 'verify')}
                                 busy={busy}
                             />
-                            {runFailed && fullRun.error && (
+                            {/* A failed test already shows this under its own row. */}
+                            {runFailed && fullRun.error && !(fullRun.tests ?? []).some((r) => r.error === fullRun.error) && (
                                 <details className="dl-details">
                                     <summary>{t('setup.progress.details')}</summary>
                                     <pre dir="ltr">{fullRun.error}</pre>

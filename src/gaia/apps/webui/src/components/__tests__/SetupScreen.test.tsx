@@ -1250,11 +1250,13 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         expect(await screen.findByText(/GAIA will use the AI engine at http:\/\/localhost:13305\/api\/v1/)).toBeInTheDocument();
     });
 
-    it('puts the server choice in the bottom bar, with Continue back once it is made', async () => {
+    it('puts the server choice in the bottom bar, GAIA\'s own last and primary, with Continue back once it is made', async () => {
         await offer(FOUND);
         await screen.findByRole('form', { name: 'Use your Lemonade Server' });
         const bar = () => [...(document.querySelector('.setup-footer') as HTMLElement).querySelectorAll('button')].map((b) => b.textContent?.trim());
-        await waitFor(() => expect(bar()).toEqual(["Install GAIA's own", 'Use the one I have']));
+        await waitFor(() => expect(bar()).toEqual(['Use the one I have', "Install GAIA's own"]));
+        expect(screen.getByRole('button', { name: "Install GAIA's own" })).toHaveClass('btn-primary');
+        expect(screen.getByRole('button', { name: 'Use the one I have' })).toHaveClass('btn-secondary');
         fireEvent.click(screen.getByRole('button', { name: "Install GAIA's own" }));
         await waitFor(() => expect(bar()).toEqual(['Continue']));
     });
@@ -1335,11 +1337,14 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         expect(await screen.findByRole('button', { name: 'Use the one I have' })).toBeInTheDocument();
     });
 
-    it('explains a too-old server and offers no way to use it', async () => {
-        const message = 'The Lemonade Server at http://localhost:8000/api/v1 is v9.0.0; GAIA needs v10.0.0 or newer.';
-        await offer({ ...FOUND, status: 'too_old', message });
-        expect(await screen.findByText(message)).toBeInTheDocument();
+    it('says plainly that a too-old server is left alone and GAIA installs its own, with nothing to do', async () => {
+        const message = 'The Lemonade Server at http://localhost:8000/api/v1 is v9.0.0; GAIA needs v10.0.0 or newer. Upgrade it from https://lemonade-server.ai.';
+        await offer({ ...FOUND, status: 'too_old', version: '9.0.0', message });
+        expect(await screen.findByText(/older than GAIA needs, so GAIA installs its own\. Yours stays as it is\./)).toBeInTheDocument();
+        // The backend's English sentence, with its upgrade instruction, never reaches the screen.
+        expect(screen.queryByText(/Upgrade it/)).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Use the one I have' })).not.toBeInTheDocument();
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument());
     });
 
     it('does not look for one once a choice is saved', async () => {
@@ -1385,6 +1390,25 @@ describe("SetupScreen: the user's server isn't answering", () => {
         fireEvent.click(await screen.findByRole('button', { name: /Use GAIA.s own instead/ }));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, true, expect.any(Object)));
         expect(await startChatting()).toBeInTheDocument();
+    });
+
+    it("says plainly that a server the user chose is too old, and makes GAIA's own the way on", async () => {
+        const message = 'Your Lemonade Server at 127.0.0.1:13305 is v9.0.0; GAIA needs v10.0.0 or newer.';
+        mockedApi.startSetup.mockResolvedValueOnce({
+            ...UNREACHABLE,
+            error: message,
+            problem: { kind: 'server_too_old', message, start: null, use_gaia: true, switch_hint: null },
+        }).mockResolvedValueOnce(READY);
+        await startLocal();
+        expect(await screen.findByText(/older than GAIA needs\. Update it, or use GAIA.s own instead\./)).toBeInTheDocument();
+        // No command to run, and the versions wait behind Details.
+        expect(screen.queryByText(/gaia config set/)).not.toBeInTheDocument();
+        expect(screen.getByText(message).closest('details')).not.toBeNull();
+        const useGaia = screen.getByRole('button', { name: /Use GAIA.s own instead/ });
+        expect(useGaia).toHaveClass('btn-primary');
+        expect(screen.getByRole('button', { name: 'Try again' })).toHaveClass('btn-secondary');
+        fireEvent.click(useGaia);
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, true, expect.any(Object)));
     });
 
     it("doesn't offer a switch LEMONADE_BASE_URL would override, and says what does", async () => {

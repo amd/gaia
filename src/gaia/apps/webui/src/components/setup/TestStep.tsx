@@ -9,6 +9,15 @@ import { ConfirmSheet } from './ConfirmSheet';
 import { formatSize } from './format';
 import { SetupFooter } from './SetupFooter';
 
+/** A failed test's plain reason, by what went wrong; anything else gets the general one. */
+const WHY: Record<string, Parameters<Translate>[0]> = {
+    memory: 'setup.test.why.memory',
+    broken: 'setup.test.why.broken',
+    stuck: 'setup.test.why.stuck',
+    missing: 'setup.test.why.missing',
+    agent: 'setup.test.why.agent',
+};
+
 function jobLabel(job: SetupTest['job'], t: Translate): string {
     return t(`setup.test.job.${job}`);
 }
@@ -75,7 +84,7 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
                             {r.error && (
                                 <div className="setup-result-error">
                                     {/* A plain reason first; the engine's own words, paths and codes, behind Details. */}
-                                    <p>{t(r.kind === 'memory' ? 'setup.test.why.memory' : r.kind === 'broken' ? 'setup.test.why.broken' : r.kind === 'stuck' ? 'setup.test.why.stuck' : 'setup.test.why.other')}</p>
+                                    <p>{t(WHY[r.kind ?? ''] ?? 'setup.test.why.other')}</p>
                                     <details className="dl-details">
                                         <summary>{t('setup.progress.details')}</summary>
                                         <pre dir="ltr">{r.error}</pre>

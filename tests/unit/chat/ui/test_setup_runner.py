@@ -877,7 +877,9 @@ def users_server(monkeypatch):
 
         def probe(base, api_key=None, **_kw):
             probed.append(base)
-            return lemonade_choice.ProbeResult(base, status)
+            return lemonade_choice.ProbeResult(
+                base, status, version="9.0.0", minimum="10.0.0"
+            )
 
         monkeypatch.setattr(lemonade_choice, "probe", probe)
         monkeypatch.setattr(
@@ -912,6 +914,35 @@ def test_a_saved_server_that_does_not_answer_offers_gaias_own(users_server):
     problem = _REAL_SERVER_PROBLEM()
     assert problem["use_gaia"] is True
     assert problem["switch_hint"] is None
+
+
+def test_a_saved_server_that_is_too_old_names_both_versions_and_offers_gaias_own(
+    users_server,
+):
+    users_server("http://localhost:13305/api/v1", "config", lemonade_choice.TOO_OLD)
+    problem = _REAL_SERVER_PROBLEM()
+    assert problem["kind"] == "server_too_old"
+    assert "v9.0.0" in problem["message"] and "v10.0.0" in problem["message"]
+    # Upgrading happens outside GAIA: no start hint, and no command anywhere.
+    assert problem["start"] is None
+    assert problem["use_gaia"] is True
+    assert "gaia config" not in str(problem)
+
+
+def test_a_too_old_env_server_cannot_be_switched_from_setup(users_server):
+    users_server("http://127.0.0.1:13305", "env", lemonade_choice.TOO_OLD)
+    problem = _REAL_SERVER_PROBLEM()
+    assert problem["kind"] == "server_too_old"
+    assert problem["use_gaia"] is False
+    assert "unset it and restart GAIA" in problem["switch_hint"]
+
+
+@pytest.mark.parametrize(
+    "status", [lemonade_choice.OK, lemonade_choice.NEEDS_KEY, lemonade_choice.BAD_KEY]
+)
+def test_a_server_that_answers_well_enough_is_not_the_problem(users_server, status):
+    users_server("http://localhost:13305/api/v1", "config", status)
+    assert _REAL_SERVER_PROBLEM() is None
 
 
 def test_no_start_hint_when_this_pc_has_no_lemonade_to_start(users_server):

@@ -5,8 +5,9 @@
 # Each OS installs this checkout, builds the web UI, and for every test starts
 # the real backend with an empty HOME and GAIA_HOME against a fake Lemonade
 # (installer/headless/fake_model_server.py --catalog), then drives the real app
-# with Playwright. `gaia init`, the Test step's checks and a real `gaia -p` agent
-# turn all run for real; only the model server is fake.
+# with Playwright. `gaia init`, the Test step's checks and a real turn through the
+# installed GAIA assistant binary (fetched from the hub, as on a user's PC) all
+# run for real; only the model server is fake.
 #
 # This layer is Chromium against the UI the backend serves, not the Electron
 # shell: installers, the tray and window controls are test_installers_headless.yml's,
@@ -91,9 +92,9 @@ jobs:
           cache: 'npm'
           cache-dependency-path: src/gaia/apps/webui/package-lock.json
 
-      # The flagship from this checkout, so the agent turn is this PR's agent.
+      # No flagship package: setup installs and tests the assistant's binary, as the apps do.
       - name: Install this checkout
-        run: python -m pip install -e ".[ui,dev]" -e hub/agents/gaia/python
+        run: python -m pip install -e ".[ui,dev]"
 
       - name: Test the fake and these workflows
         run: python -m pytest tests/setup_journey -q

@@ -1020,8 +1020,8 @@ export interface SetupCheck {
 
 /** A failed setup with a known fix: the user's Lemonade Server isn't answering. */
 export interface SetupProblem {
-    kind: 'server_unreachable';
-    /** One plain sentence: what is wrong. */
+    kind: 'server_unreachable' | 'server_too_old';
+    /** One plain sentence: what is wrong, in English, with the address and versions. */
     message: string;
     /** How to start that server, or null when this PC has none to start. */
     start: string | null;

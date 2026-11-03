@@ -97,21 +97,23 @@ class TestBareInitTargetsTheFlagship:
         assert any(r.startswith("fastapi") for r in ui)
         assert any(r.startswith("uvicorn") for r in ui)
 
-    def test_availability_probe_uses_the_flagships_real_module_name(self, monkeypatch):
-        """`gaia_agent_gaia` does not exist and never will, so probing for it
-        would report the flagship missing forever and reinstall it every run."""
+    def test_an_importable_flagship_package_does_not_count_as_installed(
+        self, monkeypatch
+    ):
+        """The apps run the flagship as its binary, so a checkout's importable
+        `gaia_agent` must not stop `gaia init` installing that binary."""
         asked = []
 
         def fake_find_spec(name):
             asked.append(name)
-            return None
+            return object()
 
         monkeypatch.setattr(
             "gaia.installer.init_command.importlib.util.find_spec", fake_find_spec
         )
         monkeypatch.setattr("gaia.hub.installer.read_sentinel", lambda _id: None)
-        InitCommand._is_hub_agent_available(FLAGSHIP_AGENT_ID)
-        assert asked == [FLAGSHIP_IMPORT_NAME]
+        assert InitCommand._is_hub_agent_available(FLAGSHIP_AGENT_ID) is False
+        assert FLAGSHIP_IMPORT_NAME not in asked
 
     def test_other_agents_keep_the_gaia_agent_prefix_convention(self, monkeypatch):
         asked = []

@@ -26,6 +26,16 @@ test("a download's Save dialog is titled, not named after its blob: URL", () => 
   expect(main).toMatch(/session\.defaultSession\.on\("will-download"[\s\S]{0,200}setSaveDialogOptions\(\{\s*title: "Save from GAIA"/);
 });
 
+test("a missing Downloads folder still opens the Save dialog instead of crashing the app", () => {
+  const start = main.indexOf("function saveFolderFor(");
+  expect(start).toBeGreaterThan(-1);
+  const fn = main.slice(start, main.indexOf("\n}\n", start));
+  expect(fn).toMatch(/try \{\s*return path\.join\(app\.getPath\("downloads"\), filename\);\s*\} catch/);
+  expect(fn).toMatch(/console\.warn/);
+  // The only Downloads lookup in the main process goes through the guarded helper.
+  expect(main.match(/getPath\("downloads"\)/g)).toHaveLength(1);
+});
+
 test("the will-download listener is added once, not on every window reopen", () => {
   expect(main.match(/"will-download"/g)).toHaveLength(1);
   const start = main.indexOf("function createWindow(");

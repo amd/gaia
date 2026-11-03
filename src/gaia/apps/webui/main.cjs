@@ -573,9 +573,19 @@ function titleDownloadSaveDialogs() {
   session.defaultSession.on("will-download", (_event, item) => {
     item.setSaveDialogOptions({
       title: "Save from GAIA",
-      defaultPath: path.join(app.getPath("downloads"), item.getFilename()),
+      defaultPath: saveFolderFor(item.getFilename()),
     });
   });
+}
+
+// Windows throws when the user's Downloads folder is missing or redirected away; the dialog still lets them pick one.
+function saveFolderFor(filename) {
+  try {
+    return path.join(app.getPath("downloads"), filename);
+  } catch (err) {
+    console.warn(`[GAIA] No Downloads folder to suggest for ${filename}: ${err.message}`);
+    return filename;
+  }
 }
 
 function createWindow() {
