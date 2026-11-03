@@ -373,7 +373,8 @@ def _guard_real_gaia_home():
     real home, and a daemon spawned without ``GAIA_HOME`` -- that daemon owns,
     and on shutdown stops, the real home's server.
     """
-    from gaia.daemon import client
+    from gaia.daemon import client, paths as daemon_paths
+    from gaia.llm import lemonade_service
     from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
     def _guard_method(name, real):
@@ -393,6 +394,21 @@ def _guard_real_gaia_home():
         return guarded
 
     real_spawn = client._spawn_and_wait
+    real_post_start = lemonade_service._post_start
+
+    def guarded_post_start(*args, **kwargs):
+        daemon_home = daemon_paths.host_dir()
+        if _is_real_gaia_home(daemon_home):
+            pytest.fail(
+                _REAL_HOME_MESSAGE.format(
+                    action="ask the daemon in",
+                    home=daemon_home,
+                    harm=_LEMONADE_HARM,
+                    hint=_LEMONADE_HINT,
+                ),
+                pytrace=False,
+            )
+        return real_post_start(*args, **kwargs)
 
     def guarded_spawn(*args, **kwargs):
         home = _child_gaia_home(os.environ)
@@ -416,6 +432,7 @@ def _guard_real_gaia_home():
                 _guard_method(name, getattr(EmbeddedLemonade, name)),
             )
         mp.setattr(client, "_spawn_and_wait", guarded_spawn)
+        mp.setattr(lemonade_service, "_post_start", guarded_post_start)
         # sqlite3.dbapi2 is the module SQLAlchemy and other drivers bind.
         for module in (sqlite3, sqlite3.dbapi2):
             mp.setattr(module, "connect", _guard_connect(module.connect))

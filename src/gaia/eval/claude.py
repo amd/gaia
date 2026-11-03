@@ -18,7 +18,7 @@ except ImportError:
     BeautifulSoup = None
 
 
-from gaia.env import load_env
+from gaia.env import credential, load_env
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
 from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
@@ -98,7 +98,7 @@ class ClaudeClient:
         if model is None:
             model = DEFAULT_CLAUDE_MODEL
         self.log = self.__class__.log  # Use the class-level logger for instances
-        self.api_key = os.getenv("ANTHROPIC_API_KEY")
+        self.api_key = credential("ANTHROPIC_API_KEY")
         if not self.api_key:
             error_msg = (
                 "ANTHROPIC_API_KEY not found in environment.\n\n"

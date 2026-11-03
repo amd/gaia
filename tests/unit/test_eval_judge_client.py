@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from gaia import env as gaia_env
 from gaia.eval import judge_client
 from gaia.eval.judge_client import (
     ClaudeCliClient,
@@ -32,6 +33,8 @@ def _clear_credentials(monkeypatch):
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(gaia_env, "_working_dir_credentials", {})
+    monkeypatch.setattr(gaia_env, "_working_dir_credential_files", {})
 
 
 @pytest.fixture
@@ -127,6 +130,54 @@ def test_api_key_wins_when_both_are_set(monkeypatch, fake_claude_bin):
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
     sentinel = _stub_sdk_client(monkeypatch)
     assert make_judge_client() is sentinel
+
+
+PROJECT_DOTENV = "/work/project/.env"
+
+
+@pytest.fixture
+def project_key(monkeypatch):
+    """ANTHROPIC_API_KEY supplied only by a working-directory .env."""
+    monkeypatch.setitem(
+        gaia_env._working_dir_credentials, "ANTHROPIC_API_KEY", "sk-ant-project"
+    )
+    monkeypatch.setitem(
+        gaia_env._working_dir_credential_files, "ANTHROPIC_API_KEY", PROJECT_DOTENV
+    )
+
+
+def test_a_project_key_does_not_override_an_oauth_token(
+    monkeypatch, project_key, fake_claude_bin
+):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
+    _stub_sdk_client(monkeypatch)
+    assert isinstance(make_judge_client(), ClaudeCliClient)
+
+
+def test_a_project_key_does_not_override_the_cli_login(
+    monkeypatch, project_key, fake_claude_bin
+):
+    _stub_sdk_client(monkeypatch)
+    assert isinstance(make_judge_client(), ClaudeCliClient)
+
+
+def test_a_project_key_is_used_when_nothing_else_is_and_says_so(
+    monkeypatch, project_key, no_claude_bin, caplog
+):
+    sentinel = _stub_sdk_client(monkeypatch)
+    with caplog.at_level("WARNING", logger=judge_client.log.name):
+        assert make_judge_client() is sentinel
+    assert f"Using ANTHROPIC_API_KEY from {PROJECT_DOTENV!r}" in caplog.text
+
+
+def test_an_exported_key_still_wins_over_the_cli_login(
+    monkeypatch, project_key, fake_claude_bin, caplog
+):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-exported")
+    sentinel = _stub_sdk_client(monkeypatch)
+    with caplog.at_level("WARNING", logger=judge_client.log.name):
+        assert make_judge_client() is sentinel
+    assert "Using ANTHROPIC_API_KEY from" not in caplog.text
 
 
 def test_max_tokens_reaches_only_the_sdk_client(monkeypatch):

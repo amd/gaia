@@ -1876,8 +1876,8 @@
     },
     "amd-cdna-4-architecture-whitepaper.pdf": {
      "url": "https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/white-papers/amd-cdna-4-architecture-whitepaper.pdf",
-     "sha256": "7ebf89edb9b82198b9edea7bb37eb7fe7c998842257eb21ef7a459a87774a4b2",
-     "bytes": 2703210
+     "sha256": "613e3418d2d1aa0b9cda417fe1e6798f69d0da0f7c8614531b160b66cbb716ac",
+     "bytes": 2561194
     },
     "amd-instinct-mi300-cdna3-instruction-set-architecture.pdf": {
      "url": "https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf",

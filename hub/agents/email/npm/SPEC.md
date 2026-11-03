@@ -898,7 +898,9 @@ each): OAuth-forward `/v1/connections` (2.5, #2154), mid-run `needs_input` +
 worklist view (`NeedsYouItem[]`) plus the filtered-remainder `BulkSummary`
 (2.11, #2743, see below), `EmailQueryRequest.session_id`: an optional
 conversation id that resolves the same agent across turns sharing it,
-instead of a throwaway per-call agent (2.12, #2829),
+instead of a throwaway per-call agent (2.12, #2829; a turn that names a
+different `model` than the session's agent was built on rebuilds that agent
+on the new model rather than ignoring it, #2834),
 `PreScanItem.is_phishing`/`is_spam` plus
 `EmailPreScanResult.suspicious`/`suspicious_total`: the phishing/spam-flagged
 subset of `actionable`, captured before its own cap so a flagged message

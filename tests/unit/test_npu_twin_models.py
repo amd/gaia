@@ -117,6 +117,13 @@ class TestFreshPullRequestShape:
         client = lc.LemonadeClient(host="localhost", port=13305)
         with responses.RequestsMock() as rsps:
             rsps.add(
+                responses.GET,
+                f"{client.base_url}/system-info",
+                json={
+                    "recipes": {"flm": {"backends": {"npu": {"state": "installed"}}}}
+                },
+            )
+            rsps.add(
                 responses.POST,
                 f"{client.base_url}/pull",
                 body=b"event: complete\ndata: {}\n\n",
@@ -124,7 +131,7 @@ class TestFreshPullRequestShape:
                 stream=True,
             )
             list(client.pull_model_stream(model_id))
-            body = json.loads(rsps.calls[0].request.body)
+            body = json.loads(rsps.calls[-1].request.body)
         assert body == {"model_name": model_id, "stream": True}
 
     def test_an_flm_model_never_carries_registration(self):
@@ -252,19 +259,19 @@ class TestTuiAgrees:
             assert entry["size_gb"] == mr.size_gb
             assert entry.get("vision", False) == mr.vision
             # The TUI's server-start window must be the one Python loads with.
-            assert entry["min_ctx_size"] == lc.npu_ctx_ceiling(model_id)
+            assert entry["min_ctx_size"] == lc.npu_default_ctx(model_id)
 
 
 class TestNpuWindow:
     def test_twins_get_a_64k_window_and_e2b_keeps_the_flm_ceiling(self):
-        assert lc.npu_ctx_ceiling(lc.NPU_DEFAULT_MODEL_NAME) == lc.GPU_CTX_SIZE
-        assert lc.npu_ctx_ceiling("gemma4-it-e2b-FLM") == lc.NPU_CTX_SIZE
-        assert lc.npu_ctx_ceiling("some-unknown-FLM") == lc.NPU_CTX_SIZE
+        assert lc.npu_default_ctx(lc.NPU_DEFAULT_MODEL_NAME) == lc.GPU_CTX_SIZE
+        assert lc.npu_default_ctx("gemma4-it-e2b-FLM") == lc.NPU_CTX_SIZE
+        assert lc.npu_default_ctx("some-unknown-FLM") == lc.NPU_CTX_SIZE
 
-    def test_an_override_above_the_ceiling_is_clamped(self, monkeypatch):
+    def test_an_override_wins_on_the_npu(self, monkeypatch):
         monkeypatch.setenv("GAIA_CTX_SIZE", "131072")
-        assert lc.resolve_ctx_size(lc.NPU_DEFAULT_MODEL_NAME) == lc.GPU_CTX_SIZE
-        assert lc.resolve_ctx_size("gemma4-it-e2b-FLM") == lc.NPU_CTX_SIZE
+        assert lc.resolve_ctx_size(lc.NPU_DEFAULT_MODEL_NAME) == 131072
+        assert lc.resolve_ctx_size("gemma4-it-e2b-FLM") == 131072
 
 
 class TestGpuStaysTheDefault:

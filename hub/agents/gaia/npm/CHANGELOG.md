@@ -10,6 +10,13 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **A project's `.env` can only supply the Claude API key.** The sidecar reads
+  `ANTHROPIC_API_KEY` from a `.env` in its working directory, for its own
+  Claude calls, and ignores every other name there with one warning. Settings
+  such as `TAVILY_API_KEY` or `LEMONADE_BASE_URL` kept in a project's `.env`
+  now have to be exported in the launch environment. A sidecar run from a
+  source checkout still loads the `.env` at or above GAIA's install (the
+  repo's `.env`) in full, as before; the packaged binary has no install `.env`.
 - **On Gemma 4 E4B the agent stops offering features that model fails.** The
   SQL scratchpad, email, image generation, and finding or installing skills
   failed GAIA's agent evals on Gemma, and their 16 tool descriptions were read
@@ -75,6 +82,26 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **Skill messages give commands that work and say what really happens.**
+  Installing a skill the agent already bundles now says the bundled copy is
+  the one that loads, instead of telling the model to load the install. The
+  commands GAIA names now run as written: `gaia skill import` gets
+  `--allow-experimental` for a skill that ships code, `gaia skill deltas
+  --drop-section` gets its `--scope`, and the nonexistent `gaia skill info
+  --remote` is replaced. The skills list no longer says a CLI such as `gh` is
+  refused until its skill loads (it asks you to approve each command), a
+  learned-change undo says it takes effect on the next start, and asking to
+  correct a skill that isn't loaded explains the lesson can be saved on your
+  next message. The docs no longer mention a `--skill-set` flag the agent
+  doesn't have.
+- **A printed test log no longer marks an answer verified.** A `run_python`
+  snippet that printed an old log with a pytest summary counted as a test run
+  (#4013). Python code now counts only when it runs a test runner itself:
+  `pytest.main()`, `unittest.main()`, or a launched process whose program is
+  the runner, such as `subprocess.run([sys.executable, '-m', 'pytest'])`,
+  `os.system('npm test')`, `sh -c 'pytest -q'` or `uv run pytest`. Reading a
+  log with `cat` or `type` does not count, whatever the log is named. A runner
+  reached only through an imported helper reads as unverified.
 - **A slide request gets a slide file, not a picture.** Asked for a slide or
   deck, the agent ran Stable Diffusion and handed back a blurry image of one.
   It now asks whether you want PowerPoint (.pptx) or HTML when you didn't say,
@@ -761,6 +788,21 @@ Released with GAIA 0.25.0, and requires it.
   watching, code indexing, and where screenshots, transcripts and exports are
   saved. A folder outside the scope gets the usual approval prompt, and a folder
   you approve is readable by document indexing too.
+- **Small file edits preserve the file's existing line endings** (#4864), so a
+  one-line change does not rewrite an entire LF or CRLF file in a noisy diff.
+- **Declining folder creation also blocks writes inside that folder** (#4857),
+  rather than letting the same rejected effect be retried through another tool.
+- **Mentioning image generation no longer causes an unsolicited image request**
+  (#4809). The agent only corrects an answer about an image when this turn
+  actually attempted image generation.
+- **Document summaries have enough output budget and fail loudly if still cut
+  off** (#4827), instead of presenting a partial summary as complete.
+- **PDFs with an empty owner password can be indexed** (#4734); PDFs that need
+  a real user password still return the existing actionable error.
+- **Large documents index in the background after the foreground wait budget**
+  (#4754), so a chat can continue instead of waiting for embedding to finish.
+- **The file-verification read-back stays internal to the turn** (#4719), so
+  answers do not expose offsets or other implementation bookkeeping.
 
 ### Added
 

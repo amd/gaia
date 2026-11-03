@@ -1193,6 +1193,16 @@ def build_parser():
         help="With -p: cap on agent steps (default: the agent's own limit)",
     )
     parser.add_argument(
+        "--attempts",
+        dest="print_attempts",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help="With -p: run N (up to 4) independent attempts, each in a copy of the "
+        "current folder, then one more that checks and combines them. Better "
+        "reviews and answers for about N+1 times the tokens",
+    )
+    parser.add_argument(
         "--dangerously-skip-permissions",
         dest="print_skip_permissions",
         action="store_true",
@@ -3719,7 +3729,7 @@ Examples:
 
     skills_cli.add_subparser(subparsers)
 
-    # Local GGUF models added from a Hugging Face link (shared with the Agent UI and TUI).
+    # Local models added from a Hugging Face link (shared with the Agent UI and TUI).
     from gaia.llm import custom_models_cli
 
     custom_models_cli.add_subparser(subparsers)
@@ -4583,13 +4593,16 @@ def _handle_eval_tasks(args):
             f"<run_dir> --propose {expect_path}` from a run of main to gate this model."
         )
         return
-    unmeasured = ft.summarize(card)["unmeasured"]
+    summary = ft.summarize(card)
+    unmeasured, contaminated = summary["unmeasured"], summary["contaminated"]
     missed = [c.metric for c in checks if not c.ok]
     if unmeasured:
         problem = (
             f"{unmeasured} task(s) not measured: the model backend was unreachable. "
             "That is an infrastructure failure, not a verdict on the agent; re-run."
         )
+        if contaminated:
+            problem += f" {contaminated} task(s) also read the answer key."
     elif missed:
         problem = f"Missed expectations: {', '.join(missed)}."
     else:
@@ -4910,6 +4923,7 @@ def main():
         "--output-format": args.print_output_format is not None,
         "--verbose": args.print_verbose,
         "--max-steps": args.print_max_steps is not None,
+        "--attempts": args.print_attempts is not None,
         "--dangerously-skip-permissions": args.print_skip_permissions,
         "--full-access": args.print_full_access,
     }
@@ -4936,6 +4950,11 @@ def main():
             parser.error(f"-p runs headless; {', '.join(launcher_flags)} cannot apply.")
         if args.print_verbose and args.print_output_format != "json":
             parser.error("--verbose adds the conversation to --output-format json.")
+        if args.print_attempts:
+            from gaia.attempts import MAX_ATTEMPTS
+
+            if args.print_attempts > MAX_ATTEMPTS:
+                parser.error(f"--attempts takes 1 to {MAX_ATTEMPTS}.")
         from gaia.print_mode import run as run_print_mode
 
         sys.exit(
@@ -4945,6 +4964,7 @@ def main():
                 output_format=args.print_output_format or "text",
                 verbose=args.print_verbose,
                 max_steps=args.print_max_steps,
+                attempts=args.print_attempts or 1,
                 skip_permissions=args.print_skip_permissions,
                 full_access=args.print_full_access,
                 base_url=args.base_url,

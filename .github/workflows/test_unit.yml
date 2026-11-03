@@ -56,6 +56,7 @@ on:
       - 'examples/mcp_windows_system_health_agent.py'
       - 'eval/ci_lanes.json'
       - 'eval/ci_tiers.json'
+      - 'eval/tasks/tasks.json'
       - 'eval/retrieval/**'
       - 'data/pdf/**'
       - 'cpp/src/unicode_upper_ranges.inc'
@@ -70,6 +71,7 @@ on:
       - 'docs/releases/**'
       # Doc pages unit tests check against the code (drift and runnable-command tests).
       - 'docs/connectors/google.mdx'
+      - 'docs/guides/building-skills.mdx'
       - 'docs/guides/chat.mdx'
       - 'docs/guides/gaia.mdx'
       - 'docs/guides/install.mdx'
@@ -123,6 +125,7 @@ on:
       - 'examples/mcp_windows_system_health_agent.py'
       - 'eval/ci_lanes.json'
       - 'eval/ci_tiers.json'
+      - 'eval/tasks/tasks.json'
       - 'eval/retrieval/**'
       - 'data/pdf/**'
       - 'cpp/src/unicode_upper_ranges.inc'
@@ -137,6 +140,7 @@ on:
       - 'docs/releases/**'
       # Doc pages unit tests check against the code (drift and runnable-command tests).
       - 'docs/connectors/google.mdx'
+      - 'docs/guides/building-skills.mdx'
       - 'docs/guides/chat.mdx'
       - 'docs/guides/gaia.mdx'
       - 'docs/guides/install.mdx'

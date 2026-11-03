@@ -240,7 +240,11 @@ await shutdown(proc);   // tree-kill; auto-cleanup also reaps on exit
   sign-ins, native hub agents, media tools) never inherit this token
   or GAIA's other internal credentials. To withhold your own variables from
   them too, list the names in `GAIA_CHILD_ENV_DENY` (comma or space separated);
-  `GAIA_NO_DOTENV=1` stops the sidecar loading `.env` files.
+  `GAIA_NO_DOTENV=1` stops the sidecar loading `.env` files. From a `.env` in
+  its working directory the sidecar reads only `ANTHROPIC_API_KEY`; pass any
+  other setting through `env` instead. A sidecar run from a source checkout
+  still loads the `.env` at or above GAIA's install (the repo's `.env`) in
+  full, as before; the packaged binary has no install `.env`.
 
 Or skip the code entirely and let the CLI own it:
 
@@ -513,6 +517,12 @@ paths, and **the default is the user's home directory**. That is the honest scop
 for a personal document agent, and it is still a real boundary — system
 directories, program files, and other users' homes are refused, with the check
 run against the *resolved* path so a symlink out of scope doesn't slip through.
+In normal permission mode, a path outside the conversation's supplied scope
+requires an approval before it is granted. Full access (the session bypass
+route) grants such a path without that separate prompt when the caller can
+answer for the session, but it does not override `GAIA_ALLOWED_PATHS`, the
+secret- and write-path denylists described below, or the refusal of grants that
+cover the home folder or a drive root.
 
 **Being in scope is not the same as being safe, and two denylists apply inside
 it.** Reads refuse secrets — `.env`, `id_rsa`, `credentials.json`, `.netrc`,
@@ -532,8 +542,10 @@ part of the temp dir the agent may use.
 **To narrow it for a run, set `GAIA_ALLOWED_PATHS`** in the environment the
 sidecar starts in — absolute folders joined with `;` on Windows and `:` elsewhere.
 The scope becomes the overlap with the default; an entry outside it is ignored
-with a warning and never widens it, and out-of-scope paths are refused without a
-prompt, even under full access. The scratch directory stays writable. An empty,
+with a warning and never widens it. Out-of-scope paths are refused without a
+prompt in every mode, including full access; full access can grant a path outside
+the conversation's scope without that extra prompt, but still cannot widen this
+environment-level restriction. The scratch directory stays writable. An empty,
 relative or missing entry stops the sidecar at startup. It confines the agent's
 tools, not code they run: a `run_python` script or shell command can still read
 anything the OS user can, so isolating a run from files it must not see needs a
@@ -549,8 +561,9 @@ agent = GaiaAgent(config=GaiaAgentConfig(allowed_paths=["/home/me/Documents"]))
 ## 10. Skills — one always-on, the rest opt-in
 
 The agent is built to host **Agent Skills** (short playbooks loaded into its own
-prompt, grouped into named sets, one set active per launch), and its bundled
-skill directory is the highest-precedence discovery root.
+prompt, mid-session through `load_skill`), and its bundled skill directory is
+the highest-precedence discovery root. Skills can be grouped into named sets,
+but none ship today — see below.
 
 Loaded skills are **not** all resident every turn: each turn the agent embeds
 the query against every loaded skill's description and renders only the
@@ -569,7 +582,7 @@ turn — budget for it. It is not a task recipe but the agent's honesty floor: d
 not claim work you did not do, do not present empty output as a result, do not
 substitute a near-miss and report success. Those failures corrupt an answer
 whatever the task is, which is why it cannot live in an opt-in bundle. It
-declares no tools, and its body measures 790 tokens (tiktoken `cl100k`).
+declares no tools, and its body measures 789 tokens (tiktoken `cl100k`).
 
 **`document-extract` ships bundled but not enabled.** `gaia-voice` routes a
 request for every item in a document to it, and it drives
@@ -725,7 +738,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.27","agentVersion":"0.3.1"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.27","agentVersion":"0.3.3"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \

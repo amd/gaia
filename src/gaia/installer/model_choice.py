@@ -201,8 +201,17 @@ def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, A
     when either the size or this PC's memory is unknown. The verdict is
     model_fit's; the numbers are converted to decimal GB.
     """
-    from gaia.llm.lemonade_client import find_model_requirement, kv_cache_for
-    from gaia.llm.model_fit import MachineCapacity, check_fit, required_memory_gb
+    from gaia.llm.lemonade_client import (
+        find_model_requirement,
+        kv_cache_for,
+        runs_on_npu,
+    )
+    from gaia.llm.model_fit import (
+        MachineCapacity,
+        check_fit,
+        npu_capacity,
+        required_memory_gb,
+    )
 
     if capacity is None or not size_gb:
         return {
@@ -213,6 +222,16 @@ def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, A
             ),
             "fit_reason": None,
         }
+    if runs_on_npu(model_id):
+        capacity = npu_capacity(capacity)
+        if capacity is None:
+            return {
+                "fits": False,
+                "need_gb": None,
+                "capacity_gb": None,
+                "fit_reason": "runs on a Ryzen AI NPU, and Lemonade reports none "
+                "on this PC",
+            }
     mr = find_model_requirement(model_id)
     kv = kv_cache_for(mr, capacity) if mr else 0.0
     memory_only = MachineCapacity(capacity.memory_gb, capacity.memory_source, None)

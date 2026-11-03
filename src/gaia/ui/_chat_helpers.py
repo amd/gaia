@@ -67,6 +67,7 @@ from gaia.ui.email_sidecar.profiles import (
     profile_for,
     reasoning_supported,
     scope_supported,
+    session_id_supported,
     surface_supported,
     turns_supported,
     working_directory_supported,
@@ -419,8 +420,8 @@ def _owned_models() -> set:
 def _auto_load_windows() -> set:
     """Windows a model has when a request made Lemonade load it, unasked.
 
-    Lemonade's own default, and the window GAIA's supervisor starts the server
-    with (``LEMONADE_CTX_SIZE``, the machine's profile window).
+    Lemonade's own default, and the machine's profile window, which is what a
+    GAIA load asks for.
     """
     from gaia.llm.lemonade_client import active_profile_ctx_size
 
@@ -2796,7 +2797,11 @@ def _dispatch_sidecar_query(
                 else None
             ),
             profile=profile,
-            session_id=session_id,
+            session_id=(
+                session_id
+                if session_id_supported(profile, handle.api_version)
+                else None
+            ),
             answers_confirmations=answers_confirmations,
             offers_always=offers_always,
             documents=relayed_documents,

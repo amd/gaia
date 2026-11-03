@@ -88,27 +88,63 @@ func (l *Lock) Release() {
 // is intentionally exclusive: Windows may reject a read during os.Rename, and
 // a short critical section keeps readers from observing a replacement in
 // progress without requiring platform-specific shared-lock semantics.
+//
+// A read never creates anything: when target's folder is missing or is not a
+// folder, or the folder cannot be written to (read-only media, no permission),
+// it reads without the lock, since no GAIA writer can be working there either.
 func ReadFile(target string) ([]byte, error) {
-	return readFile(target, Acquire, os.ReadFile)
+	return readFile(target, Acquire, os.ReadFile, probeWritable)
 }
 
 type acquireFunc func(string, time.Duration) (*Lock, error)
 
 type readFunc func(string) ([]byte, error)
 
-func readFile(target string, acquire acquireFunc, read readFunc) ([]byte, error) {
+type probeFunc func(dir string) error
+
+func readFile(target string, acquire acquireFunc, read readFunc, probe probeFunc) ([]byte, error) {
+	dir := filepath.Dir(target)
+	info, err := os.Stat(dir)
+	if err != nil {
+		return read(target)
+	}
+	if !info.IsDir() {
+		return nil, &fs.PathError{Op: "open", Path: target, Err: fs.ErrNotExist}
+	}
 	lock, err := acquire(target, Timeout)
 	if err != nil {
-		// A provisioned GAIA_CONFIG_FILE may be readable but live in a directory
-		// where the TUI cannot create its sibling lock. Preserve that read-only
-		// configuration mode; lock contention and every other failure remain loud.
-		if errors.Is(err, fs.ErrPermission) {
+		if lockUnwritable(err, dir, probe) {
 			return read(target)
 		}
 		return nil, err
 	}
 	defer lock.Release()
 	return read(target)
+}
+
+// lockUnwritable reports whether err only means the folder cannot take a lock
+// file. Lock contention and every other failure stay loud.
+func lockUnwritable(err error, dir string, probe probeFunc) bool {
+	if isReadOnlyFS(err) {
+		return true
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		return false
+	}
+	perr := probe(dir)
+	return perr != nil && (errors.Is(perr, fs.ErrPermission) || isReadOnlyFS(perr))
+}
+
+func isReadOnlyFS(err error) bool { return errors.Is(err, errReadOnlyFS) }
+
+// probeWritable creates and removes a scratch file in dir.
+func probeWritable(dir string) error {
+	f, err := os.CreateTemp(dir, ".gaia-write-probe-*")
+	if err != nil {
+		return err
+	}
+	f.Close()
+	return os.Remove(f.Name())
 }
 
 // WriteAtomic replaces path with data. The bytes go to a temp file in the same
