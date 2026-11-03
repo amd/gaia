@@ -62,6 +62,8 @@ func Speak(ctx context.Context, pieces []string, synth Synthesizer, play PlayFun
 	if len(pieces) == 0 {
 		return nil
 	}
+	// Read once: a fetch can still be writing after Speak has returned.
+	dir := tempDir
 	fetch := func(text string) <-chan fetched {
 		ch := make(chan fetched, 1)
 		go func() {
@@ -70,7 +72,7 @@ func Speak(ctx context.Context, pieces []string, synth Synthesizer, play PlayFun
 				ch <- fetched{err: err}
 				return
 			}
-			path, err := writeTemp(wav)
+			path, err := writeTemp(dir, wav)
 			ch <- fetched{path: path, err: err}
 		}()
 		return ch
@@ -117,8 +119,8 @@ func Speak(ctx context.Context, pieces []string, synth Synthesizer, play PlayFun
 // tempDir is where audio files are written; "" is the system's temp dir.
 var tempDir = ""
 
-func writeTemp(wav []byte) (string, error) {
-	f, err := os.CreateTemp(tempDir, "gaia-read-aloud-*.wav")
+func writeTemp(dir string, wav []byte) (string, error) {
+	f, err := os.CreateTemp(dir, "gaia-read-aloud-*.wav")
 	if err != nil {
 		return "", fmt.Errorf("could not create a temporary audio file: %w", err)
 	}
