@@ -3932,6 +3932,11 @@ Examples:
         help="Skip building the Agent UI frontend (same effect as GAIA_SKIP_WEBUI_BUILD)",
     )
     init_parser.add_argument(
+        "--skip-pip-extras",
+        action="store_true",
+        help="Install no Python packages (the desktop app ships its own)",
+    )
+    init_parser.add_argument(
         "--force-reinstall",
         action="store_true",
         help="Reinstall GAIA's embedded Lemonade Server",
@@ -6479,6 +6484,7 @@ Let me know your answer!
             verbose=getattr(args, "verbose", False),
             remote=getattr(args, "remote", False),
             skip_webui_build=getattr(args, "skip_webui_build", False),
+            skip_pip_extras=getattr(args, "skip_pip_extras", False),
             skip_chat_model=getattr(args, "skip_chat_model", False),
             lemonade_url=getattr(args, "lemonade_url", None),
             gaia_lemonade=getattr(args, "gaia_lemonade", False),

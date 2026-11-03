@@ -38,7 +38,7 @@ export type SetupRole = 'chat' | 'vision' | 'embedding' | 'speech' | 'voice' | '
 
 /** Something setup fetches besides the models (GET /api/setup/plan `components`). */
 export interface SetupComponent {
-    id: 'server' | 'backend' | 'packages' | 'agent';
+    id: 'server' | 'backend' | 'agent';
     version: string | null;
     /** null when it can't be known before the download starts. */
     size_gb: number | null;

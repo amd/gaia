@@ -67,7 +67,6 @@ export const SDXL = optional({ id: 'SDXL-Turbo', name: 'SDXL Turbo', roles: ['im
 export const COMPONENTS: SetupComponent[] = [
     { id: 'server', version: '10.9.1', size_gb: 0.007, source: 'github.com/lemonade-sdk/lemonade/releases', installed: false },
     { id: 'backend', version: null, size_gb: 0.141, source: 'github.com/ggml-org/llama.cpp', installed: null },
-    { id: 'packages', version: null, size_gb: null, source: 'pypi.org', installed: null },
     { id: 'agent', version: null, size_gb: null, source: 'hub.amd-gaia.ai', installed: true },
 ];
 

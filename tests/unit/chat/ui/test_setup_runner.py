@@ -55,6 +55,8 @@ def test_run_args_never_prompt_or_rebuild_the_running_ui():
     args = sr.run_args(False)
     assert args[:3] == ["init", "--profile", "gaia"]
     assert "--yes" in args and "--skip-webui-build" in args
+    # The app ships its packages; its setup never pip-installs.
+    assert "--skip-pip-extras" in args
     assert "--skip-chat-model" not in args
     assert sr.run_args(True)[-1] == "--skip-chat-model"
 

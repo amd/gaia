@@ -805,8 +805,6 @@ const messages: Messages = {
     'setup.component.serverNote': 'يشغّل نماذج الذكاء الاصطناعي على هذا الجهاز (Lemonade).',
     'setup.component.backend': 'دعم الرسومات',
     'setup.component.backendNote': 'يتيح للنماذج استخدام شريحة الرسومات أو المعالج (llama.cpp).',
-    'setup.component.packages': 'مكوّنات التطبيق',
-    'setup.component.packagesNote': 'ما يحتاجه GAIA لقراءة مستنداتك والعمل.',
     'setup.component.agent': 'مساعد GAIA',
     'setup.component.agentNote': 'المساعد الذي يخطط لطلباتك وينفذها.',
     'setup.optional.title': 'اختياري',

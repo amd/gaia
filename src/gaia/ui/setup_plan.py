@@ -284,15 +284,6 @@ def _components(
         components.append(_llamacpp_component(system_info))
     components.append(
         {
-            "id": "packages",
-            "version": None,
-            "size_gb": None,
-            "source": "pypi.org",
-            "installed": None,
-        }
-    )
-    components.append(
-        {
             "id": "agent",
             "version": None,
             "size_gb": None,

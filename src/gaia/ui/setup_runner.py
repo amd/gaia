@@ -162,6 +162,7 @@ def run_args(
 ) -> List[str]:
     # --yes: nobody can answer a prompt on a pipe. --skip-webui-build: a source
     # checkout would otherwise rebuild the very UI that is running this.
+    # --skip-pip-extras: the app ships its packages; setup never pip-installs.
     # --progress-json: per-model bytes and states for the progress rows.
     # server_only: start the model server so the user can choose models next.
     args = [
@@ -170,6 +171,7 @@ def run_args(
         PROFILE,
         "--yes",
         "--skip-webui-build",
+        "--skip-pip-extras",
         "--progress-json",
     ]
     if allow_low_disk:

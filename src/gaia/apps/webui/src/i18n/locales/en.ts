@@ -805,8 +805,6 @@ export const enMessages = {
     'setup.component.serverNote': 'Runs the AI models on this PC (Lemonade).',
     'setup.component.backend': 'Graphics support',
     'setup.component.backendNote': 'Lets the models use your graphics chip or processor (llama.cpp).',
-    'setup.component.packages': 'App components',
-    'setup.component.packagesNote': 'What GAIA needs to read your documents and run.',
     'setup.component.agent': 'GAIA assistant',
     'setup.component.agentNote': 'The assistant that plans and carries out your requests.',
     'setup.optional.title': 'Optional',

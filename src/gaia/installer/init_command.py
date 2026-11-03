@@ -1149,6 +1149,7 @@ class InitCommand:
         verbose: bool = False,
         remote: bool = False,
         skip_webui_build: bool = False,
+        skip_pip_extras: bool = False,
         skip_chat_model: bool = False,
         progress_callback: Optional[Callable[[InitProgress], None]] = None,
         lemonade_url: Optional[str] = None,
@@ -1174,6 +1175,8 @@ class InitCommand:
             skip_webui_build: Skip the Agent UI frontend build step entirely
                 (same-day escape hatch if the Node preflight ever false-positives;
                 same effect as setting GAIA_SKIP_WEBUI_BUILD)
+            skip_pip_extras: Install no Python packages; the desktop app ships
+                its own, and the Agent UI's setup never pip-installs
             skip_chat_model: Skip the profile's chat LLM (e.g. Gemma-4-E4B-it-GGUF)
                 while still downloading any embedding model it declares. For a
                 session whose inference runs on Anthropic's Claude API instead of
@@ -1216,6 +1219,7 @@ class InitCommand:
         self._setup_verified = True
         self.skip_models = skip_models
         self.skip_webui_build = skip_webui_build
+        self.skip_pip_extras = skip_pip_extras
         self.force_reinstall = force_reinstall
         self.force_models = force_models
         self.yes = yes
@@ -1493,7 +1497,9 @@ class InitCommand:
         self._print_header()
 
         profile_config = INIT_PROFILES[self.profile]
-        has_pip_extras = bool(profile_config.get("pip_extras"))
+        has_pip_extras = (
+            bool(profile_config.get("pip_extras")) and not self.skip_pip_extras
+        )
         # Data-driven scope (#2358): keyed off the declared agent, not a
         # hardcoded profile-name literal, so it never touches profiles for
         # agents outside the catalog (chat/sd/vlm/email/...), each of which
@@ -3756,6 +3762,7 @@ def run_init(
     verbose: bool = False,
     remote: bool = False,
     skip_webui_build: bool = False,
+    skip_pip_extras: bool = False,
     skip_chat_model: bool = False,
     lemonade_url: Optional[str] = None,
     gaia_lemonade: bool = False,
@@ -3777,6 +3784,7 @@ def run_init(
         verbose: Enable verbose output
         remote: Use the Lemonade Server LEMONADE_BASE_URL names
         skip_webui_build: Skip the Agent UI frontend build step entirely
+        skip_pip_extras: Install no Python packages; the desktop app ships its own
         skip_chat_model: Skip the profile's chat LLM, keep any embedding model
             (see InitCommand's docstring — for a Claude-backed session)
         lemonade_url: Use (and save) the Lemonade Server the user runs here
@@ -3800,6 +3808,7 @@ def run_init(
             verbose=verbose,
             remote=remote,
             skip_webui_build=skip_webui_build,
+            skip_pip_extras=skip_pip_extras,
             skip_chat_model=skip_chat_model,
             lemonade_url=lemonade_url,
             gaia_lemonade=gaia_lemonade,
