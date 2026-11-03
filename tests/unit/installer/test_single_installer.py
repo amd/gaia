@@ -647,5 +647,6 @@ def test_setup_leaves_lemonade_to_gaia():
         text = (REPO_ROOT / ".github" / "workflows" / workflow).read_text(
             encoding="utf-8"
         )
-        assert "lemonade-server-minimal.msi" not in text, workflow
+        assert "lemonade-sdk/lemonade/releases" not in text, workflow
+        assert not re.search(r"\.msi\b", text), workflow
     assert "--lemonade-msi" not in BUILD_SETUP.read_text(encoding="utf-8")

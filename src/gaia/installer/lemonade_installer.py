@@ -22,7 +22,7 @@ import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from gaia.llm.lemonade_launcher import get_installed_version, resolve_lemonade
 from gaia.version import LEMONADE_VERSION, parse_version
@@ -42,11 +42,9 @@ except ImportError:
 GITHUB_RELEASE_BASE = "https://github.com/lemonade-sdk/lemonade/releases/download"
 GITHUB_RELEASE_TAG_BASE = "https://github.com/lemonade-sdk/lemonade/releases/tag"
 
-# Upstream .deb assets carry a distro infix: lemonade-server_<ver>-debian13_<arch>.deb
-LINUX_DEB_DISTRO_TAG = "debian13"
-
-# SHA-256 of every installer asset GAIA downloads for LEMONADE_VERSION, keyed by
-# its path under GITHUB_RELEASE_BASE, as the GitHub release API publishes them.
+# SHA-256 of the two Windows installers for LEMONADE_VERSION, keyed by their
+# path under GITHUB_RELEASE_BASE, as the GitHub release API publishes them.
+# Uninstalling a Lemonade whose ProductCode is gone downloads its MSI.
 # The MSI names carry no version, so the key does. Bumping LEMONADE_VERSION
 # without refreshing these makes download_installer() fail loudly;
 # tests/integration/test_lemonade_embeddable_assets.py checks them against the
@@ -54,9 +52,6 @@ LINUX_DEB_DISTRO_TAG = "debian13"
 INSTALLER_SHA256 = {
     "v2026.44.1/lemonade.msi": "85c97cf2ae3f7f7c1857c01d718e7c59c2784e4a10c14795f107ba44a6f921ec",
     "v2026.44.1/lemonade-server-minimal.msi": "cfa3f96a452e608ab98275e981824f06d5074373217e52278e0423afae9a5243",
-    "v2026.44.1/lemonade-server_2026.44.1-debian13_amd64.deb": "ddeb64d1673cf3d7a228c5353b1ade3f7cb2f2cf1156f414480f4e08a3ec5a6f",
-    "v2026.44.1/lemonade-server_2026.44.1-debian13_arm64.deb": "8884d060fe961f36096a0fb45778fd77a91e3bb83c30746116ad520368096818",
-    "v2026.44.1/Lemonade-2026.44.1-Darwin.pkg": "5af69a31a7603c5024fbc43ce630b9ddf65233adebf7f6ba263ad50962da3e0d",
 }
 
 # The Windows installers of every older release GAIA supports (back to
@@ -118,13 +113,6 @@ LEGACY_MSI_SHA256 = {
 }
 
 # platform.machine() varies by OS/libc for the same hardware.
-DEB_ARCH_BY_MACHINE = {
-    "x86_64": "amd64",
-    "amd64": "amd64",
-    "aarch64": "arm64",
-    "arm64": "arm64",
-}
-
 # Lemonade's only supported Linux channel (lemonade-sdk was removed from PyPI).
 LEMONADE_PPA = "ppa:lemonade-team/stable"
 
@@ -264,7 +252,6 @@ class LemonadeInstaller:
     def __init__(
         self,
         target_version: str = LEMONADE_VERSION,
-        progress_callback: Optional[Callable[[int, int], None]] = None,
         minimal: bool = False,
         console: Optional[Any] = None,
     ):
@@ -273,12 +260,10 @@ class LemonadeInstaller:
 
         Args:
             target_version: Lemonade version whose MSI an uninstall downloads
-            progress_callback: Optional callback for download progress (bytes_downloaded, total_bytes)
             minimal: Use minimal installer (smaller download, fewer features)
             console: Optional Rich Console for user-facing output (suppresses log messages)
         """
         self.target_version = target_version.lstrip("v")
-        self.progress_callback = progress_callback
         self.minimal = minimal
         self.system = platform.system().lower()
         self.machine = platform.machine().lower()
@@ -388,61 +373,22 @@ class LemonadeInstaller:
         """Upstream release page — the authoritative list of published assets."""
         return f"{GITHUB_RELEASE_TAG_BASE}/v{self.target_version}"
 
-    def _deb_arch(self) -> str:
-        """Map platform.machine() to the Debian arch used in upstream asset names."""
-        arch = DEB_ARCH_BY_MACHINE.get(self.machine)
-        if arch is None:
-            raise RuntimeError(
-                f"Architecture '{self.machine}' has no Lemonade Linux package. "
-                f"Upstream v{self.target_version} publishes amd64 (x86_64) and "
-                f"arm64 (aarch64) .deb assets only — see {self.release_page_url}."
-            )
-        return arch
-
     def get_download_url(self) -> str:
-        """
-        Get the download URL for the current platform and architecture.
+        """The URL of this version's Windows MSI, the full or minimal one.
 
-        Returns:
-            Download URL for the installer
+        Only the Windows uninstall downloads an installer; Linux and macOS
+        remove Lemonade without one.
 
         Raises:
-            RuntimeError: If the platform or architecture is not supported
+            RuntimeError: Not on Windows.
         """
-        version = self.target_version
-
-        if self.system == "windows":
-            if self.minimal:
-                # Minimal installer for lightweight setup
-                return f"{GITHUB_RELEASE_BASE}/v{version}/lemonade-server-minimal.msi"
-            else:
-                # Full installer
-                return f"{GITHUB_RELEASE_BASE}/v{version}/lemonade.msi"
-        elif self.system == "linux":
-            # Linux DEB - no minimal variant yet.
-            # Note: v10.0.0+ changed naming from lemonade_ to lemonade-server_,
-            # and the asset carries a distro infix (see LINUX_DEB_DISTRO_TAG).
-            return (
-                f"{GITHUB_RELEASE_BASE}/v{version}/lemonade-server_"
-                f"{version}-{LINUX_DEB_DISTRO_TAG}_{self._deb_arch()}.deb"
-            )
-        elif self.system == "darwin":
-            # The .pkg ships arm64-only binaries and installs cleanly on Intel,
-            # so an unguarded install would only fail later at "Bad CPU type".
-            if self.machine not in ("arm64", "aarch64"):
-                raise RuntimeError(
-                    f"Architecture '{self.machine}' has no Lemonade macOS package. "
-                    f"Upstream v{self.target_version} publishes an Apple-Silicon-only "
-                    f".pkg — see {self.release_page_url}.\n"
-                    "On an Apple Silicon Mac this means Python is running under "
-                    "Rosetta; re-run GAIA with a native arm64 Python."
-                )
-            return f"{GITHUB_RELEASE_BASE}/v{version}/Lemonade-{version}-Darwin.pkg"
-        else:
+        if self.system != "windows":
             raise RuntimeError(
-                f"Platform '{self.system}' is not supported. "
-                "Lemonade publishes installers for Windows, Linux, and macOS only."
+                f"GAIA downloads a Lemonade installer only to uninstall it on "
+                f"Windows, not on '{self.system}'."
             )
+        name = "lemonade-server-minimal.msi" if self.minimal else "lemonade.msi"
+        return f"{GITHUB_RELEASE_BASE}/v{self.target_version}/{name}"
 
     def get_installer_filename(self) -> str:
         """Get the installer filename for the current platform.
@@ -623,8 +569,6 @@ class LemonadeInstaller:
                         digest.update(chunk)
                         downloaded += len(chunk)
 
-                        if self.progress_callback:
-                            self.progress_callback(downloaded, total_size)
                 finally:
                     try:
                         f.close()  # Flushes, so a full disk can surface here too.

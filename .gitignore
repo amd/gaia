@@ -204,7 +204,6 @@ atlassian_config.json
 
 # version files
 version.txt
-installer/version.nsh
 
 # Installer files
 installer/**.exe
@@ -212,7 +211,6 @@ release_info.json
 
 # version
 version.txt
-**/version.nsh
 **/.gaia_servers.json
 **/agent_output_*.json
 

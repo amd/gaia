@@ -1413,154 +1413,43 @@ def _defer_windows_venv_removal(
     return True
 
 
-def _resolve_lemonade_python() -> Optional[str]:
-    """Return the best-guess Python interpreter that owns ``lemonade-server``.
-
-    When called from the GAIA installer bundle, ``sys.executable`` is the
-    bundled venv, NOT where Lemonade was installed — so running ``pip
-    uninstall`` against it is always a no-op. Locate the real one by
-    inspecting ``lemonade-server`` on PATH:
-
-      * POSIX: read the script's shebang.
-      * Windows: walk the parent directory for ``python.exe`` /
-        ``Scripts/python.exe``.
-
-    Returns ``None`` when we can't make a confident guess; callers should
-    then skip the pip fallback rather than pip-uninstall the wrong env.
-    """
-    lemonade = shutil.which("lemonade-server")
-    if not lemonade:
-        return None
-
-    lemonade_path = Path(lemonade)
-
-    if sys.platform.startswith("win"):
-        # Typical layouts:
-        #   <env>/Scripts/lemonade-server.exe → <env>/python.exe
-        #   <env>/Scripts/lemonade-server.exe → <env>/Scripts/python.exe
-        scripts_dir = lemonade_path.parent
-        candidates = [
-            scripts_dir / "python.exe",
-            scripts_dir.parent / "python.exe",
-            scripts_dir / "pythonw.exe",
-        ]
-        for candidate in candidates:
-            if candidate.exists():
-                return str(candidate)
-        return None
-
-    # POSIX / macOS: parse the shebang of the console script.
-    try:
-        with open(lemonade_path, "rb") as fp:
-            first_line = fp.readline()
-    except OSError:
-        return None
-    if not first_line.startswith(b"#!"):
-        return None
-    shebang = first_line[2:].strip().decode("utf-8", errors="replace")
-    # Handle `#!/usr/bin/env python3` as well as a direct path.
-    parts = shebang.split()
-    if not parts:
-        return None
-    if parts[0].endswith("env") and len(parts) > 1:
-        return parts[1]
-    return parts[0]
-
-
 def _remove_lemonade(printer: Callable[[str], None] = print) -> bool:
-    """Best-effort Lemonade Server removal.
+    """Remove a system-wide Lemonade Server, if one is installed.
 
-    Returns False only when the installation check itself raised, because then
+    Returns False only when the installation check itself failed, because then
     "not installed" would be a guess and the caller must not report success. A
-    removal that fails after a good check is still reported as a warning and
-    returns True, so the rest of the uninstall flow proceeds.
+    removal that fails after a good check is reported as a warning and returns
+    True, so the rest of the uninstall flow proceeds.
     """
+    from gaia.installer.lemonade_installer import LemonadeInstaller
+
     _print("  [lemonade] attempting to uninstall Lemonade Server...", printer=printer)
-
-    # Strategy 1: the shared LemonadeInstaller class knows how to uninstall
-    # on Windows (msiexec) and Linux (apt / dpkg).
-    try:
-        from gaia.installer.lemonade_installer import LemonadeInstaller
-
-        installer = LemonadeInstaller()
-        info = installer.check_installation()
-        if info.check_failed:
-            _print(
-                f"  [lemonade] installation check failed: {info.error}",
-                printer=printer,
-            )
-            _print(
-                "  [lemonade] skipped removal — uninstall Lemonade Server by hand "
-                "if it is present",
-                printer=printer,
-            )
-            return False
-        if not info.installed:
-            _print(
-                "  [lemonade] not installed — nothing to do",
-                printer=printer,
-            )
-            return True
-
-        result = installer.uninstall(silent=True)
-        if result.success:
-            _print(
-                "  [lemonade] uninstalled via LemonadeInstaller",
-                printer=printer,
-            )
-            return True
+    installer = LemonadeInstaller()
+    info = installer.check_installation()
+    if info.check_failed:
         _print(
-            f"  [lemonade] LemonadeInstaller.uninstall failed: {result.error}",
+            f"  [lemonade] installation check failed: {info.error}",
             printer=printer,
         )
-    except Exception as exc:  # pragma: no cover - defensive
         _print(
-            f"  [lemonade] LemonadeInstaller unavailable: {exc}",
+            "  [lemonade] skipped removal — uninstall Lemonade Server by hand "
+            "if it is present",
             printer=printer,
         )
+        return False
+    if not info.installed:
+        _print("  [lemonade] not installed — nothing to do", printer=printer)
+        return True
 
-    # Strategy 2: pip uninstall against the interpreter that actually owns
-    # the ``lemonade-server`` console script. Pip-uninstalling against
-    # ``sys.executable`` is wrong here: when invoked from the installer
-    # bundle that's the GAIA venv, NOT where Lemonade lives.
-    python = _resolve_lemonade_python()
-    if python is None:
-        _print(
-            "  [lemonade] lemonade-server not on PATH; skipping pip uninstall.",
-            printer=printer,
-        )
+    result = installer.uninstall(silent=True)
+    if result.success:
+        _print("  [lemonade] uninstalled Lemonade Server", printer=printer)
     else:
-        try:
-            result = subprocess.run(
-                [python, "-m", "pip", "uninstall", "-y", "lemonade-sdk"],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
-            )
-            if result.returncode == 0:
-                _print(
-                    f"  [lemonade] removed via `{python} -m pip uninstall lemonade-sdk`",
-                    printer=printer,
-                )
-                return True
-            _print(
-                "  [lemonade] pip uninstall did not remove lemonade-sdk "
-                f"(exit {result.returncode}); giving up cleanly",
-                printer=printer,
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-            _print(
-                f"  [lemonade] pip uninstall unavailable: {exc}",
-                printer=printer,
-            )
-
-    _print(
-        "  [lemonade] could not auto-remove Lemonade Server. If you want it "
-        "gone, uninstall it manually via your OS package manager.",
-        printer=printer,
-    )
-    return True  # best-effort — never fail the command
+        _print(
+            f"  [lemonade] could not uninstall Lemonade Server: {result.error}",
+            printer=printer,
+        )
+    return True
 
 
 # ---------------------------------------------------------------------------

@@ -68,9 +68,10 @@
 
 ; ─── Uninstall: clean up the autostart Run key ─────────────────────────
 ;
-; Lemonade Server is not touched: GAIA runs its own private copy under
-; ~/.gaia/lemonade (removed with ~/.gaia below), and a system Lemonade that an
-; older GAIA installer added stays installed because other apps may use it.
+; Lemonade Server is not uninstalled here. GAIA's own copy lives in
+; ~/.gaia/lemonade, so it goes only if the user agrees to delete ~/.gaia below;
+; a system Lemonade an older GAIA installer added stays because other apps may
+; use it.
 
 !macro customUnInstall
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \

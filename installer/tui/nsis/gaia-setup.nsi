@@ -1028,9 +1028,9 @@ Section "Uninstall"
 
   Call un.RemoveFromUserPath
 
-  ; Lemonade Server is not touched: GAIA's own copy lives in ~/.gaia (below), and
-  ; a system Lemonade an older setup added stays because other apps may use it.
-  ; Same contract as installer/nsis/installer.nsh.
+  ; Lemonade Server is not uninstalled here. GAIA's own copy lives in ~/.gaia, so
+  ; it goes only if the user agrees to delete that below; a system Lemonade an
+  ; older setup added stays. Same contract as installer/nsis/installer.nsh.
 
   ; Optional cleanup deletes the entire shared GAIA home, including other
   ; installations' runtimes. Interactive and silent defaults preserve it.

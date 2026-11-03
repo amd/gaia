@@ -3,12 +3,12 @@
 
 """Shape tests for the Lemonade installer download URLs.
 
-These are hermetic: they assert the URL/filename built for every (platform,
-arch) pair we claim to support, and that unsupported ones fail loudly. A
-mocked HTTP layer only proves we *called* something, so the companion test
+These are hermetic: they assert the URL/filename built for each Windows MSI
+the uninstall downloads, and that other platforms fail loudly. A mocked HTTP
+layer only proves we *called* something, so the companion test
 ``tests/integration/test_lemonade_release_assets.py`` resolves the same URLs
 against the live upstream release — that is the one that catches an asset
-rename (the .deb gained a ``debian13`` infix and the old name now 404s).
+rename.
 """
 
 import urllib.error
@@ -52,37 +52,10 @@ class TestDownloadUrlShape:
         installer = _installer(system, machine, minimal)
         assert installer.get_installer_filename() == expected_asset
 
-    def test_linux_deb_carries_distro_infix(self):
-        """Regression guard: the infix-less name 404s upstream."""
-        url = _installer("Linux", "x86_64").get_download_url()
-        assert "-debian13_amd64.deb" in url
-        assert f"lemonade-server_{LEMONADE_VERSION}_amd64.deb" not in url
-
-    def test_macos_yields_pkg(self):
-        url = _installer("Darwin", "arm64").get_download_url()
-        assert url.endswith(".pkg")
-
-    def test_intel_mac_raises_rather_than_installing_arm64_binaries(self):
-        """The .pkg payload is arm64-only and installs happily on Intel."""
-        installer = _installer("Darwin", "x86_64")
-        with pytest.raises(RuntimeError) as exc:
-            installer.get_download_url()
-        message = str(exc.value)
-        assert "x86_64" in message
-        assert "Apple-Silicon-only" in message
-
-    def test_unsupported_arch_raises_naming_the_arch(self):
-        installer = _installer("Linux", "armv7l")
-        with pytest.raises(RuntimeError) as exc:
-            installer.get_download_url()
-        message = str(exc.value)
-        assert "armv7l" in message
-        assert "amd64" in message and "arm64" in message
-        assert f"releases/tag/v{LEMONADE_VERSION}" in message
-
-    def test_unsupported_platform_raises(self):
-        installer = _installer("FreeBSD", "x86_64")
-        with pytest.raises(RuntimeError, match="not supported"):
+    @pytest.mark.parametrize("system", ["Linux", "Darwin", "FreeBSD"])
+    def test_only_windows_downloads_an_installer(self, system):
+        installer = _installer(system, "x86_64")
+        with pytest.raises(RuntimeError, match="only to uninstall it on Windows"):
             installer.get_download_url()
 
 
@@ -90,7 +63,7 @@ class TestVerifyDownloadUrl:
     """verify_download_url turns an upstream rename into an actionable error."""
 
     def test_404_raises_with_url_version_and_asset_list(self):
-        installer = _installer("Linux", "x86_64")
+        installer = _installer("Windows", "AMD64")
         url = installer.get_download_url()
         error = urllib.error.HTTPError(url, 404, "Not Found", {}, None)
 
@@ -105,7 +78,7 @@ class TestVerifyDownloadUrl:
         assert f"releases/tag/v{LEMONADE_VERSION}" in message
 
     def test_unreachable_host_blames_the_network_not_a_rename(self):
-        installer = _installer("Darwin", "arm64")
+        installer = _installer("Windows", "AMD64")
         with patch(
             "urllib.request.urlopen",
             side_effect=urllib.error.URLError("nodename nor servname provided"),
@@ -120,7 +93,7 @@ class TestVerifyDownloadUrl:
         assert "renamed" not in message
 
     def test_timeout_is_wrapped_not_leaked(self):
-        installer = _installer("Linux", "x86_64")
+        installer = _installer("Windows", "AMD64")
         with patch("urllib.request.urlopen", side_effect=TimeoutError()):
             with pytest.raises(LemonadeAssetError) as exc:
                 installer.verify_download_url(timeout=1)
@@ -128,7 +101,7 @@ class TestVerifyDownloadUrl:
 
     def test_missing_asset_writes_nothing_to_disk(self, tmp_path):
         """The 404 must stop the download before the file is created."""
-        installer = _installer("Linux", "x86_64")
+        installer = _installer("Windows", "AMD64")
         url = installer.get_download_url()
         error = urllib.error.HTTPError(url, 404, "Not Found", {}, None)
 
@@ -142,9 +115,9 @@ class TestVerifyDownloadUrl:
         self, tmp_path, monkeypatch
     ):
         """A proxy that 403s HEAD must not block a GET that would succeed."""
-        installer = _installer("Linux", "x86_64")
+        installer = _installer("Windows", "AMD64")
         url = installer.get_download_url()
-        payload = b"deb-bytes"
+        payload = b"msi-bytes"
 
         class _Response:
             headers = {"content-length": str(len(payload))}
@@ -168,12 +141,12 @@ class TestVerifyDownloadUrl:
                 raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
             return _Response()
 
-        _pin(monkeypatch, installer, b"deb-bytes")
+        _pin(monkeypatch, installer, b"msi-bytes")
         with patch("urllib.request.urlopen", side_effect=_urlopen):
             dest = installer.download_installer(dest_dir=str(tmp_path))
 
         assert calls == ["HEAD", "GET"]
-        assert dest.read_bytes() == b"deb-bytes"
+        assert dest.read_bytes() == b"msi-bytes"
 
 
 class _Stream:

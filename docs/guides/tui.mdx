@@ -101,9 +101,9 @@ To remove it, close Windows Terminal, then go to **Settings → Personalization 
 Uninstalling leaves `~/.gaia` — your chats, documents and memory — in place unless
 you say otherwise. On Windows, the terminal is its own **GAIA Terminal UI** entry
 in Installed apps, separate from the desktop app's, and its uninstaller offers to delete it; on Linux,
-`apt remove` and `rpm -e` keep it. GAIA's own Lemonade Server lives in `~/.gaia`
-and goes with it. A system-wide Lemonade is never removed with GAIA, because other
-things may be using it — see `gaia uninstall --purge-lemonade`.
+`apt remove` and `rpm -e` keep it. GAIA's own Lemonade Server lives in `~/.gaia`,
+so it stays or goes with that folder. A system-wide Lemonade is never removed with
+GAIA, because other things may be using it — see `gaia uninstall --purge-lemonade`.
 
 A macOS `.pkg` ships no uninstaller — that is the platform convention, not an
 omission — so remove the files and then forget the receipt:

@@ -96,7 +96,7 @@ class TestLemonadeInstaller(unittest.TestCase):
         installer = LemonadeInstaller(target_version="9.1.4")
         with self.assertRaises(RuntimeError) as ctx:
             installer.get_download_url()
-        self.assertIn("not supported", str(ctx.exception))
+        self.assertIn("only to uninstall it on Windows", str(ctx.exception))
 
     @patch("platform.system")
     def test_get_download_url_windows_minimal(self, mock_system):
