@@ -92,6 +92,21 @@ Email-body inference runs on Lemonade — `gaia init` installs GAIA's own instan
 
 ### 3. Ask for your mail
 
+If you use the Python CLI, install the daemon extra first. A plain
+`pip install amd-gaia` does not include the FastAPI/uvicorn/psutil runtime that
+`gaia email` needs:
+
+```bash
+pip install "amd-gaia[api]"
+gaia email -q "Triage my inbox"
+```
+
+If those dependencies are missing, `gaia email` now stops before starting the
+Lemonade check and prints the same actionable `[api]` remedy instead of the
+opaque `daemon process exited early` error.
+
+Alternatively, use the published npm entry point:
+
 ```bash
 npx @amd-gaia/gaia    # requires Node.js and npm
 ```

@@ -16,10 +16,12 @@ This module is the reusable translation layer (spec §6): a **total,
 source-exhaustive** mapping from the handler's vocabulary onto the canonical
 event types —
 
-    status | token | tool_call | tool_result | needs_confirmation
+    status | token | reasoning | tool_call | tool_result | needs_confirmation
           | needs_input | final | error
 
-— terminated by exactly one ``final`` or ``error``. It is dependency-light (this
+The optional ``reasoning`` event is emitted only when requested by a
+contract-compatible caller; otherwise thinking folds to ``status``. The stream is
+terminated by exactly one ``final`` or ``error``. It is dependency-light (this
 module plus the stdlib-only :mod:`gaia.ui.event_narration`) so it unit-tests
 without Lemonade, a mailbox, or a live agent, and so the OpenAPI export stays
 cheap.
