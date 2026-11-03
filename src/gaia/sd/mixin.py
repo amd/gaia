@@ -136,6 +136,7 @@ class SDToolsMixin:
         enable_3d_tools: bool = False,
         enable_variation_tools: bool = False,
         enable_edit_tools: bool = True,
+        follow_user_settings: bool = False,
     ) -> None:
         """
         Initialize SD tools and register them with the agent.
@@ -156,6 +157,11 @@ class SDToolsMixin:
                 ``create_image_variation`` tool.
             enable_edit_tools: Register edit and upscale tools. Standalone
                 SD profiles default to enabled; flagship callers opt in separately.
+            follow_user_settings: Take the model, size and steps from the
+                user's ``image_model`` / ``image_size`` / ``image_steps`` in
+                ``~/.gaia/config.json``, read at every generation, ahead of
+                the defaults above. A request that names a model uses only
+                that model's own defaults.
 
         Example:
             # Fast generation with defaults (SDXL-Turbo)
@@ -190,6 +196,7 @@ class SDToolsMixin:
         self.sd_enable_3d_tools = enable_3d_tools
         self.sd_enable_variation_tools = enable_variation_tools
         self.sd_enable_edit_tools = enable_edit_tools
+        self.sd_follow_user_settings = follow_user_settings
 
         logger.debug(
             f"SD tools initialized: endpoint={self.sd_client.base_url}/images/generations, output={self.sd_output_dir}"
@@ -222,7 +229,7 @@ class SDToolsMixin:
             Args:
                 prompt: Text description of the image.
                 model: Exact image model ID from list_sd_models(), including
-                    TheNoise models. Omit to use the legacy SDXL-Turbo default.
+                    TheNoise models. Omit to use the user's chosen image model.
                 size: Optional WIDTHxHEIGHT; otherwise model defaults apply.
                 steps: Optional steps; otherwise model defaults apply.
                 cfg_scale: Optional guidance; otherwise model defaults apply.
@@ -279,10 +286,11 @@ class SDToolsMixin:
                         speed=self._estimate_generation_time(name, defaults["size"]),
                     )
                 listed.append(entry)
+            saved = self._saved_image_settings()
             return {
                 "status": "success",
                 "models": listed,
-                "default_model": self.sd_default_model,
+                "default_model": saved["model"] if saved else self.sd_default_model,
             }
 
         @tool(
@@ -650,6 +658,11 @@ class SDToolsMixin:
         import time
 
         # Apply instance defaults first
+        saved = self._saved_image_settings()
+        if saved and not model:
+            model = saved["model"]
+            size = size or saved["size"]
+            steps = steps if steps is not None else saved["steps"]
         model = model or self.sd_default_model
         size = size or self.sd_default_size
         steps = steps if steps is not None else self.sd_default_steps
@@ -662,6 +675,14 @@ class SDToolsMixin:
             try:
                 models = self.sd_client.list_sd_models()
                 if not any(m.get("id") == model for m in models):
+                    if saved and model == saved["model"]:
+                        return {
+                            "status": "error",
+                            "error": f"{model}, the image model chosen in GAIA's "
+                            "image settings, is not downloaded on this Lemonade. "
+                            "Choose another model in those settings, or download "
+                            f"{model} in Settings › Model.",
+                        }
                     return {
                         "status": "error",
                         "error": f"Invalid model '{model}' or model not downloaded. "
@@ -865,6 +886,28 @@ class SDToolsMixin:
 
             logger.error(error_msg, exc_info=True)
             return {"status": "error", "error": error_msg}
+
+    def _saved_image_settings(self) -> Optional[Dict[str, Any]]:
+        """The user's saved image model, size and steps, when this agent follows them.
+
+        Read fresh so a change in either app's settings applies to the next
+        image. None when not following, or when no model was saved.
+
+        Raises:
+            GaiaConfigError: config.json exists but cannot be read.
+        """
+        if not getattr(self, "sd_follow_user_settings", False):
+            return None
+        from gaia.config import GaiaConfig
+
+        config = GaiaConfig.load()
+        if not config.image_model:
+            return None
+        return {
+            "model": config.image_model,
+            "size": config.image_size,
+            "steps": config.image_steps,
+        }
 
     @staticmethod
     def _describe_client_error(error: Exception, model: str) -> str:

@@ -2425,6 +2425,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     enable_edit_tools=getattr(
                         self.config, "enable_sd_edit_tools", False
                     ),
+                    follow_user_settings=True,
                 )
                 logger.debug(
                     "SD tools registered (generate_image, list_sd_models, "
