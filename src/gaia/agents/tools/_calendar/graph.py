@@ -59,12 +59,17 @@ def _utc_value(endpoint: Optional[Dict[str, Any]], event_id: Any) -> str:
     endpoint = endpoint or {}
     value = endpoint.get("dateTime")
     zone = endpoint.get("timeZone")
-    if not value or zone != "UTC":
+    if value and zone == "UTC":
+        return parse_instant(f"{value}Z").isoformat()
+    # Graph ignores the UTC preference on write replies and uses the event's own zone.
+    named = _named_zone(zone)
+    if not value or named is None:
         raise CalendarError(
             f"Microsoft Graph returned event {event_id} with time {value!r} in zone "
             f"{zone!r} instead of UTC, so its real time can't be known."
         )
-    return parse_instant(f"{value}Z").isoformat()
+    wall_clock = parse_instant(f"{value}Z").replace(tzinfo=named)
+    return wall_clock.astimezone(timezone.utc).isoformat()
 
 
 def _named_zone(name: Optional[str]) -> Optional[tzinfo]:
@@ -74,7 +79,8 @@ def _named_zone(name: Optional[str]) -> Optional[tzinfo]:
             continue
         try:
             return ZoneInfo(candidate)
-        except (ZoneInfoNotFoundError, ValueError):
+        # OSError: a name like "Pacific" is a folder in the zone database.
+        except (ZoneInfoNotFoundError, ValueError, OSError):
             continue
     return None
 
@@ -89,12 +95,13 @@ def _all_day_value(
     """
     endpoint = endpoint or {}
     value = endpoint.get("dateTime")
-    moment = None
-    if value and endpoint.get("timeZone") == "UTC":
+    stated_zone = endpoint.get("timeZone")
+    if value and stated_zone:
+        # The clock reading is in the stated zone, so midnight there names the date.
         moment = parse_instant(f"{value}Z")
         if moment.time() == datetime.min.time():
             return moment.date().isoformat()
-        zone = _named_zone(original_zone)
+        zone = _named_zone(original_zone) if stated_zone == "UTC" else None
         if zone is not None:
             moment = moment.astimezone(zone)
             if moment.time() == datetime.min.time():

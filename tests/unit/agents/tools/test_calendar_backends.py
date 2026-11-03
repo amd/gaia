@@ -485,8 +485,35 @@ class TestGraphWrites:
         with pytest.raises(CalendarError, match="all-day"):
             _graph(handler).get_event("m1")
 
-    def test_an_all_day_value_in_another_zone_is_refused(self):
-        raw = self._all_day("2026-11-03T00:00:00", "2026-11-04T00:00:00")
+    def test_an_all_day_write_reply_in_its_own_zone_keeps_its_dates(self):
+        # Shape real Outlook returned from POST and PATCH, despite the UTC preference.
+        raw = self._all_day(
+            "2030-01-13T00:00:00.0000000", "2030-01-14T00:00:00.0000000"
+        )
+        raw["start"]["timeZone"] = raw["end"]["timeZone"] = "America/Los_Angeles"
+        _, handler = _recording(raw)
+        event = _graph(handler).update_event(_event(), EventPatch(title="x"))
+        assert (event.start, event.end) == ("2030-01-13", "2030-01-14")
+
+    def test_a_timed_write_reply_in_its_own_zone_converts_to_utc(self):
+        raw = {
+            **GRAPH_RAW,
+            "start": {
+                "dateTime": "2030-01-10T10:00:00.0000000",
+                "timeZone": "Pacific Standard Time",
+            },
+            "end": {
+                "dateTime": "2030-01-10T11:00:00.0000000",
+                "timeZone": "America/Los_Angeles",
+            },
+        }
+        _, handler = _recording(raw)
+        event = _graph(handler).update_event(_event(), EventPatch(title="x"))
+        assert parse_instant(event.start) == parse_instant("2030-01-10T18:00:00Z")
+        assert parse_instant(event.end) == parse_instant("2030-01-10T19:00:00Z")
+
+    def test_an_all_day_value_off_midnight_in_another_zone_is_refused(self):
+        raw = self._all_day("2026-11-03T05:00:00", "2026-11-04T05:00:00")
         raw["start"]["timeZone"] = "Pacific Standard Time"
         _, handler = _recording(raw)
         with pytest.raises(CalendarError, match="all-day"):
