@@ -287,8 +287,12 @@ def run_steps():
 
 def test_a_stamp_the_model_wrote_is_dropped_on_every_event():
     run = run_steps()["Post Claude's comment"]["run"]
-    strip = re.search(r"sed -E -i 's/(.+?)//g' \"\$COMMENT_FILE\"", run)
+    strip = re.search(r"sed -E 's/(.+?)//g' \"\$COMMENT_FILE\"", run)
     assert strip, "the post step must strip model-written stamps"
+    assert 'printf \'%s\\n\' "$stripped" > "$COMMENT_FILE"' in run
+    # `sed -i` differs on macOS and fails across drives on Windows.
+    code = [ln for ln in run.splitlines() if not ln.lstrip().startswith("#")]
+    assert not any(re.search(r"\bsed\b[^|]*\s-i\b", ln) for ln in code)
     assert run.index(strip.group(0)) < run.index("reviewed-sha: %s")
     # Not inside the REVIEWED_SHA branch: replies are stripped too.
     assert run.index(strip.group(0)) < run.index('if [ -n "${REVIEWED_SHA:-}" ]')

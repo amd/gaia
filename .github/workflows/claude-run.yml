@@ -638,7 +638,10 @@ jobs:
             exit 0
           fi
           # Only this step may stamp a comment, on every event: drop any stamp the model wrote.
-          sed -E -i 's/<!--[^>]*reviewed-sha[^>]*-->//g' "$COMMENT_FILE"
+          # Not `sed -i`: BSD sed reads its next argument as a suffix, and Git Bash cannot
+          # rename its temp file across drives.
+          stripped=$(sed -E 's/<!--[^>]*reviewed-sha[^>]*-->//g' "$COMMENT_FILE")
+          printf '%s\n' "$stripped" > "$COMMENT_FILE"
           if [ -n "$COMMENT_MARKER" ]; then
             printf '\n\n%s\n' "$COMMENT_MARKER" >> "$COMMENT_FILE"
           fi
