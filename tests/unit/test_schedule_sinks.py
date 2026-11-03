@@ -13,6 +13,9 @@ sink's success + failure paths.
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 import pytest
 
 from gaia.schedule import sinks
@@ -62,7 +65,10 @@ class TestValidate:
         mocker.patch(_PLATFORM_SYSTEM, return_value=system)
         sinks.validate("notification", {})
 
-    def test_notification_is_valid_on_windows(self, mocker):`n        mocker.patch(_PLATFORM_SYSTEM, return_value="Windows")`n        sinks.validate("notification", {})`n
+    def test_notification_is_valid_on_windows(self, mocker):
+        mocker.patch(_PLATFORM_SYSTEM, return_value="Windows")
+        sinks.validate("notification", {})
+
 
 # ===========================================================================
 # 1. dispatch routing table
@@ -189,6 +195,46 @@ class TestNotificationSink:
         helper = mocker.patch("gaia.schedule.sinks._to_windows_notification")
         sinks.dispatch("notification", {"title": "T"}, "body")
         helper.assert_called_once_with("T", "body")
+
+    def test_windows_uses_plyer_when_available(self, mocker):
+        notification = mocker.Mock()
+        mocker.patch.dict(
+            sys.modules, {"plyer": SimpleNamespace(notification=notification)}
+        )
+        sinks._to_windows_notification("T", "body")
+        notification.notify.assert_called_once_with(
+            title="T", message="body", timeout=5
+        )
+
+    def test_windows_falls_back_to_powershell_when_plyer_missing(self, mocker):
+        mocker.patch.dict(sys.modules, {"plyer": None})
+        run = mocker.patch(_SUBPROCESS_RUN)
+        sinks._to_windows_notification("T", "body")
+        args, kwargs = run.call_args
+        assert args[0][0] == "powershell"
+        assert "body" not in args[0][-1]
+        assert kwargs["env"]["GAIA_NOTIFY_TITLE"] == "T"
+        assert kwargs["env"]["GAIA_NOTIFY_MESSAGE"] == "body"
+
+    def test_windows_powershell_failure_is_not_silent(self, mocker):
+        import subprocess
+
+        mocker.patch.dict(sys.modules, {"plyer": None})
+        mocker.patch(
+            _SUBPROCESS_RUN,
+            side_effect=subprocess.CalledProcessError(
+                7, "powershell", stderr=b"bad notifier"
+            ),
+        )
+        with pytest.raises(RuntimeError, match="PowerShell exited with code 7"):
+            sinks._to_windows_notification("T", "body")
+
+    def test_windows_missing_powershell_is_actionable(self, mocker):
+        mocker.patch.dict(sys.modules, {"plyer": None})
+        mocker.patch(_SUBPROCESS_RUN, side_effect=FileNotFoundError("powershell"))
+        with pytest.raises(FileNotFoundError):
+            sinks._to_windows_notification("T", "body")
+
     def test_unsupported_os_raises_not_implemented(self, mocker):
         mocker.patch(_PLATFORM_SYSTEM, return_value="Plan9")
         with pytest.raises(NotImplementedError, match="not implemented for 'Plan9'"):

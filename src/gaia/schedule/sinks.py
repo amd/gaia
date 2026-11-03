@@ -108,13 +108,19 @@ def _to_notification(output: str, sink_args: Dict[str, Any]) -> None:
             subprocess.run(["osascript", "-e", script], check=True, timeout=30)
         elif system == "Linux":
             subprocess.run(["notify-send", title, output], check=True, timeout=30)
-        elif system == "Windows":`n            _to_windows_notification(title, output)`n        else:
+        elif system == "Windows":
+            _to_windows_notification(title, output)
+        else:
             raise NotImplementedError(
                 f"notification sink is not implemented for {system!r}; "
                 f"use --sink stdout, file:<path>, or telegram instead"
             )
     except FileNotFoundError as e:
-        tool = "osascript" if system == "Darwin" else "notify-send"
+        tool = (
+            "osascript"
+            if system == "Darwin"
+            else "PowerShell" if system == "Windows" else "notify-send"
+        )
         raise FileNotFoundError(
             f"notification sink needs {tool!r} on PATH ({system}): {e}. "
             f"Install it or choose a different --sink."
@@ -131,93 +137,42 @@ def _to_notification(output: str, sink_args: Dict[str, Any]) -> None:
         ) from e
 
 
-
 def _to_windows_notification(title: str, output: str) -> None:
-    """Show a Windows notification through plyer, then a safe PowerShell fallback."""
+    """Show a Windows notification without interpolating user text into PowerShell."""
     try:
         from plyer import notification
-
+    except ImportError:
+        pass
+    else:
+        # Do not silently substitute another notifier if installed plyer fails.
         notification.notify(title=title, message=output, timeout=5)
         return
-    except Exception as plyer_error:
-        script = (
-            "Add-Type -AssemblyName System.Windows.Forms; "
-            "[System.Windows.Forms.MessageBox]::Show("
-            "[string]$env:GAIA_NOTIFY_MESSAGE, [string]$env:GAIA_NOTIFY_TITLE)"
-        )
-        env = os.environ.copy()
-        env["GAIA_NOTIFY_TITLE"] = title
-        env["GAIA_NOTIFY_MESSAGE"] = output
-        try:
-            proc = subprocess.Popen(
-                ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
-            try:
-                code = proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                return
-            if code == 0:
-                return
-            stderr = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
-            raise RuntimeError(f"PowerShell exited with code {code}: {stderr[:200]}")
-        except FileNotFoundError as powershell_error:
-            raise FileNotFoundError(
-                "Windows notification needs plyer or PowerShell on PATH; "
-                f"plyer failed with {plyer_error}, PowerShell failed with {powershell_error}."
-            ) from powershell_error
-        except OSError as powershell_error:
-            raise RuntimeError(
-                "Windows notification failed after plyer fallback: "
-                f"{powershell_error}. Install plyer or choose another sink."
-            ) from powershell_error
 
-
-def _to_windows_notification(title: str, output: str) -> None:
-    """Show a Windows notification through plyer, then a safe PowerShell fallback."""
+    script = (
+        "Add-Type -AssemblyName System.Windows.Forms; "
+        "[System.Windows.Forms.MessageBox]::Show("
+        "[string]$env:GAIA_NOTIFY_MESSAGE, [string]$env:GAIA_NOTIFY_TITLE)"
+    )
+    env = os.environ.copy()
+    env["GAIA_NOTIFY_TITLE"] = title
+    env["GAIA_NOTIFY_MESSAGE"] = output
     try:
-        from plyer import notification
-
-        notification.notify(title=title, message=output, timeout=5)
-        return
-    except Exception as plyer_error:
-        script = (
-            "Add-Type -AssemblyName System.Windows.Forms; "
-            "[System.Windows.Forms.MessageBox]::Show("
-            "[string]$env:GAIA_NOTIFY_MESSAGE, [string]$env:GAIA_NOTIFY_TITLE)"
+        subprocess.run(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+            check=True,
+            timeout=30,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
-        env = os.environ.copy()
-        env["GAIA_NOTIFY_TITLE"] = title
-        env["GAIA_NOTIFY_MESSAGE"] = output
-        try:
-            proc = subprocess.Popen(
-                ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
-            try:
-                code = proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                return
-            if code == 0:
-                return
-            stderr = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
-            raise RuntimeError(f"PowerShell exited with code {code}: {stderr[:200]}")
-        except FileNotFoundError as powershell_error:
-            raise FileNotFoundError(
-                "Windows notification needs plyer or PowerShell on PATH; "
-                f"plyer failed with {plyer_error}, PowerShell failed with {powershell_error}."
-            ) from powershell_error
-        except OSError as powershell_error:
-            raise RuntimeError(
-                "Windows notification failed after plyer fallback: "
-                f"{powershell_error}. Install plyer or choose another sink."
-            ) from powershell_error
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.decode(errors="replace") if e.stderr else ""
+        raise RuntimeError(
+            f"Windows notification PowerShell exited with code {e.returncode}: "
+            f"{stderr[:200]}. Choose a different --sink or check PowerShell."
+        ) from e
+
 
 def _osa(text: str) -> str:
     """Quote a string for embedding inside an AppleScript literal."""
