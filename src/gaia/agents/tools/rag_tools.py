@@ -491,6 +491,29 @@ def extract_page_from_chunk(
 _IN_PAGE_SECTION = re.compile(r"\s*(?:\*\*Content Extracted|### |\*\*Speaker Notes)")
 
 
+# Text one default-size chunk (~500 tokens) costs the prompt.
+_CHUNK_CHARS = 2000
+
+
+def top_or_whole_index(
+    ranked: List[tuple], candidates: List[str], limit: int, chunk_chars: int
+) -> List[tuple]:
+    """Return the top ``limit`` (chunk, score) pairs, or every candidate when
+    all of them fit in the text ``limit`` full-size chunks would take.
+
+    A rollup over eight one-paragraph reports must see all eight.
+    """
+    if sum(len(chunk) for chunk in candidates) > limit * chunk_chars:
+        return ranked[:limit]
+    seen = {chunk for chunk, _ in ranked}
+    rest = []
+    for chunk in candidates:
+        if chunk not in seen:
+            seen.add(chunk)
+            rest.append((chunk, 0.0))
+    return ranked + rest
+
+
 def split_entries_at_pages(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """*entries* with each page-spanning chunk split, so every 'page' field is true.
 
@@ -819,8 +842,14 @@ class RAGToolsMixin:
                 else:
                     adaptive_max = self.max_chunks  # Default (5) for small docs
 
-                top_chunks = [chunk for chunk, score in sorted_items[:adaptive_max]]
-                top_scores = [score for chunk, score in sorted_items[:adaptive_max]]
+                kept = top_or_whole_index(
+                    sorted_items,
+                    rag.chunks,
+                    adaptive_max,
+                    _CHUNK_CHARS,
+                )
+                top_chunks = [chunk for chunk, score in kept]
+                top_scores = [score for chunk, score in kept]
 
                 # Find the actual chunk indices from the RAG system
                 chunk_indices = []
@@ -1297,8 +1326,18 @@ class RAGToolsMixin:
                 else:
                     adaptive_max = self.max_chunks  # Default (5) for small docs
 
-                top_chunks = [chunk for chunk, score in sorted_items[:adaptive_max]]
-                top_scores = [score for chunk, score in sorted_items[:adaptive_max]]
+                kept = top_or_whole_index(
+                    sorted_items,
+                    [
+                        rag.chunks[i]
+                        for i in rag.file_to_chunk_indices.get(str(target_file), [])
+                        if i < len(rag.chunks)
+                    ],
+                    adaptive_max,
+                    _CHUNK_CHARS,
+                )
+                top_chunks = [chunk for chunk, score in kept]
+                top_scores = [score for chunk, score in kept]
 
                 # Update debug info with final chunks
                 if debug_info:

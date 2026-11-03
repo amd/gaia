@@ -331,3 +331,40 @@ def test_empty_reply_reprompts_are_bounded(agent):
 
     assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
     assert "empty response from the language model" in _final_text(result)
+
+
+def _with_index_tool(agent):
+    agent._tools_registry["index_directory"] = {
+        "function": lambda **_: {},
+        "description": "Index a folder.",
+        "parameters": {},
+    }
+    return agent
+
+
+def test_asking_to_index_what_the_user_said_to_index_is_reprompted(agent):
+    _with_index_tool(agent)
+    sent = _stub_chat(
+        agent,
+        "Should I go ahead and index the entire folder so I can search it?",
+        "West had the highest revenue.",
+    )
+
+    result = agent.process_query(
+        "Index ~/reports and tell me which region led.", max_steps=10
+    )
+
+    assert len(sent) == 2
+    assert "already told you to index it" in sent[1][-1]["content"]
+    assert _final_text(result) == "West had the highest revenue."
+
+
+def test_offer_to_index_is_kept_when_the_user_did_not_ask(agent):
+    _with_index_tool(agent)
+    offer = "Would you like me to index that folder?"
+    sent = _stub_chat(agent, offer)
+
+    result = agent.process_query("What is in ~/reports?", max_steps=10)
+
+    assert len(sent) == 1
+    assert _final_text(result) == offer

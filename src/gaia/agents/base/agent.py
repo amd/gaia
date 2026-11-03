@@ -1308,6 +1308,12 @@ _TOOL_CALL_MARKUP_PATTERN = re.compile(
     r"<invoke\s+name\s*=|<parameter\s+name\s*=|\{\s*\"tool\"\s*:"
 )
 _ENVELOPE_KEYS = ("thought", "goal", "tool", "tool_args", "plan")
+_ASKS_TO_INDEX_PATTERN = re.compile(
+    r"\b(?:should|shall|may|can) I (?:go ahead and )?index\b"
+    r"|\b(?:would you like|do you want|want) me to (?:go ahead and )?index\b",
+    re.IGNORECASE,
+)
+_INDEX_TOOL_NAMES = ("index_directory", "index_document")
 
 
 def _holds_complete_text_call(response: str) -> bool:
@@ -11702,6 +11708,33 @@ Do NOT wrap conversational replies in JSON.
                             "content": (
                                 "Your last reply was empty. Make the next tool "
                                 "call, or answer the user from the results above."
+                            ),
+                        }
+                    )
+                    continue
+                if (
+                    _ASKS_TO_INDEX_PATTERN.search(answer_candidate)
+                    and re.search(
+                        r"\bindex\b",
+                        getattr(self, "_original_user_input", None) or user_input,
+                        re.IGNORECASE,
+                    )
+                    and any(name in self._tools_registry for name in _INDEX_TOOL_NAMES)
+                    and steps_taken < steps_limit - 1
+                    and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
+                ):
+                    unfinished_answer_reprompts += 1
+                    logger.warning(
+                        "[WORKFLOW] Asked permission to index what the user said "
+                        "to index; asking it to index"
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "The user already told you to index it. Call "
+                                "index_directory or index_document on that path "
+                                "now, then answer their question."
                             ),
                         }
                     )
