@@ -65,8 +65,9 @@ requirements:
 # `default_skill_set` is deliberately COMMENTED OUT, following the email agent's
 # precedent (#2848): loading skill bodies costs prompt tokens and shrinks the
 # result envelope, and no eval has yet measured that trade for this agent. Until
-# one has, skills are opt-in via `--skill-set` or GAIA_SKILL_SET, and the
-# out-of-the-box prompt budget is identical to plain ChatAgent doc.
+# one has, no sets are declared (so any GAIA_SKILL_SET stops startup), task
+# skills load mid-session through load_skill, and the out-of-the-box prompt
+# budget is identical to plain ChatAgent doc.
 #
 # Re-enabling is uncommenting the two blocks below — no code change.
 
@@ -77,7 +78,7 @@ requirements:
 # the flagship and they corrupt an answer no matter which task is running, so
 # they cannot live in an opt-in bundle the way a task skill can.
 #
-# Its body is 702 tiktoken (cl100k) tokens, measured, and it declares no tools —
+# Its body is 789 tiktoken (cl100k) tokens, measured, and it declares no tools —
 # so the concern that kept `default_skill_set` commented out, loading several
 # large skill bodies into every prompt, does not apply. Keep it that size: it is
 # paid on every LLM call of every turn. default_skill_set stays off.

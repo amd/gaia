@@ -3729,7 +3729,7 @@ Examples:
 
     skills_cli.add_subparser(subparsers)
 
-    # Local GGUF models added from a Hugging Face link (shared with the Agent UI and TUI).
+    # Local models added from a Hugging Face link (shared with the Agent UI and TUI).
     from gaia.llm import custom_models_cli
 
     custom_models_cli.add_subparser(subparsers)
@@ -6728,6 +6728,12 @@ def handle_email_command(args):
         print(dest)
         sys.exit(0)
 
+    # Every email route relays through the daemon, including autonomy controls.
+    # Check its runtime dependencies before probing Lemonade or making a relay
+    # request, so a base install gets the actionable [api] remedy instead of
+    # "daemon exited early".
+    _check_daemon_deps()
+
     # autonomy: a REST thin client over the daemon relay (#2516) — status/
     # trust/set-level/pause/resume/kill need no LLM at all, and `run` does its
     # own Lemonade check inside the sidecar call, so short-circuit here too.
@@ -9512,7 +9518,7 @@ def _check_daemon_deps():
     missing = missing_daemon_deps()
     if missing:
         print(
-            "❌ `gaia daemon` needs packages not in the base install: "
+            "❌ This command needs the GAIA daemon, whose packages are not in the base install: "
             + ", ".join(missing)
             + '.\n   Install the daemon extras:  pip install "amd-gaia[api]"'
             "  (or [ui], which adds the Agent UI's RAG stack on top)."

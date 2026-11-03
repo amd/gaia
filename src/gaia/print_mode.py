@@ -38,7 +38,23 @@ def read_prompt(prompt: Optional[str]) -> str:
             'gaia -p needs a prompt: pass it as `gaia -p "<prompt>"` or pipe it '
             'on stdin (`echo "<prompt>" | gaia -p`).'
         )
-    text = sys.stdin.read().strip()
+    stdin_buffer = getattr(sys.stdin, "buffer", None)
+    if stdin_buffer is None:
+        # Lightweight StringIO-style streams used by callers/tests do not
+        # expose the raw byte stream. Real piped stdin does, so production
+        # input still follows the explicit UTF-8 path below.
+        text = sys.stdin.read()
+    else:
+        try:
+            text = stdin_buffer.read().decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValueError(
+                "gaia -p expects piped stdin to be a UTF-8 text file. Save the "
+                "prompt as UTF-8 (in Windows PowerShell 5.1: "
+                "`Out-File -Encoding utf8`), or pass it as an argument: "
+                'gaia -p "<prompt>".'
+            ) from exc
+    text = text.strip()
     if not text:
         raise ValueError("gaia -p read an empty prompt from stdin.")
     return text
