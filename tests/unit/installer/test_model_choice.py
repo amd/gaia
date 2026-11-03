@@ -207,6 +207,8 @@ def test_a_remote_server_that_does_not_say_is_unknown():
             "The filename or extension is too long.",
             "path_too_long",
         ),
+        # Linux and macOS say it differently, and the Windows advice wouldn't fit.
+        ("OSError: [Errno 36] File name too long", "lemonade"),
         (None, None),
     ],
 )

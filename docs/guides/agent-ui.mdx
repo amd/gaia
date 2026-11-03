@@ -285,7 +285,10 @@ Pick the install path that fits you best:
     and start** takes it.
 
     **Customize** opens the model choices; the steps beside the screen stay
-    the same. On an integrated GPU, **Change how memory is split** opens GPU
+    the same. **Backend** comes first: **GPU (Vulkan)**, or **NPU
+    (FastFlowLM)** on a PC whose Ryzen AI NPU has the memory for GAIA's NPU
+    model; these are the two GAIA has tested. Picking one picks that backend's
+    chat model, and setup keeps llama.cpp on Vulkan when it starts. On an integrated GPU, **Change how memory is split** opens GPU
     memory from there or from Check this PC. It is optional: unless you pick a
     new size, GAIA changes nothing. The models are grouped by job, and picking
     a chat model updates the jobs that depend on it:
@@ -596,17 +599,18 @@ with `LEMONADE_BASE_URL`: GAIA never unloads its models or stops it.
   transcription, vision, reranking, image or 3D), labelled by its type, with
   its name, backend and context window.
 
-To choose the backend, pick **Auto**, **Vulkan**, **ROCm** or **CPU** under
-*llama.cpp backend for chat models*. Only backends Lemonade can run on this PC
-are listed; one marked "downloads on first use" is fetched by Lemonade the
-first time it loads (ROCm is about 4 GB). The choice applies the next time the
-chat model loads; **Reload chat model now** applies it at once. The embedding
-model keeps its own backend.
+*llama.cpp backend for chat models* offers only the backends GAIA has tested:
+**Vulkan** for the GPU. A chat model on a Ryzen AI NPU runs on FastFlowLM
+instead; choose one with **Change model**, or under **Backend** when you
+Customize setup. A different backend saved earlier still loads and shows here,
+so you can switch it to Vulkan. The choice applies the next time the chat model
+loads; **Reload chat model now** applies it at once. The embedding model keeps
+its own backend.
 
 The same setting from a terminal:
 
 ```bash
-gaia config set llamacpp_backend rocm   # vulkan | rocm | metal | cpu | auto
+gaia config set llamacpp_backend vulkan   # vulkan | auto
 ```
 
 **Change model** opens Settings → Model. To use a different server, set

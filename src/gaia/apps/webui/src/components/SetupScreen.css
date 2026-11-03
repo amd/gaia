@@ -124,6 +124,16 @@ button.setup-rail-step:hover {
     margin-inline-end: auto;
 }
 
+@media (max-width: 480px) {
+    .setup-footer-row {
+        padding: 10px 12px;
+    }
+
+    .setup-footer-row > button {
+        flex: 1 1 0;
+    }
+}
+
 .setup-inner {
     --setup-pad-block: 48px;
     display: flex;
@@ -597,6 +607,10 @@ button.setup-rail-step:hover {
 
 .setup-log-toggle svg.is-open {
     transform: rotate(90deg);
+}
+
+[dir="rtl"] .setup-log-toggle svg:not(.is-open) {
+    transform: scaleX(-1);
 }
 
 .setup-log-pre {

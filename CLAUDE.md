@@ -376,6 +376,27 @@ python -m gaia.mcp.mcp_bridge
 
 **#1655 is the canonical case for both:** the model-pull sent `recipe=` for a *built-in* Lemonade model, which Lemonade 400s — but only on a *fresh* pull. Every unit test mocked the client, every manual check ran on a box that already had `gemma4-it-e2b-FLM` cached, and the PR's `gaia init --profile npu` test-plan item was checked off against that warm cache. `test_pull_model` (now in `tests/unit/test_lemonade_client_http.py`) even documented the correct `user.`-prefix-with-`recipe` pattern, but stubbed the HTTP layer, so it couldn't catch the profile that violated it.
 
+### IMPORTANT: Offer users only what GAIA has proven
+
+**A choice in a screen, a setting or a CLI flag is a promise that it works.** Offer a
+backend, device, model or option only once GAIA has proven it: agent evals on that
+hardware, and the setup journey from a clean PC. "Lemonade says this PC can run it"
+is not proof, and neither is "it's one more radio button."
+
+- **Proven today:** llama.cpp on **Vulkan** for the GPU, and **FastFlowLM** for a Ryzen
+  AI NPU. The list lives in one place, `GaiaConfig.TESTED_LLAMACPP_BACKENDS` in
+  [`src/gaia/config.py`](src/gaia/config.py); models are proven through
+  `VERIFIED_MODELS` and the model ladders in `lemonade_client.py`.
+- **Unproven stays out of reach:** don't list it, don't accept it from a setting or
+  the API, and don't suggest it in an error remedy. GAIA may still use something
+  internally for a known reason (the embedder on the CPU next to ROCm). A value saved
+  before a choice was withdrawn still loads, so no install stops starting.
+- **To offer something new,** prove it first: evals on the hardware, then the setup
+  journey. Then add it to the list in the same change that shows it.
+
+The canonical miss: setup's Customize screen and Settings offered ROCm, CPU and Auto
+because Lemonade reported them, though GAIA had never evaluated them on any of them.
+
 ### IMPORTANT: A UI change isn't done until someone has looked at it
 
 **Passing tests say the code runs; they don't say the screen looks right.** Before

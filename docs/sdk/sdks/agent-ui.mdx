@@ -523,9 +523,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       ],
       "default_backend": "vulkan",
       "available_backends": [
-        { "name": "vulkan", "state": "installed" },
-        { "name": "rocm", "state": "installable" },
-        { "name": "cpu", "state": "installed" }
+        { "name": "vulkan", "state": "installed" }
       ],
       "preferred_backend": null,
       "system_info_error": null
@@ -538,10 +536,10 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | `chat_model` / `embedding_model` | The selected loaded chat and embedding model, respectively; each has the loaded-model shape below or is `null` |
     | `loaded_models` | Other loaded models, excluding only the selected chat and embedding entries. This can include additional embedding models, vision, speech, transcription, reranking, image, or 3D models. |
     | `model_type` | Lemonade's type for a loaded model, such as `llm`, `embedding`, `vision`, `tts`, `transcription`, `reranking`, or `3d`; `null` when Lemonade did not report it |
-    | `backend` | `vulkan`, `rocm`, `metal`, `cpu`, `npu`, `remote` (a cloud model), or `null` when Lemonade did not say |
+    | `backend` | What a loaded model actually runs on: `vulkan`, `rocm`, `metal`, `cpu`, `npu`, `remote` (a cloud model), or `null` when Lemonade did not say |
     | `backend_source` | `requested` (named by the load), `launch` (read from the llama-server path), or `lemonade_default` |
-    | `available_backends` | llama.cpp backends Lemonade can run here; `unsupported` ones are never listed |
-    | `preferred_backend` | The saved choice; `null` means Auto |
+    | `available_backends` | llama.cpp backends GAIA has tested that Lemonade can run here (today only `vulkan`); `unsupported` ones are never listed |
+    | `preferred_backend` | The saved choice, which may be an untested one saved before GAIA stopped offering it; `null` means none was saved and Lemonade picks |
   </Accordion>
 
   <Accordion title="PUT /api/system/model-server/backend">
@@ -549,10 +547,10 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
 
     **Request:**
     ```json
-    { "backend": "rocm" }
+    { "backend": "vulkan" }
     ```
 
-    `backend` is `auto` or one of the names in `available_backends`. Returns the refreshed `GET /api/system/model-server` body. `400` when the backend is not available on this machine, `503` when Lemonade is not answering.
+    `backend` is one of the names in `available_backends`, or `auto` to clear the saved choice. Returns the refreshed `GET /api/system/model-server` body. `400` when the backend isn't one GAIA has tested or this machine can't run it, `503` when Lemonade is not answering.
   </Accordion>
 
   <Accordion title="POST /api/system/load-model">

@@ -1000,10 +1000,11 @@ Model server:        Lemonade 2026.41.1 (GAIA's own) at localhost:51234 · Qwen3
 ```
 
 `(default)` means Lemonade picked the backend; `unknown` means this Lemonade
-does not report it. To choose one, run `gaia config set llamacpp_backend rocm`
-(or `vulkan`, `cpu`, `auto`), or use Settings → Advanced → Model server in the
-Agent UI, which lists only the backends this PC can run. It applies the next
-time the chat model loads.
+does not report it. GAIA offers only the backends it has tested: Vulkan for
+the GPU (`gaia config set llamacpp_backend vulkan`, or Settings → Advanced →
+Model server in the Agent UI), and FastFlowLM for a chat model on a Ryzen AI
+NPU, chosen by picking that model. It applies the next time the chat model
+loads.
 
 ## Next steps
 

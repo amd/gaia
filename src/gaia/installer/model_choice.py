@@ -76,9 +76,7 @@ _NETWORK_RE = re.compile(
 )
 # Windows' 260-character path limit; retrying can never get past it.
 _PATH_TOO_LONG_RE = re.compile(
-    r"filename or extension is too long|path too long|file name too long|"
-    r"enametoolong|winerror 206",
-    re.IGNORECASE,
+    r"filename or extension is too long|winerror 206", re.IGNORECASE
 )
 _DISK_FULL_RE = re.compile(
     r"no space|disk full|not enough (disk|space)|insufficient disk|enospc",

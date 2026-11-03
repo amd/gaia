@@ -320,3 +320,14 @@ func keyMsg(k string) tea.KeyMsg {
 	}
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 }
+
+// A path Windows refused says what to change; Retry alone can never get past it.
+func TestAPathTooLongForWindowsSaysWhatToChange(t *testing.T) {
+	line := failureLine(setupapi.ErrPathTooLong, "Gemma 4 E4B", "C:", 0, 0)
+	if !strings.Contains(line, "path to the models folder is too long") {
+		t.Fatalf("path_too_long worded as %q", line)
+	}
+	if strings.Contains(line, "Press d") {
+		t.Fatalf("path_too_long points at Lemonade's message instead of the fix: %q", line)
+	}
+}

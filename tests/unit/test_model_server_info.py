@@ -68,10 +68,10 @@ def config_file(tmp_path, monkeypatch):
 # ── reading Lemonade's reports ────────────────────────────────────────────
 
 
-def test_only_backends_this_machine_can_run_are_offered():
+def test_only_tested_backends_this_machine_can_run_are_offered():
     names = [b["name"] for b in available_llamacpp_backends(SYSINFO)]
-    # metal is unsupported here; cuda is not a backend /load accepts.
-    assert names == ["vulkan", "rocm", "cpu"]
+    # rocm and cpu run here but GAIA hasn't tested them; metal is unsupported.
+    assert names == ["vulkan"]
 
 
 @pytest.mark.parametrize(
@@ -363,14 +363,26 @@ def test_server_owner(url, port, owner):
 # ── the saved choice ──────────────────────────────────────────────────────
 
 
-def test_config_accepts_backends_and_auto_means_unset(config_file):
+def _saved_before_only_vulkan_was_offered(backend):
+    """A config file from before GAIA offered only tested backends: it still loads."""
+    config_mod.GAIA_CONFIG_FILE.write_text(json.dumps({"llamacpp_backend": backend}))
+
+
+def test_config_accepts_only_tested_backends_and_auto_means_unset(config_file):
     cfg = config_mod.GaiaConfig()
-    cfg.set("llamacpp_backend", "ROCm")
-    assert cfg.llamacpp_backend == "rocm"
+    cfg.set("llamacpp_backend", "Vulkan")
+    assert cfg.llamacpp_backend == "vulkan"
     cfg.set("llamacpp_backend", "auto")
     assert cfg.llamacpp_backend is None
+    with pytest.raises(config_mod.GaiaConfigError, match="isn't one GAIA has tested"):
+        cfg.set("llamacpp_backend", "rocm")
     with pytest.raises(config_mod.GaiaConfigError, match="llamacpp_backend"):
         cfg.set("llamacpp_backend", "cuda")
+
+
+def test_an_untested_backend_saved_earlier_still_loads(config_file):
+    config_file.write_text(json.dumps({"llamacpp_backend": "rocm"}))
+    assert config_mod.GaiaConfig.load().llamacpp_backend == "rocm"
 
 
 def test_a_bad_backend_on_disk_fails_loudly(config_file):
@@ -427,7 +439,7 @@ def _loads(calls):
 
 
 def test_chosen_backend_is_sent_on_the_next_chat_load(config_file):
-    config_mod.GaiaConfig.save_key("llamacpp_backend", "rocm")
+    _saved_before_only_vulkan_was_offered("rocm")
     calls = []
     _recording_client(calls).load_model("Gemma-4-E4B-it-GGUF", prompt=False)
     assert _loads(calls) == [
@@ -442,7 +454,7 @@ def test_auto_sends_no_backend(config_file):
 
 
 def test_a_non_llamacpp_model_never_gets_a_llamacpp_backend(config_file):
-    config_mod.GaiaConfig.save_key("llamacpp_backend", "cpu")
+    _saved_before_only_vulkan_was_offered("cpu")
     calls = []
     _recording_client(calls, recipe="flm").load_model(
         "Gemma-4-E4B-it-GGUF", prompt=False
@@ -452,7 +464,7 @@ def test_a_non_llamacpp_model_never_gets_a_llamacpp_backend(config_file):
 
 def test_the_embedder_keeps_its_own_backend(config_file, monkeypatch):
     monkeypatch.setattr(lemonade_client.platform, "system", lambda: "Windows")
-    config_mod.GaiaConfig.save_key("llamacpp_backend", "cpu")
+    _saved_before_only_vulkan_was_offered("cpu")
     calls = []
     _recording_client(calls).load_model(DEFAULT_EMBEDDING_MODEL, prompt=False)
     assert _loads(calls)[0]["llamacpp_backend"] == "vulkan"
@@ -460,18 +472,19 @@ def test_the_embedder_keeps_its_own_backend(config_file, monkeypatch):
 
 def test_a_saved_rocm_choice_puts_the_embedder_on_the_cpu(config_file, monkeypatch):
     monkeypatch.setattr(lemonade_client.platform, "system", lambda: "Linux")
-    config_mod.GaiaConfig.save_key("llamacpp_backend", "rocm")
+    _saved_before_only_vulkan_was_offered("rocm")
     calls = []
     _recording_client(calls).load_model(DEFAULT_EMBEDDING_MODEL, prompt=False)
     assert _loads(calls)[0]["llamacpp_backend"] == "cpu"
 
 
 def test_a_failed_load_on_the_chosen_backend_says_how_to_undo_it(config_file):
-    config_mod.GaiaConfig.save_key("llamacpp_backend", "rocm")
+    _saved_before_only_vulkan_was_offered("rocm")
     client = _recording_client([], fail_load="backend rocm is not installed")
     with pytest.raises(LemonadeClientError) as err:
         client.load_model("Gemma-4-E4B-it-GGUF", prompt=False, load_retries=0)
-    assert "gaia config set llamacpp_backend auto" in str(err.value)
+    assert "gaia config set llamacpp_backend vulkan" in str(err.value)
+    assert "Auto" not in str(err.value)
     assert "rocm" in str(err.value)
 
 
@@ -554,7 +567,17 @@ def test_choosing_an_unavailable_backend_is_refused_and_not_saved(ui, config_fil
     client = ui(health={}, sysinfo=SYSINFO)
     resp = client.put("/api/system/model-server/backend", json={"backend": "metal"})
     assert resp.status_code == 400
-    assert "not available on this machine" in resp.json()["detail"]
+    assert "isn't one GAIA offers here" in resp.json()["detail"]
+    assert not config_file.exists()
+
+
+@pytest.mark.allow_network
+def test_choosing_a_backend_gaia_has_not_tested_is_refused(ui, config_file):
+    # rocm runs on this machine, but GAIA's evals cover only vulkan.
+    client = ui(health={}, sysinfo=SYSINFO)
+    resp = client.put("/api/system/model-server/backend", json={"backend": "rocm"})
+    assert resp.status_code == 400
+    assert "(vulkan)" in resp.json()["detail"]
     assert not config_file.exists()
 
 
@@ -578,10 +601,10 @@ def test_choosing_while_lemonade_is_down_is_refused(ui, config_file):
 @pytest.mark.allow_network
 def test_choosing_an_available_backend_persists(ui, config_file):
     client = ui(health={}, sysinfo=SYSINFO)
-    resp = client.put("/api/system/model-server/backend", json={"backend": "rocm"})
+    resp = client.put("/api/system/model-server/backend", json={"backend": "vulkan"})
     assert resp.status_code == 200
-    assert resp.json()["preferred_backend"] == "rocm"
-    assert json.loads(config_file.read_text())["llamacpp_backend"] == "rocm"
+    assert resp.json()["preferred_backend"] == "vulkan"
+    assert json.loads(config_file.read_text())["llamacpp_backend"] == "vulkan"
 
     resp = client.put("/api/system/model-server/backend", json={"backend": "auto"})
     assert resp.json()["preferred_backend"] is None
@@ -595,7 +618,7 @@ def test_ui_load_model_sends_the_chosen_backend(monkeypatch, config_file):
 
     from gaia.ui.server import create_app
 
-    config_mod.GaiaConfig.save_key("llamacpp_backend", "rocm")
+    _saved_before_only_vulkan_was_offered("rocm")
     calls = []
     real_client = lemonade_client.LemonadeClient
     monkeypatch.setattr(real_client, "_check_free_memory", lambda *a: None)

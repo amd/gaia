@@ -1234,6 +1234,8 @@ def test_a_finished_run_marks_what_loaded_ready_and_what_did_not_failed():
     rows = _models(runner)
     assert rows[EMBED]["state"] == "ready"
     assert rows[QWEN]["state"] == "failed" and rows[QWEN]["error_kind"] == "verify"
+    # Details shows the row's log, so the reason is there, not only in the error.
+    assert "Failed to load: would not load" in rows[QWEN]["log"]
     assert rows[GEMMA]["state"] == "skipped"
 
 

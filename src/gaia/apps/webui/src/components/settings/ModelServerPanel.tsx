@@ -151,12 +151,13 @@ export function ModelServerPanel() {
         );
     }
 
+    // Only backends GAIA has tested, which the server lists; no Auto, since Lemonade's own pick may not be one.
     const available = info.available_backends ?? [];
     const preferred = info.preferred_backend ?? null;
-    const choices = ['auto', ...available.map((b) => b.name)];
-    // A saved choice this machine no longer offers stays visible so it can be undone.
+    const choices = available.map((b) => b.name);
+    // A saved choice GAIA no longer offers stays visible so it can be switched off.
     if (preferred && !choices.includes(preferred)) choices.push(preferred);
-    const selected = preferred ?? 'auto';
+    const selected = preferred ?? info.default_backend ?? null;
     const installable = available.filter((b) => b.state === 'installable').map((b) => backendLabel(b.name));
     const chatIsLocalLlamacpp = !!chat?.name && chat.recipe === 'llamacpp';
 
@@ -198,8 +199,8 @@ export function ModelServerPanel() {
                 <span className="settings-label">llama.cpp backend for chat models</span>
                 {available.length === 0 && !preferred ? (
                     <span className="settings-hint">
-                        This Lemonade does not report which backends this PC can run, so there is nothing to
-                        choose. Update Lemonade to pick one here.
+                        Vulkan, the GPU backend GAIA has tested, isn't available from this Lemonade on this PC, so
+                        there is nothing to choose.
                     </span>
                 ) : (
                     <>
@@ -215,14 +216,13 @@ export function ModelServerPanel() {
                                     onClick={() => { if (name !== selected) void choose(name); }}
                                 >
                                     {saving === name ? <Loader2 size={12} className="spin" /> : null}
-                                    {name === 'auto'
-                                        ? `Auto${info.default_backend ? ` (${backendLabel(info.default_backend)})` : ''}`
-                                        : backendLabel(name)}
+                                    {backendLabel(name)}
                                 </button>
                             ))}
                         </div>
                         <span className="settings-hint">
-                            Applies the next time a chat model loads. The embedding model keeps its own backend.
+                            The backends GAIA has tested on this PC. Applies the next time a chat model loads; the
+                            embedding model keeps its own backend. NPU models run on FastFlowLM: choose one in Change model.
                             {installable.length > 0 && ` ${installable.join(', ')} downloads on first use.`}
                         </span>
                     </>

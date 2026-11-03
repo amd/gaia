@@ -336,6 +336,8 @@ func failureLine(kind, name, drive string, doneGB, leftGB float64) string {
 		return "The connection dropped while downloading " + name + ". Press r to continue from where it stopped."
 	case "verify":
 		return name + " downloaded but didn't load. Press r to delete it and download it again."
+	case "path_too_long":
+		return "Windows couldn't save " + name + ": the path to the models folder is too long. Turn on long file paths in Windows, or use a models folder with a shorter path, then press r."
 	}
 	return "Lemonade couldn't download " + name + ". Press d for its message, r to retry."
 }

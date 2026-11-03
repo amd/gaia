@@ -286,6 +286,8 @@ const (
 	ErrDiskFull = "disk_full"
 	ErrLemonade = "lemonade"
 	ErrVerify   = "verify"
+	// ErrPathTooLong is Windows' path limit; retrying can't get past it.
+	ErrPathTooLong = "path_too_long"
 )
 
 // Overall is the bytes-weighted total across the models being set up.

@@ -924,3 +924,34 @@ def test_plan_memory_matches_the_gpu_memory_pane(
     assert pane["applies"] is True
     # Settings shows both: the same machine must read the same number.
     assert plan["capacity_gb"] == pane["gpu_gb"]
+
+
+def test_a_pc_with_an_npu_is_offered_gaias_npu_chat_model(running):
+    """Lemonade lists no FLM model until its backend is in, so setup names it."""
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    running(MachineCapacity(96, "AMD iGPU", 500, npu_memory_gb=64))
+    entry = next(
+        (e for e in sp.build_plan()["catalog"] if e["id"] == NPU_DEFAULT_MODEL_NAME),
+        None,
+    )
+    assert entry is not None and entry["chat_choice"]
+    assert entry["support"] == "verified" and entry["fits"] is True
+    # What the screen keys NPU on, though Lemonade doesn't list the model yet.
+    assert entry["recipe"] == "flm" and entry["in_lemonade"] is False
+
+
+def test_a_pc_without_an_npu_is_not_offered_one(running):
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    fake = running(BIG_GPU)
+    report = fake.get_system_info
+
+    def no_npu(timeout=None):
+        info = report(timeout)
+        info["devices"].pop("amd_npu")
+        return info
+
+    fake.get_system_info = no_npu
+    ids = [e["id"] for e in sp.build_plan()["catalog"]]
+    assert NPU_DEFAULT_MODEL_NAME not in ids

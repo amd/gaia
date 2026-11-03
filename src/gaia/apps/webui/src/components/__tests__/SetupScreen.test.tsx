@@ -453,6 +453,15 @@ describe('SetupScreen: the rail', () => {
         expect(railStep('Your setup')).toHaveAttribute('aria-current', 'step');
     });
 
+    it('starts llama.cpp on Vulkan when an untested backend was saved, before anything downloads', async () => {
+        mockedApi.getModelServer.mockResolvedValue({ reachable: true, available_backends: [{ name: 'vulkan', state: 'installed' }], default_backend: 'vulkan', preferred_backend: 'rocm' } as never);
+        mockedApi.setModelServerBackend.mockResolvedValue({ reachable: true, preferred_backend: 'vulkan' } as never);
+        await startLocal();
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalled());
+        expect(mockedApi.setModelServerBackend).toHaveBeenCalledWith('vulkan');
+        expect(mockedApi.setModelServerBackend.mock.invocationCallOrder[0]).toBeLessThan(mockedApi.startSetup.mock.invocationCallOrder[0]);
+    });
+
     it("puts every screen's main action in the bar at the bottom, last in it", async () => {
         renderSetup();
         await screen.findByRole('region', { name: 'What setup found' });

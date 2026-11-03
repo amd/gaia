@@ -676,7 +676,7 @@ error. To run the chat model in the cloud instead, see
   <Accordion title="GPU stuck at 100% on ROCm with two models loaded" icon="microchip">
     With llama.cpp's ROCm backend, the chat model and the embedding model both resident on the GPU can hold it at 100% even while idle. It is an amdgpu kernel driver issue, reported fixed in Linux kernel 7.4.
 
-    GAIA avoids it by loading the embedding model on the CPU whenever llama.cpp uses ROCm, either as Lemonade's default backend or as the backend you chose for chat models in **Settings → Advanced → Model server**. That panel then reads:
+    GAIA avoids it by loading the embedding model on the CPU whenever llama.cpp uses ROCm, either as Lemonade's default backend or as one saved before GAIA offered only Vulkan in **Settings → Advanced → Model server**. That panel then reads:
 
     ```
     Embedding model runs on the CPU with ROCm to avoid a known GPU driver issue.

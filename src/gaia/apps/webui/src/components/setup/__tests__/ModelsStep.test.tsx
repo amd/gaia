@@ -78,11 +78,25 @@ describe('Choose your models', () => {
     });
 
     it('updates the total as the choices change', async () => {
-        render(<Harness plan={COLD_BIG()} />);
-        // gpt-oss replaces Qwen: 12.1 + 5.97 + 0.3, eased in over 150 ms.
-        fireEvent.click(chat(/gpt-oss 20B/));
-        await waitFor(() => expect(within(summary()).getByText('18.4 GB')).toBeInTheDocument());
-        await waitFor(() => expect(within(summary()).getByText('393.9 GB')).toBeInTheDocument());
+        // The total, not its easing: without it no frame timing decides the test.
+        Object.defineProperty(window, 'matchMedia', {
+            configurable: true,
+            value: (query: string) => ({
+                matches: query === '(prefers-reduced-motion: reduce)',
+                media: query,
+                addEventListener: vi.fn(),
+                removeEventListener: vi.fn(),
+            }),
+        });
+        try {
+            render(<Harness plan={COLD_BIG()} />);
+            // gpt-oss replaces Qwen: 12.1 + 5.97 + 0.3.
+            fireEvent.click(chat(/gpt-oss 20B/));
+            await waitFor(() => expect(within(summary()).getByText('18.4 GB')).toBeInTheDocument());
+            expect(within(summary()).getByText('393.9 GB')).toBeInTheDocument();
+        } finally {
+            Reflect.deleteProperty(window, 'matchMedia');
+        }
     });
 
     it('says how much to free and the one model to drop when the disk is short, and Continue becomes Continue anyway', () => {

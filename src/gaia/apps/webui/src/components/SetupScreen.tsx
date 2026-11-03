@@ -21,7 +21,7 @@ import { GpuMemoryPanel } from './setup/GpuMemoryPanel';
 import { tooBigText } from './setup/ModelChecklist';
 import { StageLogs } from './setup/StageLogs';
 import { SetupFooter, SetupFooterSlot } from './setup/SetupFooter';
-import { BackendChoice } from './setup/BackendChoice';
+import { BackendChoice, applyTestedBackend } from './setup/BackendChoice';
 import { DetectedSummary } from './setup/DetectedSummary';
 import { SetupChecks } from './setup/SetupChecks';
 import { SetupRail, type RailStep } from './setup/SetupRail';
@@ -547,6 +547,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 }
             }
             if (!cloud) {
+                // Whatever the choice, llama.cpp runs on the backend GAIA has tested.
+                await applyTestedBackend();
                 const vision = savedVision(catalog, selection);
                 if (vision !== (latest.vision_model ?? null)) latest = await api.chooseSetupVisionModel(vision);
                 for (const change of skipChanges(latest, selection)) {
@@ -984,7 +986,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     {stage === 'models' && (
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.models.title')}</h1>
-                            <BackendChoice disabled={busy || runGoing} />
+                            {plan && selection && <BackendChoice plan={plan} selection={selection} onSelection={setSelection} disabled={busy || runGoing} />}
                             {showGpu && gpu?.total_gb != null && gpu.gpu_gb != null && (
                                 <p className="setup-hint setup-gpu-option">
                                     {t('setup.models.gpu', { gpu: formatSize(gpu.gpu_gb), total: formatSize(gpu.total_gb) })}{' '}

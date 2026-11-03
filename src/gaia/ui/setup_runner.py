@@ -1173,6 +1173,8 @@ class SetupRunner:
             if entry.id in failed:
                 entry.state, entry.error_kind = "failed", "verify"
                 entry.error = failed[entry.id]
+                # Details shows the row's log, so the reason must be in it.
+                entry.add_log(f"Failed to load: {failed[entry.id]}")
             elif entry.state != "verifying":
                 continue
             elif run_failed:

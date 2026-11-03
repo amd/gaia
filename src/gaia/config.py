@@ -303,6 +303,9 @@ class GaiaConfig:
 
     #: Values ``llamacpp_backend`` accepts; ``auto`` (or empty) is stored as None.
     LLAMACPP_BACKEND_CHOICES = ("auto", "vulkan", "rocm", "metal", "cpu")
+    #: The ones GAIA's evals cover, and so the only ones a user may newly choose.
+    #: A file saved with another still loads, so no install stops starting.
+    TESTED_LLAMACPP_BACKENDS = ("vulkan",)
 
     @classmethod
     def _check_llamacpp_backend(cls, value: Any, where: str) -> Optional[str]:
@@ -622,7 +625,14 @@ class GaiaConfig:
                 f"Valid keys: {', '.join(self.field_names())}."
             )
         if key == "llamacpp_backend":
-            setattr(self, key, self._check_llamacpp_backend(value, "gaia config"))
+            backend = self._check_llamacpp_backend(value, "gaia config")
+            if backend is not None and backend not in self.TESTED_LLAMACPP_BACKENDS:
+                raise GaiaConfigError(
+                    f"gaia config: llama.cpp's '{backend}' backend isn't one GAIA has "
+                    f"tested. Choose {', '.join(self.TESTED_LLAMACPP_BACKENDS)}, or "
+                    "auto to let Lemonade pick."
+                )
+            setattr(self, key, backend)
             return
         if key == "context_sizes":
             raise GaiaConfigError(

@@ -29,7 +29,9 @@ const SPEECH = entry({ id: 'Whisper-Large-v3-Turbo', name: 'Whisper Large v3 Tur
 const VOICE = entry({ id: 'kokoro-v1', name: 'Kokoro', roles: ['voice'], purpose: 'Reads answers aloud', size_gb: 0.3, support: null, chat_choice: false });
 const IMAGES = entry({ id: 'SDXL-Turbo', name: 'SDXL Turbo', roles: ['image_creation'], purpose: 'Makes pictures', size_gb: 6.9, support: null, chat_choice: false });
 
-const CATALOG = [GEMMA, EMBED, QWEN, MINE, FLM, SPEECH, VOICE, IMAGES];
+// GAIA's own NPU model, which setup lists on a PC whose NPU holds it.
+const NPU = entry({ id: 'gemma4-it-e4b-FLM', name: 'Gemma 4 E4B (NPU)', recipe: 'flm', roles: ['chat', 'vision'], size_gb: 9.1, full_size_gb: 9.1, fits: true, need_gb: 10.2, reads_images: true });
+const CATALOG = [GEMMA, EMBED, QWEN, NPU, MINE, FLM, SPEECH, VOICE, IMAGES];
 
 const COMPONENTS = [
     { id: 'server', version: '10.9.1', size_gb: 0.007, source: 'github.com/lemonade-sdk/lemonade/releases', installed: false },

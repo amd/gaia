@@ -179,14 +179,22 @@ def _is_local(lemonade: Dict[str, Any]) -> bool:
     )
 
 
-def _known_chat_models() -> List[str]:
+def _known_chat_models(capacity=None) -> List[str]:
+    """GAIA's chat models, with its NPU ones on a PC whose NPU holds them."""
     from gaia.llm.lemonade_client import (
         DEFAULT_MODEL_LADDER,
         FLASH_OPTION_MODEL_NAME,
         OPTIONAL_CHAT_MODELS,
+        npu_chat_models_that_fit,
     )
 
-    return [*DEFAULT_MODEL_LADDER, *OPTIONAL_CHAT_MODELS, FLASH_OPTION_MODEL_NAME]
+    npu = npu_chat_models_that_fit(capacity) if capacity is not None else []
+    return [
+        *DEFAULT_MODEL_LADDER,
+        *npu,
+        *OPTIONAL_CHAT_MODELS,
+        FLASH_OPTION_MODEL_NAME,
+    ]
 
 
 def _profile_models(profile: str, client) -> List[str]:
@@ -378,6 +386,7 @@ def _catalog(
         is_embedding_model_id,
         remaining_download_gb,
     )
+    from gaia.llm.lemonade_client import runs_on_npu
 
     same = model_choice.ids_match
     lemonade_list = (
@@ -392,13 +401,13 @@ def _catalog(
 
     order: List[str] = []
     offered = [*model_choice.VISION_ONLY_MODELS, *model_choice.OPTIONAL_MODELS]
-    known = [*planned, *_known_chat_models(), *offered]
+    known = [*planned, *_known_chat_models(capacity), *offered]
     # GAIA's own models: a Lemonade-only model the user made the chat model is
     # planned, but stays in the Lemonade list where they found it.
     gaia_known = [
         *(m for m in planned if not same(m, chat_id)),
         *(INIT_PROFILES[profile]["models"] or []),
-        *_known_chat_models(),
+        *_known_chat_models(capacity),
         *offered,
     ]
     for model_id in known:
@@ -446,7 +455,9 @@ def _catalog(
                     if is_planned or set(roles) - {model_choice.ROLE_CHAT}
                     else None
                 ),
-                "recipe": (entry or {}).get("recipe"),
+                # Lemonade lists no FLM model before its backend is in; GAIA knows it anyway.
+                "recipe": (entry or {}).get("recipe")
+                or ("flm" if runs_on_npu(model_id) else None),
                 "size_gb": remaining,
                 "full_size_gb": float(full) if full is not None else None,
                 "partial": partial_gb > 0,

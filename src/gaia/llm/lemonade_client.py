@@ -3057,9 +3057,9 @@ def backend_crash_remedy(model: str) -> str:
     return (
         f"Lemonade is running, but llama.cpp exited while loading '{model}'. "
         "On an AMD Radeon GPU with the Vulkan backend, a possible cause is "
-        "llama.cpp's cooperative-matrix crash: load the model with "
-        "llamacpp_backend=cpu, or start Lemonade with GGML_VK_DISABLE_COOPMAT=1 "
-        "(every model then runs slower). Otherwise, Lemonade's server log has "
+        "llama.cpp's cooperative-matrix crash: start Lemonade with "
+        "GGML_VK_DISABLE_COOPMAT=1 (every model then runs slower). Otherwise, "
+        "Lemonade's server log has "
         "llama-server's own output."
     )
 
@@ -3088,8 +3088,8 @@ def _chosen_backend_hint(backend: Optional[str]) -> str:
     return (
         f" GAIA asked for llama.cpp's {backend} backend, as set in Settings → "
         "Advanced → Model server (llamacpp_backend in ~/.gaia/config.json). "
-        "Choose Auto there, or run `gaia config set llamacpp_backend auto`, to "
-        "let Lemonade pick."
+        "Choose Vulkan there, the GPU backend GAIA has tested, or run "
+        "`gaia config set llamacpp_backend vulkan`."
     )
 
 

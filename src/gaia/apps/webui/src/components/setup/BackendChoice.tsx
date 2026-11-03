@@ -1,89 +1,79 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useState } from 'react';
-import { Loader2 } from 'lucide-react';
 import { useT } from '../../i18n/useT';
 import * as api from '../../services/api';
-import type { ModelServerInfo } from '../../types/api.gen';
-import { backendLabel } from '../settings/ModelServerPanel';
+import type { SetupPlan } from '../../types';
+import { catalogOf, isNpu, pickChat, recommendedSelection, type Selection } from './selection';
 
-function errorText(err: unknown): string {
-    return err instanceof Error ? err.message : String(err);
+/**
+ * At the start of a local setup: make llama.cpp use Vulkan, the GPU backend GAIA has
+ * tested, where Lemonade's own pick or an earlier saved one is another and this PC
+ * can run Vulkan. A server that isn't answering is left to the download to report.
+ */
+export async function applyTestedBackend(): Promise<void> {
+    const server = await api.getModelServer();
+    if (!server.reachable) return;
+    const vulkan = (server.available_backends ?? []).some((b) => b.name === 'vulkan');
+    if (vulkan && (server.preferred_backend ?? server.default_backend) !== 'vulkan') {
+        await api.setModelServerBackend('vulkan');
+    }
+}
+
+interface Props {
+    plan: SetupPlan;
+    selection: Selection;
+    onSelection: (selection: Selection) => void;
+    disabled?: boolean;
 }
 
 /**
- * Which llama.cpp backend runs the chat model: the same setting as Settings →
- * Advanced → Model server, so the two always agree. NPU models run on their
- * own backend and are picked in the chat list.
+ * Where the chat model runs, from the two backends GAIA has tested: llama.cpp
+ * on the GPU with Vulkan, or FastFlowLM on a Ryzen AI NPU. Picking one picks
+ * that backend's chat model.
  */
-export function BackendChoice({ disabled = false }: { disabled?: boolean }) {
+export function BackendChoice({ plan, selection, onSelection, disabled = false }: Props) {
     const t = useT();
-    const [info, setInfo] = useState<ModelServerInfo | null>(null);
-    const [error, setError] = useState<string | null>(null);
-    const [saving, setSaving] = useState<string | null>(null);
+    const catalog = catalogOf(plan);
+    // GAIA's own NPU model, offered only on a PC whose NPU holds it.
+    const npuModel = catalog.find((e) => isNpu(e) && e.gaia_model && e.chat_choice && e.fits !== false);
+    const onNpu = !!catalog.find((e) => e.id === selection.defaultChat && isNpu(e));
+    // Back to the GPU: setup's own pick, unless that is the NPU model itself.
+    const recommended = recommendedSelection(plan).defaultChat;
+    const gpuChat = recommended && !catalog.find((e) => e.id === recommended && isNpu(e))
+        ? recommended
+        : catalog.find((e) => e.chat_choice && e.gaia_model && e.support === 'verified' && !isNpu(e))?.id;
 
-    useEffect(() => {
-        let live = true;
-        api.getModelServer()
-            .then((next) => { if (live) setInfo(next); })
-            .catch((err) => { if (live) setError(t('setup.backend.readFailed', { error: errorText(err) })); });
-        return () => { live = false; };
-    }, [t]);
+    const choose = (id: 'gpu' | 'npu') => {
+        if (id === 'npu' && npuModel && !onNpu) onSelection(pickChat(selection, catalog, npuModel.id));
+        if (id === 'gpu' && onNpu && gpuChat) onSelection(pickChat(selection, catalog, gpuChat));
+    };
 
-    const choose = useCallback(async (name: string) => {
-        setSaving(name);
-        setError(null);
-        try {
-            setInfo(await api.setModelServerBackend(name));
-        } catch (err) {
-            setError(t('setup.backend.saveFailed', { error: errorText(err) }));
-        } finally {
-            setSaving(null);
-        }
-    }, [t]);
-
-    const available = info?.available_backends ?? [];
-    const preferred = info?.preferred_backend ?? null;
-    const choices = ['auto', ...available.map((b) => b.name)];
-    if (preferred && !choices.includes(preferred)) choices.push(preferred);
-    const selected = preferred ?? 'auto';
-    const toFetch = available.filter((b) => b.state === 'installable').map((b) => backendLabel(b.name));
+    const choices: Array<{ id: 'gpu' | 'npu'; label: string }> = [
+        { id: 'gpu', label: t('setup.backend.gpu') },
+        ...(npuModel ? [{ id: 'npu' as const, label: t('setup.backend.npu') }] : []),
+    ];
+    const selected = onNpu ? 'npu' : 'gpu';
 
     return (
         <section className="setup-backend" aria-labelledby="setup-backend-title">
             <h3 className="mc-job-title" id="setup-backend-title">{t('setup.backend.title')}</h3>
-            {!info && !error && <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.backend.reading')}</p>}
-            {info && available.length === 0 && !preferred && <p className="setup-hint">{t('setup.backend.none')}</p>}
-            {info && (available.length > 0 || preferred) && (
-                <>
-                    <div className="segmented" role="radiogroup" aria-labelledby="setup-backend-title">
-                        {choices.map((name) => (
-                            <button
-                                key={name}
-                                type="button"
-                                role="radio"
-                                aria-checked={selected === name}
-                                className={selected === name ? 'is-active' : ''}
-                                disabled={disabled || saving !== null}
-                                onClick={() => { if (name !== selected) void choose(name); }}
-                            >
-                                {saving === name && <Loader2 size={12} className="spin" aria-hidden="true" />}
-                                <bdi>{name === 'auto'
-                                    ? t(info.default_backend ? 'setup.backend.autoIs' : 'setup.backend.auto', { name: backendLabel(info.default_backend) })
-                                    : backendLabel(name)}</bdi>
-                            </button>
-                        ))}
-                    </div>
-                    <p className="setup-hint">
-                        {t.compose((say) => [
-                            say('setup.backend.hint'),
-                            toFetch.length ? say('setup.backend.fetch', { names: toFetch.join(', ') }) : null,
-                        ].filter(Boolean).join(' '))}
-                    </p>
-                </>
-            )}
-            {error && <p className="setup-error" role="alert">{error}</p>}
+            <div className="segmented" role="radiogroup" aria-labelledby="setup-backend-title">
+                {choices.map((c) => (
+                    <button
+                        key={c.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected === c.id}
+                        className={selected === c.id ? 'is-active' : ''}
+                        disabled={disabled}
+                        onClick={() => choose(c.id)}
+                    >
+                        <bdi>{c.label}</bdi>
+                    </button>
+                ))}
+            </div>
+            <p className="setup-hint">{t(npuModel ? 'setup.backend.hint' : 'setup.backend.hintNoNpu')}</p>
         </section>
     );
 }
