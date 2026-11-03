@@ -177,9 +177,6 @@ def run_args(
         args.append("--gaia-lemonade")
     if server_only or upgrade_embedded:
         args.append("--skip-models")
-    if upgrade_embedded:
-        # Replace the pinned embedded artifact without downloading model data.
-        args.append("--force-reinstall")
     for model_id in extra_models or []:
         args += ["--download-model", model_id]
     return args

@@ -34,6 +34,7 @@ import { FLAGSHIP_AGENT_ID, hasFlagshipAgent, isFlagshipMissingError } from './u
 import { runWhileVisible } from './utils/visibleInterval';
 import { RETRY_INITIAL_MS, retryUntilOk, type Retrier } from './utils/retry';
 import { shouldShowStartupScreen } from './utils/startupGate';
+import { useT } from './i18n/useT';
 import type { SetupCheck, StartCard } from './types';
 
 // Heavy, occasional screens load on first use.
@@ -88,6 +89,7 @@ function Loading() {
 const shouldLogRetry = (attempt: number) => attempt === 1 || attempt % 10 === 0;
 
 function App() {
+    const t = useT();
     const currentSessionId = useChatStore((s) => s.currentSessionId);
     const setSessions = useChatStore((s) => s.setSessions);
     const setCurrentSession = useChatStore((s) => s.setCurrentSession);
@@ -173,13 +175,9 @@ function App() {
                 // server artifact is replaced; the model cache is untouched.
                 if (!check.ready && check.stage === 'upgrade' && !active?.remote) {
                     setSetup({ state: 'upgrading' });
-                    try {
-                        await api.startSetup(false, false, { upgradeEmbedded: true });
-                        await waitForEmbeddedUpgrade();
-                        check = await api.checkSetup(false);
-                    } catch (err) {
-                        throw err;
-                    }
+                    await api.startSetup(false, false, { upgradeEmbedded: true });
+                    await waitForEmbeddedUpgrade();
+                    check = await api.checkSetup(false);
                 }
                 // Read status and chats before showing the app, so it never flashes "lost connection" or "no chats".
                 if (waited > 0) await Promise.all([refreshStatus.current(), reloadSessions.current()]);
@@ -678,6 +676,17 @@ function App() {
                 <main className="startup" role="status" aria-label="Starting GAIA">
                     <div className="loading-spinner" aria-hidden="true" />
                     <p className="startup-text">Starting GAIA…</p>
+                </main>
+            </div>
+        );
+    }
+
+if (setup.state === 'upgrading') {
+        return (
+            <div className="app">
+                <main className="startup" role="status" aria-live="polite" aria-label={t('setup.upgrading.notice')}>
+                    <div className="loading-spinner" aria-hidden="true" />
+                    <p className="startup-text">{t('setup.upgrading.notice')}</p>
                 </main>
             </div>
         );

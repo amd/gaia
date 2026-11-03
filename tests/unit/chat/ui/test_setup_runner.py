@@ -80,7 +80,7 @@ def test_run_args_server_only_downloads_nothing():
 def test_run_args_upgrade_replaces_only_the_embedded_server():
     args = sr.run_args(False, upgrade_embedded=True)
     assert "--skip-models" in args
-    assert "--force-reinstall" in args
+    assert "--force-reinstall" not in args
     assert "--download-model" not in args
 
 
@@ -520,6 +520,27 @@ def test_a_server_only_run_is_ready_without_loading_models(monkeypatch):
     assert [s["key"] for s in view["steps"]] == ["server"]
     assert view["steps"][0]["status"] == "done"
     assert "--skip-models" in calls[0][0]
+
+
+def test_an_embedded_upgrade_ends_ready_without_loading_models(monkeypatch):
+    calls = []
+    _popen(
+        monkeypatch,
+        _FakeProc(io.BytesIO(b"Step 1/2: Starting Lemonade Server...\n")),
+        calls,
+    )
+
+    def check(*_a, **_k):
+        raise AssertionError("an embedded upgrade preserves the existing model cache")
+
+    monkeypatch.setattr(sr, "check", check)
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, upgrade_embedded=True)
+    view = _wait_done(runner)
+    assert view["state"] == "ready" and view["upgrade_embedded"] is True
+    assert view["text"] == "Lemonade Server upgraded"
+    assert "--skip-models" in calls[0][0]
+    assert "--force-reinstall" not in calls[0][0]
 
 
 def test_an_extra_model_with_no_load_check_ends_ready(monkeypatch):

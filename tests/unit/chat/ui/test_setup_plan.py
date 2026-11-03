@@ -761,6 +761,21 @@ def test_upgrade_embedded_run_uses_no_model_downloads(client, flm_box, monkeypat
     ]
 
 
+def test_setup_run_rejects_extra_models_during_embedded_upgrade(client, monkeypatch):
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: pytest.fail("must not start"),
+    )
+    r = client.post(
+        "/api/setup/run",
+        json={"upgrade_embedded": True, "extra_models": [DEFAULT_MODEL_NAME]},
+        headers=UI,
+    )
+    assert r.status_code == 422
+    assert "no extra_models" in r.json()["detail"]
+
+
 def test_setup_run_rejects_conflicting_server_only_and_upgrade(client, monkeypatch):
     monkeypatch.setattr(
         setup_router.runner,

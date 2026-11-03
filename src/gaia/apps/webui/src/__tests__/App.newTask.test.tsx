@@ -375,16 +375,23 @@ describe('first-run setup', () => {
         expect(screen.queryByText('Starting GAIA…')).not.toBeInTheDocument();
     });
 
-    it('upgrades an older embedded Lemonade before entering chat without opening first-run setup', async () => {
+    it('shows a localized blocking notice while upgrading an older embedded Lemonade, then enters chat', async () => {
+        let finishUpgrade!: (status: { state: 'ready' }) => void;
         mocked.checkSetup
             .mockResolvedValueOnce({ ready: false, stage: 'upgrade', steps: [] })
             .mockResolvedValueOnce(READY);
         mocked.startSetup.mockResolvedValue({ state: 'running', upgrade_embedded: true } as never);
-        mocked.getSetupStatus.mockResolvedValue({ state: 'ready' } as never);
+        mocked.getSetupStatus.mockImplementation(
+            () => new Promise((resolve) => { finishUpgrade = resolve; }),
+        );
         render(<App />);
 
-        expect(await screen.findByLabelText('Message')).toBeInTheDocument();
+        expect(await screen.findByText('Updating the local model server…')).toBeInTheDocument();
+        expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
         expect(mocked.startSetup).toHaveBeenCalledWith(false, false, { upgradeEmbedded: true });
+
+        finishUpgrade({ state: 'ready' });
+        expect(await screen.findByLabelText('Message')).toBeInTheDocument();
         expect(mocked.checkSetup).toHaveBeenCalledTimes(2);
     });
 

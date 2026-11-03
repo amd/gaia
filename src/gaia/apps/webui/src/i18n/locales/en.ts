@@ -705,6 +705,7 @@ export const enMessages = {
     'setup.lede.start': 'A few minutes of setup, then your first chat.',
     'setup.lede.running': 'Setting things up. Setup keeps going if you switch away.',
     'setup.lede.done': 'All set.',
+    'setup.upgrading.notice': 'Updating the local model server…',
     'setup.check.title': 'Check this PC',
     'setup.where.title': 'Choose where GAIA runs',
     'setup.where.local': 'On this PC',

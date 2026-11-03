@@ -705,6 +705,7 @@ const messages: Messages = {
     'setup.lede.start': 'بضع دقائق من الإعداد، ثم محادثتك الأولى.',
     'setup.lede.running': 'جارٍ الإعداد. يستمر الإعداد حتى لو انتقلت إلى نافذة أخرى.',
     'setup.lede.done': 'كل شيء جاهز.',
+    'setup.upgrading.notice': 'جارٍ تحديث خادم النماذج المحلي…',
     'setup.check.title': 'فحص هذا الجهاز',
     'setup.where.title': 'اختر مكان تشغيل GAIA',
     'setup.where.local': 'على هذا الجهاز',
