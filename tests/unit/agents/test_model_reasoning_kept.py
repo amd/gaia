@@ -274,11 +274,9 @@ def test_unclosed_think_block_is_not_the_answer(agent):
 
     answer = strip_verification_scope(result["result"]).strip()
     assert "Still working" not in answer
-    # Name the outcome rather than only asserting an absence: today the loop
-    # ends on the empty-response branch without re-prompting. Continuing a
-    # cut-off reply is #4054's job, so that PR must update this assertion.
-    assert len(sent) == 1
-    assert "empty response" in answer.lower()
+    # A reply that is all reasoning is empty, so the model is asked again.
+    assert len(sent) == 2
+    assert answer == "It says hello."
 
 
 def test_a_reply_merely_mentioning_think_is_not_truncated(agent):

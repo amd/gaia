@@ -85,7 +85,7 @@ from the committed seed, and runs the benchmark (~17 minutes on a 4B model).
 - **CI:** `test_email_agent_eval.yml` (nightly, report-mode on the self-hosted AMD
   `stx` pool) and `email_scorecard_refresh.yml` (manual dispatch only; a full-corpus
   run regenerates `SCORECARD.md`, a subset run smoke-tests the pipeline without
-  committing). The drafting eval needs a Claude judge — `ANTHROPIC_API_KEY` (takes precedence),
-  or a subscription through the `claude` CLI (`CLAUDE_CODE_OAUTH_TOKEN`, or the CLI's own login).
+  committing). The drafting eval needs a Claude judge — a subscription through the `claude`
+  CLI (`CLAUDE_CODE_OAUTH_TOKEN`, or the CLI's own login) first, then `ANTHROPIC_API_KEY`.
   With none it exits non-zero and fails the build; never a skip, never a pass.
 </details>
