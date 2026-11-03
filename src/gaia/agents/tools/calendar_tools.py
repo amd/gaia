@@ -105,6 +105,12 @@ _NOBODY_TO_ASK_MESSAGE = (
     "nothing on the calendar changed."
 )
 
+_UNCHECKED_TARGET_MESSAGE = (
+    "Nothing was changed: the event couldn't be re-read to show who this change "
+    "notifies. List the calendar again with list_calendar_events, then retry with "
+    "the event's id, title and start as listed."
+)
+
 _BUSY_MESSAGE = (
     "being saved by another GAIA operation right now, so its state can't be read "
     "yet. Retry in a moment"
@@ -392,7 +398,17 @@ class _CalendarPreflight:
         ):
             logger.info("calendar: %s refused, nobody can approve it", self._tool_name)
             return _refusal(self._tool_name, _NOBODY_TO_ASK_MESSAGE)
-        return self._check(args)
+        refusal = self._check(args)
+        if refusal is None and self._needs_target and self._target(args) is None:
+            return _refusal(self._tool_name, _UNCHECKED_TARGET_MESSAGE)
+        return refusal
+
+    @property
+    def _needs_target(self) -> bool:
+        return self._tool_name != "create_calendar_event"
+
+    def _target(self, args: Dict[str, Any]) -> Optional[CalendarEvent]:
+        return (self._mixin._calendar_targets or {}).get(_call_key(args))
 
     def prompt_args_of(self, args: Dict[str, Any]) -> Dict[str, Any]:
         shown = {key: _shown_arg(key, value) for key, value in args.items()}
@@ -402,10 +418,12 @@ class _CalendarPreflight:
         written = [v for v in args.values() if isinstance(v, str)] + [
             v for v in args.get("notify_attendees") or () if isinstance(v, str)
         ]
-        if self._tool_name != "create_calendar_event":
+        if self._needs_target:
             # The event as the provider holds it: a case-insensitive match lets
             # the model's spelling differ from who is really told.
-            event = self._mixin._calendar_targets.pop(_call_key(args))
+            event = (self._mixin._calendar_targets or {}).pop(_call_key(args), None)
+            if event is None:
+                raise CalendarError(_UNCHECKED_TARGET_MESSAGE)
             told = _who_gets_told(event)
             shown["expected_title"] = visible_line(event.title.strip())
             shown["notify_attendees"] = [_shown_invitee(a) for a in told]

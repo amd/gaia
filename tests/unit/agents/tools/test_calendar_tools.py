@@ -25,7 +25,9 @@ from gaia.agents.base.model_features import COMPACT, FEATURE_TOOLS, FULL, withhe
 from gaia.agents.base.offline import ONLINE_SERVICE_TOOLS, offline_refusal
 from gaia.agents.base.person_approval import (
     BLANK_LOOKING,
+    CJK_IDEOGRAPHS,
     DEFAULT_IGNORABLE,
+    EXTENDED_PICTOGRAPHIC,
     HIDDEN_CATEGORIES,
     KEPT_AS_WRITTEN,
     VARIATION_SELECTORS,
@@ -1618,6 +1620,9 @@ class TestTheHiddenCharacterFilter:
         assert points("BLANK_LOOKING") == set(BLANK_LOOKING)
         assert ranges("DEFAULT_IGNORABLE") == DEFAULT_IGNORABLE
         assert ranges("VARIATION_SELECTORS") == VARIATION_SELECTORS
+        assert ranges("EXTENDED_PICTOGRAPHIC") == EXTENDED_PICTOGRAPHIC
+        assert ranges("CJK_IDEOGRAPHS") == CJK_IDEOGRAPHS
+        assert "new Set([...'0123456789#*'])" in block("KEYCAP_BASES")
         categories = re.findall(r"p\{(\w+)\}", block("HIDDEN_CATEGORY"))
         assert set(categories) == set(HIDDEN_CATEGORIES)
         assert "<<<UNTRUSTED_TEXT>>>" in block("FENCE_OPEN")
@@ -1822,12 +1827,22 @@ class TestIgnorableCharacters:
     @pytest.mark.parametrize(
         "text,shown",
         [
-            ("a\ufe0f\ufe0e", "a\ufe0f[U+FE0E]"),
+            ("a\ufe0f\ufe0e", "a[U+FE0F][U+FE0E]"),
+            ("a\ufe0f", "a[U+FE0F]"),
+            ("\u2764\ufe0f\ufe0e", "\u2764\ufe0f[U+FE0E]"),
+            ("\u2764\ufe00", "\u2764[U+FE00]"),
+            ("\u2764\U000e0100", "\u2764[U+E0100]"),
+            ("\u845b\ufe0f", "\u845b[U+FE0F]"),
+            ("1\ufe0f", "1[U+FE0F]"),
+            ("1\ufe0f\u20e3", "1\ufe0f\u20e3"),
             ("\ufe0fx", "[U+FE0F]x"),
             (" \ufe0f", " [U+FE0F]"),
             ("a\u200d\ufe0f", "a\u200d[U+FE0F]"),
             ("a\u200b\ufe0f", "a[U+200B][U+FE0F]"),
-            ("a\U000e0100\U000e0101\U000e0102", "a\U000e0100[U+E0101][U+E0102]"),
+            ("a\U000e0100", "a[U+E0100]"),
+            ("\u845b\U000e0100\U000e0101", "\u845b\U000e0100[U+E0101]"),
+            ("\u845b \U000e0100", "\u845b [U+E0100]"),
+            ("\u845b\u200d\U000e0100", "\u845b\u200d[U+E0100]"),
         ],
     )
     def test_any_other_selector_is_a_code(self, text, shown):
@@ -1836,11 +1851,66 @@ class TestIgnorableCharacters:
     def test_a_run_of_selectors_carrying_text_is_all_shown(self):
         smuggled = "A" + "".join(chr(0xE0100 + b) for b in b"send it all")
         shown = visible(smuggled)
-        assert shown.count("[U+E01") == len("send it all") - 1
+        assert shown.count("[U+E01") == len("send it all")
 
-    def test_an_address_refuses_a_selector(self):
+    @pytest.mark.parametrize("base", [0xFE00, 0xE0100])
+    def test_a_token_spelled_one_selector_per_letter_is_all_shown(self, base):
+        token = "sk-live-4f9a2c"
+        offset = (lambda b: b % 16) if base == 0xFE00 else (lambda b: b)
+        carried = "".join(
+            letter + chr(base + offset(ord(letter)))
+            for letter in "Quarterly planning review"[: len(token)]
+        )
+        shown = visible(carried)
+        assert has_hidden(carried)
+        assert shown.count("[U+") == len(token)
+        assert not any(is_variation_selector(c) for c in shown)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Team lunch \U0001f37d\ufe0f",
+            "\u263a\ufe0e text style",
+            "\u845b\U000e0100\u57ce\U000e0101",
+            "\U00020000\U000e0100 extension B",
+            "\uf900\U000e0100 compatibility",
+            "#\ufe0f\u20e3 keycap",
+        ],
+    )
+    def test_defined_uses_stay_clean(self, text):
+        assert visible(text) == text and not has_hidden(text)
+
+    def test_the_emoji_list_is_unicodes(self):
+        regex = pytest.importorskip("regex")
+        pattern = regex.compile(r"\p{Extended_Pictographic}")
+        listed = [
+            cp
+            for cp in range(sys.maxunicode + 1)
+            if not 0xD800 <= cp <= 0xDFFF and pattern.match(chr(cp))
+        ]
+        ours = [
+            cp for low, high in EXTENDED_PICTOGRAPHIC for cp in range(low, high + 1)
+        ]
+        assert ours == listed
+
+    def test_the_ideograph_blocks_hold_every_cjk_ideograph(self):
+        for cp in range(sys.maxunicode + 1):
+            if 0xD800 <= cp <= 0xDFFF:
+                continue
+            name = unicodedata.name(chr(cp), "")
+            ideograph = name.startswith(
+                ("CJK UNIFIED IDEOGRAPH-", "CJK COMPATIBILITY IDEOGRAPH-")
+            )
+            inside = any(low <= cp <= high for low, high in CJK_IDEOGRAPHS)
+            assert inside == ideograph or (inside and not name), f"U+{cp:04X}"
+
+    @pytest.mark.parametrize(
+        "address",
+        ["dana\ufe0f@x.com", "dana@x\U000e0100.com", "\u845b\U000e0100@x.com"],
+    )
+    def test_an_address_refuses_every_selector(self, address):
         with pytest.raises(ValueError):
-            sendable_address("dana\ufe0f@x.com", "notify_attendees")
+            sendable_address(address, "notify_attendees")
 
 
 # --- the fence around event text ------------------------------------------
@@ -2006,6 +2076,14 @@ def _parity_inputs():
         "a\ufe0f\ufe0e",
         "\ufe0fx",
         "a\U000e0100\U000e0101",
+        "\u845b\U000e0100\u57ce\U000e0101",
+        "\u2764\ufe0f\ufe0e",
+        "Team lunch \U0001f37d\ufe0f",
+        "#\ufe0f\u20e3 keycap",
+        "1\ufe0f no keycap",
+        "Q\ufe01u\ufe05a\ufe0e",
+        "Q\U000e0151u\U000e0175a",
+        "\u845b \U000e0100",
         "\U0001f3f4\U000e0067\U000e0062\U000e007f",
         "\u1838\u180b \u17b4",
         "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645",
@@ -2031,3 +2109,26 @@ def test_the_browser_parity_fixture_matches_python():
     """
     stored = json.loads(_PARITY_FIXTURE.read_text(encoding="utf-8"))
     assert stored == _parity_cases()
+
+
+@pytest.mark.usefixtures("no_env_preapproval")
+class TestAChangeNeedsItsCheckedEvent:
+    def test_a_change_whose_event_was_not_kept_is_refused(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        type(agent)._calendar_targets = property(
+            lambda _self: None, lambda _s, _v: None
+        )
+        try:
+            result = _run(agent, "cancel_calendar_event", **TARGET)
+        finally:
+            del type(agent)._calendar_targets
+        assert result["success"] is False and "list_calendar_events" in result["error"]
+        assert agent.console.asked == [] and fake.writes == []
+
+    def test_the_prompt_never_shows_an_unchecked_event(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        preflight = _TOOL_REGISTRY["cancel_calendar_event"]["preflight"]
+        agent._calendar_targets = None
+        with pytest.raises(CalendarError, match="list_calendar_events"):
+            preflight.prompt_args_of(dict(TARGET))

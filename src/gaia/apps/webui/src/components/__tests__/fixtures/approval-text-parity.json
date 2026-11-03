@@ -133,7 +133,7 @@
   },
   {
     "input": "a\ufe0f\ufe0e",
-    "shown": "a\ufe0f[U+FE0E]"
+    "shown": "a[U+FE0F][U+FE0E]"
   },
   {
     "input": "\ufe0fx",
@@ -141,7 +141,39 @@
   },
   {
     "input": "a\udb40\udd00\udb40\udd01",
-    "shown": "a\udb40\udd00[U+E0101]"
+    "shown": "a[U+E0100][U+E0101]"
+  },
+  {
+    "input": "\u845b\udb40\udd00\u57ce\udb40\udd01",
+    "shown": "\u845b\udb40\udd00\u57ce\udb40\udd01"
+  },
+  {
+    "input": "\u2764\ufe0f\ufe0e",
+    "shown": "\u2764\ufe0f[U+FE0E]"
+  },
+  {
+    "input": "Team lunch \ud83c\udf7d\ufe0f",
+    "shown": "Team lunch \ud83c\udf7d\ufe0f"
+  },
+  {
+    "input": "#\ufe0f\u20e3 keycap",
+    "shown": "#\ufe0f\u20e3 keycap"
+  },
+  {
+    "input": "1\ufe0f no keycap",
+    "shown": "1[U+FE0F] no keycap"
+  },
+  {
+    "input": "Q\ufe01u\ufe05a\ufe0e",
+    "shown": "Q[U+FE01]u[U+FE05]a[U+FE0E]"
+  },
+  {
+    "input": "Q\udb40\udd51u\udb40\udd75a",
+    "shown": "Q[U+E0151]u[U+E0175]a"
+  },
+  {
+    "input": "\u845b \udb40\udd00",
+    "shown": "\u845b [U+E0100]"
   },
   {
     "input": "\ud83c\udff4\udb40\udc67\udb40\udc62\udb40\udc7f",
