@@ -87,7 +87,7 @@ test asserts byte-for-byte equality, so drift in either place fails CI.
 > []}, {}]` (bearer OR none) rather than asserting an unconditional requirement.
 > `EXEMPT_PATHS` routes (`/health`, `/version`, `/v1/email/health`, `/v1/email/version`)
 > declare an explicit empty requirement instead. See
-> [Email Integration → Authentication](https://amd-gaia.ai/docs/guides/email-integration#authentication).
+> [Email guide](https://amd-gaia.ai/docs/guides/email).
 
 ---
 
@@ -622,6 +622,14 @@ failure propagates as a normal connector error (403/502/503).
 
 Read-only throughout: this endpoint never archives, marks, replies, or
 sends — proven by an id-set diff in the issue's real-world test evidence.
+
+## Transient connection errors — retry, don't reconnect
+
+When another GAIA process or request is mid-save on the mailbox connection, a
+mailbox route answers `502` with a detail saying the connection "is being saved
+by another GAIA operation". The `/v1/email/agent/*` routes answer the same case
+with `503` and a `Retry-After` header. Both are transient, not a broken
+mailbox: retry shortly and don't prompt the user to reconnect.
 
 ---
 

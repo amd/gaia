@@ -15,8 +15,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import socket
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -26,6 +28,7 @@ from gaia.agents.registry import AgentRegistry
 from gaia.hub.installer import register_installed_sidecars
 from gaia.security import PathValidator
 from gaia.ui import permissions as session_permissions
+from gaia.ui import session_environment
 from gaia.ui._chat_helpers import _stream_chat_impl
 from gaia.ui.database import ChatDatabase
 from gaia.ui.email_sidecar import daemon_client as daemon_client_module
@@ -68,13 +71,15 @@ class _Rag:
 class _DocAgent:
     """Stands in for GaiaAgent: answers with the documents it can read."""
 
-    def __init__(self, scope, **_kwargs):
+    def __init__(self, scope, **kwargs):
+        self.built_with = kwargs
         self.console = None
         self.conversation_history = []
         self._cancel_event = None
         self.indexed_files: set = set()
         self.path_validator = PathValidator([str(scope)])
         self.rag = _Rag(self.path_validator)
+        self.queries: list = []
 
     def rebuild_system_prompt(self):
         pass
@@ -82,6 +87,7 @@ class _DocAgent:
     def process_query(self, query, max_steps=None):
         from pathlib import Path
 
+        self.queries.append(query)
         readable = sorted(
             Path(p).read_text(encoding="utf-8") for p in self.indexed_files
         )
@@ -101,11 +107,29 @@ def live_gaia_sidecar(monkeypatch, tmp_path):
     from gaia_agent import server as server_mod
     from gaia_agent import session_registry as sr
 
+    import gaia.ui.turn_insights as turn_insights
     from gaia.daemon.sidecars.manager import find_free_port
+    from gaia.llm.lemonade_manager import LemonadeManager
 
     caller_auth.reset()
+    LemonadeManager.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    # Context measurement is exercised by the relay after every turn. Keep it
+    # local: the document contract does not need a real Lemonade health check.
+    monkeypatch.setattr(turn_insights, "_loaded_chat_model", lambda *_args: None)
+
+    # Keep history sizing local on both sides of the relay. Otherwise the UI
+    # or sidecar can reach a shared Lemonade server before a relayed turn.
+    import gaia.agents.base.history as history
+
+    monkeypatch.setattr(
+        history, "model_context_window", lambda *_args, **_kwargs: 32768
+    )
+    monkeypatch.setattr(
+        history, "relayed_history_budget", lambda *_args, **_kwargs: 32768
+    )
+
     scope = tmp_path / "agent-scope"
     scope.mkdir()
     agents: list = []
@@ -152,13 +176,35 @@ def live_gaia_sidecar(monkeypatch, tmp_path):
     else:
         server.should_exit = True
         raise RuntimeError("flagship sidecar test server never became reachable")
+    original_connect = socket.create_connection
+    blocked_connections = []
+
+    def connect_only_to_sidecar(address, *args, **kwargs):
+        """Record and reject connections other than the fixture sidecar."""
+        host, target_port = address[:2]
+        if host == "127.0.0.1" and target_port == port:
+            return original_connect(address, *args, **kwargs)
+        # httpx reaches this seam. A later assertion is needed because context
+        # measurement intentionally catches connection errors and logs a warning.
+        blocked_connections.append(address)
+        raise OSError(
+            "live_gaia_sidecar may connect only to its own loopback port; "
+            f"got {address!r}"
+        )
+
+    monkeypatch.setattr(socket, "create_connection", connect_only_to_sidecar)
     try:
         yield base_url, agents, server_mod.API_VERSION
     finally:
         server.should_exit = True
         thread.join(timeout=5)
+        LemonadeManager.reset()
         sr.registry.clear()
         caller_auth.reset()
+        assert not blocked_connections, (
+            "live_gaia_sidecar reached outside the fixture sidecar: "
+            f"{blocked_connections!r}"
+        )
 
 
 @pytest.fixture
@@ -232,7 +278,7 @@ def chat(monkeypatch, sidecar_flagship_registry, tmp_path):
         )
         db.attach_document(session_id, doc["id"])
 
-    yield SimpleNamespace(send=send, attach=attach, session_id=session_id)
+    yield SimpleNamespace(db=db, send=send, attach=attach, session_id=session_id)
     session_permissions.reset_all()
 
 
@@ -310,6 +356,145 @@ def test_an_older_flagship_still_chats_without_documents(
     _point_ui_at(monkeypatch, base_url, "2.15")
 
     assert _answer(chat.send("hi")) == "no documents are indexed"
+
+
+def test_a_folder_added_to_the_chat_reaches_the_relayed_flagship(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    folder = tmp_path / "q3-report"
+    folder.mkdir()
+    session_environment.grant_folder(chat.db, chat.session_id, str(folder))
+
+    _answer(chat.send("what's in my folder?"))
+
+    [agent] = agents
+    assert str(folder.resolve()) in agent.built_with["allowed_paths"]
+    # The model is told which folder "my folder" is; the chat keeps the question.
+    [query] = agent.queries
+    assert query.startswith(f"[This chat is working in the folder {folder.resolve()}.")
+    assert query.endswith("\n\nwhat's in my folder?")
+    assert all(
+        "This chat is working in" not in (m["content"] or "")
+        for m in chat.db.get_messages(chat.session_id)
+    )
+
+
+def test_a_bare_file_name_lands_in_the_folder_picked_for_the_chat(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    # The chip shows the picked folder, so that is where "notes.txt" belongs.
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    folder = tmp_path / "picked"
+    folder.mkdir()
+    session_environment.grant_folder(chat.db, chat.session_id, str(folder))
+
+    _answer(chat.send("create notes.txt"))
+
+    [agent] = agents
+    assert agent.built_with["working_directory"] == str(folder.resolve())
+
+
+def test_an_older_flagship_says_folders_need_an_update(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    base_url, agents, _ = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, "2.17")
+    folder = tmp_path / "q3-report"
+    folder.mkdir()
+    session_environment.grant_folder(chat.db, chat.session_id, str(folder))
+
+    events = chat.send("what's in my folder?")
+
+    [error] = [e for e in events if e.get("type") == "agent_error"]
+    assert "too old to be given folders" in error["content"]
+    assert "Update GAIA to the latest version" in error["content"]
+    assert agents == []
+
+
+def test_a_relayed_chat_with_a_removed_sub_folder_stops(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    # Made while the agent ran in-process: a folder, with one sub-folder taken
+    # away. Relayed, the folder would go as a whole and hand back the secret.
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    folder = tmp_path / "project"
+    secret = folder / "secrets"
+    secret.mkdir(parents=True)
+    chat.db.set_session_environment(
+        chat.session_id,
+        folders=[str(folder.resolve())],
+        withheld=[str(secret.resolve())],
+        internet_off=False,
+    )
+
+    events = chat.send("list everything in this folder")
+
+    [error] = [e for e in events if e.get("type") == "agent_error"]
+    assert "Start a new chat" in error["content"]
+    assert agents == []
+
+
+def test_a_relayed_chat_with_a_removed_default_folder_stops(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    chat.db.set_session_environment(
+        chat.session_id,
+        folders=[],
+        withheld=[str(Path.cwd().resolve())],
+        internet_off=False,
+    )
+
+    events = chat.send("hi")
+
+    assert [e for e in events if e.get("type") == "agent_error"]
+    assert agents == []
+
+
+def test_a_folder_reaches_the_relayed_flagship_without_its_siblings(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    folder = tmp_path / "picked"
+    sibling = tmp_path / "picked-not"
+    folder.mkdir()
+    sibling.mkdir()
+    session_environment.grant_folder(chat.db, chat.session_id, str(folder))
+
+    _answer(chat.send("what's here?"))
+
+    [agent] = agents
+    scope = agent.built_with["allowed_paths"]
+    assert str(folder.resolve()) in scope
+    assert str(tmp_path.resolve()) not in scope
+    assert str(sibling.resolve()) not in scope
+    validator = PathValidator(scope)
+    assert validator.is_path_allowed(str(folder / "a.txt"), prompt_user=False)
+    assert not validator.is_path_allowed(str(sibling / "a.txt"), prompt_user=False)
+
+
+def test_gaia_allowed_paths_still_narrows_a_relayed_folder(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    ceiling = tmp_path / "ceiling"
+    ceiling.mkdir()
+    folder = tmp_path / "outside"
+    folder.mkdir()
+    session_environment.grant_folder(chat.db, chat.session_id, str(folder))
+    monkeypatch.setenv("GAIA_ALLOWED_PATHS", str(ceiling))
+
+    _answer(chat.send("what's here?"))
+
+    [agent] = agents
+    assert str(folder.resolve()) not in agent.built_with["allowed_paths"]
 
 
 def test_email_turns_never_carry_documents(monkeypatch, tmp_path):

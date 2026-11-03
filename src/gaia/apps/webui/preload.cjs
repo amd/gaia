@@ -15,6 +15,7 @@
  *   gaia:update:*    — Auto-update status & manual check (Phase F)
  *   system:*         — System metrics for the observability dashboard (#2007)
  *   power:*          — Keep the PC awake while a chat turn runs (#5226)
+ *   dialog:*         — The OS folder picker
  */
 
 const { contextBridge, ipcRenderer } = require("electron");
@@ -84,6 +85,11 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
   system: {
     getMetrics: () => ipcRenderer.invoke("system:get-metrics"),
   },
+
+  // ── OS folder picker; resolves the chosen path, or null on cancel ─────
+  dialog: {
+    pickFolder: (defaultPath) => ipcRenderer.invoke("dialog:pick-folder", defaultPath),
+  },
 });
 
 // ── Window frame ─────────────────────────────────────────────────────────
@@ -152,6 +158,9 @@ contextBridge.exposeInMainWorld("gaiaUpdater", {
    * @param {string} tag  e.g. "v0.20.0"
    */
   installVersion: (tag) => ipcRenderer.invoke("gaia:update:install-version", tag),
+
+  /** Go back to the version before the last update, and pin it. */
+  revertUpdate: () => ipcRenderer.invoke("gaia:update:revert"),
 
   /**
    * Resume normal auto-updates — clears the version pin set by installVersion.

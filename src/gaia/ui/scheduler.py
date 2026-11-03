@@ -346,7 +346,8 @@ def _take(pattern: str, s: str):
 def _reject_dates_and_one_offs(s: str) -> None:
     """Reject calendar dates and one-time phrasing: every schedule repeats."""
     one_time = (
-        "One-time tasks aren't supported yet — a schedule repeats. " + _RECURRING_HINT
+        "A schedule here repeats. To run a prompt once, use "
+        "'gaia schedule add --at' in a terminal. " + _RECURRING_HINT
     )
     for pattern, month_group, day_group in (
         (rf"\b({_MONTH_RE})\.? (\d{{1,2}})(?:st|nd|rd|th)?\b", 1, 2),
@@ -360,8 +361,8 @@ def _reject_dates_and_one_offs(s: str) -> None:
             if not 1 <= day <= calendar.monthrange(2024, month)[1]:
                 raise _ScheduleInputError(
                     f"{_MONTH_DISPLAY[month]} {day} isn't a date. "
-                    "One-time tasks aren't supported yet either — a schedule "
-                    "repeats. " + _RECURRING_HINT
+                    "A schedule here repeats, too. To run a prompt once, use "
+                    "'gaia schedule add --at' in a terminal. " + _RECURRING_HINT
                 )
             raise _ScheduleInputError(one_time)
     if re.search(r"\b(?:\d{1,2}/\d{1,2}(?:/\d{2,4})?|\d{4}-\d{1,2}-\d{1,2})\b", s):
@@ -831,6 +832,9 @@ class ScheduledTask:
         # The last run's error, or None when it succeeded.
         self.last_error = last_error
         self._timer_task: Optional[asyncio.Task] = None
+        # A run is in flight, timed or Run now; a second one waits for the next.
+        self._executing = False
+        self._manual_run: Optional[asyncio.Task] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
@@ -850,6 +854,7 @@ class ScheduledTask:
             "schedule_config": self.schedule_config,
             "description": self.describe(),
             "last_error": self.last_error,
+            "running": self._executing,
         }
 
     def describe(self) -> str:
@@ -903,6 +908,8 @@ class Scheduler:
         self._max_concurrent_runs = max_concurrent_runs
         self._run_semaphore: Optional[asyncio.Semaphore] = None
         self._tasks: Dict[str, ScheduledTask] = {}
+        # Run now runs outlive their request, so hold them until they finish.
+        self._manual_runs: set = set()
         self._lock = asyncio.Lock()
         self._running = False
         self._missed_since: Optional[datetime] = None
@@ -945,6 +952,7 @@ class Scheduler:
                     except asyncio.CancelledError:
                         pass
                     task._timer_task = None
+                await self._cancel_manual_run(task)
         logger.info("Scheduler shut down, all timers cancelled")
 
     async def create_task(
@@ -1155,12 +1163,61 @@ class Scheduler:
                     await task._timer_task
                 except asyncio.CancelledError:
                     pass
+            await self._cancel_manual_run(task)
 
             self._db_delete_task(task.id)
             del self._tasks[name]
 
         logger.info("Deleted scheduled task '%s'", name)
         return True
+
+    async def run_task_now(self, name: str) -> Dict[str, Any]:
+        """Start one run of a task now, keeping its next scheduled time.
+
+        Returns at once with the task marked running; the run goes on in the
+        background and saves its reply in the task's chat as a timed run does.
+
+        Raises:
+            KeyError: If task not found.
+            ValueError: If a run of it is already in flight.
+        """
+        async with self._lock:
+            task = self._tasks.get(name)
+            if not task:
+                raise KeyError(f"Task '{name}' not found")
+            if task._executing:
+                raise ValueError(f"'{name}' is already running")
+            # Claimed before returning, so a second click can't start another.
+            task._executing = True
+        run = asyncio.create_task(
+            self._execute_task(task, reschedule=False, claimed=True)
+        )
+        task._manual_run = run
+        self._manual_runs.add(run)
+        run.add_done_callback(self._manual_run_done)
+        logger.info("Scheduled task '%s': run now", name)
+        return task.to_dict()
+
+    @staticmethod
+    async def _cancel_manual_run(task: ScheduledTask) -> None:
+        """Stop a Run now in flight, as a timer is stopped on delete and shutdown."""
+        run = task._manual_run
+        task._manual_run = None
+        if run is None or run.done():
+            return
+        run.cancel()
+        try:
+            await run
+        except asyncio.CancelledError:
+            pass
+
+    def _manual_run_done(self, run: asyncio.Task) -> None:
+        self._manual_runs.discard(run)
+        if not run.cancelled() and run.exception() is not None:
+            logger.error(
+                "A Run now run failed outside its executor",
+                exc_info=run.exception(),
+            )
 
     def get_task(self, name: str) -> Optional[Dict[str, Any]]:
         """Get task info by name.
@@ -1420,7 +1477,29 @@ class Scheduler:
         logger.warning("Scheduled task '%s': %s", task.name, message)
         self._db_store_result(task.id, plan.last_missed.isoformat(), error=message)
 
-    async def _execute_task(self, task: ScheduledTask):
+    async def _execute_task(
+        self, task: ScheduledTask, reschedule: bool = True, claimed: bool = False
+    ):
+        """Run *task* once, unless a run of it is already in flight.
+
+        *reschedule* moves its next run on from now (a timed run); Run now
+        passes False to keep it. *claimed* means the caller already marked
+        the task running.
+        """
+        if not claimed:
+            if task._executing:
+                logger.info(
+                    "Scheduled task '%s' is still running; skipping this run",
+                    task.name,
+                )
+                return
+            task._executing = True
+        try:
+            await self._execute_task_once(task, reschedule)
+        finally:
+            task._executing = False
+
+    async def _execute_task_once(self, task: ScheduledTask, reschedule: bool):
         """Execute a single task run.
 
         If the database supports sessions (i.e. is a full ChatDatabase),
@@ -1526,19 +1605,19 @@ class Scheduler:
                     exc_info=True,
                 )
 
-        # Update next run
-        config = (
-            ScheduleConfig.from_json(task.schedule_config)
-            if task.schedule_config
-            else None
-        )
-        if config:
-            next_run = compute_next_run(config)
-        else:
-            next_run = datetime.now(timezone.utc) + timedelta(
-                seconds=task.interval_seconds
+        if reschedule:
+            config = (
+                ScheduleConfig.from_json(task.schedule_config)
+                if task.schedule_config
+                else None
             )
-        task.next_run_at = next_run.isoformat()
+            if config:
+                next_run = compute_next_run(config)
+            else:
+                next_run = datetime.now(timezone.utc) + timedelta(
+                    seconds=task.interval_seconds
+                )
+            task.next_run_at = next_run.isoformat()
         task.last_result = error if error else (result or "completed")
         task.last_error = error
 

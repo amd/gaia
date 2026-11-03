@@ -231,6 +231,18 @@ class TestNotificationSink:
         with pytest.raises(RuntimeError, match="failed to post"):
             sinks.dispatch("notification", {}, "hi")
 
+    def test_hung_notifier_raises_runtime_error(self, mocker):
+        import subprocess
+
+        mocker.patch(_PLATFORM_SYSTEM, return_value="Linux")
+        mock_run = mocker.patch(
+            _SUBPROCESS_RUN,
+            side_effect=subprocess.TimeoutExpired("notify-send", 30),
+        )
+        with pytest.raises(RuntimeError, match="within 30s.*different --sink"):
+            sinks.dispatch("notification", {}, "hi")
+        assert mock_run.call_args.kwargs["timeout"] == 30
+
     def test_missing_tool_raises_file_not_found(self, mocker):
         mocker.patch(_PLATFORM_SYSTEM, return_value="Linux")
         mocker.patch(_SUBPROCESS_RUN, side_effect=FileNotFoundError("no notify-send"))

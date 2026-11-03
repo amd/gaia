@@ -12,7 +12,7 @@ import json
 import logging
 import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
@@ -45,6 +45,7 @@ from ..models import (
     SessionListResponse,
     SessionPinRequest,
     SessionResponse,
+    SessionSearchResponse,
     UpdateSessionRequest,
 )
 from ..run_manager import run_manager
@@ -188,7 +189,6 @@ def _reject_unknown_agent_type(agent_type: str | None) -> None:
     # here told the user 'gaia' was both unknown and registered.
     valid_ids = sorted(
         {reg.id for reg in registry.list()}
-        | {"chat"}
         | {aid for aid in _SIDECAR_AGENT_TYPES if profile_for(aid).always_relay}
     )
     load_error = registry.get_load_error(agent_type)
@@ -233,7 +233,12 @@ async def create_session(
     request.agent_type = flagship_only(http_request, request.agent_type)
     _reject_unknown_agent_type(request.agent_type)
     try:
-        session_environment.check_new_chat_folders(request.agent_type, request.folders)
+        # Off the loop: a relayed agent is asked over the daemon.
+        await asyncio.to_thread(
+            session_environment.check_new_chat_folders,
+            request.agent_type,
+            request.folders,
+        )
     except session_environment.EnvironmentChangeError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     session = None
@@ -252,7 +257,7 @@ async def create_session(
         )
         session_permissions.seed_new_session(session["id"], start_mode)
         for folder in request.folders:
-            session_environment.add_folder(db, session["id"], folder)
+            session_environment.grant_folder(db, session["id"], folder)
         return await _session_response(db, session)
     except Exception as e:
         if session is not None:
@@ -304,6 +309,27 @@ async def session_events():
             await _system_emitter.unsubscribe(q)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# Declared before /api/sessions/{session_id}, which would otherwise claim "search".
+@router.get("/api/sessions/search", response_model=SessionSearchResponse)
+async def search_sessions(
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = 20,
+    include_automated: bool = False,
+    db: ChatDatabase = Depends(get_db),
+):
+    """Find chats by title or message text, ignoring case and accents.
+
+    Eval and scheduled chats are left out unless *include_automated*, as the
+    sidebar leaves them out. Private chats are included: the search runs on
+    this PC and its results go only to the local UI that already lists them.
+    """
+    limit = max(1, min(limit, 50))
+    results, truncated = await asyncio.to_thread(
+        db.search_sessions, q, limit, include_automated
+    )
+    return SessionSearchResponse(query=q, results=results, truncated=truncated)
 
 
 @router.post("/api/sessions/{session_id}/activate", status_code=200)

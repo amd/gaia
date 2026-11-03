@@ -10,11 +10,21 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
-from gaia.agents.base.tool_grants import PATH_TOOLS, grant_scope, path_argument
+from gaia.agents.base.tool_grants import (
+    PATH_TOOLS,
+    GrantScope,
+    grant_scope,
+    path_argument,
+)
 from gaia.agents.base.tools import get_tool_display_name
+from gaia.agents.base.write_safety import (
+    has_hidden_part,
+    is_too_broad_folder,
+    lands_where_code_runs,
+)
 from gaia.llm.surface_hints import surface_wording
 
 logger = logging.getLogger(__name__)
@@ -59,7 +69,7 @@ ANSI_MAGENTA = "\033[95m"
 ANSI_CYAN = "\033[96m"
 
 
-# === Confirmation-gated tools (#2210) ===
+# === Confirmation-gated tools ===
 #
 # Tools in ``Agent.confirmation_required_tools()`` must never execute without an
 # explicit human decision. A console that cannot reach a human DENIES. The only
@@ -159,9 +169,11 @@ def unaskable_denial_message(tool_name: str) -> str:
 
 def edit_target(tool_args: Any) -> str:
     """Where a file-writing call lands — the same rule the file tools apply
-    (``gaia.agents.tools.file_io_tools._resolve_target``): a relative
+    (``gaia.agents.tools.workspace_paths._resolve_target``): a relative
     ``file_path`` sits under ``project_dir`` when one is given, else under the
-    process cwd. "" when the call names no file."""
+    process cwd. It does not know a session workspace, so a host that sets one
+    passes args already resolved by the tool's ``target_of``. "" when the call
+    names no file."""
     target = path_argument(tool_args)
     if not target:
         return ""
@@ -184,21 +196,14 @@ def edit_is_inside(target: str, roots: Tuple[str, ...]) -> bool:
     A home folder or drive root is never a workspace: started there, every
     file the user owns would be "inside".
     """
-    roots = tuple(r for r in roots if not _too_broad_to_be_a_workspace(r))
+    roots = tuple(r for r in roots if not is_too_broad_folder(r))
     if not roots:
         return False
     try:
         resolved = os.path.realpath(target)
     except (OSError, ValueError):
         return False
-    parts = {part.lower() for part in resolved.replace("\\", "/").split("/")}
-    if ".git" in parts:
-        return False
-    parent = os.path.normcase(os.path.dirname(resolved))
-    for entry in os.environ.get("PATH", "").split(os.pathsep):
-        if entry and os.path.normcase(os.path.realpath(entry)) == parent:
-            return False
-    if _shadows_a_program(resolved):
+    if lands_where_code_runs(resolved):
         return False
     for root in roots:
         real_root = os.path.realpath(root)
@@ -210,25 +215,8 @@ def edit_is_inside(target: str, roots: Tuple[str, ...]) -> bool:
         except ValueError:
             continue  # different drives on Windows
         inside = os.path.relpath(resolved, real_root).replace("\\", "/").split("/")
-        return not any(part.startswith(".") and part != "." for part in inside)
+        return not has_hidden_part(inside)
     return False
-
-
-def _too_broad_to_be_a_workspace(root: str) -> bool:
-    """A home folder or a drive root holds everything the user owns."""
-    real = os.path.normcase(os.path.realpath(root))
-    home = os.path.normcase(os.path.realpath(os.path.expanduser("~")))
-    return real == home or os.path.dirname(real) == real
-
-
-def _shadows_a_program(path: str) -> bool:
-    """On Windows, cmd.exe looks in the current folder before ``PATH``, so a
-    ``git.bat`` written into the workspace runs instead of git."""
-    if os.name != "nt":
-        return False
-    stem, ext = os.path.splitext(os.path.basename(path))
-    pathext = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").lower().split(";")
-    return ext.lower() in pathext and shutil.which(stem) is not None
 
 
 def terminal_is_interactive() -> bool:
@@ -328,9 +316,11 @@ class OutputHandler(ABC):
     """A person turned on full access for this session, and can see that it is on.
 
     Strictly narrower in origin than ``auto_approve_gated_tools`` and wider in
-    effect. Only ``PermissionState`` sets it, from the TUI's ``/full-access``
-    (or the retired ``--bypass-permissions`` spelling) — an unattended harness
-    that merely pre-approves prompts must not also get an unguarded shell. In
+    effect. Only an explicit opt-in a person names sets it — the TUI's
+    ``/full-access`` via ``PermissionState`` (or the retired
+    ``--bypass-permissions`` spelling), or ``gaia -p --full-access`` — never
+    pre-approval: an unattended harness that merely pre-approves prompts must
+    not also get an unguarded shell. In
     exchange it lifts the shell guardrails too: the operator block, the
     read-only binary policy (replaced by ``DEVELOPER_COMMANDS``) and the rate
     limit, and it runs commands outside ``run_shell_command``'s no-prompt list
@@ -634,6 +624,15 @@ class OutputHandler(ABC):
         """Grant keys the user has answered "always" to on this console."""
         return self._lazy_tool_set("_session_grants")
 
+    def session_grant_scopes(self) -> Dict[str, GrantScope]:
+        """Each "always" answer on this console, by :attr:`GrantScope.key`.
+
+        :meth:`session_grants` holds only the family keys a call is checked
+        against; this keeps what each answer granted, so it can be listed by
+        its label and revoked as a whole.
+        """
+        return self._lazy_attribute("_session_grant_scopes", dict)
+
     def call_is_granted(self, tool_name: str, tool_args: Any) -> bool:
         """True when an earlier "always" already covers THIS exact call."""
         scope = grant_scope(tool_name, tool_args)
@@ -656,6 +655,7 @@ class OutputHandler(ABC):
             )
             return None
         self.session_grants().update(scope.keys)
+        self.session_grant_scopes()[scope.key] = scope
         self._last_denial = None
         logger.info("User granted '%s' for the remainder of this session", scope.label)
         return scope.label
@@ -667,6 +667,7 @@ class OutputHandler(ABC):
         new user) so consent does not outlive its context.
         """
         self.session_grants().clear()
+        self.session_grant_scopes().clear()
 
     def _lazy_tool_set(self, attribute: str) -> Set[str]:
         """Per-instance string set, created on first use.
@@ -675,11 +676,14 @@ class OutputHandler(ABC):
         into every other console in the process — so a subclass that skips
         ``super().__init__()`` still behaves.
         """
-        names = getattr(self, attribute, None)
-        if names is None:
-            names = set()
-            setattr(self, attribute, names)
-        return names
+        return self._lazy_attribute(attribute, set)
+
+    def _lazy_attribute(self, attribute: str, factory: Callable[[], Any]) -> Any:
+        value = getattr(self, attribute, None)
+        if value is None:
+            value = factory()
+            setattr(self, attribute, value)
+        return value
 
     def log_auto_approval(self, tool_name: str) -> None:
         """Record that a gated tool ran without a human decision."""

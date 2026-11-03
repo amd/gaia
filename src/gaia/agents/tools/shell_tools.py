@@ -31,11 +31,7 @@ from gaia.agents.base.call_risk import (
 )
 from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.errors import exit_error
-from gaia.agents.base.file_snapshots import (
-    SnapshotError,
-    before_change,
-    note_untracked,
-)
+from gaia.agents.base.file_snapshots import SnapshotError, before_change, note_untracked
 from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
@@ -53,6 +49,7 @@ from gaia.agents.tools.shell_deletes import (
     split_exact,
 )
 from gaia.agents.tools.shell_session import ShellSession
+from gaia.agents.tools.workspace_paths import _workspace_default, _workspace_target
 from gaia.env import child_env
 from gaia.tool_cancellation import tool_cancelled
 
@@ -202,6 +199,217 @@ DANGEROUS_FIND_ACTIONS = {
     "-fprint0",
     "-fprintf",
     "-fls",
+}
+
+
+def _long_flag_matches(token: str, full: str) -> bool:
+    """True when *token* is ``--name`` or ``--name=…`` spelling *full* or a prefix of it."""
+    name = token.split("=", 1)[0]
+    return len(name) > 2 and full.startswith(name)
+
+
+#: ``date`` flags that only choose what is printed; ``-d``/``-f``/``-r`` read
+#: their value, and ``-I`` takes an optional attached one.
+_DATE_VALUE_SHORT = frozenset("dfr")
+_DATE_LONG_VALUE = ("--date", "--file", "--reference")
+_DATE_LONG_FLAGS = (
+    "--date",
+    "--debug",
+    "--file",
+    "--iso-8601",
+    "--reference",
+    "--resolution",
+    "--rfc-3339",
+    "--rfc-email",
+    "--universal",
+    "--utc",
+    "--help",
+    "--version",
+)
+
+
+def _date_sets_clock(parts: list) -> Optional[str]:
+    """Why ``date`` *parts* sets the clock, or None for a read."""
+    skip_next = False
+    for part in parts[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if part.lower() == "/t":
+            # cmd's `date /t` only prints; GNU date rejects it as an operand.
+            continue
+        if part.startswith("--"):
+            name = part.split("=", 1)[0]
+            matches = [f for f in _DATE_LONG_FLAGS if _long_flag_matches(part, f)]
+            if name in matches:
+                matches = [name]
+            if len(matches) != 1:
+                # Unknown, ambiguous, or an abbreviation of --set.
+                return f"date '{part}' can set the system clock"
+            if matches[0] in _DATE_LONG_VALUE and "=" not in part:
+                skip_next = True
+            continue
+        if part.startswith("-") and part != "-":
+            for i, letter in enumerate(part[1:]):
+                if letter == "s":
+                    return "date -s sets the system clock"
+                if letter in _DATE_VALUE_SHORT:
+                    skip_next = i == len(part) - 2
+                    break
+                if letter == "I":
+                    break
+                if letter not in "uR":
+                    return f"date '{part}' can set the system clock"
+            continue
+        if not part.startswith("+"):
+            # An operand that is not a +FORMAT is a new date to set.
+            return f"date '{part}' sets the system clock"
+    return None
+
+
+#: ``sysctl`` letters that only read (Linux procps and BSD/macOS).
+_SYSCTL_READ_LETTERS = frozenset("aAbdehiNnoqxX")
+_SYSCTL_READ_LONG = ("--all", "--binary", "--ignore", "--names", "--values", "--quiet")
+
+
+def _sysctl_writes(parts: list) -> Optional[str]:
+    """Why ``sysctl`` *parts* changes kernel state, or None for a read."""
+    for part in parts[1:]:
+        if part.startswith("--"):
+            if not any(_long_flag_matches(part, f) for f in _SYSCTL_READ_LONG):
+                return f"sysctl '{part}' can write or load kernel settings"
+        elif part.startswith("-") and part != "-":
+            if not set(part[1:]) <= _SYSCTL_READ_LETTERS:
+                return f"sysctl '{part}' can write or load kernel settings"
+        elif "=" in part:
+            return f"sysctl '{part}' sets a kernel setting"
+    return None
+
+
+_HOSTNAME_READ_LETTERS = frozenset("aAdfhiIsVy")
+_HOSTNAME_READ_LONG = (
+    "--alias",
+    "--all-fqdns",
+    "--all-ip-addresses",
+    "--domain",
+    "--fqdn",
+    "--help",
+    "--ip-address",
+    "--long",
+    "--short",
+    "--version",
+    "--yp",
+    "--nis",
+)
+
+
+def _hostname_sets(parts: list) -> Optional[str]:
+    """Why ``hostname`` *parts* renames this machine, or None for a read."""
+    for part in parts[1:]:
+        if part.startswith("--"):
+            if not any(_long_flag_matches(part, f) for f in _HOSTNAME_READ_LONG):
+                return f"hostname '{part}' can rename this machine"
+        elif part.startswith("-") and part != "-":
+            if not set(part[1:]) <= _HOSTNAME_READ_LETTERS:
+                return f"hostname '{part}' can rename this machine"
+        else:
+            return f"hostname '{part}' renames this machine"
+    return None
+
+
+#: ``ipconfig`` switches that only display; /release, /renew, /flushdns,
+#: /registerdns and /setclassid change network state.
+_IPCONFIG_READ_SWITCHES = frozenset(
+    {"all", "displaydns", "allcompartments", "showclassid", "showclassid6", "?"}
+)
+
+
+def _ipconfig_changes_network(parts: list) -> Optional[str]:
+    """Why ``ipconfig`` *parts* changes network state, or None for a read."""
+    for part in parts[1:]:
+        if part.startswith(("/", "-")) and part.lstrip("/-").lower() not in (
+            _IPCONFIG_READ_SWITCHES
+        ):
+            return f"ipconfig '{part}' changes network configuration"
+    return None
+
+
+#: ``file`` short options whose value is the rest of the cluster or the next word.
+_FILE_VALUE_LETTERS = frozenset("eFfmP")
+
+
+def _file_compiles_magic(parts: list) -> Optional[str]:
+    """Why ``file`` *parts* writes a compiled magic file, or None for a read."""
+    for part in parts[1:]:
+        if part.startswith("--"):
+            if len(part.split("=", 1)[0]) > 3 and _long_flag_matches(part, "--compile"):
+                return "file --compile writes a compiled magic file"
+        elif part.startswith("-"):
+            for letter in part[1:]:
+                if letter == "C":
+                    return "file -C writes a compiled magic file"
+                if letter in _FILE_VALUE_LETTERS:
+                    break
+    return None
+
+
+#: ``less`` short options whose value is the rest of the cluster or the next word.
+_LESS_VALUE_LETTERS = frozenset('pPtTD"')
+#: ``less`` long options that write a log file or load key bindings, which can
+#: set LESSOPEN and so run a program.
+_LESS_LONG_WRITES_OR_RUNS = (
+    "--log-file",
+    "--lesskey-file",
+    "--lesskey-src",
+    "--lesskey-content",
+)
+#: ``+N``, ``+G`` and ``+Ng`` only move to a line.
+_LESS_GOTO_LINE = re.compile(r"\+\d*[gG]?")
+
+
+def _less_writes_or_runs(parts: list) -> Optional[str]:
+    """Why ``less``/``more`` *parts* writes a log file or runs a command, or None.
+
+    ``more`` is checked too because on macOS it is ``less``.
+    """
+    for part in parts[1:]:
+        if part.startswith("--"):
+            lowered = part.lower()
+            if any(_long_flag_matches(lowered, f) for f in _LESS_LONG_WRITES_OR_RUNS):
+                return f"'{part}' writes a log file or loads key bindings"
+        elif part.startswith("-") and part != "-":
+            for letter in part[1:]:
+                if letter in "oOk":
+                    return f"'{part}' writes a log file or loads key bindings"
+                if letter in _LESS_VALUE_LETTERS:
+                    break
+        elif part.startswith("+") and not _LESS_GOTO_LINE.fullmatch(part):
+            # A +command can be '!' or '|', which runs a shell command.
+            return f"'{part}' runs a pager command at startup"
+    return None
+
+
+def _arch_runs_program(parts: list) -> Optional[str]:
+    """Why ``arch`` *parts* runs another program, or None for bare ``arch``.
+
+    On macOS ``arch -arm64 <cmd>`` runs *cmd*; only the bare read is unasked.
+    """
+    if len(parts) > 1:
+        return f"arch '{parts[1]}' can run another program"
+    return None
+
+
+#: Read-only-by-name commands with flags or operands that write, set system
+#: state, or run something. Each returns why, or None for a plain read.
+STATE_CHANGING_FLAG_GUARDS = {
+    "date": _date_sets_clock,
+    "sysctl": _sysctl_writes,
+    "hostname": _hostname_sets,
+    "ipconfig": _ipconfig_changes_network,
+    "file": _file_compiles_magic,
+    "less": _less_writes_or_runs,
+    "more": _less_writes_or_runs,
+    "arch": _arch_runs_program,
 }
 
 # How a blocked command is blocked. Mirrors the three tiers in
@@ -419,10 +627,10 @@ def _call_key(command: Any, working_directory: Any) -> Tuple[Any, Any]:
     return command, _expand_home(working_directory) or None
 
 
-# The binaries a developer session needs and a read-only session must not have
-# (#3374). Active ONLY under full access; ALLOWED_COMMANDS above is
+# The binaries a developer session needs and a read-only session must not have.
+# Active ONLY under full access; ALLOWED_COMMANDS above is
 # untouched so the read-only tier keeps claiming exactly what it claims, and
-# #2768's sweep of it never has to reason about these entries.
+# a sweep of it never has to reason about these entries.
 #
 # This set permits ARBITRARY CODE EXECUTION — node, make and the interpreters
 # each run whatever the working tree tells them to. That is why it is reachable
@@ -705,6 +913,7 @@ DENIED_ENV_NAMES = frozenset(
         "LOCPATH",
         "NLSPATH",
         "TERMINFO",
+        "MORE",  # macOS `more` is `less`, and reads its options from MORE
     }
 )
 
@@ -865,7 +1074,7 @@ def _is_file_write_flag(token: str) -> bool:
 #: ALLOWED_COMMANDS, so they are refused either way — but the generic refusal
 #: says "only read-only commands are allowed" and lists read-only examples,
 #: which leaves no route to the thing the agent was trying to do. Naming these
-#: lets the refusal point at edit_file instead of dead-ending (#3600).
+#: lets the refusal point at edit_file instead of dead-ending.
 
 
 FILE_REWRITE_BINARIES = frozenset(
@@ -2517,6 +2726,10 @@ def _posix_pipe_positions(text: str) -> list:
     return positions
 
 
+#: The only characters a cmd.exe line may hold and still be classified read-only.
+_CMD_PLAIN_LINE = re.compile(r"[A-Za-z0-9 ._\\/:-]*")
+
+
 def _pipe_dialect() -> str:
     """Whose pipe rules a step follows: cmd.exe's on Windows, sh's elsewhere."""
     return "cmd" if os.name == "nt" else "posix"
@@ -2813,19 +3026,32 @@ class ShellToolsMixin:
         """
         return self._path_allowed
 
+    def _session_start_cwd(self) -> Optional[str]:
+        """Return a permitted chat workspace, or let the session use cwd."""
+        workspace = _workspace_default(self)
+        if workspace and self._path_allowed(workspace, prompt_user=False):
+            return workspace
+        return None
+
     @property
     def shell_session(self) -> ShellSession:
         """This agent's shell session, created on first use."""
         session = getattr(self, "_shell_session", None)
         if session is None or session.closed:
-            session = ShellSession(cwd_guard=self._session_cwd_guard())
+            session = ShellSession(
+                start_cwd=self._session_start_cwd(),
+                cwd_guard=self._session_cwd_guard(),
+            )
             self._shell_session = session
         return session
 
     def reset_shell_session(self) -> ShellSession:
         """Replace the session with a clean one and return it."""
         previous = getattr(self, "_shell_session", None)
-        self._shell_session = ShellSession(cwd_guard=self._session_cwd_guard())
+        self._shell_session = ShellSession(
+            start_cwd=self._session_start_cwd(),
+            cwd_guard=self._session_cwd_guard(),
+        )
         if previous is not None:
             previous.close()
         return self._shell_session
@@ -2951,8 +3177,9 @@ class ShellToolsMixin:
         """Whether this session is running under full access (#3373).
 
         One source of truth, read live: the session's output handler carries
-        ``full_access``, set only by the sidecar's ``PermissionState``
-        from ``--full-access`` or the TUI's ``/full-access``. Every gate reads
+        ``full_access``, set only by a named opt-in: the sidecar's
+        ``PermissionState`` from ``--full-access`` or the TUI's ``/full-access``,
+        or ``gaia -p --full-access``. Every gate reads
         this — ``_validate_shell_command``, ``skill_grant_covers_call``, the
         executor — so they cannot hold different opinions about whether a
         command is legal.
@@ -3038,7 +3265,8 @@ class ShellToolsMixin:
         pre-approve for unattended runs. They were granted when commands outside
         the no-prompt list could not be approved at all, so neither widens what
         such a run executes. Only the console's ``full_access`` (the TUI's
-        ``/full-access``, on screen for the whole session) runs them unasked.
+        ``/full-access``, on screen for the whole session, or ``gaia -p
+        --full-access``, announced on stderr) runs them unasked.
         """
         console = getattr(self, "console", None)
         if getattr(console, "full_access", False) is True:
@@ -3303,11 +3531,12 @@ class ShellToolsMixin:
         """``(folder, explicit)`` a call runs in, or None when it names no real one."""
         working_directory = _expand_home(working_directory)
         if working_directory:
-            if not isinstance(working_directory, str) or not os.path.isdir(
-                working_directory
-            ):
+            if not isinstance(working_directory, str):
                 return None
-            return str(Path(working_directory).resolve()), True
+            working_directory = str(_workspace_target(self, working_directory))
+            if not os.path.isdir(working_directory):
+                return None
+            return working_directory, True
         return self._live_session_cwd(), False
 
     def _live_session_cwd(self) -> str:
@@ -3343,6 +3572,51 @@ class ShellToolsMixin:
             f"ran in {session.cwd} instead."
         )
         return session.cwd
+
+    def _line_is_read_only(self, command: str) -> bool:
+        """Return whether *command* is read-only under the ordinary policy.
+
+        Full access changes whether a command may run, not whether it can write.
+        Reparse under the normal policy so redirections and other shell-only
+        constructs still count as untracked changes.
+        """
+        # Full access hands the raw line to sh, which expands $ and backticks
+        # even inside double quotes; the shell-less parse sees only text.
+        if _pipe_dialect() == "posix" and ("$" in command or "`" in command):
+            return False
+        # Braces and globs can expand into a write flag (`find . {-delete,}`):
+        # sh does it off Windows, Git's GNU tools do it to their own argv on it.
+        if any(char in command for char in "{*?["):
+            return False
+        # cmd.exe strips quotes and rewrites ^, %VAR% and !VAR! before the
+        # program runs, so only a line of plain characters can be judged read-only.
+        if _pipe_dialect() == "cmd" and not _CMD_PLAIN_LINE.fullmatch(command):
+            return False
+        # A PowerShell body can run any cmdlet inside a subexpression; never a read.
+        if "powershell" in command.lower() or "pwsh" in command.lower():
+            return False
+        steps, parse_error = _parse_line(command, bypass_gates=False)
+        if parse_error is not None or not steps:
+            return False
+        granted = skill_granted_binaries(self)
+        for step in steps:
+            if step.is_cd:
+                return False
+            for segment in step.segments:
+                if (
+                    not segment
+                    or _interpreter_name(segment[0]) == "powershell"
+                    or self._validate_command(
+                        segment[0].lower(),
+                        segment,
+                        shlex.join(segment),
+                        granted_binaries=granted,
+                        bypass_gates=False,
+                    )
+                    is not None
+                ):
+                    return False
+        return True
 
     def _line_verdict(self, command: str, working_directory: Any = None) -> tuple:
         """``(error, steps)`` for this call, path scope included.
@@ -3496,7 +3770,7 @@ class ShellToolsMixin:
                 return allowed, reason, wait_time, waited
             # Sliced, not one long sleep: this runs inside _call_tool_bounded's
             # window, so a wait that ignored the flag would keep the worker
-            # alive past a Stop and past its own timeout (#2600).
+            # alive past a Stop and past its own timeout.
             remaining = wait_time
             while remaining > 0:
                 if tool_cancelled():
@@ -4111,7 +4385,14 @@ class ShellToolsMixin:
         # Special handling for wmic - only allow read-only queries
         if cmd_base == "wmic":
             for part in cmd_parts[1:]:
-                if _is_file_write_flag(part):
+                # /RECORD:<file> logs the session to a file.
+                switch = part.lower().lstrip("/-").split(":", 1)[0]
+                is_record = (
+                    part.startswith(("/", "-"))
+                    and len(switch) >= 3
+                    and "record".startswith(switch)
+                )
+                if _is_file_write_flag(part) or is_record:
                     return _confirm_once(
                         {
                             "status": "error",
@@ -4263,6 +4544,18 @@ class ShellToolsMixin:
                 part_lower = part.lower()
                 flag = part_lower.split("=", 1)[0]
                 is_output = False
+                if len(flag) > 2 and "--compress-program".startswith(flag):
+                    # --compress-program=PROG runs PROG on sort's temp files.
+                    return {
+                        "status": "error",
+                        "tier": TIER_CONFIRM,
+                        "error": (
+                            f"sort '{part}' runs another program, which is not "
+                            "allowed under the read-only command policy."
+                        ),
+                        "has_errors": True,
+                        "hint": "Drop --compress-program and read sort's result from stdout.",
+                    }
                 if len(flag) > 1 and "/output".startswith(flag):
                     # Windows sort: /o, /out, /output.
                     is_output = True
@@ -4316,6 +4609,19 @@ class ShellToolsMixin:
                     "error": "uniq with an output file is not allowed: it writes to disk, violating the read-only command policy.",
                     "has_errors": True,
                     "hint": "Use a single input (or stdin) and read stdout, e.g. 'uniq file' or 'sort file | uniq'.",
+                }
+        elif cmd_base in STATE_CHANGING_FLAG_GUARDS:
+            reason = STATE_CHANGING_FLAG_GUARDS[cmd_base](cmd_parts)
+            if reason is not None:
+                return {
+                    "status": "error",
+                    "tier": TIER_CONFIRM,
+                    "error": (
+                        f"{reason}, which is not allowed under the read-only "
+                        "command policy."
+                    ),
+                    "has_errors": True,
+                    "hint": f"Run '{cmd_base}' with read-only options only.",
                 }
         elif cmd_base in SHELL_KEYWORDS:
             return {
@@ -4627,40 +4933,41 @@ class ShellToolsMixin:
                         "hint": "Rate limiting prevents excessive command execution",
                     }
 
-                # Validate working directory if specified
+                # Validate an explicit directory after resolving it from the
+                # chat workspace; keep the original argument for approval keys.
                 if working_directory:
-                    if not os.path.exists(working_directory):
+                    cwd = str(_workspace_target(self, working_directory))
+                    if not os.path.exists(cwd):
                         return {
                             **NOT_EXECUTED,
                             "status": "error",
-                            "error": f"Working directory not found: {working_directory}",
+                            "error": f"Working directory not found: {cwd}",
                             "has_errors": True,
                         }
 
-                    if not os.path.isdir(working_directory):
+                    if not os.path.isdir(cwd):
                         return {
                             **NOT_EXECUTED,
                             "status": "error",
-                            "error": f"Path is not a directory: {working_directory}",
+                            "error": f"Path is not a directory: {cwd}",
                             "has_errors": True,
                         }
 
                     # Outside full access the line's verdict judges the
                     # folder, before the prompt, so it can be approved there.
-                    if bypass and not self._path_allowed(working_directory):
+                    if bypass and not self._path_allowed(cwd):
                         hint = (
-                            self.path_validator.scratch_hint(working_directory)
+                            self.path_validator.scratch_hint(cwd)
                             if hasattr(self, "path_validator")
                             else ""
                         )
                         return {
                             **NOT_EXECUTED,
                             "status": "error",
-                            "error": f"Access denied: {working_directory} is not in allowed paths.{hint}",
+                            "error": f"Access denied: {cwd} is not in allowed paths.{hint}",
                             "has_errors": True,
                         }
 
-                    cwd = str(Path(working_directory).resolve())
                     session_scoped = False
                 else:
                     # An explicit working_directory is a one-shot override that
@@ -4704,8 +5011,12 @@ class ShellToolsMixin:
                 error, steps = self._line_verdict(command, working_directory)
                 if error and not _reaches_the_prompt(error):
                     return error
-                # Only the read-only tier is known not to write files.
-                may_write = bool(error) or bypass
+                # Full access permits writes; it does not make a known read
+                # untrackable. Classify the line with the ordinary policy so
+                # writes still get snapshots and the Undo warning.
+                may_write = bool(error) or (
+                    bypass and not self._line_is_read_only(command)
+                )
                 if error and unconfirmed:
                     return self._blanket_approval_refusal(error, command)
                 if error and error.get("tier") == TIER_CONFIRM_ONCE:

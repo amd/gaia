@@ -4,9 +4,10 @@
 /**
  * The session panel (#5279): one docked, resizable pane per chat that keeps
  * the facts that build trust in view — this answer's sources, where the chat
- * runs and what it may touch, what fills the context, what it produced, and
- * what it changed. It absorbs the per-answer side rail (#5222) as its first
- * section, so the transcript loses one column's width, not two.
+ * runs and what it may touch, what fills the context, what it produced, what
+ * it changed, and which tools its agent has. It absorbs the per-answer side
+ * rail (#5222) as its first section, so the transcript loses one column's
+ * width, not two.
  *
  * Nothing in it polls: sections read on open, on expand, and when a reply
  * ends; closed or collapsed, they are unmounted.
@@ -24,7 +25,9 @@ import { PanelSection } from './PanelSection';
 import { EnvironmentSection } from './EnvironmentSection';
 import { OutputsSection } from './OutputsSection';
 import { ChangesSection } from './ChangesSection';
+import { AgentInfoSection } from './AgentInfoSection';
 import type { ContextUsage, Message } from '../../types';
+import { useT } from '../../i18n/useT';
 import './SessionPanel.css';
 
 /** Below this window width the panel opens over the chat instead of beside it. */
@@ -43,6 +46,7 @@ interface SessionPanelProps {
 }
 
 export function SessionPanel({ sessionId, messages, busy, onUsage, onJumpToMessage }: SessionPanelProps) {
+    const t = useT();
     const overlay = useMediaQuery(PANEL_OVERLAY_QUERY);
     const open = useSessionPanelStore((s) => (overlay ? s.overlayOpen : s.open));
     const width = useSessionPanelStore((s) => s.width);
@@ -79,9 +83,11 @@ export function SessionPanel({ sessionId, messages, busy, onUsage, onJumpToMessa
         const startWidth = width;
         const target = e.currentTarget;
         target.setPointerCapture?.(e.pointerId);
+        // Right to left the panel sits on the left, so dragging right widens it.
+        const sign = getComputedStyle(target).direction === 'rtl' ? -1 : 1;
         let latest = startWidth;
         const move = (ev: globalThis.PointerEvent) => {
-            latest = clampWidth(startWidth + (startX - ev.clientX));
+            latest = clampWidth(startWidth + sign * (startX - ev.clientX));
             setDragWidth(latest);
         };
         const up = () => {
@@ -97,9 +103,10 @@ export function SessionPanel({ sessionId, messages, busy, onUsage, onJumpToMessa
     }, [setWidth, width]);
 
     const onSeparatorKey = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
+        const step = getComputedStyle(e.currentTarget).direction === 'rtl' ? -KEY_STEP : KEY_STEP;
         const next = {
-            ArrowLeft: width + KEY_STEP,
-            ArrowRight: width - KEY_STEP,
+            ArrowLeft: width + step,
+            ArrowRight: width - step,
             Home: PANEL_MIN_WIDTH,
             End: PANEL_MAX_WIDTH,
         }[e.key];
@@ -119,7 +126,7 @@ export function SessionPanel({ sessionId, messages, busy, onUsage, onJumpToMessa
                 ref={panelRef}
                 className={`session-panel ${overlay ? 'is-overlay' : 'is-docked'}`}
                 style={overlay ? undefined : { width: shown }}
-                aria-label="Session panel"
+                aria-label={t('sp.label')}
                 role={overlay ? 'dialog' : 'complementary'}
                 aria-modal={overlay ? true : undefined}
             >
@@ -128,7 +135,7 @@ export function SessionPanel({ sessionId, messages, busy, onUsage, onJumpToMessa
                         className={`sp-resize${dragWidth != null ? ' is-dragging' : ''}`}
                         role="separator"
                         aria-orientation="vertical"
-                        aria-label="Resize session panel"
+                        aria-label={t('sp.resize')}
                         aria-valuemin={PANEL_MIN_WIDTH}
                         aria-valuemax={PANEL_MAX_WIDTH}
                         aria-valuenow={shown}
@@ -139,32 +146,33 @@ export function SessionPanel({ sessionId, messages, busy, onUsage, onJumpToMessa
                     />
                 )}
                 <header className="sp-header">
-                    <h2 className="sp-title">This chat</h2>
+                    <h2 className="sp-title">{t('sp.title')}</h2>
                     <button
                         ref={closeRef}
                         type="button"
                         className="btn-icon-sm"
                         onClick={close}
-                        aria-label="Close session panel"
-                        title="Close"
+                        aria-label={t('sp.close')}
+                        title={t('sp.closeShort')}
                     >
                         {overlay ? <X size={14} /> : <PanelRightClose size={14} />}
                     </button>
                 </header>
                 <div className="sp-body">
                     {answer && (
-                        <PanelSection id="answer" title="This answer">
+                        <PanelSection id="answer" title={t('sp.section.answer')}>
                             <ThisAnswer messages={messages} busy={busy} />
                         </PanelSection>
                     )}
                     <EnvironmentSection sessionId={sessionId} busy={busy} />
-                    <PanelSection id="context" title="Context & performance">
+                    <PanelSection id="context" title={t('sp.section.context')}>
                         <div className="sp-context">
                             <ContextDetails sessionId={sessionId} busy={busy} onUsage={onUsage} />
                         </div>
                     </PanelSection>
                     <OutputsSection sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />
                     <ChangesSection sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />
+                    <AgentInfoSection sessionId={sessionId} busy={busy} />
                 </div>
             </aside>
         </>
@@ -173,6 +181,7 @@ export function SessionPanel({ sessionId, messages, busy, onUsage, onJumpToMessa
 
 /** The chat header's button that shows or hides the panel. */
 export function SessionPanelToggle({ messages, busy }: { messages: Message[]; busy: boolean }) {
+    const t = useT();
     const overlay = useMediaQuery(PANEL_OVERLAY_QUERY);
     const open = useSessionPanelStore((s) => (overlay ? s.overlayOpen : s.open));
     const setOpen = useSessionPanelStore((s) => s.setOpen);
@@ -181,7 +190,7 @@ export function SessionPanelToggle({ messages, busy }: { messages: Message[]; bu
     const warn = !open && state?.kind === 'turn' && state.turn.turnSummary
         ? liveDataFailed(state.turn.turnSummary)
         : false;
-    const label = open ? 'Hide session panel' : warn ? "Show session panel: couldn't get live data" : 'Show session panel';
+    const label = open ? t('sp.hide') : warn ? t('sp.showWarn') : t('sp.show');
     return (
         <button
             type="button"

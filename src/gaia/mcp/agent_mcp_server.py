@@ -111,7 +111,6 @@ class AgentMCPServer:
         for tool_def in tools:
             tool_name = tool_def["name"]
             tool_description = tool_def.get("description", "")
-            _input_schema = tool_def.get("inputSchema", {})
 
             # Create a wrapper function for this tool
             # We need to capture tool_name in the closure properly

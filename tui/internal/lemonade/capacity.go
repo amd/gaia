@@ -23,6 +23,9 @@ type Capacity struct {
 	DiskFreeGB float64
 	// ServerVersion is Lemonade's own version, "" when it did not say.
 	ServerVersion string
+	// NPUMemoryGB is the system RAM an FLM model loads into: installed RAM
+	// less an APU's GPU carve-out. 0 when Lemonade reports no available NPU.
+	NPUMemoryGB float64
 }
 
 type gpuInfo struct {
@@ -62,6 +65,9 @@ type systemInfo struct {
 		AMDDGPU gpuList `json:"amd_dgpu"`
 		NVIDIA  gpuList `json:"nvidia_gpu"`
 		Metal   gpuList `json:"metal"`
+		NPU     *struct {
+			Available bool `json:"available"`
+		} `json:"amd_npu"`
 	} `json:"devices"`
 	Storage *struct {
 		FreeBytes *float64 `json:"free_bytes"`
@@ -106,6 +112,45 @@ type gpuEntry struct {
 // capacityFrom mirrors gaia.llm.model_fit.capacity_from_system_info, including
 // its refusal to judge a PC whose GPU is reported without its memory.
 func capacityFrom(info systemInfo) (Capacity, error) {
+	c, err := gpuCapacityFrom(info)
+	c.NPUMemoryGB = npuMemoryGB(info)
+	return c, err
+}
+
+// npuMemoryGB mirrors gaia.llm.model_fit._npu_memory_gb.
+func npuMemoryGB(info systemInfo) float64 {
+	physical := physicalMemoryGB(info.PhysicalMemory)
+	if info.Devices.NPU == nil || !info.Devices.NPU.Available || physical <= 0 {
+		return 0
+	}
+	carveOut := 0.0
+	for _, src := range []struct {
+		integrated bool
+		list       gpuList
+	}{{false, info.Devices.AMD}, {true, info.Devices.AMDIGPU}, {false, info.Devices.AMDDGPU}} {
+		for _, g := range src.list {
+			if g.available() && (src.integrated || g.Integrated) {
+				if carveOut = g.VRAMGB; carveOut <= 0 {
+					carveOut = adapterMemoryGB(g.Name)
+				}
+				return math.Max(0, physical-carveOut)
+			}
+		}
+	}
+	return physical
+}
+
+// NPU is c as an FLM model sees it: the NPU's system RAM as the memory pool.
+// ok is false on a PC with no NPU. Mirrors gaia.llm.model_fit.npu_capacity.
+func (c Capacity) NPU() (npu Capacity, ok bool) {
+	if c.NPUMemoryGB <= 0 {
+		return c, false
+	}
+	c.MemoryGB, c.MemorySource = c.NPUMemoryGB, "NPU, system RAM"
+	return c, true
+}
+
+func gpuCapacityFrom(info systemInfo) (Capacity, error) {
 	c := Capacity{DiskFreeGB: -1}
 	if info.Storage != nil && info.Storage.FreeBytes != nil {
 		c.DiskFreeGB = *info.Storage.FreeBytes / 1e9

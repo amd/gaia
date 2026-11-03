@@ -20,7 +20,7 @@
     border: 1px solid var(--border-light);
     border-radius: var(--radius-lg);
     color: var(--text-primary);
-    text-align: left;
+    text-align: start;
 }
 
 .start-card:hover:not(:disabled) {
@@ -46,6 +46,23 @@
 .start-card-note {
     color: var(--text-secondary);
     font-size: 12.5px;
+}
+
+/* Halves of a bracketed label wrap between, never inside, each other. */
+.start-card-part {
+    display: inline-block;
+    max-inline-size: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+}
+.start-card-part + .start-card-part {
+    margin-inline-start: 0.3em;
+}
+/* Inline, so a long English half ends in an ellipsis rather than vanishing whole. */
+.start-card-note .start-card-part .i18n-gloss {
+    display: inline;
 }
 
 @media (max-width: 480px) {

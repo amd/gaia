@@ -114,6 +114,10 @@ export interface GaiaElectronAPI {
   power: {
     setKeepAwake: (on: boolean) => Promise<boolean>;
   };
+  dialog: {
+    /** The OS folder picker. Resolves the chosen absolute path, or null when cancelled. */
+    pickFolder: (defaultPath?: string) => Promise<string | null>;
+  };
   tray: {
     getConfig: () => Promise<TrayConfig>;
     /** Resolves with the saved config; rejects with why it couldn't be saved. */

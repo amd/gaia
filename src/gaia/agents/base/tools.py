@@ -5,11 +5,14 @@ Tool registry and decorator for agent tools.
 """
 
 import inspect
-import logging
 import re
 import types
 import typing
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
+
+# Set up logging via the project logger; importing this module must not
+# reconfigure the root logger.
+from gaia.logger import get_logger
 
 # Re-exported for existing callers of this module.
 # pylint: disable=unused-import
@@ -21,9 +24,7 @@ from gaia.tool_cancellation import (  # noqa: F401
     tool_cancelled,
 )
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Tool registry to store registered tools
 _TOOL_REGISTRY: dict[str, dict] = {}
@@ -339,6 +340,18 @@ def tool(
         return decorator
 
 
+def bare_tool_name(tool_name: str) -> str:
+    """Return *tool_name* without its ``<skill-name>/`` namespace.
+
+    A skill's tools register as ``<skill>/<tool>`` (``rss-digest/fetch_rss``).
+    Checks that classify a tool by name — the confirmation set, "does this
+    write a file" — read the bare name, so a skill tool called ``write_file``
+    is held to the same rule as the core ``write_file``. Core and MCP names
+    carry no ``/`` and come back unchanged.
+    """
+    return tool_name.rpartition("/")[2]
+
+
 def get_tool_display_name(tool_name: str) -> str:
     """Return the display name for a tool, resolving MCP namespacing.
 
@@ -361,16 +374,16 @@ def get_tool_display_name(tool_name: str) -> str:
     return tool.get("display_name", tool_name)  # type: ignore[no-any-return]
 
 
-def get_tool_display_label(tool_name: str) -> str:
-    """Return a user-facing label for the tool suitable for UI progress strips.
+def get_tool_display_label(tool_name: str) -> Optional[str]:
+    """Return the tool's ``display_label`` for UI progress strips, or None.
 
-    Prefers the explicit `display_label` provided on the decorator, falls
-    back to the registry `description`, then finally to the raw tool name.
+    None when the tool isn't registered or declares no ``display_label``;
+    callers pick their own fallback.
     """
     tool = _TOOL_REGISTRY.get(tool_name)
     if not tool:
-        return None  # type: ignore[return-value]
-    return tool.get("display_label")  # type: ignore[return-value]
+        return None
+    return tool.get("display_label")
 
 
 #: What a long tool call is doing, in the user's words, while it streams.
@@ -401,3 +414,57 @@ def get_tool_metadata(tool_name: str):
     importing ``_TOOL_REGISTRY`` directly.
     """
     return _TOOL_REGISTRY.get(tool_name)
+
+
+#: Categories a tool can have besides a ``KNOWN_TOOLS`` mixin name.
+TOOL_CATEGORY_MCP = "mcp"
+TOOL_CATEGORY_SKILL = "skill"
+TOOL_CATEGORY_AGENT = "agent"
+
+
+def tool_category(tool_name: str, entry: Mapping[str, Any]) -> str:
+    """Where a registered tool comes from, for grouping it in a UI.
+
+    Args:
+        tool_name: The tool's registry key.
+        entry: Its registry entry.
+
+    Returns:
+        ``"mcp"`` for a tool an MCP server provides, ``"skill"`` for one a
+        skill registered (``<skill>/<tool>``), the ``KNOWN_TOOLS`` name of the
+        mixin that defines it (``"rag"``, ``"file_io"``, ...), else
+        ``"agent"``: a tool the agent class defines itself.
+    """
+    from gaia.agents.registry import KNOWN_TOOLS
+
+    if entry.get("_mcp_server") is not None:
+        return TOOL_CATEGORY_MCP
+    if "/" in tool_name:
+        return TOOL_CATEGORY_SKILL
+    module = getattr(entry.get("function"), "__module__", None)
+    for name, (module_path, _class_name) in KNOWN_TOOLS.items():
+        if module == module_path:
+            return name
+    return TOOL_CATEGORY_AGENT
+
+
+def describe_registry(
+    registry: Mapping[str, Mapping[str, Any]],
+) -> List[Dict[str, str]]:
+    """Name, description and category of every tool in *registry*, in its order.
+
+    Args:
+        registry: A tool registry (``_TOOL_REGISTRY`` or an agent's snapshot).
+
+    Returns:
+        One ``{"name", "description", "category"}`` dict per tool. The
+        description is the one the model is given.
+    """
+    return [
+        {
+            "name": name,
+            "description": entry.get("description") or "",
+            "category": tool_category(name, entry),
+        }
+        for name, entry in list(registry.items())
+    ]

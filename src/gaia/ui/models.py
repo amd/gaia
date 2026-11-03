@@ -139,6 +139,7 @@ class LoadedModelInfo(BaseModel):
     """One model Lemonade has loaded, as the Model server panel shows it."""
 
     name: Optional[str] = None
+    model_type: Optional[str] = None
     recipe: Optional[str] = None
     device: Optional[str] = None
     # vulkan | rocm | metal | cpu | npu | remote; None when Lemonade did not say.
@@ -168,6 +169,8 @@ class ModelServerInfo(BaseModel):
     version: Optional[str] = None
     chat_model: Optional[LoadedModelInfo] = None
     embedding_model: Optional[LoadedModelInfo] = None
+    # Other loaded models, such as vision, speech, image, and reranking models.
+    loaded_models: List[LoadedModelInfo] = Field(default_factory=list)
     # One plain sentence when GAIA chose the embedder's backend for a reason.
     embedding_note: Optional[str] = None
     default_backend: Optional[str] = None
@@ -462,6 +465,32 @@ class SessionListResponse(BaseModel):
     total: int
 
 
+class SearchSnippet(BaseModel):
+    """Text around a search hit, split so the UI can highlight ``match``."""
+
+    before: str
+    match: str
+    after: str
+
+
+class SessionSearchResult(BaseModel):
+    """One chat that matches a search, with where the first hit was."""
+
+    session_id: str
+    title: str
+    field: Literal["title", "message"]
+    snippet: SearchSnippet
+
+
+class SessionSearchResponse(BaseModel):
+    """Chats matching a search query, newest first, at most ``limit``."""
+
+    query: str
+    results: List[SessionSearchResult]
+    #: More chats matched than ``limit``; only the newest are listed.
+    truncated: bool = False
+
+
 # ── Messages ────────────────────────────────────────────────────────────────
 
 
@@ -532,7 +561,7 @@ class AgentStepResponse(BaseModel):
     """A single step in the agent's execution (persisted)."""
 
     id: int
-    type: str  # 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert'
+    type: str  # 'thinking' | 'commentary' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert'
     label: str
     detail: Optional[str] = None
     tool: Optional[str] = None

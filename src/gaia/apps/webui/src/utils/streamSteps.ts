@@ -20,6 +20,11 @@ export function agentEventToStep(event: StreamEvent, stepIdRef: { current: numbe
                 id, type: 'thinking', label: 'Thinking',
                 detail: event.content, active: true, timestamp: ts,
             };
+        case 'commentary':
+            return {
+                id, type: 'commentary', label: 'Commentary',
+                detail: event.content, active: false, timestamp: ts,
+            };
         case 'tool_start':
             return {
                 id, type: 'tool',
@@ -52,6 +57,7 @@ export function agentEventToStep(event: StreamEvent, stepIdRef: { current: numbe
                 id, type: 'status',
                 label: event.message || event.status || 'Working',
                 active: event.status === 'working',
+                ...(event.status === 'warning' ? { success: false } : {}),
                 timestamp: ts,
             };
         case 'agent_error':

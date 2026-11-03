@@ -155,6 +155,13 @@ export function useModelNames(): Record<string, string> {
     return useModelStore((s) => s.names);
 }
 
+/** Same local model: Lemonade lists a registered `user.X` as `X`, in any case. */
+export function sameModelId(a: string | null | undefined, b: string | null | undefined): boolean {
+    if (!a || !b) return false;
+    const bare = (id: string) => id.toLowerCase().replace(/^user\./, '');
+    return bare(a) === bare(b);
+}
+
 /** The friendly name the backend gave a model, else its short id. */
 export function displayModelName(model: string): string {
     const state = useModelStore.getState();

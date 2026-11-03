@@ -195,6 +195,12 @@ func (m Model) footer(w int) string {
 	if m.cfg.AgentID == "gaia" && !m.Busy() {
 		keys = append(keys, [2]string{"p", "AI provider"})
 	}
+	if m.offersUpdate() {
+		keys = append(keys, [2]string{"u", "update GAIA"})
+	}
+	if m.offersBack() {
+		keys = append(keys, [2]string{"b", "back to " + m.previous})
+	}
 	keys = append(keys, [2]string{"r", "re-check"})
 	keys = append(keys, [2]string{"d", "details"})
 	// `enter` is offered whenever pressing it would actually do something:
@@ -311,7 +317,7 @@ func (m Model) checklistLines(labelW, lineW, w int) (checklist, remedy []string,
 			bodyStyle = dimStyle
 		}
 		if row.State == StateChecking {
-			line = m.spin.View() + " " + line
+			line = m.spinPrefix() + line
 		}
 		if row.State == StatePending && row.Detail != "" {
 			line = row.Line + "  " + row.Detail
@@ -328,7 +334,7 @@ func (m Model) checklistLines(labelW, lineW, w int) (checklist, remedy []string,
 		switch {
 		case provisioning && row.Key == m.provision.Row:
 			markerText, st, bodyStyle = StateChecking.Marker(), keyStyle, labelStyle
-			line = m.spin.View() + " " + lowerFirst(m.provision.Text) + "…"
+			line = m.spinPrefix() + lowerFirst(m.provision.Text) + "…"
 		case provisioning && m.provisionDone[row.Key]:
 			markerText, st, bodyStyle = StateOK.Marker(), okStyle, dimStyle
 			line = "done"
@@ -371,7 +377,7 @@ func (m Model) trailerLines(w int) []string {
 		}
 		return []string{
 			"",
-			pad(noteStyle.Render(truncate(m.spin.View()+" "+m.progressLine(), w-2*indentW))),
+			pad(noteStyle.Render(truncate(m.spinPrefix()+m.progressLine(), w-2*indentW))),
 			pad(dimStyle.Render(leaving)),
 		}
 	case m.HeldForReview() && m.rep.Ready():

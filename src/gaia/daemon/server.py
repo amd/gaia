@@ -182,9 +182,17 @@ def _build_register(
         killed = ledger.reap_stale(specs)
         if killed:
             logger.info("daemon: reaped stale sidecar pids %s", killed)
+        from gaia import version
+
         write_instance(
             DaemonInstance(
-                pid=pid, port=port, token=token, host=host, started_at=started_at
+                pid=pid,
+                port=port,
+                token=token,
+                host=host,
+                started_at=started_at,
+                gaia_version=version.__version__,
+                version_file=os.path.abspath(version.__file__),
             )
         )
         try:
@@ -254,6 +262,9 @@ def _build_deregister(
 
 def run(host: str = HOST) -> None:
     """Start the daemon and serve until shutdown. Blocks."""
+    from gaia.logger import configure
+
+    configure()
     import uvicorn
 
     from gaia.login_path import apply_login_path

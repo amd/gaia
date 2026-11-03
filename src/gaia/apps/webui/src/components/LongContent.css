@@ -33,7 +33,8 @@
     gap: 4px;
     max-width: 100%;
     margin-top: 4px;
-    padding: 2px 8px 2px 4px;
+    padding-block: 2px;
+    padding-inline: 4px 8px;
     border: 1px solid transparent;
     border-radius: var(--radius-xs);
     font-family: var(--font-sans);
@@ -51,7 +52,7 @@
 }
 
 .msg-expand-toggle {
-    margin-left: -4px;
+    margin-inline-start: -4px;
 }
 
 /* On the code surface: a full-width footer in the code palette. */
@@ -79,7 +80,7 @@
 }
 
 .step-expand-toggle {
-    margin-left: -4px;
+    margin-inline-start: -4px;
 }
 
 .detail-result-note {

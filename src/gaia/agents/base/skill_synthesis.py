@@ -89,7 +89,7 @@ _SETTINGS_SECTION: str = "skill_synthesis"
 
 #: Max enabled procedures scanned for the reconcile cosine match. The corpus is
 #: bounded (synthesis is gated + off-by-default), so this is generous; saturating
-#: it is logged loudly rather than silently dropping rows (#1818).
+#: it is logged loudly rather than silently dropping rows.
 _RECONCILE_SCAN_LIMIT: int = 500
 
 
@@ -161,7 +161,7 @@ def load_synthesis_config(settings: Optional[Dict] = None) -> SynthesisConfig:
 
 
 # ============================================================================
-# DistilledProcedure — the intermediate (pre-#691) shape + the canonical mapping
+# DistilledProcedure — the intermediate (older) shape + the canonical mapping
 # ============================================================================
 
 

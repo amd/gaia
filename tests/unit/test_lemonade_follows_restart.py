@@ -263,10 +263,10 @@ def test_a_client_built_while_the_server_was_down_finds_it(server):
 
 def test_a_new_chat_agent_waits_for_the_port_the_server_starts_on(server, monkeypatch):
     """The chat agent used to pin the URL it resolved while the server was down."""
-    pytest.importorskip("gaia_agent_chat")
+    pytest.importorskip("gaia_agent")
     from unittest.mock import patch
 
-    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
     _install_embedded(server)
     server.live_pids = set()

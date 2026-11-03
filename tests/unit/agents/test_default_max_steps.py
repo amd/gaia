@@ -45,10 +45,10 @@ class TestDefaultMaxSteps(unittest.TestCase):
     def test_configs_inherit_the_override_at_construction(self):
         import pytest
 
-        # ChatAgentConfig ships with the standalone gaia-agent-chat wheel (#1102).
-        pytest.importorskip("gaia_agent_chat")
+        # ChatAgentConfig ships in the flagship gaia-agent-gaia wheel (#6099).
+        pytest.importorskip("gaia_agent")
 
-        from gaia_agent_chat.agent import ChatAgentConfig
+        from gaia_agent.chat_agent import ChatAgentConfig
 
         with mock.patch.dict(os.environ, {"GAIA_AGENT_MAX_STEPS": "42"}):
             self.assertEqual(ChatAgentConfig().max_steps, 42)

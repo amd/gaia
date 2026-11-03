@@ -9,7 +9,8 @@ task without a browser.
 
 Each turn is tracked by reading the same SSE stream the web UI reads
 (``POST /api/chat/send``, or ``GET /api/chat/attach`` for a turn started
-elsewhere) and folding its events with the rules ``ChatView.tsx`` uses. Prompt
+elsewhere) and folding its events with the rules ``ChatView.tsx`` uses (with
+``utils/streamSteps.ts`` and ``utils/chatStream.ts``). Prompt
 answers go through ``POST /api/chat/confirm-tool`` -- the endpoint a user's
 click posts to -- and only for a prompt this tracker actually saw.
 
@@ -98,7 +99,7 @@ def parse_timeout_ms(value: Any) -> Tuple[Optional[int], Optional[str]]:
     return value, None
 
 
-# ── Event folding (mirrors ChatView.tsx) ───────────────────────────────────
+# ── Event folding (mirrors ChatView.tsx, streamSteps.ts, chatStream.ts) ──
 
 
 def _cap(text: Any, limit: int = _STEP_TEXT_CAP) -> str:

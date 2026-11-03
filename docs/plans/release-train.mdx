@@ -6,9 +6,9 @@ icon: "train"
 
 # One-tag release train
 
-> **Status:** Proposed. Nothing below is implemented unless marked *exists today*.
+> **Status:** Accepted. Decisions recorded 2026-10-29 (see [Decisions](#7-decisions)). Phases 1 and 2 are done; nothing else below is implemented unless marked *exists today*.
 >
-> **Priority:** P1, starting right after v0.25.1 final ships.
+> **Priority:** P1. Phases 3 onward target v0.26.0.
 >
 > **Tracks:** [#5172](https://github.com/amd/gaia/issues/5172) (folds in [#5170](https://github.com/amd/gaia/issues/5170); [#3922](https://github.com/amd/gaia/issues/3922) closed as its duplicate). Eval baseline: [#5197](https://github.com/amd/gaia/issues/5197).
 
@@ -23,7 +23,8 @@ A GAIA release candidate now ships in about 30 minutes with no approval (v0.25.1
   - The core release PR and the agent bump PR had to merge in a set order.
   - The lock-PR branch collided with the `release` branch (#5473).
   - rc1 shipped without the Intel Mac agent (pymupdf 2.0, fixed in #5481).
-- **Versions are hand-synced in about 11 places.** The chat agent still says 0.1.0 in `__init__.py` but 0.2.0 everywhere else.
+- **What v0.25.2 cost.** The final needed an agent bump PR (#6023), an `agent-pkg-gaia-v0.3.2` tag plus an `agent-publish` approval, a bot pin-lock PR (#6032), the `publish` approval, and a third approval for `terminal-hub`. `main` was frozen across days.
+- **Versions were hand-synced in about 11 places.** Phase 1 now checks them; the chat agent's 0.1.0/0.2.0 drift is held rather than fixed, since chat is being removed.
 
 The train removes the order dependencies. It doesn't add more checks on top of them.
 
@@ -78,8 +79,8 @@ flowchart LR
 
 ### Tag and branch model
 
-- **`release/vX.Y`** is cut from `main` when the X.Y.0 release PR merges. RCs and finals are tagged on it. `main` moves on to X.(Y+1).0 straight away, through the bot PR.
-  - The branch can't be created until the `release` pointer branch is gone. Git can't hold `release` and `release/v0.26` together (see `util/open_flagship_lock_pr.py:46`). See decision 1.
+- **`release/vX.Y`** is cut from `main` when the X.Y.0 release PR merges. RCs and finals are tagged on it. `main` moves on to X.(Y+1).0 straight away, through the bot PR, and **never freezes for a release**.
+  - The force-pushed `release` pointer branch is deleted and `update-release-branch.yml` retired first. Git can't hold `release` and `release/v0.26` together (see `util/open_flagship_lock_pr.py:46`). Nothing in the repo reads it; people use GitHub's "latest release".
 - **Fixes land on `main` first.** A `backport release/vX.Y` label makes a bot open a cherry-pick PR against the branch. Merges to `main` never touch a candidate.
 - **rcN** is any tag `vX.Y.Z-rcN` on the branch. A newer RC supersedes an older one before publishing (*exists today*: `approve-publish` runs `release_tag.py superseded`).
 - **Patch X.Y.1** comes from the same branch: the bot opens a version bump PR to the branch, then RC, then promote.
@@ -87,14 +88,16 @@ flowchart LR
 
 ### The flagship agent joins the core version
 
+Only the flagship agent exists and ships, and its version equals core's.
+
 | Today | Train |
 |---|---|
-| Agent 0.3.1, its own `agent-pkg-gaia-v*` tag and workflow | Agent version = core version (the next release is **0.26.0**) |
+| Agent 0.3.2, its own `agent-pkg-gaia-v*` tag and workflow | Agent version = core version (the next release is **0.26.0**) |
 | `binaries.lock.json` committed with `PENDING` hashes, filled by a bot PR | Not committed. Generated in `verify` from this run's artifacts and shipped in the npm tarball and the setup |
 | `check_flagship_release.py` (agent tag vs core tag, frozen-input diff) | Deleted. The agent is built from the tagged commit by construction |
 | `open_flagship_lock_pr.py` + the `pin-lock` job | Deleted |
-| npm `@amd-gaia/gaia` 0.3.0 | `@amd-gaia/agent` 0.26.0 (new name, so no visible jump). `@amd-gaia/gaia` gets one final 0.26.0 shim and `npm deprecate` |
-| Hub `gaia` 0.1.1 to 0.3.0 | 0.26.0 is the next entry; highest-SemVer still picks it |
+| npm `@amd-gaia/gaia` 0.3.2 | `@amd-gaia/agent` 0.26.0 (new name, so no visible jump; bin `gaia-agent`). `@amd-gaia/gaia` gets one final 0.26.0 shim, keeping the `gaia` bin for existing scripts, and `npm deprecate` |
+| Hub `gaia` 0.1.1 to 0.3.2 | 0.26.0 is the next entry; highest-SemVer still picks it |
 
 **The 0.3 to 0.26 jump is deliberate and safe.** SemVer only asks that versions increase.
 
@@ -102,18 +105,17 @@ flowchart LR
 - The wire contract stays independent (`API_VERSION` in `gaia_agent/server.py`, the lock `schemaVersion`, the daemon host API), so compatibility is still expressed where it's real.
 - The agent CHANGELOG says this in one line.
 
-The chat agent follows core too, which fixes its 0.1.0/0.2.0 drift. Email is decision 3.
+Every other agent harness GAIA built is removed in [Phase 8](#5-phases): the chat agent, the email agent, and the teaching templates (`hello-world`, `word-count`, `connectors-demo`). None of them joins the train. `ChatAgent` is the flagship's base class, so its code folds into the flagship package or core. The SDK base classes in `src/gaia/agents/base/` stay; they aren't harnesses.
 
 ## 2. One version source
 
-`src/gaia/version.py` (`__version__`, `LEMONADE_VERSION`) is the only version anyone edits. A new `util/release_versions.py` replaces `installer/version/bump-ui-version.mjs`, `hub/agents/{gaia,chat}/python/packaging/stamp_version.py` and the stamping half of `release_tag.py`.
+`src/gaia/version.py` (`__version__`, `LEMONADE_VERSION`) is the only version anyone edits. `util/release_versions.py` (*exists today*, Phase 1) replaces `installer/version/bump-ui-version.mjs`, `hub/agents/{gaia,chat}/python/packaging/stamp_version.py` and the stamping half of `release_tag.py`.
 
 | Generated file / field | Today written by |
 |---|---|
 | `src/gaia/apps/webui/package.json` + lock root version | `bump-ui-version.mjs` |
 | `hub/components/{terminal-hub,agent-ui}/gaia-agent.yaml` `version` | hand `sed` (gaia-release skill, step 6) |
 | Flagship: `gaia_agent/__init__.py`, `pyproject.toml`, `gaia-agent.yaml` (`version`, `min_gaia_version`), `npm/package.json` + lock, doc URLs | `stamp_version.py` + hand bump |
-| Chat agent: same three files | hand (currently drifted) |
 | `docs/docs.json` navbar label (latest **final** · Lemonade) | hand |
 | `binaries.lock.json` | release bot PR → now generated at build time, not committed |
 
@@ -121,7 +123,7 @@ The chat agent follows core too, which fixes its 0.1.0/0.2.0 drift. Email is dec
   - `write` stamps the tree.
   - `--check` fails on any drift and runs in `lint.yml` and a unit test.
   - `--stamp <tag>` writes RC versions (`0.26.0rc1` for PyPI, `0.26.0-rc.1` for npm, `0.26.0~rc1` for deb/rpm) into every generated field at build time. Today only `version.py` and webui are stamped (`release_tag.py:159`).
-- **Not generated:** the TUI version (already set from the tag via `-ldflags`), teaching templates (`hello-world`, `word-count`, `connectors-demo`), skills, and any third-party agent.
+- **Not generated:** the TUI version (already set from the tag via `-ldflags`), the agents Phase 8 removes (chat's drift stays held until then), skills, and any third-party agent.
 - **`check_component_core_api.py` stays.** It already reads released daemon API versions from PyPI rather than a table.
 - **The next-version bot** runs after a final publishes. It opens one PR to `main`: navbar, a release-notes stub, and `version.py` bumped if `main` isn't already ahead. For a patch, it opens a second PR to the branch.
   - `docs.yml` and `test_docs_json_release.py` currently resolve `docs/releases/v<__version__>.mdx` on `main`. They must accept a `main` that's ahead of the latest release.
@@ -133,7 +135,7 @@ A final can't relabel RC bytes:
 - PyPI and npm versions are immutable.
 - The wheel `METADATA`, `package.json`, the Electron app, `latest*.yml` (which carries a sha512), the Go `-X version` and the PyInstaller sidecar all embed the version.
 
-So each RC run also builds a **final-stamped twin** from the same checkout, verifies it, and stages it. Promotion publishes the staged twin without rebuilding or re-running tests.
+So each RC run also builds a **final-stamped twin** from the same checkout, verifies it, and stages it. Promotion publishes the staged twin with one approval, without rebuilding or re-running tests (decision 2).
 
 - **Staging:** the twins go on a **draft** GitHub release `vX.Y.Z`, with `release-manifest.json` listing the RC tag, SHA, toolchain and lockfile hashes, and each artifact's SHA-256. Drafts don't expire (workflow artifacts do). Each new RC replaces the draft's assets.
 - **Twin-diff:**
@@ -169,27 +171,26 @@ Evals inform the promotion decision and record it. They never block an RC.
 
 - **Every RC tag** runs `eval_flagship.yml` (*exists today*, `eval_flagship.yml:168-171`). It covers all `eval/ci_lanes.json` lanes and `flagship-tasks`, compared with `tests/fixtures/eval_baselines/gaia-flagship/` under the same `EVAL_MODEL`, in report mode. A regression files `Flagship eval did not pass on <tag>`.
 - **The agent release's separate eval subset goes away** with `release_agent_gaia.yml`. That's also where #5197's wrong baseline directory lives (`test_gaia_agent_eval.yml` points at `gaia-gemma-4-e4b`). Fix #5197 first, in Phase 3, so the subset compares while it still exists.
-- **Promote requires** an eval run on the RC's SHA that has *concluded*: `success`, or `failure` with the eval issue labelled `release-waived` by a maintainer. Cancelled or still running blocks promotion.
+- **Promote requires** an eval run on the RC's SHA that has *concluded*: `success`, or `failure` with the eval issue labelled `release-waived` by a maintainer. Cancelled or still running blocks promotion (decision 4).
   - The promote summary lists PASS→FAIL and FAIL→PASS against the baseline separately, per CLAUDE.md.
   - A lone flip gets a re-run before anyone calls it a regression.
-  - The 80% target stays a goal, not a gate.
+  - There's no score threshold: the 80% target stays a goal, not a gate.
 - **A final tag doesn't re-run the eval** when its SHA already has a concluded RC run. Today `v*.*.*` matches the final and spends another ~3 hours of Strix Halo time on identical code (v0.25.0 final: 3 h 20 min).
 
 ## 5. Phases
 
-Each phase is one mergeable PR that leaves releases working. **S** ≤ 1 day, **M** 2–4 days, **L** 1–2 weeks.
+Each phase is one mergeable PR that leaves releases working (Phase 8 is several). **S** ≤ 1 day, **M** 2–4 days, **L** 1–2 weeks.
 
 | # | PR | Size | Lands | Acceptance |
 |---|---|---|---|---|
-| 1 | `util/release_versions.py` (`write`, `--check`, `--stamp`) + drift check in `lint.yml` + unit tests. Report-only for the flagship and chat targets, which stay independent until Phase 3. Fixes the chat `__init__` drift. | M | **Before v0.25.1 final** (tooling only, no release workflow touched) | `--check` passes on `main`. Each target drifted by hand makes it fail, naming the file. `--stamp v0.26.0-rc1` on a copy matches today's `release_tag.py stamp` byte-for-byte for the files they share. |
-| 2 | `release_train_dryrun.yml`: dispatch-only, `contents: read`, no environments or publish secrets. Builds every artifact once plus twins, generates the lock, runs verify and twin-diff, uploads a manifest. | L | **Before v0.25.1 final** (new file, can't publish) | A green dispatch on `main` produces the full artifact list, one TUI build, a lock with real hashes, and a passing twin-diff. A deliberately altered twin fails it. |
-| 3 | After final: version unification. The flagship and chat agents follow core (0.26.0 on `main`). `stamp_version.py` and `bump-ui-version.mjs` become wrappers. Next-version bot. Fix #5197. Retarget or retire `nightly-patch-release.yml` (Guard 4 at `:154` assumes a steady-state `main`). | M | after v0.25.1 final | `--check` covers the agents. The bot PR opens after a dispatch dry run. The old `agent-pkg-gaia-v0.26.0` path would still validate, so nothing breaks before Phase 5. |
-| 4 | Hub Worker: a `channels` map (`stable`, `next`), with `latest_version` kept equal to `stable` for existing clients. A neutral `agents/tui/` path, with `agents/terminal-hub/` written as an alias for one cycle. | M | after final (the Worker is deployed by `release_components.yml:224` during a final, so any earlier merge would ship with v0.25.1) | Worker vitest covers that an RC never becomes `latest_version`, and old paths resolve. A dry-run deploy passes. |
+| 1 | **Done** ([#5508](https://github.com/amd/gaia/pull/5508)). `util/release_versions.py` (`write`, `--check`, `--stamp`) + drift check in `lint.yml` + unit tests. Report-only for the flagship target until Phase 3. | M | Landed before v0.25.1 final | `--check` passes on `main`. Each target drifted by hand makes it fail, naming the file. `--stamp v0.26.0-rc1` on a copy matches today's `release_tag.py stamp` byte-for-byte for the files they share. |
+| 2 | **Done** ([#5534](https://github.com/amd/gaia/pull/5534)). `release_train_dryrun.yml`: dispatch-only, `contents: read`, no environments or publish secrets. Builds every artifact once plus twins, generates the lock, runs verify and twin-diff, uploads a manifest. | L | Landed before v0.25.1 final | A green dispatch on `main` produces the full artifact list, one TUI build, a lock with real hashes, and a passing twin-diff. A deliberately altered twin fails it. |
+| 3 | Version unification. The flagship agent follows core (0.26.0 on `main`). `stamp_version.py` and `bump-ui-version.mjs` become wrappers. Next-version bot. Fix #5197. Retarget or retire `nightly-patch-release.yml` (Guard 4 at `:154` assumes a steady-state `main`). | M | next | `--check` covers the flagship. The bot PR opens after a dispatch dry run. The old `agent-pkg-gaia-v0.26.0` path would still validate, so nothing breaks before Phase 5. |
+| 4 | Hub Worker: a `channels` map (`stable`, `next`), with `latest_version` kept equal to `stable` for existing clients. A neutral `agents/tui/` path, with `agents/terminal-hub/` written as an alias for one cycle. | M | any time; it deploys with the next final (`release_components.yml:224`) | Worker vitest covers that an RC never becomes `latest_version`, and old paths resolve. A dry-run deploy passes. |
 | 5 | The train in `publish.yml`: Phase 2's build stages + verify + the publish order + `@amd-gaia/agent` (name claimed with a one-time token first, then OIDC). Hub secrets move to a reviewer-less `hub-publish` environment, so `agent-publish` (2 reviewers) leaves the `v*` path. `release_components.yml` and `release_agent_gaia.yml` drop their tag triggers but stay dispatchable. | L | after Phase 4. First live use: **v0.26.0-rc1** | An RC publishes everything on pre-release channels with zero prompts. Killing the run during step 3 and re-running finishes with no tag moved. The GitHub release carries every asset the website links. |
-| 6 | `release/vX.Y` branches (after decision 1), validate-on-branch, staged twins, the promote path on a final tag, the backport bot, the eval promotion check, and skipping the eval on a final. | L | after one RC on Phase 5 | v0.26.0 final = rcN's SHA, one approval, no build jobs. A final on a non-RC SHA is refused. |
-| 7 | Delete: `release_components.yml`, `release_agent_gaia.yml`, `check_flagship_release.py`, `open_flagship_lock_pr.py`, the committed lock, `update-release-branch.yml` and the `agent-pkg-gaia-*` docs. Write `docs/reference/releasing.mdx` and rewrite the `gaia-release` and `agent-hub-release` skills. | M | after v0.26.0 final ships on the train | The acceptance in #5172: one tag, one approval, `git grep agent-pkg-gaia` shows only history. |
-
-**Before v0.25.1 final, only Phases 1 and 2.** Neither edits a live workflow or a file a live workflow reads: the drift check is report-only for the agent targets, and the dry run has no credentials.
+| 6 | Delete the `release` pointer branch and retire `update-release-branch.yml`, then: `release/vX.Y` branches, validate-on-branch, staged twins, the promote path on a final tag (with `rebuild_final`), the backport bot, the eval promotion check, and skipping the eval on a final. | L | after one RC on Phase 5 | v0.26.0 final = rcN's SHA, one approval, no build jobs. A final on a non-RC SHA is refused. `main` takes merges throughout. |
+| 7 | Delete: `release_components.yml`, `release_agent_gaia.yml`, `check_flagship_release.py`, `open_flagship_lock_pr.py`, the committed lock and the `agent-pkg-gaia-*` docs. Write `docs/reference/releasing.mdx` and rewrite the `gaia-release` and `agent-hub-release` skills. | M | after v0.26.0 final ships on the train | The acceptance in #5172: one tag, one approval, `git grep agent-pkg-gaia` shows only history. |
+| 8 | Remove every agent harness except the flagship, one PR per step, each leaving `main` releasable: **8a** add the capabilities the parity audit says the flagship needs before each removal; **8b** fold `ChatAgent` into the flagship package or core; **8c** remove the email agent; **8d** remove the chat agent; **8e** remove the teaching templates and any other registered agent. (BuilderAgent is already gone, #4843.) Details pending the parity audit (in progress). | TBD | independent of Phases 3–7; each removal lands once its 8a gaps are closed | `hub/agents/` holds only the flagship, the registry lists only the flagship, and `src/gaia/agents/base/` is unchanged. |
 
 ## 6. Risks and rollback
 
@@ -200,8 +201,9 @@ Each phase is one mergeable PR that leaves releases working. **S** ≤ 1 day, **
 | 3 | Agent at 0.26.0 before the train exists | Compatible with the old path (`agent-pkg-gaia-v0.26.0`). Revert before anything publishes 0.26.0, because hub paths are immutable after that. |
 | 4 | Older clients read `latest_version` and get an RC | `latest_version` stays `stable`, enforced by a Worker test. `wrangler rollback` restores the previous build. |
 | 5 | Trusted-publisher mismatch, npm name claim, first live run | First use is an RC (pre-release channels only). The old workflows stay dispatchable for a final. Revert `publish.yml` to restore today's flow. |
-| 6 | Twin staging corrupts or misses; promote half-publishes | Promote resumes on re-run (same-bytes skip). `rebuild_final: true` is the explicit escape hatch. Reverting restores Phase 5's rebuild-on-final. |
+| 6 | Twin staging corrupts or misses; promote half-publishes; a backport PR conflicts | Promote resumes on re-run (same-bytes skip). `rebuild_final: true` is the explicit escape hatch. A conflicting backport is cherry-picked by hand. Reverting restores Phase 5's rebuild-on-final. |
 | 7 | Something still read a deleted file | `git revert`. Phase 7 waits for a full final on the train. |
+| 8 | A user loses something only a removed agent did | Each removal waits for its 8a gaps to close. Each step is one revertable PR. |
 
 **Dry-run matrix before first real use** (Phase 2's workflow, plus a `train-test-*` tag pattern that only ever runs `dry_run: true`):
 
@@ -213,22 +215,24 @@ Each phase is one mergeable PR that leaves releases working. **S** ≤ 1 day, **
 - [ ] Cancel during each publish step, then re-run: completes, no tag moves (against TestPyPI and a hub `staging/` prefix).
 - [ ] A missing required platform fails verify; a missing best-effort `darwin-x64` is named in the release body.
 
-## 7. Open decisions
+## 7. Decisions
 
-1. **Release branch name.** `release/vX.Y` needs the force-pushed `release` pointer branch deleted (`update-release-branch.yml:43-44`). Nothing in the repo reads it. **Recommend:** delete `release` and point people at GitHub's "latest release". Otherwise use `releases/vX.Y`.
-2. **Final = promoted twins, or a rebuild on the final tag.** Twins roughly double native build minutes per RC and only partially prove native binaries. A rebuild retests code that was already tested. **Recommend:** twins. The point is that the final runs bytes testers already ran.
-3. **Which agents ride the train.** Agent wheels aren't on PyPI today, and their names are unclaimed (`setup.py:18-26`, #2240). Email is on its own tag at 0.6.0. **Recommend:** flagship (npm + sidecar) and chat only. Email stays on `agent-pkg-email-*` like a community agent until its own decision. Agent wheels on PyPI are a separate issue.
-4. **`@amd-gaia/agent` bin name.** `gaia` shadows the core CLI on PATH. **Recommend:** `gaia-agent`. The deprecated `@amd-gaia/gaia` shim keeps `gaia` for existing scripts.
-5. **How strict is the promote eval check?** **Recommend:** a concluded run, or a maintainer's `release-waived` label, with no score threshold. Blocking on the 59% baseline or the 80% target would just make the check always red.
+Recorded 2026-10-29.
 
-## What's riskier than #5172 assumes
+1. **Branches.** RCs and finals are tagged on `release/vX.Y`. The force-pushed `release` pointer branch is deleted and `update-release-branch.yml` retired. Fixes land on `main` first; a bot backports them via a label. `main` never freezes for a release.
+2. **Finals.** A final promotes the RC's staged, final-stamped twin with one approval and no rebuild. `rebuild_final` stays as the opt-in escape hatch.
+3. **Agents.** Only the flagship agent exists and ships, at core's version. Every other GAIA-built agent harness is removed (Phase 8): chat, email, the teaching templates, and any other registered agent. Removal is decided, not conditional; the in-progress parity audit only sets which capabilities the flagship must gain before each removal lands. `ChatAgent` folds into the flagship package or core; the SDK base classes in `src/gaia/agents/base/` stay. Agent wheels on PyPI (#2240) stay a separate issue.
+4. **Evals.** Promotion needs a finished eval run on the RC's SHA: `success`, or `failure` with a maintainer's `release-waived` label. No score threshold. A final doesn't re-run the eval.
+5. **`@amd-gaia/agent` bin name:** `gaia-agent`, decided by default. `gaia` would shadow the core CLI on PATH; the deprecated `@amd-gaia/gaia` shim keeps `gaia` for existing scripts.
 
-- **"No rebuild" can't mean byte-identical.** Every channel embeds the version, so the final is a twin built alongside the RC. Native twins can only be proven by provenance and smoke tests, not by diff.
-- **A final costs 3–4 approvals today, not 1.**
+## 8. What's riskier than #5172 assumes
+
+- **"No rebuild" can't mean byte-identical.** Every channel embeds the version, so the final is a twin built alongside the RC. Native twins can only be proven by provenance and smoke tests, not by diff. *Accepted in decision 2.*
+- **A final costs 3–4 approvals today, not 1.** v0.25.2 needed three. Open until Phases 5 and 6.
   - `publish` and `agent-publish` each require 2 reviewers.
   - `agent-publish` gates `release_components.yml`'s `terminal-hub`, `agent-ui` and `publish-windows-setup` jobs (`:366`, `:610`, `:520`) and the agent release (`release_agent_gaia.yml:713`).
   - GitHub prompts once per batch of jobs that pend together.
 - **Final GitHub releases lack the TUI installers and the combined Windows setup.** Those go to R2 only. Moving website links to GitHub assets 404s for finals until Phase 5 attaches them.
-- **The Worker deploys inside the final** (`release_components.yml:224`), so hub-channel work can't merge before v0.25.1 final.
+- **The Worker deploys inside the final** (`release_components.yml:224`). *Resolved for v0.25.1*, which shipped 2026-10-25. Still true in general: a Phase 4 merge goes live with the next final.
 - **The branch model breaks every "is on main" check:** `publish.yml:106-112`, `release_agent_gaia.yml:724-736`, the docs checks that read `__version__`, and `check_release_ci.py`, which needs CI runs on branch commits.
-- **v0.25.1 final right now:** `agent-pkg-gaia-v0.3.1` isn't tagged yet. It must go on rc2's commit (`0b14d740d`) or later, because rc1's commit differs in 9 frozen-input files. `main` has to stay frozen on `src/gaia` and `setup.py` until the core tag.
+- **The v0.25.1 final froze `main`.** *Resolved:* v0.25.1 shipped 2026-10-25 and v0.25.2 on 2026-10-29. The same freeze recurs every final until Phase 6.

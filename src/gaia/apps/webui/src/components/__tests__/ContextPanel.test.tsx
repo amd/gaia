@@ -157,6 +157,17 @@ describe('ContextPanel', () => {
         expect(screen.getByText('Turns measured').nextSibling).toHaveTextContent('1');
     });
 
+    it('shows an overflowed chat cost and tool-call count as unknown, without crashing', async () => {
+        const overflowed = perf();
+        overflowed.totals = { ...overflowed.totals, usd: null, tool_calls: null, unpriced_turns: 1 };
+        mockedApi.getChatPerformance.mockResolvedValue(overflowed);
+        render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+        await screen.findByText('In the model');
+        fireEvent.click(screen.getByRole('button', { name: 'This chat' }));
+        expect(screen.getByText('Cost').nextSibling).toHaveTextContent('unknown');
+        expect(screen.getByText('Tool calls').nextSibling).toHaveTextContent('unknown');
+    });
+
     it('fetches on open and after a reply ends, never while closed or on a timer', async () => {
         vi.useFakeTimers({ shouldAdvanceTime: true });
         try {

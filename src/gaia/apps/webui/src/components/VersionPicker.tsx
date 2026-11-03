@@ -3,8 +3,10 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReleaseInfo } from '../hooks/useUpdateStatus';
+import { updateErrorReason } from '../hooks/updateError';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useT } from '../i18n/useT';
 import './VersionPicker.css';
 
 interface VersionPickerProps {
@@ -34,6 +36,7 @@ function getUpdaterBridge(): GaiaUpdaterBridge | undefined {
  * Accessibility: role=dialog, focus trap, Esc to close, keyboard-navigable rows.
  */
 export function VersionPicker({ onClose }: VersionPickerProps) {
+    const t = useT();
     const [view, setView] = useState<PickerView>({ kind: 'loading' });
     const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -112,17 +115,15 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
         setView({ kind: 'installing' });
         const bridge = getUpdaterBridge();
         if (!bridge) {
-            setView({ kind: 'error', message: "Bridge unavailable — please restart the app." });
+            setView({ kind: 'error', message: t('update.picker.noBridge') });
             return;
         }
         try {
             await bridge.installVersion(release.tag);
-            // installVersion triggers the download; the existing update-downloaded
-            // handler will show the native "Restart now?" dialog.
+            // installVersion downloads, then restarts into it; running work asks first.
             onClose();
         } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            setView({ kind: 'error', message: `Failed to install that version: ${msg}` });
+            setView({ kind: 'error', message: t('update.picker.failed', { reason: updateErrorReason(err) }) });
         }
     }
 
@@ -150,15 +151,15 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
                 className="version-picker-dialog"
                 role="dialog"
                 aria-modal="true"
-                aria-label="Install a specific version"
+                aria-label={t('update.picker.title')}
                 ref={dialogRef}
             >
                 <div className="version-picker-header">
-                    <h3>Install a specific version</h3>
+                    <h3>{t('update.picker.title')}</h3>
                     <button
                         className="version-picker-close"
                         onClick={onClose}
-                        aria-label="Close"
+                        aria-label={t('update.picker.close')}
                         type="button"
                     >
                         ×
@@ -169,7 +170,7 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
                     {view.kind === 'loading' && (
                         <div className="version-picker-loading" aria-busy="true">
                             <span className="version-picker-spinner" />
-                            Loading releases…
+                            {t('update.picker.loading')}
                         </div>
                     )}
 
@@ -182,21 +183,27 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
                                     target="_blank"
                                     rel="noreferrer"
                                 >
-                                    Browse releases on GitHub
+                                    {t('update.picker.browse')}
                                 </a>
                             </p>
                         </div>
                     )}
 
                     {view.kind === 'list' && (
-                        <ul className="version-picker-list" role="listbox" aria-label="Available releases">
+                        <ul className="version-picker-list" role="listbox" aria-label={t('update.picker.listAria')}>
                             {view.releases.map((r) => (
                                 <li key={r.tag}>
                                     <button
                                         type="button"
                                         className="version-picker-row"
                                         data-version={r.version}
-                                        aria-label={`${r.version}${r.isCurrent ? ' — installed' : ''}${r.isPinned ? ' — pinned' : ''}`}
+                                        aria-label={
+                                            r.isCurrent
+                                                ? t('update.picker.rowInstalled', { version: r.version })
+                                                : r.isPinned
+                                                  ? t('update.picker.rowPinned', { version: r.version })
+                                                  : r.version
+                                        }
                                         aria-disabled={r.isCurrent ? 'true' : 'false'}
                                         onClick={() => selectRelease(r, view.releases)}
                                         disabled={r.isCurrent}
@@ -204,10 +211,10 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
                                         <span className="vp-version">{r.version}</span>
                                         <span className="vp-date">{formatDate(r.date)}</span>
                                         {r.isCurrent && (
-                                            <span className="vp-badge vp-badge-current">Installed</span>
+                                            <span className="vp-badge vp-badge-current">{t('update.picker.installed')}</span>
                                         )}
                                         {r.isPinned && !r.isCurrent && (
-                                            <span className="vp-badge vp-badge-pinned">Pinned</span>
+                                            <span className="vp-badge vp-badge-pinned">{t('update.picker.pinned')}</span>
                                         )}
                                         {!r.isCurrent && (
                                             <span className="vp-arrow" aria-hidden="true">›</span>
@@ -220,13 +227,13 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
 
                     {view.kind === 'list' && (
                         <p className="version-picker-more">
-                            Showing the {view.releases.length} most recent.{' '}
+                            {t('update.picker.recent', { n: view.releases.length })}{' '}
                             <a
                                 href="https://github.com/amd/gaia/releases"
                                 target="_blank"
                                 rel="noreferrer"
                             >
-                                Browse all releases on GitHub
+                                {t('update.picker.browseAll')}
                             </a>
                         </p>
                     )}
@@ -234,12 +241,10 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
                     {view.kind === 'confirm' && (
                         <div className="version-picker-confirm">
                             <p>
-                                This will <strong>install v{view.release.version}</strong> and
-                                restart the app.
+                                {t('update.picker.confirm', { version: view.release.version })}
                             </p>
                             <p className="vp-confirm-note">
-                                GAIA will stay on v{view.release.version}: updates are paused until
-                                you unpin it in Settings → Updates.
+                                {t('update.picker.confirmNote', { version: view.release.version })}
                             </p>
                             <div className="vp-confirm-actions">
                                 <button
@@ -247,14 +252,14 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
                                     className="vp-btn-cancel"
                                     onClick={() => setView({ kind: 'list', releases: view.releases })}
                                 >
-                                    Back
+                                    {t('update.picker.back')}
                                 </button>
                                 <button
                                     type="button"
                                     className="vp-btn-confirm"
                                     onClick={() => confirmInstall(view.release)}
                                 >
-                                    Install &amp; restart
+                                    {t('update.picker.install')}
                                 </button>
                             </div>
                         </div>
@@ -263,7 +268,7 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
                     {view.kind === 'installing' && (
                         <div className="version-picker-loading" aria-busy="true">
                             <span className="version-picker-spinner" />
-                            Starting download…
+                            {t('update.picker.starting')}
                         </div>
                     )}
                 </div>

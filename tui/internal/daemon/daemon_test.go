@@ -17,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/amd/gaia/tui/internal/filelock"
 )
 
 // sidecarSecret stands in for the sidecar bearer the daemon returns from
@@ -192,6 +194,10 @@ func (f *fakeDaemon) lastEnsureBody() []byte {
 // testClient builds a Client with fast timeouts and no real launcher.
 func testClient(t *testing.T, mutate func(*Options)) *Client {
 	t.Helper()
+	// Deferred restarts are remembered per process; start each test clean.
+	deferredMu.Lock()
+	deferredAt = map[string]time.Time{}
+	deferredMu.Unlock()
 	opts := Options{
 		ProbeTimeout:  2 * time.Second,
 		StartTimeout:  3 * time.Second,
@@ -643,7 +649,7 @@ func TestHelperProcess(t *testing.T) {
 			fmt.Fprintf(os.Stderr, "helper: %v\n", err)
 			os.Exit(2)
 		}
-		if ok, err := tryLock(f); err != nil || !ok {
+		if ok, err := filelock.TryLock(f); err != nil || !ok {
 			fmt.Fprintf(os.Stderr, "helper: start lock is held by the caller (%v)\n", err)
 			os.Exit(1)
 		}

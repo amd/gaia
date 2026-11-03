@@ -10,7 +10,7 @@ These tests use mocking to avoid actual network calls and installations.
 import io
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 from gaia.installer.lemonade_installer import (
     InstallResult,
@@ -25,6 +25,15 @@ from gaia.version import LEMONADE_VERSION
 SMALL_MACHINE = {
     "Physical Memory": "16 GB",
     "devices": {"metal": {"available": True, "vram_gb": 11.8}},
+    "model_storage": {"free_bytes": 200e9},
+}
+# A 16 GB Ryzen AI laptop: small GPU carve-out, an XDNA2 NPU.
+NPU_LAPTOP = {
+    "Physical Memory": "16 GB",
+    "devices": {
+        "amd_gpu": [{"available": True, "integrated": True, "vram_gb": 0.5}],
+        "amd_npu": {"available": True},
+    },
     "model_storage": {"free_bytes": 200e9},
 }
 
@@ -559,14 +568,18 @@ class TestLemonadeReady(unittest.TestCase):
         )
         return embedded
 
-    def _run_embedded(self, embedded, **kwargs):
+    def _run_embedded(self, embedded, replace=None, **kwargs):
         cmd, buf = self._cmd(**kwargs)
+        if replace is None:
+            replace = MagicMock(return_value=None)
         with (
             patch("gaia.llm.lemonade_embedded.EmbeddedLemonade", return_value=embedded),
+            patch("gaia.daemon.client.replace_outdated_daemon", replace),
             patch.object(cmd, "_hand_server_to_daemon") as hand_off,
         ):
             ok = cmd._ensure_lemonade_ready()
         self.hand_off = hand_off
+        self.replace = replace
         return ok, buf.getvalue()
 
     def test_the_started_server_is_handed_to_the_daemon(self):
@@ -653,6 +666,72 @@ class TestLemonadeReady(unittest.TestCase):
 
         self.assertTrue(ok)
         install.assert_called_once_with(force=False)
+
+    def test_an_outdated_daemon_is_replaced_before_the_server_is_swapped(self):
+        """Left running, it restarts its own release's server from its dist."""
+        old = self._status(running=True, version="0.0.1", port=1, pid=1)
+        embedded = self._embedded(old, installed=False)
+        calls = MagicMock()
+        calls.attach_mock(embedded.install, "install")
+        calls.attach_mock(embedded.stop, "stop")
+        calls.attach_mock(embedded.start, "start")
+
+        def replace_daemon():
+            # The old daemon stops the server it owns on its way out.
+            embedded.status.return_value = self._status()
+            return "it runs GAIA 0.25.1, and 0.25.2 is installed"
+
+        replace = MagicMock(side_effect=replace_daemon)
+        calls.attach_mock(replace, "replace")
+
+        ok, out = self._run_embedded(embedded, replace=replace)
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            [c[0] for c in calls.mock_calls], ["install", "replace", "start"]
+        )
+        self.assertIn("0.25.1", out)
+
+    def test_a_stopped_server_also_replaces_an_outdated_daemon(self):
+        embedded = self._embedded(self._status())
+        ok, _ = self._run_embedded(embedded)
+
+        self.assertTrue(ok)
+        self.replace.assert_called_once_with()
+
+    def test_a_current_running_server_leaves_the_daemon_to_hand_off(self):
+        """The hand-off restarts an outdated daemon once it is free."""
+        embedded = self._embedded(self._status(running=True, port=51234, pid=1))
+        ok, _ = self._run_embedded(embedded)
+
+        self.assertTrue(ok)
+        self.replace.assert_not_called()
+
+    def test_an_outdated_daemon_that_will_not_stop_fails_the_step(self):
+        from gaia.daemon.errors import DaemonError
+
+        old = self._status(running=True, version="0.0.1", port=1, pid=1)
+        embedded = self._embedded(old)
+        replace = MagicMock(side_effect=DaemonError("did not stop when asked"))
+        ok, out = self._run_embedded(embedded, replace=replace)
+
+        self.assertFalse(ok)
+        self.assertIn("did not stop when asked", out)
+        embedded.stop.assert_not_called()
+        embedded.start.assert_not_called()
+
+    def test_a_failed_download_leaves_the_old_server_running(self):
+        from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+
+        old = self._status(running=True, version="0.0.1", port=1, pid=1)
+        embedded = self._embedded(old, installed=False)
+        embedded.install.side_effect = EmbeddedLemonadeError("download failed")
+        ok, out = self._run_embedded(embedded)
+
+        self.assertFalse(ok)
+        self.assertIn("download failed", out)
+        embedded.stop.assert_not_called()
+        self.replace.assert_not_called()
 
     def test_unresponsive_instance_is_stopped_before_starting(self):
         embedded = self._embedded(self._status(port=1, unresponsive_pid=77))
@@ -849,7 +928,7 @@ class TestDownloadModels(unittest.TestCase):
 
         with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
             mock_client = MagicMock()
-            mock_client.get_system_info.return_value = SMALL_MACHINE
+            mock_client.get_system_info.return_value = NPU_LAPTOP
             mock_client.ensure_model_downloaded.return_value = True
             mock_client_class.return_value = mock_client
 
@@ -858,7 +937,7 @@ class TestDownloadModels(unittest.TestCase):
             pulled = {
                 c.args[0] for c in mock_client.ensure_model_downloaded.call_args_list
             }
-            self.assertEqual(pulled, {"gemma4-it-e2b-FLM", "embed-gemma-300m-FLM"})
+            self.assertEqual(pulled, {"gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"})
             # Regression guard: no recipe-bearing pull_model call.
             mock_client.pull_model.assert_not_called()
 
@@ -1362,12 +1441,47 @@ class TestCheckSetupStatus(unittest.TestCase):
         ):
             client = self._loading_client(mock_client_class)
             client.check_model_available.return_value = False
+            client.list_models.return_value = {
+                "data": [{"id": "user.embeddinggemma-300m-GGUF", "size": 0.3}]
+            }
             status = check_setup_status(profile="gaia", skip_chat_model=True, load=True)
 
         self.assertEqual(status.stage, "setup")
         self.assertEqual(status.models[0].size_gb, 0.3)
         self.assertFalse(status.models[0].loaded)
         client.embeddings.assert_not_called()
+
+    def test_missing_model_sizes_match_the_setup_plan(self):
+        """The first-run step and "Choose your models" show one download size:
+        the catalog's size less what an interrupted pull left on disk."""
+        from gaia.installer import init_command
+        from gaia.installer.init_command import check_setup_status
+
+        with (
+            self._embedded(self._running()),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class,
+            patch.object(
+                init_command,
+                "bytes_already_on_disk",
+                side_effect=lambda _c, ids, store: {m: 100_000_000 for m in ids},
+            ) as on_disk,
+        ):
+            client = self._loading_client(mock_client_class)
+            client.check_model_available.return_value = False
+            client.list_models.return_value = {
+                "data": [{"id": "user.embeddinggemma-300m-GGUF", "size": 0.33}]
+            }
+            client.get_system_info.return_value = {
+                "model_storage": {"path": "/models", "free_bytes": 10**12}
+            }
+            status = check_setup_status(profile="gaia", skip_chat_model=True, load=True)
+
+        self.assertEqual(status.models[0].size_gb, 0.23)
+        self.assertEqual(on_disk.call_args.args[2], "/models")
+        self.assertEqual(
+            init_command.remaining_download_gb(0.33, 100_000_000),
+            status.models[0].size_gb,
+        )
 
 
 class TestInstallPipExtras(unittest.TestCase):
@@ -1551,6 +1665,37 @@ class TestInstallViaPpa(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("Ubuntu 22.04", result.error)
         mock_run.assert_not_called()
+
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data=('ID=fedora\nVERSION_ID="41"\nPRETTY_NAME="Fedora Linux 41"\n'),
+    )
+    def test_check_linux_version_rejects_non_debian_distros_with_manual_remedy(
+        self, mock_os_release
+    ):
+        """Non-Debian systems do not receive an apt command they cannot run."""
+        error = LemonadeInstaller._check_linux_version()
+
+        self.assertIsNotNone(error)
+        self.assertIn("Fedora Linux 41", error)
+        self.assertIn("Lemonade PPA", error)
+        self.assertIn("lemonade-server.ai", error)
+        self.assertIn("LEMONADE_BASE_URL", error)
+
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data=(
+            'ID=pop\nID_LIKE="ubuntu debian"\n'
+            'VERSION_ID="24.04"\nPRETTY_NAME="Pop!_OS 24.04 LTS"\n'
+        ),
+    )
+    def test_check_linux_version_accepts_ubuntu_family_derivative(
+        self, mock_os_release
+    ):
+        """Ubuntu-family derivatives retain the PPA path via ID_LIKE."""
+        assert LemonadeInstaller._check_linux_version() is None
 
     @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value=None)
@@ -2200,7 +2345,7 @@ class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
         self.assertIn("gaia", HUB_INSTALL_AGENTS)
         # The NPU profile keeps its own FLM models and device keys.
         npu = INIT_PROFILES["npu"]
-        self.assertEqual(npu["models"], ["gemma4-it-e2b-FLM", "embed-gemma-300m-FLM"])
+        self.assertEqual(npu["models"], ["gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"])
         self.assertEqual(npu["backend"], "flm:npu")
         # The flagship runs in the daemon / Agent UI, which [ui] installs.
         self.assertEqual(npu["pip_extras"], INIT_PROFILES["gaia"]["pip_extras"])
@@ -2660,7 +2805,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
                 _, out = self._render(cmd, rich)
                 self.assertIn("gaia chat --ui", out)
                 self.assertNotIn("gaia chat --device npu", out)
-                self.assertIn("gaia config set default_device gpu", out)
+                self.assertIn("gaia config set default_model <id>", out)
 
     def test_no_build_for_this_machine_is_not_a_failed_setup(self):
         cmd = self._make_cmd("npu", agent_available=False)

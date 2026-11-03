@@ -10,11 +10,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102). The
+# ChatAgent ships in the flagship gaia-agent-gaia wheel (#6099). The
 # WebClient / BrowserToolsMixin tests below don't need it, so import it lazily
 # and skip only the ChatAgent integration class when the wheel is absent.
 try:
-    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 except ImportError:
     ChatAgent = ChatAgentConfig = None
 
@@ -798,8 +798,89 @@ class TestBrowserToolsMixin:
     def test_find_with_no_match_says_so_instead_of_guessing(self):
         fetch = self._serve("<p>" + "no prices here " * 50 + "</p>")
         out = fetch("https://example.com", find="$")
-        assert "No occurrence of '$'" in out
+        assert "No exact occurrence of '$'" in out
         assert "not found" in out
+
+    def test_find_falls_back_to_a_passage_with_all_words(self):
+        fetch = self._serve(
+            "<p>Sunday departures leave from the east terminal. "
+            "The Pier 9 shuttle boards there at 10:30. " + "filler " * 30 + "</p>"
+        )
+        out = fetch("https://example.com", find="Sunday Pier 9")
+        assert "Exact phrase 'Sunday Pier 9' was not found" in out
+        assert "Sunday departures" in out
+        assert "Pier 9 shuttle" in out
+
+    def test_text_mode_hints_when_a_page_has_many_links(self):
+        fetch = self._serve(
+            "<p>Choose a branch from this directory.</p>"
+            "<a href='/a'>A</a><a href='/b'>B</a><a href='/c'>C</a>"
+        )
+        out = fetch("https://example.com")
+        assert "3 links on this page" in out
+        assert "extract='links'" in out
+
+    def test_two_incidental_links_get_no_hint(self):
+        fetch = self._serve(
+            "<p>"
+            + "An article body. " * 20
+            + "</p><a href='/a'>A</a><a href='/b'>B</a>"
+        )
+        assert "extract='links'" not in fetch("https://example.com")
+
+    def test_all_words_fallback_ignores_word_order(self):
+        fetch = self._serve(
+            "<p>The Pier 9 shuttle runs on Sunday only. " + "filler " * 30 + "</p>"
+        )
+        out = fetch("https://example.com", find="Sunday Pier 9")
+        assert "Exact phrase 'Sunday Pier 9' was not found" in out
+        assert "Pier 9 shuttle runs on Sunday" in out
+
+    def test_all_words_fallback_window_reaches_back_but_not_too_far(self):
+        from gaia.agents.tools.browser_tools import FIND_CONTEXT_CHARS
+        from gaia.agents.tools.browser_tools import _find_all_words_spans as spans
+
+        gap = "x " * FIND_CONTEXT_CHARS  # 2 * FIND_CONTEXT_CHARS characters
+        assert spans("Pier " + gap[:-10] + "Sunday", "Sunday Pier")
+        assert not spans("Pier " + gap + "y " * 10 + "Sunday", "Sunday Pier")
+
+    def test_all_words_fallback_needs_the_words_near_each_other(self):
+        fetch = self._serve(
+            "<p>Sunday is busy. " + "filler " * 400 + "Pier 9 is open.</p>"
+        )
+        out = fetch("https://example.com", find="Sunday Pier 9")
+        assert "No exact occurrence of 'Sunday Pier 9'" in out
+        assert "Exact phrase" not in out
+
+    def test_a_single_word_miss_gets_no_all_words_fallback(self):
+        fetch = self._serve("<p>" + "nothing to see here " * 20 + "</p>")
+        out = fetch("https://example.com", find="harbour")
+        assert "No exact occurrence of 'harbour'" in out
+
+    def test_an_exact_match_is_preferred_over_the_all_words_fallback(self):
+        fetch = self._serve(
+            "<p>Sunday Pier 9 departs early. " + "filler " * 30 + "</p>"
+        )
+        out = fetch("https://example.com", find="Sunday Pier 9")
+        assert "Exact phrase" not in out
+        assert "Sunday Pier 9 departs" in out
+
+    def test_all_words_fallback_survives_case_folded_letters(self):
+        from gaia.agents.tools.browser_tools import _find_all_words_spans
+
+        # "ſ" (long s) matches "s" case-insensitively but never lowers to it.
+        assert _find_all_words_spans("ſ then x", "s x")
+
+    def test_all_words_fallback_stays_fast_on_a_long_page_of_common_words(self):
+        import time
+
+        from gaia.agents.tools.browser_tools import _find_all_words_spans
+
+        text = "the cat sat " * 40000
+        started = time.perf_counter()
+        spans = _find_all_words_spans(text, "the sat cat")
+        assert spans == [(0, len(text))]
+        assert time.perf_counter() - started < 5
 
     def test_find_marks_matches_it_could_not_fit(self):
         fetch = self._serve(
@@ -1272,7 +1353,7 @@ class TestChatAgentBrowserIntegration:
     @pytest.fixture(autouse=True)
     def _require_chat_wheel(self):
         if ChatAgent is None:
-            pytest.skip("gaia-agent-chat wheel not installed (#1102)")
+            pytest.skip("gaia-agent-gaia wheel not installed (#6099)")
 
     def test_web_client_initialized_when_enabled(self):
         """ChatAgent creates WebClient when enable_browser=True."""
@@ -1283,8 +1364,8 @@ class TestChatAgentBrowserIntegration:
             enable_scratchpad=False,
         )
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.RAGConfig"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(config)
         assert agent._web_client is not None
@@ -1299,8 +1380,8 @@ class TestChatAgentBrowserIntegration:
             enable_scratchpad=False,
         )
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.RAGConfig"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(config)
         assert agent._web_client is None
@@ -1317,8 +1398,8 @@ class TestChatAgentBrowserIntegration:
             enable_scratchpad=False,
         )
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.RAGConfig"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(config)
         assert agent._web_client._timeout == 60
@@ -1335,8 +1416,8 @@ class TestChatAgentBrowserIntegration:
             enable_scratchpad=False,
         )
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.RAGConfig"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(config)
 
@@ -1356,8 +1437,8 @@ class TestChatAgentBrowserIntegration:
             enable_scratchpad=False,
         )
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.RAGConfig"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(config)
 

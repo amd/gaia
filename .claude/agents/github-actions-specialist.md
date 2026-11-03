@@ -31,7 +31,8 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 |------|---------|
 | `lint.yml` | Formatting, imports, security scans |
 | `claude.yml` | Claude auto-review + issue/PR handler (reactive) |
-| `claude-nightly-audit.yml` | Proactive **nightly** audit (10:37 UTC ≈ 3am Pacific; deep sweep on Sundays) — scheduled fan-out (correctness/docs/tests/features; security has its own nightly workflow) → **one issue per defect**, labelled `weekly-audit` (a provenance label, not a cadence one). No per-run triage issue: the run report goes to the job summary. Findings promote to PRs via the `bug`→`auto-fix` path. Reuses the `claude.yml` auth + `claude-auth-canary.yml` canary. See the `weekly-audit-patterns` skill before editing (two-key dedup + private-security invariants). |
+| `claude-audit-rotation.yml` | The only scheduler for the three proactive audits: **one audit a night** at 10:13 UTC (≈2–3am Pacific), picked by epoch-day mod 3, so each runs every third night. Add an audit by appending to `ROTATION` in `scripts/audit/audit_rotation.py`. |
+| `claude-nightly-audit.yml` | Proactive code audit ("Claude Code Audit", every third night via the rotation; deep sweep when the last one is over 8 days old) — fan-out (correctness/docs/tests/features; security has its own workflow) → **one issue per defect**, labelled `weekly-audit` (a provenance label, not a cadence one). No per-run triage issue: the run report goes to the job summary. Findings promote to PRs via the `bug`→`auto-fix` path. Reuses the `claude.yml` auth + `claude-auth-canary.yml` canary. See the `weekly-audit-patterns` skill before editing (two-key dedup + private-security invariants). |
 
 ### Platform & integration
 | File | Scope |
@@ -76,7 +77,7 @@ on:
     paths: ["src/**", "tests/**", ".github/workflows/<self>.yml"]
   pull_request:  # no `branches:` — it filters the BASE branch (util/check_workflow_triggers.py rejects it)
     paths: ["src/**", "tests/**", ".github/workflows/<self>.yml"]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]  # `labeled`: adding ready_for_ci must start CI (util/check_workflow_triggers.py enforces it)
   merge_group:
   workflow_dispatch:
 

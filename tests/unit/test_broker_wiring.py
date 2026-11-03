@@ -339,6 +339,21 @@ def test_nested_lease_for_a_different_model_is_loud(monkeypatch):
                 pass
 
 
+def test_nested_lease_for_the_same_model_under_its_user_name_folds(monkeypatch):
+    """A custom model is leased as user.X by one path and as X by another.
+
+    Lemonade lists a registered user.X model as X, so the two names are one
+    model and the inner lease must fold, not raise.
+    """
+    local = _LocalBroker(monkeypatch)
+
+    with broker_client.model_lease("Qwen3-0.6B-Q8_0-GGUF"):
+        with broker_client.model_lease("user.Qwen3-0.6B-Q8_0-GGUF") as inner:
+            assert inner is None
+
+    assert len(local.acquired) == 1
+
+
 def test_outer_lease_plus_load_model_acquires_once(monkeypatch):
     """The unload→load pattern used by RAG / the UI pre-flight.
 

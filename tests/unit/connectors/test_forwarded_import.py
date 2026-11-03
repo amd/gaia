@@ -34,8 +34,8 @@ from gaia.connectors.store import (
     peek_provider_credentials,
 )
 
-# Forwarded grant fixture values. The agent's required union (#962) is
-# gmail.modify + gmail.send + calendar.events; this grant covers all three.
+# Forwarded grant fixture values: the email agent's full consent, which
+# carries a mail read scope and so passes the None-path default.
 FWD_CLIENT_ID = "forwarded-host-app.apps.googleusercontent.com"
 FWD_CLIENT_SECRET = "FWD-SECRET-do-not-leak"
 FWD_REFRESH = "FWD-REFRESH-TOKEN-do-not-leak"
@@ -174,15 +174,10 @@ class TestCacheEviction:
 
 class TestLoudFailures:
     def test_scope_shortfall_raises_loudly(self):
-        # Missing gmail.send.
+        # Calendar only: no mail read scope at all.
         with pytest.raises(ScopeMismatchError) as ei:
-            _do_import(
-                scopes=[
-                    "https://www.googleapis.com/auth/gmail.modify",
-                    "https://www.googleapis.com/auth/calendar.events",
-                ]
-            )
-        assert "gmail.send" in str(ei.value)
+            _do_import(scopes=["https://www.googleapis.com/auth/calendar.events"])
+        assert "gmail.readonly" in str(ei.value)
         # Nothing persisted on the failure path.
         assert peek_connection("google") is None
         assert peek_provider_credentials("google") is None
@@ -242,9 +237,9 @@ class TestProviderAwareScopeDefaults:
     Before the fix, forwarding any provider with required_scopes=None fell
     through to the Google-only default, so Microsoft (and every other non-Google
     provider) was demanded Gmail scopes.  After the fix:
+      - Each mailbox provider's default asks only for its OWN mail read scope.
       - Unknown providers default to an empty requirement (no import-time check).
       - An explicit required_scopes=[] is honoured (not overridden by the default).
-      - Google's existing default is preserved for backward compat.
     """
 
     MS_SCOPES = [
@@ -258,10 +253,9 @@ class TestProviderAwareScopeDefaults:
     def test_non_google_provider_none_path_does_not_demand_google_scopes(
         self, monkeypatch
     ):
-        """Microsoft forward with required_scopes=None must NOT raise — there
-        is no Microsoft entry in _DEFAULT_REQUIRED_SCOPES_BY_PROVIDER so the
-        default is an empty list.  The forwarded Graph scopes need not include
-        any gmail.* URL.
+        """Microsoft forward with required_scopes=None must NOT raise — its
+        default asks for a Graph mail read scope, which these carry, and never
+        for any gmail.* URL.
 
         We patch ``gaia.connectors.providers.reload`` rather than injecting
         into ``_registry`` because ``import_forwarded_connection`` rebuilds the
@@ -281,7 +275,7 @@ class TestProviderAwareScopeDefaults:
             refresh_token="ms-refresh",
             scopes=self.MS_SCOPES,
             account_email="user@outlook.com",
-            # required_scopes intentionally omitted → defaults to [] for microsoft
+            # required_scopes omitted → any one mail read scope; Mail.ReadWrite is one
         )
         assert result["provider"] == "microsoft"
         assert result["account_email"] == "user@outlook.com"
@@ -303,12 +297,96 @@ class TestProviderAwareScopeDefaults:
             )
 
     def test_google_default_still_enforced_on_none_path(self):
-        """Regression: the Google None-path default must still gate a
-        shortfall.  This is the existing test_scope_shortfall_raises_loudly
-        re-asserted to prove the map entry is wired up."""
+        """The Google None-path default still gates a connection that
+        cannot read mail."""
         with pytest.raises(ScopeMismatchError) as ei:
-            _do_import(scopes=["https://www.googleapis.com/auth/gmail.modify"])
-        assert "gmail.send" in str(ei.value)
+            _do_import(scopes=["openid", "email"])
+        assert "gmail.readonly" in str(ei.value)
+
+
+class TestFlagshipForwardDefault:
+    """The None-path default is "any one mail read scope", not the email
+    agent's modify + send — which the read-only flagship never holds, so
+    every forwarded flagship connection used to be refused."""
+
+    READONLY = "https://www.googleapis.com/auth/gmail.readonly"
+    MODIFY = "https://www.googleapis.com/auth/gmail.modify"
+
+    def test_a_readonly_forward_is_accepted(self):
+        result = _do_import(scopes=[self.READONLY])
+        assert result["provider"] == "google"
+
+    def test_the_email_agents_modify_forward_is_still_accepted(self):
+        _do_import(scopes=[self.MODIFY])
+
+    def test_the_refusal_never_asks_for_more_than_read(self):
+        """The remedy names the narrowest read scope — never modify or send,
+        which would push a host app to over-consent."""
+        with pytest.raises(ScopeMismatchError) as ei:
+            _do_import(scopes=["openid"])
+        assert ei.value.missing_scopes == [self.READONLY]
+        assert "gmail.send" not in str(ei.value)
+        assert peek_connection("google") is None
+
+    def test_a_send_only_forward_cannot_pass_as_mail_read(self):
+        """gmail.send is a mail scope but confers no read; it must not
+        satisfy the default."""
+        with pytest.raises(ScopeMismatchError):
+            _do_import(scopes=["https://www.googleapis.com/auth/gmail.send"])
+
+    def test_a_similar_looking_scope_does_not_match(self):
+        """Exact match only: a prefix or suffix lookalike is not a grant."""
+        with pytest.raises(ScopeMismatchError):
+            _do_import(scopes=[self.READONLY + ".extra", self.READONLY[:-1]])
+
+    def test_microsoft_without_mail_read_is_refused(self, monkeypatch):
+        import zlib
+        from unittest.mock import MagicMock
+
+        fake = MagicMock()
+        fake.client_id_hash = format(zlib.crc32(b"ms"), "08x")
+        monkeypatch.setattr("gaia.connectors.providers.reload", lambda _: fake)
+        with pytest.raises(ScopeMismatchError) as ei:
+            import_forwarded_connection(
+                provider="microsoft",
+                client_id="ms",
+                client_secret="s",
+                refresh_token="r",
+                scopes=["openid", "https://graph.microsoft.com/Calendars.Read"],
+            )
+        assert "Mail.Read" in str(ei.value)
+
+    def test_microsoft_mail_read_is_accepted(self, monkeypatch):
+        import zlib
+        from unittest.mock import MagicMock
+
+        fake = MagicMock()
+        fake.client_id_hash = format(zlib.crc32(b"ms"), "08x")
+        monkeypatch.setattr("gaia.connectors.providers.reload", lambda _: fake)
+        result = import_forwarded_connection(
+            provider="microsoft",
+            client_id="ms",
+            client_secret="s",
+            refresh_token="r",
+            scopes=["https://graph.microsoft.com/Mail.Read"],
+        )
+        assert result["provider"] == "microsoft"
+
+    def test_matches_the_flagships_read_capable_scopes(self):
+        """Drift guard: connectors cannot import gaia.agents, so the table
+        is duplicated. It must equal what the mail tools accept as read."""
+        from gaia.agents.tools._email.scopes import READ_CAPABLE_SCOPES
+        from gaia.connectors.api import _DEFAULT_READ_SCOPES_BY_PROVIDER
+
+        assert _DEFAULT_READ_SCOPES_BY_PROVIDER == dict(READ_CAPABLE_SCOPES)
+
+    def test_the_flagships_declared_scope_satisfies_it(self):
+        """What the flagship asks a new user to consent to must pass."""
+        from gaia.agents.tools._email.scopes import DECLARED_SCOPES
+        from gaia.connectors.api import _DEFAULT_READ_SCOPES_BY_PROVIDER
+
+        for provider, declared in DECLARED_SCOPES.items():
+            assert set(declared) & set(_DEFAULT_READ_SCOPES_BY_PROVIDER[provider])
 
 
 class TestRefreshUsesForwardedClient:

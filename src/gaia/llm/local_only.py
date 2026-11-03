@@ -1,0 +1,429 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""The user's network policy, and the guard that keeps "Local only" true.
+
+``~/.gaia/policy.json`` holds ``network_policy``: ``cloud_allowed`` (the
+default) or ``local_ai_only``. Under Local only no GAIA LLM request may reach a
+cloud model. The guard is an allowlist: a model is permitted only when
+Lemonade's catalog lists it with a recipe known to run on this machine. An
+unknown id, a cloud or ``collection.*`` recipe, or a catalog that can't be read
+is refused, because a blocklist keyed on id prefixes misses router aliases and
+providers nobody listed.
+
+The policy lives in its own file, not ``config.json``: ``GaiaConfig.save()``
+rewrites only the fields it declares, so an older GAIA would erase it there.
+See docs/plans/hybrid-local-cloud-routing.md §2.1.
+"""
+
+from __future__ import annotations
+
+import functools
+import inspect
+import json
+import os
+import tempfile
+from enum import Enum
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from gaia.logger import get_logger
+
+log = get_logger(__name__)
+
+
+class NetworkPolicy(str, Enum):
+    """How much GAIA may send off the machine, least to most private."""
+
+    CLOUD_ALLOWED = "cloud_allowed"
+    LOCAL_AI_ONLY = "local_ai_only"
+    OFFLINE = "offline"
+
+
+#: Levels a user can choose today. Offline needs the zero-network guards
+#: (plan §2.1.7); accepting it before they exist would promise more than GAIA
+#: enforces.
+SELECTABLE_POLICIES = (NetworkPolicy.CLOUD_ALLOWED, NetworkPolicy.LOCAL_AI_ONLY)
+
+#: Lemonade recipes that run on this machine. Anything else is treated as
+#: possibly remote: ``cloud`` is, and ``collection.*`` (router, omni) can
+#: forward to a cloud member. A new local recipe is refused until it is listed
+#: here — a loud error, never a leak.
+LOCAL_RECIPES = frozenset(
+    {
+        "llamacpp",
+        "llamacpp-hrx",
+        "flm",
+        "ryzenai-llm",
+        "vllm",
+        "onnxruntime",
+        "sd-cpp",
+        "whispercpp",
+        "moonshine",
+        "kokoro",
+        "thenoise",
+        "openmoss",
+        "thinksound",
+        "acestep",
+        "trellis",
+        "ds4",
+    }
+)
+
+POLICY_KEY = "network_policy"
+SETTINGS_HINT = (
+    "To allow cloud models again, run "
+    "`gaia config set network_policy cloud_allowed`."
+)
+
+
+class CloudDisabledError(RuntimeError):
+    """A request would reach a cloud model while Local only is on."""
+
+
+def policy_path() -> Path:
+    """Where the user's policy file lives; resolved per call so tests can move it."""
+    override = os.environ.get("GAIA_POLICY_FILE", "").strip()
+    if override:
+        return Path(os.path.expanduser(override))
+    from gaia.config import gaia_home
+
+    return gaia_home() / "policy.json"
+
+
+_last_read_error: List[Optional[str]] = [None]
+
+#: Limits every policy file must meet before it is parsed. The TUI's Go reader
+#: (tui/internal/lemonade/localonly.go) applies the same ones, so a file one
+#: JSON parser takes and the other rejects never reads differently in the two:
+#: tests/fixtures/local_only_policy_cases.json holds the cases both must pass.
+POLICY_MAX_BYTES = 64 * 1024
+POLICY_MAX_DEPTH = 16
+POLICY_MAX_NUMBER_CHARS = 20
+_NUMBER_CHARS = frozenset("0123456789+-.eE")
+
+
+def _within_limits(raw: bytes) -> str:
+    """The file as text if it meets the shared limits; ``ValueError`` if not."""
+    if len(raw) > POLICY_MAX_BYTES:
+        raise ValueError(f"it is larger than {POLICY_MAX_BYTES} bytes")
+    text = raw.decode("utf-8")
+    depth = run = 0
+    lead = ""
+    in_string = escaped = False
+    for ch in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch in _NUMBER_CHARS:
+            lead = lead if run else ch
+            run += 1
+            if run - (lead == "-") > POLICY_MAX_NUMBER_CHARS:
+                raise ValueError(
+                    f"it has a number longer than {POLICY_MAX_NUMBER_CHARS} characters"
+                )
+            continue
+        run = 0
+        if ch == '"':
+            in_string = True
+        elif ch in "[{":
+            depth += 1
+            if depth > POLICY_MAX_DEPTH:
+                raise ValueError(f"it nests deeper than {POLICY_MAX_DEPTH} levels")
+        elif ch in "]}":
+            depth -= 1
+    return text
+
+
+def _reject_constant(token: str) -> Any:
+    raise ValueError(f"it contains {token}, which JSON doesn't allow")
+
+
+def _load_object(path: Path) -> Dict[str, Any]:
+    """The policy file's JSON object. Raises ``FileNotFoundError`` when absent,
+    and some other exception for anything that isn't a well-formed object."""
+    with open(path, "rb") as f:
+        raw = f.read(POLICY_MAX_BYTES + 1)
+    data = json.loads(_within_limits(raw), parse_constant=_reject_constant)
+    if not isinstance(data, dict):
+        raise ValueError("it is not a JSON object")
+    return data
+
+
+def _read(path: Path) -> NetworkPolicy:
+    """Parse the file. Anything unreadable counts as Local only (fail closed)."""
+    try:
+        data = _load_object(path)
+        return NetworkPolicy(data.get(POLICY_KEY, NetworkPolicy.CLOUD_ALLOWED.value))
+    except FileNotFoundError:
+        return NetworkPolicy.CLOUD_ALLOWED
+    except Exception as e:  # any failure, RecursionError included, fails closed
+        return _fail_closed(f"Could not read the network policy in {path} ({e})")
+
+
+def _fail_closed(reason: str) -> NetworkPolicy:
+    message = (
+        f"{reason}. Treating it as Local only until the file is fixed or "
+        f"rewritten with `gaia config set network_policy <level>`."
+    )
+    # Read on every request: say it once per problem, not once per call.
+    if message != _last_read_error[0]:
+        _last_read_error[0] = message
+        log.error(message)
+    return NetworkPolicy.LOCAL_AI_ONLY
+
+
+def effective_policy() -> NetworkPolicy:
+    """The policy in force now.
+
+    Read on every call, never cached: the two levels serialize to the same
+    length and Windows mtimes are coarse, so a stat-keyed cache can miss a
+    switch to Local only. The file is tiny and inference calls are not.
+    """
+    try:
+        path = policy_path()
+    except Exception as e:  # no home directory: the policy can't be read
+        return _fail_closed(f"Could not locate the network policy file ({e})")
+    return _read(path)
+
+
+def cloud_blocked() -> bool:
+    """True while no LLM request may reach a cloud model."""
+    return effective_policy() is not NetworkPolicy.CLOUD_ALLOWED
+
+
+def set_policy(value: str) -> NetworkPolicy:
+    """Validate and atomically write the user's policy. Returns what was stored."""
+    try:
+        policy = NetworkPolicy(str(value).strip().lower())
+    except ValueError as e:
+        choices = ", ".join(p.value for p in SELECTABLE_POLICIES)
+        raise ValueError(
+            f"Unknown network_policy {value!r}. Choose one of: {choices}."
+        ) from e
+    if policy not in SELECTABLE_POLICIES:
+        raise ValueError(
+            "network_policy 'offline' isn't available yet: GAIA can't yet block "
+            "its non-AI network features, so it would promise more than it "
+            "enforces. Use 'local_ai_only' to block every cloud AI model."
+        )
+    path = policy_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data: dict = {}
+    try:
+        data = _load_object(path)
+    except FileNotFoundError:
+        pass
+    except Exception:  # rewriting is the documented repair for a bad file
+        data = {}
+    data[POLICY_KEY] = policy.value
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".policy-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    return policy
+
+
+#: config.json keys that can hold a model id GAIA runs or restores.
+SAVED_MODEL_KEYS = ("default_model", "last_model")
+
+
+def clear_saved_cloud_models() -> List[Tuple[str, str]]:
+    """Unset saved cloud model ids in config.json; return ``(key, model)`` cleared.
+
+    A saved cloud default would otherwise make every later request fail under
+    Local only. ``last_provider`` goes with a cleared ``last_model``.
+
+    Raises:
+        GaiaConfigError: config.json exists but can't be read or written.
+    """
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import cloud_model_provider
+
+    cfg = GaiaConfig.load()
+    cleared = []
+    for key in SAVED_MODEL_KEYS:
+        model = (getattr(cfg, key) or "").strip()
+        is_claude = model.lower().startswith("claude") or (
+            key == "last_model" and (cfg.last_provider or "").lower() == "claude"
+        )
+        if model and (cloud_model_provider(model) or is_claude):
+            setattr(cfg, key, None)
+            cleared.append((key, model))
+    if any(key == "last_model" for key, _ in cleared):
+        cfg.last_provider = None
+    if cleared:
+        cfg.save()
+    return cleared
+
+
+def is_local_recipe(recipe: Optional[str]) -> bool:
+    return bool(recipe) and recipe in LOCAL_RECIPES
+
+
+def assert_model_permitted(
+    model: Optional[str], recipes_of: Callable[[str], List[Optional[str]]]
+) -> None:
+    """Refuse *model* under Local only unless the catalog says it runs here.
+
+    *recipes_of* returns the catalog recipe of every entry *model* could name
+    (empty when the catalog lists none) and may raise when the catalog can't
+    be read. Every one must be local: an id that could resolve to a router
+    collection as well as a local model is not confirmed local.
+    """
+    if not cloud_blocked():
+        return
+    if not model:
+        raise CloudDisabledError(
+            "Local only is on and this request names no model, so GAIA can't "
+            f"confirm it isn't a cloud model. {SETTINGS_HINT}"
+        )
+    try:
+        recipes = recipes_of(model)
+    except Exception as e:  # any catalog failure means "unconfirmed"
+        raise CloudDisabledError(
+            f"Local only is on and GAIA couldn't read Lemonade's model catalog to "
+            f"confirm that '{model}' isn't a cloud model ({e}). Start Lemonade and "
+            f"retry. {SETTINGS_HINT}"
+        ) from e
+    if recipes and all(is_local_recipe(r) for r in recipes):
+        return
+    remote = [r for r in recipes if not is_local_recipe(r)]
+    if not recipes:
+        why = "Lemonade's catalog doesn't list it"
+    elif len(set(recipes)) > 1:
+        why = (
+            f"its name matches several catalog entries ({', '.join(map(str, recipes))}) "
+            "and not all of them are local models"
+        )
+    elif remote[0] is None:
+        why = "Lemonade's catalog lists it without saying where it runs"
+    elif remote[0] == "cloud":
+        why = "it is a cloud model"
+    elif str(remote[0]).startswith("collection."):
+        why = f"it is a '{remote[0]}' model, which can forward requests to the cloud"
+    else:
+        why = f"its recipe '{remote[0]}' isn't one GAIA knows is a local model"
+    raise CloudDisabledError(
+        f"Local only is on, so '{model}' was blocked: {why}. Pick a local "
+        f"model. {SETTINGS_HINT}"
+    )
+
+
+def catalog_recipes(client: Any, model: str) -> List[Optional[str]]:
+    """Recipes of the catalog entries *model* names on a ``LemonadeClient``'s server."""
+    return recipes_in_catalog(
+        model, client._model_metadata, lambda: client.list_models(show_all=True)
+    )
+
+
+def recipes_in_catalog(
+    model: str,
+    cached: Dict[str, Dict[str, Any]],
+    fetch_catalog: Callable[[], Dict[str, Any]],
+) -> List[Optional[str]]:
+    """Recipes of the catalog entries *model* names.
+
+    An exact id wins. Otherwise every entry equal under Lemonade's lenient
+    matching (case, ``user.`` prefix) counts. *cached* is consulted first; a
+    miss reads the catalog once through *fetch_catalog* (``{"data": [...]}``).
+    """
+    from gaia.llm.lemonade_client import MODELS, _model_ids_match
+
+    def lookup(entries: Dict[str, Dict[str, Any]]) -> List[Optional[str]]:
+        exact = entries.get(model)
+        if exact is not None:
+            return [exact.get("recipe")]
+        # A snapshot: another thread's list_models may be adding entries.
+        return [
+            e.get("recipe")
+            for mid, e in list(entries.items())
+            if _model_ids_match(mid, model)
+        ]
+
+    found = lookup(cached)
+    if found:
+        return found
+    catalog = fetch_catalog()
+    found = lookup({e["id"]: e for e in catalog.get("data", []) if e.get("id")})
+    if found:
+        return found
+    # A user.* model GAIA declares is listed only after its first pull; its
+    # declared recipe says where it will run, so a fresh machine can pull it.
+    return [
+        req.recipe
+        for req in MODELS.values()
+        if req.recipe and _model_ids_match(req.model_id, model)
+    ]
+
+
+def assert_provider_permitted(provider: str) -> None:
+    """Refuse a non-Lemonade cloud provider (e.g. Claude) under Local only."""
+    if cloud_blocked():
+        raise CloudDisabledError(
+            f"Local only is on, so GAIA won't send requests to {provider}. "
+            f"{SETTINGS_HINT}"
+        )
+
+
+def local_only_key_message(provider: str) -> str:
+    """Why a cloud key wasn't handed to Lemonade, and how to change that."""
+    return (
+        f"Local only is on, so GAIA won't give Lemonade a {provider} key and "
+        f"{provider} models stay off. {SETTINGS_HINT}"
+    )
+
+
+def guard_inference(default_model: Optional[Callable[[Any], Optional[str]]] = None):
+    """Decorate a ``LemonadeClient`` inference method with the Local only check.
+
+    The model is read from the method's ``model`` argument, positional or
+    keyword, else from a ``payload`` dict's ``"model"`` key. *default_model(self)* supplies the id the method falls back to
+    when the caller passes none, so the check sees the model actually used.
+    """
+
+    def decorator(method):
+        signature = inspect.signature(method)
+
+        @functools.wraps(method)
+        def wrapper(self, *args, **kwargs):
+            if cloud_blocked():
+                bound = signature.bind(self, *args, **kwargs)
+                bound.apply_defaults()
+                model = bound.arguments.get("model")
+                if not model and default_model is not None:
+                    model = default_model(self)
+                if not model:
+                    payload = bound.arguments.get("payload")
+                    if isinstance(payload, dict):
+                        model = payload.get("model")
+                # Re-point at a restarted GAIA Lemonade first, or the catalog
+                # read below hits a dead address. Any key replay it attempts is
+                # refused under Local only (cloud_keys.ensure_authenticated).
+                follow = getattr(self, "_follow_gaia_lemonade", None)
+                if follow is not None:
+                    follow()
+                survive = getattr(self, "_survive_gaia_lemonade_stop", None)
+
+                def recipes_of(m: str) -> List[Optional[str]]:
+                    if survive is None:
+                        return catalog_recipes(self, m)
+                    # Wait out a daemon-driven restart, as the request would.
+                    return survive(lambda: catalog_recipes(self, m), m)
+
+                assert_model_permitted(model, recipes_of)
+            return method(self, *args, **kwargs)
+
+        wrapper.__local_only_guarded__ = True
+        return wrapper
+
+    return decorator

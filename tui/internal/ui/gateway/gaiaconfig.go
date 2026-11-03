@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/amd/gaia/tui/internal/filelock"
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 // setDefaultModel points GAIA's persistent `default_model` at a gateway model,
@@ -19,7 +22,20 @@ import (
 // Unknown keys are preserved: this file is shared with the Python side
 // (gaia.config.GaiaConfig), which owns fields this package does not model.
 func setDefaultModel(modelID string) error {
+	if lemonade.LocalOnly() {
+		return fmt.Errorf("Local only is on, so GAIA did not make %s the default model. %s",
+			modelID, lemonade.LocalOnlyHint)
+	}
 	path := gaiaConfigPath()
+
+	// The Python side and the preflight writers use this same lock. Hold it for
+	// the complete read-modify-write so a concurrent save cannot lose a key, and
+	// replace the file atomically so readers never observe partial JSON.
+	lock, err := filelock.Acquire(path, filelock.Timeout)
+	if err != nil {
+		return fmt.Errorf("could not save GAIA config at %s: %w", path, err)
+	}
+	defer lock.Release()
 
 	config := map[string]any{}
 	raw, err := os.ReadFile(path)
@@ -35,17 +51,11 @@ func setDefaultModel(modelID string) error {
 	}
 
 	config["default_model"] = modelID
-
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fmt.Errorf("could not create %s: %w", dir, err)
-		}
-	}
 	encoded, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("could not encode GAIA config: %w", err)
 	}
-	if err := os.WriteFile(path, append(encoded, '\n'), 0o600); err != nil {
+	if err := filelock.WriteAtomic(path, append(encoded, '\n'), 0o600); err != nil {
 		return fmt.Errorf("could not write GAIA config to %s: %w", path, err)
 	}
 	return nil

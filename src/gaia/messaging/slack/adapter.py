@@ -734,6 +734,9 @@ class SlackAdapter:
             self._ask_confirmation(target, event)
         elif etype == "needs_input":
             self._refuse_question(target, event)
+        elif etype == "reasoning":
+            # Only sent to a client that asks for it; Slack posts the answer, not the thinking.
+            pass
         elif etype == "final":
             self._finish(target, str(event.get("answer") or ""))
         elif etype == "error":

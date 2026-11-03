@@ -14,10 +14,12 @@ vi.mock('../../services/api');
 
 const mockedApi = vi.mocked(api);
 
+// One timestamp for every chat so the sidebar's recency sort keeps them in creation order.
+const NOW = new Date().toISOString();
+
 function chat(id: string, title: string): Session {
-    const now = new Date().toISOString();
     return {
-        id, title, created_at: now, updated_at: now,
+        id, title, created_at: NOW, updated_at: NOW,
         model: '', system_prompt: null, message_count: 2, document_ids: [], inference_remote: false,
     };
 }

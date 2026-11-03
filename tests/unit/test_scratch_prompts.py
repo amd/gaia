@@ -237,3 +237,24 @@ def test_the_wire_args_are_only_what_the_model_sent(folders):
         "working_directory": str(project),
         "risk_note": risk_note,
     }
+
+
+def test_a_relative_write_is_judged_where_the_tool_writes_it(folders, monkeypatch):
+    # The process sits in scratch, but the tool resolves bare names against the
+    # chat workspace, so the write lands in the user's folder and must be asked.
+    project, scratch = folders
+    agent, handler = _agent(folders)
+    monkeypatch.chdir(scratch)
+
+    def preflight(_args):
+        return None
+
+    preflight.target_of = lambda args: project / args["file_path"]
+    entry = dict(agent._tools_registry["write_file"], preflight=preflight)
+    monkeypatch.setitem(agent._tools_registry, "write_file", entry)
+
+    _result, prompts = _drive(
+        agent, handler, "write_file", {"file_path": "explore.py", "content": "x"}
+    )
+
+    assert len(prompts) == 1

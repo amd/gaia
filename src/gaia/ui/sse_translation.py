@@ -16,10 +16,12 @@ This module is the reusable translation layer (spec §6): a **total,
 source-exhaustive** mapping from the handler's vocabulary onto the canonical
 event types —
 
-    status | token | tool_call | tool_result | needs_confirmation
+    status | token | reasoning | tool_call | tool_result | needs_confirmation
           | needs_input | final | error
 
-— terminated by exactly one ``final`` or ``error``. It is dependency-light (this
+The optional ``reasoning`` event is emitted only when requested by a
+contract-compatible caller; otherwise thinking folds to ``status``. The stream is
+terminated by exactly one ``final`` or ``error``. It is dependency-light (this
 module plus the stdlib-only :mod:`gaia.ui.event_narration`) so it unit-tests
 without Lemonade, a mailbox, or a live agent, and so the OpenAPI export stays
 cheap.
@@ -72,7 +74,11 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG, plain_risk_note
-from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, SCRATCH_ARG
+from gaia.agents.base.tool_grants import (
+    PATH_ACCESS_PROMPT_TOOL,
+    PATH_TOOLS,
+    SCRATCH_ARG,
+)
 from gaia.ui.event_narration import (
     DEBUG_CHANNEL,
     derive_narration,
@@ -113,6 +119,7 @@ SUMMARY_VIEW_KEYS = (
     # What the tool wrote (``RESULT_PATH_KEYS`` in ``gaia.ui.sse_handler``).
     "file_path",
     "image_path",
+    "audio_path",
     # A ``search_web`` result's hits, so a relayed turn can cite them.
     "sources",
 )
@@ -179,8 +186,11 @@ class CanonicalTranslator:
         action_labels: Optional[Dict[str, str]] = None,
         summary_renderer: Optional[Callable[[str, Dict[str, Any]], str]] = None,
         debug: Optional[bool] = None,
+        reasoning: bool = False,
     ) -> None:
         self._run_id = run_id
+        # The client asked for the model's reasoning as ``reasoning`` events.
+        self._reasoning = reasoning
         self._agent_id = agent_id
         self._debug = _debug_enabled_by_env() if debug is None else bool(debug)
         self._render_tool_map = dict(render_tool_map or {})
@@ -380,6 +390,10 @@ class CanonicalTranslator:
         return self._debug_status(msg)
 
     def _on_thinking(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if self._reasoning:
+            # Pieces carry their own spacing, so they go out as they came.
+            delta = str(event.get("content", ""))
+            return [{"type": "reasoning", "delta": delta}] if delta else []
         # Reasoning narration folds to status, NOT token (token is answer text the
         # UI commits to the message). See spec §6.2 / Q1.
         content = str(event.get("content", "")).strip()
@@ -397,6 +411,10 @@ class CanonicalTranslator:
         if not delta:
             return []
         return [{"type": "token", "delta": delta}]
+
+    def _on_commentary(self, _event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        # Its text already went out as tokens; the host's handler re-derives it.
+        return []
 
     def _on_tool_result(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         self._result_seen_since_call = True
@@ -418,7 +436,10 @@ class CanonicalTranslator:
             # nor the latency the preview line is made of.
             "preview": derive_preview(tool, event),
         }
-        render = self._render_tool_map.get(self._last_tool or "")
+        # A handler-attached card (e.g. an edit's diff) outranks the tool map.
+        render = event.get("render")
+        if not isinstance(render, str) or not render:
+            render = self._render_tool_map.get(self._last_tool or "")
         if render:
             canonical["render"] = render
         return [canonical]
@@ -512,11 +533,13 @@ class CanonicalTranslator:
             args = {}
         summary = self._render_args_summary(tool, args)
         # The command, where it runs, then one plain line on what it can do.
-        note = (
-            str(args.get(RISK_NOTE_ARG) or "") or plain_risk_note(event.get("risk"))
-            if tool in COMMAND_SUMMARY_TOOLS
-            else ""
-        )
+        if tool in COMMAND_SUMMARY_TOOLS:
+            note = str(args.get(RISK_NOTE_ARG) or "") or plain_risk_note(
+                event.get("risk")
+            )
+        else:
+            # A file prompt's note says what else a yes grants.
+            note = str(args.get(RISK_NOTE_ARG) or "") if tool in PATH_TOOLS else ""
         if note:
             summary = f"{summary}\n{note}"
         # confirm_url omitted: stateless stop-and-hand-off (D1, spec §5 / Q4).
@@ -539,6 +562,10 @@ class CanonicalTranslator:
         always_scope = event.get("always_scope")
         if always_scope:
             canonical["always_scope"] = str(always_scope)
+            # The same grant in plain words, e.g. "editing notes.md".
+            always_label = event.get("always_label")
+            if always_label:
+                canonical["always_label"] = str(always_label)
         # What the call does (read / write / execute / destructive), so the
         # prompt's label is earned by the command rather than the tool name.
         risk = event.get("risk")
@@ -638,6 +665,7 @@ class CanonicalTranslator:
         "thinking": _on_thinking,
         "plan": _on_plan,
         "chunk": _on_chunk,
+        "commentary": _on_commentary,
         "tool_start": _on_tool_start,
         "tool_result": _on_tool_result,
         "tool_end": _on_tool_end,

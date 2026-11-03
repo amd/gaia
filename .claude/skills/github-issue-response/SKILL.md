@@ -75,7 +75,8 @@ correcting them abstractly.
 **Code:**
 - In-core agent framework: `src/gaia/agents/` — `base/`, `tools/`, `code_index/`, `registry.py`
 - Packaged agents: `hub/agents/<id>/python/` — `gaia` (the flagship), `chat` (its base
-  class), `email`, plus the `hello-world` / `word-count` / `connectors-demo` templates.
+  class), and `email`. The one reference agent package `gaia agent init` mirrors is
+  `tests/fixtures/agents/hello-world/`.
   Per-task capabilities (coding, data exploration, document briefs, …) are skills under
   `hub/skills/`.
 - CLI: `src/gaia/cli.py` · MCP: `src/gaia/mcp/` · LLM backends: `src/gaia/llm/` (+ `providers/`)

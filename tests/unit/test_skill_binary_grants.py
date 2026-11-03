@@ -1021,6 +1021,9 @@ class _ExecutingAgent(_Gated):
     internet_off = _Base.internet_off
     _policy_refusal = _Base._policy_refusal
     _execute_tool = _Base._execute_tool
+    _write_target_outside_scope = _Base._write_target_outside_scope
+    _read_validator = _Base._read_validator
+    _path_access_without_asking = _Base._path_access_without_asking
     # _execute_tool fits arguments to their annotated types before dispatch, so
     # the stub needs that too or it is not the real path any more.
     _coerce_tool_args = _Base._coerce_tool_args

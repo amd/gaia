@@ -43,9 +43,16 @@ mixin and calling its `register_*_tools()` method. Each row is the exact
 | `filesystem` | `from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin` | File system navigation |
 | `scratchpad` | `from gaia.agents.tools.scratchpad_tools import ScratchpadToolsMixin` | SQL scratchpad tables for data analysis |
 | `browser` | `from gaia.agents.tools.browser_tools import BrowserToolsMixin` | Web search, page fetch, download |
+| `browser_use` | `from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin` | Live-browser tools: open, observe, act, and sign in |
+| `email` | `from gaia.agents.tools.email_tools import EmailToolsMixin` | Read-only mailbox tools (Gmail / Outlook) |
 | `sd` | `from gaia.sd.mixin import SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `from gaia.vlm.mixin import VLMToolsMixin` | Vision LLM / structured extraction |
+| `skills` | `from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
+| `skill_learning` | `from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin` | Persist lessons learned while running a skill |
+| `audio` | `from gaia.agents.tools.audio_tools import AudioToolsMixin` | Transcribe audio/video via Lemonade, then label speakers |
+| `audio_generation` | `from gaia.agents.tools.audio_generation_tools import AudioGenerationToolsMixin` | Generate WAV music and sound effects via Lemonade (`init_audio_generation`) |
 | `wait` | `from gaia.agents.tools.wait_tools import WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
+| `reasoning_effort` | `from gaia.agents.tools.reasoning_tools import ReasoningEffortToolsMixin` | `set_reasoning_effort` low/medium/high per step, on models that grade reasoning (gpt-oss) |
 
 The sections below show usage patterns for the most common mixins; the
 `file_io` mixin has its own spec at [FileIOToolsMixin](/spec/file-io-tools-mixin).
@@ -203,14 +210,35 @@ result = agent.process_query("create a sunset over mountains")
 
 **Available Tools:**
 - `generate_image(prompt, model, size, steps, cfg_scale, seed)` - Generate images with SD
-- `list_sd_models()` - Show available models
+- `list_sd_models()` - List the image models downloaded in Lemonade, with each one's `image_defaults`
 - `get_generation_history(limit)` - See generated images from session
+
+To opt into image-to-3D reconstruction, initialize the mixin with
+`enable_3d_tools=True`. This adds
+`generate_3d_model(image_path, model="TRELLIS-3D", resolution=512, seed=42, bg_removal="threshold")`,
+which sends a local image to Lemonade's `/v1/3d/generations` endpoint and saves
+the returned GLB mesh. The selected TRELLIS model must already be downloaded;
+GAIA does not silently download it.
+
+To opt into image variations, initialize the mixin with
+`enable_variation_tools=True`. This adds
+`create_image_variation(image_path, model="Flux-2-Klein-4B", size=None, n=1)`,
+which sends a local PNG to Lemonade's `/v1/images/variations` endpoint (no
+prompt) and saves each of the `n` (1-10) results as its own PNG next to
+generated images. The source image must be inside the agent's allowed folders,
+must be a real PNG (checked by its signature, not its extension) of at most
+20 MiB, and `size` sides are capped at 4096. These checks run before any model
+is loaded or downloaded.
+As with `generate_image`, the model must already be downloaded; only the legacy
+SD models download on demand.
+The same call is available directly as `LemonadeClient.create_image_variation()`.
 
 **Supported Models:**
 - **SDXL-Turbo** (default) - Fast, 512x512, ~17s
 - **SD-Turbo** - Faster, 512x512, ~13s
 - **SDXL-Base-1.0** - Photorealistic, 1024x1024, ~9min
 - **SD-1.5** - Legacy, 512x512, ~88s
+- **TheNoise models** (e.g. `Qwen-Image-2.1-Turbo-INT8`) - must already be downloaded; GAIA leaves size, steps, CFG and seed to Lemonade's per-model defaults unless you pass them
 
 ---
 

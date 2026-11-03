@@ -222,8 +222,6 @@ jobs:
     # derived from a measurement).
     timeout-minutes: ${{ fromJSON(inputs.limit || '250') >= 249 && 440 || 275 }}
     steps:
-      - name: Show which Claude account this job uses
-        run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
       - name: Checkout (the pushed branch)
         uses: actions/checkout@v7
         with:
@@ -263,10 +261,21 @@ jobs:
       # Prove the credential is ACCEPTED before spending hours of the serial
       # Lemonade slot. An out-of-credit key that passed a presence-only check is
       # what killed every email eval run, on every branch, ~25 minutes in.
+      # The account this job runs on: the primary, or the secondary if the
+      # primary is out of quota. Both out fails here, naming both reset times.
+      - name: Pick the Claude account
+        id: claude_account
+        uses: ./.github/actions/claude-credential
+        with:
+          primary-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          secondary-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}
+          model: claude-opus-5
+          what: "The email scorecard refresh"
+
       - name: Preflight — judge credential (live probe)
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
-          ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           python -m gaia.eval.judge_client --probe
           if ($LASTEXITCODE -ne 0) { throw "judge credential probe failed" }
@@ -449,8 +458,8 @@ jobs:
           # Prefer the subscription token; blank the key when it is present so
           # judge_client does not pick the key's account. Same expression every
           # other Claude workflow here uses.
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
-          ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           python hub/agents/email/python/packaging/eval_drafting_report.py
           if ($LASTEXITCODE -ne 0) { throw "drafting eval failed" }
@@ -464,8 +473,8 @@ jobs:
           # Prefer the subscription token; blank the key when it is present so
           # judge_client does not pick the key's account. Same expression every
           # other Claude workflow here uses.
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
-          ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           python hub/agents/email/python/packaging/eval_action_item_report.py
           if ($LASTEXITCODE -ne 0) { throw "action-item eval failed" }
@@ -477,8 +486,8 @@ jobs:
           # Prefer the subscription token; blank the key when it is present so
           # judge_client does not pick the key's account. Same expression every
           # other Claude workflow here uses.
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
-          ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           python hub/agents/email/python/packaging/eval_briefing_report.py
           if ($LASTEXITCODE -ne 0) { throw "briefing eval failed" }

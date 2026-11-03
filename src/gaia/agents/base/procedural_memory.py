@@ -16,6 +16,7 @@ Spec: docs/plans/skill-synthesis.mdx
 """
 
 import functools
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -37,6 +38,29 @@ from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
+_INCOMPLETE_MARKER = (
+    "… INCOMPLETE — the remaining steps were cut to fit; this is not the "
+    "full procedure."
+)
+# Line starts of a numbered step, a bullet, or a markdown heading.
+_STEP_START_RE = re.compile(r"^[ \t]*(?:\d+[.)]|[-*+]|#{1,6})[ \t]", re.MULTILINE)
+_PARAGRAPH_BREAK_RE = re.compile(r"\n[ \t]*\n")
+
+
+def _cut_at_step_boundary(body: str, cap: int) -> str:
+    """Return the longest prefix of ``body`` (at most ``cap`` chars) ending at a step.
+
+    Cuts only where a step, bullet or heading begins, or at a blank line, so
+    every step shown is whole.  Returns ``""`` when no boundary falls inside
+    the cap (a single step longer than the whole budget).
+    """
+    window = body[: cap + 1]
+    cuts = [m.start() for m in _STEP_START_RE.finditer(window)]
+    cuts += [m.start() for m in _PARAGRAPH_BREAK_RE.finditer(window)]
+    cuts = [c for c in cuts if 0 < c <= cap]
+    return body[: max(cuts)].rstrip() if cuts else ""
+
+
 #: Serializes every touch of a procedures FAISS index. Synthesis now writes to
 #: it from a background thread while the live turn searches it, and the native
 #: index is not safe for a concurrent add + search.
@@ -55,7 +79,7 @@ class ProceduralMemoryMixin:
     """
 
     # ==================================================================
-    # Procedures FAISS Index (v3 — procedural memory, #887)
+    # Procedures FAISS Index (v3 — procedural memory)
     # ==================================================================
 
     def _rebuild_proc_faiss_index(self) -> None:
@@ -218,7 +242,7 @@ class ProceduralMemoryMixin:
         return results
 
     # ==================================================================
-    # Skill Recall (procedural memory, #887 — RECALL)
+    # Skill Recall (procedural memory — RECALL)
     # ==================================================================
 
     def recall_skill(
@@ -430,21 +454,48 @@ class ProceduralMemoryMixin:
         Pure renderer over the already-recalled ``skills`` (and the ``config``
         resolved alongside them by ``_recall_skills_for_turn``) — the recall and
         the single settings read happen once upstream and feed both this block
-        and the loader's ``_recalled_skill_tools`` signal.  Each body is capped at
-        ``config.max_recall_body_chars`` (default 1500) with an explicit
-        ``… (truncated)`` marker; the full body always stays in the
-        ``procedures`` row.  Returns ``""`` when ``skills`` is empty, so a turn
-        with no recall carries nothing extra.
+        and the loader's ``_recalled_skill_tools`` signal.  Returns ``""`` when
+        ``skills`` is empty, so a turn with no recall carries nothing extra.
+
+        A body within ``config.max_recall_body_chars`` (default 1500) is shown
+        whole.  A longer one is never sliced mid-step: if a complete procedure
+        ranks above it, it is dropped; otherwise it is cut at the last step,
+        bullet, heading or paragraph boundary inside the cap, marked
+        INCOMPLETE, and the header tells the model to plan the missing steps
+        itself.  The full body always stays in the ``procedures`` row, and each
+        drop or cut is logged so its frequency is observable.
         """
         if not skills:
             return ""
 
         cap = config.max_recall_body_chars
         blocks: List[str] = []
+        shown_complete = False
+        any_cut = False
         for skill in skills:
             body = skill.body
-            if len(body) > cap:
-                body = body[:cap].rstrip() + "\n… (truncated)"
+            if len(body) <= cap:
+                shown_complete = True
+            elif shown_complete:
+                logger.info(
+                    "[MemoryMixin] recall: dropped procedure %r (%d chars, cap "
+                    "%d) — a complete higher-ranked procedure is already shown",
+                    skill.name,
+                    len(body),
+                    cap,
+                )
+                continue
+            else:
+                kept = _cut_at_step_boundary(body, cap)
+                body = f"{kept}\n{_INCOMPLETE_MARKER}" if kept else _INCOMPLETE_MARKER
+                any_cut = True
+                logger.info(
+                    "[MemoryMixin] recall: truncated procedure %r (%d chars, cap "
+                    "%d) at a step boundary and marked it INCOMPLETE",
+                    skill.name,
+                    len(skill.body),
+                    cap,
+                )
             blocks.append(
                 f"## {skill.name}\nWhen to use: {skill.when_to_use}\n\n{body}"
             )
@@ -455,6 +506,12 @@ class ProceduralMemoryMixin:
             "procedure(s) below instead of re-planning from scratch; adapt the "
             "steps to the current request."
         )
+        if any_cut:
+            header += (
+                " A procedure marked INCOMPLETE is missing its later steps — it "
+                "is not proven as shown. Use its steps only as a start and plan "
+                "the rest, including any cleanup and verification, yourself."
+            )
         return header + "\n\n" + "\n\n".join(blocks)
 
     def _recalled_skill_tools(self) -> List[str]:
@@ -498,7 +555,7 @@ class ProceduralMemoryMixin:
         self._recalled_skill_prompt = self._build_recalled_skills_prompt(skills, config)
 
     # ==================================================================
-    # Skill Synthesis (procedural memory, #887)
+    # Skill Synthesis (procedural memory)
     # ==================================================================
 
     def _side_request_kwargs(self) -> Dict[str, Any]:

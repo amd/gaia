@@ -18,6 +18,13 @@ type Recommended struct {
 	Provider string `json:"provider"`
 	Label    string `json:"label"`
 	Note     string `json:"note"`
+	// Device is "npu" for a FastFlowLM model, which loads into system RAM
+	// rather than GPU memory; empty for the rest.
+	Device string `json:"device"`
+	// Option marks a model listed for its size and window only: it is shown
+	// with the other models, never under "Recommended" (Gemma on the NPU is
+	// slower than on the GPU, so it is only ever the user's pick).
+	Option bool `json:"option"`
 
 	// Registration for a model that is not a Lemonade built-in. Empty for
 	// built-ins, which Lemonade pulls by name.
@@ -35,6 +42,11 @@ type Recommended struct {
 	// shared margin covers the cache.
 	MinCtxSize      int64 `json:"min_ctx_size"`
 	KVBytesPerToken int64 `json:"kv_bytes_per_token"`
+
+	// Custom marks a model the user added from a Hugging Face link
+	// (ReadCustomModels), which they may remove; SourceURL is that link.
+	Custom    bool   `json:"-"`
+	SourceURL string `json:"-"`
 }
 
 // KVCacheGB is the KV cache at the model's floor window. GAIA grows the window
@@ -48,6 +60,10 @@ func (r Recommended) KVCacheGB() float64 {
 // matches its account-path form (fireworks.accounts/fireworks/models/<name>).
 func (r Recommended) Matches(id string) bool {
 	if id == r.ID || (r.RegisterAs != "" && id == r.RegisterAs) {
+		return true
+	}
+	// Lemonade lists a registered user.X as X.
+	if r.RegisterAs != "" && SameLocalID(id, r.RegisterAs) {
 		return true
 	}
 	return r.Provider != "local" && rankKey(id) == rankKey(r.ID)

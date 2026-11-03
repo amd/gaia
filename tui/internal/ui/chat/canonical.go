@@ -156,9 +156,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.stashNarration()
 		m.phase = modelPhase{}
 		item := ActivityItem{
-			Kind:    "tool",
-			Tool:    e.Tool,
-			Content: toolNarration(e.Tool, e.Args, e.Narration),
+			Kind:     "tool",
+			Tool:     e.Tool,
+			Content:  toolNarration(e.Tool, e.Args, e.Narration),
+			RetryKey: retryKey(e.Tool, e.Args),
 		}
 		if m.dev {
 			// The narration says what the call MEANS; this says what was

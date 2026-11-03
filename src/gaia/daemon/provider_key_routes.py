@@ -68,10 +68,14 @@ def build_provider_key_router(token: str) -> APIRouter:
 
         from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
         from gaia.llm.gateway import GatewayError
+        from gaia.llm.local_only import CloudDisabledError
 
         _known(provider)
         try:
             return {"authenticated": ensure_authenticated(provider)}
+        except CloudDisabledError as e:
+            # Not transient: retrying won't help until the user changes it.
+            raise HTTPException(status_code=409, detail=str(e)) from e
         except (CloudKeyError, GatewayError, requests.RequestException) as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
 

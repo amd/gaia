@@ -35,7 +35,7 @@ gaia chat --ui
 
 In the AgentUI:
 
-5. Open Settings (gear icon) → scroll to **Connections** → click
+5. Open Settings (gear icon) → scroll to **Connectors** → click
    **Connect** next to Google. Your default browser opens. Pick your
    test-user account, click through the unverified-app warning if you
    see one, and grant the requested scopes.

@@ -82,6 +82,21 @@
     margin-top: -4px;
 }
 
+/* Failed pause, resume, run now or delete; stays above the list until dismissed */
+.schedule-action-error {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding: 6px 8px;
+    border-left: 2px solid var(--danger);
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
+    font-size: 12px;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+
 /* Schedule list */
 .schedule-section {
     margin-bottom: 20px;

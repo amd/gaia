@@ -24,7 +24,7 @@ import numpy as np
 import pytest
 from gaia_agent import stdio
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-from gaia_agent_chat.agent import ChatAgent
+from gaia_agent.chat_agent import ChatAgent
 
 from gaia.agents.base.history import SessionHistory
 from gaia.agents.base.memory import MemoryMixin
@@ -167,6 +167,9 @@ def flagship(monkeypatch, tmp_path):
 
             def _retrieve_chunks_from_file(self, query, file_path):
                 return [], []
+
+            def document_scripts(self, _file_path):
+                return ["Latin"]
 
         agent.rag = _FakeRag()
 

@@ -4,10 +4,11 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
-import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode } from '../types';
-import { applyTheme, resolveTheme, type ThemePreference } from '../utils/theme';
+import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode, ProviderId } from '../types';
+import { applyTheme, resolveTheme, syncTitleBar, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
+import { DEFAULT_LOCALE, applyLocale, isLocaleCode } from '../i18n/registry';
 import { restore as restoreQueues, type QueuedMessage } from '../utils/messageQueue';
 
 /** Settings sections, in the order the settings nav shows them. */
@@ -68,6 +69,16 @@ export function readCustomColors(): CustomColors {
         log.system.warn('Saved custom colors unreadable; starting from the default pair.', err);
     }
     return DEFAULT_CUSTOM;
+}
+
+const LOCALE_KEY = 'gaia-chat-locale';
+
+/** The saved interface language; anything unregistered reads as English. */
+export function readLocale(): string {
+    const v = readPref(LOCALE_KEY, DEFAULT_LOCALE);
+    if (isLocaleCode(v)) return v;
+    log.system.warn(`Saved interface language "${v}" is not a registered locale; using English.`);
+    return DEFAULT_LOCALE;
 }
 
 /** Persist a UI preference. Never throws: a zustand setter must still update state. */
@@ -214,6 +225,8 @@ interface ChatState {
     showFileBrowser: boolean;
     /** Open settings section, or null when settings is closed. */
     settingsSection: SettingsSection | null;
+    /** Provider tab Settings > Model opens on; null follows the active model. */
+    settingsProvider: ProviderId | null;
     showMemoryDashboard: boolean;
     showSchedules: boolean;
     /** Permission mode picked on the new-chat screen, applied when the chat is created. */
@@ -236,6 +249,9 @@ interface ChatState {
     /** A message queued for one chat; only that chat's view sends it. */
     pendingPrompt: PendingPrompt | null;
     setThemePreference: (pref: ThemePreference) => void;
+    /** Interface language, a code registered in src/i18n/registry.ts. */
+    locale: string;
+    setLocale: (code: string) => void;
     /** Color palette; `default` is the built-in warm gray look. */
     palette: PaletteId;
     customColors: CustomColors;
@@ -245,7 +261,7 @@ interface ChatState {
     syncSystemTheme: () => void;
     setShowDocLibrary: (show: boolean) => void;
     setShowFileBrowser: (show: boolean) => void;
-    openSettings: (section?: SettingsSection) => void;
+    openSettings: (section?: SettingsSection, provider?: ProviderId) => void;
     closeSettings: () => void;
     setShowMemoryDashboard: (show: boolean) => void;
     setShowSchedules: (show: boolean) => void;
@@ -416,7 +432,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             if (last.type !== 'thinking') return state;
             steps[steps.length - 1] = {
                 ...last,
-                detail: (last.detail ? last.detail + '\n' : '') + content,
+                // Streamed pieces carry their own spacing, as the saved turn joins them.
+                detail: (last.detail ?? '') + content,
                 active: true,
             };
             return { agentSteps: steps };
@@ -488,6 +505,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     showDocLibrary: false,
     showFileBrowser: false,
     settingsSection: null,
+    settingsProvider: null,
     showMemoryDashboard: false,
     showSchedules: false,
     draftPermissionMode: 'ask',
@@ -511,6 +529,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         applyPalette(get().palette, get().customColors, theme);
         set({ theme });
     },
+    locale: readLocale(),
+    setLocale: (code) => {
+        applyLocale(code);
+        syncTitleBar();
+        writePref(LOCALE_KEY, code);
+        set({ locale: code });
+    },
     palette: readPalette(),
     customColors: readCustomColors(),
     setPalette: (palette) => {
@@ -531,8 +556,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setShowDocLibrary: (show) =>
         set(show ? { ...NO_DESTINATION, showDocLibrary: true } : { showDocLibrary: false }),
     setShowFileBrowser: (show) => set({ showFileBrowser: show }),
-    openSettings: (section = 'general') => set({ settingsSection: section }),
-    closeSettings: () => set({ settingsSection: null }),
+    openSettings: (section = 'general', provider) => set({ settingsSection: section, settingsProvider: provider ?? null }),
+    closeSettings: () => set({ settingsSection: null, settingsProvider: null }),
     setShowMemoryDashboard: (show) =>
         set(show ? { ...NO_DESTINATION, showMemoryDashboard: true } : { showMemoryDashboard: false }),
     setShowSchedules: (show) =>

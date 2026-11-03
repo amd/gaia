@@ -13,9 +13,16 @@ _ROOT = Path(__file__).resolve().parents[2]
 _SCAN_ROOTS = [_ROOT / "src" / "gaia", _ROOT / "hub" / "agents", _ROOT / "docs"]
 # Any arrow spelling, with or without markdown or quotes around either word.
 _STALE_RE = re.compile(
-    r"Settings[*_`\"']*\s*(?:→|->|>|»|›|&rarr;|&gt;)\s*[*_`\"']*Connections\b",
+    r"Settings[*_`\"']*\s*(?:\([^)]*\)\s*)?(?:→|->|>|»|›|&rarr;|&gt;)\s*(?:scroll\s+to\s+)?[*_`\"']*Connections\b",
     re.IGNORECASE,
 )
+
+
+def _normalize_python_literals(text: str) -> str:
+    """Join adjacent string literals, including f-strings, while preserving line numbers."""
+    return re.sub(r"[\"'][ \t]*\n[ \t]*[rfbu]*[\"']", "\n", text, flags=re.I)
+
+
 _SCAN_EXTENSIONS = {
     ".py",
     ".tsx",
@@ -47,6 +54,8 @@ def test_settings_path_names_the_connectors_tab():
             if rel in _ALLOWED:
                 continue
             text = path.read_text(encoding="utf-8", errors="ignore")
+            if path.suffix == ".py":
+                text = _normalize_python_literals(text)
             for match in _STALE_RE.finditer(text):
                 line_num = text.count("\n", 0, match.start()) + 1
                 offenders.append(f"{rel}:{line_num}")
@@ -71,10 +80,32 @@ def test_settings_path_names_the_connectors_tab():
         "`Settings` → `Connections`",
         "settings -> connections",
         "Settings →\n  Connections",
+        "**Settings** (gear) → **Connections**",
+        "Settings (gear icon) → scroll to **Connections**",
     ],
 )
 def test_stale_pattern_catches_every_spelling(text):
     assert _STALE_RE.search(text)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        '"Settings → "\n    f"Connections"',
+        '"(or Settings -> "\n            "Connections in the Agent UI)."',
+        "'Settings → '\n    F\"Connections\"",
+        "\"Settings → \"\n    rb'Connections'",
+    ],
+)
+def test_split_python_literals_are_scanned_as_one_path(source):
+    assert _STALE_RE.search(_normalize_python_literals(source))
+
+
+def test_joining_split_literals_keeps_source_line_numbers():
+    source = 'x = 1\nmsg = ("Settings → "\n    f"Connections")\n'
+    joined = _normalize_python_literals(source)
+    match = _STALE_RE.search(joined)
+    assert match and joined.count("\n", 0, match.end()) == 2
 
 
 @pytest.mark.parametrize(
@@ -85,6 +116,8 @@ def test_stale_pattern_catches_every_spelling(text):
         "one Connections panel spanning agents",
         "stored connections for this client",
         "Settings → ConnectionsX",
+        "Settings (gear) → Connectors",
+        "Settings (gear icon) → scroll to **Connectors**",
     ],
 )
 def test_stale_pattern_leaves_correct_wording_alone(text):

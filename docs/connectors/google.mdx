@@ -111,12 +111,11 @@ inside GAIA.
 
 You only need to declare the scopes the agents you actually use will
 request — the flagship [`gaia` agent](/guides/email) needs only
-`gmail.readonly`; `openid` / `email` / `profile` are requested on every
-connection regardless of
-agent. `email` is listed twice, once as the short OIDC name and once as
-its `userinfo.email` URL equivalent — Google treats them as the same
-permission, and GAIA asks for whichever the connecting surface uses, so
-declare both.
+`gmail.readonly`; `openid` and `userinfo.email` are requested on every
+connection regardless of agent. GAIA no longer requests the short `email`
+and `profile` names (`email` is the same permission as `userinfo.email`). It
+still accepts them so connections made by older GAIA versions keep working,
+and declaring them does no harm.
 
 {/* google-scopes:start */}
 | Scope | Tier | What it buys |
@@ -184,7 +183,7 @@ explains how to copy or download the credentials.
 ## Step 5 — Paste credentials into GAIA
 
 1. Launch the Agent UI: `gaia chat --ui`.
-2. Click **Settings** (gear) → **Connections**.
+2. Click **Settings** (gear) → **Connectors**.
 3. Click the **Google** tile to expand it.
 4. Paste the **Client ID** and **Client Secret** from Step 4.
 5. Click **Save & Connect**.
@@ -336,9 +335,9 @@ Google's own opaque failure page, shown **after** you complete the
 consent screen — not the "Google hasn't verified this app" interstitial
 from Step 5. GAIA never sees why: the browser lands on Google's error
 page instead of coming back to GAIA's loopback callback, so the callback
-handler never runs and the CLI/UI just times out after two minutes
-(`OAuth flow ... timed out after 120s. Restart the flow.`) — that
-message will not name the real cause.
+handler never runs and the CLI/UI just times out once the sign-in window
+closes after 15 minutes (`Sign-in to google was not finished within 15
+minutes ...`) — that message will not name the real cause.
 
 Nothing found while researching this guide ties this error page
 authoritatively to one cause for a loopback (Desktop-app) OAuth flow.
@@ -368,8 +367,7 @@ fixes this without testing it.
 ### `Error 400: invalid_grant` after a long while
 
 Refresh tokens expire if your app stays in Testing mode for more than
-seven days without use. Reconnect from the Agent UI's Connections
-panel — it will issue a new refresh token.
+seven days without use. Reconnect from **Settings → Connectors** in the Agent UI — it will issue a new refresh token.
 
 ### `client_secret is missing`
 

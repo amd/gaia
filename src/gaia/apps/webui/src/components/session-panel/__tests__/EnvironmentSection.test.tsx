@@ -4,7 +4,7 @@
 /** Environment (#5276): where the chat runs and what it may touch, each change sent to the backend. */
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EnvironmentSection } from '../EnvironmentSection';
 import { OfflineNotice } from '../OfflineNotice';
 import { PermissionModeChip } from '../../PermissionModeChip';
@@ -111,6 +111,42 @@ describe('Can read and write', () => {
         expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
 
+    describe('in the desktop app', () => {
+        const pickFolder = vi.fn<(defaultPath?: string) => Promise<string | null>>();
+        beforeEach(() => {
+            window.gaiaAPI = { dialog: { pickFolder } } as unknown as NonNullable<typeof window.gaiaAPI>;
+        });
+        afterEach(() => {
+            delete window.gaiaAPI;
+        });
+
+        it('adds the folder chosen in the OS picker, without GAIA\'s popup', async () => {
+            pickFolder.mockResolvedValue('/Users/me/notes');
+            mocked.addEnvironmentFolder.mockResolvedValue(ENV);
+            render(<EnvironmentSection sessionId={SID} busy={false} />);
+            fireEvent.click(await screen.findByRole('button', { name: /Add folder/ }));
+            await waitFor(() => expect(mocked.addEnvironmentFolder).toHaveBeenCalledWith(SID, '/Users/me/notes'));
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+            expect(mocked.browseFiles).not.toHaveBeenCalled();
+        });
+
+        it('adds nothing when the OS picker is cancelled', async () => {
+            pickFolder.mockResolvedValue(null);
+            render(<EnvironmentSection sessionId={SID} busy={false} />);
+            fireEvent.click(await screen.findByRole('button', { name: /Add folder/ }));
+            await waitFor(() => expect(pickFolder).toHaveBeenCalledTimes(1));
+            expect(mocked.addEnvironmentFolder).not.toHaveBeenCalled();
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        });
+
+        it("says when the OS picker couldn't open", async () => {
+            pickFolder.mockRejectedValue(new Error('no window'));
+            render(<EnvironmentSection sessionId={SID} busy={false} />);
+            fireEvent.click(await screen.findByRole('button', { name: /Add folder/ }));
+            expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't open the folder picker: no window");
+        });
+    });
+
     it("says why a folder can't be added", async () => {
         mocked.browseFiles.mockResolvedValue({ current_path: 'C:\\Users\\me', parent_path: null, entries: [], quick_links: [] });
         mocked.addEnvironmentFolder.mockRejectedValue(
@@ -129,12 +165,27 @@ describe('Can read and write', () => {
         expect(await screen.findByText(/runs as its own process/)).toBeInTheDocument();
         // Not a boundary: say so rather than listing folders as if they were the limit.
         expect(screen.getByText('Files GAIA can reach')).toBeInTheDocument();
-        expect(screen.getByText(/rest of your user folder/)).toBeInTheDocument();
+        expect(screen.getByText(/never the whole user folder at once/)).toBeInTheDocument();
         expect(screen.queryByText('Can read and write')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Add folder/ })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
+    });
+
+    it('keeps the Internet switch usable when only the folders are not enforced', async () => {
+        mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false, internet_enforced: true });
+        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'gaia' }] });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const toggle = await screen.findByRole('switch', { name: 'Internet for this chat' });
+        expect(toggle).toBeEnabled();
+        expect(screen.queryByText(/can't be changed from this chat/)).not.toBeInTheDocument();
+    });
+
+    it('shows Internet as text for an agent that keeps its own network rules', async () => {
+        mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false, internet_enforced: false });
+        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'email' }] });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        expect(await screen.findByText('On')).toBeInTheDocument();
         expect(screen.queryByRole('switch', { name: 'Internet for this chat' })).not.toBeInTheDocument();
-        expect(screen.getByText('On')).toBeInTheDocument();
         expect(screen.getAllByText(/can't be changed from/)).toHaveLength(1);
     });
 
@@ -143,7 +194,7 @@ describe('Can read and write', () => {
         useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'email' }] });
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         expect(await screen.findByText(/applies its own limits/)).toBeInTheDocument();
-        expect(screen.queryByText(/rest of your user folder/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/inside your user folder/)).not.toBeInTheDocument();
     });
 
     it('offers no Remove for an attached document; it leaves through the document bar', async () => {
@@ -192,6 +243,19 @@ describe('Internet', () => {
         await act(async () => { await change!(() => mocked.setInternet(SID, false)); });
         await act(async () => { answerLateRead(ENV); });
         expect(screen.getByRole('switch', { name: 'Internet for this chat' })).toHaveAttribute('aria-checked', 'false');
+    });
+
+    it("shows the saved switch and why when the running turn couldn't be told", async () => {
+        const detail = "Internet is off from the next message, but the running agent couldn't be told (gone), so the Agent UI ended its turn. Send the message again.";
+        mocked.setInternet.mockRejectedValue(Object.assign(new Error(detail), { detail, httpStatus: 502 }));
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const toggle = await screen.findByRole('switch', { name: 'Internet for this chat' });
+        mocked.getEnvironment.mockResolvedValue({ ...ENV, internet: false });
+
+        fireEvent.click(toggle);
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(detail);
+        await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'));
     });
 
     it('shows the offline notice for a chat saved with internet off', async () => {

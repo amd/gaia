@@ -1,126 +1,103 @@
 # Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Smoke tests for the standalone gaia-agent-chat package.
+"""The deprecated gaia-agent-chat shim keeps every old import working.
 
-ChatAgent ships under three prompt-profile ids — ``chat``/``doc``/``file`` —
-each registered via its own ``gaia.agent`` entry point (#1102). All three are
-``hidden`` — retired as user-facing choices now the flagship supersedes them,
-but still resolvable by id for stored sessions and evals. These tests assert
-the registration shape, lazy re-exports, and registry discovery without
-constructing a full agent (which would need a live RAG/LLM backend).
+ChatAgent moved into the flagship package (#6099). For one release this
+package re-exports it: each old submodule must BE the new module, so a
+``patch("gaia_agent_chat.agent.X")`` written against the old path still
+patches what the agent runs.
 """
 
+import importlib
+import re
+import sys
+import warnings
+from pathlib import Path
+from unittest.mock import patch
 
-def test_build_chat_registration_shape():
-    import gaia_agent_chat as m
+import pytest
 
-    reg = m.build_chat()
-    assert reg.id == "chat"
-    assert reg.source == "installed"
-    # Retired as a user-facing choice — absent from the picker and the Hub
-    # listing, but still resolvable by id.
-    assert reg.hidden is True
-    # The chat profile loads MCP servers dynamically, so the registration must
-    # advertise that to the connectors activation panel (#1005).
-    assert reg.consumes_mcp_servers is True
-    tier_names = [t.name for t in reg.model_tiers]
-    assert tier_names == ["full", "lite"]
+CHAT_ROOT = Path(__file__).resolve().parents[1]
 
-
-def test_build_doc_registration_shape():
-    import gaia_agent_chat as m
-
-    reg = m.build_doc()
-    assert reg.id == "doc"
-    assert reg.source == "installed"
-    # Retired as a user-facing choice — absent from the picker and the Hub
-    # listing, but still resolvable by id.
-    assert reg.hidden is True
-    tier_names = [t.name for t in reg.model_tiers]
-    assert tier_names == ["full", "lite"]
+MOVED = {
+    "agent": "gaia_agent.chat_agent",
+    "profiles": "gaia_agent.profiles",
+    "tool_bundles": "gaia_agent.tool_bundles",
+    "session": "gaia_agent.session",
+    "python_jobs": "gaia_agent.python_jobs",
+    "python_runner": "gaia_agent.python_runner",
+    "tool_requests": "gaia_agent.tool_requests",
+}
 
 
-def test_build_file_registration_shape():
-    import gaia_agent_chat as m
-
-    reg = m.build_file()
-    assert reg.id == "file"
-    assert reg.source == "installed"
-    # Retired as a user-facing choice — absent from the picker and the Hub
-    # listing, but still resolvable by id.
-    assert reg.hidden is True
-    tier_names = [t.name for t in reg.model_tiers]
-    assert tier_names == ["full", "lite"]
+def _fresh_import(name):
+    """Import *name* as if for the first time in this process."""
+    for mod in [m for m in sys.modules if m.split(".")[0] == "gaia_agent_chat"]:
+        sys.modules.pop(mod)
+    return importlib.import_module(name)
 
 
-def test_lazy_reexports():
-    from gaia_agent_chat import ChatAgent, ChatAgentConfig, ChatAgentLite
-
-    assert ChatAgent is not None
-    assert ChatAgentConfig is not None
-    assert ChatAgentLite is not None
+def test_importing_the_package_warns_that_it_is_deprecated():
+    with pytest.warns(DeprecationWarning, match=r"gaia_agent\.chat_agent"):
+        _fresh_import("gaia_agent_chat")
 
 
-def test_config_defaults():
-    from gaia_agent_chat import ChatAgentConfig
-
-    cfg = ChatAgentConfig()
-    assert cfg.use_claude is False
-    assert cfg.model_id is None
-    assert cfg.prompt_profile == "full"
-
-
-def test_memory_failure_is_reported_to_chat_console():
-    from gaia.agents.base.memory import (
-        MEMORY_UNAVAILABLE_DISABLED_BY_ENV,
-        MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
-        MemoryMixin,
-    )
-
-    class Console:
-        def __init__(self):
-            self.messages = []
-
-        def print_warning(self, message):
-            self.messages.append(message)
-
-    class Agent:
-        def __init__(self, reason):
-            self._memory_unavailable_reason = reason
-            self.console = Console()
-            self._memory_unavailable_warning_reported = False
-
-        def memory_unavailable_message(self):
-            return "Embedding model is unavailable; pull it and restart."
-
-    reported = Agent(MEMORY_UNAVAILABLE_MODEL_NOT_PULLED)
-    assert MemoryMixin.report_memory_unavailable(reported) is True
-    assert MemoryMixin.report_memory_unavailable(reported) is False
-    assert reported.console.messages == [
-        "Embedding model is unavailable; pull it and restart."
-    ]
-
-    for reason in (MEMORY_UNAVAILABLE_DISABLED_BY_ENV, None):
-        quiet = Agent(reason)
-        assert MemoryMixin.report_memory_unavailable(quiet) is False
-        assert quiet.console.messages == []
+@pytest.mark.parametrize("old, new", sorted(MOVED.items()))
+def test_each_old_submodule_is_the_new_module(old, new):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        legacy = _fresh_import(f"gaia_agent_chat.{old}")
+    target = importlib.import_module(new)
+    assert legacy is target
+    assert sys.modules[f"gaia_agent_chat.{old}"] is target
+    assert getattr(sys.modules["gaia_agent_chat"], old) is target
 
 
-def test_discovered_when_installed():
-    from gaia.agents.registry import AgentRegistry
+def test_patching_the_old_path_patches_what_the_agent_runs():
+    import gaia_agent.chat_agent as chat_agent
 
-    reg = AgentRegistry()
-    reg.discover()
-    ids = {a.id for a in reg.list()}
-    assert {"chat", "doc", "file"} <= ids
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        _fresh_import("gaia_agent_chat.agent")
+    sentinel = object()
+    with patch("gaia_agent_chat.agent.run_python_job", sentinel):
+        assert chat_agent.run_python_job is sentinel
+    assert chat_agent.run_python_job is not sentinel
 
 
-def test_discovery_stamps_installed_namespace():
-    from gaia.agents.registry import AgentRegistry
+def test_lazy_reexports_are_the_flagship_classes():
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
-    reg = AgentRegistry()
-    reg.discover()
-    chat = reg.get("chat")
-    assert chat is not None
-    assert chat.source == "installed"
-    assert chat.namespaced_agent_id == "installed:chat"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        legacy = _fresh_import("gaia_agent_chat")
+    assert legacy.ChatAgent is ChatAgent
+    assert legacy.ChatAgentConfig is ChatAgentConfig
+    assert legacy.ChatAgentLite.__module__ == "gaia_agent_chat.lite_agent"
+    with pytest.raises(AttributeError):
+        legacy.build_chat  # pylint: disable=pointless-statement
+
+
+def test_app_reexports_interactive_mode():
+    from gaia_agent.interactive import interactive_mode
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        app = _fresh_import("gaia_agent_chat.app")
+    assert app.interactive_mode is interactive_mode
+
+
+def test_package_registers_no_agent_ids():
+    """chat/doc/file resolve to the flagship through registry aliases; an entry
+    point here would register them again and shadow the alias."""
+    pyproject = (CHAT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert not re.search(r"(?m)^\[project\.entry-points", pyproject)
+
+
+def test_shim_requires_the_flagship_it_reexports():
+    pyproject = (CHAT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    manifest = (CHAT_ROOT / "gaia-agent.yaml").read_text(encoding="utf-8")
+    floor = re.compile(r'"gaia-agent-gaia>=([0-9.]+)"')
+    assert floor.search(pyproject), "pyproject.toml must require gaia-agent-gaia"
+    assert floor.search(manifest), "gaia-agent.yaml must require gaia-agent-gaia"
+    assert floor.search(pyproject).group(1) == floor.search(manifest).group(1)

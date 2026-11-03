@@ -59,10 +59,14 @@ logger = logging.getLogger(__name__)
 _SUMMARY_CHAR_CAP = 300
 #: How much of an MCP tool's text output a tool row carries.
 _MCP_OUTPUT_CHAR_CAP = 16_000
+#: Most diff lines an edit's ``diff`` card carries; the rest is counted, not sent.
+_DIFF_CARD_MAX_LINES = 400
+#: Most characters it carries, so one huge line (a minified file) stays bounded.
+_DIFF_CARD_MAX_CHARS = 64_000
 
 #: Result keys naming a file the tool wrote; kept on the summary view a
 #: relayed result is reduced to.
-RESULT_PATH_KEYS = ("file_path", "image_path")
+RESULT_PATH_KEYS = ("file_path", "image_path", "audio_path")
 
 #: A tool result with one of these statuses did not do its job.
 FAILED_TOOL_STATUSES = FAILED_STATUSES
@@ -524,6 +528,9 @@ class SSEOutputHandler(OutputHandler):
     #: The sidecar prompt a relayed run is parked on (see __init__).
     _relay_confirm_id: Optional[str] = None
 
+    #: What "always" would grant on that prompt; ``None`` when not offered.
+    _relay_always_scope: Optional[str] = None
+
     #: The sidecar question a relayed run is parked on, until it is answered.
     _relay_question_id: Optional[str] = None
 
@@ -533,6 +540,18 @@ class SSEOutputHandler(OutputHandler):
     #: The sidecar session a relayed run keeps in step with the chat's
     #: permission mode; ``None`` when no relayed run is doing so.
     active_relay_mode_session: Optional[str] = None
+
+    #: Set by a transport that knows no person can answer a confirmation on
+    #: this run (an unattended sidecar query), so nothing offers to ask one.
+    nobody_answers: bool = False
+
+    #: The sidecar session a relayed run keeps in step with the chat's Internet
+    #: switch; ``None`` when no relayed run is doing so.
+    active_relay_internet_session: Optional[str] = None
+
+    #: A relayed run is going whose agent is too old to be told the Internet
+    #: switch, so turning it off has to end the run instead.
+    relay_ignores_internet: bool = False
 
     def __init__(self, background_mode: bool = False):
         self.event_queue: queue.Queue = queue.Queue()
@@ -544,6 +563,8 @@ class SSEOutputHandler(OutputHandler):
         self._last_tool_label = ""
         self._stream_buffer = ""  # Buffer to detect and filter tool-call JSON
         self._in_thinking = False  # True while inside a <think>...</think> block
+        # Part of the open <think> block already went out.
+        self._thinking_streamed = False
         self._json_filtered = False  # True after a JSON block was suppressed; used to eat trailing } artifacts
         # Where the brace scan of a still-open envelope stopped, and the head of
         # the buffer it scanned: a long tool call is scanned once, not per token.
@@ -563,6 +584,8 @@ class SSEOutputHandler(OutputHandler):
         self._shown_line_start = True
         # Line-start state of the raw stream, thinking included.
         self._raw_line_start = True
+        # Text streamed since the last tool call; becomes commentary if a call follows.
+        self._text_since_tool = ""
         # Set while streaming the value of a {"answer": "..."} reply.
         self._answer_stream: Optional[JsonStringStreamDecoder] = None
         # Tool confirmation state (blocking until frontend responds)
@@ -607,8 +630,13 @@ class SSEOutputHandler(OutputHandler):
         # email-relay turn, in lockstep with active_relay_response.
         self.active_relay_proxy: Optional[Any] = None
         self.active_relay_run_id: Optional[str] = None
+        # True only while an in-process agent is executing its query. A handler
+        # is registered before it contacts the daemon, so counting every
+        # handler would make the request that asks for a restart block itself.
+        self.in_process_turn_active = False
         # Only this id may be answered, so a late click cannot approve a newer one.
         self._relay_confirm_id = None
+        self._relay_always_scope = None
         # A relayed needs_input question the sidecar run is parked on.
         self._relay_question_id: Optional[str] = None
         # What the sidecar measured fills its context, from its ``final`` event.
@@ -625,13 +653,25 @@ class SSEOutputHandler(OutputHandler):
         self.delivered_answer: str = ""
         # What this turn's tools used, wrote and contacted, for the side rail.
         self.turn_ledger = TurnLedger()
+        # The diff print_diff drew for the call in flight; its result carries it.
+        self._pending_diff_card: Optional[Dict[str, Any]] = None
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
-        if event and event.get("type") == "chunk":
+        etype = event.get("type") if event else None
+        if etype == "chunk":
             self._shown_fence, self._shown_line_start = _fence_after(
                 event.get("content") or "", self._shown_fence, self._shown_line_start
             )
+            self._text_since_tool += event.get("content") or ""
+        elif etype == "tool_start":
+            # Text written just before a call narrates the work; it is not the answer.
+            note = self._text_since_tool.strip()
+            if note:
+                self.event_queue.put({"type": "commentary", "content": note})
+            self._text_since_tool = ""
+        elif etype == "answer":
+            self._text_since_tool = ""
         self.event_queue.put(event)
 
     def _fence_at(self, unshown: str) -> "tuple[Optional[str], bool]":
@@ -685,6 +725,9 @@ class SSEOutputHandler(OutputHandler):
         pass
 
     def print_thought(self, thought: str):
+        # Live thinking pieces are joined with no separator; end a whole thought on a newline.
+        if thought and not thought.endswith("\n"):
+            thought += "\n"
         self._emit(
             {
                 "type": "thinking",
@@ -768,6 +811,7 @@ class SSEOutputHandler(OutputHandler):
 
     def print_tool_usage(self, tool_name: str):
         self.record_tool_started(tool_name)
+        self._pending_diff_card = None
         # Prefer an explicit display label from the tool registry; fall back
         # to the legacy description map in this module when none is provided.
         detail_label = get_tool_display_label(tool_name) or _tool_description(tool_name)
@@ -953,8 +997,34 @@ class SSEOutputHandler(OutputHandler):
         # set last so it always wins over the generic result_data shapes above.
         if render_card is not None:
             event["result_data"] = render_card
+        elif self._pending_diff_card is not None:
+            # ChatView and step persistence read a card from ``data``.
+            event["result_data"] = self._pending_diff_card
+            event["data"] = self._pending_diff_card
+            event["render"] = "diff"
+        self._pending_diff_card = None
 
         self._emit(event)
+
+    def print_diff(self, diff: str, filename: str) -> None:
+        """Attach a ``diff`` card to the result of the call that made the change.
+
+        Called by the write tools after the bytes are on disk; the card rides
+        the call's own ``tool_result`` so it lands under that tool row.
+        """
+        lines = diff.splitlines()
+        card: Dict[str, Any] = {"title": filename, "unified": diff}
+        if len(lines) > _DIFF_CARD_MAX_LINES:
+            card["unified"] = "\n".join(lines[:_DIFF_CARD_MAX_LINES])
+            card["note"] = (
+                f"Showing the first {_DIFF_CARD_MAX_LINES} of {len(lines)} diff lines."
+            )
+        if len(card["unified"]) > _DIFF_CARD_MAX_CHARS:
+            card["unified"] = card["unified"][:_DIFF_CARD_MAX_CHARS]
+            card["note"] = (
+                f"Showing the first {_DIFF_CARD_MAX_CHARS:,} characters of the diff."
+            )
+        self._pending_diff_card = card
 
     # === Status Messages ===
 
@@ -1523,7 +1593,14 @@ class SSEOutputHandler(OutputHandler):
                     # We're inside a thinking block — look for closing tag
                     close_idx = self._stream_buffer.find("</think>")
                     if close_idx >= 0:
-                        thinking_text = self._stream_buffer[:close_idx].strip()
+                        thinking_text = self._stream_buffer[:close_idx]
+                        # A closing piece continues the streamed words; keep its leading space.
+                        thinking_text = (
+                            thinking_text.rstrip()
+                            if self._thinking_streamed
+                            else thinking_text.strip()
+                        )
+                        self._thinking_streamed = False
                         if thinking_text:
                             self._emit({"type": "thinking", "content": thinking_text})
                         self._stream_buffer = self._stream_buffer[
@@ -1533,10 +1610,12 @@ class SSEOutputHandler(OutputHandler):
                         continue  # Check for more <think> blocks
                     else:
                         # Still inside thinking — emit partial and wait
-                        if self._stream_buffer.strip():
-                            self._emit(
-                                {"type": "thinking", "content": self._stream_buffer}
-                            )
+                        piece = self._stream_buffer
+                        if not self._thinking_streamed:
+                            piece = piece.lstrip()
+                        if piece:
+                            self._emit({"type": "thinking", "content": piece})
+                            self._thinking_streamed = True
                         self._stream_buffer = ""
                         return
                 else:
@@ -2041,7 +2120,24 @@ class SSEOutputHandler(OutputHandler):
         if self.cancelled.is_set():
             return
         if not self.turn_slot.come_back(self.cancelled):
-            # Withdrawn from the line: the turn must not use the model.
+            if self.cancelled.is_set():
+                return
+            # Not a Stop: the turn ended (cleanup or shutdown) while it waited in line.
+            logger.warning(
+                "Turn ended while waiting to retake the model after the user "
+                "answered; the approved step did not run"
+            )
+            self._emit(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        "This chat ended while your approved step was waiting "
+                        "for the model, so it didn't run. Send your message "
+                        "again to retry."
+                    ),
+                    "fatal": True,
+                }
+            )
             self.cancelled.set()
         elif not self.cancelled.is_set() and self.on_model_regained is not None:
             try:
@@ -2343,21 +2439,40 @@ class SSEOutputHandler(OutputHandler):
         with self._user_input_lock:
             self._relay_question_id = request_id
 
-    def set_relay_confirmation(self, confirm_id: Optional[str]) -> None:
-        """Record (or clear, with ``None``) the sidecar prompt now pending."""
+    def set_relay_confirmation(
+        self, confirm_id: Optional[str], always_scope: Optional[str] = None
+    ) -> None:
+        """Record (or clear, with ``None``) the sidecar prompt now pending.
+
+        *always_scope* is what an "always" answer grants, when one is offered.
+        """
         with self._confirm_lock:
             self._relay_confirm_id = confirm_id
+            self._relay_always_scope = always_scope if confirm_id else None
 
-    def relay_confirmation_pending(self) -> bool:
+    def relay_confirmation_pending(self, confirm_id: Optional[str] = None) -> bool:
+        """Whether a sidecar prompt is pending; *confirm_id* must be that one."""
         with self._confirm_lock:
+            if confirm_id is not None:
+                return confirm_id == self._relay_confirm_id
             return self._relay_confirm_id is not None
 
-    def resolve_relay_confirmation(self, approved: bool, confirm_id: str) -> bool:
-        """Hand the user's allow-once/deny to the sidecar run parked on it.
+    def relay_always_scope(self, confirm_id: Optional[str]) -> Optional[str]:
+        """What "always" grants on the pending prompt *confirm_id*, or None."""
+        with self._confirm_lock:
+            if not confirm_id or confirm_id != self._relay_confirm_id:
+                return None
+            return self._relay_always_scope
+
+    def resolve_relay_confirmation(
+        self, approved: bool, confirm_id: str, always: bool = False
+    ) -> bool:
+        """Hand the user's answer to the sidecar run parked on it.
 
         Returns ``False`` when *confirm_id* is not the prompt pending on a live
-        relayed run. Claimed under the lock before the POST, so a double click
-        cannot send two answers; a sidecar rejection raises ``SidecarError``.
+        relayed run, or when *always* was not offered on it. Claimed under the
+        lock before the POST, so a double click cannot send two answers; a
+        sidecar rejection raises ``SidecarError``.
         """
         with self._confirm_lock:
             proxy = self.active_relay_proxy
@@ -2367,10 +2482,16 @@ class SSEOutputHandler(OutputHandler):
                 or confirm_id != self._relay_confirm_id
                 or proxy is None
                 or run_id is None
+                or (always and self._relay_always_scope is None)
             ):
                 return False
             self._relay_confirm_id = None
-        proxy.tool_decision(run_id, "allow" if approved else "deny", confirm_id)
+            self._relay_always_scope = None
+        if always:
+            decision = "always"
+        else:
+            decision = "allow" if approved else "deny"
+        proxy.tool_decision(run_id, decision, confirm_id)
         return True
 
     def signal_done(self):
@@ -2380,6 +2501,7 @@ class SSEOutputHandler(OutputHandler):
             self._emit({"type": "thinking", "content": self._stream_buffer})
             self._stream_buffer = ""
             self._in_thinking = False
+        self._thinking_streamed = False
 
         # A stopped stream can leave a call open or a tag tail held back.
         if self._markup_close is not None or self._markup_pending:

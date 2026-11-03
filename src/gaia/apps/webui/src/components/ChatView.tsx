@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
+import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, RotateCw, X } from 'lucide-react';
 import { MessageBubble, isErrorContent } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
+import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -14,7 +15,7 @@ import { refreshActiveRuns } from '../services/activeRuns';
 import { claimView, dispatchNext, idleByPoll, isBusyError, markActivity, requeueRefused, type QueuedSend, type SendOutcome } from '../services/queueDispatch';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
-import { describeStreamError, isStreamInterrupted, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
+import { classifyChatError, isStreamInterrupted, mayStillFinish, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
 import { isAuthRequiredMessage } from './email/EmailConnectCta';
 import { ConnectorRetryBanner } from './ConnectorRetryBanner';
 import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage } from '../types';
@@ -22,6 +23,7 @@ import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage } fr
 import './ChatView.css';
 import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
+import { SessionFolderChip } from './FolderChip';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PermissionPrompt } from './PermissionPrompt';
 import { QueuedMessages } from './QueuedMessages';
@@ -48,16 +50,7 @@ import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { useChatDraft } from '../hooks/useSavedDraft';
-
-/**
- * Safety-net regex to strip raw tool-call JSON from streaming content.
- *
- * Primary filtering happens server-side in sse_handler.py (see _TOOL_CALL_JSON_RE).
- * This frontend regex is a secondary safety net in case any tool-call JSON leaks
- * through the SSE stream. The canonical pattern is defined in sse_handler.py;
- * keep this in sync if the server-side pattern changes.
- */
-const TOOL_CALL_JSON_SAFETY_RE = /\s*\{\s*"?(?:tool|thought|goal)"?\s*:\s*"[^"]*"[^}]*(?:"?tool_args"?\s*:\s*\{[^}]*\})?\s*\}/g;
+import { getT, useT } from '../i18n/useT';
 
 /** Events that only come after the agent got past a permission prompt. */
 const RESOLVES_PROMPTS = new Set(['tool_start', 'tool_end', 'tool_result']);
@@ -70,76 +63,12 @@ export { QUEUE_BUSY_WAIT_MS } from '../services/queueDispatch';
 
 const NO_QUEUE: QueuedMessage[] = [];
 
-/**
- * Strip the LLM JSON envelope from streamed/accumulated content.
- * Handles responses like {"thought":"...", "goal":"...", "answer":"<content>"}
- * where the entire response is wrapped in a structured JSON object.
- * During streaming, progressively reveals the answer content as it arrives.
- */
-function stripStreamingEnvelope(text: string): string {
-    const trimmed = text.trim();
-    if (!trimmed.startsWith('{')) return text;
-    if (!trimmed.includes('"thought"') && !trimmed.includes('"answer"') && !trimmed.includes('"goal"')) return text;
-
-    // Try full JSON parse first (works when message is complete and well-formed)
-    try {
-        const parsed = JSON.parse(trimmed);
-        if (parsed.answer !== undefined) return String(parsed.answer);
-    } catch {
-        // Incomplete or malformed JSON (literal newlines in values) — fall through
-    }
-
-    // Find "answer" field and extract content progressively
-    const answerIdx = trimmed.indexOf('"answer"');
-    if (answerIdx === -1) return ''; // Still in thought/goal — suppress during streaming
-
-    const colonIdx = trimmed.indexOf(':', answerIdx + 8);
-    if (colonIdx === -1) return '';
-    let start = colonIdx + 1;
-    while (start < trimmed.length && /\s/.test(trimmed[start])) start++;
-    if (start >= trimmed.length || trimmed[start] !== '"') return '';
-
-    let content = trimmed.slice(start + 1);
-    // Strip closing "} if the JSON envelope is complete
-    if (content.endsWith('"}')) content = content.slice(0, -2);
-    else if (content.endsWith('"')) content = content.slice(0, -1);
-
-    return content.replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
-}
-
-/**
- * A recoverable error right after a failed tool repeats that tool's error, which
- * its card already shows; the agent retries, so it isn't a turn-level error.
- * A tool that raises or times out reports the error before its result lands, so a
- * still-running tool counts too — its result always follows as failed.
- */
-export function isEchoOfFailedTool(event: StreamEvent, steps: AgentStep[]): boolean {
-    if (event.type !== 'agent_error' || event.recoverable !== true) return false;
-    const last = steps[steps.length - 1];
-    if (!last || last.type !== 'tool') return false;
-    return last.success === false || (!!last.active && last.success == null);
-}
-
 /** Notices by server message id: a refetch replaces messages, so they cannot live on them alone. */
 const historyNotices = new Map<number, string>();
 
 /** One quiet line saying older turns left the model's view. */
 function HistoryNotice({ text }: { text: string }) {
     return <div className="history-notice" role="note">{text}</div>;
-}
-
-/** Messages as the API sends them, with steps and stats under the names the view reads. */
-function fromApiMessages(raw: unknown[] | undefined): Message[] {
-    return (raw || []).map((m: any) => ({
-        ...m,
-        agentSteps: m.agentSteps || m.agent_steps || undefined,
-        stats: m.stats || m.inference_stats || undefined,
-        turnSummary: m.turnSummary || m.turn_summary || undefined,
-    }));
-}
-
-function policyReceiptAnchor(receiptId: string): string {
-    return `policy-receipt-${encodeURIComponent(receiptId)}`;
 }
 
 interface ChatViewProps {
@@ -160,6 +89,7 @@ interface SendOptions {
 }
 
 export function ChatView({ sessionId }: ChatViewProps) {
+    const t = useT();
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
@@ -251,7 +181,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const closeStoppedTurnLocallyRef = useRef<(() => void) | null>(null);
     const stepIdRef = useRef(0);
     /** The agent's own step number for the live turn, from its `step` events. */
-    const [liveAgentStep, setLiveAgentStep] = useState(0);
     const toolOccurredRef = useRef(false);
     const sendMessageRef = useRef<(text?: string, options?: SendOptions) => void>(() => {});
     // Messages typed while a reply runs, kept per chat in the store, and whether the user stopped that reply.
@@ -261,6 +190,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         [sessionId],
     );
     const userStoppedRef = useRef(false);
+    /** The running reply said up front that it can't take a message mid-turn. */
+    const [followupsUnavailable, setFollowupsUnavailable] = useState(false);
     /** This view saw its chat's last turn end, so the queue need not wait for a poll to say so. */
     const observedEndRef = useRef(false);
     /** A queued message's send that the server has not yet taken; leaving the chat must not abort it. */
@@ -338,7 +269,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 } else if (msgs.length !== lastMsgCountRef.current && !useChatStore.getState().isStreaming) {
                     // New messages from external source (MCP, API) — refresh
                     log.chat.info(`Messages changed externally: ${lastMsgCountRef.current} -> ${msgs.length}`);
-                    setMessages(msgs);
+                    setMessages(keepFailedReply(useChatStore.getState().messages, msgs));
                     lastMsgCountRef.current = msgs.length;
                 }
             } catch (err) {
@@ -624,7 +555,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // from the start, so stale cards would double up without this.
         clearCards();
         stepIdRef.current = 0;
-        setLiveAgentStep(0);
         toolOccurredRef.current = false;
         if (reconnect) {
             useChatStore.getState().setLiveStatus(`${RECONNECTING_PREFIX} (attempt ${reconnect} of ${MAX_STREAM_RECONNECTS})…`);
@@ -638,6 +568,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setLiveHistoryNotice(null);
         let doneHandled = false;
         observedEndRef.current = false;
+        if (!reattach) setFollowupsUnavailable(false);
         let streamController: AbortController | null = null;
         let queuedSettled = !fromQueue;
         queuedSendPendingRef.current = fromQueue;
@@ -744,6 +675,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             toolOccurredRef.current = false;
                         }
                         fullContent += content;
+                        // The answer has begun, so the reasoning before it is over.
+                        const steps = useChatStore.getState().agentSteps;
+                        const last = steps[steps.length - 1];
+                        if (last?.type === 'thinking' && last.active) {
+                            updateLastAgentStep({ active: false, latencyMs: Date.now() - last.timestamp });
+                        }
                     }
                     // Safety net: strip any tool-call JSON that leaked past the
                     // backend SSE filter (see sse_handler.py _TOOL_CALL_JSON_RE).
@@ -787,6 +724,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         created_at: new Date().toISOString(),
                         rag_sources: null,
                     });
+                    return;
+                }
+                if (event.type === 'followup_unavailable') {
+                    if (!isStale()) setFollowupsUnavailable(true);
                     return;
                 }
                 if (event.type === 'followup_returned') {
@@ -935,6 +876,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
                 // Tool completion updates the last TOOL step (not just the last step,
                 // since thinking/status events may have been interleaved during execution)
+                // The call is over, so the live line must stop naming it; the model has the turn again.
+                if ((event.type === 'tool_end' || event.type === 'tool_result')
+                    && useChatStore.getState().livePhase === 'tool') {
+                    useChatStore.getState().setLiveStatus(null);
+                }
                 if (event.type === 'tool_end') {
                     updateLastToolStep({ active: false, success: event.success !== false });
                     return;
@@ -1001,8 +947,19 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     const store = useChatStore.getState();
                     const tool = [...store.agentSteps].reverse().find((s) => s.type === 'tool');
                     if (event.narration && tool?.active && store.livePhase === 'tool') {
-                        store.setLiveStatus(toolRowText(tool), 'tool');
+                        store.setLiveStatus(toolRowText(tool, getT()), 'tool');
                     }
+                    return;
+                }
+
+                // The text streamed so far narrated the call that follows: it leaves the answer for the timeline.
+                if (event.type === 'commentary') {
+                    fullContent = '';
+                    toolOccurredRef.current = false;
+                    streamBufferRef.current = '';
+                    setStreamContent('');
+                    const step = agentEventToStep(event, stepIdRef);
+                    if (step) addAgentStep(step);
                     return;
                 }
 
@@ -1064,11 +1021,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
-                if (event.type === 'step') {
-                    // No row of its own, but it is the turn's step count.
-                    if (typeof event.step === 'number') setLiveAgentStep(event.step);
-                    return;
-                }
+                // The step counter measures the harness; the timeline shows the work.
+                if (event.type === 'step') return;
 
                 if (event.type === 'agent_error' && isEchoOfFailedTool(event, useChatStore.getState().agentSteps)) {
                     return;
@@ -1079,7 +1033,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (event.type === 'tool_start') {
                         toolOccurredRef.current = true;
                         // The model's phase ended with the call; say a tool runs, not the model.
-                        useChatStore.getState().setLiveStatus(toolRowText(step), 'tool');
+                        useChatStore.getState().setLiveStatus(toolRowText(step, getT()), 'tool');
                     }
                 }
             },
@@ -1159,10 +1113,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         .then((data) => {
                             // A queued message may already be streaming; its own end refetches.
                             if (isStale() || useChatStore.getState().isStreaming) return;
-                            // The backend doesn't persist cards, so this replace
-                            // would drop them — merge from the pre-refetch
-                            // in-memory messages by id, else role+content.
-                            // #2109 replaces this merge with steps-derived hydration.
+                            // Only cards a tool step persisted come back from the
+                            // backend; keep the live ones (e.g. confirmations) by
+                            // id, else role+content.
                             // stopState isn't persisted either; carry it by id.
                             const prevMsgs = useChatStore.getState().messages;
                             const prevWithCards = prevMsgs.filter((m) => m.cards && m.cards.length > 0);
@@ -1172,7 +1125,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 );
                                 return {
                                     ...m,
-                                    cards: prev?.cards,
+                                    cards: prev?.cards ?? m.cards,
                                     stopState: prevMsgs.find((p) => p.id === m.id)?.stopState,
                                 };
                             });
@@ -1204,7 +1157,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     } else {
                         settleQueued(isBusyError(err)
                             ? { kind: 'busy' }
-                            : { kind: 'failed', error: describeStreamError(err) ?? (err.message || 'Unknown error') });
+                            : { kind: 'failed', error: classifyChatError(err).text });
                         streamEndedAtRef.current = Date.now();
                         endStopWait();
                         if (streamRafRef.current !== null) {
@@ -1229,6 +1182,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     closeStoppedTurnLocallyRef.current?.();
                     return;
                 }
+                // This view is gone; the next view of this chat re-attaches the run itself.
+                if (interrupted && !mountedRef.current) return;
                 // A dead connection is not a failed turn: re-attach, which replays the run so far.
                 if (interrupted && !doneHandled && !isStale() && reconnectsRef.current < MAX_STREAM_RECONNECTS) {
                     const attempt = ++reconnectsRef.current;
@@ -1237,7 +1192,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     useChatStore.getState().setLiveStatus(`${RECONNECTING_PREFIX} (attempt ${attempt} of ${MAX_STREAM_RECONNECTS})…`);
                     const reattach = () => {
                         reconnectTimerRef.current = null;
-                        if (isStale() || stopRequestedRef.current) return;
+                        if (!mountedRef.current || isStale() || stopRequestedRef.current) return;
                         sendMessageRef.current(undefined, { attach: true, reconnect: attempt });
                     };
                     if (delay > 0) reconnectTimerRef.current = setTimeout(reattach, delay);
@@ -1286,32 +1241,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     clearCards();
                     return;
                 }
-                // Provide a user-friendly error message based on the error type
-                // Each error includes a GitHub link for reporting issues
-                let errorContent: string;
-                const msg = err.message || '';
-                const issueFooter = '\n\n---\n*Unexpected error?* '
-                    + `[Report it on GitHub](${bugReportUrl(msg.slice(0, 80))})`;
-                const described = describeStreamError(err);
-
-                if (described) {
-                    errorContent = described;
-                } else if (msg.includes('Lemonade') || msg.includes('LLM') || msg.includes('Could not get response')) {
-                    errorContent =
-                        'The model server did not answer. Open Settings → Model to check it, '
-                        + 'then send your message again.\n\n'
-                        + `Details: ${msg}` + issueFooter;
-                } else if (err instanceof TypeError || msg.includes('fetch') || msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
-                    errorContent =
-                        'Lost the connection to GAIA. Check that GAIA is still running, then send '
-                        + 'your message again.' + issueFooter;
-                } else if (msg.includes('timed out') || msg.includes('timeout') || msg.includes('Timeout')) {
-                    errorContent =
-                        'The request timed out. Try a shorter question, or a faster model in '
-                        + 'Settings → Model.' + issueFooter;
-                } else {
-                    errorContent = `Error: ${msg}` + issueFooter;
-                }
+                // Plain cause + next step; the raw text stays in the log above.
+                const { kind, text } = classifyChatError(err);
+                const errorContent = kind === 'stream'
+                    ? text
+                    : text + '\n\n---\n*Unexpected error?* '
+                        + `[Report it on GitHub](${bugReportUrl((err.message || '').slice(0, 80))})`;
                 const errMsg: Message = {
                     id: Date.now() + 2,
                     session_id: sessionId,
@@ -1319,6 +1254,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     content: errorContent,
                     created_at: new Date().toISOString(),
                     rag_sources: null,
+                    failed: !mayStillFinish(err),
+                    failureText: err.message || undefined,
                 };
                 addMessage(errMsg);
                 setStreaming(false);
@@ -1408,31 +1345,61 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [sessionId, isStreaming, removeMessage, setMessages, isStale]);
 
     // Resend a user message: delete it and everything below, then re-send
-    const handleResendMessage = useCallback(async (message: Message) => {
-        if (isStreaming || message.role !== 'user') return;
+    const resendingRef = useRef(false);
+    const handleResendMessage = useCallback(async (message: Message, failedReply?: Message) => {
+        if (isStreaming || message.role !== 'user' || resendingRef.current) return;
+        resendingRef.current = true;
         const text = message.content;
         log.chat.info(`Resending message ${message.id} from session=${sessionId}`, { preview: text.slice(0, 80) });
 
-        // Optimistic removal of this message and all below
-        removeMessagesFrom(message.id);
-
         try {
-            await api.deleteMessagesFrom(sessionId, message.id);
+            // The shown id may still be the temporary one; delete the server's own row.
+            const data = await api.getMessages(sessionId);
+            if (isStale()) return;
+            const server = fromApiMessages(data.messages);
+            const row = persistedQuestion(server, useChatStore.getState().messages, message);
+            if (row && failedReply && !onlyFailureAfter(server, row, failedReply)) {
+                // Answered since it failed here: show that answer instead of deleting it.
+                log.chat.info(`Message ${message.id} was answered since it failed; not resending`);
+                setMessages(server);
+                lastMsgCountRef.current = server.length;
+                return;
+            }
+            if (row) await api.deleteMessagesFrom(sessionId, row.id);
+            if (isStale()) {
+                // The question is gone from the server; the background dispatcher asks it again,
+                // unless the chat itself was deleted meanwhile.
+                const { sessions, pendingDeleteIds } = useChatStore.getState();
+                if (sessions.some((s) => s.id === sessionId) && !pendingDeleteIds.includes(sessionId)) {
+                    setQueue((q) => messageQueue.enqueue(q, text, 'queued'));
+                }
+                return;
+            }
         } catch (err) {
-            log.chat.error(`Failed to delete messages from ${message.id}`, err);
-            // Reload messages on error
-            api.getMessages(sessionId)
-                .then((data) => {
-                    if (isStale()) return;
-                    setMessages(fromApiMessages(data.messages));
-                })
-                .catch((reloadErr) => log.chat.error(`Could not reload messages for session=${sessionId}`, reloadErr));
+            log.chat.error(`Could not resend message ${message.id} in session=${sessionId}`, err);
+            const cause = err instanceof Error ? classifyChatError(err) : null;
+            const lost = cause?.kind === 'connection' || cause?.kind === 'timeout';
+            addNotification({
+                id: `resend-failed-${sessionId}-${Date.now()}`,
+                type: 'error',
+                agentId: sessionId,
+                agentName: 'GAIA',
+                title: t('chatError.resendFailed'),
+                message: lost ? cause.text : t('chatError.resendStale'),
+                timestamp: Date.now(),
+                read: false,
+                dismissed: false,
+                priority: 'high',
+                sessionId,
+            });
             return;
+        } finally {
+            resendingRef.current = false;
         }
 
-        // Re-send the same message text
+        removeMessagesFrom(message.id);
         sendMessage(text);
-    }, [sessionId, isStreaming, removeMessagesFrom, setMessages, sendMessage, isStale]);
+    }, [sessionId, isStreaming, removeMessagesFrom, setMessages, setQueue, sendMessage, isStale, addNotification, t]);
 
     // This view sends its chat's queue while open; the background dispatcher does it otherwise.
     useEffect(() => claimView(sessionId), [sessionId]);
@@ -1477,7 +1444,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             .then(() => setQueue((q) => messageQueue.promote(q, id, 'sending', 'delivered')))
             .catch((err) => {
                 log.chat.info(`Follow-up not taken by the running reply; it stays queued: ${err instanceof Error ? err.message : err}`);
-                setQueue((q) => messageQueue.promote(q, id, 'sending', 'queued'));
+                setQueue((q) => messageQueue.steerRefused(q, id));
             });
     }, [queue, isStreaming, sessionId, setQueue]);
 
@@ -1488,6 +1455,17 @@ export function ChatView({ sessionId }: ChatViewProps) {
         for (let i = messages.length - 1; i >= 0; i--) {
             if (messages[i].role === 'user') {
                 handleResendMessage(messages[i]);
+                return;
+            }
+        }
+    }, [messages, handleResendMessage]);
+
+    // Try again on a failed reply: resend the question it answers.
+    const handleTryAgain = useCallback((reply: Message) => {
+        const at = messages.indexOf(reply);
+        for (let i = at - 1; i >= 0; i--) {
+            if (messages[i].role === 'user') {
+                handleResendMessage(messages[i], reply);
                 return;
             }
         }
@@ -1644,10 +1622,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             {...CLAIMS_ESCAPE}
                             autoFocus
                             aria-label="Chat title"
+                            dir="auto"
                         />
                     ) : (
-                        <button type="button" className="task-title" onClick={startEditTitle} title="Rename">
-                            <span>{session?.title || 'New chat'}</span>
+                        <button type="button" className="task-title" onClick={startEditTitle} title={t('row.rename')}>
+                            <span>{session?.title || t('sidebar.newChat')}</span>
                             <Edit3 size={12} aria-hidden="true" className="task-title-edit" />
                         </button>
                     )}
@@ -1737,7 +1716,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             : undefined;
                         const canRetry = !busy && !comparison && !retiredAgent && !streamEnding
                             && msg.role === 'assistant' && idx === messages.length - 1
-                            && !msg.stopState && !isErrorContent(msg.content);
+                            && !msg.stopState && !msg.failed && !isErrorContent(msg.content);
+                        const canTryAgain = msg.failed === true && !busy && !retiredAgent && !streamEnding
+                            && idx === messages.length - 1;
                         const latency = msg.stats?.seconds != null ? msg.stats.seconds * 1000 : latencyByMsgId.get(msg.id);
                         return (
                             <div
@@ -1757,6 +1738,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                             answeredBy={msg.stats?.model ?? session?.effective_model}
                                             onPick={(model) => handleRetryWith(msg, model)}
                                         />
+                                    ) : canTryAgain ? (
+                                        <button
+                                            className="msg-action-btn"
+                                            onClick={() => handleTryAgain(msg)}
+                                            title={t('msg.tryAgain')}
+                                            aria-label={t('msg.tryAgain')}
+                                        >
+                                            <RotateCw size={12} />
+                                        </button>
                                     ) : undefined}
                                     latencyMs={latency}
                                 />
@@ -1790,7 +1780,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 isStreaming={isStreaming}
                                 agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
                                 agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
-                                agentStepCount={liveAgentStep}
                                 cards={isStreaming ? cards : lastCardsRef.current}
                                 liveStatus={isStreaming ? liveStatus : null}
                                 awaitingUser={isStreaming && (awaitingUser || hasLiveQuestion || hasOpenPrompt)}
@@ -1858,7 +1847,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         items={queue}
                         onRemove={(id) => setQueue((q) => messageQueue.remove(q, id))}
                         onRetry={(id) => setQueue((q) => messageQueue.promote(q, id, 'failed', 'queued'))}
-                        onSteer={isStreaming && !stopping ? handleSteer : undefined}
+                        onSteer={isStreaming && !stopping && !followupsUnavailable ? handleSteer : undefined}
                         replying={isStreaming}
                         busyRetry={!!queueHold}
                     />
@@ -1874,8 +1863,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         attachments={attach}
                         inputRef={inputRef}
                         placeholder={isStreaming
-                            ? 'Queue your next message'
-                            : messages.length === 0 ? 'Ask GAIA anything' : 'Reply to GAIA'}
+                            ? t('composer.queueNext')
+                            : messages.length === 0 ? t('composer.placeholder') : t('composer.reply')}
                         leftControls={<PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} />}
                         rightControls={(
                             <>
@@ -1887,6 +1876,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     onUsage={showContextUsage}
                                     onDetails={() => revealPanelSection('context')}
                                 />
+                                <SessionFolderChip sessionId={sessionId} onOpen={() => revealPanelSection('environment')} />
                                 <ModelChip />
                             </>
                         )}

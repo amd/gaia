@@ -51,6 +51,7 @@ from gaia.skills.lock import (
     LOCK_FILENAME,
     SOURCE_HUB,
     SOURCE_LOCAL,
+    UNVERSIONED,
     LockEntry,
     SkillLock,
     lock_path,
@@ -470,9 +471,10 @@ def check_drift(skills_root: Path | str) -> DriftReport:
                     "not track it, so nothing can tell whether it has changed."
                 ),
                 remediation=(
-                    "Expected if you created, imported, or migrated it. Start "
-                    "tracking it with 'gaia skill lock --relock'; if you did not "
-                    f"put it there, remove it with 'gaia skill remove {name}'."
+                    "Expected if you created it; until it is tracked it is held to "
+                    f"the '{LOWEST_TIER}' permission ceiling. Start tracking it "
+                    "with 'gaia skill lock --relock'; if you did not put it "
+                    f"there, remove it with 'gaia skill remove {name}'."
                 ),
                 path=str(directory),
             )
@@ -617,7 +619,7 @@ def _relock_locked(root: Path, lock: SkillLock) -> RelockResult:
         lock.record(
             LockEntry(
                 name=name,
-                version=skill.version or "",
+                version=skill.version or UNVERSIONED,
                 requested="",
                 source=SOURCE_LOCAL,
                 content_digest=content_digest(directory),

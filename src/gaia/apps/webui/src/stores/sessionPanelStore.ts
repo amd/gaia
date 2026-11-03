@@ -10,7 +10,7 @@
 import { create } from 'zustand';
 import { log } from '../utils/logger';
 
-export type PanelSectionId = 'answer' | 'environment' | 'context' | 'outputs' | 'changes';
+export type PanelSectionId = 'answer' | 'environment' | 'context' | 'outputs' | 'changes' | 'tools';
 
 export const PANEL_MIN_WIDTH = 280;
 export const PANEL_MAX_WIDTH = 640;
@@ -26,6 +26,7 @@ const DEFAULT_SECTIONS: Record<PanelSectionId, boolean> = {
     context: false,
     outputs: true,
     changes: true,
+    tools: false,
 };
 
 function read<T>(key: string, parse: (raw: string) => T, fallback: T): T {

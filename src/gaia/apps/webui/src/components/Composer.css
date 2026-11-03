@@ -6,7 +6,8 @@
     flex-direction: column;
     gap: 8px;
     width: 100%;
-    padding: 12px 12px 10px 16px;
+    padding-block: 12px 10px;
+    padding-inline: 16px 12px;
     background: var(--bg-input);
     border-radius: var(--radius-xl);
     box-shadow: var(--shadow-sm);
@@ -146,7 +147,8 @@
     align-items: center;
     gap: 6px;
     max-width: 260px;
-    padding: 3px 4px 3px 8px;
+    padding-block: 3px;
+    padding-inline: 8px 4px;
     border-radius: var(--radius-md);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
@@ -154,6 +156,8 @@
 }
 
 .composer-attachment.has-error {
+    flex-wrap: wrap;
+    align-content: flex-start;
     background: var(--danger-dim);
 }
 
@@ -176,8 +180,22 @@
     white-space: nowrap;
 }
 
+/* The error gets its own line under the name, so the name and remove button stay visible. */
 .composer-attachment.has-error .composer-attachment-state {
+    order: 1;
+    flex-basis: 100%;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    white-space: normal;
+    padding-block: 0 2px;
+    padding-inline: 0 4px;
     color: var(--danger);
+}
+
+.composer-attachment.has-error .composer-attachment-name {
+    flex: 1;
 }
 
 .composer-attachment .composer-icon-btn {
@@ -210,6 +228,11 @@
     text-overflow: ellipsis;
 }
 
+/* Too long to sit beside the other chips on a phone; the eye icon carries the state. */
+@media (max-width: 480px) {
+    .composer-chip-memory .composer-chip-label { display: none; }
+}
+
 .composer-chip.is-warning {
     color: var(--accent-yellow);
 }
@@ -221,4 +244,9 @@
 .composer-chip.is-on {
     background: var(--accent-dim);
     color: var(--accent);
+}
+
+.composer-chip.is-unavailable {
+    opacity: 0.5;
+    cursor: default;
 }

@@ -453,6 +453,28 @@ class TestModelLoad:
         assert len(users_server.posts("load")) == 2
         assert users_server.setup_writes() == []
 
+    def test_chat_window_is_saved_on_gaias_server(self, env_server, client):
+        """So Lemonade's auto-load after an eviction keeps it, not a 4K auto-tune."""
+        client.load_model(CHAT, auto_download=False, prompt=False, ctx_size=131072)
+        load = env_server.posts("load")[0]
+        assert load["ctx_size"] == 131072 and load["save_options"] is True
+
+    def test_chat_window_is_not_saved_on_the_users_server(self, users_server, client):
+        client.load_model(CHAT, auto_download=False, prompt=False, ctx_size=131072)
+        load = users_server.posts("load")[0]
+        assert load["ctx_size"] == 131072 and "save_options" not in load
+        assert users_server.setup_writes() == []
+
+    def test_a_load_without_a_window_saves_nothing(self, env_server, client):
+        client.load_model(CHAT, auto_download=False, prompt=False)
+        assert "save_options" not in env_server.posts("load")[0]
+
+    def test_an_explicit_no_save_is_kept(self, env_server, client):
+        client.load_model(
+            CHAT, auto_download=False, prompt=False, ctx_size=65536, save_options=False
+        )
+        assert "save_options" not in env_server.posts("load")[0]
+
     def test_control_embedder_load_saves_options_on_an_env_chosen_server(
         self, env_server, client
     ):

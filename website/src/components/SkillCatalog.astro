@@ -1,0 +1,97 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// The /hub skill cards, or an honest empty state when the hub's skills lane
+// has nothing in it yet. Split from the page so a test can render both
+// branches without the network.
+
+import type { HubSkill } from '../data/hub';
+
+interface Props {
+  skills: HubSkill[];
+  class?: string;
+}
+
+const { skills, class: className = '' } = Astro.props;
+
+const SKILLS_SOURCE = 'https://github.com/amd/gaia/tree/main/hub/skills';
+
+// Verified is AMD-attested; the rest are labelled, not hidden.
+const TIER_BADGE: Record<string, string> = { verified: 'g-badge' };
+---
+
+{skills.length === 0 ? (
+  <div data-skills-empty class:list={['g-card max-w-[640px] p-[22px] sm:p-[30px]', className]}>
+    <h2 class="g-h-card">No skills published yet</h2>
+    <p class="g-body mt-2">
+      The hub's skills catalog is empty right now. The skills headed there live in the
+      GAIA repository, where you can read them today.
+    </p>
+    <a href={SKILLS_SOURCE} target="_blank" rel="noopener noreferrer" class="g-cta-link mt-5">
+      Browse hub/skills on GitHub<span aria-hidden="true">&rarr;</span>
+    </a>
+  </div>
+) : (
+  <ul class:list={['grid gap-[18px] md:grid-cols-2 lg:grid-cols-3', className]}>
+    {skills.map((s) => (
+      <li data-skill={s.id} class="g-card flex flex-col p-[22px]">
+        <div class="flex items-start justify-between gap-3">
+          <h2 class="g-h-card break-all">{s.name}</h2>
+          <span class={TIER_BADGE[s.tier] ?? 'g-badge-muted'}>{s.tier}</span>
+        </div>
+        <p class="g-meta mt-1">v{s.version}</p>
+        <p class="g-body mt-3 flex-1">{s.description}</p>
+        <div class="g-cmd-plain mt-5 justify-between gap-2 py-2 pr-2">
+          {/* Focusable: the command overflows at narrow widths. */}
+          <div tabindex="0" class="flex min-w-0 items-center gap-2 overflow-x-auto">
+            <span class="text-g-code-accent" aria-hidden="true">$</span>
+            <code class="whitespace-nowrap bg-transparent p-0" data-skill-cmd>{s.installCommand}</code>
+          </div>
+          <button
+            type="button"
+            data-copy-skill
+            data-cmd={s.installCommand}
+            aria-label={`Copy the install command for ${s.name}`}
+            class="flex-none rounded-g-btn border border-g-border px-2 py-1.5 text-g-code-faint transition-colors hover:border-g-code-accent/45 hover:text-g-code-text"
+          >
+            <svg data-icon-copy class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            <svg data-icon-done class="hidden h-3.5 w-3.5 text-g-code-accent" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 6 9 17l-5-5"/>
+            </svg>
+          </button>
+        </div>
+        <a href={s.sourceUrl} target="_blank" rel="noopener noreferrer" class="g-cta-link mt-4">
+          Source on GitHub<span aria-hidden="true">&rarr;</span>
+        </a>
+      </li>
+    ))}
+  </ul>
+)}
+
+<script>
+  // Same behaviour as InstallCommand.astro's copy button.
+  document.querySelectorAll<HTMLButtonElement>('[data-copy-skill]').forEach((btn) => {
+    let timer = 0;
+    const flip = (ok: boolean) => {
+      btn.querySelector('[data-icon-copy]')?.classList.toggle('hidden', ok);
+      btn.querySelector('[data-icon-done]')?.classList.toggle('hidden', !ok);
+    };
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(btn.dataset.cmd || '');
+      } catch {
+        // No Clipboard API: select the command so a manual copy still works.
+        const code = btn.closest('.g-cmd-plain')?.querySelector('[data-skill-cmd]');
+        if (code) getSelection()?.selectAllChildren(code);
+        btn.setAttribute('aria-label', 'Copy failed — command selected, press Ctrl+C');
+        return;
+      }
+      flip(true);
+      clearTimeout(timer);
+      timer = window.setTimeout(() => flip(false), 1600);
+    });
+  });
+</script>

@@ -9,10 +9,10 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as get_package_version_metadata
 from typing import Optional, Tuple
 
-__version__ = "0.25.2"
+__version__ = "0.25.4"
 
 # Lemonade version used across CI and installer
-LEMONADE_VERSION = "2026.43.3"
+LEMONADE_VERSION = "2026.44.1"
 
 # Oldest Lemonade Server GAIA runs against. LEMONADE_VERSION is what we install;
 # this is the floor below which we refuse. Profiles may require newer
@@ -75,6 +75,7 @@ def get_git_hash(hash_length: int = 8) -> str:
             ["git", "rev-parse", "--short", "HEAD"],
             stderr=subprocess.DEVNULL,
             text=True,
+            timeout=10,
         ).strip()
         return git_hash[:hash_length]
     except Exception:

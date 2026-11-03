@@ -23,9 +23,6 @@ const read = (url: URL) => readFileSync(url, 'utf8').replace(/\r\n/g, '\n');
 
 const ARTIFACTS_PY = read(new URL('../../../installer/tui/artifacts.py', import.meta.url));
 const BUILD_TUI = read(new URL('../../../.github/workflows/build_tui.yml', import.meta.url));
-const RELEASE_COMPONENTS = read(
-  new URL('../../../.github/workflows/release_components.yml', import.meta.url),
-);
 const PUBLISH = read(new URL('../../../.github/workflows/publish.yml', import.meta.url));
 
 const V = '1.2.3';
@@ -33,7 +30,7 @@ const V = '1.2.3';
 /** The body of one top-level job in a workflow, up to the next job. */
 function job(workflow: string, id: string): string {
   const start = workflow.indexOf(`\n  ${id}:\n`);
-  expect(start, `release_components.yml has no '${id}' job`).toBeGreaterThan(-1);
+  expect(start, `publish.yml has no '${id}' job`).toBeGreaterThan(-1);
   const rest = workflow.slice(start + 1);
   const next = rest.slice(1).search(/\n {2}[a-z][\w-]*:\n/);
   return next === -1 ? rest : rest.slice(0, next + 1);
@@ -58,15 +55,16 @@ describe('the terminal installers', () => {
   });
 
   it('are attached to the GitHub release', () => {
-    const attach = job(RELEASE_COMPONENTS, 'github-release-installers');
+    // publish.yml attaches them for every tag, final or RC.
+    const attach = job(PUBLISH, 'github-release-installers');
     expect(attach).toContain('installer/tui/artifacts.py publish-args');
     expect(attach).toMatch(/gh release upload "\$\{TAG\}"[^\n]*\n[^\n]*--clobber/);
     expect(attach).toContain('name: windows-setup');
     expect(attach).toContain('pattern: tui-installers-*');
-    // The site only shows them after a rebuild, and the attach can land after
-    // redeploy-website has run, so the attach job requests its own.
-    expect(attach.indexOf('gh workflow run deploy_website.yml')).toBeGreaterThan(
-      attach.indexOf('gh release upload'),
+    // The site only shows them after a rebuild, so the redeploy waits for the
+    // attach to finish.
+    expect(job(PUBLISH, 'redeploy-website')).toMatch(
+      /needs: \[[^\]]*\bgithub-release-installers\b[^\]]*\]/,
     );
   });
 });

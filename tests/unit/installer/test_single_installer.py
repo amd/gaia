@@ -12,9 +12,13 @@ exercise the fetcher that picks which desktop app setup gets embedded.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import io
 import re
+import subprocess
 import sys
+import urllib.error
 import uuid
 import zipfile
 from pathlib import Path
@@ -147,6 +151,17 @@ def test_terminal_profile_runs_only_with_the_terminal():
     assert "${SecMain}" in sync.group(1)
 
 
+def test_smoke_test_reports_locks_after_an_unexpected_both_components_rerun():
+    smoke = SMOKE.read_text(encoding="utf-8")
+    assert "function Write-LockDiagnostics([string[]]$Paths)" in smoke
+    assert "Wait-Writable $path -Seconds 5" in smoke
+    assert "no GAIA processes were running after the failed setup" in smoke
+    step = re.search(r"# ── 5\..*?(?=# ── 6\.)", smoke, re.M | re.S)
+    assert step, "smoke-test.ps1 no longer covers rerunning both components"
+    assert "$bothExecutables = @(" in step.group(0)
+    assert "Write-LockDiagnostics $bothExecutables" in step.group(0)
+
+
 def test_exit_codes_are_distinct_and_the_smoke_test_checks_them():
     codes = {
         name: int(value)
@@ -158,6 +173,20 @@ def test_exit_codes_are_distinct_and_the_smoke_test_checks_them():
     smoke = SMOKE.read_text(encoding="utf-8")
     for name in ("EXIT_RUNNING", "EXIT_USAGE", "EXIT_CONFLICT"):
         assert f"-ne {codes[name]})" in smoke, f"smoke-test.ps1 never expects {name}"
+
+
+def test_running_app_refusal_retries_for_a_bounded_time_before_failing():
+    body = re.search(
+        r"^Function AbortIfRunning\n(.*?)^FunctionEnd", _nsi(), re.M | re.S
+    )
+    assert body, "gaia-setup.nsi no longer checks a running app before install"
+    code = body.group(1)
+    assert "StrCpy $R6 20" in code
+    assert "IntOp $R6 $R6 - 1" in code
+    assert "Sleep 500" in code
+    assert "Goto wait_for_file" in code
+    assert 'DetailPrint "Waiting for $R8 to be released..."' in code
+    assert "SetErrorLevel ${EXIT_RUNNING}" in code
 
 
 def test_every_section_is_ordered_ahead_of_the_code_that_names_it():
@@ -227,19 +256,143 @@ def test_release_source_refuses_a_tag_that_is_not_a_version(tmp_path, tag):
         fetch.from_release("amd/gaia", tag, tmp_path)
 
 
+def _sha512_b64(data: bytes) -> str:
+    return base64.b64encode(hashlib.sha512(data).digest()).decode("ascii")
+
+
+def _latest_yml(name: str, sha512: str) -> bytes:
+    # The shape electron-builder writes, including the top-level duplicate.
+    return (
+        f"version: 0.25.0\nfiles:\n  - url: {name}.blockmap\n    sha512: other==\n"
+        f"  - url: {name}\n    sha512: {sha512}\n    size: 1\n"
+        f"path: {name}\nsha512: {sha512}\n"
+    ).encode()
+
+
+def _serve(monkeypatch, assets: dict[str, bytes]) -> list[str]:
+    """Stand in for the release-asset host; never the gh CLI or the REST API."""
+    fetched: list[str] = []
+
+    def download(url):
+        fetched.append(url)
+        if url not in assets:
+            raise AssertionError(f"unexpected download {url}")
+        return assets[url]
+
+    def no_gh(args):
+        raise AssertionError(f"the release source must not call gh: {args}")
+
+    monkeypatch.setattr(fetch, "_download", download)
+    monkeypatch.setattr(fetch, "_gh", no_gh)
+    return fetched
+
+
+def _asset_url(tag: str, name: str) -> str:
+    return f"https://github.com/amd/gaia/releases/download/{tag}/{name}"
+
+
 def test_release_source_takes_a_release_candidates_setup_by_its_npm_version(
     tmp_path, monkeypatch
 ):
     name = fetch.setup_name("0.25.0-rc.2")
+    data = _setup_bytes()
+    _serve(monkeypatch, {_asset_url("v0.25.0-rc2", name): data})
+    sha = hashlib.sha256(data).hexdigest()
+    path = fetch.from_release("amd/gaia", "v0.25.0-rc2", tmp_path, sha)
+    assert path == tmp_path / name
+    assert path.read_bytes() == data
 
-    def gh(args):
-        assert args[:3] == ["release", "download", "v0.25.0-rc2"]
-        assert args[args.index("--pattern") + 1] == name
-        (tmp_path / name).write_bytes(_setup_bytes())
-        return b""
 
-    monkeypatch.setattr(fetch, "_gh", gh)
-    assert fetch.from_release("amd/gaia", "v0.25.0-rc2", tmp_path) == tmp_path / name
+def test_release_source_refuses_a_setup_that_misses_its_pinned_sha256(
+    tmp_path, monkeypatch
+):
+    name = fetch.setup_name("0.24.1")
+    _serve(monkeypatch, {_asset_url("v0.24.1", name): _setup_bytes()})
+    with pytest.raises(SystemExit, match="sha256"):
+        fetch.from_release("amd/gaia", "v0.24.1", tmp_path, "0" * 64)
+    assert not (tmp_path / name).exists()
+
+
+def test_release_source_without_a_pin_checks_the_releases_latest_yml(
+    tmp_path, monkeypatch
+):
+    name = fetch.setup_name("0.25.0")
+    data = _setup_bytes()
+    fetched = _serve(
+        monkeypatch,
+        {
+            _asset_url("v0.25.0", "latest.yml"): _latest_yml(name, _sha512_b64(data)),
+            _asset_url("v0.25.0", name): data,
+        },
+    )
+    assert fetch.from_release("amd/gaia", "v0.25.0", tmp_path) == tmp_path / name
+    assert fetched[0].endswith("/latest.yml")
+
+
+def test_release_source_without_a_pin_refuses_a_setup_latest_yml_disagrees_with(
+    tmp_path, monkeypatch
+):
+    name = fetch.setup_name("0.25.0")
+    _serve(
+        monkeypatch,
+        {
+            _asset_url("v0.25.0", "latest.yml"): _latest_yml(name, "bogus=="),
+            _asset_url("v0.25.0", name): _setup_bytes(),
+        },
+    )
+    with pytest.raises(SystemExit, match="sha512"):
+        fetch.from_release("amd/gaia", "v0.25.0", tmp_path)
+
+
+def test_release_source_refuses_a_latest_yml_that_does_not_list_the_setup(
+    tmp_path, monkeypatch
+):
+    other = _latest_yml(fetch.setup_name("0.24.1"), "x==")
+    _serve(monkeypatch, {_asset_url("v0.25.0", "latest.yml"): other})
+    with pytest.raises(SystemExit, match="no sha512"):
+        fetch.from_release("amd/gaia", "v0.25.0", tmp_path)
+
+
+def test_release_source_reuses_a_cached_setup_only_when_it_still_matches(
+    tmp_path, monkeypatch
+):
+    name = fetch.setup_name("0.24.1")
+    data = _setup_bytes()
+    sha = hashlib.sha256(data).hexdigest()
+    (tmp_path / name).write_bytes(data)
+    assert _serve(monkeypatch, {}) == []
+    assert fetch.from_release("amd/gaia", "v0.24.1", tmp_path, sha) == tmp_path / name
+
+    (tmp_path / name).write_bytes(b"MZ corrupted")
+    fetched = _serve(monkeypatch, {_asset_url("v0.24.1", name): data})
+    fetch.from_release("amd/gaia", "v0.24.1", tmp_path, sha)
+    assert fetched == [_asset_url("v0.24.1", name)]
+    assert (tmp_path / name).read_bytes() == data
+
+
+@pytest.mark.parametrize(
+    "code,match", [(404, "unpublished"), (403, "rate limiting"), (429, "rate limiting")]
+)
+def test_download_names_a_missing_asset_apart_from_a_refused_one(
+    monkeypatch, code, match
+):
+    def urlopen(req, timeout):
+        raise urllib.error.HTTPError(req.full_url, code, "x", {}, None)
+
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", urlopen)
+    with pytest.raises(SystemExit, match=match):
+        fetch._download("https://github.com/amd/gaia/releases/download/v1.0.0/x")
+
+
+def test_gh_reports_a_rate_limit_as_a_rate_limit_not_a_missing_thing(monkeypatch):
+    err = b"HTTP 403: API rate limit exceeded for installation. (https://api.github.com/...)"
+
+    def run(*_a, **_k):
+        return subprocess.CompletedProcess([], 1, b"", err)
+
+    monkeypatch.setattr(fetch.subprocess, "run", run)
+    with pytest.raises(SystemExit, match="rate limit.*Nothing is missing"):
+        fetch._gh(["api", "repos/amd/gaia/actions/runs/1/artifacts"])
 
 
 class _FakeGitHub:

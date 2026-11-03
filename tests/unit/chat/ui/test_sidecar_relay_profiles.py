@@ -112,7 +112,6 @@ def _registered_tool_names() -> set:
         "src/gaia/sd",
         "src/gaia/vlm",
         "src/gaia/agents/code_index",
-        "hub/agents/chat/python",
         "hub/agents/gaia/python",
     ]
 
@@ -243,6 +242,9 @@ class _FakeProxy:
         return self._init_result
 
 
+_NO_FOLLOWUPS = {"type": "followup_unavailable"}
+
+
 class _FakeHandle:
     def __init__(self, api_version="2.13", init_result=(200, {})):
         self.api_version = api_version
@@ -291,7 +293,8 @@ class TestGaiaDispatch:
             {"role": "user", "content": "a"},
             {"role": "assistant", "content": "b"},
         ]
-        assert handler.events == []
+        # 2.13 takes no mid-turn messages, so the chat is told not to offer one.
+        assert handler.events == [_NO_FOLLOWUPS]
 
     def test_old_binary_is_refused_with_gaia_copy(self, monkeypatch):
         _, calls = self._patch(monkeypatch, _FakeHandle(api_version="2.11"))
@@ -325,7 +328,7 @@ class TestGaiaDispatch:
         _dispatch_sidecar_query(handler, request, [], "m", "gaia")
 
         assert len(calls) == 1, "a not-ready probe must not cancel the turn"
-        assert len(handler.events) == 1
+        assert handler.events[1:] == [_NO_FOLLOWUPS]
         assert handler.events[0]["type"] == "status"
         message = handler.events[0]["message"]
         # Framed as a probe result, not asserted as fact — it is wrong often
@@ -364,7 +367,7 @@ class TestGaiaDispatch:
         )
 
         assert len(calls) == 1
-        assert handler.events == []
+        assert handler.events == [_NO_FOLLOWUPS]
 
     def test_a_missing_model_the_turn_uses_still_blocks(self, monkeypatch):
         body = self._init_body(reachable=True, present=False, hint="not downloaded")
@@ -663,11 +666,44 @@ class TestSessionIdGating:
     def test_gaia_sends_session_id(self):
         assert self._body_for(GAIA_PROFILE, "sess-9")["session_id"] == "sess-9"
 
-    def test_email_does_not(self):
-        assert "session_id" not in self._body_for(EMAIL_PROFILE, "sess-9")
+    def test_email_sends_it_too(self):
+        # #2834: without it a follow-up can't name the thread the last turn
+        # showed — the sidecar builds a fresh agent per turn.
+        assert self._body_for(EMAIL_PROFILE, "sess-9")["session_id"] == "sess-9"
 
-    def test_gaia_omits_it_when_absent(self):
-        assert "session_id" not in self._body_for(GAIA_PROFILE, None)
+    @pytest.mark.parametrize("empty", [None, ""])
+    def test_omitted_when_absent(self, empty):
+        for profile in (GAIA_PROFILE, EMAIL_PROFILE):
+            assert "session_id" not in self._body_for(profile, empty)
+
+    def test_a_profile_without_the_field_never_sends_it(self):
+        from dataclasses import replace
+
+        bare = replace(EMAIL_PROFILE, min_session_id_api_version=None)
+        assert "session_id" not in self._body_for(bare, "sess-9")
+
+    @pytest.mark.parametrize(
+        "version,expected",
+        [
+            ("2.11", False),
+            ("2.12", True),
+            ("2.14", True),
+            ("3.0", True),
+            (None, False),
+            ("", False),
+            ("garbage", False),
+        ],
+    )
+    def test_email_takes_it_only_from_contract_2_12(self, version, expected):
+        from gaia.ui.email_sidecar.profiles import session_id_supported
+
+        assert session_id_supported(EMAIL_PROFILE, version) is expected
+
+    def test_gaia_takes_it_at_its_own_floor(self):
+        from gaia.ui.email_sidecar.profiles import session_id_supported
+
+        floor = ".".join(str(n) for n in GAIA_PROFILE.min_api_version)
+        assert session_id_supported(GAIA_PROFILE, floor)
 
 
 # ── Per-agent copy never says "email" for the flagship ───────────────────────

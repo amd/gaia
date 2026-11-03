@@ -18,7 +18,7 @@ on:
       - 'package-lock.json'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - 'src/gaia/electron/**'
       - 'src/gaia/apps/*/webui/**'
@@ -121,6 +121,12 @@ jobs:
         run: |
           cd src/gaia/apps/webui
           npm test
+
+      - name: Check right-to-left layout
+        run: |
+          cd src/gaia/apps/webui
+          npx playwright install --with-deps chromium
+          npm run test:rtl
 
   test-apps-integration:
     name: Test Apps Integration

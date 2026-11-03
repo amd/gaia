@@ -7,6 +7,8 @@ import os
 import pytest
 import requests
 
+pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("require_lemonade")]
+
 
 def _get_context_size_from_health(health_data: dict) -> int:
     """Extract context size from health endpoint response.
@@ -32,30 +34,26 @@ def test_health_endpoint_returns_context_size():
     port = os.environ.get("LEMONADE_PORT", "13305")
     url = f"http://localhost:{port}/api/v1/health"
 
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        health_data = response.json()
+    response = requests.get(url, timeout=10)
+    response.raise_for_status()
+    health_data = response.json()
 
-        print(f"\nHealth endpoint response: {health_data}")
+    print(f"\nHealth endpoint response: {health_data}")
 
-        # Extract context_size using the helper (handles both old and new formats)
-        context_size = _get_context_size_from_health(health_data)
-        print(f"Context size: {context_size}")
+    # Extract context_size using the helper (handles both old and new formats)
+    context_size = _get_context_size_from_health(health_data)
+    print(f"Context size: {context_size}")
 
-        assert context_size > 0, (
-            f"context_size should be > 0, got {context_size}. "
-            f"Health response: {health_data}"
-        )
+    assert context_size > 0, (
+        f"context_size should be > 0, got {context_size}. "
+        f"Health response: {health_data}"
+    )
 
-        # If we started with 32768, verify it
-        expected_ctx = int(os.environ.get("EXPECTED_CTX_SIZE", "32768"))
-        assert (
-            context_size >= expected_ctx
-        ), f"context_size {context_size} is less than expected {expected_ctx}"
-
-    except requests.exceptions.ConnectionError:
-        pytest.skip("Lemonade server not running")
+    # If we started with 32768, verify it
+    expected_ctx = int(os.environ.get("EXPECTED_CTX_SIZE", "32768"))
+    assert (
+        context_size >= expected_ctx
+    ), f"context_size {context_size} is less than expected {expected_ctx}"
 
 
 if __name__ == "__main__":

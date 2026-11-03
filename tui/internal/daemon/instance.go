@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -53,6 +54,10 @@ type Instance struct {
 	APIVersion string  `json:"api_version"`
 	Service    string  `json:"service"`
 	StartedAt  float64 `json:"started_at"`
+	// GaiaVersion and VersionFile name the GAIA release the daemon runs and the
+	// version.py it read it from, so a client can tell an update replaced it.
+	GaiaVersion string `json:"gaia_version,omitempty"`
+	VersionFile string `json:"version_file,omitempty"`
 	// RelayBudget is what the daemon reported on its last status probe.
 	RelayBudget RelayBudget `json:"-"`
 }
@@ -195,4 +200,31 @@ func (i *Instance) CheckAgentsFloor() error {
 		}
 	}
 	return nil
+}
+
+var versionLine = regexp.MustCompile(`(?m)^__version__\s*=\s*["']([^"']+)["']`)
+
+// ReplacedInstall says why inst runs a GAIA release an update has since
+// replaced on disk, or "" when it is current or recorded no release. It reads
+// the daemon's own version.py, as the Python client does, so every client
+// agrees on the answer.
+func ReplacedInstall(inst *Instance) string {
+	if inst.VersionFile == "" {
+		return ""
+	}
+	data, err := os.ReadFile(inst.VersionFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Sprintf("its install (%s) is gone", inst.VersionFile)
+	}
+	if err != nil {
+		return ""
+	}
+	onDisk := "another version"
+	if m := versionLine.FindSubmatch(data); m != nil {
+		onDisk = string(m[1])
+	}
+	if onDisk == inst.GaiaVersion {
+		return ""
+	}
+	return fmt.Sprintf("it runs GAIA %s, and %s is installed", inst.GaiaVersion, onDisk)
 }

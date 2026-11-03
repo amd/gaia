@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from gaia.logger import get_logger
+from gaia.utils.user_folders import documents_dir
 
 try:
     import winreg  # Windows only
@@ -1075,7 +1076,7 @@ class SystemDiscovery:
         if paths is None:
             paths = [
                 self._home / "Work",
-                self._home / "Documents",
+                documents_dir(self._home),
                 self._home / "Projects",
             ]
 
@@ -1176,7 +1177,7 @@ class SystemDiscovery:
         if paths is None:
             paths = [
                 self._home / "Work",
-                self._home / "Documents",
+                documents_dir(self._home),
                 self._home / "Projects",
             ]
 
@@ -2649,7 +2650,7 @@ class SystemDiscovery:
             if p.is_dir():
                 search_roots.append(p)
         # Also check Documents
-        docs = home / "Documents"
+        docs = documents_dir(home)
         if docs.is_dir():
             search_roots.append(docs)
 
@@ -2892,7 +2893,7 @@ class SystemDiscovery:
             r"(resume|cv|curriculum[_\s-]?vitae|cover[_\s-]?letter)",
             re.IGNORECASE,
         )
-        docs_dir = home / "Documents"
+        docs_dir = documents_dir(home)
         if not docs_dir.exists() or not docs_dir.is_dir():
             return
 
@@ -2993,7 +2994,7 @@ class SystemDiscovery:
         }
 
         scan_dirs = [
-            home / "Documents",
+            documents_dir(home),
             home / "Desktop",
             home / "Downloads",
             home / "Projects",
@@ -3053,17 +3054,17 @@ class SystemDiscovery:
         """Detect note-taking / writing directories (Obsidian, Notion, markdown)."""
         # Check for known note-taking app vaults/exports
         writing_indicators = [
-            (home / "Documents" / "Obsidian", "Obsidian vault"),
+            (documents_dir(home) / "Obsidian", "Obsidian vault"),
             (home / "Obsidian", "Obsidian vault"),
-            (home / "Documents" / "Notion", "Notion export"),
+            (documents_dir(home) / "Notion", "Notion export"),
             (home / "Notion", "Notion export"),
-            (home / "Documents" / "Notes", "notes directory"),
+            (documents_dir(home) / "Notes", "notes directory"),
             (home / "Notes", "notes directory"),
-            (home / "Documents" / "Journal", "journal directory"),
+            (documents_dir(home) / "Journal", "journal directory"),
             (home / "Journal", "journal directory"),
-            (home / "Documents" / "Writing", "writing directory"),
+            (documents_dir(home) / "Writing", "writing directory"),
             (home / "Writing", "writing directory"),
-            (home / "Documents" / "Blog", "blog directory"),
+            (documents_dir(home) / "Blog", "blog directory"),
             (home / "Blog", "blog directory"),
         ]
 
@@ -3094,7 +3095,7 @@ class SystemDiscovery:
                     found_writing.append(description)
 
         # Also scan for .obsidian directories (indicates vault root)
-        for candidate in [home / "Documents", home]:
+        for candidate in [documents_dir(home), home]:
             if not candidate.exists():
                 continue
             try:
@@ -3137,7 +3138,7 @@ class SystemDiscovery:
         }
 
         scan_dirs = [
-            home / "Documents",
+            documents_dir(home),
             home / "Desktop",
             home / "Downloads",
             home / "Projects",
@@ -3492,7 +3493,7 @@ class SystemDiscovery:
 
         for scan_dir in [
             self._home / "Downloads",
-            self._home / "Documents",
+            documents_dir(self._home),
             self._home / "Desktop",
         ]:
             if not scan_dir.exists():

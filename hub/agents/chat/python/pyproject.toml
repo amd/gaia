@@ -8,29 +8,26 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gaia-agent-chat"
 version = "0.2.0"
-description = "GAIA chat agent — conversation, document Q&A (RAG), and file-system profiles"
+description = "Deprecated: re-exports ChatAgent from the flagship gaia-agent-gaia package for one release"
 authors = [{ name = "AMD" }]
 license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10"
-# Floor: 0.25.1 is the first core release shipping
-# gaia.agents.tools.reasoning_tools, imported at agent start; 0.25.0 added
-# gaia.agents.tools.path_access (#4656) and 0.22.0
-# gaia.agents.registry.get_embedding_model_for_device (#2112).
-# tests/test_chat_dependency_floor.py guards this floor.
+# A re-export shim of gaia-agent-gaia, where ChatAgent now lives (#6099); it is
+# deleted in #6103. The gaia-agent-gaia floor follows the flagship's in-tree
+# version (util/release_versions.py stamps it), so a released shim requires
+# the flagship it was built with.
 #
-# Intentionally bare `amd-gaia` (no `[rag]` extras marker): a plain
-# `pip install gaia-agent-chat` must not implicitly pull faiss/pymupdf/
-# sentence-transformers just to import ChatAgent. RAG's real dependencies
-# come from `gaia init --profile chat`'s own `_install_pip_extras()` step
-# into the ACTIVE interpreter, not from this wheel's install -- do not "fix"
-# this by adding `[rag]` here (#2358).
-dependencies = ["amd-gaia>=0.25.2"]
-
-[project.entry-points."gaia.agent"]
-chat = "gaia_agent_chat:build_chat"
-doc = "gaia_agent_chat:build_doc"
-file = "gaia_agent_chat:build_file"
+# The amd-gaia floor stays for lite_agent, the one module still defined here.
+# tests/test_dependency_floor.py guards it. Intentionally bare `amd-gaia` (no
+# `[rag]` extras marker) -- see #2358.
+#
+# No `gaia.agent` entry points: the `chat`, `doc` and `file` ids resolve to the
+# flagship through gaia.agents.registry's legacy aliases.
+dependencies = [
+  "amd-gaia>=0.25.4",
+  "gaia-agent-gaia>=0.3.3",
+]
 
 [project.optional-dependencies]
 test = ["pytest"]
