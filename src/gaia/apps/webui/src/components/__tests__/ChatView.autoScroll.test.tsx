@@ -296,8 +296,7 @@ describe('auto-scroll edge cases', () => {
     it('holds when the reader drags the scrollbar up', async () => {
         const list = await mountList();
         scrollTo(list, 1500);
-        Object.defineProperty(list, 'clientWidth', { configurable: true, value: 800 });
-        fireEvent.pointerDown(list, { clientX: 805 });
+        fireEvent.pointerDown(list);
         await act(async () => { await new Promise((r) => setTimeout(r, 600)); });
         scrollTo(list, 1000);
         expect(await followsNext('More text')).toBe(false);
@@ -307,8 +306,7 @@ describe('auto-scroll edge cases', () => {
     it('keeps following after a click on a card, which is not a scroll', async () => {
         const list = await mountList();
         scrollTo(list, 1500);
-        Object.defineProperty(list, 'clientWidth', { configurable: true, value: 800 });
-        fireEvent.pointerDown(screen.getByText('Write a long essay'), { clientX: 100 });
+        fireEvent.pointerDown(screen.getByText('Write a long essay'));
         scrollTo(list, 1200, 1700);
         scrollTo(list, 1150, 1700);
         expect(await followsNext('More text')).toBe(true);

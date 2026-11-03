@@ -14,7 +14,11 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { ANSWER_SESSION, mockApi, useLocale, useTheme } from './fixtures';
 
-test.use({ viewport: { width: 1400, height: 900 } });
+test.use({
+    viewport: { width: 1400, height: 900 },
+    // Headless Chromium hides scrollbars by default; the drag tests need a real one.
+    launchOptions: { executablePath: process.env.GAIA_VISUAL_CHROMIUM || undefined, ignoreDefaultArgs: ['--hide-scrollbars'] },
+});
 
 /** Stream `chunk` events into POST /api/chat/send until the page closes; `__pauseStream` holds them. */
 function streamReplies(): void {
@@ -53,11 +57,11 @@ const distFromBottom = (page: Page): Promise<number> =>
 const scrollTop = (page: Page): Promise<number> => list(page).evaluate((el) => el.scrollTop);
 
 /** Open the answered chat, send a prompt, and wait until the reply overflows the list and is followed. */
-async function streamingChat(page: Page): Promise<void> {
+async function streamingChat(page: Page, locale = 'en'): Promise<void> {
     await page.addInitScript(streamReplies);
     await mockApi(page);
     await useTheme(page, 'light');
-    await useLocale(page, 'en');
+    await useLocale(page, locale);
     await page.goto(`/#${ANSWER_SESSION}`);
     await expect(page.locator('.flow-steps-summary').first()).toBeVisible();
     const box = page.getByRole('textbox').first();
@@ -119,3 +123,38 @@ test('content growing above a reader 40px from the bottom holds them', async ({ 
     await page.waitForTimeout(1500);
     expect(await distFromBottom(page), 'the reader was pulled back to the bottom').toBeGreaterThanOrEqual(before - 2);
 });
+
+for (const locale of ['en', 'ar']) {
+    test(`dragging the scrollbar up mid-stream holds the reader (${locale})`, async ({ page }) => {
+        await streamingChat(page, locale);
+        // A point on the list's own scrollbar that nothing else (a resize handle) covers.
+        const grip = await list(page).evaluate((el) => {
+            const box = el.getBoundingClientRect();
+            const gutter = el.offsetWidth - el.clientWidth;
+            const rtl = getComputedStyle(el).direction === 'rtl';
+            const y = box.bottom - 30;
+            for (let i = 0; i < gutter; i++) {
+                const x = rtl ? box.left + 0.5 + i : box.right - 0.5 - i;
+                if (document.elementFromPoint(x, y) === el) return { x, y, gutter };
+            }
+            return { x: -1, y, gutter };
+        });
+        expect(grip.gutter, 'no classic scrollbar to drag').toBeGreaterThan(0);
+        expect(grip.x, 'the scrollbar is covered by another element').toBeGreaterThan(0);
+        const { x, y } = grip;
+        await page.mouse.move(x, y);
+        await page.mouse.down();
+        for (let step = 1; step <= 10; step++) {
+            await page.mouse.move(x, y - 15 * step);
+            await page.waitForTimeout(30);
+        }
+        await page.waitForTimeout(300);
+        const held = await scrollTop(page);
+        await page.waitForTimeout(1000);
+        expect(Math.abs((await scrollTop(page)) - held), 'the view snapped back during the drag').toBeLessThan(2);
+        await page.mouse.up();
+        await page.waitForTimeout(1000);
+        expect(Math.abs((await scrollTop(page)) - held), 'the view snapped back after the drag').toBeLessThan(2);
+        expect(await distFromBottom(page)).toBeGreaterThan(100);
+    });
+}
