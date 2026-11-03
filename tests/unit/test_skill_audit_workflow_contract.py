@@ -203,6 +203,34 @@ def test_the_gate_runs_even_on_fork_pull_requests(gate):
 
 
 # ----------------------------------------------------------------------
+# Best-effort PR summary
+# ----------------------------------------------------------------------
+
+
+def _summary_comment_step(gate: dict) -> dict:
+    steps = [
+        step
+        for step in gate["steps"]
+        if step.get("name") == "Post summary-only PR comment"
+    ]
+    assert steps, "the workflow must retain its same-repo summary-comment step"
+    return steps[0]
+
+
+def test_rate_limited_summary_comment_cannot_fail_the_audit_gate(gate):
+    """The deterministic verdict, not a GitHub API call, decides this check."""
+    assert _summary_comment_step(gate).get("continue-on-error") is True
+
+
+def test_summary_comment_lookup_is_paginated_to_update_existing_marker(gate):
+    """A marker beyond GitHub's default page must not create a duplicate."""
+    script = _summary_comment_step(gate)["with"]["script"]
+    assert "github.paginate" in script
+    assert "github.rest.issues.listComments" in script
+    assert "per_page: 100" in script
+
+
+# ----------------------------------------------------------------------
 # Disclosure policy
 # ----------------------------------------------------------------------
 

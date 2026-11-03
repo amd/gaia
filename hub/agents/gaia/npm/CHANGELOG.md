@@ -10,6 +10,11 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **Reading text aloud no longer downloads a voice model mid-chat.**
+  `text_to_speech` used to pull Kokoro on first use; it now stops and asks you
+  to run `gaia download --agent talk` first. It also takes a `speed` (0.5-2.0),
+  defaults to the `af_bella` voice, writes only `.wav` files, and reads long
+  text in sentence-sized pieces joined into one file.
 - **A project's `.env` can only supply the Claude API key.** The sidecar reads
   `ANTHROPIC_API_KEY` from a `.env` in its working directory, for its own
   Claude calls, and ignores every other name there with one warning. Settings
@@ -90,6 +95,14 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   stored conversations, after the user approves it. A plain `recall` now says
   how many sensitive entries it held back, and `search_past_conversations`
   leaves out turns that mention something forgotten after they were said.
+- **Deleting a chat removes it from Memory.** The agent filed each Agent UI
+  chat's turns and tool calls under a random id, so a deleted chat stayed
+  readable in full under Memory > Advanced > Conversation history. It now
+  files them under the chat's id, and deleting the chat deletes them; what
+  GAIA learned about you stays under About you, and the Agent UI's delete
+  confirmation says so. A turn
+  still finishing when its chat is deleted files nothing, and skill learning
+  keeps reading work done in a chat after it was first learned from (#5931).
 - **Skill messages give commands that work and say what really happens.**
   Installing a skill the agent already bundles now says the bundled copy is
   the one that loads, instead of telling the model to load the install. The

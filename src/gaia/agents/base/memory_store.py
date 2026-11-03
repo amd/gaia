@@ -611,6 +611,13 @@ CREATE TABLE IF NOT EXISTS forgotten (
     sensitive    INTEGER NOT NULL DEFAULT 0,
     forgotten_at TEXT NOT NULL
 );
+
+-- Agent UI chats the user deleted (#5931). A stopped turn can finish after its
+-- chat is gone, in another process; its writes check here and file nothing.
+CREATE TABLE IF NOT EXISTS deleted_sessions (
+    session_id  TEXT PRIMARY KEY,
+    deleted_at  TEXT NOT NULL
+);
 """
 
 # Sync triggers for conversations_fts (external-content FTS5 table).
@@ -1087,8 +1094,9 @@ class MemoryStore:
             try:
                 self._conn.execute(
                     "INSERT INTO conversations (session_id, role, content, context, timestamp) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (session_id, role, content, context, now),
+                    "SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS "
+                    "(SELECT 1 FROM deleted_sessions WHERE session_id = ?)",
+                    (session_id, role, content, context, now, session_id),
                 )
                 self._conn.commit()
             except Exception:
@@ -2775,7 +2783,9 @@ class MemoryStore:
                     """
                     INSERT INTO tool_history
                         (session_id, tool_name, args, result_summary, success, executed, error, duration_ms, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    WHERE NOT EXISTS
+                        (SELECT 1 FROM deleted_sessions WHERE session_id = ?)
                     """,
                     (
                         session_id,
@@ -2787,6 +2797,7 @@ class MemoryStore:
                         error,
                         duration_ms,
                         now,
+                        session_id,
                     ),
                 )
                 self._conn.commit()
@@ -4665,6 +4676,40 @@ class MemoryStore:
                 raise
         logger.info("[MemoryStore] cleared conversations: %d rows", deleted)
         return {"conversations": deleted}
+
+    def delete_session(self, session_id: str) -> Dict:
+        """Delete *session_id*'s conversation turns and tool calls.
+
+        Both hold the chat's own words: tool args and result summaries can
+        quote files, searches and pages. What was learned from the session
+        (knowledge, procedures) is kept. The FTS index follows through the
+        delete trigger. The id is recorded as deleted, so a turn still
+        finishing under it files nothing. Returns the deleted row counts.
+        """
+        with self._locked():
+            try:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO deleted_sessions (session_id, deleted_at) "
+                    "VALUES (?, ?)",
+                    (session_id, _now_iso()),
+                )
+                conv_deleted = self._conn.execute(
+                    "DELETE FROM conversations WHERE session_id = ?", (session_id,)
+                ).rowcount
+                tool_deleted = self._conn.execute(
+                    "DELETE FROM tool_history WHERE session_id = ?", (session_id,)
+                ).rowcount
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        logger.info(
+            "[MemoryStore] deleted session %s: %d conversation turns, %d tool calls",
+            session_id,
+            conv_deleted,
+            tool_deleted,
+        )
+        return {"conversations": conv_deleted, "tool_history": tool_deleted}
 
     def seed_bulk(self, items: List[Dict]) -> List[str]:
         """Bulk-insert knowledge rows, bypassing dedup.
