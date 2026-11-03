@@ -4,8 +4,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
+import type { MessageKey } from '../../i18n/registry';
+import { useT, type Translate } from '../../i18n/useT';
 import { useChatStore } from '../../stores/chatStore';
 import { displayModelName } from '../../stores/modelStore';
+import { ErrorNotice } from './ErrorNotice';
 import type { LoadedModelInfo, ModelServerInfo } from '../../types/api.gen';
 
 const BACKEND_LABELS: Record<string, string> = {
@@ -17,10 +20,10 @@ const BACKEND_LABELS: Record<string, string> = {
     remote: 'Remote (cloud)',
 };
 
-const OWNER_LABELS: Record<string, string> = {
-    gaia: "GAIA's own Lemonade",
-    user: 'Your Lemonade',
-    remote: 'Lemonade on another machine',
+const OWNER_LABELS: Record<string, MessageKey> = {
+    gaia: 'settings.server.ownerGaia',
+    user: 'settings.server.ownerUser',
+    remote: 'settings.server.ownerRemote',
 };
 
 export function backendLabel(backend: string | null | undefined): string {
@@ -39,29 +42,29 @@ function ctxLabel(ctx: number | null | undefined): string {
     return ctx ? `${Math.round(ctx / 1024)}K tokens` : 'unknown';
 }
 
-const MODEL_KIND_LABELS: Record<string, string> = {
-    asr: 'Speech recognition',
-    embedding: 'Embedding',
-    image: 'Image',
-    llm: 'Language',
-    rerank: 'Reranker',
-    reranking: 'Reranker',
-    stt: 'Speech recognition',
-    transcription: 'Speech recognition',
-    tts: 'Speech',
-    vision: 'Vision',
-    '3d': '3D',
+const MODEL_KIND_LABELS: Record<string, MessageKey> = {
+    asr: 'settings.server.kind.speechRecognition',
+    embedding: 'settings.server.kind.embedding',
+    image: 'settings.server.kind.image',
+    llm: 'settings.server.kind.language',
+    rerank: 'settings.server.kind.reranker',
+    reranking: 'settings.server.kind.reranker',
+    stt: 'settings.server.kind.speechRecognition',
+    transcription: 'settings.server.kind.speechRecognition',
+    tts: 'settings.server.kind.speech',
+    vision: 'settings.server.kind.vision',
+    '3d': 'settings.server.kind.threeD',
 };
 
-function modelKindLabel(model: LoadedModelInfo): string {
-    if (!model.model_type) return 'Loaded model';
+function modelKindLabel(model: LoadedModelInfo, t: Translate): string {
+    if (!model.model_type) return t('settings.server.loadedModel');
     const type = model.model_type.toLowerCase();
-    const label = MODEL_KIND_LABELS[type] ?? `${type.charAt(0).toUpperCase()}${type.slice(1)}`;
-    return `${label} model`;
+    const key = MODEL_KIND_LABELS[type];
+    return key ? t(key) : t('settings.server.kindOther', { kind: `${type.charAt(0).toUpperCase()}${type.slice(1)}` });
 }
 
-function loadedModelDetail(model: LoadedModelInfo): string {
-    const name = model.name ? displayModelName(model.name) : 'Unknown model';
+function loadedModelDetail(model: LoadedModelInfo, t: Translate): string {
+    const name = model.name ? displayModelName(model.name) : t.bare('settings.server.unknownModel');
     const detail = [name, runsOn(model)];
     if (model.backend !== 'remote' && model.ctx_size) detail.push(ctxLabel(model.ctx_size));
     return detail.join(' · ');
@@ -71,13 +74,14 @@ function Row({ label, value, title }: { label: string; value: string; title?: st
     return (
         <div className="status-row">
             <span className="status-label">{label}</span>
-            <span className="status-value model-server-value" title={title ?? value}>{value}</span>
+            <span className="status-value model-server-value" dir="auto" title={title ?? value}>{value}</span>
         </div>
     );
 }
 
 /** Which Lemonade GAIA uses, where it is, and what each loaded model runs on. */
 export function ModelServerPanel() {
+    const t = useT();
     const openSettings = useChatStore((s) => s.openSettings);
     const [info, setInfo] = useState<ModelServerInfo | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
@@ -97,13 +101,13 @@ export function ModelServerPanel() {
         try {
             const next = await api.setModelServerBackend(backend);
             setInfo(next);
-            setNotice({ ok: true, text: 'Saved. It applies the next time the chat model loads.' });
+            setNotice({ ok: true, text: t('settings.server.savedBackend') });
         } catch (err) {
             setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
         } finally {
             setSaving(null);
         }
-    }, []);
+    }, [t]);
 
     const chat = info?.chat_model ?? null;
     const reload = useCallback(async () => {
@@ -111,41 +115,41 @@ export function ModelServerPanel() {
         setReloading(true);
         try {
             if (!(await api.loadModelAskingFirst(chat.name, chat.ctx_size ?? undefined))) return;
-            setNotice({ ok: true, text: `Reloading ${chat.name}. Reopen this panel in a moment to see its backend.` });
+            setNotice({ ok: true, text: t('settings.server.reloading', { name: chat.name }) });
         } catch (err) {
             setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
         } finally {
             setReloading(false);
         }
-    }, [chat]);
+    }, [chat, t]);
 
     const changeModel = (
         <button type="button" className="btn-secondary" onClick={() => openSettings('model')}>
-            Change model
+            {t('settings.server.changeModel')}
         </button>
     );
 
     if (loadError) {
         return (
-            <section className="settings-section" aria-label="Model server">
-                <h4>Model server</h4>
-                <p className="settings-error" role="alert">{loadError}</p>
+            <section className="settings-section" aria-label={t('settings.advanced.modelServer')}>
+                <h4>{t('settings.advanced.modelServer')}</h4>
+                <ErrorNotice message={loadError} />
             </section>
         );
     }
     if (!info) {
         return (
-            <section className="settings-section" aria-label="Model server">
-                <h4>Model server</h4>
-                <p className="loading-text">Checking the model server…</p>
+            <section className="settings-section" aria-label={t('settings.advanced.modelServer')}>
+                <h4>{t('settings.advanced.modelServer')}</h4>
+                <p className="loading-text">{t('settings.server.checkingServer')}</p>
             </section>
         );
     }
     if (!info.reachable) {
         return (
-            <section className="settings-section" aria-label="Model server">
-                <h4>Model server</h4>
-                <p className="settings-error" role="alert">{info.error}</p>
+            <section className="settings-section" aria-label={t('settings.advanced.modelServer')}>
+                <h4>{t('settings.advanced.modelServer')}</h4>
+                <ErrorNotice message={info.error ?? t('settings.errors.serverDownTitle')} />
                 {changeModel}
             </section>
         );
@@ -161,49 +165,48 @@ export function ModelServerPanel() {
     const chatIsLocalLlamacpp = !!chat?.name && chat.recipe === 'llamacpp';
 
     return (
-        <section className="settings-section" aria-label="Model server">
-            <h4>Model server</h4>
+        <section className="settings-section" aria-label={t('settings.advanced.modelServer')}>
+            <h4>{t('settings.advanced.modelServer')}</h4>
             <div className="status-grid">
                 <Row
-                    label="Server"
-                    value={`${OWNER_LABELS[info.owner] ?? info.owner}${info.version ? ` v${info.version}` : ''}`}
+                    label={t('settings.server.server')}
+                    value={`${OWNER_LABELS[info.owner] ? t(OWNER_LABELS[info.owner]) : info.owner}${info.version ? ` v${info.version}` : ''}`}
                 />
-                <Row label="Address" value={info.base_url} />
+                <Row label={t('settings.server.addressShort')} value={info.base_url} />
                 <Row
-                    label="Chat model"
-                    value={chat?.name ? displayModelName(chat.name) : 'None loaded'}
+                    label={t('settings.server.chatModel')}
+                    value={chat?.name ? displayModelName(chat.name) : t('settings.advanced.noneLoaded')}
                     title={chat?.name ?? undefined}
                 />
-                {chat && <Row label="Runs on" value={runsOn(chat)} />}
-                {chat && chat.backend !== 'remote' && <Row label="Context window" value={ctxLabel(chat.ctx_size)} />}
+                {chat && <Row label={t('settings.server.runsOn')} value={runsOn(chat)} />}
+                {chat && chat.backend !== 'remote' && <Row label={t('settings.advanced.context')} value={ctxLabel(chat.ctx_size)} />}
                 <Row
-                    label="Embedding model"
+                    label={t('settings.advanced.embedding')}
                     value={info.embedding_model?.name
                         ? `${info.embedding_model.name} · ${runsOn(info.embedding_model)}`
-                        : 'None loaded'}
+                        : t('settings.advanced.noneLoaded')}
                 />
                 {(info.loaded_models ?? []).map((model, index) => (
                     <Row
                         key={`${model.name ?? 'unknown'}-${index}`}
-                        label={modelKindLabel(model)}
-                        value={loadedModelDetail(model)}
+                        label={modelKindLabel(model, t)}
+                        value={loadedModelDetail(model, t)}
                         title={model.name ?? undefined}
                     />
                 ))}
             </div>
-            {info.embedding_note && <p className="settings-hint">{info.embedding_note}</p>}
-            {info.system_info_error && <p className="settings-hint">{info.system_info_error}</p>}
+            {info.embedding_note && <p className="settings-hint"><bdi>{info.embedding_note}</bdi></p>}
+            {info.system_info_error && <p className="settings-hint"><bdi>{info.system_info_error}</bdi></p>}
 
             <div className="settings-field model-server-backend">
-                <span className="settings-label">llama.cpp backend for chat models</span>
+                <span className="settings-label">{t('settings.server.backend')}</span>
                 {available.length === 0 && !preferred ? (
                     <span className="settings-hint">
-                        This Lemonade does not report which backends this PC can run, so there is nothing to
-                        choose. Update Lemonade to pick one here.
+                        {t('settings.server.noBackends')}
                     </span>
                 ) : (
                     <>
-                        <div className="segmented" role="radiogroup" aria-label="llama.cpp backend">
+                        <div className="segmented" role="radiogroup" aria-label={t('settings.server.backendShort')}>
                             {choices.map((name) => (
                                 <button
                                     key={name}
@@ -222,16 +225,13 @@ export function ModelServerPanel() {
                             ))}
                         </div>
                         <span className="settings-hint">
-                            Applies the next time a chat model loads. The embedding model keeps its own backend.
-                            {installable.length > 0 && ` ${installable.join(', ')} downloads on first use.`}
+                            {t('settings.server.backendHint')}
+                            {installable.length > 0 && ` ${t('settings.server.installable', { names: installable.join(', ') })}`}
                         </span>
                     </>
                 )}
-                {notice && (
-                    <p className={notice.ok ? 'settings-ok' : 'settings-error'} role={notice.ok ? 'status' : 'alert'}>
-                        {notice.text}
-                    </p>
-                )}
+                {notice?.ok && <p className="settings-ok" role="status">{notice.text}</p>}
+                {notice && !notice.ok && <ErrorNotice message={notice.text} />}
             </div>
 
             <div className="settings-row">
@@ -239,7 +239,7 @@ export function ModelServerPanel() {
                 {chatIsLocalLlamacpp && (
                     <button type="button" className="btn-secondary" onClick={() => void reload()} disabled={reloading}>
                         {reloading ? <Loader2 size={13} className="spin" /> : null}
-                        Reload chat model now
+                        {t('settings.server.reload')}
                     </button>
                 )}
             </div>
