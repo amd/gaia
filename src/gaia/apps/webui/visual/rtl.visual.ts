@@ -70,6 +70,16 @@ const audit = (page: Page): Promise<string[]> =>
 
         if (document.documentElement.scrollWidth > innerWidth) problems.push('the page scrolls sideways');
 
+        // An <option> holds plain text, so the English hint in brackets can't be
+        // styled quietly there and its brackets scramble in rtl; use t.bare.
+        // The language picker names each language in English on purpose.
+        for (const option of document.querySelectorAll('option:not(#ui-language option)')) {
+            const text = option.textContent ?? '';
+            if (arabic.test(text) && /\([^)]*[A-Za-z]{3,}[^)]*\)/.test(text)) {
+                problems.push(`an <option> carries the English hint: "${text.trim().slice(0, 50)}"`);
+            }
+        }
+
         for (const el of document.querySelectorAll('body *')) {
             if (!shown(el)) continue;
             const box = el.getBoundingClientRect();
