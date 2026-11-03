@@ -10,6 +10,31 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **Reading text aloud no longer downloads a voice model mid-chat.**
+  `text_to_speech` used to pull Kokoro on first use; it now stops and asks you
+  to run `gaia download --agent talk` first. It also takes a `speed` (0.5-2.0),
+  defaults to the `af_bella` voice, writes only `.wav` files, and reads long
+  text in sentence-sized pieces joined into one file.
+- **A project's `.env` can only supply the Claude API key.** The sidecar reads
+  `ANTHROPIC_API_KEY` from a `.env` in its working directory, for its own
+  Claude calls, and ignores every other name there with one warning. Settings
+  such as `TAVILY_API_KEY` or `LEMONADE_BASE_URL` kept in a project's `.env`
+  now have to be exported in the launch environment. A sidecar run from a
+  source checkout still loads the `.env` at or above GAIA's install (the
+  repo's `.env`) in full, as before; the packaged binary has no install `.env`.
+- **On Gemma 4 E4B the agent stops offering features that model fails.** The
+  SQL scratchpad, email, image generation, and finding or installing skills
+  failed GAIA's agent evals on Gemma, and their 16 tool descriptions were read
+  on every step. On Gemma, on the GPU or the NPU, they are now left out, along
+  with the skills built on them; larger models keep everything.
+  `GAIA_FEATURE_TIER=full` or `compact` forces one set for any model.
+- **Gemma 4 E2B on the NPU answers instead of showing an empty `json` block.**
+  The agent sent it tools as JSON in text, and its reply, wrapped in a code
+  fence, reached the chat as a bare "```json" (#6008). It now gets them as
+  native tool calls, which FastFlowLM 1.0.7 serves.
+- **Docs name the terminal UI binary correctly.** README, SPEC and SKILL said
+  a core install runs it as `gaia tui`; the binary is `gaia-tui`, and the
+  Python `gaia` CLI rejects `gaia tui`.
 - **The agent ships as one Python package.** `ChatAgent`, the class the agent
   builds on, moved into `gaia-agent-gaia` (`gaia_agent.chat_agent`), so the
   binary and a pip install no longer need `gaia-agent-chat`. Prompts and tools
@@ -17,11 +42,33 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   `chat`, `doc` or `file` agents get this agent instead; Agent UI chats saved
   under them stay read-only. MCP settings saved for `installed:chat` no
   longer apply (#6099).
+- **The binary ships no GPL or AGPL code.** PDF rendering and image
+  extraction moved from PyMuPDF (AGPL-3.0) to pypdfium2 (Apache-2.0 /
+  BSD-3-Clause), so `run_python` scripts get `pypdfium2` in place of
+  `pymupdf`. The binary also stopped carrying PyInstaller's own Python package,
+  GNU Readline and GNU dbm; scripts that `import readline` now get an
+  `ImportError`, and `shelve`/`dbm` keep working on `dbm.dumb`. The release
+  build fails if any of them come back.
 - **Reading a web page no longer dead-ends as early.** When a page splits a
   multi-word `fetch_page(find=...)` phrase across a table or sentence, the agent
   gets a labelled passage holding all its words instead of "no occurrence". A
   page with several links says how to list them, and `open_url` defers to the
   enforced network policy rather than having the model refuse on its own.
+- **With Claude, the agent follows a repository's own instructions.** Started in
+  a repository, a Claude model gets the project's `CLAUDE.md` / `AGENTS.md` in
+  its prompt and its `.claude/skills` in the skill list, as in Claude Code. Other
+  models get the prompt they had before, because they scored no better with it
+  and paid for it in tokens. `gaia config set project_context full|off|auto`
+  changes the choice.
+
+### For integrators: contract 2.27
+
+- **A session's tools can be listed** (contract **2.27**).
+  `GET /v1/gaia/sessions/{session_id}/tools` returns the tools the session's
+  agent can call now, as `{ name, description, category }`, skills loaded so
+  far included. The Agent UI shows them in the chat's Agent info. An unknown
+  session is a `404`.
+
 ### For integrators: contract 2.26
 
 - **"Always" answers can be listed and revoked** (contract **2.26**).
@@ -33,9 +80,59 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   own. An unknown session or key is a `404`.
 - **`needs_confirmation` carries `always_label`** beside `always_scope`: the
   same grant in plain words (`editing notes.md`), when there is one.
+- **`GET /v1/gaia/skills` can return `"source": "claude-project"`** for a skill
+  in the `.claude/skills` of the project the agent works in. A host that groups
+  rows by `source` must show a value it does not know ungrouped rather than
+  drop it: an Agent UI from before this release hides these skills.
 
 ### Fixed
 
+- **Deleting a chat removes it from Memory.** The agent filed each Agent UI
+  chat's turns and tool calls under a random id, so a deleted chat stayed
+  readable in full under Memory > Advanced > Conversation history. It now
+  files them under the chat's id, and deleting the chat deletes them; what
+  GAIA learned about you stays under About you, and the Agent UI's delete
+  confirmation says so. A turn
+  still finishing when its chat is deleted files nothing, and skill learning
+  keeps reading work done in a chat after it was first learned from (#5931).
+- **Skill messages give commands that work and say what really happens.**
+  Installing a skill the agent already bundles now says the bundled copy is
+  the one that loads, instead of telling the model to load the install. The
+  commands GAIA names now run as written: `gaia skill import` gets
+  `--allow-experimental` for a skill that ships code, `gaia skill deltas
+  --drop-section` gets its `--scope`, and the nonexistent `gaia skill info
+  --remote` is replaced. The skills list no longer says a CLI such as `gh` is
+  refused until its skill loads (it asks you to approve each command), a
+  learned-change undo says it takes effect on the next start, and asking to
+  correct a skill that isn't loaded explains the lesson can be saved on your
+  next message. The docs no longer mention a `--skill-set` flag the agent
+  doesn't have.
+- **A printed test log no longer marks an answer verified.** A `run_python`
+  snippet that printed an old log with a pytest summary counted as a test run
+  (#4013). Python code now counts only when it runs a test runner itself:
+  `pytest.main()`, `unittest.main()`, or a launched process whose program is
+  the runner, such as `subprocess.run([sys.executable, '-m', 'pytest'])`,
+  `os.system('npm test')`, `sh -c 'pytest -q'` or `uv run pytest`. Reading a
+  log with `cat` or `type` does not count, whatever the log is named. A runner
+  reached only through an imported helper reads as unverified.
+- **A slide request gets a slide file, not a picture.** Asked for a slide or
+  deck, the agent ran Stable Diffusion and handed back a blurry image of one.
+  It now asks whether you want PowerPoint (.pptx) or HTML when you didn't say,
+  and builds nothing until you answer; then it builds that file.
+- **Image generation no longer reports an image it didn't make.** A server
+  reply with no image, an unreadable one, or a single flat colour (SDXL can
+  return an all-black frame) counted as success. Each is now an error naming
+  what came back, and success gives the saved file's path.
+- **A rate-limited page now says how long to wait.** `fetch_webpage` on an
+  HTTP 429 or 503 with `Retry-After` returns the wait as `retry_after` with a
+  hint not to fetch again before then. It returned only the status line, so
+  the agent re-fetched at once and could not tell the user when the limit
+  resets.
+- **One stray tool-call reply no longer triples a gateway model's token use.**
+  A gateway model that wrote its own tool-call markup once was moved to native
+  tool schemas (~12K more tokens per call) for every later session, so a single
+  DeepSeek reply in its own format cost every run after it. The switch now
+  lasts only for the session that wrote the markup.
 - **The doc profile names a search tool it has.** Its discovery rules told the
   model to start with `find_files`, which that profile does not register, so the
   first discovery step failed. They now name `search_file`, which it does
@@ -704,6 +801,21 @@ Released with GAIA 0.25.0, and requires it.
   watching, code indexing, and where screenshots, transcripts and exports are
   saved. A folder outside the scope gets the usual approval prompt, and a folder
   you approve is readable by document indexing too.
+- **Small file edits preserve the file's existing line endings** (#4864), so a
+  one-line change does not rewrite an entire LF or CRLF file in a noisy diff.
+- **Declining folder creation also blocks writes inside that folder** (#4857),
+  rather than letting the same rejected effect be retried through another tool.
+- **Mentioning image generation no longer causes an unsolicited image request**
+  (#4809). The agent only corrects an answer about an image when this turn
+  actually attempted image generation.
+- **Document summaries have enough output budget and fail loudly if still cut
+  off** (#4827), instead of presenting a partial summary as complete.
+- **PDFs with an empty owner password can be indexed** (#4734); PDFs that need
+  a real user password still return the existing actionable error.
+- **Large documents index in the background after the foreground wait budget**
+  (#4754), so a chat can continue instead of waiting for embedding to finish.
+- **The file-verification read-back stays internal to the turn** (#4719), so
+  answers do not expose offsets or other implementation bookkeeping.
 
 ### Added
 

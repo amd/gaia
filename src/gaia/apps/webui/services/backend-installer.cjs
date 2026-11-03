@@ -672,7 +672,7 @@ function isFileLockedError(output) {
 /**
  * Detect a transient network failure in `uv pip install` output so the
  * install stage can retry instead of failing the whole bootstrap. The
- * install stage downloads transitive deps (numpy, faiss, pymupdf, …) from
+ * install stage downloads transitive deps (numpy, faiss, pypdfium2, …) from
  * PyPI; a single mid-stream hiccup ("stream closed because of a broken pipe")
  * otherwise fails the entire backend install — and, in the release pipeline,
  * the whole AppImage smoke test that gates publishing.
@@ -1799,11 +1799,26 @@ async function installBackend(opts = {}) {
     GAIA_PYTHON_BIN,
   ];
   // Retry the install on transient PyPI/network failures. The transitive
-  // deps (numpy, faiss, pymupdf, …) are fetched live from PyPI even
+  // deps (numpy, faiss, pypdfium2, …) are fetched live from PyPI even
   // when the gaia wheel itself is local, so a single broken-pipe mid-download
   // would otherwise fail the whole bootstrap (and block a release). File-lock
   // failures (Windows os-error-32) are NOT retried — they need user action.
   let installResult;
+  if (!localWheel && isBackendPrefetched(version)) {
+    report(STAGES.INSTALL_PACKAGE, 0, `Installing ${pipPackage} from the downloaded update`);
+    const offline = await runCommand(
+      "uv",
+      ["pip", "install", pipPackage, "--offline", "--compile-bytecode", "--python", GAIA_PYTHON_BIN],
+      { stageLabel: "pip" }
+    );
+    fs.rmSync(_prefetchMarker(toPep440(version)), { force: true });
+    if (offline.code === 0) {
+      installResult = offline;
+    } else {
+      log(`The prefetched backend is no longer all in uv's cache (${_lastLines(offline)}) — installing from PyPI`);
+    }
+  }
+  const installedOffline = Boolean(installResult);
   let useNativeTls = false;
   let nativeTlsAttempted = false;
   // The TLS branch flips useNativeTls and `continue`s, consuming an iteration.
@@ -1811,7 +1826,7 @@ async function installBackend(opts = {}) {
   // so the promised --native-tls retry actually runs (issue #1693 review).
   for (
     let attempt = 1;
-    attempt <= INSTALL_MAX_ATTEMPTS || (useNativeTls && !nativeTlsAttempted);
+    !installedOffline && (attempt <= INSTALL_MAX_ATTEMPTS || (useNativeTls && !nativeTlsAttempted));
     attempt++
   ) {
     const attemptArgs = useNativeTls ? [...pipArgs, "--native-tls"] : pipArgs;
@@ -1871,6 +1886,14 @@ async function installBackend(opts = {}) {
           : "") +
         "Ask IT to install the proxy's root CA in your system's trusted certificate store, then relaunch GAIA. " +
         "See https://amd-gaia.ai/docs/quickstart#cli-install";
+    } else if (isTransientNetworkError(output)) {
+      // The log file keeps pip's output; the box says what to do about it.
+      throw new InstallError("GAIA couldn't reach the internet to finish installing.", {
+        stage: STAGES.INSTALL_PACKAGE,
+        code: installResult.code,
+        suggestion:
+          "Check your connection, then choose Retry. If it keeps failing, the log file below says why. Your chats and settings are safe.",
+      });
     } else {
       suggestion = `Try installing manually:\n  uv pip install ${pipPackage} --python ${
         IS_WINDOWS ? `${GAIA_VENV_DISPLAY}/Scripts/python.exe` : `${GAIA_VENV_DISPLAY}/bin/python`
@@ -1976,6 +1999,81 @@ async function installBackend(opts = {}) {
 
   setState(STATES.READY, { stage: null, version, installedVersion, ...setup });
   log("Backend install complete");
+}
+
+// ── Backend prefetch for an app update ──────────────────────────────────────
+
+const PREFETCH_DIR = path.join(GAIA_HOME, "cache", "backend-prefetch");
+
+function _prefetchMarker(pep440) {
+  return path.join(PREFETCH_DIR, `${pep440}.ready`);
+}
+
+/** True when an earlier prefetch left everything `version` needs in uv's cache. */
+function isBackendPrefetched(version) {
+  return Boolean(version) && fs.existsSync(_prefetchMarker(toPep440(version)));
+}
+
+/**
+ * Before an app update restarts, put the backend it will need into uv's cache
+ * by installing it into a throwaway environment. The first launch then
+ * installs offline, so it neither waits on nor depends on PyPI.
+ * Throws with uv's own words when the download fails.
+ */
+async function prefetchBackend(appVersion, { isPackaged } = {}) {
+  if (process.env.GAIA_LOCAL_WHEEL) {
+    log("GAIA_LOCAL_WHEEL is set: the next launch installs that wheel, so there is nothing to prefetch");
+    return;
+  }
+  const version = toPep440(appVersion);
+  const pipPackage = `amd-gaia[ui]==${version}`;
+  const workDir = path.join(PREFETCH_DIR, version);
+  const venv = path.join(workDir, "venv");
+  const python = IS_WINDOWS ? path.join(venv, "Scripts", "python.exe") : path.join(venv, "bin", "python");
+  log(`Prefetching ${pipPackage} for the update`);
+  await ensureUv({ isPackaged });
+  _removeScratchVenvs();
+  fs.mkdirSync(workDir, { recursive: true });
+  try {
+    const venvResult = await runCommand("uv", ["venv", venv, "--python", "3.12"], { stageLabel: "prefetch" });
+    if (venvResult.code !== 0) {
+      throw new Error(`uv venv exited ${venvResult.code}: ${_lastLines(venvResult)}`);
+    }
+    const args = ["pip", "install", pipPackage, "--refresh", "--python", python];
+    let result = await runCommand("uv", args, { stageLabel: "prefetch" });
+    if (result.code !== 0 && isTlsCertError(`${result.stdout || ""}\n${result.stderr || ""}`)) {
+      result = await runCommand("uv", [...args, "--native-tls"], { stageLabel: "prefetch" });
+    }
+    if (result.code !== 0) {
+      throw new Error(`Couldn't download ${pipPackage} (uv exit ${result.code}): ${_lastLines(result)}`);
+    }
+  } finally {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+  fs.writeFileSync(_prefetchMarker(version), new Date().toISOString());
+  log(`Prefetched ${pipPackage}: the next launch installs it offline`);
+}
+
+/** Scratch venvs a quit cut short; the .ready markers beside them stay. */
+function _removeScratchVenvs() {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(PREFETCH_DIR, { withFileTypes: true });
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) fs.rmSync(path.join(PREFETCH_DIR, entry.name), { recursive: true, force: true });
+  }
+}
+
+function _lastLines({ stdout, stderr }) {
+  return `${stdout || ""}\n${stderr || ""}`
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .slice(-5)
+    .join(" | ");
 }
 
 // ── Version-aware ensure ─────────────────────────────────────────────────────
@@ -2232,6 +2330,8 @@ module.exports = {
   ensureUv,
   installBackend,
   ensureBackend,
+  prefetchBackend,
+  isBackendPrefetched,
   getInstalledVersion,
   findGaiaBin,
   toPep440,

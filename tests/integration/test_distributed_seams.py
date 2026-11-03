@@ -188,12 +188,13 @@ def test_canonical_event_set_matches_translator_outputs():
 
     # The translator's producible types: the terminal set + every type its
     # per-event maps can emit. We assert the harness's set is exactly the frozen
-    # vocabulary (the seven, plus the additive-MINOR needs_input from #2469) and
+    # vocabulary (including the additive-MINOR needs_input and reasoning events)
     # that the translator never emits something outside it.
     assert CANONICAL_EVENT_TYPES == frozenset(
         {
             "status",
             "token",
+            "reasoning",
             "tool_call",
             "tool_result",
             "needs_confirmation",

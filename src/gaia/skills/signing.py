@@ -22,11 +22,11 @@ the highest tier it may claim:
 * signed by any other trusted key → ``community``
 * unsigned, unverifiable, or signed by an unknown key → ``experimental``
 
-There is deliberately **no bundled AMD root key**. The trust store is empty until
-an operator adds one, so out of the box no skill can reach ``verified`` — an
-honest floor rather than a placeholder key that would make the top tier look
-enforced when nothing anchors it. :mod:`gaia.skills.tiers` then collapses a
-skill's *claimed* tier down to what its signature earned.
+GAIA ships exactly one built-in trusted key, :data:`BUILTIN_TRUSTED_KEYS`: the
+AMD key the release pipeline signs ``hub/skills/*`` with, so a first-party skill
+installs from the hub with no trust setup. Every other key reaches the trust store
+only when an operator adds it. :mod:`gaia.skills.tiers` then collapses a skill's
+*claimed* tier down to what its signature earned.
 """
 
 from __future__ import annotations
@@ -65,6 +65,18 @@ _ALGORITHM = "ed25519"
 ROLE_AMD = "amd"
 ROLE_PUBLISHER = "publisher"
 _ROLE_TIERS = {ROLE_AMD: "verified", ROLE_PUBLISHER: "community"}
+
+#: Keys every GAIA install trusts. The private half is the ``agent-publish``
+#: environment secret ``GAIA_SKILL_SIGNING_KEY``; rotating it means shipping a
+#: release with the new public key before the old one is dropped.
+BUILTIN_TRUSTED_KEYS: dict[str, dict[str, str]] = {
+    "32197c4382b36336fa69e041750dd0d9": {
+        "key_id": "32197c4382b36336fa69e041750dd0d9",
+        "public_key": "w3ZHTD39nLB2KARki3q8sQ+mxjWwUQVlapL2ZdUpqiw=",
+        "publisher": "AMD",
+        "role": ROLE_AMD,
+    },
+}
 
 _DOCS = "https://amd-gaia.ai/docs/plans/skill-format#security-tiers"
 
@@ -514,9 +526,8 @@ class TrustStore:
           ]
         }
 
-    An absent file is an **empty** store, not an error: a machine that trusts
-    nobody yet installs everything at ``experimental``, which is the correct
-    conservative floor. There is no bundled AMD key — see the module docstring.
+    An absent file is an **empty** store, not an error. :data:`BUILTIN_TRUSTED_KEYS`
+    are trusted on top of it and are never written to the file.
     """
 
     entries: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -566,7 +577,7 @@ class TrustStore:
 
     def role_for(self, identifier: str) -> str:
         """Trust role of *identifier*, or "" when the key is unknown."""
-        entry = self.entries.get(identifier)
+        entry = self.entries.get(identifier) or BUILTIN_TRUSTED_KEYS.get(identifier)
         return str(entry["role"]) if entry else ""
 
     def add(

@@ -43,7 +43,7 @@ from gaia.skills.format import (
     SkillTool,
 )
 from gaia.skills.lock import forget_skill
-from gaia.skills.manager import SkillManager
+from gaia.skills.manager import SkillManager, default_project_dir
 from gaia.skills.migrate import (
     VENDORS,
     MigrationOutcome,
@@ -106,7 +106,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--root",
         default=None,
         help="Only show skills from this discovery root "
-        "(agent-bundled | user | claude-import)",
+        "(agent-bundled | user | claude-project | claude-import)",
     )
 
     p_info = sub.add_parser("info", help="Show one skill's manifest in detail")
@@ -208,6 +208,12 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="Replace an existing skill of the same name",
     )
     p_migrate.add_argument(
+        "--allow-experimental",
+        action="store_true",
+        help=f"Required to migrate a skill that ships code ({SKILL_TOOLS_FILENAME} "
+        "or scripts/); that code runs in your agent's process",
+    )
+    p_migrate.add_argument(
         "--dry-run",
         action="store_true",
         help="Report what would be migrated without writing anything",
@@ -303,7 +309,7 @@ def _add_marketplace_subparsers(sub: argparse._SubParsersAction) -> None:
         "search", help="Search the Agent Hub's skills lane for a published skill"
     )
     p_search.add_argument(
-        "query", nargs="?", default="", help="Substring to match (omit to list all)"
+        "query", nargs="?", default="", help="Words to match (omit to list all)"
     )
     p_search.add_argument(
         "--json",
@@ -351,7 +357,8 @@ def _add_marketplace_subparsers(sub: argparse._SubParsersAction) -> None:
             "tracks that are gone. Exits "
             f"{EXIT_INVALID} when anything differs, {EXIT_OK} when the lock and "
             "the disk agree. Untracked skills are expected right after "
-            "'gaia skill create' / 'migrate' — --relock records them."
+            "'gaia skill create' — --relock records them; until then they are "
+            "held to the experimental tier's permission ceiling."
         ),
     )
     lock_mode = p_lock.add_mutually_exclusive_group()
@@ -503,7 +510,7 @@ def handle(args: argparse.Namespace) -> int:
 
 
 def _manager() -> SkillManager:
-    return SkillManager()
+    return SkillManager(project_dir=default_project_dir())
 
 
 def _handle_list(args: argparse.Namespace) -> int:
@@ -715,8 +722,9 @@ def _handle_create(args: argparse.Namespace) -> int:
 
 
 def _handle_import(args: argparse.Namespace) -> int:
-    from gaia.skills.capture import import_bundle
+    from gaia.skills.capture import import_bundle, refuse_hub_url
 
+    refuse_hub_url(args.source)
     with tempfile.TemporaryDirectory(prefix="gaia-skill-import-") as tmp:
         source_dir = _materialize_source(args.source, Path(tmp))
         result = import_bundle(
@@ -898,7 +906,12 @@ def _handle_migrate(args: argparse.Namespace) -> int:
             if not outcome.migrated:
                 continue
             try:
-                target = install_migrated(outcome, destination, force=args.force)
+                target = install_migrated(
+                    outcome,
+                    destination,
+                    force=args.force,
+                    allow_experimental=getattr(args, "allow_experimental", False),
+                )
             except SkillError as exc:
                 # One collision must not hide the report for the rest of a batch.
                 # Tracked apart from `blockers`: the skill migrated fine, it just
@@ -954,10 +967,12 @@ def _handle_migrate(args: argparse.Namespace) -> int:
             return EXIT_INVALID
     if refused:
         print(
-            f"\n{len(refused)} skill(s) could not be migrated (see ✗ above). v1 accepts "
-            "instruction-only and connector-backed skills; a skill needing local "
-            "shell, filesystem, database, desktop, or env access is refused rather "
-            "than silently stripped of the permission.",
+            f"\n{len(refused)} skill(s) could not be migrated (see ✗ above). A "
+            "migrated skill lands at the experimental tier and gets the same checks "
+            "as 'gaia skill import', so a skill needing a CLI, files, or another "
+            "capability above that tier is refused rather than silently stripped "
+            "of the permission. Install a signed copy from the hub to get it at a "
+            "higher tier.",
             file=sys.stderr,
         )
         return EXIT_INVALID
@@ -1248,7 +1263,7 @@ def _handle_keygen(args: argparse.Namespace) -> int:
 
 
 def _handle_trust(args: argparse.Namespace) -> int:
-    from gaia.skills.signing import TrustStore
+    from gaia.skills.signing import BUILTIN_TRUSTED_KEYS, TrustStore
 
     action = getattr(args, "trust_action", None)
     if action is None:
@@ -1261,20 +1276,20 @@ def _handle_trust(args: argparse.Namespace) -> int:
     store = TrustStore.load(root)
 
     if action == "list":
-        if not store.entries:
-            print("No trusted signing keys.")
-            print(
-                f"  Every skill therefore installs at '{LOWEST_TIER}'. Trust a "
-                "publisher's public key with: gaia skill trust add <key>"
-            )
-            return EXIT_OK
         print(f"{'KEY ID':<34} {'ROLE':<11} {'ATTESTS':<13} PUBLISHER")
-        for entry in store.entries.values():
-            attests = "verified" if entry["role"] == ROLE_AMD else "community"
-            print(
-                f"{entry['key_id']:<34} {entry['role']:<11} {attests:<13} "
-                f"{entry.get('publisher') or '-'}"
-            )
+        builtin = {
+            k: v for k, v in BUILTIN_TRUSTED_KEYS.items() if k not in store.entries
+        }
+        for source, entries in (("built-in", builtin), ("", store.entries)):
+            for entry in entries.values():
+                attests = "verified" if entry["role"] == ROLE_AMD else "community"
+                publisher = entry.get("publisher") or "-"
+                if source:
+                    publisher = f"{publisher} ({source})"
+                print(
+                    f"{entry['key_id']:<34} {entry['role']:<11} {attests:<13} "
+                    f"{publisher}"
+                )
         return EXIT_OK
 
     if action == "add":
@@ -1291,6 +1306,13 @@ def _handle_trust(args: argparse.Namespace) -> int:
         print(f"   Trust store: {store.path}")
         return EXIT_OK
 
+    if args.key_id in BUILTIN_TRUSTED_KEYS and args.key_id not in store.entries:
+        sys.stderr.write(
+            f"❌ Key {args.key_id} is built into GAIA (it signs the skills GAIA "
+            "publishes), so it cannot be removed from the trust store. To stop "
+            "using a skill signed by it, run 'gaia skill remove <name>'.\n"
+        )
+        return EXIT_USAGE
     if not store.remove(args.key_id):
         sys.stderr.write(
             f"❌ Key {args.key_id} is not in the trust store at {store.path}. List "
@@ -1377,6 +1399,17 @@ def _download(url: str, destination: Path) -> Path:
             "not https. Ask the publisher for an https download link, or download "
             "the .zip yourself and pass its local path."
         )
+
+    final_url = str(response.url)
+    if final_url != url:
+        from gaia.skills.capture import refuse_hub_url
+
+        # A redirect can land on the hub, same as capture's fetch.
+        try:
+            refuse_hub_url(final_url)
+        except SkillError:
+            response.close()
+            raise
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("wb") as handle:

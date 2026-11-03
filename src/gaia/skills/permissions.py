@@ -246,7 +246,7 @@ def refuse_unbridged_permissions(
             f"binaries: {', '.join(sorted(BINARY_POLICIES)) or '(none)'}. The "
             "sandbox that would contain unrestricted shell is deferred to a later "
             f"phase. See {FORMAT_DOCS_URL}#permission-model and "
-            "https://github.com/amd/gaia/issues/1019 (Phase 2)."
+            "https://github.com/amd/gaia/issues/2863."
         )
     raise SkillPermissionError(
         f"Skill '{skill_name}' declares local-capability permission(s): {declared}. "
@@ -258,7 +258,7 @@ def refuse_unbridged_permissions(
         "To load it now, drop those permissions and use the agent's own tools for "
         "local access, or wait for the permission sandbox. "
         f"See {FORMAT_DOCS_URL}#permission-model and "
-        "https://github.com/amd/gaia/issues/1019 (Phase 2)."
+        "https://github.com/amd/gaia/issues/2863."
     )
 
 

@@ -22,12 +22,12 @@ const SEMVER_RE =
 
 // go/typescript admit the two shipped non-agent packages: the Go terminal hub
 // and the Electron Agent UI. Keep in lock-step with manifest.py.
-const VALID_LANGUAGES = new Set(["python", "cpp", "go", "typescript"]);
+export const VALID_LANGUAGES = new Set(["python", "cpp", "go", "typescript"]);
 const VALID_SECURITY_TIERS = new Set(["verified", "community", "experimental"]);
 const DEFAULT_SECURITY_TIER = "experimental";
 // Multi-component discriminator (#1716). Defaults to "agent" so existing
 // agent-only manifests keep validating unchanged.
-const VALID_TYPES = new Set(["agent", "app", "component"]);
+export const VALID_TYPES = new Set(["agent", "app", "component"]);
 const DEFAULT_TYPE = "agent";
 const VALID_PLATFORMS = new Set([
   "win-x64",

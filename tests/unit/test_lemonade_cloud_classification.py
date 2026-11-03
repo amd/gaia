@@ -235,7 +235,7 @@ class TestToolCalling:
         """The change must be strictly additive for every local id."""
         record_cloud_models(CATALOG)
         assert is_tool_calling_model(LOCAL_MODEL) is True
-        assert is_tool_calling_model("gemma4-it-e2b-FLM") is False
+        assert is_tool_calling_model("embed-gemma-300m-FLM") is False
         assert is_tool_calling_model("Some-Unknown-GGUF") is True
         assert is_tool_calling_model(None) is False
 

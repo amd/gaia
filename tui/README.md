@@ -340,8 +340,8 @@ that their agent-side context is unchanged, because their protocol has no reset.
 ## The `tui` prefix
 
 A leading `tui` word is accepted and dropped — `gaia-tui tui status` and
-`gaia-tui status` are the same command — so the `gaia tui …` form used
-elsewhere in the docs keeps working.
+`gaia-tui status` are the same command. It exists for older docs and scripts
+that spell the binary `gaia tui …`; new ones should use `gaia-tui`.
 
 ## Contributing: colours
 

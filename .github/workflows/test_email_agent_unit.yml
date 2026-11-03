@@ -93,7 +93,7 @@ on:
       - 'tests/fixtures/eval_baselines/gaia-flagship-gemma-stx/**'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - 'hub/agents/email/python/**'
       - 'hub/agents/email/npm/**'
