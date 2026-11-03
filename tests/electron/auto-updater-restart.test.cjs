@@ -466,6 +466,19 @@ describe("a silent install that fails", () => {
     expect(mockUpdater.quitAndInstall).toHaveBeenCalledWith(false, true);
   });
 
+  test("a failed install is reported once, and the launch after installs silently again", async () => {
+    failedLastTime();
+    initUpdater({ confirmRestart: async () => true });
+    expect(fs.existsSync(attemptFile())).toBe(false);
+    loaded.pop().destroy();
+    mockUpdater.removeAllListeners();
+    const m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().installFailed).toBeNull();
+    await finishDownload();
+    await clickRestartChip();
+    expect(mockUpdater.quitAndInstall).toHaveBeenCalledWith(true, true);
+  });
+
   test("a launch on a different version counts as installed and forgets the attempt", async () => {
     failedLastTime({ from: "0.24.0", target: "0.25.0" });
     const m = initUpdater({ confirmRestart: async () => true });

@@ -1263,6 +1263,12 @@ function _readInstallOutcome() {
     }
   }
   log("error", `GAIA ${attempt.target} didn't install; still on ${attempt.from}`);
+  // Report the failure once: a stale attempt would keep install-on-quit off for good.
+  try {
+    fs.rmSync(INSTALL_ATTEMPT_PATH, { force: true });
+  } catch (err) {
+    log("warn", "Couldn't clear the failed update attempt:", err && err.message);
+  }
 }
 
 /** The quit path's check: a quit can't wait for the async one. */
