@@ -1308,6 +1308,66 @@ _TOOL_CALL_MARKUP_PATTERN = re.compile(
     r"<invoke\s+name\s*=|<parameter\s+name\s*=|\{\s*\"tool\"\s*:"
 )
 _ENVELOPE_KEYS = ("thought", "goal", "tool", "tool_args", "plan")
+# "Index my reports folder", "please re-index ~/docs": the verb opens a clause
+# and takes a path or a folder/file object, so "index.html" or "S&P 500 index"
+# never count.
+_INDEX_REQUEST_PATTERN = re.compile(
+    r"(?:^|[.!?;:,\n]|\b(?:please|kindly|and|then|also|now|first|just|go ahead and"
+    r"|can you|could you|would you|will you|i want you to|i'd like you to"
+    r"|i need you to))\s*"
+    r"(?:re-?)?index\s+"
+    r"(?:(?:all|all of|everything in|the|my|this|that|these|those|our|every)\s+)*"
+    r"(?:[~./\\]|[a-z]:[\\/]|it\b|them\b"
+    r"|(?:folders?|director(?:y|ies)|files?|documents?|docs|reports?|pdfs?)\b"
+    r"|[\w.-]+\s+(?:folders?|director(?:y|ies)|files?|documents?|docs|reports?|pdfs?)\b)",
+    re.IGNORECASE,
+)
+_NEGATED_BEFORE_PATTERN = re.compile(
+    r"\b(?:don['’]?t|do not|never|not|no need to|without),?\s+"
+    r"(?:(?!(?:just|instead|but|rather|simply)\b)[\w'’]+,?\s+){0,3}$",
+    re.IGNORECASE,
+)
+# A yes/no permission question about indexing, e.g. "Should I index it?".
+_ASKS_TO_INDEX_PATTERN = re.compile(
+    r"\b(?:should|shall|may|can) I (?:go ahead and |proceed (?:with|to) )?"
+    r"(?:re-?)?index(?:ing)?\b"
+    r"|\b(?:would you like|do you want) me to (?:go ahead and )?(?:re-?)?index\b",
+    re.IGNORECASE,
+)
+# A choice or a cost/scale warning is a real question for the user.
+_INDEX_QUESTION_NEEDS_USER_PATTERN = re.compile(
+    r"\bwhich\b|\bor\b|\d{1,3}(?:,\d{3})+|\b\d{4,}\b|\bminutes?\b|\bhours?\b"
+    r"|\btakes? (?:a )?(?:while|long|time)\b|\bthousands?\b|\b[gm]b\b"
+    r"|\bdisk space\b|\bslow\b",
+    re.IGNORECASE,
+)
+_SENTENCE_END_PATTERN = re.compile(r"[.!?](?=\s|$)|\n")
+_INDEX_TOOL_NAMES = ("index_directory", "index_document")
+
+
+def _requests_indexing(text: str) -> bool:
+    """Whether *text* tells the agent, un-negated, to index a folder or file."""
+    text = text or ""
+    for match in _INDEX_REQUEST_PATTERN.finditer(text):
+        verb = (
+            match.start()
+            + re.search(r"(?:re-?)?index\s", match.group(0), re.IGNORECASE).start()
+        )
+        sentence_start = max(text.rfind(p, 0, verb) for p in ".!?\n") + 1
+        if not _NEGATED_BEFORE_PATTERN.search(text[sentence_start:verb]):
+            return True
+    return False
+
+
+def _asks_permission_to_index(answer: str) -> bool:
+    """Whether *answer* is a bare yes/no question asking to index."""
+    match = _ASKS_TO_INDEX_PATTERN.search(answer or "")
+    if not match:
+        return False
+    end = _SENTENCE_END_PATTERN.search(answer, match.end())
+    if not end or end.group(0) != "?":
+        return False
+    return not _INDEX_QUESTION_NEEDS_USER_PATTERN.search(answer)
 
 
 def _holds_complete_text_call(response: str) -> bool:
@@ -5663,6 +5723,12 @@ Do NOT wrap conversational replies in JSON.
             )
         return schemas
 
+    def _user_asked_to_index(self, user_input: str) -> bool:
+        """True when this turn's message tells the agent to index something."""
+        return _requests_indexing(
+            getattr(self, "_original_user_input", None) or user_input
+        )
+
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """Decode a reply and reject tool arguments that cannot be executed."""
         parsed = self._decode_llm_response(response)
@@ -5943,6 +6009,7 @@ Do NOT wrap conversational replies in JSON.
                 "thought": "LLM returned empty response",
                 "goal": "Handle empty response error",
                 "answer": answer,
+                "empty_response": True,
             }
 
         response = response.strip()
@@ -11691,6 +11758,50 @@ Do NOT wrap conversational replies in JSON.
                 answer_candidate = _with_answer_beside_tool_calls(
                     parsed["answer"], answer_beside_tool_calls
                 )
+                # FastFlowLM occasionally ends a long prefill with zero tokens.
+                if (
+                    parsed.get("empty_response")
+                    and steps_taken < steps_limit - 1
+                    and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
+                ):
+                    unfinished_answer_reprompts += 1
+                    logger.warning(
+                        "[WORKFLOW] Empty model reply at step %d; asking again",
+                        steps_taken,
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your last reply was empty. Make the next tool "
+                                "call, or answer the user from the results above."
+                            ),
+                        }
+                    )
+                    continue
+                if (
+                    _asks_permission_to_index(answer_candidate)
+                    and self._user_asked_to_index(user_input)
+                    and any(name in self._tools_registry for name in _INDEX_TOOL_NAMES)
+                    and steps_taken < steps_limit - 1
+                    and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
+                ):
+                    unfinished_answer_reprompts += 1
+                    logger.warning(
+                        "[WORKFLOW] Asked permission to index what the user said "
+                        "to index; asking it to index"
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "The user already told you to index it. Call "
+                                "index_directory or index_document on that path "
+                                "now, then answer their question."
+                            ),
+                        }
+                    )
+                    continue
                 completion_gaps = []
                 # Guard against incomplete workflows: detect when the LLM outputs
                 # planning text ("Let me now search...") as a final answer after
