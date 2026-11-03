@@ -553,8 +553,9 @@ agent = GaiaAgent(config=GaiaAgentConfig(allowed_paths=["/home/me/Documents"]))
 ## 10. Skills — one always-on, the rest opt-in
 
 The agent is built to host **Agent Skills** (short playbooks loaded into its own
-prompt, grouped into named sets, one set active per launch), and its bundled
-skill directory is the highest-precedence discovery root.
+prompt, mid-session through `load_skill`), and its bundled skill directory is
+the highest-precedence discovery root. Skills can be grouped into named sets,
+but none ship today — see below.
 
 Loaded skills are **not** all resident every turn: each turn the agent embeds
 the query against every loaded skill's description and renders only the
@@ -573,7 +574,7 @@ turn — budget for it. It is not a task recipe but the agent's honesty floor: d
 not claim work you did not do, do not present empty output as a result, do not
 substitute a near-miss and report success. Those failures corrupt an answer
 whatever the task is, which is why it cannot live in an opt-in bundle. It
-declares no tools, and its body measures 790 tokens (tiktoken `cl100k`).
+declares no tools, and its body measures 789 tokens (tiktoken `cl100k`).
 
 **`document-extract` ships bundled but not enabled.** `gaia-voice` routes a
 request for every item in a document to it, and it drives
@@ -729,7 +730,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.27","agentVersion":"0.3.1"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.27","agentVersion":"0.3.3"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \

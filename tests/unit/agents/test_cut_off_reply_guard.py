@@ -235,6 +235,21 @@ def test_complete_streamed_reply_is_not_reprompted(agent):
     assert _final(result) == answer
 
 
+def test_empty_cut_off_reply_is_continued(agent):
+    # Claude returns "" with finish_reason "length" when thinking used the budget.
+    sent = _stub_chat(
+        agent,
+        ("", "length"),
+        ("gfx90a is the MI200 series.", "stop"),
+    )
+
+    result = agent.process_query("What about gfx90a?", max_steps=10)
+
+    assert len(sent) == 2
+    assert "cut off at the output-token limit" in sent[1][-1]["content"]
+    assert _final(result) == "gfx90a is the MI200 series."
+
+
 def test_repeated_cut_offs_end_with_an_honest_failure(agent):
     replies = [(TR8319_CB_REPLY, "length")] * (_MAX_CUT_OFF_CONTINUATIONS + 3)
     sent = _stub_chat(agent, *replies)

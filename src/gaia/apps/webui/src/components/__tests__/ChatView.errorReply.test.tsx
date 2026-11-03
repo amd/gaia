@@ -82,6 +82,8 @@ beforeEach(() => {
         isLoadingMessages: false,
         pendingPrompt: null,
         systemStatus: null,
+        messageQueues: {},
+        pendingDeleteIds: [],
     });
 });
 
@@ -369,5 +371,30 @@ describe('Try again never deletes an answer written since the failure', () => {
 
         await waitFor(() => expect(useChatStore.getState().messageQueues[SESSION.id]?.map((m) => m.text)).toEqual(['summarize the report']));
         expect(server).toEqual([]);
+    });
+
+    it('does not queue the question again when the chat is deleted mid-delete', async () => {
+        await sendAndFail(new Error('Lemonade returned 500'));
+        let release!: () => void;
+        const gate = new Promise<void>((r) => { release = r; });
+        const realDelete = mockedApi.deleteMessagesFrom.getMockImplementation()!;
+        mockedApi.deleteMessagesFrom.mockImplementationOnce(async (sid, id) => {
+            await gate;
+            return realDelete(sid, id);
+        });
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+        });
+        await waitFor(() => expect(mockedApi.deleteMessagesFrom).toHaveBeenCalledTimes(1));
+        await act(async () => {
+            useChatStore.getState().removeSession(SESSION.id);
+            release();
+        });
+
+        await waitFor(() => expect(server).toEqual([]));
+        await act(async () => { await Promise.resolve(); });
+        expect(useChatStore.getState().messageQueues[SESSION.id]).toBeUndefined();
+        expect(sends).toHaveLength(1);
     });
 });

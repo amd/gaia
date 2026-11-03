@@ -1192,6 +1192,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     closeStoppedTurnLocallyRef.current?.();
                     return;
                 }
+                // This view is gone; the next view of this chat re-attaches the run itself.
+                if (interrupted && !mountedRef.current) return;
                 // A dead connection is not a failed turn: re-attach, which replays the run so far.
                 if (interrupted && !doneHandled && !isStale() && reconnectsRef.current < MAX_STREAM_RECONNECTS) {
                     const attempt = ++reconnectsRef.current;
@@ -1200,7 +1202,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     useChatStore.getState().setLiveStatus(`${RECONNECTING_PREFIX} (attempt ${attempt} of ${MAX_STREAM_RECONNECTS})…`);
                     const reattach = () => {
                         reconnectTimerRef.current = null;
-                        if (isStale() || stopRequestedRef.current) return;
+                        if (!mountedRef.current || isStale() || stopRequestedRef.current) return;
                         sendMessageRef.current(undefined, { attach: true, reconnect: attempt });
                     };
                     if (delay > 0) reconnectTimerRef.current = setTimeout(reattach, delay);
@@ -1375,8 +1377,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
             }
             if (row) await api.deleteMessagesFrom(sessionId, row.id);
             if (isStale()) {
-                // The question is gone from the server; the background dispatcher asks it again.
-                setQueue((q) => messageQueue.enqueue(q, text, 'queued'));
+                // The question is gone from the server; the background dispatcher asks it again,
+                // unless the chat itself was deleted meanwhile.
+                const { sessions, pendingDeleteIds } = useChatStore.getState();
+                if (sessions.some((s) => s.id === sessionId) && !pendingDeleteIds.includes(sessionId)) {
+                    setQueue((q) => messageQueue.enqueue(q, text, 'queued'));
+                }
                 return;
             }
         } catch (err) {

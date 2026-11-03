@@ -254,6 +254,25 @@ def test_read_prompt_reads_and_strips_stdin(monkeypatch):
     assert print_mode.read_prompt(print_mode.READ_STDIN) == "line one\nline two"
 
 
+def test_read_prompt_decodes_raw_stdin_as_utf8_and_strips_bom(monkeypatch):
+    import io as _io
+
+    raw = _io.BytesIO("\ufeffcafé 日本 🎉\n".encode("utf-8"))
+    stdin = _io.TextIOWrapper(raw, encoding="cp1252")
+    monkeypatch.setattr(sys, "stdin", stdin)
+    assert print_mode.read_prompt(print_mode.READ_STDIN) == "café 日本 🎉"
+
+
+def test_read_prompt_rejects_non_utf8_raw_stdin(monkeypatch):
+    import io as _io
+
+    raw = _io.BytesIO(b"\xff\xfehello")
+    stdin = _io.TextIOWrapper(raw, encoding="cp1252")
+    monkeypatch.setattr(sys, "stdin", stdin)
+    with pytest.raises(ValueError, match="UTF-8"):
+        print_mode.read_prompt(print_mode.READ_STDIN)
+
+
 @pytest.mark.parametrize("prompt", ["", "   "])
 def test_an_empty_prompt_is_refused_without_touching_stdin(monkeypatch, prompt):
     # A stdin that never closes: reading it is the hang this guards against.
