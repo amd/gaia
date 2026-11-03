@@ -16,9 +16,10 @@ import (
 // DaemonInfo is what the readiness screen needs to know about a live daemon.
 // It never carries the client token.
 type DaemonInfo struct {
-	PID        int
-	Port       int
-	APIVersion string
+	PID         int
+	Port        int
+	APIVersion  string
+	GaiaVersion string
 }
 
 // Response is a buffered answer from the daemon or a relayed sidecar route.
@@ -113,7 +114,12 @@ func verify(inst *daemon.Instance) error {
 }
 
 func info(inst *daemon.Instance) DaemonInfo {
-	return DaemonInfo{PID: inst.PID, Port: inst.Port, APIVersion: inst.APIVersion}
+	return DaemonInfo{
+		PID:         inst.PID,
+		Port:        inst.Port,
+		APIVersion:  inst.APIVersion,
+		GaiaVersion: inst.GaiaVersion,
+	}
 }
 
 func (t *daemonTransport) Attach(ctx context.Context) (DaemonInfo, error) {

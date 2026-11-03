@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from gaia.config import GaiaConfig, gaia_home
 from gaia.utils.process_owner import current_owner, owner_is_gone
+from gaia.utils.sqlite_wal import enable_wal
 
 from .chat_search import fold, snippet
 
@@ -235,6 +236,58 @@ CREATE INDEX IF NOT EXISTS idx_schedule_results_task
     ON schedule_results(task_id, executed_at DESC);
 """
 
+_CHAT_SCHEMA_OBJECTS = frozenset(
+    {
+        "cloud_spend",
+        "documents",
+        "idx_cloud_spend_month",
+        "idx_documents_hash",
+        "idx_messages_session",
+        "idx_messages_unfolded",
+        "idx_schedule_results_task",
+        "idx_session_docs",
+        "idx_unfinished_turns_owner",
+        "messages",
+        "messages_search_stale",
+        "schedule_results",
+        "scheduled_tasks",
+        "session_documents",
+        "session_environment",
+        "sessions",
+        "settings",
+        "unfinished_turns",
+    }
+)
+
+_CHAT_SCHEMA_COLUMNS = {
+    "documents": {
+        "error_kind",
+        "file_mtime",
+        "indexing_owner",
+        "indexing_status",
+        "last_error",
+    },
+    "messages": {
+        "agent_steps",
+        "inference_stats",
+        "model_messages",
+        "search_text",
+        "turn_summary",
+    },
+    "scheduled_tasks": {"last_error"},
+    "sessions": {
+        "agent_type",
+        "device",
+        "kind",
+        "mail_provider",
+        "pinned",
+        "private",
+        "title_is_custom",
+        "unread",
+        "last_run_status",
+    },
+}
+
 
 class ChatDatabase:
     """SQLite database for Agent UI sessions, messages, and documents."""
@@ -258,15 +311,53 @@ class ChatDatabase:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
-        self._conn.execute("PRAGMA journal_mode = WAL")
+        self._conn.execute("PRAGMA busy_timeout = 5000")
+        enable_wal(self._conn)
+        self._schema_migration_active = False
         self._init_schema()
         logger.info("Chat database initialized: %s", db_path)
 
+    def _schema_is_current(self) -> bool:
+        """True when every current schema object and migrated column exists."""
+        names = {
+            row[0]
+            for row in self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"
+            )
+        }
+        if not _CHAT_SCHEMA_OBJECTS <= names:
+            return False
+        message_schema = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'"
+        ).fetchone()[0]
+        if "'autonomous'" not in message_schema:
+            return False
+        for table, expected_columns in _CHAT_SCHEMA_COLUMNS.items():
+            columns = {
+                row[1] for row in self._conn.execute(f"PRAGMA table_info({table})")
+            }
+            if not expected_columns <= columns:
+                return False
+        return True
+
     def _init_schema(self):
-        """Create tables if they don't exist and run migrations."""
-        self._conn.executescript(SCHEMA_SQL)
-        self._migrate()
-        self._migrate_autonomous_role()
+        """Create or upgrade the database under one cross-process write lock."""
+        if self._schema_is_current():
+            return
+        try:
+            # Schema creation and all legacy migrations must share one lock.
+            # Otherwise two fresh openers can both observe the old schema and
+            # race on the first ALTER TABLE.
+            self._conn.executescript("BEGIN IMMEDIATE;\n" + SCHEMA_SQL)
+            self._schema_migration_active = True
+            self._migrate()
+            self._migrate_autonomous_role()
+            self._conn.commit()
+        except BaseException:
+            self._conn.rollback()
+            raise
+        finally:
+            self._schema_migration_active = False
 
     def _migrate_autonomous_role(self) -> None:
         """Allow background turns while preserving the existing message table."""
@@ -301,8 +392,8 @@ class ChatDatabase:
                 "Dropping leftover messages_history_migration table before "
                 "re-running the messages role migration"
             )
-        with self._transaction():
-            self._conn.execute("BEGIN")
+
+        def migrate_messages_table() -> None:
             self._conn.execute("DROP TABLE IF EXISTS messages_history_migration")
             self._conn.execute(migrated)
             self._conn.execute(
@@ -319,6 +410,13 @@ class ChatDatabase:
                     "UPDATE sqlite_sequence SET seq = ? WHERE name = 'messages'",
                     (sequence[0],),
                 )
+
+        if getattr(self, "_schema_migration_active", False):
+            migrate_messages_table()
+        else:
+            with self._transaction():
+                self._conn.execute("BEGIN")
+                migrate_messages_table()
         logger.info("Migrated messages table: enabled autonomous history")
 
     def _ensure_settings_table(self):
@@ -327,7 +425,8 @@ class ChatDatabase:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             )""")
-        self._conn.commit()
+        if not getattr(self, "_schema_migration_active", False):
+            self._conn.commit()
 
     def _add_column(
         self,
@@ -341,13 +440,20 @@ class ChatDatabase:
         cols = {row[1] for row in self._conn.execute(f"PRAGMA table_info({table})")}
         if column in cols:
             return
+
+        def add_column() -> None:
+            self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+            if backfill:
+                self._conn.execute(backfill, params)
+
         try:
-            with self._transaction():
-                # Explicit BEGIN so the ALTER and its backfill commit together.
-                self._conn.execute("BEGIN")
-                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
-                if backfill:
-                    self._conn.execute(backfill, params)
+            if getattr(self, "_schema_migration_active", False):
+                add_column()
+            else:
+                with self._transaction():
+                    # Explicit BEGIN so the ALTER and its backfill commit together.
+                    self._conn.execute("BEGIN")
+                    add_column()
         except sqlite3.Error as e:
             raise RuntimeError(
                 f"Could not upgrade the chat database at {self._db_path}: adding "
@@ -423,7 +529,8 @@ class ChatDatabase:
         # Chat search: content folded for case and accents, filled lazily by
         # search_sessions. Any writer that edits content marks it stale.
         self._add_column("messages", "search_text", "TEXT")
-        with self._transaction():
+
+        def create_search_objects() -> None:
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_messages_unfolded "
                 "ON messages(id) WHERE search_text IS NULL"
@@ -434,6 +541,12 @@ class ChatDatabase:
                 "WHEN NEW.search_text IS OLD.search_text "
                 "BEGIN UPDATE messages SET search_text = NULL WHERE id = NEW.id; END"
             )
+
+        if getattr(self, "_schema_migration_active", False):
+            create_search_objects()
+        else:
+            with self._transaction():
+                create_search_objects()
 
     @property
     def db_path(self) -> str:
@@ -569,7 +682,7 @@ class ChatDatabase:
                 """SELECT s.*,
                           (SELECT COUNT(*) FROM messages WHERE session_id = s.id AND role != 'autonomous') as message_count
                    FROM sessions s
-                   ORDER BY s.updated_at DESC
+                   ORDER BY s.updated_at DESC, s.rowid DESC
                    LIMIT ? OFFSET ?""",
                 (limit, offset),
             ).fetchall()
@@ -619,7 +732,7 @@ class ChatDatabase:
         automated = "" if include_automated else " WHERE kind NOT IN (?, ?)"
         with self._transaction():
             sessions = self._conn.execute(
-                f"SELECT id, title FROM sessions{automated} ORDER BY updated_at DESC",
+                f"SELECT id, title FROM sessions{automated} ORDER BY updated_at DESC, rowid DESC",
                 () if include_automated else AUTOMATED_SESSION_KINDS,
             ).fetchall()
             first_hit = {
@@ -1407,9 +1520,29 @@ class ChatDatabase:
                 # Update last_accessed_at and chunk_count (if newly indexed
                 # count is higher, e.g. fixing a previous 0-chunk bug)
                 new_chunk_count = max(chunk_count, doc.get("chunk_count", 0))
+                # The file moved: follow it instead of keeping a dead path.
+                if (
+                    filepath != doc["filepath"]
+                    and not Path(doc["filepath"] or "").is_file()
+                    and Path(filepath).is_file()
+                ):
+                    doc["filename"], doc["filepath"] = filename, filepath
+                    if doc["indexing_status"] == "missing":
+                        doc["indexing_status"] = "complete"
                 self._conn.execute(
-                    "UPDATE documents SET last_accessed_at = ?, chunk_count = ?, file_mtime = ? WHERE id = ?",
-                    (now, new_chunk_count, file_mtime, doc["id"]),
+                    """UPDATE documents
+                       SET last_accessed_at = ?, chunk_count = ?, file_mtime = ?,
+                           filename = ?, filepath = ?, indexing_status = ?
+                       WHERE id = ?""",
+                    (
+                        now,
+                        new_chunk_count,
+                        file_mtime,
+                        doc["filename"],
+                        doc["filepath"],
+                        doc["indexing_status"],
+                        doc["id"],
+                    ),
                 )
                 self._conn.commit()
                 doc["chunk_count"] = new_chunk_count

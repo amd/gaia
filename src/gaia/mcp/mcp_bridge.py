@@ -35,6 +35,10 @@ from gaia.llm.lemonade_client import (  # pylint: disable=wrong-import-position
 )
 from gaia.logger import get_logger  # pylint: disable=wrong-import-position
 from gaia.mcp.ports import MCP_BRIDGE_PORT  # pylint: disable=wrong-import-position
+from gaia.mcp.protocol import (  # pylint: disable=wrong-import-position
+    MCP_PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
+)
 
 # pylint: enable=wrong-import-position
 
@@ -57,12 +61,6 @@ PUBLIC_PATHS = frozenset({"/health"})
 # Extra browser origins allowed to call the bridge (comma-separated). Loopback
 # origins are always allowed; everything else is refused, token or not.
 ALLOWED_ORIGINS_ENV_VAR = "GAIA_MCP_ALLOWED_ORIGINS"
-
-# Handshake-era MCP revisions; 2026-07-28 dropped `initialize`, so it is not offered.
-SUPPORTED_PROTOCOL_VERSIONS = frozenset(
-    {"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"}
-)
-MCP_PROTOCOL_VERSION = "2025-11-25"
 
 # How long a client may go silent while sending its request. It bounds socket
 # reads only, never the tool call, which can wait minutes on a busy Lemonade.
@@ -871,6 +869,9 @@ def build_parser():
 
 
 def main():
+    from gaia.logger import configure
+
+    configure()
     from gaia.login_path import apply_login_path
     from gaia.tls import use_os_trust_store
 

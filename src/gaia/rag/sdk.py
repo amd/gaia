@@ -10,6 +10,7 @@ import codecs
 import errno
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -17,9 +18,9 @@ import secrets
 import threading
 import time
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -49,8 +50,11 @@ from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
+    resident_vision_model,
+    resolve_default_vision_model,
 )
 from gaia.logger import get_logger
+from gaia.rag.arabic_text import extract_pdf_page_text, normalize_arabic_pdf_text
 from gaia.security import PathValidator
 from gaia.utils.document_formats import (
     UNSUPPORTED_DOCUMENTS,
@@ -65,6 +69,7 @@ from gaia.utils.file_lock import (
     write_bytes_atomic,
     write_text_atomic,
 )
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
 
 _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF8, "utf-8-sig"),
@@ -77,6 +82,106 @@ _TEXT_FALLBACK_ENCODINGS = ("utf-8", "cp1252", "latin-1")
 _TEXT_TRIED_ENCODINGS = ", ".join(
     dict.fromkeys([e for _, e in _TEXT_BOM_ENCODINGS] + list(_TEXT_FALLBACK_ENCODINGS))
 )
+
+
+#: Plain-text documents, read as text.
+TEXT_DOCUMENT_EXTENSIONS = frozenset(
+    {".txt", ".md", ".mdx", ".markdown", ".rst", ".log"}
+)
+
+#: Source, markup and config files, read as text for Q&A.
+CODE_EXTENSIONS = frozenset(
+    {
+        ".py",
+        ".pyw",
+        ".java",
+        ".cpp",
+        ".cc",
+        ".cxx",
+        ".hpp",
+        ".h",
+        ".c",
+        ".cs",
+        ".go",
+        ".rs",
+        ".rb",
+        ".php",
+        ".swift",
+        ".kt",
+        ".kts",
+        ".scala",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".mjs",
+        ".cjs",
+        ".vue",
+        ".svelte",
+        ".astro",
+        ".css",
+        ".scss",
+        ".sass",
+        ".less",
+        ".styl",
+        ".stylus",
+        ".html",
+        ".htm",
+        ".svg",
+        ".sh",
+        ".bash",
+        ".ps1",
+        ".r",
+        ".sql",
+        ".yaml",
+        ".yml",
+        ".xml",
+        ".toml",
+        ".ini",
+        ".cfg",
+        ".conf",
+        ".env",
+        ".properties",
+        ".gradle",
+        ".cmake",
+        ".mk",
+        ".make",
+    }
+)
+
+#: Formats with a dedicated extractor (PDF, Office, CSV, JSON, EPUB).
+STRUCTURED_DOCUMENT_EXTENSIONS = frozenset(
+    {".pdf", ".pptx", ".docx", ".xlsx", ".csv", ".json", ".epub"}
+)
+
+#: What a folder walk indexes. Images need the vision model, and *.env files
+#: hold secrets, so both are indexed only when picked one at a time.
+FOLDER_INDEX_EXTENSIONS = (
+    STRUCTURED_DOCUMENT_EXTENSIONS | TEXT_DOCUMENT_EXTENSIONS | CODE_EXTENSIONS
+) - {".env"}
+
+
+def folder_index_skip_reason(file_path) -> Optional[str]:
+    """Why a folder walk should skip *file_path*, or None when it is indexable."""
+    path = Path(file_path)
+    ext = path.suffix.lower()
+    if ext in FOLDER_INDEX_EXTENSIONS:
+        return None
+    if ext in UNSUPPORTED_DOCUMENTS:
+        return unsupported_document_message(path.name, ext)
+    if ext == ".env":
+        return (
+            ".env files usually hold secrets and are not indexed from a folder; "
+            "index the file on its own if it is safe to."
+        )
+    if ext in IMAGE_EXTENSIONS:
+        return (
+            f"{ext} images are read by the vision model and are not indexed "
+            "from a folder; index the image file on its own."
+        )
+    if not ext:
+        return "no file extension, so the document type is unknown"
+    return f"{ext} files are not a supported document type"
 
 
 def _decode_text_bytes(data: bytes) -> str:
@@ -129,6 +234,58 @@ class EmptyPDFError(PDFExtractionError):
     """
 
     status = "empty"
+
+
+class ImageExtractionError(ValueError):
+    """Raised when an image file cannot be read into text, with a remedy."""
+
+
+# Each page is one VLM call (seconds to tens of seconds), so a fax-sized TIFF is
+# fine and a 500-page archive is a mistake to stop early.
+MAX_IMAGE_PAGES = 50
+# Past this much text a page's images are logos and photos, not its content.
+IMAGE_PAGE_TEXT_LIMIT = 200
+
+
+def _flatten_for_vlm(img):
+    """Upright, opaque copy of *img*: EXIF rotation applied, alpha on white.
+
+    Image files only. PDF-embedded images are shown as the PDF places them, so
+    the PDF path must not rotate them by their own EXIF tag.
+    """
+    from PIL import Image, ImageOps  # pylint: disable=import-outside-toplevel
+
+    img = ImageOps.exif_transpose(img)
+    if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
+        # The VLM drops alpha, so a transparent background would read as black.
+        rgba = img.convert("RGBA")
+        white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        img = Image.alpha_composite(white, rgba).convert("RGB")
+    return img
+
+
+def _image_pages_for_vlm(img, file_name: str) -> list:
+    """The prepared VLM inputs for an opened image file, one per page."""
+    from PIL import ImageSequence  # pylint: disable=import-outside-toplevel
+
+    from gaia.rag.pdf_utils import (  # pylint: disable=import-outside-toplevel
+        prepare_pil_image_for_vlm,
+    )
+
+    if img.format != "TIFF":
+        return [prepare_pil_image_for_vlm(_flatten_for_vlm(img))]
+
+    page_count = getattr(img, "n_frames", 1)
+    if page_count > MAX_IMAGE_PAGES:
+        raise ImageExtractionError(
+            f"Cannot index image {file_name}: it has {page_count} pages, and GAIA "
+            f"reads at most {MAX_IMAGE_PAGES} pages from one image file.\n"
+            "Split the TIFF into smaller files and index each one."
+        )
+    return [
+        prepare_pil_image_for_vlm(_flatten_for_vlm(frame))
+        for frame in ImageSequence.Iterator(img)
+    ]
 
 
 class SpreadsheetReadError(ValueError):
@@ -287,12 +444,59 @@ def _cache_lock_target(cache_path: str) -> Path:
     return Path(cache_path).parent / _CACHE_LOCK_NAME
 
 
+# Letter ranges -> script name for document_scripts(); first match wins.
+_SCRIPT_RANGES = (
+    (
+        "Arabic",
+        (
+            (0x0600, 0x06FF),
+            (0x0750, 0x077F),
+            (0x08A0, 0x08FF),
+            (0xFB50, 0xFDFF),
+            (0xFE70, 0xFEFF),
+        ),
+    ),
+    ("Hebrew", ((0x0590, 0x05FF),)),
+    ("Cyrillic", ((0x0400, 0x04FF),)),
+    ("Devanagari", ((0x0900, 0x097F),)),
+    ("CJK", ((0x3040, 0x30FF), (0x4E00, 0x9FFF), (0xAC00, 0xD7AF))),
+)
+
+
+def _script_of(ch: str) -> Optional[str]:
+    """The script of a letter, "Latin" for ASCII/Latin letters, None for the rest."""
+    if not ch.isalpha():
+        return None
+    code = ord(ch)
+    if code < 0x0250:
+        return "Latin"
+    for name, ranges in _SCRIPT_RANGES:
+        if any(lo <= code <= hi for lo, hi in ranges):
+            return name
+    return None
+
+
+def text_scripts(text: str) -> List[str]:
+    """Writing systems that make up at least 10% of ``text``'s letters, largest first."""
+    counts: Dict[str, int] = {}
+    for ch in text:
+        script = _script_of(ch)
+        if script:
+            counts[script] = counts.get(script, 0) + 1
+    total = sum(counts.values())
+    return sorted(
+        (name for name, n in counts.items() if n / total >= 0.1),
+        key=lambda name: -counts[name],
+    )
+
+
 # Files the RAG cache writes: signed chunk caches, their sidecar signatures,
-# and extracted-text markdown. clear_cache() deletes nothing else.
+# saved vectors, and extracted-text markdown. clear_cache() deletes nothing else.
 _CACHE_OWNED_FILE = re.compile(
     r"^(?:[0-9a-f]{16}_[0-9a-f]{32}|[0-9a-f]{64}_notfound)(?:_[0-9a-f]{8})?"
     r"\.json(?:\.sig)?$"
     r"|_extracted\.md$"
+    r"|^vectors_[0-9a-f]{24}\.npy$"
 )
 
 
@@ -354,6 +558,111 @@ def default_rag_cache_dir() -> str:
 
 
 @dataclass
+class JsonLoaderConfig:
+    """Index each object of a JSON array as its own record.
+
+    Every chunk of a record starts with that record's ``metadata_fields`` as
+    ``key: value`` lines, so a retrieved chunk carries its citation.
+    """
+
+    #: Fields whose values are the searchable text, in order.
+    content_fields: List[str]
+    #: Fields copied onto every chunk of the record (id, title, url, ...).
+    metadata_fields: List[str] = field(default_factory=list)
+    #: Dotted path to the array of records; "" means the file is the array.
+    document_array_path: str = ""
+
+    def __post_init__(self):
+        if isinstance(self.content_fields, str) or not self.content_fields:
+            raise ValueError(
+                "JsonLoaderConfig.content_fields must be a non-empty list of "
+                "field names, e.g. ['bodyText', 'summary']."
+            )
+        if isinstance(self.metadata_fields, str):
+            raise ValueError(
+                "JsonLoaderConfig.metadata_fields must be a list of field names."
+            )
+
+
+_JSON_RECORD_MARKER = re.compile(r"^=== JSON record \d+ ===\n", re.MULTILINE)
+# Any content line that is exactly a marker, the last line included.
+_JSON_MARKER_LINE = re.compile(r"^(?==== JSON record \d+ ===$)", re.MULTILINE)
+
+
+def _json_to_text_lines(obj, indent: int = 0) -> List[str]:
+    """Render parsed JSON as indented ``key: value`` lines."""
+    lines = []
+    prefix = "  " * indent
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if isinstance(value, (dict, list)):
+                lines.append(f"{prefix}{key}:")
+                lines.extend(_json_to_text_lines(value, indent + 1))
+            else:
+                lines.append(f"{prefix}{key}: {value}")
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            if isinstance(item, (dict, list)):
+                lines.append(f"{prefix}Item {i + 1}:")
+                lines.extend(_json_to_text_lines(item, indent + 1))
+            else:
+                lines.append(f"{prefix}- {item}")
+    else:
+        lines.append(f"{prefix}{obj}")
+    return lines
+
+
+def _json_value_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (dict, list)):
+        return "\n".join(_json_to_text_lines(value)).strip()
+    return str(value)
+
+
+def _json_metadata_value(value) -> str:
+    """One-line form of a metadata value; a newline would end the header."""
+    if isinstance(value, list):
+        value = ", ".join(_json_value_text(v) for v in value)
+    elif isinstance(value, dict):
+        value = json.dumps(value, ensure_ascii=False)
+    return " ".join(_json_value_text(value).split())
+
+
+def _json_records(data, loader: JsonLoaderConfig, source: str) -> List[dict]:
+    """The record array *loader* points at inside *data*."""
+    node = data
+    walked = []
+    for key in [k for k in loader.document_array_path.split(".") if k]:
+        if not isinstance(node, dict) or key not in node:
+            where = ".".join(walked) or "the top level"
+            found = sorted(node) if isinstance(node, dict) else type(node).__name__
+            raise ValueError(
+                f"document_array_path '{loader.document_array_path}' not found in "
+                f"{source}: no key '{key}' at {where} (found: {found}). Fix "
+                "JsonLoaderConfig.document_array_path."
+            )
+        node = node[key]
+        walked.append(key)
+    if not isinstance(node, list):
+        where = loader.document_array_path or "the top level"
+        raise ValueError(
+            f"{source}: expected an array of records at {where}, found "
+            f"{type(node).__name__}. Set JsonLoaderConfig.document_array_path "
+            "to the array that holds the records."
+        )
+    for i, record in enumerate(node):
+        if not isinstance(record, dict):
+            raise ValueError(
+                f"{source}: record {i + 1} is a {type(record).__name__}, not an "
+                "object; JsonLoaderConfig needs an array of objects."
+            )
+    return node
+
+
+@dataclass
 class RAGConfig:
     """Configuration for RAG SDK."""
 
@@ -382,11 +691,13 @@ class RAGConfig:
         False  # Enable LLM-based intelligent chunking (requires LLM client)
     )
     # VLM settings (enabled if available, errors out if model can't be loaded)
-    vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF"
+    vlm_model: str = field(default_factory=resolve_default_vision_model)
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
     # Security settings
     allowed_paths: Optional[List[str]] = None
+    # Index each object of a JSON array as its own record (None: whole file)
+    json_loader: Optional[JsonLoaderConfig] = None
 
 
 @dataclass
@@ -499,6 +810,7 @@ class RAGSDK:
         # Per-file indexing: maps file paths to their chunk indices
         # This enables efficient per-file searches
         self.file_to_chunk_indices = {}  # {file_path: [chunk_idx1, chunk_idx2, ...]}
+        self._scripts_cache = {}  # {file_path: ((first_idx,), n_chunks), scripts)}
         self.chunk_to_file = {}  # {chunk_idx: file_path} for reverse lookup
 
         # Per-file FAISS indices and embeddings (CACHED for performance)
@@ -772,6 +1084,11 @@ class RAGSDK:
                 "embed_max_chars": EMBED_MAX_CHARS,
                 # Only when off, so existing caches keep their keys.
                 **({} if self.config.use_vlm else {"use_vlm": False}),
+                **(
+                    {"json_loader": asdict(self.config.json_loader)}
+                    if self.config.json_loader is not None
+                    else {}
+                ),
             },
             sort_keys=True,
         )
@@ -781,7 +1098,8 @@ class RAGSDK:
         """``<path hash>_<content hash>``: the shared stem of a document's cache files.
 
         The content hash (not mtime/size) makes same-size edits and sub-second
-        rewrites invalidate; the path hash keeps identical files apart. An
+        rewrites invalidate; the path hash names each path's own entry, though
+        :meth:`_cache_of_same_bytes` reuses another path's for identical bytes. An
         unreadable file gets a path-only ``<hash>_notfound`` key, and indexing
         then fails at extraction.
 
@@ -805,6 +1123,23 @@ class RAGSDK:
         path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
         return f"{path_hash}_{hasher.hexdigest()[:32]}"
 
+    def document_scripts(self, file_path: str) -> List[str]:
+        """Writing systems that make up at least 10% of an indexed file's letters.
+
+        Lets the agent search a document in its own language when the question
+        is asked in another (an English question over an Arabic report).
+        """
+        with self._state_lock:
+            indices = list(self.file_to_chunk_indices.get(file_path, []))
+            chunks = [self.chunks[i] for i in indices if i < len(self.chunks)]
+        key = (tuple(indices[:1]), len(chunks))
+        cached = self._scripts_cache.get(file_path)
+        if cached and cached[0] == key:
+            return list(cached[1])
+        scripts = text_scripts("".join(chunks))
+        self._scripts_cache[file_path] = (key, scripts)
+        return list(scripts)
+
     def _get_cache_path(self, file_path: str, content_key: Optional[str] = None) -> str:
         """Chunk-cache path: :meth:`_content_key` plus :meth:`_chunking_fingerprint`.
 
@@ -816,6 +1151,25 @@ class RAGSDK:
         return os.path.join(
             self.config.cache_dir, f"{key}_{self._chunking_fingerprint()}.json"
         )
+
+    def _cache_of_same_bytes(self, cache_path: str, content_key: str) -> str:
+        """``cache_path``, or the entry another path of these exact bytes left.
+
+        The library indexes an upload's temp copy and chats index the original,
+        so without this a chat reads every page again, images included.
+        """
+        if os.path.exists(cache_path):
+            return cache_path
+        content_hash = content_key.rsplit("_", 1)[-1]
+        if content_hash == "notfound":
+            return cache_path
+        suffix = f"_{content_hash}_{self._chunking_fingerprint()}.json"
+        try:
+            names = sorted(os.listdir(self.config.cache_dir))
+        except FileNotFoundError:
+            return cache_path
+        match = next((name for name in names if name.endswith(suffix)), None)
+        return os.path.join(self.config.cache_dir, match) if match else cache_path
 
     def _extracted_markdown_path(self, content_key: str) -> str:
         """Extracted text depends on content alone, so no chunking fingerprint."""
@@ -1191,6 +1545,7 @@ class RAGSDK:
             - num_pages: int
             - vlm_pages: int (number of pages enhanced with VLM)
             - total_images: int (total images processed)
+            - image_pages_skipped: int (pages whose images were left unread)
             - pdf_status: str ("readable", "degraded", "encrypted",
               "corrupted", "empty"). "degraded" means the document indexed but
               at least one page may be incomplete — see degraded_pages.
@@ -1261,13 +1616,17 @@ class RAGSDK:
             try:
                 from gaia.llm import VLMClient
                 from gaia.rag.pdf_utils import (
+                    PdfImageExtractionError,
                     PdfPageInspectionError,
                     count_images_in_page,
-                    extract_images_from_page_pymupdf,
+                    extract_images_from_page_pdfium,
                 )
 
                 vlm = VLMClient(
-                    vlm_model=self.config.vlm_model, base_url=self.config.base_url
+                    vlm_model=resident_vision_model(
+                        self.config.vlm_model, self.config.base_url
+                    ),
+                    base_url=self.config.base_url,
                 )
                 vlm_available = self.config.use_vlm and vlm.check_availability()
 
@@ -1303,6 +1662,7 @@ class RAGSDK:
             pages_data = []
             vlm_pages_count = 0
             total_images_processed = 0
+            image_pages_skipped = 0
             degraded_pages = []
             page_warnings = {}
 
@@ -1311,7 +1671,7 @@ class RAGSDK:
                 page_start = time_module.time()
 
                 # Step 1: Extract text with pypdf
-                pypdf_text = page.extract_text()
+                pypdf_text = normalize_arabic_pdf_text(extract_pdf_page_text(page))
 
                 # Step 2: Check for images
                 has_imgs = False
@@ -1322,7 +1682,7 @@ class RAGSDK:
                         has_imgs, num_imgs = count_images_in_page(page, page_num=i)
                     except PdfPageInspectionError as e:
                         # Unknown, not "none". The inventory comes from pypdf
-                        # and the extraction from PyMuPDF, so a page pypdf
+                        # and the extraction from PDFium, so a page pypdf
                         # cannot inspect may still extract — try it rather than
                         # indexing the page as blank (#3551).
                         page_warning = str(e)
@@ -1334,9 +1694,19 @@ class RAGSDK:
 
                 # Step 3: Extract from images if present
                 image_texts = []
-                if has_imgs and vlm_available:
+                read_images = len(pypdf_text.strip()) < IMAGE_PAGE_TEXT_LIMIT
+                if has_imgs and vlm_available and not read_images:
+                    image_pages_skipped += 1
+                elif has_imgs and vlm_available:
                     try:
-                        images = extract_images_from_page_pymupdf(pdf_path, page_num=i)
+                        try:
+                            images = extract_images_from_page_pdfium(
+                                pdf_path, page_num=i
+                            )
+                        except PdfImageExtractionError as e:
+                            page_warning = f"image extraction failed on page {i}: {e}"
+                            self.log.warning(page_warning)
+                            images = e.images
                         if images:
                             image_texts = vlm.extract_from_page_images(
                                 images, page_num=i
@@ -1421,7 +1791,7 @@ class RAGSDK:
                 print(f"{'='*60}\n")
 
             self.log.info(
-                f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages)"
+                f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages, {image_pages_skipped} text pages' images left unread)"
             )
 
             # If pypdf parsed the file but every page came back blank, surface
@@ -1453,6 +1823,7 @@ class RAGSDK:
                 "num_pages": total_pages,
                 "vlm_pages": vlm_pages_count,
                 "total_images": total_images_processed,
+                "image_pages_skipped": image_pages_skipped,
                 "vlm_checked": True,  # Indicates this cache was created with VLM capability check
                 "vlm_available": vlm_available,  # Whether VLM was actually available
                 "pdf_status": "degraded" if degraded_pages else "readable",
@@ -1657,7 +2028,10 @@ class RAGSDK:
                 )
 
                 vlm = VLMClient(
-                    vlm_model=self.config.vlm_model, base_url=self.config.base_url
+                    vlm_model=resident_vision_model(
+                        self.config.vlm_model, self.config.base_url
+                    ),
+                    base_url=self.config.base_url,
                 )
                 vlm_available = self.config.use_vlm and vlm.check_availability()
 
@@ -2095,38 +2469,23 @@ These positions indicate where to split the text."""
             raise
 
     def _extract_text_from_json(self, json_path: str) -> str:
-        """Extract text from JSON file."""
+        """Extract text from JSON file.
+
+        With ``config.json_loader`` set, each record of the configured array
+        becomes its own ``=== JSON record N ===`` block (metadata lines, a
+        blank line, then content) that :meth:`_chunk_json_records` chunks
+        record by record.
+        """
         try:
             # Use _safe_open to prevent symlink attacks
             with self._safe_open(json_path, "rb") as f:
                 data = json.load(f)
 
-            # Convert JSON to readable text format
-            def json_to_text(obj, indent=0):
-                """Recursively convert JSON to readable text."""
-                lines = []
-                prefix = "  " * indent
-
-                if isinstance(obj, dict):
-                    for key, value in obj.items():
-                        if isinstance(value, (dict, list)):
-                            lines.append(f"{prefix}{key}:")
-                            lines.extend(json_to_text(value, indent + 1))
-                        else:
-                            lines.append(f"{prefix}{key}: {value}")
-                elif isinstance(obj, list):
-                    for i, item in enumerate(obj):
-                        if isinstance(item, (dict, list)):
-                            lines.append(f"{prefix}Item {i + 1}:")
-                            lines.extend(json_to_text(item, indent + 1))
-                        else:
-                            lines.append(f"{prefix}- {item}")
-                else:
-                    lines.append(f"{prefix}{obj}")
-
-                return lines
-
-            text = "\n".join(json_to_text(data))
+            loader = self.config.json_loader
+            if loader is None:
+                text = "\n".join(_json_to_text_lines(data))
+            else:
+                text = self._render_json_records(data, loader, Path(json_path).name)
 
             if self.config.show_stats:
                 print(f"  ✅ Loaded JSON file ({len(text):,} characters)")
@@ -2136,6 +2495,62 @@ These positions indicate where to split the text."""
         except Exception as e:
             self._log_read_failure(e, json_path, f"Error reading JSON {json_path}: {e}")
             raise
+
+    def _render_json_records(self, data, loader: JsonLoaderConfig, source: str) -> str:
+        blocks = []
+        empty = 0
+        for record in _json_records(data, loader, source):
+            content = [
+                _json_value_text(record.get(name)) for name in loader.content_fields
+            ]
+            body = "\n\n".join(part for part in content if part)
+            # A content line shaped like a record marker would split the record.
+            body = _JSON_MARKER_LINE.sub(" ", body)
+            if not body:
+                empty += 1
+                continue
+            header = [
+                f"{name}: {_json_metadata_value(record[name])}"
+                for name in loader.metadata_fields
+                if name in record and _json_metadata_value(record[name])
+            ]
+            blocks.append(
+                f"=== JSON record {len(blocks) + 1} ===\n"
+                + "\n".join(header)
+                + "\n\n"
+                + body
+            )
+        if not blocks:
+            raise ValueError(
+                f"{source}: none of its records has text in content_fields "
+                f"{loader.content_fields}. Check the field names in "
+                "JsonLoaderConfig.content_fields."
+            )
+        if empty:
+            self.log.warning(
+                f"{source}: skipped {empty} record(s) with no text in "
+                f"{loader.content_fields}"
+            )
+        return "\n\n".join(blocks)
+
+    def _chunk_json_records(self, text: str) -> List[str]:
+        """Chunk each record on its own, prefixing every chunk with its metadata."""
+        chunks = []
+        for block in _JSON_RECORD_MARKER.split(text):
+            if not block.strip():
+                continue
+            header, _, body = block.partition("\n\n")
+            room = EMBED_MAX_CHARS - (len(header) + 1 if header else 0)
+            if room < EMBED_MAX_CHARS // 2:
+                raise ValueError(
+                    f"A JSON record's metadata_fields render to {len(header)} "
+                    f"chars, over half the embedder's {EMBED_MAX_CHARS}-char "
+                    "input. List fewer or shorter JsonLoaderConfig.metadata_fields."
+                )
+            for chunk in self._split_text_into_chunks(body):
+                for piece in split_for_embedding(chunk, room):
+                    chunks.append(f"{header}\n{piece}" if header else piece)
+        return chunks
 
     def _extract_text_from_xlsx(self, xlsx_path: str) -> str:
         """Extract text from an Excel .xlsx workbook using openpyxl.
@@ -2307,6 +2722,137 @@ These positions indicate where to split the text."""
         self.log.info(f"📄 Extracted {len(text):,} characters from Word file")
         return text
 
+    def _extract_text_from_image(self, image_path: str) -> tuple:
+        """Read an image file's text with the vision model.
+
+        Each page is sent as the PDF path sends an embedded image, after EXIF
+        rotation and flattening transparency onto white. A multi-page TIFF is
+        read page by page; other formats (animated GIF included) by their
+        first frame. There is no non-VLM path: an image the VLM cannot read
+        fails instead of indexing empty or placeholder text.
+
+        Returns:
+            (text, metadata) — metadata has vlm_pages and total_images set to
+            the number of pages read, and num_pages for a multi-page TIFF.
+
+        Raises:
+            ImageExtractionError: VLM turned off or unavailable, the file is not
+                a decodable image, it has more than MAX_IMAGE_PAGES pages, or the
+                VLM found no text in it.
+        """
+        from PIL import Image  # pylint: disable=import-outside-toplevel
+
+        from gaia.llm import VLMClient  # pylint: disable=import-outside-toplevel
+        from gaia.llm.lemonade_launcher import (  # pylint: disable=import-outside-toplevel
+            describe_client_hint,
+            describe_start_hint,
+        )
+        from gaia.llm.vlm_client import (  # pylint: disable=import-outside-toplevel
+            VLMExtractionError,
+        )
+
+        file_name = Path(image_path).name
+        model = (
+            resident_vision_model(self.config.vlm_model, self.config.base_url)
+            if self.config.use_vlm
+            else self.config.vlm_model
+        )
+
+        if not self.config.use_vlm:
+            raise ImageExtractionError(
+                f"Cannot index image {file_name}: image text extraction is off "
+                "(RAGConfig.use_vlm=False).\n"
+                "Images are read by the vision model; set use_vlm=True to index them."
+            )
+
+        # Outside the try: a locked file must reach index_document as PermissionError.
+        raw = Path(image_path).read_bytes()
+        try:
+            with Image.open(io.BytesIO(raw)) as img:
+                pages = _image_pages_for_vlm(img, file_name)
+        except ImageExtractionError:
+            raise
+        except (OSError, ValueError, Image.DecompressionBombError) as e:
+            self.log.error(f"Unreadable image {image_path}: {e}")
+            raise ImageExtractionError(
+                f"Could not read image: {file_name}\n"
+                f"Reason: {e}\n"
+                "The file appears to be corrupted or not a supported image.\n"
+                "Re-export it as PNG or JPEG and index it again."
+            ) from e
+
+        vlm = VLMClient(vlm_model=model, base_url=self.config.base_url)
+        if not vlm.check_availability():
+            try:
+                vlm.client.health_check()
+            except Exception as e:  # pylint: disable=broad-except
+                if not _is_connection_failure(e):
+                    raise ImageExtractionError(
+                        f"Cannot index image {file_name}: Lemonade Server at "
+                        f"{vlm.server_url} returned an error: {e}\n"
+                        "Check the Lemonade Server log, then index the image again."
+                    ) from e
+                raise ImageExtractionError(
+                    f"Cannot index image {file_name}: Lemonade Server isn't "
+                    f"reachable at {vlm.server_url}.\n"
+                    f"{describe_start_hint().instruction}\n"
+                    "Then index the image again."
+                ) from e
+            # Reachable, so the model is what's missing.
+            pull = describe_client_hint("pull", model).instruction
+            raise ImageExtractionError(
+                f"Cannot index image {file_name}: vision model {model} is not "
+                f"available at {vlm.server_url}.\n"
+                "Images are indexed by reading their text with the vision model.\n"
+                "To fix:\n"
+                f"  1. Download it. {pull}\n"
+                f"     Or download {model} in the Lemonade Model Manager "
+                f"({vlm.server_url}).\n"
+                "  2. Index the image again."
+            )
+
+        if self.config.show_stats:
+            print(f"  🖼️  Reading image text with {model} ({len(pages)} page(s))...")
+        page_texts = []
+        try:
+            for page_num, page in enumerate(pages, 1):
+                _beat()
+                results = vlm.extract_from_page_images([page], page_num=page_num)
+                page_texts.append(
+                    "\n\n".join(r["text"].strip() for r in results).strip()
+                )
+        except VLMExtractionError as e:
+            raise ImageExtractionError(
+                f"Could not read text from image {file_name}: {e}"
+            ) from e
+        finally:
+            vlm.cleanup()
+
+        if len(pages) == 1:
+            text = page_texts[0]
+        else:
+            text = "\n\n".join(
+                f"[Page {i}]\n{t}" for i, t in enumerate(page_texts, 1) if t
+            )
+        if not text.strip():
+            raise ImageExtractionError(
+                f"No text found in image: {file_name}\n"
+                f"The vision model ({model}) read the image but returned no text."
+            )
+
+        self.log.info(
+            f"🖼️  Extracted {len(text):,} characters from {file_name} "
+            f"({len(pages)} page(s))"
+        )
+        metadata = {
+            "num_pages": len(pages) if len(pages) > 1 else None,
+            "vlm_pages": len(pages),
+            "total_images": len(pages),
+            "vlm_checked": True,
+            "vlm_available": True,
+        }
+        return text, metadata
+
     def _extract_text_from_epub(self, epub_path: str) -> tuple:
         """Extract an EPUB book's text; returns ``(text, num_chapters)``."""
         from gaia.rag.epub_utils import (  # pylint: disable=import-outside-toplevel
@@ -2333,8 +2879,8 @@ These positions indicate where to split the text."""
         Returns:
             (text, metadata_dict) tuple where metadata_dict contains:
             - num_pages: int (for PDFs/PPTX) or None
-            - vlm_pages: int (for PDFs/PPTX with VLM) or None
-            - total_images: int (for PDFs/PPTX with VLM) or None
+            - vlm_pages: int (for PDFs/PPTX/images with VLM) or None
+            - total_images: int (for PDFs/PPTX/images with VLM) or None
         """
         file_type = self._get_file_type(file_path)
         metadata = {"num_pages": None, "vlm_pages": None, "total_images": None}
@@ -2361,8 +2907,12 @@ These positions indicate where to split the text."""
             metadata["total_images"] = pptx_metadata.get("total_images", 0)
             return text, metadata
 
+        # Image files (read by the vision model)
+        elif file_type in IMAGE_EXTENSIONS:
+            return self._extract_text_from_image(file_path)
+
         # Text-based files
-        elif file_type in [".txt", ".md", ".mdx", ".markdown", ".rst", ".log"]:
+        elif file_type in TEXT_DOCUMENT_EXTENSIONS:
             return self._extract_text_from_text_file(file_path), metadata
 
         # CSV files
@@ -2391,76 +2941,7 @@ These positions indicate where to split the text."""
             raise ValueError(unsupported_document_message(file_path, file_type))
 
         # Code files (treat as text for Q&A purposes)
-        elif file_type in [
-            # Backend languages
-            ".py",
-            ".pyw",  # Python
-            ".java",  # Java
-            ".cpp",
-            ".cc",
-            ".cxx",
-            ".hpp",
-            ".h",  # C++
-            ".c",  # C
-            ".cs",  # C#
-            ".go",  # Go
-            ".rs",  # Rust
-            ".rb",  # Ruby
-            ".php",  # PHP
-            ".swift",  # Swift
-            ".kt",
-            ".kts",  # Kotlin
-            ".scala",  # Scala
-            # Web - JavaScript/TypeScript
-            ".js",
-            ".jsx",  # JavaScript
-            ".ts",
-            ".tsx",  # TypeScript
-            ".mjs",
-            ".cjs",  # JavaScript modules
-            # Web - Frameworks
-            ".vue",  # Vue.js
-            ".svelte",  # Svelte
-            ".astro",  # Astro
-            # Web - Styling
-            ".css",  # CSS
-            ".scss",
-            ".sass",  # Sass
-            ".less",  # Less
-            ".styl",
-            ".stylus",  # Stylus
-            # Web - Markup
-            ".html",
-            ".htm",  # HTML
-            ".svg",  # SVG
-            ".jsx",
-            ".tsx",  # JSX/TSX (already listed but emphasizing)
-            # Scripting
-            ".sh",
-            ".bash",  # Shell
-            ".ps1",  # PowerShell
-            ".r",
-            ".R",  # R
-            # Database
-            ".sql",  # SQL
-            # Configuration
-            ".yaml",
-            ".yml",  # YAML
-            ".xml",  # XML
-            ".toml",  # TOML
-            ".ini",
-            ".cfg",
-            ".conf",  # Config files
-            ".env",  # Environment files
-            ".properties",  # Properties files
-            # Build & Package
-            ".gradle",  # Gradle
-            ".cmake",  # CMake
-            ".mk",
-            ".make",  # Makefiles
-            # Documentation
-            ".rst",  # ReStructuredText
-        ]:
+        elif file_type in CODE_EXTENSIONS:
             self.log.info(f"Indexing code/web file: {file_type}")
             return self._extract_text_from_text_file(file_path), metadata
 
@@ -2491,7 +2972,8 @@ These positions indicate where to split the text."""
                 f"Cannot index {Path(file_path).name}: it is a binary file, not "
                 f"text, and GAIA has no reader for {file_type} files.\n"
                 "Supported: PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx), "
-                "EPUB, plain text, Markdown, CSV, JSON, HTML and source code. "
+                "EPUB, images (PNG, JPG, ...), plain text, Markdown, CSV, JSON, HTML "
+                "and source code. "
                 "Convert the file to one of these (PDF works for most documents) "
                 "and index that copy."
             )
@@ -2796,22 +3278,75 @@ These positions indicate where to split the text."""
         index.add(embeddings.astype("float32"))
         return index
 
+    def _vectors_path(self, chunks: List[str]) -> str:
+        """Where the embeddings of *chunks* under the current embedder are kept.
+
+        The name binds the vectors to the embedding model and the exact chunk
+        text, so different text never reads them and the same text, indexed
+        again from a new temp copy, adds no second file.
+        """
+        digest = hashlib.sha256(self.config.embedding_model.encode("utf-8"))
+        for chunk in chunks:
+            digest.update(b"\x1e" + chunk.encode("utf-8"))
+        return os.path.join(
+            self.config.cache_dir, f"vectors_{digest.hexdigest()[:24]}.npy"
+        )
+
+    def _load_vectors(self, path: str, count: int) -> Optional["np.ndarray"]:
+        """Saved embeddings at *path*, or None when absent or not *count* rows."""
+        if not os.path.exists(path):
+            return None
+        try:
+            with file_lock(_cache_lock_target(path)):
+                vectors = np.load(path, allow_pickle=False)
+        except (OSError, ValueError) as e:
+            self.log.warning(f"Re-embedding: saved vectors unreadable ({path}): {e}")
+            return None
+        if vectors.ndim != 2 or vectors.shape[0] != count:
+            self.log.warning(
+                f"Re-embedding: saved vectors have shape {vectors.shape}, "
+                f"expected {count} rows ({path})"
+            )
+            return None
+        return vectors
+
+    def _save_vectors(self, path: str, vectors: "np.ndarray") -> None:
+        buf = io.BytesIO()
+        np.save(buf, np.ascontiguousarray(vectors, dtype="float32"))
+        with file_lock(_cache_lock_target(path)):
+            write_bytes_atomic(path, buf.getvalue())
+
     def _create_vector_index(
         self,
         chunks: List[str],
         return_embeddings: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         wait_callback: Optional[Callable[[int], None]] = None,
+        cache_path: Optional[str] = None,
     ) -> tuple:
         """Create FAISS vector index from chunks with progress reporting.
 
         ``progress_callback(done, total)`` is called before the first chunk is
         embedded and after every ``PROGRESS_SLICE_CHUNKS`` chunks.
         ``wait_callback`` is passed to ``_encode_texts``.
+
+        With ``cache_path`` (the document's chunk cache), embeddings are saved
+        beside it and reused, so reopening a document never re-embeds it.
         """
         import time as time_module  # pylint: disable=reimported
 
         self._load_embedder()
+
+        vectors_path = self._vectors_path(chunks) if cache_path else None
+        saved = self._load_vectors(vectors_path, len(chunks)) if vectors_path else None
+        if saved is not None:
+            if progress_callback is not None and chunks:
+                progress_callback(len(chunks), len(chunks))
+            index = self._create_faiss_index(saved)
+            self.log.info(f"📚 Index ready with {index.ntotal} saved vectors")
+            if return_embeddings:
+                return index, chunks, saved
+            return index, chunks
 
         # Generate embeddings with detailed progress
         self.log.info(f"🔍 Generating embeddings for {len(chunks)} chunks...")
@@ -2845,6 +3380,12 @@ These positions indicate where to split the text."""
                 progress_callback(start + len(part), len(chunks))
             embeddings = np.concatenate(parts)
         embed_duration = time_module.time() - embed_start
+        if vectors_path:
+            try:
+                self._save_vectors(vectors_path, embeddings)
+            except (OSError, FileLockError) as e:
+                # Saved vectors only speed up reopening; the index itself is built.
+                self.log.warning(f"Could not save vectors to {vectors_path}: {e}")
 
         if self.config.show_stats:
             print(
@@ -2880,6 +3421,22 @@ These positions indicate where to split the text."""
         if return_embeddings:
             return index, chunks, embeddings
         return index, chunks
+
+    def _index_without_rows(self, removed: set):
+        """A new index with every vector of ``self.index`` except rows *removed*.
+
+        Copies the stored vectors instead of re-embedding, and leaves
+        ``self.index`` untouched for readers holding a snapshot of it.
+        """
+        total = self.index.ntotal
+        if total != len(self.chunks):
+            raise RuntimeError(
+                f"Vector index holds {total} vectors for {len(self.chunks)} "
+                "chunks; re-index the documents to rebuild it."
+            )
+        keep = np.ones(total, dtype=bool)
+        keep[sorted(removed)] = False
+        return self._create_faiss_index(self.index.reconstruct_n(0, total)[keep])
 
     def _snapshot_query_state(self) -> Dict[str, Any]:
         """Capture a consistent read snapshot for query operations."""
@@ -2947,9 +3504,8 @@ These positions indicate where to split the text."""
                                 new_file_to_chunk_indices[owner] = []
                             new_file_to_chunk_indices[owner].append(new_idx)
 
-                    # Rebuild index only after the new chunk set is ready.
                     if new_chunks:
-                        new_index, new_chunks = self._create_vector_index(new_chunks)
+                        new_index = self._index_without_rows(chunk_indices_set)
                     else:
                         new_index = None
 
@@ -3057,20 +3613,20 @@ These positions indicate where to split the text."""
                         result["total_indexed_files"] = len(self.indexed_files)
                         result["total_chunks"] = len(self.chunks)
 
-    def _evict_lru_document(self) -> bool:
+    def _evict_lru_document(self) -> Optional[str]:
         """
         Evict the least recently used document to free memory.
 
         Returns:
-            True if a document was evicted, False otherwise
+            The path of the evicted document, or None if no document was evicted
         """
         if not self.config.enable_lru_eviction:
             self.log.warning("LRU eviction disabled, cannot free memory")
-            return False
+            return None
 
         if not self.file_access_times:
             self.log.warning("No tracked files available for LRU eviction")
-            return False
+            return None
 
         # Find LRU file (oldest access time)
         lru_file = min(self.file_access_times, key=self.file_access_times.get)
@@ -3086,27 +3642,34 @@ These positions indicate where to split the text."""
         result = self.remove_document(lru_file)
         if not result:
             self.log.error(f"Failed to evict LRU document: {Path(lru_file).name}")
-        return result
+            return None
+        return lru_file
 
-    def _check_memory_limits(self) -> bool:
+    def _check_memory_limits(self) -> Tuple[bool, List[str]]:
         """
         Check memory limits and evict documents if necessary.
 
         Returns:
-            True if limits are satisfied, False if still exceeded
+            A tuple containing:
+                - True if limits are satisfied, False if still exceeded
+                - A list of evicted document paths (if any)
         """
+        evicted_files: List[str] = []
+
         # Check total chunks limit
         while (
             self.config.max_total_chunks > 0
             and len(self.chunks) > self.config.max_total_chunks
             and len(self.indexed_files) > 1
         ):  # Keep at least one file
-            if not self._evict_lru_document():
+            path = self._evict_lru_document()
+            if path is None:
                 self.log.warning(
                     f"Cannot meet chunk limit: {len(self.chunks)} chunks "
                     f"exceeds max {self.config.max_total_chunks}, eviction failed"
                 )
                 break
+            evicted_files.append(path)
 
         # Check indexed files limit
         while (
@@ -3114,12 +3677,14 @@ These positions indicate where to split the text."""
             and len(self.indexed_files) > self.config.max_indexed_files
             and len(self.indexed_files) > 1
         ):  # Keep at least one file
-            if not self._evict_lru_document():
+            path = self._evict_lru_document()
+            if path is None:
                 self.log.warning(
                     f"Cannot meet file limit: {len(self.indexed_files)} files "
                     f"exceeds max {self.config.max_indexed_files}, eviction failed"
                 )
                 break
+            evicted_files.append(path)
 
         chunks_ok = (
             self.config.max_total_chunks <= 0
@@ -3129,7 +3694,7 @@ These positions indicate where to split the text."""
             self.config.max_indexed_files <= 0
             or len(self.indexed_files) <= self.config.max_indexed_files
         )
-        return chunks_ok and files_ok
+        return chunks_ok and files_ok, evicted_files
 
     def _has_indexing_capacity(self) -> bool:
         """Check if there is capacity to index another document.
@@ -3351,7 +3916,9 @@ These positions indicate where to split the text."""
             content_key = self._content_key(file_path, raise_locked=True)
         except PermissionError as e:
             return self._document_locked(stats, file_path, e)
-        cache_path = self._get_cache_path(file_path, content_key)
+        cache_path = self._cache_of_same_bytes(
+            self._get_cache_path(file_path, content_key), content_key
+        )
         md_cache_path = self._extracted_markdown_path(content_key)
 
         if os.path.exists(cache_path):
@@ -3385,12 +3952,12 @@ These positions indicate where to split the text."""
                         vlm_info = f" (VLM: {cached_metadata['vlm_pages']} pages)"
                     print(f"  ✅ Loaded {len(cached_chunks)} cached chunks{vlm_info}")
 
-                # The cache holds chunks, not vectors, so this re-embeds.
                 new_index, _, file_embeddings = self._create_vector_index(
                     list(cached_chunks),
                     return_embeddings=True,
                     progress_callback=progress_callback,
                     wait_callback=wait_callback,
+                    cache_path=cache_path,
                 )
 
                 with self._state_lock:
@@ -3478,7 +4045,7 @@ These positions indicate where to split the text."""
                     print("  ✅ Successfully loaded from cache")
 
                 # Check memory limits after cache load
-                limits_ok = self._check_memory_limits()
+                limits_ok, evicted = self._check_memory_limits()
 
                 # Update stats for cache load
                 stats["success"] = True
@@ -3489,6 +4056,8 @@ These positions indicate where to split the text."""
                 stats["total_indexed_files"] = len(self.indexed_files)
                 stats["total_chunks"] = len(self.chunks)
                 stats["from_cache"] = True
+                if evicted:
+                    stats["evicted"] = evicted
                 if not limits_ok:
                     stats["memory_limit_warning"] = True
                 return stats
@@ -3552,13 +4121,17 @@ These positions indicate where to split the text."""
                 raise ValueError(error_msg)
 
             # Split into chunks
-            new_chunks = self._split_text_into_chunks(text)
+            if file_type == ".json" and self.config.json_loader is not None:
+                new_chunks = self._chunk_json_records(text)
+            else:
+                new_chunks = self._split_text_into_chunks(text)
 
             new_index, _, file_embeddings = self._create_vector_index(
                 list(new_chunks),
                 return_embeddings=True,
                 progress_callback=progress_callback,
                 wait_callback=wait_callback,
+                cache_path=cache_path,
             )
 
             with self._state_lock:
@@ -3661,7 +4234,9 @@ These positions indicate where to split the text."""
                 self.file_access_times[file_path] = self._access_counter
 
                 # Check memory limits and evict if necessary
-                limits_ok = self._check_memory_limits()
+                limits_ok, evicted = self._check_memory_limits()
+            if evicted:
+                stats["evicted"] = evicted
             if not limits_ok:
                 self.log.warning(
                     f"Memory limits exceeded after indexing {file_path}. "

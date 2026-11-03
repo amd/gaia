@@ -177,11 +177,10 @@ class LemonadeSupervisor:
         """Make sure a Lemonade Server is answering, starting one if it is not.
 
         Args:
-            ctx_size: the context window a started server must come up with. A
-                server started without one answers ``/health`` and then fails
-                every long request, which reads as an agent bug rather than a
-                launch bug — so callers pass their profile's window
-                (``lemonade_client.profile_ctx_size``).
+            ctx_size: the caller's profile window
+                (``lemonade_client.profile_ctx_size``). Only the legacy
+                Lemonade CLI takes it at start; modern Lemonade
+                reads no start-time window and gets it on each ``/load``.
             timeout: how long a freshly started server gets to answer.
 
         Raises:
@@ -344,7 +343,7 @@ class LemonadeSupervisor:
         except OSError as e:
             raise LemonadeStartError(
                 f"GAIA could not launch the local model server "
-                f"(`{' '.join(spec.argv)}`): {e}\n"
+                f"(`{render_command(spec)}`): {e}\n"
                 "To fix: re-run `gaia init` to repair the install, or set "
                 "LEMONADE_SERVER_PATH to a working server executable.\n"
                 f"Where to look: {self.log_path()}"
@@ -376,7 +375,7 @@ class LemonadeSupervisor:
         except OSError as e:
             log.warning("Could not rotate %s (%s); appending to it.", path, e)
         self._log_handle = open(path, "a", encoding="utf-8", errors="replace")
-        self._log_handle.write(f"\n=== GAIA daemon start: {' '.join(spec.argv)} ===\n")
+        self._log_handle.write(f"\n=== GAIA daemon start: {render_command(spec)} ===\n")
         self._log_handle.flush()
 
         group_kwargs = background_popen_kwargs()

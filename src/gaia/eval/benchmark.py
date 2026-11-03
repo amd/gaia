@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import statistics as _stats
 import time
 from datetime import datetime, timezone
@@ -753,6 +754,134 @@ def _verify_ctx_readback(client: Any, model_id: str, requested_ctx: int) -> int:
     return readback
 
 
+# Python-repr literals (``got: '...'``) carry model output or ids, never the
+# server's words; the lookarounds keep apostrophes ("can't") from opening one.
+_REPR_LITERAL_RE = re.compile(r"(?<!\w)'(?:[^'\\]|\\.)*'(?!\w)")
+_DOUBLE_QUOTED_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _backend_error_messages(text: str) -> list[str]:
+    """The ``error.message`` of every JSON error envelope embedded in *text*."""
+    decoder = json.JSONDecoder()
+    messages: list[str] = []
+    start = text.find("{")
+    while start != -1:
+        try:
+            payload, end = decoder.raw_decode(text, start)
+        except ValueError:
+            start = text.find("{", start + 1)
+            continue
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(error, dict):
+            details = error.get("details")
+            response = details.get("response") if isinstance(details, dict) else None
+            nested = response.get("error") if isinstance(response, dict) else None
+            source = nested if isinstance(nested, dict) else error
+            if source.get("message"):
+                messages.append(str(source["message"]))
+        start = text.find("{", end)
+    return messages
+
+
+def _is_backend_overflow(error_text: str) -> bool:
+    """Classify on the server's own overflow message, never on quoted output.
+
+    ``LLMTriageError`` quotes the model's reply, and a reply that says "got
+    too long" must not read as a context overflow.
+    """
+    from gaia.llm.lemonade_client import is_context_overflow_error
+
+    if not isinstance(error_text, str) or not error_text:
+        return False
+    unquoted = _REPR_LITERAL_RE.sub("''", error_text)
+    server_messages = _backend_error_messages(unquoted)
+    if server_messages:
+        return any(is_context_overflow_error(m) for m in server_messages)
+    return is_context_overflow_error(_DOUBLE_QUOTED_RE.sub('""', unquoted))
+
+
+def context_overflow_detail(
+    error_text: str, ctx_size: int | None, limit: int
+) -> dict[str, Any] | None:
+    """Explain an experiment that failed because its prompt outgrew the window.
+
+    Such a row has no measurement at all, so it must not read like a quality
+    result: it carries ``error_kind="context_overflow"``, the token counts the
+    backend reported (when it did), and a ``remedy`` naming ``--ctx-size``.
+    Returns ``None`` for every other failure.
+    """
+    from gaia.agents.base.context_eviction import overflow_numbers
+
+    if not _is_backend_overflow(error_text):
+        return None
+    detail: dict[str, Any] = {"error_kind": "context_overflow"}
+    numbers = overflow_numbers(error_text)
+    if numbers:
+        detail["requested_tokens"], detail["available_tokens"] = numbers
+        need = f"needed {numbers[0]} tokens but the window is {numbers[1]}"
+    else:
+        need = f"outgrew the {ctx_size or 'loaded'}-token window"
+    detail["remedy"] = (
+        f"Context overflow, not a quality result: triaging {limit} emails {need}. "
+        "Re-run with a smaller --limit, or a larger --ctx-size (e.g. 32768, the "
+        "envelope max — not comparable to a 16384 baseline)."
+    )
+    return detail
+
+
+# A trimmed overflow was retried; only one that still failed ended the run.
+_RECOVERED_OVERFLOW_TYPES = frozenset({"llm_context_overflow_trimmed"})
+
+
+def context_overflow_error_from_result(agent_result: Any) -> str | None:
+    """The backend overflow text a returned run hit, or ``None``.
+
+    The agent loop does not raise on an overflow: one it cannot trim away is
+    recorded in ``error_history`` and answered politely, and one inside a tool
+    (e.g. ``triage_inbox``'s per-email classifier) comes back as a failed tool
+    result. Either way the exception path never sees it.
+    """
+    from gaia.agents.base.tool_outcome import (
+        tool_result_error_fields,
+        tool_result_failed,
+    )
+
+    if not isinstance(agent_result, dict):
+        return None
+    candidates: list[Any] = []
+    for entry in agent_result.get("error_history") or ():
+        if isinstance(entry, dict):
+            if entry.get("type") not in _RECOVERED_OVERFLOW_TYPES:
+                candidates.append(entry.get("error"))
+        else:
+            candidates.append(entry)
+    for message in agent_result.get("conversation") or ():
+        if not isinstance(message, dict) or message.get("role") != "tool":
+            continue
+        content = message.get("content")
+        if tool_result_failed(content):
+            candidates.append(tool_result_error_fields(content).get("error"))
+    for text in candidates:
+        if isinstance(text, str) and _is_backend_overflow(text):
+            return text
+    return None
+
+
+def _has_triage_results(agent_result: Any) -> bool:
+    """Whether the run produced per-email verdicts that :func:`build_result` scores."""
+    if not isinstance(agent_result, dict):
+        return False
+    conversation = [
+        m for m in agent_result.get("conversation") or () if isinstance(m, dict)
+    ]
+    try:
+        results, _ = _extract_triage_results(conversation)
+    except ValueError:
+        # Malformed envelope: nothing was measured either way.
+        return False
+    return bool(results)
+
+
 def _close_agent_db(agent: Any) -> None:
     """Release ``agent``'s SQLite state.db, tolerating agents with none.
 
@@ -900,6 +1029,16 @@ def run_benchmark(
                 # per-experiment failure (e.g. the base agent's wrong-ctx
                 # re-raise on a 4K sweep leg) becomes an honest ERRORED row
                 # and the remaining experiments still run.
+                failure = f"{type(exc).__name__}: {exc}"
+            else:
+                # Triage results mean the run measured something even if a
+                # later turn (e.g. the closing summary) overflowed; score it.
+                failure = (
+                    None
+                    if _has_triage_results(agent_result)
+                    else context_overflow_error_from_result(agent_result)
+                )
+            if failure is not None:
                 total_duration_ms = int((time.monotonic() - start) * 1000)
                 row = build_result(
                     {},
@@ -912,8 +1051,13 @@ def run_benchmark(
                     ctx_size=stamp_ctx,
                 )
                 row["status"] = "ERRORED"
-                row["error"] = f"{type(exc).__name__}: {exc}"
+                row["error"] = failure
+                overflow = context_overflow_detail(row["error"], stamp_ctx, limit)
+                if overflow:
+                    row.update(overflow)
                 print(f"[ERRORED] experiment {exp}/{experiments}: {row['error']}")
+                if overflow:
+                    print(f"[CTX] {overflow['remedy']}")
                 results.append(row)
                 _close_agent_db(agent)
                 continue

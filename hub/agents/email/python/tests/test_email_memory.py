@@ -773,3 +773,14 @@ class TestMemoryDegradedStateNotice:
             real_console.print_warning.assert_called_once()
         finally:
             agent.close_db()
+
+
+def test_state_database_uses_shared_wal_retry_helper(tmp_path):
+    """Email state.db must use the core opener, not a bare WAL pragma."""
+    with patch("gaia_agent_email.agent.enable_wal") as enable_wal:
+        agent = _build_agent(tmp_path, memory_disabled=True)
+        try:
+            enable_wal.assert_called_once_with(agent._db)
+            assert agent._db.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+        finally:
+            agent.close_db()

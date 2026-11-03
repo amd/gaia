@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
+
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 // The model the user last chose, kept in ~/.gaia/config.json as
@@ -40,7 +42,11 @@ func readLastModel(p hostProbe) (LastModel, error) {
 	if path == "" {
 		return LastModel{}, nil
 	}
-	raw, err := p.readFile(path)
+	read := p.readConfig
+	if read == nil {
+		read = p.readFile
+	}
+	raw, err := read(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return LastModel{Path: path}, nil
 	}
@@ -67,5 +73,9 @@ func readLastModel(p hostProbe) (LastModel, error) {
 
 // WriteLastModel saves provider and model together.
 func WriteLastModel(provider, model string) (string, error) {
+	if lemonade.LocalOnly() && (provider != "local" || lemonade.IsCloudID(model)) {
+		return "", fmt.Errorf("Local only is on, so %s isn't saved as your model. %s",
+			model, lemonade.LocalOnlyHint)
+	}
 	return writeConfigKeys(map[string]any{"last_provider": provider, "last_model": model})
 }

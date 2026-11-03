@@ -41,6 +41,8 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// A developer's own Local only must not change what these tests send.
+	os.Setenv("GAIA_POLICY_FILE", filepath.Join(os.TempDir(), "gaia-cli-test-no-policy.json"))
 	// A gate that finds Lemonade down must report it, not start the
 	// developer's real server under an isolated HOME and leave it running.
 	restore := preflight.StubLemonadeAutoStartForTest(

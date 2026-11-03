@@ -52,8 +52,6 @@ FROZEN_INPUTS = (
     "hub/agents/gaia/python",
     ":(exclude)hub/agents/gaia/python/tests",
     ":(exclude)hub/agents/gaia/python/eval_baselines",
-    "hub/agents/chat/python",
-    ":(exclude)hub/agents/chat/python/tests",
     "setup.py",
 )
 

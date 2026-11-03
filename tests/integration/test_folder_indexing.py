@@ -110,6 +110,29 @@ class TestFolderIndexing:
         # _index_document should have been called once per file
         assert mock_index.call_count == 3
 
+    @patch("gaia.ui.server._index_document", new_callable=AsyncMock, return_value=2)
+    def test_index_folder_skips_images(self, mock_index, client, temp_folder):
+        """A folder walk never sends images to the vision model (#730)."""
+        from gaia.utils.image_formats import IMAGE_EXTENSIONS
+
+        _create_file(temp_folder, "readme.txt", "Hello world")
+        for ext in IMAGE_EXTENSIONS:
+            (temp_folder / f"icon{ext}").write_bytes(b"\x89PNG\r\n\x1a\n")
+        (temp_folder / "sub").mkdir()
+        (temp_folder / "sub" / "logo.PNG").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+        resp = client.post(
+            "/api/documents/index-folder",
+            json={"folder_path": str(temp_folder), "recursive": True},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+
+        assert [d["filename"] for d in body["documents"]] == ["readme.txt"]
+        assert body["failed"] == 0
+        indexed = [Path(c.args[0]).name for c in mock_index.call_args_list]
+        assert indexed == ["readme.txt"]
+
     @patch("gaia.ui.server._index_document", new_callable=AsyncMock, return_value=3)
     def test_index_folder_recursive(self, mock_index, client, temp_folder):
         """Files in nested subdirectories should be indexed when recursive=True."""

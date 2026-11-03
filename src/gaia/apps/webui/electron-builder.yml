@@ -72,6 +72,11 @@ extraResources:
     to: vendor/uv
     filter:
       - "**/*"
+  # Third-party licence notices for the libraries the app bundles.
+  - from: ../../../../THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
+  - from: ../../../../licenses
+    to: licenses
 
 asar: true
 # Nothing currently needs to be unpacked from the asar.
@@ -135,7 +140,7 @@ nsis:
   uninstallerSidebar: ../../../../installer/nsis/installer-sidebar.bmp
   uninstallDisplayName: ${productName}
   license: ../../../../LICENSE.md
-  include: ../../../../installer/nsis/installer.nsh
+  include: nsis/installer.nsh
   # Respect §5 — keep user data by default. The uninstaller wizard / the
   # `gaia uninstall --purge` command handle data removal when the user opts in.
   deleteAppDataOnUninstall: false

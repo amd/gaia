@@ -368,6 +368,11 @@ SINKS: dict[str, Sink] = {
         "Narrow the deletion to specific files you created, or drop it. A "
         "recursive delete driven by a tool argument can erase a user's data.",
     ),
+    # --- gaia.skills.context: the declared, runtime-checked routes -------
+    "gaia.skills.context.run_program": Sink("program", "run"),
+    "gaia.skills.context.temp_dir": Sink("scratch", "write"),
+    "gaia.skills.context.write_temp_file": Sink("scratch", "write"),
+    "gaia.skills.context.copy_to_temp": Sink("scratch", "write"),
     # --- environment ---------------------------------------------------
     "os.getenv": Sink("env", "read"),
     # --- database ------------------------------------------------------

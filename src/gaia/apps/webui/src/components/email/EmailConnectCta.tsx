@@ -39,7 +39,7 @@ const EMAIL_AGENT_ID = 'email';
  *
  * Returns the namespaced id of the EMAIL agent (and only it) when that agent
  * declares ``connectorId``. Co-installed agents that also declare the connector
- * (e.g. ``installed:connectors-demo`` for Google) are deliberately excluded:
+ * (e.g. a custom ``installed:my-agent`` for Google) are deliberately excluded:
  * granting them here would hand them the mailbox scopes with no consent surface,
  * bypassing the per-agent grant model. Those agents are granted explicitly from
  * Settings → Connectors instead.

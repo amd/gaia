@@ -9,10 +9,34 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A chat that switches model mid-conversation gets the model it asked
+  for.** `POST /v1/email/query` with a `session_id` used to keep running the
+  session's agent on whatever model it was first built with, even when a later
+  turn named another `model`. That turn now rebuilds the session's agent on
+  the requested model, keeping the session's memory-off toggle and autonomy
+  level, and a failed rebuild is a 502 that leaves the session usable. Naming
+  the model the session already runs does not rebuild. This matters now that the Agent UI sends `session_id`, so a
+  follow-up can name a thread the previous turn showed. (#2834)
+
+- **`gaia email autonomy status` now says what the last cycle did.** Every
+  autonomy cycle, whether run over REST, from the CLI or on the scheduler,
+  records a counts-only summary (or a redacted error if it failed).
+  `GET /v1/email/agent/autonomy/{id}` returns it as `last_cycle`, so "ran,
+  nothing to do" is no longer indistinguishable from "never ran", and a run
+  whose caller timed out still has a readable result. (#2618)
+
+- **The served endpoint spec (`GET /v1/email/spec`) now documents `POST /v1/email/agent/autonomy/undo` and the `/v1/connections` intake routes.** A new test checks every route on the agent and connection routers against the rendered spec. (#3321)
+- **Concurrent startup no longer fails to open the email state database
+  during SQLite WAL-mode setup.** The agent now uses GAIA core's bounded WAL
+  retry helper when another email agent is opening the same `state.db`.
+  Its core floor is now 0.25.3, the first release with that helper. (#6041)
+- **Unread Outlook listings no longer fail at Microsoft Graph.** The core and
+  email-agent backends now put a broad `receivedDateTime` predicate before
+  `isRead` whenever they sort unread mail newest-first. That meets Graph's
+  `$filter` / `$orderby` rule instead of returning `InefficientFilter` (#4806).
 - **The email package no longer installs beside an incompatible GAIA core.**
-  Its declared core floor is now 0.25.1, the first release covering the
-  email agent module-level imports, including its guided Outlook setup route.
-  (#4430)
+  Its declared core floor covers the email agent module-level imports,
+  including its guided Outlook setup route. (#4430)
 - **A note the model writes before a tool call no longer shows as
   `[unmapped agent event: commentary]`.** The host's output handler now marks
   that text as `commentary`; the translator drops it, since the words already

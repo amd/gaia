@@ -108,7 +108,7 @@ Note that installer certificates do **not** appear under
 notary service rejects a package containing unsigned or ad-hoc-signed
 executables, so `build-pkg.sh` refuses to submit one — and a *Developer ID
 Application* certificate (a different certificate from the *Installer* one in
-the table above) is what signs them. `release_components.yml` imports no
+the table above) is what signs them. `tui_installers.yml` imports no
 keychain and signs no binary, so today it passes `--allow-unsigned` and every
 published `.pkg` is unsigned.
 

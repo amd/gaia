@@ -592,7 +592,7 @@ def catalog(
 
         # Named with f.npm for both flavors; a candidate's .deb/.rpm carry
         # X.Y.Z~rc.N inside, which the build's own smoke test checks. A
-        # candidate needs all four (publish.yml's rc-tui-complete), so its
+        # candidate needs all four (publish.yml's tui-installers-complete), so its
         # Intel .pkg is required even though the Intel agent is best-effort.
         for platform, label in (
             ("darwin-arm64", "macos"),

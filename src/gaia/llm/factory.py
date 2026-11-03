@@ -28,6 +28,9 @@ def create_client(
 ) -> LLMClient:
     """Create a Lemonade or Claude client.
 
+    A Lemonade model id naming a gateway Claude model (``amd.Claude-*``) gets a
+    ``GatewayClaudeProvider``, which calls the gateway's Anthropic route.
+
     ``use_openai`` is retained only to reject legacy callers with migration
     guidance; it cannot select a backend, even with an explicit provider.
     """
@@ -41,6 +44,15 @@ def create_client(
     if provider_lower not in _PROVIDERS:
         available = ", ".join(_PROVIDERS.keys())
         raise ValueError(f"Unknown provider: {provider}. Available: {available}")
+
+    if provider_lower == "lemonade":
+        from .gateway import gateway_claude_upstream_id
+
+        if gateway_claude_upstream_id(kwargs.get("model")):
+            # Lemonade's gateway route drops cache_control; this one keeps it.
+            from .providers.claude import GatewayClaudeProvider
+
+            return GatewayClaudeProvider(**kwargs)
 
     import importlib
 

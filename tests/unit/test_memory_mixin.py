@@ -592,6 +592,13 @@ class TestSystemContext:
         prompt = mixin_host.get_memory_system_prompt()
         assert "No personal memories stored yet" in prompt
 
+    def test_reminder_instruction_does_not_promise_an_alert(self, mixin_host):
+        prompt = mixin_host.get_memory_system_prompt()
+
+        assert "does NOT send an alert" in prompt
+        assert "Never promise an automatic notification" in prompt
+        assert "next time the user chats" in prompt
+
     def test_stable_prompt_no_nudge_when_personal_memories_exist(self, mixin_host):
         """The 'no personal memories' nudge disappears once user data is stored."""
         mixin_host.memory_store.store(
@@ -4734,19 +4741,179 @@ class TestRecalledSkillPromptBuilder:
         assert body in prompt
         assert "(truncated)" not in prompt
 
-    def test_long_body_truncated_at_cap(self, mixin_host):
-        """A body over the cap is truncated at injection (the row keeps it whole)."""
-        from gaia.agents.base.skill_synthesis import MAX_RECALL_BODY_CHARS
-
-        long_body = "# Big\n" + ("x" * 5000) + "\n## Edge cases\n- e"
-
-        prompt = mixin_host._build_recalled_skills_prompt(
-            [_recalled_skill("big-proc", long_body)], self._config()
+    @staticmethod
+    def _steps(n, width=60):
+        """A numbered procedure of ``n`` steps, each ``width`` chars of text."""
+        return "# Proc\n" + "\n".join(
+            f"{i}. step {i} " + "x" * width for i in range(1, n + 1)
         )
 
-        assert "… (truncated)" in prompt
-        # The injected body carries at most MAX_RECALL_BODY_CHARS of the content.
-        assert prompt.count("x") <= MAX_RECALL_BODY_CHARS
+    @staticmethod
+    def _capped(cap):
+        from dataclasses import replace
+
+        from gaia.agents.base.skill_synthesis import load_synthesis_config
+
+        return replace(load_synthesis_config(), max_recall_body_chars=cap)
+
+    def test_under_cap_block_is_byte_identical(self, mixin_host):
+        """No over-cap body → the exact pre-#2676 block (no prompt churn)."""
+        body = "# Short\n1. step\n## Edge cases\n- e"
+        prompt = mixin_host._build_recalled_skills_prompt(
+            [_recalled_skill("a", body), _recalled_skill("b", body, "other")],
+            self._config(),
+        )
+
+        assert prompt == (
+            "=== RECALLED PROCEDURES (learned from past successful runs) ===\n"
+            "You have succeeded at similar goals before. Reuse the proven "
+            "procedure(s) below instead of re-planning from scratch; adapt the "
+            "steps to the current request.\n\n"
+            f"## a\nWhen to use: trigger\n\n{body}\n\n"
+            f"## b\nWhen to use: other\n\n{body}"
+        )
+
+    def test_body_exactly_at_cap_is_whole(self, mixin_host):
+        """Boundary: len(body) == cap is shown whole, not cut."""
+        body = "1. " + "y" * 97
+        assert len(body) == 100
+
+        prompt = mixin_host._build_recalled_skills_prompt(
+            [_recalled_skill("p", body)], self._capped(100)
+        )
+
+        assert prompt.endswith(body)
+        assert "INCOMPLETE" not in prompt
+
+    def test_long_body_cut_at_step_boundary(self, mixin_host):
+        """Over the cap: the cut lands before a step, never inside one."""
+        body = self._steps(40)
+        cap = 500
+
+        prompt = mixin_host._build_recalled_skills_prompt(
+            [_recalled_skill("big", body)], self._capped(cap)
+        )
+
+        shown = prompt.split("When to use: trigger\n\n", 1)[1]
+        kept, marker = shown.split("\n… INCOMPLETE", 1)
+        assert len(kept) <= cap
+        # Every shown line is a whole line of the original body.
+        body_lines = body.split("\n")
+        assert kept.split("\n") == body_lines[: len(kept.split("\n"))]
+        assert kept.split("\n")[-1].startswith(f"{len(kept.split(chr(10))) - 1}. ")
+        assert "not the full procedure" in marker
+        assert "(truncated)" not in prompt
+
+    def test_cut_header_marks_procedure_non_authoritative(self, mixin_host):
+        """A cut body changes the header from 'proven' to 'plan the rest yourself'."""
+        prompt = mixin_host._build_recalled_skills_prompt(
+            [_recalled_skill("big", self._steps(40))], self._capped(300)
+        )
+
+        header = prompt.split("\n\n", 1)[0]
+        assert "INCOMPLETE" in header
+        assert "not proven" in header
+
+    def test_over_cap_lower_ranked_procedure_is_dropped(self, mixin_host):
+        """A complete best match → the over-cap runner-up is dropped, not cut."""
+        short = "1. do it\n2. check it"
+        prompt = mixin_host._build_recalled_skills_prompt(
+            [
+                _recalled_skill("best", short),
+                _recalled_skill("runner-up", self._steps(40)),
+            ],
+            self._capped(300),
+        )
+
+        assert "## best" in prompt
+        assert "runner-up" not in prompt
+        assert "INCOMPLETE" not in prompt
+
+    def test_over_cap_top_ranked_is_cut_not_dropped(self, mixin_host):
+        """The best match over the cap is cut (marked), and a complete one follows."""
+        short = "1. do it\n2. check it"
+        prompt = mixin_host._build_recalled_skills_prompt(
+            [
+                _recalled_skill("best", self._steps(40)),
+                _recalled_skill("second", short),
+            ],
+            self._capped(300),
+        )
+
+        assert prompt.index("## best") < prompt.index("## second")
+        assert prompt.count("… INCOMPLETE") == 1
+        assert short in prompt
+
+    def test_two_over_cap_procedures_both_cut(self, mixin_host):
+        """No complete procedure to prefer → each over-cap one is cut and marked."""
+        prompt = mixin_host._build_recalled_skills_prompt(
+            [
+                _recalled_skill("one", self._steps(40)),
+                _recalled_skill("two", self._steps(40)),
+            ],
+            self._capped(300),
+        )
+
+        assert prompt.count("… INCOMPLETE") == 2
+
+    def test_single_giant_step_yields_no_partial_step(self, mixin_host):
+        """Adversarial: no boundary inside the cap → no fragment of the step shown."""
+        body = "1. " + "z" * 5000 + "\n2. cleanup"
+        prompt = mixin_host._build_recalled_skills_prompt(
+            [_recalled_skill("giant", body)], self._capped(300)
+        )
+
+        assert "z" not in prompt.split("When to use: trigger", 1)[1]
+        assert "INCOMPLETE" in prompt
+
+    def test_unstructured_prose_is_never_cut_mid_word(self, mixin_host):
+        """Adversarial: one long paragraph with no step/blank-line boundary."""
+        body = " ".join(["word"] * 1000)
+        prompt = mixin_host._build_recalled_skills_prompt(
+            [_recalled_skill("prose", body)], self._capped(300)
+        )
+
+        shown = prompt.split("When to use: trigger\n\n", 1)[1]
+        assert shown.startswith("… INCOMPLETE")
+        assert "word" not in shown
+
+    def test_number_in_prose_is_not_a_boundary(self, mixin_host):
+        """'3.5 GB' mid-line must not be mistaken for a step start."""
+        body = "1. Download the 3.5 GB model " + "q" * 400 + "\n2. load it"
+        prompt = mixin_host._build_recalled_skills_prompt(
+            [_recalled_skill("p", body)], self._capped(200)
+        )
+
+        assert "3.5 GB" not in prompt
+        assert "q" not in prompt.split("When to use: trigger", 1)[1]
+
+    def test_paragraph_break_is_a_boundary(self, mixin_host):
+        """A blank line counts as a boundary when there are no step markers."""
+        body = "First para.\n\n" + "Second para " + "w" * 600
+        prompt = mixin_host._build_recalled_skills_prompt(
+            [_recalled_skill("p", body)], self._capped(200)
+        )
+
+        shown = prompt.split("When to use: trigger\n\n", 1)[1]
+        assert shown.startswith("First para.\n… INCOMPLETE")
+
+    def test_cut_and_drop_are_logged(self, mixin_host, caplog):
+        """Each truncation and each drop is logged so frequency is observable."""
+        import logging
+
+        with caplog.at_level(logging.INFO):
+            mixin_host._build_recalled_skills_prompt(
+                [
+                    _recalled_skill("cut-me", self._steps(40)),
+                    _recalled_skill("complete", "1. a"),
+                    _recalled_skill("drop-me", self._steps(40)),
+                ],
+                self._capped(300),
+            )
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("truncated procedure 'cut-me'" in m for m in messages)
+        assert any("dropped procedure 'drop-me'" in m for m in messages)
 
 
 class TestRecallOnceProcedureCache:

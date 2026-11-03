@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 
 from gaia.agents.base.file_snapshots import SnapshotError, before_change
 from gaia.agents.tools.path_access import read_access_error, write_access_error
+from gaia.agents.tools.workspace_paths import _workspace_target
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -446,7 +447,7 @@ class AudioToolsMixin:
         from gaia.audio.lemonade_asr import DEFAULT_ASR_MODEL, LemonadeASRClient
         from gaia.audio.media import ensure_ffmpeg, probe_duration, to_wav16k_mono
 
-        source = Path(file_path).expanduser()
+        source = _workspace_target(self, file_path)
         denied = self._transcript_access_error(source, write=False)
         if denied:
             return denied
@@ -604,9 +605,9 @@ class AudioToolsMixin:
 
         from gaia.agents.base.tools import ToolCancelled, raise_if_cancelled
 
-        source = Path(transcript_path).expanduser()
+        source = _workspace_target(self, transcript_path)
         destination = (
-            Path(output_path).expanduser()
+            _workspace_target(self, output_path)
             if output_path
             else source.with_suffix(".transcript.md")
         )
@@ -1010,7 +1011,7 @@ class AudioToolsMixin:
     def _transcript_destination(self, source, output_path):
         """Where this recording's transcript lives."""
         if output_path:
-            return Path(output_path).expanduser()
+            return _workspace_target(self, output_path)
         return TRANSCRIPT_DIR / f"{source.stem}.txt"
 
     def _diarize_if_possible(self, wav_path):

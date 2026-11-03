@@ -18,11 +18,13 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/components"
 
+	"github.com/amd/gaia/tui/internal/ui/modelsetup"
 	"github.com/amd/gaia/tui/internal/ui/providers"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -165,6 +167,15 @@ type ChatModel struct {
 	updateCheckOnLaunch bool
 
 	providerPanel *providers.Model
+	// modelSetup is /models, /gpu or first-run setup. It outlives its screen
+	// while a /models download runs in the background; modelSetupOpen is
+	// whether it is on screen.
+	modelSetup     *modelsetup.Model
+	modelSetupOpen bool
+	// setupChoices are first-run model choices left with esc, for /setup.
+	setupChoices *modelsetup.Choices
+	// gpuApplies is whether /gpu means anything on this PC (an integrated GPU).
+	gpuApplies bool
 	// agentsPanel is the in-chat "/agents" listing (nil unless open). It only
 	// lists and selects (agents.SelectedMsg's own doc comment); switching to
 	// the picked agent is the root model's job, so a SelectedMsg is left to
@@ -666,6 +677,11 @@ func (m ChatModel) Init() tea.Cmd {
 		// probeCapabilitiesCmd.
 		m.probeCapabilitiesCmd(),
 	}
+	if m.agentID == setupAgentID {
+		// Whether /gpu applies here: only a PC with an integrated GPU has a
+		// memory share to change, so only there does the palette offer it.
+		cmds = append(cmds, probeGPUCmd())
+	}
 	if m.agentID == setupAgentID && m.initialQuery == "" {
 		// The one-time Slack offer. Gated on an empty initial query so a user
 		// who launched with a question gets their answer, not an ad; and run
@@ -697,8 +713,7 @@ func (m ChatModel) Init() tea.Cmd {
 	} else if m.dev && m.preScanGateMismatch() {
 		// A client that could serve the pre-scan view but an agentID that
 		// doesn't match must not fail with no signal at all.
-		fmt.Fprintf(os.Stderr,
-			"[DEBUG] pre-scan fetch skipped: agentID %q has a PreScanFetcher client but does not match %q\n",
+		control.DevLogf("pre-scan fetch skipped: agentID %q has a PreScanFetcher client but does not match %q",
 			m.agentID, preScanAgentID)
 	}
 	// Behind the first-boot gate the warm-up waits for it: there may be no
@@ -891,6 +906,24 @@ func queuedSendWatchdogAfter(turnSeq int, d time.Duration) tea.Cmd {
 }
 
 func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var setupCmd tea.Cmd
+	if m.modelSetup != nil {
+		next, cmd, handled := m.updateModelSetup(msg)
+		if handled {
+			return next, cmd
+		}
+		m, setupCmd = next.(ChatModel), cmd
+	}
+	if probed, ok := msg.(gpuProbedMsg); ok {
+		m.gpuApplies = probed.applies
+		return m, nil
+	}
+	next, cmd := m.updateChat(msg)
+	return next, tea.Batch(setupCmd, cmd)
+}
+
+// updateChat is update for everything the setup screens did not take.
+func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.providerPanel != nil {
 		switch v := msg.(type) {
 		case providers.ClosedMsg:
@@ -1273,7 +1306,7 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case capabilitiesProbedMsg:
 		if msg.err != nil && m.dev {
-			fmt.Fprintf(os.Stderr, "[DEBUG] capability probe failed (%v) — gated commands stay in their 'unknown' (shown) state\n", msg.err)
+			control.DevLogf("capability probe failed (%v) — gated commands stay in their 'unknown' (shown) state", msg.err)
 		}
 		return m, nil
 
@@ -1927,6 +1960,23 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	case "/full-access never":
 		return m.setFullAccessDefault(false)
 
+	case "/models", "/gpu":
+		if m.agentID != setupAgentID {
+			m.messages = append(m.messages, Message{
+				Role:    RoleError,
+				Content: m.agentName + " has no model setup — only the gaia flagship agent does.",
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		if m.setupRunning {
+			return m.statusNote("Setup is running. Esc cancels it."), nil
+		}
+		if query == "/gpu" {
+			return m.openModelSetup(modelsetup.ModeGPU)
+		}
+		return m.openModelSetup(modelsetup.ModeModels)
+
 	case "/setup":
 		if m.agentID != setupAgentID {
 			m.messages = append(m.messages, Message{
@@ -1940,7 +1990,7 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		if m.setupRunning {
 			return m.statusNote("Setup is already running. Esc cancels it."), nil
 		}
-		return m.startSetupRun(false /* firstBoot */)
+		return m.openFirstRunSetup(false /* firstBoot */)
 
 	case "/slack":
 		return m.startSlackCheck()
@@ -3644,6 +3694,9 @@ func (m ChatModel) contentHeaderRows() int {
 }
 
 func (m ChatModel) View() string {
+	if m.modelSetup != nil && m.modelSetupOpen {
+		return m.modelSetup.View()
+	}
 	if m.providerPanel != nil {
 		return m.providerPanel.View()
 	}

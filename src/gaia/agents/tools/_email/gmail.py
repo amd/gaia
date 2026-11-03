@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Read-only Gmail mailbox client for the flagship agent's email tools.
 
-Same five reads as the Graph backend next door, emitting the same
+Same reads as the Graph backend next door, emitting the same
 provider-neutral summary shape, so neither the skill nor the model learns
 which mailbox is connected.
 
@@ -46,7 +46,15 @@ _FETCH_CONCURRENCY = 5
 
 # `metadataHeaders` is only honoured alongside `format=metadata`; sending
 # either alone silently returns the wrong thing.
-_METADATA_HEADERS = ("Subject", "From", "To", "Cc", "Date")
+_METADATA_HEADERS = (
+    "Subject",
+    "From",
+    "To",
+    "Cc",
+    "Date",
+    "Auto-Submitted",
+    "X-Autoreply",
+)
 
 # Gmail label IDs that are mailbox state, not user tags. `categories` must
 # carry only what a user would recognise as a label they created.
@@ -67,8 +75,11 @@ _RESERVED_LABEL_PREFIX = "CATEGORY_"
 
 _GMAIL_ENABLE_URL = "https://console.cloud.google.com/apis/library/gmail.googleapis.com"
 
-# The shape Gmail issues for a message id.
+# The shape Gmail issues for a message id. Thread ids share it.
 _MESSAGE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+# The folder names the scans use, mapped to Gmail's system label ids.
+_FOLDER_LABELS = {"inbox": "INBOX", "sent": "SENT"}
 
 # The shape Gmail documents for `errors[].reason` (`accessNotConfigured`) and
 # for `error.status` (`PERMISSION_DENIED`). Anything else means the body isn't
@@ -221,6 +232,10 @@ def message_summary(
         "categories": _categories(msg.get("labelIds"), label_names),
         # Gmail entity-encodes the snippet where Graph's bodyPreview is plain.
         "preview": html.unescape(msg.get("snippet") or "").strip(),
+        # Kept for the waiting-on-you detector; not shown as user-facing mail
+        # content. Gmail returns these through metadataHeaders.
+        "auto_submitted": _decode(headers.get("auto-submitted")),
+        "x_autoreply": _decode(headers.get("x-autoreply")),
     }
     if include_body:
         summary["body"], summary["body_content_type"] = _select_body(payload)
@@ -270,6 +285,12 @@ class GmailReadBackend:
                 "grant google installed:gaia --scopes <scope>`, or reconnect "
                 f"Google, then retry. (request: {where}; reason: "
                 f"{reason or 'forbidden'})"
+            )
+        if code == 404:
+            raise MailboxError(
+                "Gmail has no such message or thread (404). The id may be "
+                "mistyped, or the mail was deleted. Use an id returned by "
+                f"list_inbox or search_email. (request: {where})"
             )
         if code == 429:
             retry_after = response.headers.get("Retry-After", "unknown")
@@ -416,6 +437,66 @@ class GmailReadBackend:
             )
         data = self._get(f"/users/me/messages/{message_id}", params={"format": "full"})
         return message_summary(data, label_names=self._label_map(), include_body=True)
+
+    def list_thread_ids(self, folder: str, *, limit: int = 50) -> Dict[str, Any]:
+        """Distinct thread ids in ``folder`` (``inbox`` or ``sent``), newest first.
+
+        ``truncated`` means older mail exists past ``limit``: Gmail returned
+        another page, or the listing filled the whole budget.
+        """
+        label = _FOLDER_LABELS.get(folder)
+        if label is None:
+            raise ValueError(
+                f"folder must be one of {sorted(_FOLDER_LABELS)}, got {folder!r}"
+            )
+        wanted = self._clamp(limit)
+        data = self._get(
+            "/users/me/messages",
+            params={"labelIds": [label], "maxResults": wanted},
+        )
+        stubs = data.get("messages") or []
+        thread_ids: List[str] = []
+        for stub in stubs:
+            tid = stub.get("threadId")
+            if not tid:
+                raise MailboxError(
+                    f"Gmail listed message {stub.get('id')!r} without a "
+                    "threadId, so it cannot be grouped into a conversation. "
+                    "Retry; report it at https://github.com/amd/gaia/issues "
+                    "if it repeats."
+                )
+            if tid not in thread_ids:
+                thread_ids.append(tid)
+        return {
+            "thread_ids": thread_ids,
+            "messages_listed": len(stubs),
+            "truncated": bool(data.get("nextPageToken")) or len(stubs) >= wanted,
+        }
+
+    def get_thread(self, thread_id: str) -> Dict[str, Any]:
+        """Every message in one conversation, oldest first, bodies included.
+
+        Gmail does not promise thread order, so it is sorted here. Each message
+        also carries its raw ``_label_ids`` for the waiting-on-you veto; the
+        tool layer strips underscore keys before the model sees them.
+        """
+        if not thread_id or not _MESSAGE_ID_RE.fullmatch(thread_id):
+            raise ValueError(
+                f"thread_id {thread_id!r} is not a Gmail thread id. Use the "
+                "thread_id from a list_inbox or search_email result."
+            )
+        data = self._get(f"/users/me/threads/{thread_id}", params={"format": "full"})
+        raw = sorted(
+            data.get("messages") or [], key=lambda m: int(m.get("internalDate") or 0)
+        )
+        label_names = self._label_map()
+        messages = []
+        for msg in raw:
+            summary = message_summary(msg, label_names=label_names, include_body=True)
+            summary["draft"] = "DRAFT" in (msg.get("labelIds") or [])
+            summary["_label_ids"] = list(msg.get("labelIds") or [])
+            messages.append(summary)
+        return {"thread_id": thread_id, "messages": messages, "truncated": False}
 
     def list_folders(self, *, limit: int = 50) -> List[Dict[str, Any]]:
         """Labels with their unread and total counts.

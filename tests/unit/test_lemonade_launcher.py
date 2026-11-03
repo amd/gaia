@@ -5,8 +5,8 @@
 
 Modern Lemonade Server (10.7/10.8) removed the ``lemonade-server`` CLI:
 Windows ships ``LemonadeServer.exe`` (server) + ``lemonade.exe`` (client),
-context size is set via the ``LEMONADE_CTX_SIZE`` env var (not a
-``--ctx-size`` flag), and Linux ships ``/usr/bin/lemonade`` +
+the modern server takes no context size at launch (no ``--ctx-size`` flag and
+no environment variable — GAIA sends it per ``/load``), and Linux ships ``/usr/bin/lemonade`` +
 ``/usr/bin/lemond`` started via the ``lemond`` systemd unit. Legacy
 Lemonade still uses ``lemonade-server ... serve --ctx-size N``.
 
@@ -196,8 +196,8 @@ def test_get_installed_version_parses_legacy_client_output(mocker):
 
 
 def test_build_start_command_modern_windows(mocker):
-    """Modern Windows: argv=[<LemonadeServer.exe path>, '--silent'],
-    ctx size via LEMONADE_CTX_SIZE env — not argv."""
+    """Modern Windows: argv=[<LemonadeServer.exe path>, '--silent'] and no
+    env — modern Lemonade reads no context-size variable (#3320)."""
     from gaia.llm.lemonade_launcher import LemonadeTooling
 
     mocker.patch("platform.system", return_value="Windows")
@@ -216,7 +216,7 @@ def test_build_start_command_modern_windows(mocker):
         r"C:\Users\test\AppData\Local\lemonade_server\bin\LemonadeServer.exe",
         "--silent",
     ]
-    assert spec.env == {"LEMONADE_CTX_SIZE": "32768"}
+    assert spec.env == {}
 
 
 def test_build_start_command_legacy(mocker):
@@ -262,8 +262,7 @@ def test_build_start_command_legacy_windows_includes_no_tray(mocker):
 
 
 def test_build_start_command_modern_linux_uses_systemctl(mocker):
-    """Modern Linux best-effort path: systemctl --user start lemond,
-    ctx size via LEMONADE_CTX_SIZE env var.
+    """Modern Linux best-effort path: systemctl --user start lemond, no env.
 
     Pins the host platform: the systemd form is Linux-only, and this assertion
     silently depended on the runner not being macOS before the Darwin branch
@@ -281,7 +280,7 @@ def test_build_start_command_modern_linux_uses_systemctl(mocker):
     spec = build_start_command(tooling, ctx_size=32768)
 
     assert spec.argv == ["systemctl", "--user", "start", "lemond"]
-    assert spec.env == {"LEMONADE_CTX_SIZE": "32768"}
+    assert spec.env == {}
 
 
 def test_env_override_modern_non_exe_launched_verbatim(mocker):
@@ -298,7 +297,7 @@ def test_env_override_modern_non_exe_launched_verbatim(mocker):
     spec = build_start_command(tooling, ctx_size=32768)
 
     assert spec.argv == ["/opt/lemonade/lemond"]
-    assert spec.env == {"LEMONADE_CTX_SIZE": "32768"}
+    assert spec.env == {}
 
 
 @pytest.mark.parametrize(
@@ -353,13 +352,13 @@ def test_caller_env_merge_pattern_preserves_existing_path(mocker):
     mocker.patch.dict(
         os.environ, {"PATH": "/usr/bin:/bin", "SOME_OTHER_VAR": "keep-me"}
     )
-    spec = StartSpec(argv=["irrelevant"], env={"LEMONADE_CTX_SIZE": "32768"})
+    spec = StartSpec(argv=["irrelevant"], env={"LEMONADE_API_KEY": "k"})
 
     merged = {**os.environ, **spec.env}
 
     assert merged["PATH"] == "/usr/bin:/bin"
     assert merged["SOME_OTHER_VAR"] == "keep-me"
-    assert merged["LEMONADE_CTX_SIZE"] == "32768"
+    assert merged["LEMONADE_API_KEY"] == "k"
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +518,7 @@ def test_build_start_command_modern_macos_starts_the_daemon_not_systemctl(mocker
 
     assert spec.argv == [MACOS_DAEMON]
     assert "systemctl" not in spec.argv
-    assert spec.env == {"LEMONADE_CTX_SIZE": "32768"}
+    assert spec.env == {}
 
 
 def test_build_start_command_modern_macos_without_launcher_fails_loudly(mocker):
@@ -547,7 +546,7 @@ def test_macos_end_to_end_resolve_then_start_command(mocker):
     spec = build_start_command(resolve_lemonade(), ctx_size=65536)
 
     assert spec.argv == [MACOS_DAEMON]
-    assert spec.env == {"LEMONADE_CTX_SIZE": "65536"}
+    assert spec.env == {}
 
 
 # ---------------------------------------------------------------------------
@@ -653,11 +652,24 @@ def test_start_hint_legacy_windows_path_is_joined_for_cmd_not_posix(mocker):
     )
 
 
-def test_start_hint_windows_renders_env_the_cmd_way_never_drops_it(mocker):
-    """A ctx-carrying env var must survive into the rendered command on
-    Windows too — as `set "VAR=..."`, not the POSIX `VAR=... cmd` form (which
-    cmd.exe would treat as the program name). The quotes bound the value:
-    unquoted, cmd.exe keeps the space before `&&` in it."""
+def test_render_command_windows_renders_env_the_cmd_way_never_drops_it(mocker):
+    """An env var must survive into the rendered command on Windows — as
+    `set "VAR=..."`, not the POSIX `VAR=... cmd` form (which cmd.exe would
+    treat as the program name). The quotes bound the value: unquoted, cmd.exe
+    keeps the space before `&&` in it."""
+    from gaia.llm.lemonade_launcher import _render_command
+
+    mocker.patch("platform.system", return_value="Windows")
+
+    rendered = _render_command([r"C:\lemonade\lemond"], {"LEMONADE_API_KEY": "k"})
+
+    assert rendered == r'set "LEMONADE_API_KEY=k" && C:\lemonade\lemond'
+    assert "k &&" not in rendered
+
+
+def test_start_hint_windows_modern_names_no_ctx_variable(mocker):
+    """The hint must not tell a user to set a variable Lemonade never reads
+    (#3320): with no env, cmd.exe and PowerShell agree on one bare command."""
     from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
 
     mocker.patch("platform.system", return_value="Windows")
@@ -674,12 +686,9 @@ def test_start_hint_windows_renders_env_the_cmd_way_never_drops_it(mocker):
 
     hint = describe_start_hint(ctx_size=32768)
 
-    assert hint.command is None
-    assert hint.instruction == (
-        'Run in Command Prompt: set "LEMONADE_CTX_SIZE=32768" && C:\\lemonade\\lemond'
-        " — or in PowerShell: $env:LEMONADE_CTX_SIZE=32768; C:\\lemonade\\lemond"
-    )
-    assert "32768 &&" not in hint.instruction
+    assert hint.command == r"C:\lemonade\lemond"
+    assert hint.instruction == r"Run: C:\lemonade\lemond"
+    assert "CTX" not in hint.instruction
 
 
 def test_start_hint_windows_keeps_one_command_when_both_shells_agree(mocker):
@@ -710,8 +719,8 @@ def test_start_hint_windows_keeps_one_command_when_both_shells_agree(mocker):
         ([r"C:\x\lemond"], {}, r"C:\x\lemond"),
         (
             [r"C:\Users\Jane Doe\LemonadeServer.exe", "--silent"],
-            {"LEMONADE_CTX_SIZE": "65536"},
-            r"$env:LEMONADE_CTX_SIZE=65536; & 'C:\Users\Jane Doe\LemonadeServer.exe' --silent",
+            {"LEMONADE_API_KEY": "k"},
+            r"$env:LEMONADE_API_KEY=k; & 'C:\Users\Jane Doe\LemonadeServer.exe' --silent",
         ),
         # `$` and backtick stay literal only inside single quotes; `'` doubles.
         ([r"C:\O'Neil $x\lemond"], {}, r"& 'C:\O''Neil $x\lemond'"),
@@ -736,7 +745,7 @@ def test_start_hint_macos_names_the_daemon_via_real_detection(mocker):
 
     hint = describe_start_hint(ctx_size=32768)
 
-    assert hint.command == f"LEMONADE_CTX_SIZE=32768 {MACOS_DAEMON}"
+    assert hint.command == MACOS_DAEMON
     assert "lemonade-server" not in hint.instruction
     assert "systemctl" not in hint.instruction
     # The app is the normal macOS entry point, so name it alongside the CLI.

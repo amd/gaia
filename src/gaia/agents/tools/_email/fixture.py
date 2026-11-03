@@ -260,6 +260,11 @@ class _FixtureGmailApi:
                     "eval fixture mailbox cannot answer query part %r", str(exc)
                 )
                 return self._error(400, str(exc), reason="fixtureUnsupportedQuery")
+        if len(rest) == 2 and rest[0] == "threads":
+            thread = self._thread(rest[1])
+            if not thread:
+                return self._error(404, f"no thread {rest[1]}")
+            return httpx.Response(200, json={"id": rest[1], "messages": thread})
         if len(rest) == 2 and rest[0] == "messages":
             if rest[1] not in self._messages:
                 return self._error(404, f"no message {rest[1]}")
@@ -268,6 +273,13 @@ class _FixtureGmailApi:
                 200, json=self._store.get_message(rest[1], format=fmt)
             )
         return self._error(404, f"unknown path {path}")
+
+    def _thread(self, thread_id: str) -> List[Dict[str, Any]]:
+        return [
+            self._store.get_message(mid, format="full")
+            for mid, msg in self._messages.items()
+            if msg.get("threadId") == thread_id
+        ]
 
     def _labels(self) -> List[Dict[str, Any]]:
         used = {lid for m in self._messages.values() for lid in m.get("labelIds", [])}

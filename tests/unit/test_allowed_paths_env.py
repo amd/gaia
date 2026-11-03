@@ -481,10 +481,10 @@ class TestChatAgentInheritsTheNarrowedScope:
     """One narrowing in ChatAgent reaches every consumer of its scope."""
 
     def test_validator_rag_and_config_agree(self, confined):
-        pytest.importorskip("gaia_agent_chat")
+        pytest.importorskip("gaia_agent")
         from unittest.mock import patch
 
-        from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+        from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
         config = ChatAgentConfig(
             prompt_profile="doc",
@@ -492,8 +492,8 @@ class TestChatAgentInheritsTheNarrowedScope:
             allowed_paths=[str(confined.home)],
         )
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.SessionManager"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.SessionManager"),
         ):
             agent = ChatAgent(config)
 

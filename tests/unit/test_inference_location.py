@@ -27,9 +27,9 @@ from gaia.llm.inference_location import (
     resolve_inference_location,
 )
 
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # The resolver

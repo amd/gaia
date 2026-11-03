@@ -4,6 +4,7 @@
 import { useCallback, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { ArrowUp, FileText, Plus, Square, X } from 'lucide-react';
 import type { UseAttachments } from '../hooks/useAttachments';
+import { useT } from '../i18n/useT';
 import './Composer.css';
 
 interface ComposerProps {
@@ -35,8 +36,9 @@ export const MAX_MESSAGE_CHARS = 100_000;
 
 export function Composer({
     value, onChange, onSubmit, onStop, streaming = false, stopping = false, queueWhileStreaming = false, disabledReason, attachments,
-    placeholder = 'Ask GAIA anything', autoFocus, inputRef, leftControls, rightControls,
+    placeholder, autoFocus, inputRef, leftControls, rightControls,
 }: ComposerProps) {
+    const t = useT();
     const ownRef = useRef<HTMLTextAreaElement | null>(null);
     const textareaRef = inputRef ?? ownRef;
     const fileRef = useRef<HTMLInputElement>(null);
@@ -47,7 +49,7 @@ export function Composer({
     const tooLong = sentLength > MAX_MESSAGE_CHARS;
     const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong;
 
-    const shownPlaceholder = disabledReason || placeholder;
+    const shownPlaceholder = disabledReason || placeholder || t('composer.placeholder');
 
     // Grow with the text, up to a cap; shrink back when it is cleared.
     // Chrome counts the placeholder in scrollHeight, and a narrow first layout
@@ -92,20 +94,20 @@ export function Composer({
             onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }}
         >
             {attachments.attachments.length > 0 && (
-                <ul className="composer-attachments" aria-label="Attached files">
+                <ul className="composer-attachments" aria-label={t('composer.attached')}>
                     {attachments.attachments.map((a) => (
                         <li key={a.id} className={`composer-attachment${a.error ? ' has-error' : ''}`}>
                             {a.isImage && a.url
                                 ? <img src={a.url} alt="" className="composer-attachment-thumb" />
                                 : <FileText size={14} aria-hidden="true" />}
-                            <span className="composer-attachment-name" title={a.name}>{a.name}</span>
-                            {a.uploading && <span className="composer-attachment-state">Uploading…</span>}
+                            <span className="composer-attachment-name" title={a.name} dir="auto">{a.name}</span>
+                            {a.uploading && <span className="composer-attachment-state">{t('composer.uploading')}</span>}
                             {a.error && <span className="composer-attachment-state" role="alert" title={a.error}>{a.error}</span>}
                             <button
                                 type="button"
                                 className="composer-icon-btn"
                                 onClick={() => attachments.remove(a.id)}
-                                aria-label={`Remove ${a.name}`}
+                                aria-label={t('composer.remove', { name: a.name })}
                             >
                                 <X size={12} />
                             </button>
@@ -124,12 +126,13 @@ export function Composer({
                 rows={1}
                 disabled={disabled}
                 autoFocus={autoFocus}
-                aria-label="Message"
+                aria-label={t('composer.message')}
+                dir="auto"
             />
             {tooLong && (
                 <p className="composer-limit-error" role="alert">
-                    Too long to send: {sentLength.toLocaleString()} of {MAX_MESSAGE_CHARS.toLocaleString()} characters.
-                    {' '}Save it as a file and attach it with +, and GAIA can read all of it.
+                    {t('composer.tooLong', { sent: sentLength.toLocaleString(), max: MAX_MESSAGE_CHARS.toLocaleString() })}
+                    {' '}{t('composer.tooLongHint')}
                 </p>
             )}
             <div className="composer-row">
@@ -139,8 +142,8 @@ export function Composer({
                         className="composer-icon-btn"
                         onClick={() => fileRef.current?.click()}
                         disabled={disabled}
-                        aria-label="Attach files"
-                        title="Attach files"
+                        aria-label={t('composer.attach')}
+                        title={t('composer.attach')}
                     >
                         <Plus size={16} />
                     </button>
@@ -164,8 +167,8 @@ export function Composer({
                             className="composer-send"
                             onClick={onSubmit}
                             disabled={!canSend}
-                            aria-label="Queue message"
-                            title="Queue it to send when this reply ends (Enter)"
+                            aria-label={t('composer.queue')}
+                            title={t('composer.queueTitle')}
                         >
                             <ArrowUp size={16} />
                         </button>
@@ -176,8 +179,8 @@ export function Composer({
                             className="composer-send is-stop"
                             onClick={onStop}
                             disabled={stopping}
-                            aria-label="Stop"
-                            title={stopping ? 'Stopping…' : 'Stop (Esc)'}
+                            aria-label={t('composer.stop')}
+                            title={stopping ? t('composer.stopping') : t.hint(t('composer.stop'), 'Esc')}
                         >
                             <Square size={12} fill="currentColor" />
                         </button>
@@ -187,8 +190,8 @@ export function Composer({
                             className="composer-send"
                             onClick={onSubmit}
                             disabled={!canSend}
-                            aria-label="Send"
-                            title="Send (Enter)"
+                            aria-label={t('composer.send')}
+                            title={t.hint(t('composer.send'), 'Enter')}
                         >
                             <ArrowUp size={16} />
                         </button>

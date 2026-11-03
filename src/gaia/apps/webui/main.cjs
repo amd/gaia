@@ -47,11 +47,18 @@ const _MAIN_LOG_PATH = path.join(_GAIA_DIR, "electron-main.log");
 // very handler we are trying to install, falling through to Electron's bare
 // JS-error dialog.
 let installSafetyNet, installLogTee, _fatalHandler;
+let readCount, runSafeModePrompt, SAFE_MODE_THRESHOLD;
 // Set when a fatal error quits the app: the crash dialog was the question,
 // so the quit guard must not ask again.
 let fatalQuitting = false;
 try {
-  ({ installSafetyNet, installLogTee } = require("./main-safety-net.cjs"));
+  ({
+    installSafetyNet,
+    installLogTee,
+    readCount,
+    runSafeModePrompt,
+    SAFE_MODE_THRESHOLD,
+  } = require("./main-safety-net.cjs"));
   ({ fatal: _fatalHandler } = installSafetyNet({
     logPath: _MAIN_LOG_PATH,
     dialogModule: dialog,
@@ -67,6 +74,12 @@ try {
   // handler installed, so execution cannot safely continue.
   process.exit(1);
 }
+
+// ── Safe mode (issue #938) ────────────────────────────────────────────────────
+// After SAFE_MODE_THRESHOLD crashes in a row, skip the log tee (the #934 crash
+// path) and ask the user what to do before any other start-up work runs.
+const _crashCount = readCount(() => os.homedir());
+const _inSafeMode = _crashCount >= SAFE_MODE_THRESHOLD;
 
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
@@ -119,7 +132,7 @@ for (const [name, value] of chromiumSwitches({ platform: process.platform, env: 
 // Users often launch AppImages by double-click, not from a terminal, so
 // console output vanishes. Mirror console.log/error to a file so the
 // diagnostics bundler has something to attach.
-(function installMainLogTee() {
+function installMainLogTee() {
   try {
     try { fs.mkdirSync(_GAIA_DIR, { recursive: true }); } catch { /* ignore */ }
     const logPath = _MAIN_LOG_PATH;
@@ -186,7 +199,8 @@ for (const [name, value] of chromiumSwitches({ platform: process.platform, env: 
     // not refuse to launch over a log-tee failure.
     process.stderr.write(`[main] log tee failed: ${err.message}\n`);
   }
-})();
+}
+if (!_inSafeMode) installMainLogTee();
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -440,6 +454,7 @@ async function startBackend() {
  * Quit. Invoked from child.on("exit") when the kill was NOT initiated by us.
  */
 async function handleBackendCrash(code, signal) {
+  autoUpdater.reportStartFailure();
   try {
     const choice = await showBackendCrashDialog({
       dialog,
@@ -838,6 +853,45 @@ async function chooseLemonadeInDialog(found, parent) {
   return response === 0 ? "external" : "gaia";
 }
 
+/** Lets an update fetch its backend before the restart, so the first launch is offline. */
+function updateBackendHooks() {
+  return {
+    prefetchBackend: (version) => backendInstaller.prefetchBackend(version, { isPackaged: app.isPackaged }),
+    isBackendPrefetched: backendInstaller.isBackendPrefetched,
+  };
+}
+
+/** Setup failed after an update: download the version before it and restart into it. */
+async function goBackToPreviousVersion(version) {
+  const progress = installerProgressDialog.createProgressWindow({ revertingTo: version });
+  const ticker = setInterval(() => {
+    const percent = autoUpdater.getState().progress;
+    progress.onProgress("revert-download", percent, `${percent}%`);
+  }, 500);
+  let failed = false;
+  let failure;
+  try {
+    autoUpdater.init(null, { confirmRestart: async () => true, ...updateBackendHooks() });
+    await autoUpdater.revertUpdate();
+  } catch (err) {
+    failed = true;
+    failure = err;
+  } finally {
+    clearInterval(ticker);
+  }
+  if (!failed) return true;
+  progress.close();
+  await dialog.showMessageBox({
+    type: "error",
+    title: "GAIA",
+    message: `GAIA couldn't go back to ${version}.`,
+    detail: `${(failure && failure.message) || failure}\n\nYou can also download it from https://github.com/amd/gaia/releases.`,
+    buttons: ["OK"],
+    noLink: true,
+  });
+  return false;
+}
+
 /**
  * Ensure the Python backend is installed before the main window loads.
  *
@@ -879,7 +933,9 @@ async function bootstrapBackend() {
   // Slow path: need to install or upgrade. Show the progress window.
   let keepTrying = true;
   while (keepTrying) {
-    const progress = installerProgressDialog.createProgressWindow();
+    const progress = installerProgressDialog.createProgressWindow({
+      updating: Boolean(existingBin),
+    });
 
     try {
       await backendInstaller.ensureBackend({
@@ -900,6 +956,7 @@ async function bootstrapBackend() {
         message: (err && err.message) || "GAIA install failed.",
         stage: (err && err.stage) || null,
         suggestion: (err && err.suggestion) || null,
+        revertTo: autoUpdater.previousVersion(),
       };
 
       const choice = await installerProgressDialog.showFailureDialog(
@@ -909,6 +966,11 @@ async function bootstrapBackend() {
 
       if (choice === "retry") {
         continue; // loop
+      }
+      if (choice === "revert") {
+        // On success the installer is taking over, so this launch ends.
+        if (await goBackToPreviousVersion(errorInfo.revertTo)) return false;
+        continue;
       }
       if (choice === "manual") {
         // The user was directed to the docs in an external browser. Quit so
@@ -1170,6 +1232,16 @@ app.on("second-instance", (_event, argv, _cwd) => {
 });
 
 app.whenReady().then(async () => {
+  if (_inSafeMode) {
+    await runSafeModePrompt({
+      count: _crashCount,
+      dialogModule: dialog,
+      appModule: app,
+      shellModule: shell,
+    });
+    return;
+  }
+
   // Phase 0: seed bundled agents BEFORE the Python backend starts, so the
   // agent registry sees them on its first discovery pass. Failures here are
   // non-fatal — the app must still launch even if seeding is blocked (e.g.
@@ -1229,7 +1301,7 @@ app.whenReady().then(async () => {
   // Any failure here is logged and swallowed — the app continues to run
   // even if auto-update is unavailable.
   try {
-    autoUpdater.init(mainWindow, { confirmRestart: confirmUpdateRestart });
+    autoUpdater.init(mainWindow, { confirmRestart: confirmUpdateRestart, ...updateBackendHooks() });
   } catch (err) {
     console.error(
       "[main] Failed to init auto-updater:",
@@ -1256,6 +1328,14 @@ app.whenReady().then(async () => {
       console.log("Backend API is ready on port", backendPort);
     } else {
       console.warn("Backend did not respond within timeout.");
+    }
+  }
+  if (!backendReady) {
+    autoUpdater.reportStartFailure();
+    if (backendProcess) {
+      waitForBackend(STARTUP_TIMEOUT * 10).then((ready) => {
+        if (ready) autoUpdater.clearStartFailure();
+      });
     }
   }
 
@@ -1331,7 +1411,7 @@ function askAboutRunningWork(action) {
   });
 }
 
-/** The update dialog's "Restart now": the installer starts at once, so ask first. */
+/** Restarting into an update: the installer starts at once, so ask first. */
 function confirmUpdateRestart() {
   return workCanBeLost() ? askAboutRunningWork(RESTART_FOR_UPDATE) : Promise.resolve(true);
 }

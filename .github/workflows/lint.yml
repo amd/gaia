@@ -36,7 +36,7 @@ on:
       - 'docs/docs.json'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - 'src/**'
       - 'hub/**'
@@ -93,7 +93,7 @@ jobs:
           # Linting tools are auto-downloaded by uvx
           # The hub agent packages are installed so Import Validation really
           # imports GaiaAgent and ChatAgent instead of skipping them.
-          uv pip install --system -e . -e hub/agents/chat/python -e hub/agents/gaia/python
+          uv pip install --system -e . -e hub/agents/gaia/python
 
       - name: Run lint checks
         env:

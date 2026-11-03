@@ -611,6 +611,13 @@ CREATE TABLE IF NOT EXISTS forgotten (
     sensitive    INTEGER NOT NULL DEFAULT 0,
     forgotten_at TEXT NOT NULL
 );
+
+-- Agent UI chats the user deleted (#5931). A stopped turn can finish after its
+-- chat is gone, in another process; its writes check here and file nothing.
+CREATE TABLE IF NOT EXISTS deleted_sessions (
+    session_id  TEXT PRIMARY KEY,
+    deleted_at  TEXT NOT NULL
+);
 """
 
 # Sync triggers for conversations_fts (external-content FTS5 table).
@@ -883,7 +890,7 @@ class MemoryStore:
         if current_version < 3:
             logger.info("[MemoryStore] migrating schema v%d -> v3", current_version)
 
-            # v2 -> v3: add the procedures table (procedural memory, #887).
+            # v2 -> v3: add the procedures table (procedural memory).
             # The table and its indexes are created by _SCHEMA_SQL's
             # CREATE TABLE IF NOT EXISTS, which already ran in _init_schema(),
             # so this step only advances the version marker.  Additive only —
@@ -898,7 +905,7 @@ class MemoryStore:
         if current_version < 4:
             logger.info("[MemoryStore] migrating schema v%d -> v4", current_version)
 
-            # v3 -> v4: add the skill_deltas table (adaptive skills, #2674).
+            # v3 -> v4: add the skill_deltas table (adaptive skills).
             # Same shape as the v2 -> v3 step: _SCHEMA_SQL's CREATE TABLE IF NOT
             # EXISTS already ran in _init_schema(), so this only advances the
             # marker. Additive — no existing row or read path is touched, and an
@@ -913,7 +920,7 @@ class MemoryStore:
         if current_version < 5:
             logger.info("[MemoryStore] migrating schema v%d -> v5", current_version)
 
-            # v4 -> v5: add the synthesis_marks table (procedural memory, #887).
+            # v4 -> v5: add the synthesis_marks table (procedural memory).
             # Same shape as the two steps above — _SCHEMA_SQL's CREATE TABLE IF
             # NOT EXISTS already ran in _init_schema(), so this only advances the
             # marker.  A store written before this build has no marks and no
@@ -927,7 +934,7 @@ class MemoryStore:
             current_version = 5
 
         if current_version < 6:
-            # v5 -> v6: add the forgotten table (#4730). Same shape as above:
+            # v5 -> v6: add the forgotten table. Same shape as above:
             # the table already exists, so this only advances the marker.
             self._conn.execute(
                 "UPDATE schema_version SET version = 6, migrated_at = ?",
@@ -1083,8 +1090,9 @@ class MemoryStore:
             try:
                 self._conn.execute(
                     "INSERT INTO conversations (session_id, role, content, context, timestamp) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (session_id, role, content, context, now),
+                    "SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS "
+                    "(SELECT 1 FROM deleted_sessions WHERE session_id = ?)",
+                    (session_id, role, content, context, now, session_id),
                 )
                 self._conn.commit()
             except Exception:
@@ -1525,7 +1533,7 @@ class MemoryStore:
         except sqlite3.OperationalError as e:
             # A failed dedup search means store() falls through to inserting a
             # duplicate -- debug level hid exactly that for as long as this
-            # query could raise (#4142's own bug was one such cause).
+            # query could raise.
             logger.warning("[MemoryStore] FTS5 dedup search failed: %s", e)
 
         return None
@@ -2771,7 +2779,9 @@ class MemoryStore:
                     """
                     INSERT INTO tool_history
                         (session_id, tool_name, args, result_summary, success, executed, error, duration_ms, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    WHERE NOT EXISTS
+                        (SELECT 1 FROM deleted_sessions WHERE session_id = ?)
                     """,
                     (
                         session_id,
@@ -2783,6 +2793,7 @@ class MemoryStore:
                         error,
                         duration_ms,
                         now,
+                        session_id,
                     ),
                 )
                 self._conn.commit()
@@ -2985,7 +2996,7 @@ class MemoryStore:
                 (now_iso,),
             ).fetchone()[0]
 
-            # Procedures (procedural memory / skills, #887). COUNT(*) instead of
+            # Procedures (procedural memory / skills). COUNT(*) instead of
             # fetching rows so a large procedure table never loads into memory.
             p_total = self._conn.execute("SELECT COUNT(*) FROM procedures").fetchone()[
                 0
@@ -3509,7 +3520,7 @@ class MemoryStore:
             ]
 
     # ==================================================================
-    # Procedures (v3 — procedural memory, #887)
+    # Procedures (v3 — procedural memory)
     # ==================================================================
 
     def _row_to_procedure_dict(self, row) -> Dict:
@@ -3814,7 +3825,7 @@ class MemoryStore:
                 raise
 
     # ------------------------------------------------------------------
-    # Skill deltas — the learned overlay on an authored skill (v4, #2674)
+    # Skill deltas — the learned overlay on an authored skill (v4)
     # ------------------------------------------------------------------
 
     def put_delta(
@@ -4185,7 +4196,7 @@ class MemoryStore:
         ]
 
     # ------------------------------------------------------------------
-    # Synthesis progress — what the distiller has already consumed (#887)
+    # Synthesis progress — what the distiller has already consumed
     # ------------------------------------------------------------------
 
     #: ``meta`` key holding the newest tool-history timestamp synthesis consumed.
@@ -4613,6 +4624,40 @@ class MemoryStore:
                 raise
         logger.info("[MemoryStore] cleared conversations: %d rows", deleted)
         return {"conversations": deleted}
+
+    def delete_session(self, session_id: str) -> Dict:
+        """Delete *session_id*'s conversation turns and tool calls.
+
+        Both hold the chat's own words: tool args and result summaries can
+        quote files, searches and pages. What was learned from the session
+        (knowledge, procedures) is kept. The FTS index follows through the
+        delete trigger. The id is recorded as deleted, so a turn still
+        finishing under it files nothing. Returns the deleted row counts.
+        """
+        with self._locked():
+            try:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO deleted_sessions (session_id, deleted_at) "
+                    "VALUES (?, ?)",
+                    (session_id, _now_iso()),
+                )
+                conv_deleted = self._conn.execute(
+                    "DELETE FROM conversations WHERE session_id = ?", (session_id,)
+                ).rowcount
+                tool_deleted = self._conn.execute(
+                    "DELETE FROM tool_history WHERE session_id = ?", (session_id,)
+                ).rowcount
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        logger.info(
+            "[MemoryStore] deleted session %s: %d conversation turns, %d tool calls",
+            session_id,
+            conv_deleted,
+            tool_deleted,
+        )
+        return {"conversations": conv_deleted, "tool_history": tool_deleted}
 
     def seed_bulk(self, items: List[Dict]) -> List[str]:
         """Bulk-insert knowledge rows, bypassing dedup.
