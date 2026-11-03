@@ -97,7 +97,25 @@ describe('SetupScreen', () => {
         const onClose = vi.fn();
         render(<SetupScreen onReady={vi.fn()} onClose={onClose} />);
         await screen.findByText('backend 500');
-        expect(screen.queryByRole('button', { name: 'Not now' })).not.toBeNull();
+        expect(screen.queryByRole('button', { name: 'Back to GAIA' })).not.toBeNull();
+    });
+
+    it('offers Back to GAIA when opened from Settings, and not on first run', async () => {
+        const { unmount } = render(<SetupScreen onReady={vi.fn()} />);
+        await screen.findByRole('button', { name: 'Continue' });
+        expect(screen.queryByRole('button', { name: 'Back to GAIA' })).toBeNull();
+        unmount();
+        const onClose = vi.fn();
+        render(<SetupScreen onReady={vi.fn()} onClose={onClose} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Back to GAIA' }));
+        expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('opened from Settings, picks up a setup still running but not a finished one', async () => {
+        mockedApi.getSetupStatus.mockResolvedValue(runStatus([progress({ id: QWEN.id, state: 'ready', bytes_done: 1e9 })], { state: 'ready' }));
+        render(<SetupScreen onReady={vi.fn()} onClose={vi.fn()} />);
+        expect(await screen.findByRole('button', { name: 'Continue' })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Start chatting' })).toBeNull();
     });
 
     it('a failed setup-again run (download step) still offers a way back', async () => {
@@ -107,6 +125,6 @@ describe('SetupScreen', () => {
         render(<SetupScreen onReady={vi.fn()} onClose={onClose} />);
         fireEvent.click(await pastChecks());
         await screen.findByText('Try again');
-        await waitFor(() => expect(screen.queryByRole('button', { name: 'Not now' })).not.toBeNull());
+        await waitFor(() => expect(screen.queryByRole('button', { name: 'Back to GAIA' })).not.toBeNull());
     });
 });

@@ -688,8 +688,10 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 | **EmailTriageAgent** | Email triage for Gmail or Outlook (local inference; needs the Google or Microsoft connector) — hub (`email/`) |
 
 Per-task agents (code, analyst, browser, fileio, docqa, doc-search, summarize, jira,
-docker, blender, sd, emr, routing) were **deleted**: their capability is the flagship's
-tool surface driven by a `SKILL.md` in [`hub/skills/`](hub/skills/). Adding a capability
+docker, blender, sd, emr, routing) were **deleted**. Most of their capability is now the flagship's
+tool surface driven by a `SKILL.md` in [`hub/skills/`](hub/skills/) (for example
+`coding`, `file-ops`, `summarize`, `image-gen`); jira, docker, blender, emr and
+routing were dropped with no skill replacing them. Adding a capability
 means writing a skill, not shipping an agent. Custom agents stay supported (`gaia agent
 init/pack/publish`, `~/.gaia/agents/` discovery); the one reference package `gaia agent
 init` mirrors is [`tests/fixtures/agents/hello-world/`](tests/fixtures/agents/hello-world/),

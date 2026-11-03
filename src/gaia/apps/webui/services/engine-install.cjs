@@ -10,7 +10,9 @@
  *
  * Status: { phase: 'running'|'failed', stage, percent, message, error }
  * percent is null when the stage has none to report. error, when failed:
- * { stage, reason, message, logTail }; reason is one of FAILURE_REASONS or null.
+ * { stage, reason, message, logTail, previousVersion }; reason is one of
+ * FAILURE_REASONS or null, and previousVersion is the version an update can
+ * go back to, or null.
  */
 
 "use strict";
@@ -21,6 +23,7 @@ const IPC_STATUS_REQUEST = "install:status";
 const IPC_RETRY_REQUEST = "install:retry";
 const IPC_CONTINUE_REQUEST = "install:continue";
 const IPC_OPEN_LOG_FILE = "install:open-log-file";
+const IPC_REVERT_REQUEST = "install:revert";
 
 /** Not an installer stage: the backend is installed and starting. */
 const STARTING_STAGE = "start";
@@ -35,8 +38,10 @@ const CONTINUE = "continue";
  * @param {() => Electron.BrowserWindow|null} deps.getWindow
  * @param {boolean} deps.isPackaged
  * @param {(err: Error) => void} deps.onFailed - Runs once the failure is on screen.
+ * @param {() => string|null} deps.previousVersion - The version an update can go back to.
+ * @param {() => Promise<void>} deps.revert - Installs that version; the app then restarts into it.
  */
-function createEngineInstall({ installer, ipcMain, shell, getWindow, isPackaged, onFailed }) {
+function createEngineInstall({ installer, ipcMain, shell, getWindow, isPackaged, onFailed, previousVersion, revert }) {
   let status = { phase: "running", stage: null, percent: null, message: "", error: null };
   let wakeForRetry = null;
 
@@ -60,6 +65,13 @@ function createEngineInstall({ installer, ipcMain, shell, getWindow, isPackaged,
   ipcMain.handle(IPC_CONTINUE_REQUEST, () => {
     if (!wakeForRetry || status.error?.stage !== AGENT_REFRESH_STAGE) return false;
     wakeForRetry(CONTINUE);
+    return true;
+  });
+
+  // After a failed update: go back to the version before it. Its errors reach the screen.
+  ipcMain.handle(IPC_REVERT_REQUEST, async () => {
+    if (!wakeForRetry || !status.error?.previousVersion) return false;
+    await revert();
     return true;
   });
 
@@ -95,6 +107,7 @@ function createEngineInstall({ installer, ipcMain, shell, getWindow, isPackaged,
             // The rest is the tool's output, which the log tail carries.
             message: String(err.message).split("\n")[0],
             logTail: installer.readLogTail(),
+            previousVersion: previousVersion(),
           },
         });
         onFailed(err);
@@ -125,4 +138,5 @@ module.exports = {
   IPC_RETRY_REQUEST,
   IPC_CONTINUE_REQUEST,
   IPC_OPEN_LOG_FILE,
+  IPC_REVERT_REQUEST,
 };

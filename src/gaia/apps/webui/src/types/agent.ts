@@ -146,6 +146,8 @@ export interface EngineInstallError {
   /** The installer's own first line, in English. */
   message: string;
   logTail: string[];
+  /** After a failed update: the version GAIA can go back to. */
+  previousVersion?: string | null;
 }
 
 /** services/engine-install.cjs: where the backend install has got to. */
@@ -166,6 +168,8 @@ export interface GaiaInstallBridge {
   retry: () => Promise<boolean>;
   /** Past a failed agent update only; resolves false for any other failure. */
   continueWithoutAgentUpdate: () => Promise<boolean>;
+  /** Installs the version before a failed update; the app restarts into it. */
+  revert: () => Promise<boolean>;
   openLogFile: () => Promise<{ ok: boolean; message: string | null }>;
 }
 

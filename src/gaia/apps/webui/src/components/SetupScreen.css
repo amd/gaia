@@ -423,6 +423,10 @@ button.setup-rail-step:hover {
     font-weight: 600;
 }
 
+.setup-close {
+    align-self: flex-start;
+}
+
 .setup-lede {
     margin: 6px 0 24px;
     color: var(--text-secondary);

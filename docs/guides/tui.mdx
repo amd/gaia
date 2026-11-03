@@ -57,7 +57,7 @@ it runs) — so there is nothing to unzip and nothing to `chmod`.
 | macOS Apple silicon | `gaia-<version>-darwin-arm64.pkg` | double-click | `/usr/local/bin` |
 | macOS Intel | `gaia-<version>-darwin-x64.pkg` | double-click | `/usr/local/bin` |
 | Linux x64 (Debian/Ubuntu) | `gaia_<version>_amd64.deb` | `sudo dpkg -i gaia_<version>_amd64.deb` | `/usr/bin` |
-| Linux x64 (Fedora/RHEL) | `gaia-<version>.x86_64.rpm` | `sudo rpm -i gaia-<version>.x86_64.rpm` | `/usr/bin` |
+| Linux x64 (Fedora/RHEL) | `gaia-<version>.x86_64.rpm` | `sudo dnf install ./gaia-<version>.x86_64.rpm` | `/usr/bin` |
 
 On Windows this is the one GAIA installer: on **Choose Components**, tick
 **Terminal** — and the desktop app too, if you want both. [Install GAIA](/guides/install)
@@ -695,7 +695,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
 | `/copy all` | Copy the whole conversation as markdown |
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
-| `/update` | Check for a newer GAIA. `/update now` installs the newest, `/update v0.25.0` installs and pins that exact one, `/update auto on` installs new releases when you quit (off by default), `/update rc on` offers release candidates too. See [Updating GAIA](/guides/install#updating-gaia) |
+| `/update` | Check for a newer GAIA. `/update now` installs the newest, `/update v0.25.0` installs and pins that exact one, `/update back` returns to the version before the last update, `/update auto on` installs new releases when you quit (off by default), `/update rc on` offers release candidates too. See [Updating GAIA](/guides/install#updating-gaia) |
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
 their own — `/model`, `/setup`, `/models`, `/gpu` and `/provider` are flagship-only (`/gpu` only on an integrated-GPU PC), and `/memory`

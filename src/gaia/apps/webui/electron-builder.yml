@@ -147,7 +147,7 @@ nsis:
   uninstallerSidebar: ../../../../installer/nsis/installer-sidebar.bmp
   uninstallDisplayName: ${productName}
   license: ../../../../LICENSE.md
-  include: ../../../../installer/nsis/installer.nsh
+  include: nsis/installer.nsh
   # Respect §5 — keep user data by default. The uninstaller wizard / the
   # `gaia uninstall --purge` command handle data removal when the user opts in.
   deleteAppDataOnUninstall: false

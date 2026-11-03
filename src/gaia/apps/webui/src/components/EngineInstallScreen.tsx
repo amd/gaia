@@ -55,12 +55,13 @@ function Progress({ status }: { status: EngineInstallStatus }) {
     );
 }
 
-function Failure({ error, busy, notice, onRetry, onContinue, onOpenLog }: {
+function Failure({ error, busy, notice, onRetry, onContinue, onRevert, onOpenLog }: {
     error: EngineInstallError;
     busy: boolean;
     notice: string | null;
     onRetry: () => void;
     onContinue: () => void;
+    onRevert: () => void;
     onOpenLog: () => void;
 }) {
     const t = useT();
@@ -76,6 +77,11 @@ function Failure({ error, busy, notice, onRetry, onContinue, onOpenLog }: {
             {error.stage === AGENT_REFRESH_STAGE && (
                 <button type="button" className="btn-secondary engine-retry" disabled={busy} onClick={onContinue}>
                     {t('engine.continueWithout')}
+                </button>
+            )}
+            {error.previousVersion && (
+                <button type="button" className="btn-secondary engine-retry" disabled={busy} onClick={onRevert}>
+                    {t('update.chip.goBack', { version: error.previousVersion })}
                 </button>
             )}
             {notice && <p className="engine-error" role="alert"><bdi dir="ltr">{notice}</bdi></p>}
@@ -124,6 +130,15 @@ export function EngineInstallScreen() {
         window.gaiaInstall!.continueWithoutAgentUpdate().catch(fail).finally(() => setBusy(false));
     }, [fail]);
 
+    // On success the installer takes over and the app restarts, so busy stays set.
+    const revert = useCallback(() => {
+        setBusy(true);
+        setNotice(null);
+        window.gaiaInstall!.revert()
+            .then((started) => { if (!started) setBusy(false); })
+            .catch((err) => { fail(err); setBusy(false); });
+    }, [fail]);
+
     const openLog = useCallback(() => {
         setNotice(null);
         window.gaiaInstall!.openLogFile()
@@ -143,7 +158,7 @@ export function EngineInstallScreen() {
                 <div className="engine-inner">
                     <h1 className="engine-title">{title}</h1>
                     {failed ? (
-                        <Failure error={error} busy={busy} notice={notice} onRetry={retry} onContinue={continueAnyway} onOpenLog={openLog} />
+                        <Failure error={error} busy={busy} notice={notice} onRetry={retry} onContinue={continueAnyway} onRevert={revert} onOpenLog={openLog} />
                     ) : (
                         <>
                             <p className="engine-lede">{t('engine.lede')}</p>

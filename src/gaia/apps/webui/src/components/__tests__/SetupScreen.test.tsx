@@ -342,11 +342,11 @@ describe('SetupScreen: the recommendation', () => {
     it('offers Not now only when setup was reopened from Settings', async () => {
         const onClose = vi.fn();
         await open({ onClose });
-        fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Back to GAIA' }));
         expect(onClose).toHaveBeenCalledTimes(1);
         cleanup();
         await open();
-        expect(screen.queryByRole('button', { name: 'Not now' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Back to GAIA' })).not.toBeInTheDocument();
     });
 });
 

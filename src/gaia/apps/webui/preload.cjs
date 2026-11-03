@@ -120,6 +120,9 @@ contextBridge.exposeInMainWorld("gaiaInstall", {
   // Goes on past a failed agent update; the next launch tries it again.
   continueWithoutAgentUpdate: () => ipcRenderer.invoke("install:continue"),
 
+  // After a failed update, go back to the version before it; the app restarts into it.
+  revert: () => ipcRenderer.invoke("install:revert"),
+
   // Open the log file in the OS's default viewer.
   openLogFile: () => ipcRenderer.invoke("install:open-log-file"),
 });
@@ -159,6 +162,9 @@ contextBridge.exposeInMainWorld("gaiaUpdater", {
    * @param {string} tag  e.g. "v0.20.0"
    */
   installVersion: (tag) => ipcRenderer.invoke("gaia:update:install-version", tag),
+
+  /** Go back to the version before the last update, and pin it. */
+  revertUpdate: () => ipcRenderer.invoke("gaia:update:revert"),
 
   /**
    * Resume normal auto-updates — clears the version pin set by installVersion.

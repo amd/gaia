@@ -43,6 +43,18 @@ describe('locale registry', () => {
     });
 });
 
+describe('right-to-left messages keep a Latin phrase in order', () => {
+    const rtl = LOCALES.filter((l) => l.meta.dir === 'rtl');
+    it.each(rtl.map((l) => [l.meta.code, l] as const))('%s writes sizes and versions so they read left to right', (_code, locale) => {
+        for (const [key, text] of Object.entries(locale.messages)) {
+            // "412 MB" in an RTL line reads "MB 412": a size comes as one {param}, which is isolated.
+            expect(text, key).not.toMatch(/(\d|\})\s?(KB|MB|GB|TB)\b/);
+            // "GAIA {version}" reads "0.25.4 GAIA" unless the pair is one left-to-right island.
+            expect(text, key).not.toMatch(/(?<!⁦)(GAIA \{|\bv\{)/);
+        }
+    });
+});
+
 describe('translate', () => {
     it('renders English as-is', () => {
         expect(translate('en', 'sidebar.newChat')).toBe('New chat');

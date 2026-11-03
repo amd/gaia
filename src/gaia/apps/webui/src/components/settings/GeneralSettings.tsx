@@ -4,6 +4,7 @@
 import { useChatStore } from '../../stores/chatStore';
 import type { ThemePreference } from '../../utils/theme';
 import { DesktopAppSettings } from './DesktopAppSettings';
+import { SettingsDisclosure } from './SettingsDisclosure';
 import { UpdatesSection } from './UpdatesSection';
 import { DEFAULT_CUSTOM, PALETTES, type CustomColors, type PaletteId } from '../../utils/palette';
 import { formatShortcut } from '../../utils/platform';
@@ -88,10 +89,7 @@ export function GeneralSettings() {
                     ))}
                 </div>
             </div>
-            <DesktopAppSettings />
-            <UpdatesSection />
-            <div className="settings-field">
-                <span className="settings-label" id="palette-label">{t('settings.colors')}</span>
+            <SettingsDisclosure title={t('settings.colors')} titleId="palette-label" defaultOpen={palette === 'custom'}>
                 <div className="palette-grid" role="radiogroup" aria-labelledby="palette-label">
                     {PALETTES.map((p) => (
                         <button
@@ -136,9 +134,10 @@ export function GeneralSettings() {
                         <p className="settings-hint">{t('settings.colors.hint')}</p>
                     </div>
                 )}
-            </div>
-            <div className="settings-field">
-                <span className="settings-label">{t('settings.shortcuts')}</span>
+            </SettingsDisclosure>
+            <DesktopAppSettings />
+            <UpdatesSection />
+            <SettingsDisclosure title={t('settings.shortcuts')}>
                 <dl className="shortcut-list">
                     {SHORTCUTS.map(([keys, what]) => (
                         <div key={keys} className="shortcut-row">
@@ -147,7 +146,7 @@ export function GeneralSettings() {
                         </div>
                     ))}
                 </dl>
-            </div>
+            </SettingsDisclosure>
         </div>
     );
 }

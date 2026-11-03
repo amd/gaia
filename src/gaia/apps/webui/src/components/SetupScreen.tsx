@@ -270,7 +270,7 @@ function RunError({ run }: { run: SetupRunStatus }) {
 interface SetupScreenProps {
     /** Setup is done; `first` is a task the user picked to start with. */
     onReady: (first?: StartCard) => void;
-    /** Set when setup runs again from Settings: leaves it with nothing changed. */
+    /** Opened from Settings (run setup again, or add local models): offers a way back, and ends with the installed model in use. */
     onClose?: () => void;
 }
 
@@ -721,11 +721,6 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         setKeyState({ busy: false, error: null, done: false });
     }, []);
 
-    const finish = useCallback(async (first?: StartCard) => {
-        await refreshModel();
-        onReady(first);
-    }, [onReady, refreshModel]);
-
     // Extras added during the run: fetched and tested the same way, once it ends.
     useEffect(() => {
         if (!installed || queued.length === 0 || extending.current) return;
@@ -741,6 +736,19 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
 
     const canFinish = installed && queued.length === 0;
     const answering = cloud ? cloudModel : fullRun?.chat_model ?? (plan && !plan.decided_after_server ? plan.chat_model.id : null);
+
+    const finish = useCallback(async (first?: StartCard) => {
+        setActionError(null);
+        try {
+            // Setup leaves the active model alone, so a cloud user would stay on the cloud.
+            if (onClose && !cloud && answering) await selectModel(answering);
+            await refreshModel();
+        } catch (err) {
+            setActionError(errorText(err));
+            return;
+        }
+        onReady(first);
+    }, [answering, cloud, onClose, onReady, refreshModel, selectModel]);
 
     useEffect(() => {
         if (!canFinish) return;
@@ -974,7 +982,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 <div className="setup-row">
                                     <button type="button" className="link-btn" onClick={customize} disabled={runGoing}>{t('setup.plan.customize')}</button>
                                     <button type="button" className="link-btn" onClick={useCloud} disabled={runGoing}>{t('setup.plan.cloud')}</button>
-                                    {onClose && <button type="button" className="link-btn" onClick={onClose}>{t('setup.again.notNow')}</button>}
+                                    {onClose && <button type="button" className="link-btn" onClick={onClose}>{t('setup.backToGaia')}</button>}
                                 </div>
                                 {blocked && <p className="setup-error" role="alert"><bdi dir="ltr">{hardware?.blockers.join(' ')}</bdi></p>}
                                 {short && <p className="setup-error" role="alert">{t('setup.summary.short', { need: formatSize(short.needGb), free: formatSize(short.freeGb), drive: t('setup.summary.theDrive'), freeUp: formatSize(short.freeUpGb) })}</p>}
@@ -1261,7 +1269,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 </div>
                 {onClose && !running && stage !== 'plan' && stage !== 'ready' && (
                     <div className="setup-row">
-                        <button type="button" className="link-btn" onClick={onClose}>{t('setup.again.notNow')}</button>
+                        <button type="button" className="link-btn" onClick={onClose}>{t('setup.backToGaia')}</button>
                     </div>
                 )}
                 {runGoing && (choiceStep || stage === 'plan') && (

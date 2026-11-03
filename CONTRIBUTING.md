@@ -67,6 +67,12 @@ A good Summary + Why example:
 
 ---
 
+## Contributing a skill
+
+New skills are pull requests that add `hub/skills/<name>/`. The next final release publishes them to the hub, signed by AMD, so you never handle a key or token. The walkthrough is [Build and Publish a Skill](https://amd-gaia.ai/docs/guides/building-skills).
+
+---
+
 ## Code style and testing
 
 Development setup, lint commands, and the test layout live in [`docs/reference/dev.mdx`](docs/reference/dev.mdx) — please follow that guide rather than relying on commands quoted here, since it's the canonical source. New features need tests; the [`tests/`](tests/) directory has examples for unit, integration, MCP, and CLI testing patterns.

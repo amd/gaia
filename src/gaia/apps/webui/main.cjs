@@ -465,6 +465,7 @@ async function startBackend() {
  * Quit. Invoked from child.on("exit") when the kill was NOT initiated by us.
  */
 async function handleBackendCrash(code, signal) {
+  autoUpdater.reportStartFailure();
   try {
     const choice = await showBackendCrashDialog({
       dialog,
@@ -855,6 +856,20 @@ function showInstallFailure(err) {
   win.show();
 }
 
+/** Lets an update fetch its backend before the restart, so the first launch is offline. */
+function updateBackendHooks() {
+  return {
+    prefetchBackend: (version) => backendInstaller.prefetchBackend(version, { isPackaged: app.isPackaged }),
+    isBackendPrefetched: backendInstaller.isBackendPrefetched,
+  };
+}
+
+/** Setup failed after an update: download the version before it and restart into it. */
+async function goBackToPreviousVersion() {
+  autoUpdater.init(null, { confirmRestart: async () => true, ...updateBackendHooks() });
+  await autoUpdater.revertUpdate();
+}
+
 // ── gaia:// deep-link install bridge (issue #1725) ──────────────────────────
 //
 // The website's "Open in GAIA" button opens a `gaia://hub/install/<id>` URL.
@@ -1123,6 +1138,8 @@ app.whenReady().then(async () => {
     getWindow: () => mainWindow,
     isPackaged: app.isPackaged,
     onFailed: showInstallFailure,
+    previousVersion: () => autoUpdater.previousVersion(),
+    revert: goBackToPreviousVersion,
   });
 
   app.on("activate", () => {
@@ -1192,7 +1209,7 @@ app.whenReady().then(async () => {
   // Any failure here is logged and swallowed — the app continues to run
   // even if auto-update is unavailable.
   try {
-    autoUpdater.init(mainWindow, { confirmRestart: confirmUpdateRestart });
+    autoUpdater.init(mainWindow, { confirmRestart: confirmUpdateRestart, ...updateBackendHooks() });
   } catch (err) {
     console.error(
       "[main] Failed to init auto-updater:",
@@ -1219,6 +1236,14 @@ app.whenReady().then(async () => {
       console.log("Backend API is ready on port", backendPort);
     } else {
       console.warn("Backend did not respond within timeout.");
+    }
+  }
+  if (!backendReady) {
+    autoUpdater.reportStartFailure();
+    if (backendProcess) {
+      waitForBackend(STARTUP_TIMEOUT * 10).then((ready) => {
+        if (ready) autoUpdater.clearStartFailure();
+      });
     }
   }
 
@@ -1285,7 +1310,7 @@ function askAboutRunningWork(action) {
   });
 }
 
-/** The update dialog's "Restart now": the installer starts at once, so ask first. */
+/** Restarting into an update: the installer starts at once, so ask first. */
 function confirmUpdateRestart() {
   return workCanBeLost() ? askAboutRunningWork(RESTART_FOR_UPDATE) : Promise.resolve(true);
 }

@@ -32,6 +32,7 @@ function mountBridge(initial: EngineInstallStatus) {
         status: vi.fn(async () => initial),
         retry: vi.fn(async () => true),
         continueWithoutAgentUpdate: vi.fn(async () => true),
+        revert: vi.fn(async () => true),
         openLogFile: vi.fn(async () => ({ ok: true, message: null })),
     };
     window.gaiaInstall = bridge;
@@ -46,6 +47,34 @@ afterEach(() => {
     cleanup();
     delete window.gaiaInstall;
     window.history.replaceState(null, '', '/');
+});
+
+describe('EngineInstallScreen after a failed update', () => {
+    it('offers to go back to the version before it, and asks the desktop app to', async () => {
+        const { bridge } = mountBridge({ ...FAILED, error: { ...ERROR, previousVersion: '0.25.3' } });
+        render(<EngineInstallScreen />);
+        const goBack = await screen.findByRole('button', { name: 'Go back to 0.25.3' });
+        fireEvent.click(goBack);
+        await waitFor(() => expect(bridge.revert).toHaveBeenCalledTimes(1));
+        // The installer takes over from here, so nothing else is clickable.
+        expect(screen.getByRole('button', { name: 'Try again' })).toBeDisabled();
+    });
+
+    it('shows its failure as a notice and lets the user try again', async () => {
+        const { bridge } = mountBridge({ ...FAILED, error: { ...ERROR, previousVersion: '0.25.3' } });
+        bridge.revert = vi.fn(async () => { throw new Error('No installer for 0.25.3'); });
+        render(<EngineInstallScreen />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Go back to 0.25.3' }));
+        expect(await screen.findByText('No installer for 0.25.3')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+    });
+
+    it('has no way back on a first install', async () => {
+        mountBridge(FAILED);
+        render(<EngineInstallScreen />);
+        await screen.findByRole('button', { name: 'Try again' });
+        expect(screen.queryByRole('button', { name: /Go back/ })).toBeNull();
+    });
 });
 
 describe('EngineInstallScreen while installing', () => {

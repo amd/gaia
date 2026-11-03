@@ -227,7 +227,7 @@ export async function readResolvedAgentManifest(
  * undefined when the scorecard is absent, malformed, or missing the field —
  * never throws so a bad scorecard never breaks the catalog build.
  */
-function parseScorecardScore(markdown: string | null): number | undefined {
+export function parseScorecardScore(markdown: string | null): number | undefined {
   if (!markdown) return undefined;
   // Extract the YAML front matter block between the leading --- delimiters.
   // Tolerate CRLF so a Windows-authored scorecard still yields a score.

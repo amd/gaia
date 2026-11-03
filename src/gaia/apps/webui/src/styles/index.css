@@ -401,6 +401,8 @@ textarea:focus-visible {
 }
 .btn-primary { background: var(--accent-fill); color: var(--accent-fill-text); }
 .btn-primary:hover { background: var(--accent-fill-hover); }
+/* Lightened, the English fell to 4.46:1 on the hover fill. */
+.btn-primary .i18n-gloss.i18n-gloss { color: inherit; }
 .btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); }
 .btn-secondary:hover { background: var(--bg-active); }
 .btn-danger { background: var(--danger-dim); color: var(--danger); }

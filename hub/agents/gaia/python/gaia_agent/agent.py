@@ -33,9 +33,10 @@ Skills are discovered from the bundled ``skills/`` directory (highest-precedence
 root) and declared in ``gaia-agent.yaml``. Following the email agent's precedent
 (#2848), **no skill set loads by default** — the manifest ships its
 ``default_skill_set`` commented out until an eval measures the prompt-token cost.
-Skills are opt-in via ``--skill-set``, ``GAIA_SKILL_SET``, or — mid-session — the
-skill-library tools in :mod:`gaia.agents.tools.skill_library_tools`, which let the model
-discover, install, load, and unload skills on demand without a restart. Those
+No sets are declared, so any ``GAIA_SKILL_SET`` stops startup. Task skills load
+mid-session through the skill-library tools in
+:mod:`gaia.agents.tools.skill_library_tools`, which let the model discover,
+install, load, and unload skills on demand without a restart. Those
 tools never load anything on their own, so the out-of-the-box prompt budget is
 unchanged.
 """

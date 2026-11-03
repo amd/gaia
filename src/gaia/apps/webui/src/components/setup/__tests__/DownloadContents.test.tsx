@@ -16,13 +16,15 @@ describe('Everything coming to this PC', () => {
         expect(row("AI engine")).toHaveTextContent('7 MB');
         expect(row('Graphics support')).toHaveTextContent('From github.com/ggml-org/llama.cpp');
         expect(row('Graphics support')).toHaveTextContent('141 MB');
-        expect(row('App components')).toHaveTextContent('From pypi.org');
         expect(row('GAIA assistant')).toHaveTextContent('From hub.amd-gaia.ai');
+        // The app ships its packages: nothing comes from PyPI.
+        expect(document.body).not.toHaveTextContent('pypi.org');
     });
 
     it('invents no size it cannot know', () => {
-        render(<DownloadContents plan={P()} />);
-        expect(row('App components')).toHaveTextContent('Size shown when it starts');
+        const plan = P();
+        render(<DownloadContents plan={{ ...plan, components: plan.components!.map((c) => (c.id === 'agent' ? { ...c, installed: false } : c)) }} />);
+        expect(row('GAIA assistant')).toHaveTextContent('Size shown when it starts');
     });
 
     it('before a run says what is here and what is to come', () => {
@@ -34,13 +36,12 @@ describe('Everything coming to this PC', () => {
     });
 
     it('during a run shows each state from the run', () => {
-        const run = runStatus([], { components: { server: 'done', backend: 'active', packages: 'failed' } });
+        const run = runStatus([], { components: { server: 'done', backend: 'active', agent: 'failed' } });
         render(<DownloadContents plan={P()} run={run} />);
         expect(row("AI engine")).toHaveTextContent('Ready');
         expect(row('Graphics support')).toHaveTextContent('In progress');
-        expect(row('App components')).toHaveTextContent('Failed');
-        expect(row('App components')).toHaveClass('is-failed');
-        expect(row('GAIA assistant')).toHaveTextContent('Already here');
+        expect(row('GAIA assistant')).toHaveTextContent('Failed');
+        expect(row('GAIA assistant')).toHaveClass('is-failed');
     });
 
     it('a run that ended mid-step leaves that step unfinished, not still working', () => {

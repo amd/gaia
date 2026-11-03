@@ -15,11 +15,12 @@ const {
   IPC_STATUS_REQUEST,
   IPC_RETRY_REQUEST,
   IPC_OPEN_LOG_FILE,
+  IPC_REVERT_REQUEST,
 } = require("../../src/gaia/apps/webui/services/engine-install.cjs");
 
 const LOG_PATH = "/mock/home/.gaia/install.log";
 
-function setup({ ensureBackend = jest.fn(async () => "/mock/gaia"), window: win } = {}) {
+function setup({ ensureBackend = jest.fn(async () => "/mock/gaia"), window: win, previousVersion = null } = {}) {
   const handlers = new Map();
   const ipcMain = { handle: (channel, fn) => handlers.set(channel, fn) };
   const installer = {
@@ -31,6 +32,7 @@ function setup({ ensureBackend = jest.fn(async () => "/mock/gaia"), window: win 
   const send = jest.fn();
   const target = win === undefined ? { isDestroyed: () => false, webContents: { send } } : win;
   const onFailed = jest.fn();
+  const revert = jest.fn(async () => {});
   const engine = createEngineInstall({
     installer,
     ipcMain,
@@ -38,9 +40,11 @@ function setup({ ensureBackend = jest.fn(async () => "/mock/gaia"), window: win 
     getWindow: () => target,
     isPackaged: true,
     onFailed,
+    previousVersion: () => previousVersion,
+    revert,
   });
   const invoke = (channel, ...args) => handlers.get(channel)({}, ...args);
-  return { engine, installer, shell, send, onFailed, invoke };
+  return { engine, installer, shell, send, onFailed, revert, invoke };
 }
 
 const installError = (message, extra = {}) => Object.assign(new Error(message), extra);
@@ -128,6 +132,7 @@ describe("a failed install", () => {
         reason: "network",
         message: "Failed to install amd-gaia (pip exit 1).",
         logTail: ["last line"],
+        previousVersion: null,
       },
     });
     expect(onFailed).toHaveBeenCalledWith(err);
@@ -243,6 +248,44 @@ describe("install:open-log-file", () => {
     shell.openPath.mockResolvedValue("Failed to open path");
 
     await expect(invoke(IPC_OPEN_LOG_FILE)).resolves.toEqual({ ok: false, message: "Failed to open path" });
+  });
+});
+
+describe("going back after a failed update", () => {
+  const failOnce = () => jest.fn(async () => {
+    throw installError("boom", { stage: "install-package" });
+  });
+
+  test("the failure names the version an update can go back to", async () => {
+    const { engine, send } = setup({ ensureBackend: failOnce(), previousVersion: "0.25.3" });
+    void engine.run();
+    await new Promise((r) => setImmediate(r));
+    expect(send.mock.calls.at(-1)[1].error.previousVersion).toBe("0.25.3");
+    engine.stop();
+  });
+
+  test("Go back installs the previous version while the failure waits", async () => {
+    const { engine, invoke, revert } = setup({ ensureBackend: failOnce(), previousVersion: "0.25.3" });
+    void engine.run();
+    await new Promise((r) => setImmediate(r));
+    await expect(invoke(IPC_REVERT_REQUEST)).resolves.toBe(true);
+    expect(revert).toHaveBeenCalledTimes(1);
+    engine.stop();
+  });
+
+  test("a first install has nothing to go back to", async () => {
+    const { engine, invoke, revert } = setup({ ensureBackend: failOnce() });
+    void engine.run();
+    await new Promise((r) => setImmediate(r));
+    await expect(invoke(IPC_REVERT_REQUEST)).resolves.toBe(false);
+    expect(revert).not.toHaveBeenCalled();
+    engine.stop();
+  });
+
+  test("with no failure waiting, Go back does nothing", async () => {
+    const { invoke, revert } = setup({ previousVersion: "0.25.3" });
+    await expect(invoke(IPC_REVERT_REQUEST)).resolves.toBe(false);
+    expect(revert).not.toHaveBeenCalled();
   });
 });
 

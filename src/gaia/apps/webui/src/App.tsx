@@ -50,6 +50,7 @@ type SetupGate =
     | { state: 'checking' }
     | { state: 'ready' }
     | { state: 'needed'; check: SetupCheck }
+    | { state: 'addingLocal' }
     | { state: 'unknown'; error: string };
 
 const LEMONADE_FAIL_THRESHOLD = 3;
@@ -547,6 +548,20 @@ function App() {
         startChat(first.prompt).catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
     }, [checkSystemStatus, startChat, reloadAgentsAfterSetup]);
 
+    const leaveLocalSetup = useCallback(() => {
+        setSetup({ state: 'ready' });
+        void checkSystemStatus();
+    }, [checkSystemStatus]);
+
+    useEffect(() => {
+        const open = () => {
+            useChatStore.getState().closeSettings();
+            setSetup({ state: 'addingLocal' });
+        };
+        window.addEventListener('gaia:set-up-local', open);
+        return () => window.removeEventListener('gaia:set-up-local', open);
+    }, []);
+
     // ── Keyboard shortcuts ─────────────────────────────────────────────
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
@@ -645,14 +660,19 @@ function App() {
         );
     }
 
-    if (setup.state === 'needed' || setupAgain) {
+    if (setup.state === 'needed' || setup.state === 'addingLocal' || setupAgain) {
+        // Settings can open setup two ways; closing it goes back the way it came.
+        const close = setupAgain
+            ? () => runSetupAgain(false)
+            : setup.state === 'addingLocal' ? leaveLocalSetup : undefined;
         return (
             <div className="app">
                 <SetupScreen
                     onReady={(first) => { runSetupAgain(false); finishSetup(first); }}
-                    onClose={setupAgain ? () => runSetupAgain(false) : undefined}
+                    onClose={close}
                 />
                 <ModelNeededDialog />
+                <UpdateIndicator />
             </div>
         );
     }
