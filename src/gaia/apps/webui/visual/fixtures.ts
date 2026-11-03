@@ -176,6 +176,14 @@ const ROUTES: Record<string, unknown> = {
     'GET /memory/settings': { memory_enabled: true },
     'GET /skills': { skills: [] },
     'GET /system/model-server': { reachable: true, error: null, base_url: 'http://127.0.0.1:13305', port: 13305, owner: 'gaia' },
+    'GET /images/settings': {
+        model: 'Z-Image-Turbo', size: '1280x720', steps: null, max_steps: 100,
+        model_available: true, chat_model: 'Gemma-4-E4B-it-GGUF', chat_model_creates_images: false,
+        models: [
+            { id: 'Z-Image-Turbo', recipe: 'sd-cpp', downloaded: true, downloads_on_first_use: false, size_gb: 20.7, default_size: '1024x1024', default_steps: 9, sizes: ['512x512', '768x768', '1024x1024', '1280x720', '720x1280'] },
+            { id: 'SDXL-Turbo', recipe: 'sd-cpp', downloaded: false, downloads_on_first_use: true, size_gb: 6.46, default_size: '512x512', default_steps: 4, sizes: ['512x512', '768x768', '1024x1024'] },
+        ],
+    },
     'GET /lemonade/target': { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: 'http://127.0.0.1:13305', saved_base_url: null, api_key_stored: false, env_override: null },
 };
 

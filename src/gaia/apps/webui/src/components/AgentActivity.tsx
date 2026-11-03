@@ -28,6 +28,7 @@ import {
     Circle,
     Sparkles,
     Link,
+    ImageIcon,
     type LucideIcon,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -100,6 +101,8 @@ const TOOL_ICON: Record<string, LucideIcon> = {
     forget: Brain,
     forget_everything: Brain,
     search_past_conversations: Brain,
+    // Images
+    generate_image: ImageIcon,
     request_user_input: MessageCircleQuestionMark,
     // Skills
     load_skill: Sparkles,

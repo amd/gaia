@@ -70,6 +70,16 @@ const audit = (page: Page): Promise<string[]> =>
 
         if (document.documentElement.scrollWidth > innerWidth) problems.push('the page scrolls sideways');
 
+        // An <option> holds plain text, so the English hint in brackets can't be
+        // styled quietly there and its brackets scramble in rtl; use t.bare.
+        // The language picker names each language in English on purpose.
+        for (const option of document.querySelectorAll('option:not(#ui-language option)')) {
+            const text = option.textContent ?? '';
+            if (arabic.test(text) && /\([^)]*[A-Za-z]{3,}[^)]*\)/.test(text)) {
+                problems.push(`an <option> carries the English hint: "${text.trim().slice(0, 50)}"`);
+            }
+        }
+
         for (const el of document.querySelectorAll('body *')) {
             if (!shown(el)) continue;
             const box = el.getBoundingClientRect();
@@ -495,6 +505,17 @@ test('settings in the dark theme', async ({ page }) => {
     await expect(page.getByRole('dialog')).toBeVisible();
     expect(await audit(page)).toEqual([]);
 });
+
+for (const [locale, theme] of [['ar', 'light'], ['ar', 'dark'], ['en', 'light']] as const) {
+    test(`image creation settings (${locale}, ${theme})`, async ({ page }) => {
+        await open(page, '', locale, undefined, theme);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="images"]').click();
+        await expect(page.locator('#image-size')).toHaveValue('1280x720');
+        await expect(page.locator('.settings-notice')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+    });
+}
 
 /** How far each Arabic item name's text sits from the row's left and right edges. */
 const arabicNameGaps = (page: Page) =>

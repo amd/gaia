@@ -104,5 +104,7 @@ def check_image_choice(
                 f"{model} takes the sizes {', '.join(choice['sizes'])}, not {size}."
             )
     if steps is not None and not 1 <= steps <= IMAGE_MAX_STEPS:
-        raise ValueError(f"Image steps must be from 1 to {IMAGE_MAX_STEPS}, got {steps}.")
+        raise ValueError(
+            f"Image steps must be from 1 to {IMAGE_MAX_STEPS}, got {steps}."
+        )
     return choice

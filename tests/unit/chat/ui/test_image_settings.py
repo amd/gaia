@@ -26,7 +26,13 @@ CATALOG = [
         "downloaded": False,
         "labels": ["image"],
         "size": 6.46,
-        "image_defaults": {"width": 512, "height": 512, "steps": 4, "cfg_scale": 1.0, "soft_pixel_cap": 1048576},
+        "image_defaults": {
+            "width": 512,
+            "height": 512,
+            "steps": 4,
+            "cfg_scale": 1.0,
+            "soft_pixel_cap": 1048576,
+        },
     },
     {
         "id": "Z-Image-Turbo",
@@ -34,7 +40,13 @@ CATALOG = [
         "downloaded": True,
         "labels": ["image"],
         "size": 20.7,
-        "image_defaults": {"width": 1024, "height": 1024, "steps": 9, "cfg_scale": 1.0, "soft_pixel_cap": 2097152},
+        "image_defaults": {
+            "width": 1024,
+            "height": 1024,
+            "steps": 9,
+            "cfg_scale": 1.0,
+            "soft_pixel_cap": 2097152,
+        },
     },
     {
         "id": "Krea-2-Turbo",
@@ -42,7 +54,12 @@ CATALOG = [
         "downloaded": False,
         "labels": ["image"],
         "size": 35.0,
-        "image_defaults": {"width": 1024, "height": 1024, "steps": 8, "soft_pixel_cap": 4194304},
+        "image_defaults": {
+            "width": 1024,
+            "height": 1024,
+            "steps": 8,
+            "soft_pixel_cap": 4194304,
+        },
     },
     {
         "id": "RealESRGAN-x4plus",
@@ -51,7 +68,12 @@ CATALOG = [
         "labels": ["upscaling", "image"],
         "image_defaults": None,
     },
-    {"id": "Gemma-4-E4B-it-GGUF", "recipe": "llamacpp", "downloaded": True, "labels": ["vision"]},
+    {
+        "id": "Gemma-4-E4B-it-GGUF",
+        "recipe": "llamacpp",
+        "downloaded": True,
+        "labels": ["vision"],
+    },
 ]
 
 
@@ -133,7 +155,9 @@ def db():
 def catalog(monkeypatch):
     listed = MagicMock(return_value={"data": CATALOG})
     monkeypatch.setattr(lc.LemonadeClient, "list_models", listed)
-    monkeypatch.setattr(lc, "resolve_default_chat_model", lambda: "Qwen3.6-35B-A3B-GGUF")
+    monkeypatch.setattr(
+        lc, "resolve_default_chat_model", lambda: "Qwen3.6-35B-A3B-GGUF"
+    )
     return listed
 
 
@@ -145,7 +169,9 @@ def client(db):
     return TestClient(app, headers={"X-Gaia-UI": "1"})
 
 
-def test_a_fresh_install_creates_images_with_sdxl_turbo_at_its_defaults(client, catalog):
+def test_a_fresh_install_creates_images_with_sdxl_turbo_at_its_defaults(
+    client, catalog
+):
     body = client.get("/api/images/settings").json()
     assert (body["model"], body["size"], body["steps"]) == ("SDXL-Turbo", None, None)
     assert body["model_available"] is True
@@ -168,13 +194,19 @@ def test_settings_save_to_the_config_the_tui_reads(client, catalog):
 
 
 def test_a_new_model_goes_back_to_its_own_size_and_steps(client, catalog):
-    client.put("/api/images/settings", json={"model": "Z-Image-Turbo", "size": "1440x1440", "steps": 20})
+    client.put(
+        "/api/images/settings",
+        json={"model": "Z-Image-Turbo", "size": "1440x1440", "steps": 20},
+    )
     body = client.put("/api/images/settings", json={"model": "SDXL-Turbo"}).json()
     assert (body["model"], body["size"], body["steps"]) == ("SDXL-Turbo", None, None)
 
 
 def test_null_size_or_steps_means_automatic(client, catalog):
-    client.put("/api/images/settings", json={"model": "Z-Image-Turbo", "size": "1440x1440", "steps": 20})
+    client.put(
+        "/api/images/settings",
+        json={"model": "Z-Image-Turbo", "size": "1440x1440", "steps": 20},
+    )
     body = client.put("/api/images/settings", json={"size": None}).json()
     assert (body["model"], body["size"], body["steps"]) == ("Z-Image-Turbo", None, 20)
 
@@ -207,7 +239,9 @@ def test_a_model_removed_since_it_was_saved_is_reported(client, catalog):
     assert client.get("/api/images/settings").json()["model_available"] is False
 
 
-def test_a_compact_chat_model_is_reported_as_unable_to_create_images(client, catalog, db):
+def test_a_compact_chat_model_is_reported_as_unable_to_create_images(
+    client, catalog, db
+):
     db.set_setting("custom_model", "Gemma-4-E4B-it-GGUF")
     body = client.get("/api/images/settings").json()
     assert body["chat_model"] == "Gemma-4-E4B-it-GGUF"
@@ -242,17 +276,28 @@ def _sd_host(tmp_path, follow):
 
 
 def test_an_image_without_a_named_model_uses_the_saved_settings(tmp_path):
-    GaiaConfig.save_keys({"image_model": "Z-Image-Turbo", "image_size": "1280x720", "image_steps": 12})
+    GaiaConfig.save_keys(
+        {"image_model": "Z-Image-Turbo", "image_size": "1280x720", "image_steps": 12}
+    )
     host = _sd_host(tmp_path, follow=True)
     host._generate_image("a lighthouse")
     sent = host.sd_client.generate_image.call_args.kwargs
-    assert (sent["model"], sent["size"], sent["steps"]) == ("Z-Image-Turbo", "1280x720", 12)
+    assert (sent["model"], sent["size"], sent["steps"]) == (
+        "Z-Image-Turbo",
+        "1280x720",
+        12,
+    )
 
 
 def test_a_named_model_keeps_its_own_defaults(tmp_path):
-    GaiaConfig.save_keys({"image_model": "Z-Image-Turbo", "image_size": "1280x720", "image_steps": 12})
+    GaiaConfig.save_keys(
+        {"image_model": "Z-Image-Turbo", "image_size": "1280x720", "image_steps": 12}
+    )
     host = _sd_host(tmp_path, follow=True)
-    host.sd_client.list_sd_models.return_value = [{"id": "Z-Image-Turbo"}, {"id": "Krea-2-Turbo"}]
+    host.sd_client.list_sd_models.return_value = [
+        {"id": "Z-Image-Turbo"},
+        {"id": "Krea-2-Turbo"},
+    ]
     host._generate_image("a lighthouse", model="Krea-2-Turbo")
     sent = host.sd_client.generate_image.call_args.kwargs
     assert (sent["model"], sent["size"], sent["steps"]) == ("Krea-2-Turbo", None, None)

@@ -217,6 +217,12 @@ result = agent.process_query("create a sunset over mountains")
 - `list_sd_models()` - List the image models downloaded in Lemonade, with each one's `image_defaults`
 - `get_generation_history(limit)` - See generated images from session
 
+`init_sd(follow_user_settings=True)` makes a request that names no model use
+the user's `image_model`, `image_size` and `image_steps` from
+`~/.gaia/config.json`, read fresh at each call, ahead of `default_model`,
+`default_size` and `default_steps`. The flagship sets it; a request that names
+a model keeps that model's own defaults.
+
 To opt into image-to-3D reconstruction, initialize the mixin with
 `enable_3d_tools=True`. This adds
 `generate_3d_model(image_path, model="TRELLIS-3D", resolution=512, seed=42, bg_removal="threshold")`,

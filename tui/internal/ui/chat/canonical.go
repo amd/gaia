@@ -183,6 +183,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				break
 			}
 			m.markToolDone(e)
+			m.noteCreatedImage(e.Render, e.Data)
 			break
 		}
 		if outcome == event.ToolOutcomeFailed {
@@ -213,6 +214,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			m.preScanRenderedThisTurn = true
 		}
 		m.upsertCard(identity, e.Tool, e.Render, e.Data)
+		m.noteCreatedImage(e.Render, e.Data)
 
 	case event.CanonicalNeedsInputEvent:
 		// The run is parked waiting for this answer, on the stream we are still

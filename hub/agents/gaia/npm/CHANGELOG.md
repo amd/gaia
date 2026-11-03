@@ -70,6 +70,11 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   run yourself is pointed at https://lemonade-server.ai. This hint needs the
   `gaia` CLI from the same release; the release that ships it raises the
   `amd-gaia` floor.
+- **Images use the model, size and steps you choose.** When a request names
+  no model, `generate_image` now uses the image settings from the Agent UI
+  (Settings › Image creation) or the TUI (`/image`) instead of always
+  SDXL-Turbo at its defaults. `list_sd_models` reports that model as the
+  default.
 - **A project's `.env` can only supply the Claude API key.** The sidecar reads
   `ANTHROPIC_API_KEY` from a `.env` in its working directory, for its own
   Claude calls, and ignores every other name there with one warning. Settings

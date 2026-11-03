@@ -379,6 +379,13 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 		t.Error("paletteCommands does not offer /update")
 	}
 
+	// /image takes a model id or size and is dispatched the same way
+	// (isImageCommand, imagecmd.go).
+	seen["/image"] = true
+	if !known["/image"] {
+		t.Error("paletteCommands does not offer /image")
+	}
+
 	// The other direction: an entry nobody dispatches is a stale row that
 	// will mislead exactly the discoverability this feature exists for.
 	for name := range known {
