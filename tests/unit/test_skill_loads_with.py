@@ -97,6 +97,47 @@ def test_a_skill_the_model_loaded_keeps_that_origin(agent):
     assert [how for _, _, how in agent.console.uses] == ["model", "loaded"]
 
 
+CODE_SKILL = SKILL.replace("name: recorder", "name: coder").replace(
+    "    loads_with:",
+    "    tools:\n      - name: helper\n        description: Helps.\n    loads_with:",
+)
+
+
+@pytest.mark.parametrize(
+    "where",
+    ["user_skills_root", "claude_skill_dirs"],
+)
+def test_a_skill_nobody_shipped_with_the_agent_never_loads_itself(tmp_path, where):
+    root = tmp_path / "elsewhere"
+    write_skill_dir(root, "recorder", SKILL)
+    agent = build_doc_agent_skeleton(profile="doc", deterministic=True)
+    agent._skill_manager = isolated_manager(
+        tmp_path, **{where: root if where == "user_skills_root" else [root]}
+    )
+    assert "recorder" in agent.skill_manager.discover()
+
+    assert agent._skill_loaded_by("fake_analyze") is None
+
+
+def test_a_bundled_skill_that_ships_code_never_loads_itself(tmp_path):
+    root = tmp_path / "bundled"
+    write_skill_dir(root, "coder", CODE_SKILL)
+    agent = build_doc_agent_skeleton(profile="doc", deterministic=True)
+    agent._skill_manager = isolated_manager(tmp_path, agent_skill_dirs=[root])
+    assert agent.skill_manager.discover()["coder"].gaia.tools
+
+    assert agent._skill_loaded_by("fake_analyze") is None
+
+
+def test_an_automatic_load_registers_the_tools_the_framework_supplies(agent):
+    activated = []
+    agent._activate_extraction_skills = activated.append
+
+    agent._note_skill_tool_use("fake_analyze")
+
+    assert activated == ["recorder"]
+
+
 def test_a_skill_that_cannot_load_does_not_stop_its_tool(agent, monkeypatch, caplog):
     from gaia.skills.errors import SkillUnavailableError
 

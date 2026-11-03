@@ -163,7 +163,7 @@ The field name **`tools_required` is locked** as the cross-spec contract with
 | `metadata.gaia.tools` | list | no | Provided `@tool` declarations. Default: none (instruction-only). |
 | `metadata.gaia.tools_required` | list | no | Registry tool names consumed (recipe contract). Default: `[]`. |
 | `metadata.gaia.pairs_with` | list | no | Skills this one is usually combined with on one request. Mutual, shown in the skill catalogue and named by `load_skill`; names that are not installed are ignored. See [Companion skills](/spec/agent-skills#companion-skills). Default: `[]`. |
-| `metadata.gaia.loads_with` | list | no | Tools from `tools_required` that only this skill drives. When the model calls one without loading the skill, GAIA loads it. Each name must also be in `tools_required`, and no two installed skills should claim the same tool. See [Skills that load with their tools](/spec/agent-skills#skills-that-load-with-their-tools). Default: `[]`. |
+| `metadata.gaia.loads_with` | list | no | Tools from `tools_required` that only this skill drives. When the model calls one without loading the skill, GAIA loads it, but only for a skill bundled with the agent that has no `tools` of its own. Each name must also be in `tools_required`, and no two installed skills should claim the same tool. See [Skills that load with their tools](/spec/agent-skills#skills-that-load-with-their-tools). Default: `[]`. |
 
 ### Manifest-side grammar: `skills`, `skill_sets`, `default_skill_set`
 

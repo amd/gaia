@@ -4154,11 +4154,20 @@ Do NOT wrap conversational replies in JSON.
         return self._loaded_skills
 
     def _skill_loaded_by(self, tool_name: str) -> Optional[str]:
-        """The installed skill whose ``loads_with`` names *tool_name*, if any."""
+        """The bundled skill whose ``loads_with`` names *tool_name*, if any.
+
+        Only skills GAIA ships with the agent, and that bring no code of their
+        own, load this way: nobody chose them, so anything else waits for the
+        model's ``load_skill`` and the checks that call makes.
+        """
+        from gaia.skills.manager import ROOT_AGENT_BUNDLED
+
         index = self._loads_with_index
         if index is None:
             index = {}
             for skill in self.skill_manager.discover().values():
+                if skill.root != ROOT_AGENT_BUNDLED or skill.gaia.tools:
+                    continue
                 for tool in skill.gaia.loads_with:
                     index.setdefault(tool, skill.name)
             self._loads_with_index = index
@@ -4215,6 +4224,10 @@ Do NOT wrap conversational replies in JSON.
                     e,
                 )
                 return
+            # Tools the framework supplies for a skill, as load_skill registers them.
+            activate = getattr(self, "_activate_extraction_skills", None)
+            if callable(activate):
+                activate(name)
             logger.info(
                 "Loaded skill '%s' because the model called %s", name, tool_name
             )
