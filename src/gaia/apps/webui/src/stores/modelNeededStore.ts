@@ -52,7 +52,8 @@ export const useModelNeededStore = create<ModelNeededState>((set, get) => ({
         } finally {
             clearTimeout(limit);
         }
-        if (!need?.needed) {
+        // Off on this PC: asked every time, so the user always knows it isn't read.
+        if (!need?.needed && !need?.off) {
             ready.add(job);
             return true;
         }

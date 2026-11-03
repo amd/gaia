@@ -815,6 +815,15 @@ def model_need(job: str) -> Dict[str, Any]:
         model_id = _job_model(job)
     except GaiaConfigError as e:
         raise SetupPlanError(str(e)) from e
+    if job == model_choice.ROLE_VISION and model_id is None:
+        # Chat runs on the NPU, where reading images is off: say so, offer nothing.
+        return {
+            "job": job,
+            "needed": False,
+            "model": None,
+            "disk_free_gb": None,
+            "off": "npu",
+        }
     plan = build_plan()
     if model_id is None or not plan["lemonade"]["reachable"]:
         return {"job": job, "needed": False, "model": None, "disk_free_gb": None}

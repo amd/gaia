@@ -55,6 +55,8 @@ export interface ModelNeed {
     needed: boolean;
     model: { id: string; name: string; size_gb: number | null; source: string | null } | null;
     disk_free_gb: number | null;
+    /** Why the job is off on this PC, so nothing can be downloaded for it: chat runs on the NPU. */
+    off?: 'npu';
 }
 
 /** One row of the Test step (GET /api/setup/status `tests`). */

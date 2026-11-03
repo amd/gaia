@@ -416,19 +416,31 @@ VISION_CHAT_MODELS = frozenset(
 )
 
 
-def resolve_default_vision_model() -> str:
+#: Why there is no vision model: GAIA reads no images while chat runs on the NPU.
+VISION_OFF_ON_NPU = (
+    "GAIA can't read images while it runs on the NPU, because the NPU model "
+    "doesn't read images. To read images, switch the chat model to the GPU in "
+    "Settings > Model."
+)
+
+
+def resolve_default_vision_model() -> Optional[str]:
     """The model that reads text in scans and images when nobody passed one.
 
-    ``vision_model`` from setup when the user chose one; else the PC's chat
-    model when it reads images, because that one is already downloaded and
-    resident; else :data:`DEFAULT_MODEL_NAME`.
+    None while the chat model runs on the NPU: reading images is off there, so
+    no second model is loaded next to it (:data:`VISION_OFF_ON_NPU` says why).
+    Otherwise ``vision_model`` from setup when the user chose one; else the
+    PC's chat model when it reads images, because that one is already
+    downloaded and resident; else :data:`DEFAULT_MODEL_NAME`.
     """
     from gaia.config import GaiaConfig
 
+    model = resolve_default_chat_model()
+    if runs_on_npu(model):
+        return None
     chosen = GaiaConfig.load().vision_model
     if chosen:
         return chosen
-    model = resolve_default_chat_model()
     return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
 
 

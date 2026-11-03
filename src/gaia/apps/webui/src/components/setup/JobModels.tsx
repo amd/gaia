@@ -148,7 +148,9 @@ export function JobModels({ plan, selection, onSelection, disabled }: Props) {
 
             <section className="mc-job" aria-labelledby={`${groupId}-vision`}>
                 <h3 className="mc-job-title" id={`${groupId}-vision`}>{t('setup.job.vision')}</h3>
-                {builtIn ? (
+                {onNpu ? (
+                    <p className="setup-hint" role="note">{t('setup.job.visionOffNpu', { name: chat?.name ?? '' })}</p>
+                ) : builtIn ? (
                     <div className="setup-card">
                         <p className="mc-job-line"><bdi>{t('setup.job.visionBuiltIn', { name: chat?.name ?? '' })}</bdi><span className="setup-ok">{t('setup.job.nothingMore')}</span></p>
                         <button type="button" className="link-btn" aria-expanded={showVision} onClick={() => setShowVision((v) => !v)}>
@@ -158,7 +160,7 @@ export function JobModels({ plan, selection, onSelection, disabled }: Props) {
                 ) : (
                     <p className="setup-hint">{t('setup.job.visionNeeded', { name: chat?.name ?? '' })}</p>
                 )}
-                {(!builtIn || showVision) && (
+                {!onNpu && (!builtIn || showVision) && (
                     <ul className="mc-list" role="radiogroup" aria-labelledby={`${groupId}-vision`}>
                         {visionRows.map((e) => (
                             <RadioRow key={e.id} name={`${groupId}-vision-model`} entry={e} checked={visionPick === e.id} recommended={!builtIn && e.gaia_model && e.support === 'verified'} disabled={disabled} onPick={() => chooseVision(e.id)} />
@@ -241,7 +243,7 @@ export function WhatYouGet({ plan, selection }: { plan: SetupPlan; selection: Se
             <h3 className="mc-job-title">{t('setup.get.title')}</h3>
             <dl className="setup-summary-list">
                 <div><dt>{t('setup.job.chat')}</dt><dd><bdi>{name(selection.defaultChat)}</bdi></dd></div>
-                <div><dt>{t('setup.job.vision')}</dt><dd><bdi>{vision ? name(vision) : t('setup.get.off')}</bdi></dd></div>
+                <div><dt>{t('setup.job.vision')}</dt><dd><bdi>{chat && isNpu(chat) ? t('setup.get.offNpu') : vision ? name(vision) : t('setup.get.off')}</bdi></dd></div>
                 <div><dt>{t('setup.job.documents')}</dt><dd><bdi>{embedder ? embedder.name : t('setup.get.off')}</bdi></dd></div>
                 <div><dt>{t('setup.get.voice')}</dt><dd>{voice || t('setup.get.off')}</dd></div>
                 <div><dt>{t('setup.job.images')}</dt><dd>{!canCreateImages(chat) ? t('setup.get.notAvailable') : ticked('image_creation') ? t('setup.get.on') : t('setup.get.off')}</dd></div>

@@ -976,6 +976,26 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** The notice a chat shows when reading images is off because chat runs on the NPU. */
+async function withImagesOffOnNpu(page: Page): Promise<void> {
+    await page.route('**/api/setup/needs/chat', (route) =>
+        route.fulfill({ json: { job: 'chat', needed: false, model: null, disk_free_gb: null, off: 'npu' } }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the NPU image notice says why and offers no download (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withImagesOffOnNpu);
+        await page.locator('textarea').first().fill('hello');
+        await page.keyboard.press('Enter');
+        const dialog = page.locator('.model-needed');
+        await expect(dialog).toBeVisible();
+        await expect(dialog.getByRole('button')).toHaveCount(2);
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `npu-image-notice-${locale}`);
+    });
+}
+
 test('composer chips stay whole at phone width', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 780 });
     await open(page);

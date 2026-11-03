@@ -595,7 +595,7 @@ def with_chat_model(profile: str, model_ids, resolve_chat) -> list:
     if profile == "sd":
         return ids
     if profile == "npu":
-        # Both NPU models see images, so the pick replaces the floor model.
+        # The pick replaces the floor model; GAIA reads no images on the NPU.
         chat = resolve_chat().model_id
         ids = [m for m in ids if not _model_ids_match(m, NPU_DEFAULT_MODEL_NAME)]
         return [chat, *(m for m in ids if not _model_ids_match(m, chat))]
@@ -2986,16 +2986,18 @@ class InitCommand:
         return roles[0]
 
     def _vision_test_model(self, client) -> Optional[str]:
-        """The model setup leaves reading images; None on a cloud chat setup."""
+        """The model setup leaves reading images; None on a cloud or NPU chat setup."""
         from gaia.config import GaiaConfig
-        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, runs_on_npu
 
         if self.skip_chat_model:
+            return None
+        chat = self._chat_model(client)
+        if runs_on_npu(chat):
             return None
         chosen = GaiaConfig.load().vision_model
         if chosen:
             return chosen
-        chat = self._chat_model(client)
         return chat if model_choice.reads_images(chat) else DEFAULT_MODEL_NAME
 
     def _verify_setup(self) -> bool:

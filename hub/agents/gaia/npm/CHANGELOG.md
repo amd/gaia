@@ -10,6 +10,10 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **Images are not read while chat runs on the NPU.** The NPU model doesn't
+  read images, and loading Gemma next to it would mean a 6 GB download, so
+  `analyze_image` and `answer_question_about_image` answer with why they
+  can't read the image and how to switch to the GPU.
 - **Images are read by the model setup chose, not always Gemma.** The image
   tools loaded Gemma 4 E4B by name, so a PC running Qwen3.6, which reads images
   itself, was asked to download Gemma on its first image question. They now use

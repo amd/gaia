@@ -131,6 +131,21 @@ export function ModelNeededDialog() {
         }, POLL_MS);
     }, [need, settle, stop, t]);
 
+    if (need?.off) {
+        return createPortal(
+            <div className="model-needed-overlay">
+                <div ref={panel} className="model-needed" role="dialog" aria-modal="true" aria-label={t(`modelNeeded.off.${need.off}.title`)}>
+                    <h2 className="model-needed-title">{t(`modelNeeded.off.${need.off}.title`)}</h2>
+                    <p className="model-needed-from">{t(`modelNeeded.off.${need.off}.body`)}</p>
+                    <div className="model-needed-actions">
+                        <button type="button" className="btn-secondary" onClick={close}>{t('modelNeeded.notNow')}</button>
+                        <button type="button" className="btn-primary" onClick={() => settle(true)}>{t('modelNeeded.off.send')}</button>
+                    </div>
+                </div>
+            </div>,
+            document.body,
+        );
+    }
     if (!need?.model) return null;
     const { model, job, disk_free_gb: freeGb } = need;
     // The same rule as setup's: more to download than is free.

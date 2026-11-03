@@ -92,3 +92,32 @@ describe('the missing-model prompt', () => {
         expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
     });
 });
+
+describe('reading images while chat runs on the NPU', () => {
+    const OFF: ModelNeed = { job: 'vision', needed: false, model: null, disk_free_gb: null, off: 'npu' };
+
+    afterEach(() => act(() => useModelNeededStore.setState({ need: null })));
+
+    it('says images are off on the NPU, offers no download, and sends on request', async () => {
+        vi.spyOn(api, 'getModelNeed').mockResolvedValue(OFF);
+        render(<ModelNeededDialog />);
+        let sent: Promise<boolean> = Promise.resolve(false);
+        await act(async () => { sent = useModelNeededStore.getState().ensure('vision'); });
+        expect(screen.getByRole('dialog', { name: "GAIA can't read images on the NPU" })).toHaveTextContent('switch the chat model to the GPU');
+        expect(screen.queryByRole('button', { name: /Download/ })).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: 'Send without the image' }));
+        await expect(sent).resolves.toBe(true);
+    });
+
+    it('asks every time, so a later image is never read in silence', async () => {
+        const need = vi.spyOn(api, 'getModelNeed').mockResolvedValue(OFF);
+        render(<ModelNeededDialog />);
+        for (let i = 0; i < 2; i++) {
+            let sent: Promise<boolean> = Promise.resolve(true);
+            await act(async () => { sent = useModelNeededStore.getState().ensure('vision'); });
+            fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+            await expect(sent).resolves.toBe(false);
+        }
+        expect(need).toHaveBeenCalledTimes(2);
+    });
+});

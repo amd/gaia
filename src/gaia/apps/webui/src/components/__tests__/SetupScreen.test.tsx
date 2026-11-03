@@ -313,6 +313,7 @@ describe('SetupScreen: the recommendation', () => {
         const hero = within(await planScreen());
         expect(hero.getByText('Ryzen AI NPU')).toBeInTheDocument();
         expect(hero.queryByText('AMD Radeon 8060S')).not.toBeInTheDocument();
+        expect(hero.getByText("Reading images is off: the NPU model doesn't read images.")).toBeInTheDocument();
     });
 
     it('calls a saved pick the user\'s choice, not a recommendation', async () => {
@@ -710,7 +711,9 @@ describe('SetupScreen: warnings and confirmations', () => {
         // Run on the NPU first: it picks the NPU model the user already has.
         fireEvent.click(screen.getByRole('radio', { name: 'Ryzen AI NPU' }));
         expect(chatRadio(/Gemma 4 E2B \(NPU\)/)).toBeChecked();
-        fireEvent.click(visionRadio(/Skip for now/));
+        // Reading images is off on the NPU: said plainly, with nothing to pick or download.
+        expect(screen.getByText(/runs on the NPU, which doesn't read images, so reading images is off/)).toBeInTheDocument();
+        expect(screen.queryByRole('radio', { name: /Skip for now/ })).not.toBeInTheDocument();
         clickContinue();
         await waitFor(() => expect(mockedApi.chooseSetupChatModel).toHaveBeenCalledWith(FLM.id, false));
         await waitFor(() => expect(mockedApi.skipSetupModel).toHaveBeenCalledWith(GEMMA.id, true));

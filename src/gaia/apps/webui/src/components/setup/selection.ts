@@ -35,9 +35,11 @@ export const canCreateImages = (chat: SetupCatalogEntry | undefined) => chat?.fe
 /** The model that reads images for this selection: the user's, else the chat model
  *  when it can, else GAIA's vision model. Null when the user skipped it. */
 export function resolveVision(catalog: SetupCatalogEntry[], sel: Selection): string | null {
+    const chat = catalog.find((e) => e.id === sel.defaultChat);
+    // GAIA reads no images while chat runs on the NPU, so nothing else downloads for it.
+    if (chat && isNpu(chat)) return null;
     if (sel.vision === VISION_NONE) return null;
     if (sel.vision) return sel.vision;
-    const chat = catalog.find((e) => e.id === sel.defaultChat);
     if (chat?.reads_images) return chat.id;
     return catalog.find((e) => isVision(e) && e.gaia_model)?.id ?? null;
 }
@@ -84,6 +86,7 @@ export function savedVision(catalog: SetupCatalogEntry[], sel: Selection): strin
     if (sel.vision === VISION_NONE) return null;
     const pick = resolveVision(catalog, sel);
     const chat = catalog.find((e) => e.id === sel.defaultChat);
+    if (chat && isNpu(chat)) return null;
     const gaiaChoice = chat?.reads_images ? chat.id : catalog.find((e) => isVision(e) && e.gaia_model)?.id;
     return pick === gaiaChoice ? null : pick;
 }

@@ -30,7 +30,7 @@ const VOICE = entry({ id: 'kokoro-v1', name: 'Kokoro', roles: ['voice'], purpose
 const IMAGES = entry({ id: 'SDXL-Turbo', name: 'SDXL Turbo', roles: ['image_creation'], purpose: 'Makes pictures', size_gb: 6.9, support: null, chat_choice: false });
 
 // GAIA's own NPU model, which setup lists on a PC whose NPU holds it.
-const NPU = entry({ id: 'gemma4-it-e4b-FLM', name: 'Gemma 4 E4B (NPU)', recipe: 'flm', roles: ['chat', 'vision'], size_gb: 9.1, full_size_gb: 9.1, fits: true, need_gb: 10.2, reads_images: true });
+const NPU = entry({ id: 'gemma4-it-e4b-FLM', name: 'Gemma 4 E4B (NPU)', recipe: 'flm', roles: ['chat'], size_gb: 9.1, full_size_gb: 9.1, fits: true, need_gb: 10.2, reads_images: false });
 const CATALOG = [GEMMA, EMBED, QWEN, NPU, MINE, FLM, SPEECH, VOICE, IMAGES];
 
 const COMPONENTS = [
@@ -358,6 +358,14 @@ export const SETUP_SCENES: SetupScene[] = [
             await expect(page.locator('.mc-chip.is-untested')).toBeVisible();
             await expect(page.locator('.mc-warn.is-big').first()).toBeVisible();
             await expect(page.locator('.mc-row.is-off')).toBeVisible();
+        },
+    },
+    {
+        name: 'models-npu',
+        reach: async (page) => {
+            await toModels(page);
+            await page.locator('.setup-backend [role="radio"]').nth(1).click();
+            await expect(page.locator('.mc-job p.setup-hint[role="note"]')).toBeVisible();
         },
     },
     {

@@ -1038,6 +1038,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         <li>{t('setup.plan.why.fits', { need: formatFitGb(chatEntry.need_gb), have: formatFitGb(chatEntry.capacity_gb) })}</li>
                                     )}
                                     <li>{t('setup.plan.why.private')}</li>
+                                    {chatEntry && isNpu(chatEntry) && <li>{t('setup.plan.why.noImagesNpu')}</li>}
                                     {biggerOption && biggerOption.id !== chatEntry?.id && biggerOption.need_gb != null && biggerOption.capacity_gb != null && (
                                         <li>{t('setup.plan.why.bigger', { name: biggerOption.name, need: formatFitGb(biggerOption.need_gb), have: formatFitGb(biggerOption.capacity_gb) })}</li>
                                     )}
