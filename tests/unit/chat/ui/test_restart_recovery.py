@@ -635,7 +635,8 @@ async def test_a_clock_step_does_not_make_a_live_server_look_gone(monkeypatch):
 
 
 @pytest.mark.skipif(
-    sys.platform == "win32", reason="Windows create_time() is never shifted"
+    sys.platform == "win32" or not process_owner._UNSHIFTED,
+    reason="needs psutil 7.1+'s unshifted create_time; Windows is never shifted",
 )
 async def test_a_shifted_create_time_does_not_make_a_live_server_look_gone(
     monkeypatch,
