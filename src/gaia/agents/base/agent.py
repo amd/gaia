@@ -119,6 +119,7 @@ from gaia.agents.base.task_lessons import attach as attach_task_lessons
 from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
+    RESOLVED_PATH_ARG,
     SCRATCH_ARG,
     command_reaches_folder,
     is_inside_folder,
@@ -139,6 +140,7 @@ from gaia.agents.base.tool_outcome import (
 from gaia.agents.base.tools import (
     _TOOL_REGISTRY,
     bare_tool_name,
+    describe_registry,
     tool_call_progress_message,
 )
 from gaia.agents.base.turn_scope import (
@@ -1306,6 +1308,66 @@ _TOOL_CALL_MARKUP_PATTERN = re.compile(
     r"<invoke\s+name\s*=|<parameter\s+name\s*=|\{\s*\"tool\"\s*:"
 )
 _ENVELOPE_KEYS = ("thought", "goal", "tool", "tool_args", "plan")
+# "Index my reports folder", "please re-index ~/docs": the verb opens a clause
+# and takes a path or a folder/file object, so "index.html" or "S&P 500 index"
+# never count.
+_INDEX_REQUEST_PATTERN = re.compile(
+    r"(?:^|[.!?;:,\n]|\b(?:please|kindly|and|then|also|now|first|just|go ahead and"
+    r"|can you|could you|would you|will you|i want you to|i'd like you to"
+    r"|i need you to))\s*"
+    r"(?:re-?)?index\s+"
+    r"(?:(?:all|all of|everything in|the|my|this|that|these|those|our|every)\s+)*"
+    r"(?:[~./\\]|[a-z]:[\\/]|it\b|them\b"
+    r"|(?:folders?|director(?:y|ies)|files?|documents?|docs|reports?|pdfs?)\b"
+    r"|[\w.-]+\s+(?:folders?|director(?:y|ies)|files?|documents?|docs|reports?|pdfs?)\b)",
+    re.IGNORECASE,
+)
+_NEGATED_BEFORE_PATTERN = re.compile(
+    r"\b(?:don['’]?t|do not|never|not|no need to|without),?\s+"
+    r"(?:(?!(?:just|instead|but|rather|simply)\b)[\w'’]+,?\s+){0,3}$",
+    re.IGNORECASE,
+)
+# A yes/no permission question about indexing, e.g. "Should I index it?".
+_ASKS_TO_INDEX_PATTERN = re.compile(
+    r"\b(?:should|shall|may|can) I (?:go ahead and |proceed (?:with|to) )?"
+    r"(?:re-?)?index(?:ing)?\b"
+    r"|\b(?:would you like|do you want) me to (?:go ahead and )?(?:re-?)?index\b",
+    re.IGNORECASE,
+)
+# A choice or a cost/scale warning is a real question for the user.
+_INDEX_QUESTION_NEEDS_USER_PATTERN = re.compile(
+    r"\bwhich\b|\bor\b|\d{1,3}(?:,\d{3})+|\b\d{4,}\b|\bminutes?\b|\bhours?\b"
+    r"|\btakes? (?:a )?(?:while|long|time)\b|\bthousands?\b|\b[gm]b\b"
+    r"|\bdisk space\b|\bslow\b",
+    re.IGNORECASE,
+)
+_SENTENCE_END_PATTERN = re.compile(r"[.!?](?=\s|$)|\n")
+_INDEX_TOOL_NAMES = ("index_directory", "index_document")
+
+
+def _requests_indexing(text: str) -> bool:
+    """Whether *text* tells the agent, un-negated, to index a folder or file."""
+    text = text or ""
+    for match in _INDEX_REQUEST_PATTERN.finditer(text):
+        verb = (
+            match.start()
+            + re.search(r"(?:re-?)?index\s", match.group(0), re.IGNORECASE).start()
+        )
+        sentence_start = max(text.rfind(p, 0, verb) for p in ".!?\n") + 1
+        if not _NEGATED_BEFORE_PATTERN.search(text[sentence_start:verb]):
+            return True
+    return False
+
+
+def _asks_permission_to_index(answer: str) -> bool:
+    """Whether *answer* is a bare yes/no question asking to index."""
+    match = _ASKS_TO_INDEX_PATTERN.search(answer or "")
+    if not match:
+        return False
+    end = _SENTENCE_END_PATTERN.search(answer, match.end())
+    if not end or end.group(0) != "?":
+        return False
+    return not _INDEX_QUESTION_NEEDS_USER_PATTERN.search(answer)
 
 
 def _holds_complete_text_call(response: str) -> bool:
@@ -2465,7 +2527,10 @@ Do NOT wrap conversational replies in JSON.
         # Stored before _register_tools so an agent's selector hook and the
         # post-registration skill-set load both see the explicit request.
         self._requested_skill_set = skill_set
-        self.error_history = []  # Store error history for learning
+        # Cumulative across queries (get_error_history); a result reports only
+        # the entries from _turn_error_start on.
+        self.error_history = []
+        self._turn_error_start = 0
         # Safe default so _execute_tool -> _fold_tool_usage never AttributeErrors
         # if called outside the normal process_query loop (e.g. directly in a
         # test); _process_query_impl resets this per-turn.
@@ -4833,6 +4898,18 @@ Do NOT wrap conversational replies in JSON.
         """Get a list of registered tools for the agent."""
         return list(self._tools_registry.values())
 
+    def describe_tools(self) -> List[Dict[str, str]]:
+        """The tools this agent can call, for showing them to a user.
+
+        Returns:
+            One ``{"name", "description", "category"}`` dict per registered
+            tool, in registry order. ``category`` is a ``KNOWN_TOOLS`` mixin
+            name, ``"mcp"``, ``"skill"`` or ``"agent"`` (see
+            :func:`gaia.agents.base.tools.tool_category`).
+        """
+        # Copy first: a running turn can load a skill's tools meanwhile.
+        return describe_registry(dict(self._tools_registry))
+
     def _announce_model_call(self, after_tools: bool) -> None:
         """Say what the model is doing until its first token, and keep saying it.
 
@@ -5646,6 +5723,12 @@ Do NOT wrap conversational replies in JSON.
             )
         return schemas
 
+    def _user_asked_to_index(self, user_input: str) -> bool:
+        """True when this turn's message tells the agent to index something."""
+        return _requests_indexing(
+            getattr(self, "_original_user_input", None) or user_input
+        )
+
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """Decode a reply and reject tool arguments that cannot be executed."""
         parsed = self._decode_llm_response(response)
@@ -5926,6 +6009,7 @@ Do NOT wrap conversational replies in JSON.
                 "thought": "LLM returned empty response",
                 "goal": "Handle empty response error",
                 "answer": answer,
+                "empty_response": True,
             }
 
         response = response.strip()
@@ -6939,7 +7023,7 @@ Do NOT wrap conversational replies in JSON.
         reserved = sorted(
             key
             for key in (tool_args if isinstance(tool_args, dict) else {})
-            if key in (RISK_NOTE_ARG, SCRATCH_ARG, NEEDS_PERSON_ARG)
+            if key in (RISK_NOTE_ARG, SCRATCH_ARG, NEEDS_PERSON_ARG, RESOLVED_PATH_ARG)
         )
         if reserved:
             return {
@@ -6990,6 +7074,10 @@ Do NOT wrap conversational replies in JSON.
         prompt_args = _with_resolved_target(
             prompt_args, (self._tools_registry.get(tool_name) or {}).get("preflight")
         )
+        if isinstance(prompt_args, dict) and tool_name in PATH_TOOLS:
+            resolved_path = prompt_args.get("file_path")
+            if isinstance(resolved_path, str) and os.path.isabs(resolved_path):
+                prompt_args = {**prompt_args, RESOLVED_PATH_ARG: resolved_path}
         # Scratch writes never ask, so code run from there is asked about on
         # every run — the marker keeps "always" (and any broader grant) off it.
         scratch = _scratch_reached_by(self, tool_name, prompt_args)
@@ -9096,9 +9184,13 @@ Do NOT wrap conversational replies in JSON.
         explicit = getattr(getattr(self, "config", None), "project_root", None)
         return resolve_project_root(explicit)
 
+    def _turn_errors(self) -> List[Any]:
+        """The errors recorded since the current query began."""
+        return self.error_history[getattr(self, "_turn_error_start", 0) :]
+
     def _mark_errors_recovered(self) -> None:
         """A reply parsed cleanly: earlier unusable replies were retried, not fatal."""
-        for entry in self.error_history:
+        for entry in self._turn_errors():
             if (
                 isinstance(entry, dict)
                 and entry.get("type") in _RECOVERABLE_ERROR_TYPES
@@ -9109,7 +9201,7 @@ Do NOT wrap conversational replies in JSON.
         """Errors that still stand at the end of the turn."""
         return [
             entry
-            for entry in self.error_history
+            for entry in self._turn_errors()
             if not (isinstance(entry, dict) and entry.get("recovered"))
         ]
 
@@ -9415,6 +9507,8 @@ Do NOT wrap conversational replies in JSON.
             Dict containing the final result and operation details
         """
         ns_id = self._namespaced_agent_id()
+        # getattr: hosts built with __new__ reach process_query without __init__.
+        self._turn_error_start = len(getattr(self, "error_history", ()))
         # A level the model chose for the last request must not carry into this one.
         reset_effort = getattr(self, "reset_reasoning_effort", None)
         if reset_effort is not None:
@@ -11657,6 +11751,50 @@ Do NOT wrap conversational replies in JSON.
                 answer_candidate = _with_answer_beside_tool_calls(
                     parsed["answer"], answer_beside_tool_calls
                 )
+                # FastFlowLM occasionally ends a long prefill with zero tokens.
+                if (
+                    parsed.get("empty_response")
+                    and steps_taken < steps_limit - 1
+                    and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
+                ):
+                    unfinished_answer_reprompts += 1
+                    logger.warning(
+                        "[WORKFLOW] Empty model reply at step %d; asking again",
+                        steps_taken,
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your last reply was empty. Make the next tool "
+                                "call, or answer the user from the results above."
+                            ),
+                        }
+                    )
+                    continue
+                if (
+                    _asks_permission_to_index(answer_candidate)
+                    and self._user_asked_to_index(user_input)
+                    and any(name in self._tools_registry for name in _INDEX_TOOL_NAMES)
+                    and steps_taken < steps_limit - 1
+                    and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
+                ):
+                    unfinished_answer_reprompts += 1
+                    logger.warning(
+                        "[WORKFLOW] Asked permission to index what the user said "
+                        "to index; asking it to index"
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "The user already told you to index it. Call "
+                                "index_directory or index_document on that path "
+                                "now, then answer their question."
+                            ),
+                        }
+                    )
+                    continue
                 completion_gaps = []
                 # Guard against incomplete workflows: detect when the LLM outputs
                 # planning text ("Let me now search...") as a final answer after
@@ -12447,8 +12585,8 @@ Do NOT wrap conversational replies in JSON.
                 "steps_taken": steps_taken,
                 "timing_summary": timing_summary,
                 "duration": time.time() - start_time,
-                "error_count": len(self.error_history),
-                "error_history": self.error_history,
+                "error_count": len(self._turn_errors()),
+                "error_history": self._turn_errors(),
             }
             self.last_result["model_messages"] = messages.finish("")
             # Returns before the tail seal below. A front-end that ends the turn
@@ -12563,8 +12701,8 @@ Do NOT wrap conversational replies in JSON.
             "total_tokens": total_input_tokens
             + total_output_tokens,  # Combined token count
             "cached_tokens": _sum_cached_tokens(conversation),
-            "error_count": len(self.error_history),
-            "error_history": self.error_history,  # Include the full error history
+            "error_count": len(self._turn_errors()),
+            "error_history": self._turn_errors(),  # this query's errors only
             "tool_schema": self._trace_tool_schema(),
             "completion_gaps": completion_gaps,
             # Retries behind this turn's model calls, and whether the model
@@ -13025,11 +13163,14 @@ Do NOT wrap conversational replies in JSON.
                 f"Output written to: {display_result['output_file']}"
             )
 
-    def get_error_history(self) -> List[str]:
+    def get_error_history(self) -> List[Any]:
         """
-        Get the history of errors encountered by the agent.
+        Get every error this agent instance has recorded, across all queries.
+
+        A query's result carries only that query's errors (``error_count`` /
+        ``error_history``); this is the cumulative view.
 
         Returns:
-            List of error messages
+            A copy of the error entries (strings or dicts), oldest first.
         """
-        return self.error_history
+        return list(self.error_history)

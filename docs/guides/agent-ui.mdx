@@ -120,6 +120,10 @@ stays in the queue marked **Not sent**, with the reason and **Send again**, and
 the messages after it wait so the order holds. Deleting a chat deletes its
 queued messages; the delete button says how many first.
 
+Deleting a chat, one at a time or with **Settings → Privacy → Delete all chats**,
+also removes its conversation and tool calls from Memory. What GAIA learned about
+you from it stays under **About you** in Memory; the delete confirmation says so.
+
 ### Compare Models on Your Question
 
 To see how another model answers, use **Retry with…** on the latest answer and
@@ -161,6 +165,16 @@ so far.
 When an answer names a document from your library, the name is a link that
 opens the document, and each page it cites ("pages 175 and 205", "الصفحتان
 6–7") opens that page. In the desktop app they open in your web browser.
+
+### See Generated Images and Audio
+
+An image the agent generates shows in the answer; click it to see it full size.
+Music and sound effects it generates show a player with the file name and
+length (see [Local Music and Sound Effects](/guides/audio-generation)). Both
+still show when you reopen the chat. Only files GAIA saved in its own
+generation folders are shown this way. Speaking to GAIA through a microphone
+is not part of this; voice input is tracked in
+[#702](https://github.com/amd/gaia/issues/702).
 
 ---
 
@@ -291,10 +305,10 @@ Pick the install path that fits you best:
     `gaia init` yourself beforehand also works.
 
     Every choice can be changed later in **Settings → Model**: the default chat
-    model, **Models on this PC** (tick a skipped model and **Apply** to
-    download it; **Remove** deletes one only after you confirm), **GPU memory**
-    on integrated-GPU PCs, and the downloads in progress, which also show in
-    the sidebar while they run.
+    model and the models on this PC under **Manage downloads and disk space**
+    (tick a skipped model and **Apply** to download it; **Remove** deletes one
+    only after you confirm), **GPU memory** on integrated-GPU PCs, and the
+    downloads in progress, which also show in the sidebar while they run.
   </Tab>
 </Tabs>
 
@@ -446,7 +460,7 @@ The menu:
 - **Settings…** and **Quit GAIA**.
 
 The first time you close the window, GAIA says once that it is still running
-in the tray. If you quit, or choose **Restart now** for an update, while an
+in the tray. If you quit, or restart from the update chip, while an
 answer is being written or a document is indexing, GAIA asks first and says
 that the answer will be lost; when idle it doesn't ask. Keeping GAIA running
 puts an update off until you next quit.
@@ -575,8 +589,10 @@ GAIA asks before it changes files, runs commands or uses tools that act for you.
 The question appears above the message box with three answers:
 
 - **Allow once**
-- **Always allow** *this exact action* in this chat (offered only when the action
-  is narrow enough to name, e.g. *writing notes.md*)
+- **Always allow** the same kind of action in this chat. For a host-resolved
+  file write, this covers files in that folder; unresolved or safety-sensitive
+  paths stay exact and continue to prompt (e.g. *writing notes.md*), and so
+  does a file whose real location is outside that folder
 - **Deny**
 
 When the same question comes back after you allowed it once, the prompt says
@@ -647,16 +663,19 @@ reads nothing.
     shell tool, even under full access and even inside a wider folder, until
     you add it back. A document attached to the chat is removed from the
     document bar instead, which also takes it out of the chat's search.
-  - **Internet:** turn it off and GAIA won't search the web, open pages,
-    use the browser, connectors or your mailbox, search or install skills
-    from the Agent Hub, or run commands that go online (such as
-    `git push`, `pip install` or `npx`). Commands that talk only to this PC,
-    such as `curl http://localhost:3000`, still run. The check reads what a
-    command names, so a script that connects to the internet by itself (for
-    example `python fetch.py`) can still reach it. The message box says the
-    chat is offline, with a button to turn it back on.
+  - **Internet:** this is a filter, not a firewall. Turn it off and GAIA
+    refuses recognised web, browser, connector, mailbox, Agent Hub and
+    network-command tools (such as `git push`, `pip install` or `npx`).
+    Commands that talk only to this PC, such as `curl http://localhost:3000`,
+    still run. Skill tools, scripts and commands that hide their destination
+    may still reach the network because GAIA cannot inspect every operation.
+    The message box says the chat is offline, with a button to turn it back on.
   - **Phone access:** turns mobile access on or off, shows the QR code, and
-    names the phone that connected.
+    names the phone that connected. On the phone, **Add to Home Screen**
+    (Safari's Share menu, or Chrome's menu) installs GAIA as an app that
+    opens full screen. The app does not keep access between sessions: each
+    time you turn mobile access on, scan the new QR code, and if the
+    home-screen app no longer connects, open the new link and add it again.
   - **Permission mode:** Ask or Full access, the same setting as the shield in
     the message box. It covers this chat only; new chats follow **Settings →
     Permissions**.
@@ -748,13 +767,23 @@ Connectors, Memory, Notifications, Privacy and Advanced (model server and
 llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
 back).
 
-**Settings → Model** lists each local model with where it runs, such as
-"GPU · Vulkan" or "NPU · FLM". You don't pick the device: each model is built
-for one. A loaded model shows the device Lemonade reports for it, and says so
-plainly if that isn't the expected one (a GPU model that fell back to the CPU
-runs slowly). Each row also shows whether the model fits this PC, its download
-size and the speed measured here. Models this PC can't run are under **Not
-available on this PC**, with the reason. **Context size** goes up to the
+If you chose a cloud provider during setup and this PC has no model server yet,
+the banner, **Settings → Model** and **Settings → Advanced** offer **Set up local
+models**. It reopens setup on **On this PC**, and **Back to GAIA** leaves it with
+nothing changed. Finishing it switches GAIA to the model it installed.
+
+**Settings → Model** opens on the **Model in use** card: the model, what it runs
+on, **Switch model** for the models ready to use, and **Context size**. Below
+it, models sit in groups you can open and close: **Downloaded**, **Available to
+download** and **Not available on this PC**, with the reason. A search opens
+every group it matches.
+
+Each row shows chips for the device (GPU or NPU), whether it's loaded and
+whether it fits this PC. **Details** has where it runs, such as "GPU · Vulkan"
+or "NPU · FLM", and the speed measured here. You don't pick the device: each
+model is built for one. A loaded model shows the device Lemonade reports for
+it, and says so plainly if that isn't the expected one (a GPU model that fell
+back to the CPU runs slowly). **Context size** goes up to the
 largest window that fits; **Automatic** is GAIA's choice, and a size you pick
 is kept for that model. For a model GAIA has no memory figures for, you can
 pick from 32K up to the window it was trained for. GAIA can't check those fit
@@ -827,12 +856,26 @@ Everything lives in **Settings → General → Updates** (desktop installer only
   candidate build is offered newer candidates either way.
 - **Check for updates**, then **Update to vX** when one is waiting. The corner chip
   offers the same **Update now**.
-- **Install a specific version…** — pick any published release, newer or older
-  (useful to step back from a regression). The app downloads it and shows a native
-  "Restart now?" prompt.
+- **Install a specific version…** — pick a recent release, newer or older
+  (useful to step back from a regression). The app downloads it and restarts into
+  it, asking first if an answer or indexing job is still running.
+
+An update downloads in the background, usually only the parts that changed, and
+installs with no setup wizard. Once it is ready, the corner chip offers the restart,
+whenever suits you; quitting GAIA also installs it. Before offering the restart, GAIA
+also fetches the new version's Python backend, so the first launch afterwards doesn't
+depend on the package server. A restart that would leave no working app, such as one
+with no disk space, is refused with the reason.
 
 **Pinning:** after installing a specific version, GAIA stays on it and offers no
 updates. The Updates section shows "Pinned to vX.Y.Z"; click **Unpin** to resume.
+
+**Going back:** after an update, **Go back to GAIA vX** in the Updates section installs
+the version you had before and pins it, so the update that went wrong isn't offered
+again until you click **Unpin**. If the update fails to finish setting up or start
+in the first three launches after it, GAIA offers the same button in that error box
+or on the corner chip. It downloads the older version, so it needs an internet
+connection, and keeps your chats, memory and goals.
 
 Checks read the [GitHub releases](https://github.com/amd/gaia/releases) and take the
 newest one on your channel that publishes this platform's update. When none does,
@@ -841,7 +884,7 @@ releases page instead.
 
 ### Platform support
 
-| Platform | Specific-version install |
+| Platform | Specific-version install and Go back |
 |----------|-----------------|
 | Windows (NSIS installer) | Full — download + reinstall works end-to-end |
 | macOS | Not yet — releases don't publish the `.zip` the macOS updater installs from ([#5682](https://github.com/amd/gaia/issues/5682)); install the `.dmg` from [Releases](https://github.com/amd/gaia/releases) |
@@ -933,7 +976,7 @@ GAIA reads every word or rejects the schedule and says what to change; it never 
 
 - Invalid times such as `25:00` or `9:75`, and a bare `at 9` (say `9am`, `9pm`, `9:00`, or `every morning at 9`).
 - A part of the day that disagrees with the time (`every morning at 8pm`), or one with no time (`every morning`).
-- One-time tasks (`tomorrow at noon`, `next friday`, `on feb 30`). Schedules repeat, so use a form like `every friday at 9am`.
+- One-time tasks (`tomorrow at noon`, `next friday`, `on feb 30`). Schedules here repeat, so use a form like `every friday at 9am`. To run a prompt once, use [`gaia schedule add --at`](/reference/cli#schedule) in a terminal.
 - Runs more often than once a minute. Each run is a full agent turn.
 - A weekly time with no day, such as `weekly at 9am` or `every 7d at 9am`. Name the day: `every monday at 9am`.
 - Combinations that can't be honored yet: `every other tuesday`, `every 2 days at 9am`, monthly schedules, and windows that don't start and end on the hour.

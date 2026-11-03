@@ -67,6 +67,7 @@ from gaia.ui.email_sidecar.profiles import (
     profile_for,
     reasoning_supported,
     scope_supported,
+    session_id_supported,
     surface_supported,
     turns_supported,
     working_directory_supported,
@@ -80,6 +81,7 @@ from . import followups
 from . import permissions as session_permissions
 from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
+from .generated_media import media_card
 from .models import ChatRequest
 from .session_environment import apply_environment, folders_refusal, held_internet_off
 from .session_environment import load as load_environment
@@ -418,8 +420,8 @@ def _owned_models() -> set:
 def _auto_load_windows() -> set:
     """Windows a model has when a request made Lemonade load it, unasked.
 
-    Lemonade's own default, and the window GAIA's supervisor starts the server
-    with (``LEMONADE_CTX_SIZE``, the machine's profile window).
+    Lemonade's own default, and the machine's profile window, which is what a
+    GAIA load asks for.
     """
     from gaia.llm.lemonade_client import active_profile_ctx_size
 
@@ -2276,6 +2278,20 @@ def cached_session_agent(session_id: str):
         return entry["agent"] if entry is not None else None
 
 
+def cached_session_agent_of(session_id: str, agent_type: str):
+    """The session's cached agent if it is still a *agent_type* agent, else None.
+
+    A chat switched to another agent keeps the old one cached until its next
+    turn; that one no longer speaks for the chat.
+    """
+    canonical = _canonical_agent_type(agent_type)
+    with _agent_cache_lock:
+        entry = _agent_cache.get(session_id)
+        if entry is None or entry.get("agent_type") != canonical:
+            return None
+        return entry["agent"]
+
+
 def _restore_model_history(
     agent, db, session_id: str, query: str, sse_handler=None
 ) -> None:
@@ -2781,7 +2797,11 @@ def _dispatch_sidecar_query(
                 else None
             ),
             profile=profile,
-            session_id=session_id,
+            session_id=(
+                session_id
+                if session_id_supported(profile, handle.api_version)
+                else None
+            ),
             answers_confirmations=answers_confirmations,
             offers_always=offers_always,
             documents=relayed_documents,
@@ -3013,6 +3033,10 @@ _EMPTY_MODEL_ANSWER_MSG = (
 )
 
 
+#: Card kinds that record what a tool did rather than answer the user, so a
+#: turn that shows only these and no text still ends as "no answer".
+_NON_ANSWER_RENDERS = frozenset({"diff"})
+
 _NO_ANSWER_AFTER_TOOLS_MSG = (
     "GAIA ran its tools but didn't write an answer. Send your message again, "
     "or try another model."
@@ -3094,9 +3118,10 @@ def _empty_answer_outcome(
       * cancelled → ``("Cancelled.", "done", True)`` — a user Stop, not a
         failure; keep the tool steps executed before the cancel and don't
         blame Lemonade.
-      * a render card was shown → ``("", "done", True)`` — the card is the
-        answer (e.g. an echoed card the echo-guard stripped to empty); keep
-        the steps so the card survives a reload.
+      * an answer card was shown (a render not in _NON_ANSWER_RENDERS) →
+        ``("", "done", True)`` — the card is the answer (e.g. an echoed card
+        the echo-guard stripped to empty); keep the steps so the card survives
+        a reload.
       * steps but no card → ``(<no-answer copy>, "failed", True)`` — the agent
         ran tools and ended without answering; say so and keep the steps.
         *has_steps* counts tool steps only, never thinking, plan or error steps.
@@ -4503,6 +4528,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         idle_cycles = 0
         stopped_at = None
         last_event_at = _turn_clock()
+        # The prompt a generated image or track is captioned with.
+        last_tool_args: dict = {}
 
         def _blocked_policy_steps():
             return [
@@ -4571,6 +4598,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 event_type = event.get("type", "")
                 if event_type in ("answer", "agent_error") and event.get("content"):
                     event = {**event, "content": _agent_ui_wording(event["content"])}
+                if event_type == "tool_start":
+                    last_tool_args = {}
+                elif event_type == "tool_args" and isinstance(event.get("args"), dict):
+                    last_tool_args = event["args"]
+                elif event_type == "tool_result" and not event.get("render"):
+                    card = media_card(event, last_tool_args)
+                    if card is not None:
+                        # A relayed result's summary-view ``data`` gives way to
+                        # the card; its summary and success are already set.
+                        event = {**event, **card}
 
                 # Capture answer content for DB storage
                 if event_type == "answer":
@@ -5087,7 +5124,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             content, sse_type, keep_steps = _empty_answer_outcome(
                 turn_cancelled,
                 bool(tool_steps),
-                any(step.get("render") for step in captured_steps),
+                any(
+                    step.get("render") and step["render"] not in _NON_ANSWER_RENDERS
+                    for step in captured_steps
+                ),
                 backend_problem,
                 turn_reported_error=any(
                     s.get("type") == "error" for s in captured_steps

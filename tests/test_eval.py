@@ -1146,6 +1146,10 @@ class TestBuildScenarioPrompt:
 class TestRunScenarioSubprocess:
     """Tests for run_scenario_subprocess JSON parsing via mocked subprocess."""
 
+    @pytest.fixture(autouse=True)
+    def _signed_in(self, claude_login):
+        """The driver needs a Claude credential; give it a CLI login."""
+
     def _minimal_scenario(self):
         return {
             "id": "mock_scenario",
@@ -2809,6 +2813,10 @@ class TestScenarioLoading:
 class TestRunner:
     """Tests for runner execution behavior (mocked subprocess)."""
 
+    @pytest.fixture(autouse=True)
+    def _signed_in(self, claude_login):
+        """The driver needs a Claude credential; give it a CLI login."""
+
     def test_timeout_handling(self, mocker):
         """Scenario that exceeds timeout gets TIMEOUT status."""
         import tempfile
@@ -2959,6 +2967,10 @@ class TestRunner:
 
 class TestScorecardPublicAPI:
     """Tests for the scorecard public API including score calculation and comparison."""
+
+    @pytest.fixture(autouse=True)
+    def _signed_in(self, claude_login):
+        """The driver needs a Claude credential; give it a CLI login."""
 
     def _make_result(self, scenario_id, status, score, category="rag_quality"):
         return {

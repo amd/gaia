@@ -184,14 +184,12 @@ def _profile_ctx_size() -> int:
     Resolves through the same ``GaiaConfig.default_device`` →
     ``profile_ctx_size`` path ``gaia.cli`` uses to size its own model loads, so
     a server the daemon starts serves the window every GAIA agent will ask for.
-    A corrupt config raises ``GaiaConfigError`` rather than guessing: the NPU
-    profile's ceiling is half the GPU one, and picking the wrong side fails the
-    model load outright.
+    A corrupt config raises ``GaiaConfigError`` rather than guessing.
     """
     from gaia.config import GaiaConfig
-    from gaia.llm.lemonade_client import npu_ctx_ceiling, profile_ctx_size, runs_on_npu
+    from gaia.llm.lemonade_client import npu_default_ctx, profile_ctx_size, runs_on_npu
 
     config = GaiaConfig.load()
     if runs_on_npu(config.default_model):
-        return npu_ctx_ceiling(config.default_model)
+        return npu_default_ctx(config.default_model)
     return profile_ctx_size(config.default_device)

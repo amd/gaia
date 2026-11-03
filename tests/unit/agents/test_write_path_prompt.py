@@ -189,12 +189,17 @@ def test_a_relative_write_names_the_workspace_target_not_the_cwd(layout, monkeyp
 
 
 def _answer_next_prompt(handler, **decision):
+    # The pending event is set before the prompt is emitted, so wait for both.
     deadline = time.monotonic() + 5
-    while handler._confirm_event is None and time.monotonic() < deadline:
-        time.sleep(0.01)
     events = []
-    while not handler.event_queue.empty():
-        events.append(handler.event_queue.get_nowait())
+    while time.monotonic() < deadline:
+        while not handler.event_queue.empty():
+            events.append(handler.event_queue.get_nowait())
+        if handler._confirm_event is not None and any(
+            e.get("type") == "permission_request" for e in events
+        ):
+            break
+        time.sleep(0.01)
     handler.resolve_tool_confirmation(**decision)
     return [e for e in events if e.get("type") == "permission_request"]
 

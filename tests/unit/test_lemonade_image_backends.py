@@ -124,6 +124,18 @@ def test_image_save_sanitizes_model_name(tmp_path):
     assert "repo_model_name" in output.name
 
 
+@pytest.mark.parametrize("whitespace", ["\t", "\n", "\r"], ids=["tab", "lf", "cr"])
+def test_image_save_normalizes_all_prompt_whitespace(tmp_path, whitespace):
+    mixin = SDToolsMixin()
+    mixin.sd_output_dir = tmp_path
+
+    output = mixin._save_image(f"red fox{whitespace}in snow", b"PNG", "SDXL-Turbo")
+
+    assert output.parent == tmp_path
+    assert "red_fox_in_snow_SDXL-Turbo_" in output.name
+    assert not any(char in output.name for char in "\t\n\r")
+
+
 def _mixin(tmp_path, downloaded):
     mixin = SDToolsMixin()
     mixin.sd_client = _client()

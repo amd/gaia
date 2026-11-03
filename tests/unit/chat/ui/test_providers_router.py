@@ -1041,6 +1041,62 @@ def test_downloaded_gpt_oss_lists_even_when_memory_is_unknown(client, lemonade):
     assert "gpt-oss-120b-mxfp-GGUF" in ids
 
 
+_NPU_SYSTEM_INFO = {
+    "Physical Memory": "32.00 GB",
+    "devices": {"amd_npu": {"available": True}},
+    "recipes": {"flm": {"backends": {"npu": {"state": "installable"}}}},
+}
+
+
+def test_a_cold_npu_pc_is_offered_gemma_before_lemonade_lists_any_flm_model(
+    client, lemonade
+):
+    lemonade.models = [{"id": "Gemma-4-E4B-it-GGUF", "downloaded": True}]
+    lemonade.answers[("GET", "system-info")] = (200, _NPU_SYSTEM_INFO)
+    models = client.get("/api/providers/local/models").json()["models"]
+    rows = {m["id"]: m for m in models}
+    assert rows["gemma4-it-e4b-FLM"]["recipe"] == "flm"
+    assert rows["gemma4-it-e4b-FLM"]["size_gb"] == 9.1
+    assert rows["gemma4-it-e4b-FLM"]["display_name"] == "Gemma 4 E4B NPU"
+    assert rows["gemma4-it-e4b-FLM"]["state"] == "not_downloaded"
+
+
+def test_a_pc_without_an_npu_is_not_offered_flm_models(client, lemonade):
+    lemonade.models = [{"id": "Gemma-4-E4B-it-GGUF", "downloaded": True}]
+    lemonade.answers[("GET", "system-info")] = (
+        200,
+        {"Physical Memory": "32.00 GB", "devices": {}},
+    )
+    ids = [m["id"] for m in client.get("/api/providers/local/models").json()["models"]]
+    assert not [i for i in ids if i.endswith("-FLM")]
+
+
+def test_a_listed_flm_model_is_not_shown_twice(client, lemonade):
+    lemonade.models = [
+        {
+            "id": "gemma4-it-e4b-FLM",
+            "downloaded": True,
+            "labels": ["chat"],
+            "recipe": "flm",
+        }
+    ]
+    lemonade.answers[("GET", "system-info")] = (200, _NPU_SYSTEM_INFO)
+    ids = [m["id"] for m in client.get("/api/providers/local/models").json()["models"]]
+    assert ids.count("gemma4-it-e4b-FLM") == 1
+
+
+def test_a_single_turn_flm_build_is_no_chat_model(client, lemonade):
+    lemonade.models = [
+        {
+            "id": "gemma4e-flash-e4b-FLM",
+            "downloaded": True,
+            "labels": ["chat", "single-turn"],
+        }
+    ]
+    ids = [m["id"] for m in client.get("/api/providers/local/models").json()["models"]]
+    assert "gemma4e-flash-e4b-FLM" not in ids
+
+
 def test_local_models_keep_chat_models_that_also_take_audio(client, lemonade):
     lemonade.models = [
         {"id": "gemma4-it-e2b-FLM", "downloaded": True, "labels": ["chat", "audio"]},

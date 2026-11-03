@@ -46,3 +46,6 @@ func renameHeld(err error) bool {
 		errors.Is(err, windows.ERROR_SHARING_VIOLATION) ||
 		errors.Is(err, windows.ERROR_LOCK_VIOLATION)
 }
+
+// errReadOnlyFS is what a write gets on a write-protected drive.
+var errReadOnlyFS error = windows.ERROR_WRITE_PROTECT

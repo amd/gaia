@@ -32,7 +32,7 @@ def _write(directory, sid, objective="X"):
 
 
 @pytest.fixture
-def dirs(tmp_path, monkeypatch):
+def dirs(tmp_path, monkeypatch, claude_login):
     repo = tmp_path / "repo"
     builtin = repo / "eval" / "scenarios"
     _write(builtin, "alpha")

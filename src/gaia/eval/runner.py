@@ -23,7 +23,6 @@ import logging
 import os
 import re
 import shutil
-import signal
 import statistics
 import subprocess
 import sys
@@ -35,20 +34,19 @@ from typing import Optional
 import requests
 import yaml
 
+from gaia.eval.claude_credential import announce, resolve_claude_credential
 from gaia.eval.claude_outage import (
-    API_KEY_VAR,
     CREDENTIAL,
     HEADLINES,
     QUOTA,
     UNREACHABLE,
     classify_driver_failure,
-    dotenv_only_api_key,
-    driver_api_key,
     switch_to_backup_account,
 )
 from gaia.eval.claude_usage import describe, merge_scenario_usage, usage_from_cli
 from gaia.eval.config import DEFAULT_AGENT_TYPE
 from gaia.eval.eval_lock import exclusive_eval
+from gaia.eval.process_tree import kill_tree as _kill_tree
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
 from gaia.eval.scorecard import NOT_RUN, SKIPPED_STATUSES
 from gaia.llm.local_only import assert_provider_permitted, cloud_blocked
@@ -1182,11 +1180,11 @@ For each turn in the scenario:
      if the turn objective says otherwise.
    - pending_question: answer it in character with answer_question.
    Repeat until the turn is idle. If wait_for_turn times out, call it once more.
-3. Call get_messages(session_id) and judge the LAST assistant message, with its
+3. Call get_messages(session_id, full_replies=True) and judge the LAST assistant message, with its
    tool steps, using the PER-TURN JUDGE INSTRUCTIONS section above
 
 ### Phase 3: Full trace
-After all turns, call get_messages(session_id) for the persisted full trace.
+After all turns, call get_messages(session_id, full_replies=True) for the persisted full trace.
 
 ### Phase 4: Scenario judgment
 Evaluate holistically using the SCENARIO-LEVEL JUDGE INSTRUCTIONS section above
@@ -1711,6 +1709,10 @@ def preflight_check(backend_url, scenarios=None):
                 )
         except FileNotFoundError:
             errors.append("'claude' CLI not found on PATH — install Claude Code CLI")
+        try:
+            announce(resolve_claude_credential(), role="Claude eval driver")
+        except (ValueError, RuntimeError) as e:
+            errors.append(str(e))
 
     # Memory-category preflight — required only when memory scenarios are queued.
     # Memory scenarios call memory_clear(scope=all) to reset state between turns;
@@ -2123,51 +2125,19 @@ def run_scripted_scenario(
 _DRIVER_DRAIN_S = 30
 
 
-def _kill_tree(proc: subprocess.Popen) -> None:
-    """Kill *proc* and every process it started.
-
-    Killing only ``claude`` leaves its MCP server holding the output pipes, so
-    reading them blocks and the timeout fires minutes late.
-    """
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-            capture_output=True,
-            check=False,
-        )
-    else:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)  # pylint: disable=no-member
-    with contextlib.suppress(OSError):
-        proc.kill()
-
-
-_warned_dotenv_api_key = False
-
-
 def _driver_auth():
     """Return ``(flags, env)`` for the ``claude -p`` driver's authentication.
 
-    ``--bare`` gives a clean subprocess (no hooks, no CLAUDE.md auto-load) but
-    also restricts auth to ``ANTHROPIC_API_KEY`` / ``apiKeyHelper`` — OAuth and
-    the keychain are never read. So it is used only with a key the operator
-    exported. A key that only a ``.env`` supplied is ignored *and* removed from
-    the child's environment, since the CLI prefers it over OAuth. ``env`` is
-    ``None`` when the child should inherit this process's environment as is.
+    Follows :func:`gaia.eval.claude_credential.resolve_claude_credential`. On
+    the subscription the child loses ``ANTHROPIC_API_KEY``, which the CLI would
+    prefer over OAuth. On a key, ``--bare`` gives a clean subprocess (no hooks,
+    no CLAUDE.md auto-load) and restricts auth to that key. ``env`` is ``None``
+    when the child should inherit this process's environment as is.
     """
-    global _warned_dotenv_api_key  # pylint: disable=global-statement
-    if driver_api_key():
-        return ["--bare"], None
-    if dotenv_only_api_key():
-        if not _warned_dotenv_api_key:
-            _warned_dotenv_api_key = True
-            logger.warning(
-                "Ignoring ANTHROPIC_API_KEY from a .env file for the eval driver "
-                "— it would disable your Claude Code login. Export it in the "
-                "shell to drive the eval with that key instead."
-            )
-        return [], {k: v for k, v in os.environ.items() if k != API_KEY_VAR}
-    return [], None
+    credential = resolve_claude_credential()
+    announce(credential, role="Claude eval driver")
+    env = credential.cli_env(os.environ)
+    return credential.cli_flags(), (None if env == dict(os.environ) else env)
 
 
 def _run_driver(
@@ -2756,6 +2726,65 @@ Fix failures in this order:
 """
 
 
+def require_clean_tree_for_fix() -> None:
+    """Refuse ``--fix`` unless the checkout has no uncommitted tracked changes.
+
+    The fixer edits this checkout with permissions disabled; only a clean
+    starting tree leaves ``git diff`` as an exact record of what it changed.
+    """
+    try:
+        proc = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(REPO_ROOT),
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(
+            f"--fix could not check the git state of {REPO_ROOT}: {e}. "
+            "It edits the checkout, so it needs git on PATH to confirm the tree "
+            "is clean."
+        ) from e
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"--fix needs a git checkout of GAIA, but {REPO_ROOT} is not one "
+            f"(git: {(proc.stderr or proc.stdout).strip()[:300]}). Run it from a "
+            "source checkout (`git clone https://github.com/amd/gaia`)."
+        )
+    dirty = [line for line in proc.stdout.splitlines() if line.strip()]
+    if dirty:
+        shown = "\n  ".join(dirty[:10])
+        more = f"\n  ... and {len(dirty) - 10} more" if len(dirty) > 10 else ""
+        raise RuntimeError(
+            f"--fix refuses to start: {REPO_ROOT} has {len(dirty)} uncommitted "
+            f"change(s), and the fixer edits this tree with permissions "
+            f"disabled:\n  {shown}{more}\n"
+            "Commit them or move them to a branch first, or run --fix from a "
+            "separate worktree (`git worktree add <path>`), so `git diff` shows "
+            "exactly what the fixer changed."
+        )
+
+
+def _fix_iteration_failure(fix_result: dict) -> Optional[str]:
+    """Why a fixer iteration did not complete, or ``None`` when it did."""
+    if fix_result.get("error"):
+        return str(fix_result["error"])
+    code = fix_result.get("fixer_exit_code")
+    if code not in (0, None):
+        return f"the fixer exited {code}"
+    return None
+
+
 def run_fix_iteration(scorecard, run_dir, iteration):
     """Invoke Claude Code to fix failing scenarios. Returns fix log entry."""
     # Load fixer prompt from file if available, fall back to inline FIXER_PROMPT
@@ -2842,6 +2871,12 @@ def run_fix_iteration(scorecard, run_dir, iteration):
     except Exception as e:
         print(f"[FIX] Fixer error: {e}", file=sys.stderr)
         return {"iteration": iteration, "error": str(e), "fixes": []}
+
+
+def _write_fix_history(run_dir, fix_history) -> None:
+    (run_dir / "fix_history.json").write_text(
+        json.dumps(fix_history, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 #: Committed next to a baseline's scorecards; names what produced them.
@@ -3375,6 +3410,9 @@ class AgentEvalRunner:
             result = run_audit()
             print(json.dumps(result, indent=2))
             return result
+
+        if fix_mode and resume_dir is None:
+            require_clean_tree_for_fix()
 
         with exclusive_eval("gaia eval agent"):
             if resume_dir is not None:
@@ -3929,6 +3967,17 @@ class AgentEvalRunner:
             # Phase B: Run fixer
             fix_result = run_fix_iteration(current_scorecard, run_dir, iteration)
             fix_history.append(fix_result)
+            failure = _fix_iteration_failure(fix_result)
+            if failure:
+                _write_fix_history(run_dir, fix_history)
+                # Re-scoring a half-edited tree, then fixing it again, compounds
+                # whatever the interrupted fixer left behind.
+                raise RuntimeError(
+                    f"Fix mode stopped: iteration {iteration} did not complete "
+                    f"({failure}). The fixer may have left partial edits in "
+                    f"{REPO_ROOT} — review them with `git diff` before re-running. "
+                    f"Fix history: {run_dir / 'fix_history.json'}"
+                )
 
             # Phase C: Re-run only previously-failed scenarios
             failed_ids = {s.get("scenario_id") for s in failed}
@@ -4023,11 +4072,7 @@ class AgentEvalRunner:
             self._print_summary(new_scorecard, fix_run_id, run_dir)
             current_scorecard = new_scorecard
 
-        # Write fix_log.json with full history
-        fix_log_path = run_dir / "fix_history.json"
-        fix_log_path.write_text(
-            json.dumps(fix_history, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        _write_fix_history(run_dir, fix_history)
 
         # Final comparison: baseline vs current
         baseline_pass = baseline_scorecard.get("summary", {}).get("judged_pass_rate", 0)
@@ -4037,7 +4082,7 @@ class AgentEvalRunner:
         print(f"  Baseline judged pass rate: {baseline_pass:.0%}")
         print(f"  Final judged pass rate:    {final_pass:.0%}")
         print(f"  Delta:                     {(final_pass - baseline_pass):+.0%}")
-        print(f"  Fix history:        {fix_log_path}")
+        print(f"  Fix history:        {run_dir / 'fix_history.json'}")
         print("  Changes are NOT committed -- review before merging.")
         print(f"{'='*60}")
 
