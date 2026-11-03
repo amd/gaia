@@ -1180,11 +1180,11 @@ For each turn in the scenario:
      if the turn objective says otherwise.
    - pending_question: answer it in character with answer_question.
    Repeat until the turn is idle. If wait_for_turn times out, call it once more.
-3. Call get_messages(session_id) and judge the LAST assistant message, with its
+3. Call get_messages(session_id, full_replies=True) and judge the LAST assistant message, with its
    tool steps, using the PER-TURN JUDGE INSTRUCTIONS section above
 
 ### Phase 3: Full trace
-After all turns, call get_messages(session_id) for the persisted full trace.
+After all turns, call get_messages(session_id, full_replies=True) for the persisted full trace.
 
 ### Phase 4: Scenario judgment
 Evaluate holistically using the SCENARIO-LEVEL JUDGE INSTRUCTIONS section above
