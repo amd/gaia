@@ -585,8 +585,9 @@ GAIA asks before it changes files, runs commands or uses tools that act for you.
 The question appears above the message box with three answers:
 
 - **Allow once**
-- **Always allow** *this exact action* in this chat (offered only when the action
-  is narrow enough to name, e.g. *writing notes.md*)
+- **Always allow** the same kind of action in this chat. For a host-resolved
+  file write, this covers files in that folder; unresolved or safety-sensitive
+  paths stay exact and continue to prompt (e.g. *writing notes.md*)
 - **Deny**
 
 When the same question comes back after you allowed it once, the prompt says
