@@ -76,7 +76,7 @@ const PLAN_LONG = {
     ...PLAN,
     chat_model: { id: QWEN_ID, user_set: true, size_gb: 23.3, downloaded: false },
     catalog: CATALOG.map((e) => (e.id === QWEN_ID
-        ? { ...e, name: LONG_NAME, planned: true, selected: true, fits: true, purpose: 'Answers your chats, reads your images and works through long documents', source: 'huggingface.co/amd/a-repository-with-a-very-long-name-that-keeps-on-going/resolve/main' }
+        ? { ...e, name: LONG_NAME, planned: true, selected: true, fits: true, need_gb: 14.2, purpose: 'Answers your chats, reads your images and works through long documents', source: 'huggingface.co/amd/a-repository-with-a-very-long-name-that-keeps-on-going/resolve/main' }
         : e)),
 };
 const PLAN_DONE = { ...PLAN, catalog: CATALOG.map((e) => (e.gaia_model && !e.support ? e : { ...e, downloaded: true, size_gb: 0 })) };
@@ -192,7 +192,7 @@ interface SetupAnswers {
 
 const THEIRS_TARGET = {
     mode: 'gaia', saved_mode: null, source: 'default', base_url: null, saved_base_url: null, api_key_stored: false, offer: true,
-    what_gaia_does: "GAIA registers its embedding model (user.embeddinggemma-300m-GGUF) on your server and loads its chat and embedding models there. It does not change your server's own setup: no cloud providers or keys, no backends, no saved load options, and it never unloads or deletes your models. It never starts a Lemonade while set to use yours.",
+    what_gaia_does: "GAIA downloads and runs its models on your server. It leaves your server's settings and your own models as they are.",
 };
 const THEIRS_FOUND = { found: { url: 'http://localhost:13305/api/v1', version: '2026.44.1', status: 'ok', message: null }, unchecked: [] };
 
@@ -404,6 +404,8 @@ export const SETUP_SCENES: SetupScene[] = [
             await expect(page.locator('.dl-row').first()).toBeVisible();
             await expect(page.locator('.setup-contents')).toBeVisible();
             await expect(page.getByRole('button', { pressed: false }).first()).toBeVisible();
+            // A running download keeps a way out in the same bar every step's actions sit in.
+            await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
         },
     },
     {
@@ -434,7 +436,8 @@ export const SETUP_SCENES: SetupScene[] = [
     {
         name: 'test-failed-broken',
         answers: { status: failedTests('broken', 'The model file looks damaged.') },
-        reach: (page) => expect(page.locator('.setup-failure .btn-secondary').nth(1)).toBeVisible(),
+        // A damaged file: Download it again is the bar's main action.
+        reach: (page) => expect(page.locator('.setup-footer .btn-primary.setup-wrap-btn')).toBeVisible(),
     },
     {
         name: 'test-long',

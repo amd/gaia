@@ -35,8 +35,9 @@ interface Props {
 export function BackendChoice({ plan, selection, onSelection, disabled = false }: Props) {
     const t = useT();
     const catalog = catalogOf(plan);
-    // GAIA's own NPU model, offered only on a PC whose NPU holds it.
-    const npuModel = catalog.find((e) => isNpu(e) && e.gaia_model && e.chat_choice && e.fits !== false);
+    // GAIA's own NPU model on a PC whose NPU holds it, else an NPU chat model already downloaded.
+    const npuModel = catalog.find((e) => isNpu(e) && e.gaia_model && e.chat_choice && e.fits !== false)
+        ?? catalog.find((e) => isNpu(e) && e.chat_choice && e.downloaded);
     const onNpu = !!catalog.find((e) => e.id === selection.defaultChat && isNpu(e));
     // Back to the GPU: setup's own pick, unless that is the NPU model itself.
     const recommended = recommendedSelection(plan).defaultChat;

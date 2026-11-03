@@ -37,7 +37,7 @@ describe('Test step', () => {
             row('chat', 'passed', { subject: QWEN.id, seconds: 12.6 }),
             row('vision', 'running', { subject: GEMMA.id }),
         ], 'verifying', ['server', 'chat', 'vision', 'embedding', 'agent']);
-        expect(rowOf(/Model server answers/)).toHaveTextContent('Passed, 0 s');
+        expect(rowOf(/AI engine answers/)).toHaveTextContent('Passed, 0 s');
         expect(rowOf(/Chat: loads and answers/)).toHaveTextContent(QWEN.name);
         expect(rowOf(/Chat: loads and answers/)).toHaveTextContent('Passed, 13 s');
         expect(rowOf(/Reading images/)).toHaveTextContent(GEMMA.name);
@@ -85,7 +85,8 @@ describe('Test step', () => {
         const { onDownloadAgain } = show([row('chat', 'failed', { subject: QWEN.id, kind: 'broken', error: 'bad file' })], 'failed');
         const alert = screen.getByRole('alert');
         expect(alert).toHaveTextContent("Something didn't work, so GAIA isn't ready yet. Your downloads are safe.");
-        fireEvent.click(within(alert).getByRole('button', { name: `Download ${QWEN.name} again` }));
+        // One damaged model: its row names it, the button just says what it does.
+        fireEvent.click(within(alert).getByRole('button', { name: 'Download it again' }));
         expect(onDownloadAgain).not.toHaveBeenCalled();
         fireEvent.click(screen.getByRole('button', { name: 'Delete and download again' }));
         expect(onDownloadAgain).toHaveBeenCalledExactlyOnceWith(QWEN.id);
@@ -122,6 +123,15 @@ describe('Test step', () => {
             row('chat', 'failed', { subject: QWEN.id, kind: 'broken', error: 'bad file' }),
             row('vision', 'failed', { subject: QWEN.id, kind: 'broken', error: 'bad file' }),
         ], 'failed');
-        expect(screen.getAllByRole('button', { name: `Download ${QWEN.name} again` })).toHaveLength(1);
+        expect(screen.getAllByRole('button', { name: 'Download it again' })).toHaveLength(1);
+    });
+
+    it('names each model when more than one is damaged', () => {
+        show([
+            row('chat', 'failed', { subject: QWEN.id, kind: 'broken', error: 'bad file' }),
+            row('vision', 'failed', { subject: GEMMA.id, kind: 'broken', error: 'bad file' }),
+        ], 'failed');
+        expect(screen.getByRole('button', { name: `Download ${QWEN.name} again` })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: `Download ${GEMMA.name} again` })).toBeInTheDocument();
     });
 });

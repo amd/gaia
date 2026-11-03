@@ -236,7 +236,7 @@ export function DetectedSummary({ plan, hardware, onChangeMemory }: { plan: Setu
 
                     <h4 className="found-group">{t('setup.found.runtime')}</h4>
                     {f.runtimes.length ? (
-                        <table className="found-table">
+                        <div className="found-table-wrap"><table className="found-table">
                             <thead className="visually-hidden">
                                 <tr>
                                     <th scope="col">{t('setup.found.col.runtime')}</th>
@@ -257,16 +257,17 @@ export function DetectedSummary({ plan, hardware, onChangeMemory }: { plan: Setu
                                     </tr>
                                 ))}
                             </tbody>
-                        </table>
+                        </table></div>
                     ) : <p className="found-muted">{t('setup.found.unknown')}</p>}
 
                     <h4 className="found-group">{t('setup.found.models')}</h4>
                     {(plan.catalog ?? []).length ? (
-                        <table className="found-table">
+                        <div className="found-table-wrap"><table className="found-table">
                             <thead className="visually-hidden">
                                 <tr>
                                     <th scope="col">{t('setup.found.col.model')}</th>
                                     <th scope="col">{t('setup.found.col.job')}</th>
+                                    <th scope="col">{t('setup.found.col.tested')}</th>
                                     <th scope="col">{t('setup.found.col.size')}</th>
                                     <th scope="col">{t('setup.found.col.state')}</th>
                                 </tr>
@@ -275,7 +276,12 @@ export function DetectedSummary({ plan, hardware, onChangeMemory }: { plan: Setu
                                 {(plan.catalog ?? []).map((e) => (
                                     <tr key={e.id}>
                                         <th scope="row" title={e.id}><bdi>{e.name}</bdi></th>
-                                        <td>{e.roles[0] ? t(JOB_KEYS[e.roles[0]]) : ''}</td>
+                                        <td>{e.roles.map((r) => t(JOB_KEYS[r])).join(' · ')}</td>
+                                        {/* The same label Customize gives it; an optional extra has none. */}
+                                        <td>
+                                            {e.support === 'verified' && <span className="mc-chip is-verified">{t('setup.label.verified')}</span>}
+                                            {e.support === 'untested' && <span className="mc-chip is-untested">{t('setup.label.untested')}</span>}
+                                        </td>
                                         <td><Tech>{e.full_size_gb ?? e.size_gb ? formatSize((e.full_size_gb ?? e.size_gb) as number) : ''}</Tech></td>
                                         <td className={e.downloaded ? 'is-installed' : undefined}>
                                             {t(e.downloaded ? 'setup.models.status.onPc' : 'setup.found.notDownloaded')}
@@ -283,7 +289,7 @@ export function DetectedSummary({ plan, hardware, onChangeMemory }: { plan: Setu
                                     </tr>
                                 ))}
                             </tbody>
-                        </table>
+                        </table></div>
                     ) : <p className="found-muted">{t('setup.found.unknown')}</p>}
 
                     <h4 className="found-group">{t('setup.found.hardware')}</h4>

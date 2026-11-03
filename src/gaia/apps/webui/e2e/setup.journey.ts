@@ -37,7 +37,10 @@ test('checks stop on what they found, then download reaches Test and Ready, and 
         await route.continue();
     });
     await open();
-    await expect(stepTitle(page)).toHaveText(say('setup.check.heading'), { timeout: 2 * 60_000 });
+    // Checking, or already checked: a fast PC can finish before the first look.
+    const checkHeadings = [say('setup.check.heading'), say('setup.check.headingDone')];
+    const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    await expect(stepTitle(page)).toHaveText(new RegExp(`^(${checkHeadings.map(literal).join('|')})$`), { timeout: 2 * 60_000 });
     await shot('checks');
 
     await pastChecks(page, say);

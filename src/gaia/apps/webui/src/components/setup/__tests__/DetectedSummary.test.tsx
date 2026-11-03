@@ -15,6 +15,8 @@ vi.mock('../../../services/api', async (importOriginal) => {
 
 const PLAN = (): SetupPlan => ({
     ...COLD_BIG(),
+    // As the real catalog has it: gpt-oss is a chat model GAIA hasn't evaluated.
+    catalog: COLD_BIG().catalog!.map((e) => (e.id.startsWith('gpt-oss') ? { ...e, support: 'untested' as const } : e)),
     lemonade: { mode: 'gaia', url: 'http://127.0.0.1:13305/api/v1', reachable: true },
     capacity_gb: 103.1,
     memory_source: 'AMD iGPU',
@@ -73,11 +75,15 @@ describe('what setup found', () => {
         expect(found).toHaveTextContent('0.3.3');
         expect(found).toHaveTextContent('AMD Radeon(TM) 8060S Graphics (gfx1151)');
         expect(found).toHaveTextContent('16 cores, 32 threads');
-        expect(within(found).getAllByRole('heading').map((h) => h.textContent)).toEqual(['What setup found', 'Software', 'Runs models with', 'Models GAIA supports here', 'Hardware']);
-        // Every model setup knows for this PC, with its job and whether it is here yet.
+        expect(within(found).getAllByRole('heading').map((h) => h.textContent)).toEqual(['What setup found', 'Software', 'Runs models with', 'Models setup can download here', 'Hardware']);
+        // Every model setup knows for this PC: all its jobs, whether GAIA tested it, whether it is here yet.
         const qwen = within(found).getByRole('rowheader', { name: 'Qwen3.6-35B-A3B' }).closest('tr') as HTMLElement;
         expect(qwen).toHaveTextContent('Chat');
+        expect(qwen).toHaveTextContent('Verified');
         expect(qwen).toHaveTextContent('Not downloaded');
+        const gptOss = within(found).getByRole('rowheader', { name: 'gpt-oss 20B' }).closest('tr') as HTMLElement;
+        expect(gptOss).toHaveTextContent('Untested');
+        expect(gptOss).not.toHaveTextContent('Verified');
         expect(found).not.toHaveTextContent('Not here');
         expect(found).not.toHaveTextContent('ds4');
     });

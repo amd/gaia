@@ -103,7 +103,9 @@ export function JobModels({ plan, selection, onSelection, disabled }: Props) {
     const catalog = catalogOf(plan);
     const [showVision, setShowVision] = useState(false);
     const chat = catalog.find((e) => e.id === selection.defaultChat);
-    const chatRows = catalog.filter((e) => e.chat_choice && !isEmbedding(e) && (e.gaia_model || e.downloaded));
+    // Only the models for where the chat model runs, as chosen in Run on above.
+    const onNpu = !!chat && isNpu(chat);
+    const chatRows = catalog.filter((e) => e.chat_choice && !isEmbedding(e) && (e.gaia_model || e.downloaded) && isNpu(e) === onNpu);
     const verified = chatRows.filter((e) => e.support === 'verified');
     const untested = chatRows.filter((e) => e.support !== 'verified');
     const visionPick = resolveVision(catalog, selection);

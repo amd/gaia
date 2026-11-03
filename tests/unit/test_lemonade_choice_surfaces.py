@@ -155,7 +155,7 @@ class TestAgentUiRouter:
     def test_target_offers_a_switch_until_someone_chooses(self, client):
         body = client.get("/api/lemonade/target", headers=self.H).json()
         assert body["mode"] == "gaia" and body["offer"] is True
-        assert "embedding model" in body["what_gaia_does"]
+        assert "leaves your server's settings" in body["what_gaia_does"]
         _save(lemonade_mode="gaia")
         assert (
             client.get("/api/lemonade/target", headers=self.H).json()["offer"] is False

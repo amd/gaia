@@ -21,6 +21,7 @@ import { GpuMemoryPanel } from './setup/GpuMemoryPanel';
 import { tooBigText } from './setup/ModelChecklist';
 import { StageLogs } from './setup/StageLogs';
 import { SetupFooter, SetupFooterSlot } from './setup/SetupFooter';
+import { LanguagePicker } from './setup/LanguagePicker';
 import { BackendChoice, applyTestedBackend } from './setup/BackendChoice';
 import { DetectedSummary } from './setup/DetectedSummary';
 import { SetupChecks } from './setup/SetupChecks';
@@ -180,14 +181,13 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
         return <p className="setup-hint"><bdi dir="ltr">{found.message}</bdi></p>;
     }
     return (
-        <form className="setup-lemonade" aria-label={t('setup.offer.label')} onSubmit={(e) => { e.preventDefault(); void choose('external'); }}>
-            <span className="setup-choice-title">
-                {t('setup.offer.title')} <bdi dir="ltr">{found.url}{found.version ? ` (v${found.version})` : ''}</bdi>
-            </span>
+        <form id="setup-lemonade-form" className="setup-lemonade" aria-label={t('setup.offer.label')} onSubmit={(e) => { e.preventDefault(); void choose('external'); }}>
+            <span className="setup-choice-title">{t('setup.offer.title')}</span>
+            <span className="setup-choice-note"><bdi dir="ltr">Lemonade{found.version ? ` ${found.version}` : ''} · {found.url}</bdi></span>
             <button type="button" className="setup-log-toggle setup-offer-more" onClick={() => setMore((m) => !m)} aria-expanded={more} aria-controls="setup-offer-detail">
                 <ChevronRight size={13} className={more ? 'is-open' : ''} aria-hidden="true" /> {t('setup.offer.whatGaiaDoes')}
             </button>
-            {more && <p className="setup-choice-note" id="setup-offer-detail"><bdi dir="ltr">{target.what_gaia_does}</bdi></p>}
+            {more && <p className="setup-choice-note" id="setup-offer-detail">{t('setup.offer.whatGaiaDoesText')}</p>}
             {needsKey && (
                 <input
                     className="settings-input"
@@ -199,15 +199,15 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
                     aria-label={t('setup.offer.keyLabel')}
                 />
             )}
-            <div className="setup-row">
-                <button type="submit" className="btn-primary" disabled={busy || (needsKey && !key.trim())}>
-                    {busy && <Loader2 size={13} className="spin" />} {t('setup.offer.useMine')}
-                </button>
+            {error && <p className="setup-error" role="alert">{error}</p>}
+            <SetupFooter>
                 <button type="button" className="btn-secondary" disabled={busy} onClick={() => void choose('gaia')}>
                     {t('setup.offer.useOwn')}
                 </button>
-            </div>
-            {error && <p className="setup-error" role="alert">{error}</p>}
+                <button type="submit" form="setup-lemonade-form" className="btn-primary" disabled={busy || (needsKey && !key.trim())}>
+                    {busy && <Loader2 size={13} className="spin" />} {t('setup.offer.useMine')}
+                </button>
+            </SetupFooter>
         </form>
     );
 }
@@ -870,6 +870,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 {t.compose((say) => say('setup.nav.toLive', { step: say(trail.find((s) => s.id === liveStage)?.key ?? 'setup.download.step') }))}
                             </button>
                         )}
+                        <LanguagePicker />
                     </nav>
                 )}
                 {resumeOffer && phase !== 'download' && (
@@ -886,22 +887,14 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 <div key={stage} className={`setup-stage is-${stepDir.current}`}>
                     {stage === 'check' && (
                         <>
-                            <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.check.heading')}</h1>
+                            <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t(checksDone ? 'setup.check.headingDone' : 'setup.check.heading')}</h1>
                             <p className="setup-lede">{t(checksDone ? 'setup.check.ledeDone' : 'setup.check.lede')}</p>
                             <SetupChecks hardware={hardware} hardwareError={hardwareError} plan={plan} serverRun={serverRun} awaitingChoice={!!lemonadeFound && !lemonadeSettled} />
                             {checksDone && plan && <DetectedSummary plan={plan} hardware={hardware} onChangeMemory={showGpu && viewing == null ? () => openGpu('check') : undefined} />}
-                            {checksDone && viewing == null && (
+                            {checksDone && viewing == null && !(lemonadeFound && !lemonadeSettled) && (
                                 <SetupFooter>
                                     <button type="button" className="btn-primary" onClick={() => stepTo('plan')}>{t('setup.continue')}</button>
                                 </SetupFooter>
-                            )}
-                            {/* Before GAIA starts its own server, and after, so the user can still switch to theirs. */}
-                            {statusRead && plan && ((!plan.lemonade.reachable && !serverRun) || (checksDone && viewing == null && plan.lemonade.mode !== 'external')) && (
-                                <ExistingLemonadeOffer
-                                    onNothingToOffer={lemonadeNothing}
-                                    onFound={setLemonadeFound}
-                                    onChosen={(mode) => { setUsersServer(mode === 'external'); setLemonadeChoice(mode); setLemonadeSettled(true); loadHardware(); void loadPlan(); }}
-                                />
                             )}
                             {serverRun && runFailed && (
                                 <>
@@ -922,6 +915,14 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 </>
                             )}
                             {startError && <p className="setup-error" role="alert">{startError}</p>}
+                            {/* Before GAIA starts its own server, and after, so the user can still switch to theirs. */}
+                            {statusRead && plan && ((!plan.lemonade.reachable && !serverRun) || (checksDone && viewing == null && plan.lemonade.mode !== 'external')) && (
+                                <ExistingLemonadeOffer
+                                    onNothingToOffer={lemonadeNothing}
+                                    onFound={setLemonadeFound}
+                                    onChosen={(mode) => { setUsersServer(mode === 'external'); setLemonadeChoice(mode); setLemonadeSettled(true); loadHardware(); void loadPlan(); }}
+                                />
+                            )}
                         </>
                     )}
 
@@ -943,7 +944,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         <li>{t('setup.plan.why.fits', { need: formatFitGb(chatEntry.need_gb), have: formatFitGb(chatEntry.capacity_gb) })}</li>
                                     )}
                                     <li>{t('setup.plan.why.private')}</li>
-                                    {biggerOption && biggerOption.id !== chatEntry?.id && <li><bdi>{biggerOption.name}</bdi>: {tooBigText(biggerOption, t)}</li>}
+                                    {biggerOption && biggerOption.id !== chatEntry?.id && biggerOption.need_gb != null && biggerOption.capacity_gb != null && (
+                                        <li>{t('setup.plan.why.bigger', { name: biggerOption.name, need: formatFitGb(biggerOption.need_gb), have: formatFitGb(biggerOption.capacity_gb) })}</li>
+                                    )}
                                 </ul>
                                 <SetupFooter>
                                     <button type="button" className="btn-primary" onClick={() => (short ? setConfirm({ kind: 'low_disk' }) : void commit(false))} disabled={busy || blocked || runGoing}>
@@ -1076,6 +1079,15 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         </form>
                     )}
 
+                    {/* Started, before the run's first report: the step is already here, not a blank page. */}
+                    {stage === 'download' && !fullRun && (
+                        <>
+                            <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.download.title')}</h1>
+                            <p className="setup-lede">{t('setup.download.lede')}</p>
+                            <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.download.starting')}</p>
+                        </>
+                    )}
+
                     {stage === 'download' && fullRun && (
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.download.title')}</h1>
@@ -1193,12 +1205,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.ready.heading')}</h1>
                             <div className="setup-done" role="status">
                                 <div className="setup-done-head">
-                                    <p>
-                                        {t.compose((say) => [
-                                            say('setup.ready.title'),
-                                            answering ? say(cloud ? 'setup.ready.answersCloud' : 'setup.ready.answersLocal', { model: cloud ? shortModelName(answering) : (names[answering] ?? finalPlan?.catalog?.find((e) => e.id === answering)?.name ?? shortModelName(answering)) }) : null,
-                                        ].filter(Boolean).join(' '))}
-                                    </p>
+                                    {/* The heading already says GAIA is ready; this says what answers. */}
+                                    {answering && (
+                                        <p>
+                                            {t(cloud ? 'setup.ready.answersCloud' : 'setup.ready.answersLocal', { model: cloud ? shortModelName(answering) : (names[answering] ?? finalPlan?.catalog?.find((e) => e.id === answering)?.name ?? shortModelName(answering)) })}
+                                        </p>
+                                    )}
                                 </div>
                                 <SetupFooter>
                                     <button type="button" className="btn-primary" onClick={() => void finish()} autoFocus>

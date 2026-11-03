@@ -38,22 +38,29 @@ beforeEach(() => vi.clearAllMocks());
 describe('choosing where the chat model runs', () => {
     it('offers only the two tested backends, and NPU picks the NPU chat model', () => {
         render(<Harness setup={plan([QWEN, GEMMA, EMBED, NPU])} />);
-        expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['GPU (Vulkan)', 'NPU (FastFlowLM)']);
-        expect(screen.getByRole('radio', { name: 'GPU (Vulkan)' })).toHaveAttribute('aria-checked', 'true');
-        fireEvent.click(screen.getByRole('radio', { name: 'NPU (FastFlowLM)' }));
+        expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['Graphics (GPU)', 'Ryzen AI NPU']);
+        expect(screen.getByRole('radio', { name: 'Graphics (GPU)' })).toHaveAttribute('aria-checked', 'true');
+        fireEvent.click(screen.getByRole('radio', { name: 'Ryzen AI NPU' }));
         expect(screen.getByTestId('chat')).toHaveTextContent(NPU.id);
-        expect(screen.getByRole('radio', { name: 'NPU (FastFlowLM)' })).toHaveAttribute('aria-checked', 'true');
+        expect(screen.getByRole('radio', { name: 'Ryzen AI NPU' })).toHaveAttribute('aria-checked', 'true');
         // Back to the GPU: setup's own GPU pick. Choosing saves nothing; the start does.
-        fireEvent.click(screen.getByRole('radio', { name: 'GPU (Vulkan)' }));
+        fireEvent.click(screen.getByRole('radio', { name: 'Graphics (GPU)' }));
         expect(screen.getByTestId('chat')).toHaveTextContent(QWEN.id);
         expect(api.getModelServer).not.toHaveBeenCalled();
         expect(api.setModelServerBackend).not.toHaveBeenCalled();
     });
 
+    it("offers NPU for an NPU model the user already has, when GAIA's isn't listed", () => {
+        const theirs = entry({ id: 'gemma4-it-e2b-FLM', name: 'Gemma 4 E2B (NPU)', recipe: 'flm', gaia_model: false, downloaded: true, size_gb: 0 });
+        render(<Harness setup={plan([QWEN, GEMMA, EMBED, theirs])} />);
+        fireEvent.click(screen.getByRole('radio', { name: 'Ryzen AI NPU' }));
+        expect(screen.getByTestId('chat')).toHaveTextContent(theirs.id);
+    });
+
     it('offers no NPU on a PC without one', () => {
         render(<Harness setup={plan([QWEN, GEMMA, EMBED])} />);
-        expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['GPU (Vulkan)']);
-        expect(screen.getByText(/the backend GAIA has tested/)).toBeInTheDocument();
+        expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['Graphics (GPU)']);
+        expect(screen.getByText(/Chat runs on this PC's graphics/)).toBeInTheDocument();
     });
 
     it('keeps llama.cpp on Vulkan at the start, only where this PC runs it', async () => {

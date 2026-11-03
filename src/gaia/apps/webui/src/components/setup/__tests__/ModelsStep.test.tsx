@@ -130,15 +130,20 @@ describe('Choose your models', () => {
         expect(cont).toHaveAccessibleDescription('Pick at least one chat model, or choose a cloud provider in step 2.');
     });
 
-    it('lets an FLM-only user make their NPU model the chat model', async () => {
-        const onContinue = vi.fn();
-        render(<Harness plan={plan([QWEN, { ...GEMMA, recommended: false }, { ...EMBED, downloaded: true, size_gb: 0 }, FLM])} onContinue={onContinue} />);
+    it('lists only the chat models for where chat runs: a GPU pick hides the NPU ones', () => {
+        render(<Harness plan={plan([QWEN, { ...GEMMA, recommended: false }, { ...EMBED, downloaded: true, size_gb: 0 }, FLM])} />);
+        expect(chat(/Qwen3\.6-35B-A3B/)).toBeChecked();
+        expect(screen.queryByRole('radio', { name: /Gemma 4 E2B \(NPU\)/ })).toBeNull();
+    });
+
+    it("lists the NPU chat models when the user's chat model runs on the NPU", () => {
+        const npuPlan = plan([QWEN, { ...GEMMA, recommended: false }, { ...EMBED, downloaded: true, size_gb: 0 }, FLM], {
+            chat_model: { id: FLM.id, user_set: true, size_gb: 0, downloaded: true },
+        });
+        render(<Harness plan={npuPlan} />);
         const npu = chat(/Gemma 4 E2B \(NPU\)/);
         expect(npu).toHaveAccessibleName(/NPU.*On this PC/);
-        fireEvent.click(npu);
-        expect(npu).toBeChecked();
-        fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-        expect(onContinue).toHaveBeenCalledExactlyOnceWith(false);
+        expect(screen.queryByRole('radio', { name: /Qwen3\.6-35B-A3B/ })).toBeNull();
     });
 
     it('offers one screen when everything is already on this PC, with Change models', () => {
@@ -167,7 +172,7 @@ describe('Choose your models', () => {
         const onRetryPlan = vi.fn();
         const onUseRecommended = vi.fn();
         render(<Harness plan={null} planError="500" onRetryPlan={onRetryPlan} onUseRecommended={onUseRecommended} />);
-        expect(screen.getByRole('alert')).toHaveTextContent('Couldn’t read the model list from Lemonade: 500');
+        expect(screen.getByRole('alert')).toHaveTextContent('Couldn’t read the model list from the AI engine: 500');
         fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
         expect(onRetryPlan).toHaveBeenCalledTimes(1);
         fireEvent.click(screen.getByRole('button', { name: 'Use the recommended set' }));

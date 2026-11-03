@@ -108,7 +108,7 @@ describe('moving between steps during a run', () => {
         await toPlan();
         fireEvent.click(stepNav().getByRole('button', { name: 'Previous step' }));
         await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
-        expect(screen.getByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
     });
 
     it('during a second run, the old Ready screen cannot be reopened', async () => {

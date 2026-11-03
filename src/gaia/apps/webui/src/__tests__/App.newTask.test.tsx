@@ -363,7 +363,7 @@ describe('first-run setup', () => {
         expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
 
         answer(NOT_READY);
-        expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
     });
 
@@ -424,9 +424,9 @@ describe('first-run setup', () => {
         mocked.checkSetup.mockResolvedValue(NOT_READY);
         render(<App />);
 
-        expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         // Setup reads as progress: the check's reason is not shown as a problem.
-        expect(screen.getByText('This takes a few seconds and downloads no models.')).toBeInTheDocument();
+        expect(screen.getByText('This takes a few seconds. Nothing downloads yet.')).toBeInTheDocument();
         expect(screen.queryByText('The local model server is not installed.')).not.toBeInTheDocument();
         expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
     });

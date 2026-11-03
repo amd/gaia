@@ -30,7 +30,7 @@ describe('models by job: support labels', () => {
         render(<Harness plan={REAL()} />);
         expect(chat(/Qwen3\.6-35B-A3B/).closest('li')).toHaveTextContent('Verified');
         expect(chat(/Qwen3\.6-35B-A3B/).closest('li')).toHaveTextContent('Recommended for this PC');
-        expect(screen.getByText("Verified models passed GAIA's evaluations.")).toBeInTheDocument();
+        expect(screen.getByText("Verified models are tested by GAIA on PCs like this one.")).toBeInTheDocument();
     });
 
     it('keeps untested models apart, under a warning, and warns again once one is picked', () => {
@@ -84,7 +84,7 @@ describe('models by job: reading images', () => {
         fireEvent.click(chat(/gpt-oss 20B/));
         fireEvent.click(vision(/Skip for now/));
         expect(vision(/Skip for now/)).toBeChecked();
-        expect(screen.getByRole('note')).toHaveTextContent('Reading images needs a vision model. GAIA will ask before downloading one.');
+        expect(screen.getByRole('note')).toHaveTextContent('Reading images needs a model that can see. GAIA will ask before downloading one.');
         expect(pending(p)).not.toContain(GEMMA.id);
         expect(fact('Reading images')).toHaveTextContent('Off for now');
     });
@@ -92,18 +92,18 @@ describe('models by job: reading images', () => {
     it('opens the other vision models on request and can pick one', () => {
         const p = REAL();
         render(<Harness plan={p} />);
-        fireEvent.click(screen.getByRole('button', { name: 'Choose a different vision model' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Choose a different model for images' }));
         fireEvent.click(vision(/Gemma-4-E4B-it/));
         expect(pending(p)).toContain(GEMMA.id);
         expect(fact('Reading images')).toHaveTextContent(GEMMA.name);
-        expect(screen.getByRole('button', { name: 'Hide other vision models' })).toHaveAttribute('aria-expanded', 'true');
+        expect(screen.getByRole('button', { name: 'Hide the other models for images' })).toHaveAttribute('aria-expanded', 'true');
     });
 
     // Product bug: "Use the chat model" sends VISION_NONE, the same value as Skip for now.
     it('Use the chat model keeps the chat model reading images', () => {
         const p = REAL();
         render(<Harness plan={p} />);
-        fireEvent.click(screen.getByRole('button', { name: 'Choose a different vision model' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Choose a different model for images' }));
         fireEvent.click(vision(/Gemma-4-E4B-it/));
         fireEvent.click(vision(/Use the chat model/));
         expect(fact('Reading images')).toHaveTextContent(QWEN.name);
@@ -112,7 +112,7 @@ describe('models by job: reading images', () => {
     // Product bug: the chat model is in use, yet no radio in the group is checked.
     it('shows Use the chat model as the choice while it is', () => {
         render(<Harness plan={REAL()} />);
-        fireEvent.click(screen.getByRole('button', { name: 'Choose a different vision model' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Choose a different model for images' }));
         expect(vision(/Use the chat model/)).toBeChecked();
     });
 });

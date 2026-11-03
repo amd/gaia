@@ -12,43 +12,43 @@ const row = (name: string) => screen.getByText(name).closest('li') as HTMLElemen
 describe('Everything coming to this PC', () => {
     it('lists each component with its size and where it comes from', () => {
         render(<DownloadContents plan={P()} />);
-        expect(row("GAIA's model server")).toHaveTextContent('From github.com/lemonade-sdk/lemonade/releases');
-        expect(row("GAIA's model server")).toHaveTextContent('7 MB');
-        expect(row('Model runtime')).toHaveTextContent('From github.com/ggml-org/llama.cpp');
-        expect(row('Model runtime')).toHaveTextContent('141 MB');
-        expect(row('Python packages')).toHaveTextContent('From pypi.org');
-        expect(row('GAIA agent')).toHaveTextContent('From hub.amd-gaia.ai');
+        expect(row("AI engine")).toHaveTextContent('From github.com/lemonade-sdk/lemonade/releases');
+        expect(row("AI engine")).toHaveTextContent('7 MB');
+        expect(row('Graphics support')).toHaveTextContent('From github.com/ggml-org/llama.cpp');
+        expect(row('Graphics support')).toHaveTextContent('141 MB');
+        expect(row('App components')).toHaveTextContent('From pypi.org');
+        expect(row('GAIA assistant')).toHaveTextContent('From hub.amd-gaia.ai');
     });
 
     it('invents no size it cannot know', () => {
         render(<DownloadContents plan={P()} />);
-        expect(row('Python packages')).toHaveTextContent('Size shown when it starts');
+        expect(row('App components')).toHaveTextContent('Size shown when it starts');
     });
 
     it('before a run says what is here and what is to come', () => {
         render(<DownloadContents plan={P()} />);
-        expect(row('GAIA agent')).toHaveTextContent('Already here');
-        expect(row('GAIA agent')).toHaveClass('is-done');
-        expect(row("GAIA's model server")).toHaveTextContent('Waiting');
-        expect(row("GAIA's model server")).toHaveClass('is-waiting');
+        expect(row('GAIA assistant')).toHaveTextContent('Already here');
+        expect(row('GAIA assistant')).toHaveClass('is-done');
+        expect(row("AI engine")).toHaveTextContent('Waiting');
+        expect(row("AI engine")).toHaveClass('is-waiting');
     });
 
     it('during a run shows each state from the run', () => {
         const run = runStatus([], { components: { server: 'done', backend: 'active', packages: 'failed' } });
         render(<DownloadContents plan={P()} run={run} />);
-        expect(row("GAIA's model server")).toHaveTextContent('Ready');
-        expect(row('Model runtime')).toHaveTextContent('In progress');
-        expect(row('Python packages')).toHaveTextContent('Failed');
-        expect(row('Python packages')).toHaveClass('is-failed');
-        expect(row('GAIA agent')).toHaveTextContent('Already here');
+        expect(row("AI engine")).toHaveTextContent('Ready');
+        expect(row('Graphics support')).toHaveTextContent('In progress');
+        expect(row('App components')).toHaveTextContent('Failed');
+        expect(row('App components')).toHaveClass('is-failed');
+        expect(row('GAIA assistant')).toHaveTextContent('Already here');
     });
 
     it('a run that ended mid-step leaves that step unfinished, not still working', () => {
         const run = runStatus([], { state: 'failed', components: { server: 'done', agent: 'active' } });
         render(<DownloadContents plan={P()} run={run} />);
-        expect(row("GAIA's model server")).toHaveTextContent('Ready');
-        expect(row('GAIA agent')).not.toHaveTextContent('In progress');
-        expect(row('GAIA agent').querySelector('.spin')).toBeNull();
+        expect(row("AI engine")).toHaveTextContent('Ready');
+        expect(row('GAIA assistant')).not.toHaveTextContent('In progress');
+        expect(row('GAIA assistant').querySelector('.spin')).toBeNull();
     });
 
     it('lists the models that will download, with size and source', () => {

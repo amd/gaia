@@ -104,8 +104,9 @@ button.setup-rail-step:hover {
     background: var(--bg-primary);
 }
 
-.setup-footer:empty {
-    display: none;
+/* The bar keeps its height when a step has no actions, so the page never jumps. */
+.setup-footer {
+    min-block-size: 61px;
 }
 
 /* Back at the start, the step's main action at the end, on every screen. */
@@ -122,6 +123,12 @@ button.setup-rail-step:hover {
 
 .setup-footer-row > .btn-secondary:first-child {
     margin-inline-end: auto;
+}
+
+/* A long label wraps inside its button rather than running off the window. */
+.setup-footer-row > button {
+    max-inline-size: 100%;
+    white-space: normal;
 }
 
 @media (max-width: 480px) {
@@ -583,10 +590,29 @@ button.setup-rail-step:hover {
     min-width: 200px;
 }
 
+/* Drawn like the download bars: the done part in the accent, the rest a pale track. */
 .setup-progress {
-    width: 100%;
-    height: 6px;
-    accent-color: var(--accent-solid);
+    inline-size: 100%;
+    block-size: 6px;
+    appearance: none;
+    border: none;
+    border-radius: var(--radius-full);
+    overflow: hidden;
+    background: var(--bg-tertiary);
+}
+
+.setup-progress::-webkit-progress-bar {
+    background: var(--bg-tertiary);
+}
+
+.setup-progress::-webkit-progress-value {
+    border-radius: var(--radius-full);
+    background: var(--accent);
+}
+
+.setup-progress::-moz-progress-bar {
+    border-radius: var(--radius-full);
+    background: var(--accent);
 }
 
 .setup-log {
@@ -797,6 +823,12 @@ button.setup-rail-step:hover {
     font-size: 12px;
 }
 
+/* A narrow window scrolls the table inside the card rather than widening it. */
+.found-table-wrap {
+    max-inline-size: 100%;
+    overflow-x: auto;
+}
+
 .found-table {
     inline-size: 100%;
     border-collapse: collapse;
@@ -905,6 +937,24 @@ button.setup-rail-step:hover {
     margin-block-end: 12px;
     color: var(--text-secondary);
     font-size: 13px;
+}
+
+/* The language, at the end of the step bar on every screen. */
+.setup-language {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-inline-start: auto;
+    color: var(--text-secondary);
+}
+
+.setup-language select {
+    padding: 3px 6px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 12.5px;
 }
 
 /* Quiet arrows: no fill until hovered. */

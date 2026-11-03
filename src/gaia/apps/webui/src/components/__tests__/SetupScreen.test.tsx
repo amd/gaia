@@ -3,6 +3,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useChatStore } from '../../stores/chatStore';
 import { SetupScreen } from '../SetupScreen';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
@@ -96,7 +97,7 @@ function renderSetup(props: { onClose?: () => void } = {}) {
 const planScreen = () => waitFor(() => {
     const plan = screen.queryByRole('region', { name: 'Recommended setup' });
     if (plan) return plan;
-    if (screen.queryByRole('heading', { name: 'Checking this PC' })) {
+    if (screen.queryByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })) {
         const go = screen.queryByRole('button', { name: 'Continue' });
         if (go) fireEvent.click(go);
     }
@@ -143,7 +144,7 @@ describe('SetupScreen: checking this PC', () => {
         let answer!: (r: PreflightReport) => void;
         mockedApi.getOnboardingPreflight.mockImplementation(() => new Promise((r) => { answer = r; }));
         renderSetup();
-        expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         await waitFor(() => expect(mockedApi.getSetupPlan).toHaveBeenCalled());
         // While it checks, only its log and the troubleshooting report can be pressed.
         const enabled = () => screen.queryAllByRole('button').filter((b) => !(b as HTMLButtonElement).disabled).map((b) => b.textContent?.trim());
@@ -151,7 +152,7 @@ describe('SetupScreen: checking this PC', () => {
         expect(railStep('Check this PC')).toHaveAttribute('aria-current', 'step');
         answer(HARDWARE);
         expect(await screen.findByRole('region', { name: 'What setup found' })).toBeInTheDocument();
-        expect(screen.getByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         await planScreen();
         expect(railStep('Check this PC')).toHaveClass('is-done');
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
@@ -171,9 +172,9 @@ describe('SetupScreen: checking this PC', () => {
     it('opening Check this PC again stays there', async () => {
         await open();
         fireEvent.click(rail().getByRole('button', { name: /Check this PC/ }));
-        expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
-        expect(screen.getByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         expect(screen.getByRole('region', { name: 'What setup found' })).toBeInTheDocument();
     });
 
@@ -230,7 +231,7 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
         mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue(SERVER_READY);
         renderSetup();
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledExactlyOnceWith(false, false, { serverOnly: true }));
-        expect(screen.getByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         expect(screen.queryByRole('region', { name: 'Recommended setup' })).not.toBeInTheDocument();
         await planScreen();
         expect(screen.getByRole('button', { name: /Download and start/ })).toBeInTheDocument();
@@ -300,8 +301,8 @@ describe('SetupScreen: the recommendation', () => {
     it('gives its reasons, with real numbers when the model fits', async () => {
         await open();
         const hero = await planScreen();
-        expect(hero).toHaveTextContent('The model we evaluated as the default for a PC like this one.');
-        expect(hero).toHaveTextContent('Fits this PC: needs 27.1 GB and this PC has 96.0 GB.');
+        expect(hero).toHaveTextContent("GAIA's tested pick for a PC like this one.");
+        expect(hero).toHaveTextContent('Fits this PC: needs 27.1 GB of memory, and this PC has 96.0 GB for models.');
         expect(hero).toHaveTextContent('Works offline, and your chats stay on this PC.');
     });
 
@@ -318,14 +319,14 @@ describe('SetupScreen: the recommendation', () => {
         const small = { ...GEMMA_CHAT, chat_choice: true };
         mockedApi.getSetupPlan.mockResolvedValue(plan([small, big, EMBED], { chat_model: { id: GEMMA.id, user_set: false, size_gb: 5.97, downloaded: false } }));
         await open();
-        expect(await planScreen()).toHaveTextContent(`${QWEN.name}: Needs about 27.1 GB; this PC has 16.0 GB.`);
+        expect(await planScreen()).toHaveTextContent(`${QWEN.name} is a bigger model that answers better, but it needs about 27.1 GB of memory and this PC has 16.0 GB.`);
     });
 
     it('opens everything that will download, components and models', async () => {
         mockedApi.getSetupPlan.mockResolvedValue({ ...COLD_BIG(), components: COMPONENTS });
         await open();
         const list = screen.getByText('See everything that will be downloaded').closest('details') as HTMLElement;
-        expect(within(list).getByText('Model runtime')).toBeInTheDocument();
+        expect(within(list).getByText('Graphics support')).toBeInTheDocument();
         expect(within(list).getByText(QWEN.name)).toBeInTheDocument();
     });
 
@@ -398,7 +399,7 @@ describe('SetupScreen: first run, local', () => {
         mockedApi.chooseSetupVisionModel.mockResolvedValue({ ...p, vision_model: GEMMA.id });
         await open();
         await toModels();
-        fireEvent.click(screen.getByRole('button', { name: 'Choose a different vision model' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Choose a different model for images' }));
         fireEvent.click(visionRadio(/Gemma-4-E4B-it/));
         clickContinue();
         await waitFor(() => expect(mockedApi.chooseSetupVisionModel).toHaveBeenCalledExactlyOnceWith(GEMMA.id));
@@ -428,10 +429,12 @@ describe('SetupScreen: first run, local', () => {
         const done = (e: typeof QWEN) => ({ ...e, downloaded: true, size_gb: 0 });
         mockedApi.getSetupPlan.mockResolvedValueOnce(COLD_BIG()).mockResolvedValue(plan([done(QWEN), done(GEMMA), done(EMBED)]));
         const onReady = await startLocal();
-        const card = await screen.findByText(/GAIA is ready\./);
-        expect(card).toHaveTextContent('GAIA is ready. Qwen3.6-35B-A3B answers on this PC.');
-        const summary = await screen.findByText('Vision');
-        expect(summary.closest('dl')).toHaveTextContent('ChatQwen3.6-35B-A3BVisionGemma-4-E4B-itDocumentsembeddinggemma-300m');
+        expect(await screen.findByRole('heading', { name: 'GAIA is ready' })).toBeInTheDocument();
+        // Said once, by the heading; the card says what answers.
+        expect(screen.getByText('Qwen3.6-35B-A3B answers on this PC.')).toBeInTheDocument();
+        expect(screen.queryByText(/GAIA is ready\./)).toBeNull();
+        const summary = await screen.findByText('Reading images');
+        expect(summary.closest('dl')).toHaveTextContent('ChatQwen3.6-35B-A3BReading imagesGemma-4-E4B-itDocuments and memoryembeddinggemma-300m');
         fireEvent.click(await screen.findByRole('button', { name: /Check in/ }));
         await waitFor(() => expect(onReady).toHaveBeenCalledExactlyOnceWith(START.cards[0]));
     });
@@ -462,6 +465,17 @@ describe('SetupScreen: the rail', () => {
         expect(mockedApi.setModelServerBackend.mock.invocationCallOrder[0]).toBeLessThan(mockedApi.startSetup.mock.invocationCallOrder[0]);
     });
 
+    it('lets a first-time user pick the language on the first screen', async () => {
+        renderSetup();
+        await screen.findByRole('region', { name: 'What setup found' });
+        const language = screen.getByRole('combobox', { name: 'Language' });
+        fireEvent.change(language, { target: { value: 'ar' } });
+        expect(document.documentElement.dir).toBe('rtl');
+        expect(localStorage.getItem('gaia-chat-locale')).toBe('ar');
+        act(() => useChatStore.getState().setLocale('en'));
+        localStorage.removeItem('gaia-chat-locale');
+    });
+
     it("puts every screen's main action in the bar at the bottom, last in it", async () => {
         renderSetup();
         await screen.findByRole('region', { name: 'What setup found' });
@@ -488,7 +502,7 @@ describe('SetupScreen: the rail', () => {
         await toModels();
         expect(rail().queryByRole('button', { name: /Download/ })).not.toBeInTheDocument();
         fireEvent.click(rail().getByRole('button', { name: /Check this PC/ }));
-        expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
     });
 
     it('marks the step that failed', async () => {
@@ -539,7 +553,7 @@ describe('SetupScreen: the rail', () => {
         await open();
         await toModels();
         fireEvent.click(rail().getByRole('button', { name: /Check this PC/ }));
-        await screen.findByRole('heading', { name: 'Checking this PC' });
+        await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ });
         fireEvent.click(rail().getByRole('button', { name: /Your setup/ }));
         expect(await screen.findByRole('heading', { name: 'Choose your models' })).toBeInTheDocument();
     });
@@ -554,7 +568,7 @@ describe('SetupScreen: the rail', () => {
         fireEvent.click(steps().getByRole('button', { name: 'Previous step' }));
         expect(await screen.findByRole('heading', { name: 'Your setup' })).toBeInTheDocument();
         fireEvent.click(steps().getByRole('button', { name: 'Previous step' }));
-        expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         fireEvent.click(steps().getByRole('button', { name: 'Next step' }));
         fireEvent.click(steps().getByRole('button', { name: 'Next step' }));
         expect(await screen.findByRole('button', { name: 'Cancel' })).toBeInTheDocument();
@@ -674,7 +688,9 @@ describe('SetupScreen: warnings and confirmations', () => {
         mockedApi.skipSetupModel.mockImplementation(async (id, skipped) => ({ ...afterChat, catalog: afterChat.catalog.map((e) => (e.id === id ? { ...e, skipped, selected: !skipped } : e)) }));
         await open();
         await toModels();
-        fireEvent.click(chatRadio(/Gemma 4 E2B \(NPU\)/));
+        // Run on the NPU first: it picks the NPU model the user already has.
+        fireEvent.click(screen.getByRole('radio', { name: 'Ryzen AI NPU' }));
+        expect(chatRadio(/Gemma 4 E2B \(NPU\)/)).toBeChecked();
         fireEvent.click(visionRadio(/Skip for now/));
         clickContinue();
         await waitFor(() => expect(mockedApi.chooseSetupChatModel).toHaveBeenCalledWith(FLM.id, false));
@@ -700,7 +716,7 @@ describe('SetupScreen: GPU memory', () => {
         await open();
         await toModels();
         expect(railLabels()).toEqual(['Check this PC', 'Your setup', 'Download', 'Test', 'Ready']);
-        expect(screen.getByText(/The GPU has 32\.0 GB of this PC's 128\.0 GB/)).toBeInTheDocument();
+        expect(screen.getByText(/Graphics \(GPU\) memory: 32\.0 GB of this PC's 128\.0 GB/)).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Change how memory is split' }));
         expect(await screen.findByText('With 64.0 GB for the GPU, Qwen3.6-35B-A3B fits.')).toBeInTheDocument();
         expect(railStep('Your setup')).toHaveAttribute('aria-current', 'step');
@@ -717,7 +733,7 @@ describe('SetupScreen: GPU memory', () => {
         expect(await screen.findByRole('heading', { name: 'GPU memory' })).toBeInTheDocument();
         expect(railStep('Check this PC')).toHaveAttribute('aria-current', 'step');
         fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-        expect(await screen.findByRole('heading', { name: 'Checking this PC' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
     });
 
     it('stays out of the plain path, which goes straight to the download', async () => {
@@ -753,9 +769,9 @@ describe('SetupScreen: downloading', () => {
         mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue(run);
         await startLocal();
         const list = within(await screen.findByRole('region', { name: 'Everything being set up' }));
-        expect(list.getByText('Model runtime').closest('li')).toHaveTextContent('From github.com/ggml-org/llama.cpp');
-        expect(list.getByText('Model runtime').closest('li')).toHaveTextContent('In progress');
-        expect(list.getByText("GAIA's model server").closest('li')).toHaveTextContent('Ready');
+        expect(list.getByText('Graphics support').closest('li')).toHaveTextContent('From github.com/ggml-org/llama.cpp');
+        expect(list.getByText('Graphics support').closest('li')).toHaveTextContent('In progress');
+        expect(list.getByText("AI engine").closest('li')).toHaveTextContent('Ready');
     });
 
     it('retries a failed model from where it stopped, and can skip it', async () => {
@@ -1049,7 +1065,7 @@ describe('SetupScreen: testing', () => {
         mockedApi.removeSetupModel.mockResolvedValue({ ...COLD_BIG(), freed_gb: 23.3 });
         mockedApi.downloadSetupModel.mockResolvedValue(failedRun('broken'));
         await startLocal();
-        fireEvent.click(await screen.findByRole('button', { name: `Download ${QWEN.name} again` }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Download it again' }));
         expect(mockedApi.removeSetupModel).not.toHaveBeenCalled();
         fireEvent.click(await screen.findByRole('button', { name: 'Delete and download again' }));
         await waitFor(() => expect(mockedApi.removeSetupModel).toHaveBeenCalledWith(QWEN.id));
@@ -1219,25 +1235,35 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
     it('offers it with what GAIA does there, and saves the URL on Use mine', async () => {
         await offer(FOUND);
         expect(await screen.findByRole('form', { name: 'Use your Lemonade Server' }))
-            .toHaveTextContent('Use the Lemonade you already run at http://localhost:13305/api/v1 (v10.3.0)');
+            .toHaveTextContent("GAIA found an AI engine already running on this PC. Use it, or install GAIA's own?Lemonade 10.3.0 · http://localhost:13305/api/v1");
         // The detail waits behind its own chevron; the choice is what shows.
-        expect(screen.queryByText(TARGET.what_gaia_does)).toBeNull();
+        const plain = "GAIA downloads and runs its models on your server. It leaves your server's settings and your own models as they are.";
+        expect(screen.queryByText(plain)).toBeNull();
         const more = screen.getByRole('button', { name: 'What GAIA does on your server' });
         expect(more).toHaveAttribute('aria-expanded', 'false');
         fireEvent.click(more);
-        expect(screen.getByText(TARGET.what_gaia_does)).toBeInTheDocument();
-        fireEvent.click(screen.getByRole('button', { name: 'Use mine' }));
+        expect(screen.getByText(plain)).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Use the one I have' }));
         await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith(
             { mode: 'external', base_url: FOUND.url, api_key: undefined },
         ));
-        expect(await screen.findByText(/GAIA will use your Lemonade Server at http:\/\/localhost:13305\/api\/v1/)).toBeInTheDocument();
+        expect(await screen.findByText(/GAIA will use the AI engine at http:\/\/localhost:13305\/api\/v1/)).toBeInTheDocument();
+    });
+
+    it('puts the server choice in the bottom bar, with Continue back once it is made', async () => {
+        await offer(FOUND);
+        await screen.findByRole('form', { name: 'Use your Lemonade Server' });
+        const bar = () => [...(document.querySelector('.setup-footer') as HTMLElement).querySelectorAll('button')].map((b) => b.textContent?.trim());
+        await waitFor(() => expect(bar()).toEqual(["Install GAIA's own", 'Use the one I have']));
+        fireEvent.click(screen.getByRole('button', { name: "Install GAIA's own" }));
+        await waitFor(() => expect(bar()).toEqual(['Continue']));
     });
 
     it('reads the device and the models again from their server', async () => {
         await offer(FOUND);
         const plans = mockedApi.getSetupPlan.mock.calls.length;
-        fireEvent.click(await screen.findByRole('button', { name: 'Use mine' }));
-        await screen.findByText(/GAIA will use your Lemonade Server/);
+        fireEvent.click(await screen.findByRole('button', { name: 'Use the one I have' }));
+        await screen.findByText(/GAIA will use the AI engine at/);
         await waitFor(() => expect(mockedApi.getSetupPlan.mock.calls.length).toBeGreaterThan(plans));
         expect(mockedApi.getOnboardingPreflight).toHaveBeenCalledTimes(2);
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
@@ -1269,22 +1295,22 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
 
     it("saves GAIA's own when declined", async () => {
         await offer(FOUND);
-        fireEvent.click(await screen.findByRole('button', { name: /Use GAIA.s own/ }));
+        fireEvent.click(await screen.findByRole('button', { name: /Install GAIA.s own/ }));
         await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith({ mode: 'gaia' }));
-        expect(await screen.findByText('GAIA will set up its own Lemonade Server.')).toBeInTheDocument();
+        expect(await screen.findByText('GAIA will install its own AI engine.')).toBeInTheDocument();
     });
 
     it('asks for the key a protected server needs, and never shows it back', async () => {
         await offer({ ...FOUND, status: 'needs_key' });
         const key = await screen.findByLabelText('Lemonade API key');
         expect(key).toHaveAttribute('type', 'password');
-        expect(screen.getByRole('button', { name: 'Use mine' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Use the one I have' })).toBeDisabled();
         fireEvent.change(key, { target: { value: 'sk-secret' } });
-        fireEvent.click(screen.getByRole('button', { name: 'Use mine' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Use the one I have' }));
         await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith(
             { mode: 'external', base_url: FOUND.url, api_key: 'sk-secret' },
         ));
-        await screen.findByText(/GAIA will use your Lemonade Server/);
+        await screen.findByText(/GAIA will use the AI engine at/);
         expect(document.body.textContent).not.toContain('sk-secret');
     });
 
@@ -1292,7 +1318,7 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         await offer(FOUND);
         const message = 'The Lemonade Server at http://localhost:13305/api/v1 rejected the API key. Check the key it was started with (its LEMONADE_API_KEY).';
         mockedApi.setLemonadeTarget.mockRejectedValue(Object.assign(new Error(message), { reason: 'bad_key' }));
-        fireEvent.click(await screen.findByRole('button', { name: 'Use mine' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Use the one I have' }));
         expect(await screen.findByRole('alert')).toHaveTextContent(message);
         expect(screen.getByLabelText('Lemonade API key')).toBeInTheDocument();
     });
@@ -1306,14 +1332,14 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         await screen.findByRole('region', { name: 'What setup found' });
         expect(await screen.findByText(/Couldn.t check whether your Lemonade Server at http:\/\/localhost:13305\/api\/v1 is running/)).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: /Check again/ }));
-        expect(await screen.findByRole('button', { name: 'Use mine' })).toBeInTheDocument();
+        expect(await screen.findByRole('button', { name: 'Use the one I have' })).toBeInTheDocument();
     });
 
     it('explains a too-old server and offers no way to use it', async () => {
         const message = 'The Lemonade Server at http://localhost:8000/api/v1 is v9.0.0; GAIA needs v10.0.0 or newer.';
         await offer({ ...FOUND, status: 'too_old', message });
         expect(await screen.findByText(message)).toBeInTheDocument();
-        expect(screen.queryByRole('button', { name: 'Use mine' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Use the one I have' })).not.toBeInTheDocument();
     });
 
     it('does not look for one once a choice is saved', async () => {

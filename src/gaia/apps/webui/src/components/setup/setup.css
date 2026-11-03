@@ -560,8 +560,9 @@
 @keyframes confirmIn { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
 
 /* ── Ready summary ─────────────────────────────────────────────── */
-.setup-summary-list { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
-.setup-summary-list > div { display: grid; grid-template-columns: minmax(90px, max-content) 1fr; gap: 10px; }
+/* One label column for every row, so the values line up. */
+.setup-summary-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; font-size: 13px; }
+.setup-summary-list > div { display: contents; }
 .setup-summary-list dt { color: var(--text-secondary); }
 .setup-summary-list dd { color: var(--text-primary); overflow-wrap: anywhere; }
 .setup-summary-list .is-warn dd { color: var(--accent-yellow); }
@@ -615,7 +616,8 @@
     .setup-banner .setup-row > button { flex: 1 1 auto; }
     .confirm-actions > button { flex: 1 1 100%; }
     .mc-default .mc-select { flex: 1 1 100%; }
-    .setup-summary-list > div { grid-template-columns: 1fr; gap: 0; }
+    .setup-summary-list { grid-template-columns: minmax(0, 1fr); gap: 0; }
+    .setup-summary-list dd { margin-block-end: 6px; }
 }
 
 /* ── Reduced motion: state changes are instant, loops stop ─────── */

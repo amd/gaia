@@ -7,6 +7,7 @@ import { useT, type Translate } from '../../i18n/useT';
 import type { SetupCatalogEntry, SetupRunStatus, SetupTest } from '../../types';
 import { ConfirmSheet } from './ConfirmSheet';
 import { formatSize } from './format';
+import { SetupFooter } from './SetupFooter';
 
 function jobLabel(job: SetupTest['job'], t: Translate): string {
     return t(`setup.test.job.${job}`);
@@ -71,7 +72,16 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
                                 {r.subject && <bdi className="setup-result-model"> {names[r.subject] ?? r.subject}</bdi>}
                             </span>
                             <span className="setup-result-value">{resultText(r, t)}</span>
-                            {r.error && <p className="setup-result-error">{r.error}</p>}
+                            {r.error && (
+                                <div className="setup-result-error">
+                                    {/* A plain reason first; the engine's own words, paths and codes, behind Details. */}
+                                    <p>{t(r.kind === 'memory' ? 'setup.test.why.memory' : r.kind === 'broken' ? 'setup.test.why.broken' : r.kind === 'stuck' ? 'setup.test.why.stuck' : 'setup.test.why.other')}</p>
+                                    <details className="dl-details">
+                                        <summary>{t('setup.progress.details')}</summary>
+                                        <pre dir="ltr">{r.error}</pre>
+                                    </details>
+                                </div>
+                            )}
                         </li>
                     ))}
                     {waiting.map((job) => (
@@ -86,15 +96,17 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
             {stopped && (
                 <div className="setup-failure" role="alert">
                     <p>{required.some((r) => r.kind === 'memory') ? t('setup.test.failedMemory') : t('setup.test.failedHelp')}</p>
-                    <div className="setup-row">
-                        <button type="button" className="btn-primary" onClick={onRetry} disabled={busy}>{t('setup.test.tryAgain')}</button>
+                    {/* The way on sits in the bar like every step's; a damaged file's fix is downloading it again. */}
+                    <SetupFooter>
                         <button type="button" className="btn-secondary" onClick={onChooseAnother} disabled={busy}>{t('setup.test.chooseAnother')}</button>
+                        <button type="button" className={broken.length ? 'btn-secondary' : 'btn-primary'} onClick={onRetry} disabled={busy}>{t('setup.test.tryAgain')}</button>
                         {broken.map((id) => (
-                            <button key={id} type="button" className="btn-secondary setup-wrap-btn" onClick={() => setAgain(id)} disabled={busy}>
-                                {t('setup.test.downloadAgain', { name: names[id] ?? id })}
+                            <button key={id} type="button" className="btn-primary setup-wrap-btn" onClick={() => setAgain(id)} disabled={busy}>
+                                {/* One damaged model is named on its row above; several need their names here. */}
+                                {broken.length === 1 ? t('setup.test.downloadItAgain') : t('setup.test.downloadAgain', { name: names[id] ?? id })}
                             </button>
                         ))}
-                    </div>
+                    </SetupFooter>
                 </div>
             )}
             {again && (

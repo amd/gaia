@@ -279,16 +279,20 @@ Pick the install path that fits you best:
     **First run:** no separate setup command is needed. The window opens and
     GAIA checks the PC by itself: processor, GPU, NPU, memory, disk, its model
     server and the backends this PC supports. **Check this PC** shows what it
-    found, with links to the models folder and GAIA's data and logs, offers a
-    Lemonade Server you already run, and opens each check and the full details
-    on request. It then recommends a setup, with the reasons, and **Download
-    and start** takes it.
+    found, with links to the models folder and GAIA's data and logs, and opens
+    each check and the full details on request. If a Lemonade Server already
+    runs on the PC, it asks whether to **Use the one I have** or **Install
+    GAIA's own**. It then recommends a setup, with the reasons, and **Download
+    and start** takes it. Each step's main action is at the bottom right, and
+    the language can be changed from the first screen.
 
     **Customize** opens the model choices; the steps beside the screen stay
-    the same. **Backend** comes first: **GPU (Vulkan)**, or **NPU
-    (FastFlowLM)** on a PC whose Ryzen AI NPU has the memory for GAIA's NPU
-    model; these are the two GAIA has tested. Picking one picks that backend's
-    chat model, and setup keeps llama.cpp on Vulkan when it starts. On an integrated GPU, **Change how memory is split** opens GPU
+    the same. **Run on** comes first: **Graphics (GPU)**, which uses llama.cpp
+    on Vulkan, or **Ryzen AI NPU**, which uses FastFlowLM, on a PC whose NPU has
+    the memory for GAIA's NPU model or already has an NPU model. These are the
+    two GAIA has tested. Picking one picks that device's chat model, and the
+    chat list shows only that device's models. Setup keeps llama.cpp on Vulkan
+    when it starts. On an integrated GPU, **Change how memory is split** opens GPU
     memory from there or from Check this PC. It is optional: unless you pick a
     new size, GAIA changes nothing. The models are grouped by job, and picking
     a chat model updates the jobs that depend on it:

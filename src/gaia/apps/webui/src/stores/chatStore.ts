@@ -74,11 +74,22 @@ export function readCustomColors(): CustomColors {
 
 const LOCALE_KEY = 'gaia-chat-locale';
 
-/** The saved interface language; anything unregistered reads as English. */
+/**
+ * The saved interface language; anything unregistered reads as English. With
+ * nothing saved (a first run), the PC's own language when GAIA has it.
+ */
 export function readLocale(): string {
-    const v = readPref(LOCALE_KEY, DEFAULT_LOCALE);
-    if (isLocaleCode(v)) return v;
-    log.system.warn(`Saved interface language "${v}" is not a registered locale; using English.`);
+    const v = readPref(LOCALE_KEY, '');
+    if (v) {
+        if (isLocaleCode(v)) return v;
+        log.system.warn(`Saved interface language "${v}" is not a registered locale; using English.`);
+        return DEFAULT_LOCALE;
+    }
+    const system = typeof navigator === 'undefined' ? [] : (navigator.languages?.length ? navigator.languages : [navigator.language]);
+    for (const tag of system) {
+        const code = (tag ?? '').split('-')[0].toLowerCase();
+        if (isLocaleCode(code)) return code;
+    }
     return DEFAULT_LOCALE;
 }
 

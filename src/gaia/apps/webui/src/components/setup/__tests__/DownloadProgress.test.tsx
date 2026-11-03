@@ -63,7 +63,7 @@ describe('DownloadProgress', () => {
             progress({ id: GEMMA.id, roles: ['vision'], state: 'failed', error: 'boom', error_kind: 'lemonade' }),
             progress({ id: EMBED.id, roles: ['embedding'], state: 'cancelled', bytes_done: 0.1e9, bytes_total: 0.3e9 }),
         ], { state: 'failed' })} names={NAMES} onRetry={vi.fn()} onResume={vi.fn()} />);
-        expect(within(rowOf('Qwen3.6-35B-A3B')).getByText('Verifying')).toBeInTheDocument();
+        expect(within(rowOf('Qwen3.6-35B-A3B')).getByText('Checking')).toBeInTheDocument();
         expect(within(rowOf('Gemma-4-E4B-it')).getByText('Failed')).toBeInTheDocument();
         expect(within(rowOf('embeddinggemma-300m')).getByText('Cancelled')).toBeInTheDocument();
         expect(within(rowOf('embeddinggemma-300m')).getByText('100 MB kept. Resume continues from there.')).toBeInTheDocument();
@@ -202,7 +202,7 @@ describe('DownloadProgress', () => {
     it.each([
         ['network', 'The connection dropped while downloading Qwen3.6-35B-A3B. Press Retry to continue from where it stopped.'],
         ['disk_full', 'Ran out of disk space after 14.2 GB of Qwen3.6-35B-A3B. Free 7.1 GB and press Retry. Nothing was lost; the download continues from where it stopped.'],
-        ['lemonade', 'Lemonade couldn’t download Qwen3.6-35B-A3B. Details has its message.'],
+        ['lemonade', 'GAIA couldn’t download Qwen3.6-35B-A3B. Details has the reason.'],
         ['path_too_long', "Windows couldn't save Qwen3.6-35B-A3B: the path to the models folder is too long. Turn on long file paths in Windows, or use a models folder with a shorter path, then press Retry."],
     ] as const)('words a %s failure with what to do, and Retry works', (kind, text) => {
         const onRetry = vi.fn();

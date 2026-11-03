@@ -43,7 +43,7 @@ beforeEach(() => {
 describe('GPU memory: what a bigger share unlocks', () => {
     it('shows the split, the target and the model it unlocks, preselecting the smallest that does', () => {
         render(<Harness initial={gpuStatus()} />);
-        expect(screen.getByText(/This PC shares 128\.0 GB between the CPU and the GPU\. The GPU has 32\.0 GB now\./)).toBeInTheDocument();
+        expect(screen.getByText(/This PC shares 128\.0 GB between the processor \(CPU\) and graphics \(GPU\)\. The GPU has 32\.0 GB now\./)).toBeInTheDocument();
         expect(screen.getByRole('img', { name: 'Memory split after the change: CPU 64.0 GB, GPU 64.0 GB (now 32.0 GB)' })).toBeInTheDocument();
         expect(screen.getByRole('radio', { name: 'GPU 64.0 GB Recommended' })).toHaveAttribute('aria-checked', 'true');
         expect(screen.getByText('With 64.0 GB for the GPU, Qwen3.6-35B-A3B fits.')).toBeInTheDocument();

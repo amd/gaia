@@ -7,6 +7,7 @@ import { useT, type Translate } from '../../i18n/useT';
 import type { SetupModelProgress, SetupModelState, SetupRunStatus } from '../../types';
 import { ConfirmSheet } from './ConfirmSheet';
 import { FollowLog } from './FollowLog';
+import { SetupFooter } from './SetupFooter';
 import { DownloadMeter, STALL_NOTICE_S, STALL_STUCK_S, formatBytes, formatEta, formatSize, formatSpeed, ltrIn, spokenEta, type Estimate } from './format';
 import { usePageVisible } from './motion';
 
@@ -376,15 +377,18 @@ export function DownloadProgress({ status, names, freeGb = null, onCancel, onRet
                     />
                 ))}
             </ul>
-            <div className="setup-row dl-controls">
-                {active && onCancel && (
-                    <button type="button" className="btn-secondary" onClick={cancel} disabled={busy}>{t('setup.progress.cancel')}</button>
-                )}
-                {!active && cancelled.length > 1 && onResumeAll && (
-                    <button type="button" className="btn-primary" onClick={onResumeAll} disabled={busy}>{t('setup.progress.resumeAll')}</button>
-                )}
-                {active && <span className="setup-hint">{t('setup.progress.keepsGoing')}</span>}
-            </div>
+            {active && <p className="setup-hint dl-controls">{t('setup.progress.keepsGoing')}</p>}
+            {/* In setup, the screen's actions sit in its bottom bar like every other step's. */}
+            {((active && onCancel) || (!active && cancelled.length > 1 && onResumeAll)) && (
+                <SetupFooter>
+                    {active && onCancel && (
+                        <button type="button" className="btn-secondary" onClick={cancel} disabled={busy}>{t('setup.progress.cancel')}</button>
+                    )}
+                    {!active && cancelled.length > 1 && onResumeAll && (
+                        <button type="button" className="btn-primary" onClick={onResumeAll} disabled={busy}>{t('setup.progress.resumeAll')}</button>
+                    )}
+                </SetupFooter>
+            )}
             <span className="visually-hidden" aria-live="polite">{announce}</span>
             <span className="visually-hidden" role="alert">{alert}</span>
             {confirmCancel && (
