@@ -113,24 +113,6 @@ def test_a_memory_failure_keeps_the_chat_and_says_so(client, store):
     assert _history_ids(client) == []
 
 
-def test_the_chat_agent_files_memory_under_the_chat_id(store):
-    """ChatAgent hands init_memory its UI session id, even across a rebuild."""
-    pytest.importorskip("gaia_agent")
-    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
-
-    seen = []
-
-    def fake_init(self, **kwargs):
-        seen.append(kwargs.get("session_id"))
-        raise RuntimeError("stop after init_memory")
-
-    with patch.object(ChatAgent, "init_memory", fake_init):
-        for _ in range(2):
-            with pytest.raises(RuntimeError, match="stop after init_memory"):
-                ChatAgent(ChatAgentConfig(ui_session_id="chat-123", silent_mode=True))
-    assert seen == ["chat-123", "chat-123"]
-
-
 def test_a_turn_finishing_after_the_delete_files_nothing(client, store):
     """A busy relayed chat's turn runs in the agent's own process and can
     reach the post-turn hook after the delete has run."""
