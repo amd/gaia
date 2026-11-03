@@ -773,7 +773,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="DELETE /api/sessions/{session_id}">
-    Delete a session and all its messages (cascading delete). If a chat turn is running on the session, it is stopped and the request returns once that turn has finished.
+    Delete a session and all its messages (cascading delete), and its conversation turns and tool history in memory. Facts learned from it are kept. If a chat turn is running on the session, it is stopped and the request returns once that turn has finished. If the memory rows can't be removed, it returns **500** and the session is left in place, so the delete can be retried.
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/messages">
@@ -1483,11 +1483,13 @@ agent at once, so they take effect on its next step.
     otherwise. A chat that had a folder removed while its agent ran in process
     stops its turns once the agent is relayed, since the sidecar can't be kept
     out of a removed folder; start a new chat. `internet_enforced` covers the
-    internet switch: it is true in process and for a relayed GAIA agent (for
-    one older than contract 2.23, the Agent UI refuses an internet-off turn
-    with an update message instead of sending it), and false for an agent
-    that keeps its own network rules (the email agent), where the internet
-    endpoint refuses changes with **409**.
+    internet switch. It means GAIA applies its recognised-operation filter in
+    process or for a relayed GAIA agent; it is **not a firewall** and does not
+    stop skill tools, scripts or commands whose network destination GAIA cannot
+    inspect. For an agent older than contract 2.23, the Agent UI refuses an
+    internet-off turn with an update message instead of sending it. It is
+    false for an agent that keeps its own network rules (the email agent),
+    where the internet endpoint refuses changes with **409**.
   </Accordion>
 
   <Accordion title="POST /api/sessions/{session_id}/environment/folders">
@@ -2324,7 +2326,7 @@ Autonomous goal/task tracking (`GoalStore`) behind the Agent UI's Goals panel.
 
 ### Schedules
 
-Recurring prompts run on a cron-like interval — see [`gaia schedule`](/reference/cli#schedule) for the CLI equivalent. The scheduler runs *prompts* only; it cannot yet run a *skill* directly (`gaia schedule add --skill` is rejected — [#1019](https://github.com/amd/gaia/issues/1019)).
+Recurring prompts run on a cron-like interval — see [`gaia schedule`](/reference/cli#schedule) for the CLI equivalent. The scheduler runs *prompts* only; it cannot yet run a *skill* directly (`gaia schedule add --skill` is rejected).
 
 <AccordionGroup>
   <Accordion title="GET /api/schedules">

@@ -27,7 +27,7 @@
 ; either — NSIS prohibits using `!undef` on MUI macro-reserved symbols
 ; between the two page insertions when they're both emitted by a parent
 ; script we don't control. The simplest robust fix is to drop the
-; checkbox entirely and write the autostart key unconditionally. This
+; checkbox entirely and write the autostart key on a fresh install. This
 ; matches the plan's "default ON" intent and mirrors how Slack/Discord
 ; behave. Users who want to disable autostart can:
 ;
@@ -75,16 +75,39 @@
 ; Using HKCU (not HKLM) matches perMachine=false in electron-builder.yml
 ; — we're a per-user install, so per-user autostart is correct.
 
+!ifndef BUILD_UNINSTALLER
+  Var gaiaPriorInstall
+  Var gaiaAutostart
+!endif
+
+; Read first: the old version's uninstaller deletes the sign-in entry before
+; customInstall runs.
+!macro customInit
+  ; Both hives: the per-user or all-users choice isn't made yet.
+  ReadRegStr $gaiaPriorInstall HKCU "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
+  ${If} $gaiaPriorInstall == ""
+    ReadRegStr $gaiaPriorInstall HKLM "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
+  ${EndIf}
+  ReadRegStr $gaiaAutostart HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_NAME}"
+!macroend
+
 !macro customInstall
   ; Clean up the old autostart key from pre-rename installs so users
   ; who upgrade from "GAIA Agent UI" don't end up with an orphaned
   ; Run entry pointing at a binary path that no longer exists.
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "GAIA Agent UI"
 
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
-      "${PRODUCT_NAME}" \
-      '"$INSTDIR\${PRODUCT_FILENAME}.exe" --minimized'
+  ; An update keeps the user's sign-in choice.
+  ${If} $gaiaPriorInstall == ""
+  ${OrIf} $gaiaAutostart != ""
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
+        "${PRODUCT_NAME}" \
+        '"$INSTDIR\${PRODUCT_FILENAME}.exe" --minimized'
+  ${EndIf}
 
+  ; The MSI force-stops every lemond on the PC, GAIA's own included, so an
+  ; update skips it.
+  ${If} $gaiaPriorInstall == ""
   ; ── Bundle Lemonade Server MSI install (issue #774) ──────────────────────
   ; Graceful-failure contract: non-zero exit codes are logged but we never
   ; Abort — GAIA install always continues. User can recover via `gaia init`.
@@ -114,6 +137,7 @@
     DetailPrint "Lemonade MSI install returned exit code $0 — GAIA will continue. Run 'gaia init' to retry."
   ${EndIf}
   SetOutPath "$INSTDIR"
+  ${EndIf}
 !macroend
 
 ; ─── Uninstall: clean up the autostart Run key ─────────────────────────

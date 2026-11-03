@@ -1,10 +1,11 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdvancedSettings } from '../AdvancedSettings';
 import * as api from '../../../services/api';
+import { useChatStore } from '../../../stores/chatStore';
 import type { SystemStatus } from '../../../types';
 
 vi.mock('../../../services/api');
@@ -33,6 +34,7 @@ function status(overrides: Partial<SystemStatus>): SystemStatus {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    useChatStore.getState().setSystemStatus(null);
     mockedApi.getMCPRuntimeStatus.mockResolvedValue({ servers: [] } as never);
     mockedApi.getLemonadeTarget.mockResolvedValue({
         mode: 'gaia', saved_mode: null, source: 'gaia', base_url: null, saved_base_url: null,
@@ -91,5 +93,38 @@ describe('AdvancedSettings', () => {
         expect(screen.getByText('Device')).toBeInTheDocument();
         // Context size lives in Settings › Model, sized to what fits (#5213).
         expect(screen.queryByText('Context Size')).not.toBeInTheDocument();
+    });
+
+    it('offers setup, not waiting, when no model server is installed', async () => {
+        const notInstalled = status({
+            lemonade_running: false, model_loaded: null, start_command: 'gaia init',
+            start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.',
+        });
+        mockedApi.getSystemStatus.mockResolvedValue(notInstalled);
+        // The app's status poll fills the store the model server notice reads.
+        useChatStore.getState().setSystemStatus(notInstalled);
+        const opened = vi.fn();
+        window.addEventListener('gaia:set-up-local', opened);
+        render(<AdvancedSettings />);
+
+        expect(await screen.findByText('Not Installed')).toBeInTheDocument();
+        expect(screen.getByText('Set it up to run models on this PC. Cloud providers still work.')).toBeInTheDocument();
+        expect(screen.queryByText(/normally starts on its own/)).not.toBeInTheDocument();
+        // The first sits on the status card; the closed server section carries another.
+        fireEvent.click(screen.getAllByRole('button', { name: 'Set up local models' })[0]);
+        expect(opened).toHaveBeenCalledOnce();
+        window.removeEventListener('gaia:set-up-local', opened);
+    });
+
+    it('keeps a stopped server that is installed on its own start hint, with no setup button', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({
+            lemonade_running: false, model_loaded: null, start_command: null,
+            start_instruction: 'Start Lemonade from the tray icon.',
+        }));
+        render(<AdvancedSettings />);
+
+        expect(await screen.findByText('Start Lemonade from the tray icon.')).toBeInTheDocument();
+        expect(screen.getByText('Not Running')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Set up local models' })).not.toBeInTheDocument();
     });
 });

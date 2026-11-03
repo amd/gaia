@@ -268,11 +268,12 @@ def _spawn_fails(monkeypatch):
         r"C:\Program Files\Lemonade Server\bin\LemonadeServer.exe",
     ],
 )
-def test_a_launch_that_cannot_exec_shows_the_full_command_with_its_env(
+def test_a_launch_that_cannot_exec_shows_the_full_command(
     tmp_path, client, monkeypatch, free_port, launcher
 ):
-    """The window rides in the env on a modern install, so a bare argv in the
-    error or the log is a command that starts the server at the wrong size."""
+    """The error and the log name the exact command that failed. On a modern
+    install that command carries no context-size variable: Lemonade never
+    reads one (#3320)."""
     tooling = LemonadeTooling(
         found=True,
         kind="modern",
@@ -283,7 +284,7 @@ def test_a_launch_that_cannot_exec_shows_the_full_command_with_its_env(
     _spawn_fails(monkeypatch)
     s = _supervisor(tmp_path, client, monkeypatch)
     expected = render_command(build_start_command(tooling, 65536))
-    assert "LEMONADE_CTX_SIZE" in expected
+    assert "LEMONADE_CTX_SIZE" not in expected
 
     with pytest.raises(LemonadeStartError) as e:
         s.ensure_running(ctx_size=65536, timeout=5.0)
@@ -530,13 +531,14 @@ _PROBE_SCRIPT = """
 import os, pathlib, sys
 pathlib.Path(sys.argv[1]).write_text(
     "CTX=" + os.environ.get("LEMONADE_CTX_SIZE", "") + "\\n"
+    "SPEC=" + os.environ.get("GAIA_SPEC_MARKER", "") + "\\n"
     "MARKER=" + os.environ.get("GAIA_PARENT_MARKER", ""),
     encoding="utf-8",
 )
 """
 
 
-def test_a_real_spawn_inherits_the_parent_environment_and_carries_the_ctx_window(
+def test_a_real_spawn_merges_the_spec_env_into_the_parent_environment(
     tmp_path, client, monkeypatch, free_port
 ):
     """Every other test stubs ``_spawn``, which proves the call was made and
@@ -547,17 +549,15 @@ def test_a_real_spawn_inherits_the_parent_environment_and_carries_the_ctx_window
     breakage: the child environment must be the parent's env MERGED with the
     spec's, never replaced by it. A bare ``env=spec.env`` drops PATH and
     LOCALAPPDATA and LemonadeServer.exe cannot start — a failure no mock can
-    produce, because a mock has no environment to lose. It pins the other half
-    too: on a modern install the context window travels in the ENV, not the
-    argv, so a spawn that dropped it would come up health-green and then fail
-    every long request.
+    produce, because a mock has no environment to lose. It also pins that a
+    modern spawn adds no context-size variable: Lemonade never reads one
+    (#3320), and GAIA sends the window with each ``/load`` instead.
     """
     import sys
 
-    # Named so resolve_lemonade classifies the override as MODERN — the form
-    # whose ctx_size rides in the environment. The placeholder exercises real
-    # resolution; argv then uses this environment's Python to run the probe,
-    # while spec.env is left exactly as the launcher built it.
+    # Named so resolve_lemonade classifies the override as MODERN. The
+    # placeholder exercises real resolution; argv then uses this environment's
+    # Python to run the probe.
     fake_server = tmp_path / ("lemonade.exe" if os.name == "nt" else "lemond")
     fake_server.touch()
 
@@ -569,20 +569,20 @@ def test_a_real_spawn_inherits_the_parent_environment_and_carries_the_ctx_window
     # tooling and the StartSpec below are the real ones.
     monkeypatch.setenv("LEMONADE_SERVER_PATH", str(fake_server))
     monkeypatch.setenv("GAIA_PARENT_MARKER", "inherited")
+    monkeypatch.delenv("LEMONADE_CTX_SIZE", raising=False)
 
     real_build = sup.build_start_command
 
-    def redirect_argv_keep_env(tooling, ctx_size):
+    def redirect_argv_mark_env(tooling, ctx_size):
         spec = real_build(tooling, ctx_size)
-        assert spec.env.get("LEMONADE_CTX_SIZE") == str(ctx_size), (
-            "the launcher did not put the context window in the environment, so "
-            "this test would pass for the wrong reason"
-        )
+        assert spec.env == {}, f"modern launch grew an env: {spec.env}"
+        # Proves the spec's own env still reaches the child through the merge.
+        spec.env["GAIA_SPEC_MARKER"] = "from-spec"
         # A copied Windows venv launcher cannot locate its Python installation.
         spec.argv[:] = [sys.executable, str(probe), str(out)]
         return spec
 
-    monkeypatch.setattr(sup, "build_start_command", redirect_argv_keep_env)
+    monkeypatch.setattr(sup, "build_start_command", redirect_argv_mark_env)
 
     s = _supervisor(tmp_path, client, monkeypatch)
     with pytest.raises(LemonadeStartError):
@@ -591,7 +591,8 @@ def test_a_real_spawn_inherits_the_parent_environment_and_carries_the_ctx_window
         s.ensure_running(ctx_size=65536, timeout=3.0)
 
     written = out.read_text(encoding="utf-8")
-    assert "CTX=65536" in written, "the context window never reached the child"
+    assert "CTX=\n" in written, "a context-size variable reached the child"
+    assert "SPEC=from-spec" in written, "the spec's env never reached the child"
     assert "MARKER=inherited" in written, (
         "the child did not inherit the parent environment — a bare env=spec.env "
         "would break LemonadeServer.exe in exactly this way"

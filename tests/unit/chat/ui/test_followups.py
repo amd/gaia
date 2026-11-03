@@ -249,7 +249,7 @@ async def test_a_chat_that_missed_the_turn_end_can_ask_what_was_taken(runtime):
 
     session, _, _ = await _turn_with_followup(db, agent, "also the totals")
 
-    assert await chat.followup_outcome(session["id"]) == {
+    assert await chat.followup_outcome(session["id"], db) == {
         "taken": ["also the totals"],
         "returned": [],
     }
@@ -263,7 +263,7 @@ async def test_a_chat_that_missed_the_turn_end_can_ask_what_came_back(runtime):
     session, _, _ = await _turn_with_followup(db, agent, _ATTACHED)
 
     # As the user sent it, so the chat can match it against its queue.
-    assert await chat.followup_outcome(session["id"]) == {
+    assert await chat.followup_outcome(session["id"], db) == {
         "taken": [],
         "returned": [_ATTACHED],
     }
@@ -271,10 +271,52 @@ async def test_a_chat_that_missed_the_turn_end_can_ask_what_came_back(runtime):
 
 @pytest.mark.asyncio
 async def test_followup_outcome_is_refused_while_a_turn_runs(runtime):
+    db = runtime
+    session = db.create_session(model="M-GGUF", agent_type="chat")
     with patch.object(chat.run_manager, "is_running", return_value=True):
         with pytest.raises(HTTPException) as exc:
-            await chat.followup_outcome("busy")
+            await chat.followup_outcome(session["id"], db)
     assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_followup_outcome_returns_404_for_a_deleted_chat(runtime):
+    db = runtime
+    session = db.create_session(model="M-GGUF", agent_type="chat")
+    db.delete_session(session["id"])
+
+    with pytest.raises(HTTPException) as exc:
+        await chat.followup_outcome(session["id"], db)
+
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_followup_outcome_stays_empty_for_a_live_chat_without_a_turn(runtime):
+    db = runtime
+    session = db.create_session(model="M-GGUF", agent_type="chat")
+
+    assert await chat.followup_outcome(session["id"], db) == {
+        "taken": [],
+        "returned": [],
+    }
+
+
+def test_deleted_chat_followup_outcome_is_404_over_http():
+    from fastapi.testclient import TestClient
+
+    from gaia.ui.server import create_app
+
+    client = TestClient(create_app(db_path=":memory:"), raise_server_exceptions=False)
+    session_id = client.post("/api/sessions", json={}).json()["id"]
+    assert client.get(f"/api/chat/followup/{session_id}").status_code == 200
+    assert client.delete(f"/api/sessions/{session_id}").status_code == 200
+
+    # A stale run entry must not mask the deletion as a busy 409.
+    with patch.object(chat.run_manager, "is_running", return_value=True):
+        resp = client.get(f"/api/chat/followup/{session_id}")
+
+    assert resp.status_code == 404
 
 
 def test_each_turn_replaces_the_last_outcome():

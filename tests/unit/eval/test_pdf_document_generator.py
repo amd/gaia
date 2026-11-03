@@ -86,7 +86,9 @@ def test_init_asks_for_the_model_and_output_cap(mocker):
     factory.assert_called_once_with(model="claude-sonnet-5", max_tokens=4096)
 
 
-def test_generates_on_a_subscription_without_an_api_key(monkeypatch, tmp_path):
+def test_generates_on_a_subscription_without_an_api_key(
+    monkeypatch, tmp_path, claude_login
+):
     """#1344: a logged-in `claude` CLI is enough; no ANTHROPIC_API_KEY needed."""
     import subprocess
 

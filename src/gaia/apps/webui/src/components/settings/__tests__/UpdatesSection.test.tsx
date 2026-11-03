@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UpdatesSection } from '../UpdatesSection';
@@ -26,6 +26,7 @@ const bridge = {
     }),
     listReleases: vi.fn(async () => []),
     installVersion: vi.fn(async () => state),
+    revertUpdate: vi.fn(async () => state),
     resumeUpdates: vi.fn(async () => { push({ pinnedVersion: null }); return state; }),
     setAutoUpdate: vi.fn(async (enabled: boolean) => { push({ autoUpdate: enabled }); return state; }),
     setIncludePrereleases: vi.fn(async (enabled: boolean) => { push({ includePrereleases: enabled }); return state; }),
@@ -53,7 +54,7 @@ describe('UpdatesSection', () => {
 
     it('shows auto-update off by default', async () => {
         render(<UpdatesSection />);
-        await waitFor(() => expect(screen.getByText(/running gaia 0\.25\.0/i)).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText(/running gaia 0\.25\.0/i, { selector: '[role="status"]' })).toBeInTheDocument());
         expect(autoSwitch()).not.toBeChecked();
     });
 
@@ -66,7 +67,7 @@ describe('UpdatesSection', () => {
 
     it('opting into release candidates leaves auto-update off', async () => {
         render(<UpdatesSection />);
-        await screen.findByText(/running gaia 0\.25\.0/i);
+        await screen.findByText(/running gaia 0\.25\.0/i, { selector: '[role="status"]' });
         expect(rcSwitch()).not.toBeChecked();
         expect(rcSwitch()).toBeEnabled();
 
@@ -87,7 +88,7 @@ describe('UpdatesSection', () => {
     it('says plainly when no release publishes an update for this platform', async () => {
         state = { ...state, status: 'no-channel', error: 'No GAIA release publishes a desktop update for this platform yet' };
         render(<UpdatesSection />);
-        expect(await screen.findByText(/no gaia release publishes a desktop update/i)).toBeInTheDocument();
+        expect(await screen.findByText(/no gaia release publishes a desktop update/i, { selector: '[role="status"]' })).toBeInTheDocument();
         expect(screen.queryByText(/up to date/i)).toBeNull();
     });
 
@@ -116,6 +117,29 @@ describe('UpdatesSection', () => {
         expect(autoSwitch()).not.toBeChecked();
     });
 
+    it('offers the way back only when there is an earlier version', async () => {
+        render(<UpdatesSection />);
+        await screen.findByText(/running gaia 0\.25\.0/i, { selector: '[role="status"]' });
+        expect(screen.queryByRole('button', { name: /go back/i })).not.toBeInTheDocument();
+        act(() => push({ previousVersion: '0.24.0' }));
+        await userEvent.click(await screen.findByRole('button', { name: /go back to gaia 0\.24\.0/i }));
+        expect(bridge.revertUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it('says why going back failed', async () => {
+        state = { ...state, previousVersion: '0.24.0' };
+        bridge.revertUpdate.mockRejectedValueOnce(new Error('no connection'));
+        render(<UpdatesSection />);
+        await userEvent.click(await screen.findByRole('button', { name: /go back/i }));
+        expect(await screen.findByRole('alert')).toHaveTextContent(/no connection/);
+    });
+
+    it('says a failed install left the old version running', async () => {
+        state = { ...state, installFailed: { target: '0.26.0', from: '0.25.0' } };
+        render(<UpdatesSection />);
+        expect(await screen.findByRole('alert')).toHaveTextContent(/0\.26\.0 didn't install.*still on 0\.25\.0/);
+    });
+
     it('opens the version picker', async () => {
         render(<UpdatesSection />);
         await userEvent.click(await screen.findByRole('button', { name: /install a specific version/i }));
@@ -124,6 +148,19 @@ describe('UpdatesSection', () => {
 });
 
 describe('UpdateIndicator', () => {
+    it('offers the way back when GAIA did not start after updating', async () => {
+        state = { ...state, startFailed: true, previousVersion: '0.24.0' };
+        render(<UpdateIndicator />);
+        await userEvent.click(await screen.findByRole('button', { name: /go back to 0\.24\.0/i }));
+        expect(bridge.revertUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows download progress once going back has started', async () => {
+        state = { ...state, startFailed: true, previousVersion: '0.24.0', status: 'downloading', progress: 40 };
+        render(<UpdateIndicator />);
+        expect(await screen.findByText(/downloading update.*40%/i)).toBeInTheDocument();
+    });
+
     it('offers Update now for an available update', async () => {
         state = { ...state, status: 'available', version: '0.26.0' };
         render(<UpdateIndicator />);

@@ -23,6 +23,8 @@ from gaia.llm.lemonade_client import (
 
 # Test constants - override via GAIA_TEST_MODEL env var for different platforms
 TEST_MODEL = os.environ.get("GAIA_TEST_MODEL", "Gemma-4-E4B-it-GGUF")
+# A thinking model (CI's Qwen3-0.6B) spends a short token cap on reasoning.
+NO_THINKING = {"enable_thinking": False}
 
 HOST = "localhost"
 # Respect LEMONADE_PORT env var so CI can override for non-default setups.
@@ -192,6 +194,7 @@ class TestLemonadeClientIntegration(unittest.TestCase):
                 messages=messages,
                 temperature=0.0,  # Use deterministic output
                 max_completion_tokens=10,  # Limit completion tokens
+                chat_template_kwargs=NO_THINKING,
             )
 
             print(f"Chat completion response structure: {list(response.keys())}")
@@ -235,6 +238,7 @@ class TestLemonadeClientIntegration(unittest.TestCase):
                 temperature=0.0,
                 max_completion_tokens=20,
                 stream=True,
+                chat_template_kwargs=NO_THINKING,
             ):
                 chunk_count += 1
 
@@ -485,7 +489,8 @@ class TestLemonadeClientIntegration(unittest.TestCase):
                 model=TEST_MODEL,
                 input=input_text,
                 temperature=0.0,
-                max_output_tokens=50,
+                max_output_tokens=256,
+                chat_template_kwargs=NO_THINKING,
             )
 
             print(f"Responses endpoint response: {response}")

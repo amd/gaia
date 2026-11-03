@@ -25,42 +25,70 @@ The pack lives in the hub's skills lane,
 [`hub/skills/`](https://github.com/amd/gaia/tree/main/hub/skills) — one directory
 per skill, alongside `hub/agents/` and `hub/components/`.
 
-## Install one
+**GAIA already includes them.** The `gaia` agent ships with all of these skills
+built in, plus `document-extract`, `gaia-voice` and `gaia-harness-engineering`,
+so there is nothing to install to use them. The built-in copy wins over one in
+`~/.gaia/skills/`. The rest of this page is for reading them, forking them, and
+installing skills the hub offers that GAIA does not ship.
+
+## Find and install skills from the hub
+
+Skills are published to the GAIA hub, signed by AMD. Browse them at
+[amd-gaia.ai/hub](https://amd-gaia.ai/hub), or from the terminal:
 
 ```bash
-# From a GAIA checkout
-gaia skill import hub/skills/research-report
-
-gaia skill list                       # see what's installed, and from which root
-gaia skill info research-report       # the manifest: permissions, tools, tier
-gaia skill info research-report --body   # ...and the full procedure
+gaia skill search summarize          # one word works best; no word lists them all
+gaia skill install summarize         # latest version, signed by AMD
+gaia skill list                      # what is installed, its version and tier
+gaia skill info summarize --body     # permissions, tools, and the full procedure
 ```
 
-`import` audits the folder, copies it into `~/.gaia/skills/`, and stamps it
-`security_tier: experimental` — **imported skills always re-earn trust**,
-whatever tier the file claims. That is deliberate: the tier records what *you*
-have verified, not what the author asserted. It follows that a skill asking for
-more than `experimental` allows — `coding` and `github-triage` want
-`shell:execute:<binary>` — is refused at import, and a skill that ships
-`tools.py` needs `--allow-experimental`.
+Installing is for **other agents** and for skills GAIA does not ship, such as
+ones contributed by outside developers. It adds nothing for the `gaia` agent
+itself when the skill is one it already includes.
+
+`install` needs GAIA v0.25.4 or later, which trusts AMD's signing key out of the
+box. It prints the provenance (`signed by AMD`) and the tier it installed at; no
+flags are needed for these skills. To update, run
+`gaia skill install <name> --force`, which replaces the installed copy with the
+newest version (`<name>@<range>` pins one). To remove one, run
+`gaia skill remove <name>`.
+
+You can also ask the GAIA agent in chat: "find a skill that does X and install
+it". It searches the hub (`search_skill_hub`) and installs (`install_skill`), but
+an installed skill is not active until it is loaded (`load_skill`), which the
+agent does when you ask it to use the skill. The agent will not install a skill
+that is unsigned or asks for a dangerous permission; it tells you, and you can
+approve it yourself in a terminal with
+`gaia skill install <name> --allow-experimental` or `--yes`.
+
+Writing your own? See [Build and Publish a Skill](/guides/building-skills).
+
+### From a checkout or a local folder
+
+`gaia skill import <folder>` copies a skill folder, such as one in a GAIA
+checkout, into `~/.gaia/skills/`:
+
+```bash
+gaia skill import hub/skills/research-report
+```
+
+`import` audits the folder and stamps it `security_tier: experimental`:
+**imported skills always re-earn trust**, whatever tier the file claims, because
+the tier records what *you* have verified, not what the author asserted. It
+follows that a skill asking for more than `experimental` allows (`coding` and
+`github-triage` want `shell:execute:<binary>`) is refused at import, and a skill
+that ships `tools.py` needs `--allow-experimental`.
 
 ## Use one
 
-<Warning>
-**Phase 1 loads skills programmatically, not from a chat flag.** The skills
-runtime that ships today ([#888](https://github.com/amd/gaia/issues/888)) covers
-the format, discovery, validation, permission bridge, tool loading, and the
-`gaia skill` CLI. Wiring a skill into an interactive `gaia chat` session with a
-flag is not part of it. Until it lands, the two ways to run a starter skill are
-the SDK call below and simply reading the procedure yourself.
-</Warning>
-
-Any agent built on GAIA's base `Agent` can load a skill by name:
+In chat, ask the agent to use a skill by name. From code, load it with
+`load_skill`:
 
 ```python
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+from gaia_agent import GaiaAgent, GaiaAgentConfig
 
-agent = ChatAgent(ChatAgentConfig())
+agent = GaiaAgent(GaiaAgentConfig())
 agent.load_skill("research-report")     # body joins the system prompt
 
 print(agent.process_query("What's the current state of NPU support in llama.cpp?"))
@@ -76,9 +104,10 @@ flagship `gaia` agent is the exception: it selects per turn which loaded
 bodies are relevant, and collapses the rest to a one-line menu entry — see
 [the skill spec](/spec/agent-skills) for the mechanics.
 
-`ChatAgent` is the agent to target for this pack: on its default `full` profile
-it registers the web, RAG, scratchpad, memory, file, and shell tools that these
-skills consume. A skill loaded into a narrower agent still works, but any tool
+`GaiaAgent` is the agent to target for this pack: its default config turns on
+the web, RAG, scratchpad, memory, file, and shell tools these skills consume. A
+skill loaded into a narrower agent, or into a `ChatAgent` with `enable_browser`
+and `enable_scratchpad` left at their default of off, still loads, but any tool
 it names that the agent lacks is logged as unavailable.
 
 ## The skills
@@ -181,8 +210,8 @@ duplicates, ranks by severity × reach, and posts the reply once you approve it.
 
 - **Demonstrates** — a scoped binary grant. It declares `shell:execute:gh`, which
   grants the GitHub CLI to this skill's session on this agent, restricted to the
-  subcommands in GAIA's policy table (see
-  [Bring your own CLI](/plans/skill-format#bring-your-own-cli)).
+  subcommands in GAIA's policy table (see the
+  [permission model](/plans/skill-format#permission-model)).
 - **Configure** — nothing, if you let GAIA do it. Ask it to set up the GitHub CLI
   and it checks, installs, and signs in for you, showing you each command first —
   see [Setting up a CLI a skill needs](/guides/gaia#setting-up-a-cli-a-skill-needs).
@@ -229,6 +258,75 @@ generation is slow enough that you only get a couple of attempts.
   turns `enable_sd_tools` on. Generating evicts the chat model to make room for
   the SD model, so the next reply reloads it; `ChatAgent` keeps the flag off.
 
+### coding
+
+Changes code the way you would check it yourself: find the right file, edit it,
+and prove the change works before reporting it.
+
+- **Demonstrates** — grep and semantic code search together, scoped shell grants
+  for tests and git.
+- **Consumes** — `read_file`, `edit_file`, `search_file_content`,
+  `search_code_index`, `run_python`, `run_shell_command`.
+- **Configure** — nothing. It declares `shell:execute:pytest`, `python`,
+  `python3` and `git`.
+
+### file-ops
+
+Reads, writes and edits files on disk without guessing paths, and asks before
+anything hard to undo.
+
+- **Demonstrates** — read-before-write discipline and confirmation before
+  destructive changes.
+- **Consumes** — `read_file`, `write_file`, `edit_file`, `find_files`,
+  `search_file_content`, `get_file_info`, `request_user_input`.
+- **Configure** — nothing.
+
+### inbox-triage
+
+Turns a mailbox into a short list of what needs you, with a one-line reason for
+each. Read-only: it never replies, archives or deletes.
+
+- **Demonstrates** — a skill over the email tools, where the model judges and the
+  tools only report facts.
+- **Consumes** — `check_mailbox_access`, `list_inbox`, `search_email`,
+  `read_email`, `list_mail_folders`, `get_thread`, `list_connected_mailboxes`,
+  `list_waiting_on_you`.
+- **Configure** — a connected Gmail or Outlook mailbox; see the
+  [Email guide](/guides/email).
+
+### music-gen
+
+Generates original music and sound effects as WAV files with local Lemonade
+models.
+
+- **Demonstrates** — a local audio model in a skill, used only when you ask.
+- **Consumes** — `list_audio_generation_models`, `generate_music`,
+  `generate_sound_effect`.
+- **Note** — generating can load a multi-GB model and evict the chat model, so
+  the next reply reloads it.
+
+### summarize
+
+Picks a summary style that fits what the content is (transcript, email, or
+document) and folds long input forward in sections instead of dropping the back
+half.
+
+- **Demonstrates** — style selection and chunked summarizing of long input.
+- **Consumes** — `index_document`, `summarize_document`,
+  `list_indexed_documents`, `dump_document`, `read_file`.
+- **Configure** — a file path or pasted text.
+
+### transcribe-meeting
+
+Turns a meeting recording into a speaker-labelled transcript and a brief with
+decisions and action items. Takes roughly 4x realtime on a 46-minute recording.
+
+- **Demonstrates** — a three-step pipeline where each tool writes a file the next
+  one reads, so a long transcript is never truncated.
+- **Consumes** — `transcribe_media`, `refine_transcript`, `summarize_document`,
+  `query_documents`, `remember`.
+- **Configure** — an audio or video file, or a Teams/Zoom transcript export.
+
 ## Fork one
 
 This is the part that matters. Copying a skill and editing it is the whole
@@ -241,9 +339,10 @@ cp -r hub/skills/source-watch ~/my-skills/gpu-restock-watch
 
 Then, in `gpu-restock-watch/SKILL.md`:
 
-1. Change `name: source-watch` to `name: gpu-restock-watch`. **The `name` field
-   must equal the directory name** — a mismatch is a loud, fixable error rather
-   than a silent misload.
+1. Change `name: source-watch` to `name: gpu-restock-watch`. Keep the `name`
+   field equal to the directory name: `gaia skill import` installs under the
+   `name` in the file even when the folder is called something else, with no
+   error, so a stale `name` installs under the original's name.
 2. Rewrite `description`. It is not documentation; it is the trigger signal a
    model reads to decide whether this skill is relevant. Say what it does *and
    when to use it*.
@@ -263,16 +362,15 @@ gaia skill info gpu-restock-watch
   `github-triage` uses. Everything else local — `filesystem`, `database`,
   `desktop`, `env`, and a bare unscoped `shell:execute` — needs a sandbox that has
   not shipped, so a skill declaring one is **refused at load** rather than loaded
-  unenforced ([#1019](https://github.com/amd/gaia/issues/1019)).
+  unenforced.
   Do not add a permission to look thorough — add it only if the skill needs it.
 - **`tools` and `tools_required` are different fields.** `tools` are `@tool`
   functions your skill *provides* (and must exist in its `tools.py`).
   `tools_required` names registry tools it *consumes*. Only `rss-digest` uses
   the former.
-- **`pairs_with` names skills this one combines with.** `data-explore`,
-  `document-brief`, `research-report` and `summarize` pair with `office-docs`,
-  so the catalogue tells the model to load both when a request reads from one
-  and produces an Office file. A name that is not installed is ignored. See
+- **`pairs_with` names skills this one is usually combined with**, so the
+  catalogue tells the model to load both. A name that is not installed is
+  ignored, and no starter skill uses it today. See
   [Companion skills](/spec/agent-skills#companion-skills).
 - **Never put a secret in a skill file.** Reference it as a
   `requirements.env_vars` entry and configure it through

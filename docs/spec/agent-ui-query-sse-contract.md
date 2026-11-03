@@ -33,10 +33,10 @@ which is **not** the v2 contract below.
 
 This document defines two things and freezes the boundary between them:
 
-1. **The target wire contract** (§3–§5) — the seven canonical event types plus
+1. **The target wire contract** (§3–§5) — the nine canonical event types plus
    the `/query` request body. Integrators depend on this and nothing else.
 2. **The translation map** (§6) — a total, source-exhaustive mapping from the
-   in-process handler's vocabulary onto the seven canonical types, so the v2
+   in-process handler's vocabulary onto the nine canonical types, so the v2
    translation layer (built in #2016) can be implemented with **no source event
    left unmapped**.
 
@@ -208,7 +208,7 @@ as "no documents are indexed" about a file the user can see attached.
 
 ---
 
-## 4. The seven canonical event types
+## 4. The nine canonical event types
 
 The contract is exactly these `type` values (design §0.2 — the original seven,
 plus `needs_input` added as an additive MINOR by #2469, and `reasoning`, sent
@@ -224,7 +224,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
 | `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) and `risk_note` (why the agent's checks don't cover the call) |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
-| `final` | `{answer, usage?, failed?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done |
+| `final` | `{answer, usage?, failed?, performance?, context?, context_error?, model_messages?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done. `performance` reports measured turn timings, `context` reports the context-meter payload, `context_error` explains why that measurement was unavailable, and `model_messages` carries the model-facing trace when the caller sent `turns` (contract >= 2.25) |
 | `error` | `{detail, status}` | surface the actionable error verbatim; terminal |
 
 A `:`-prefixed SSE comment may appear at any point as a heartbeat. It carries no
@@ -327,14 +327,29 @@ indistinguishable from a dead one.
     "timeout_seconds": { "type": "integer" }   // after this the run fails loudly
   } }
 
+// reasoning (contract >= 2.22; emitted only when requested)
+{ "type": "object", "additionalProperties": false,
+  "required": ["type", "delta"],
+  "properties": {
+    "type":  { "const": "reasoning" },
+    "delta": { "type": "string" }
+  } }
+
 // final
 { "type": "object", "additionalProperties": false,
   "required": ["type", "answer"],
   "properties": {
-    "type":   { "const": "final" },
-    "answer": { "type": "string" },
-    "usage":  { "type": "object" },  // optional {steps?, tools_used?, elapsed?, tokens?, ttft?, tok_per_s?}
-    "failed": { "const": true }      // optional; a model failure ended the turn
+    "type":           { "const": "final" },
+    "answer":         { "type": "string" },
+    "usage":          { "type": "object" },
+    "failed":         { "const": true },
+    "performance":    { "type": "object" },
+    "context":        { "type": "object" },
+    "context_error":  { "type": "string" },
+    "model_messages": {
+      "type": "array",
+      "items": { "type": "object" }
+    }
   } }
 
 // error
