@@ -249,6 +249,21 @@ def _unload_everything(session):
             session.agent.unload_skill(name)
 
 
+def _parse_gaia_skill(command: str):
+    """Parse *command* with the real ``gaia skill`` argparse tree."""
+    import argparse
+    import shlex
+
+    from gaia.skills import cli as skills_cli
+
+    parser = argparse.ArgumentParser(prog="gaia")
+    sub = parser.add_subparsers(dest="action")
+    skills_cli.add_subparser(sub)
+    argv = shlex.split(command, posix=sys.platform != "win32")
+    assert argv[0] == "gaia", command
+    return parser.parse_args(argv[1:])
+
+
 def call(session, tool_name: str, **kwargs):
     """Invoke a registered tool the way the agent loop would."""
     return session.agent._tools_registry[tool_name]["function"](**kwargs)
@@ -556,7 +571,11 @@ def test_load_refuses_code_from_an_ungated_claude_import(session):
     assert result["status"] == "error"
     assert result["error_type"] == "SkillPermissionError"
     assert "imported_probe" in result["error"]
-    assert "gaia skill import" in result["error"]
+    # The named command must run as written: code needs --allow-experimental.
+    parsed = _parse_gaia_skill(result["error"].split("`")[1])
+    assert parsed.skill_action == "import"
+    assert parsed.allow_experimental is True
+    assert Path(parsed.source) == session.library.claude / "imported-code"
     # gaia-voice is always-on, so the claim is that no TASK skill loaded.
     assert set(session.agent.loaded_skills) == session.baseline_skills
     assert IMPORTED_CODE_MARKER not in session.agent.system_prompt
@@ -691,6 +710,8 @@ def test_install_then_load_a_signed_community_skill(session, hub, tmp_path):
     assert installed["status"] == "success", installed
     assert installed["version"] == "1.2.0"
     assert installed["security_tier"] == "community"
+    assert "shadowed_by" not in installed
+    assert "load_skill('trusted-brief')" in installed["next_step"]
     assert (session.library.user / "trusted-brief" / "SKILL.md").is_file()
     # Installing is not activating.
     assert PUBLISHED_MARKER not in session.agent.system_prompt
@@ -747,6 +768,39 @@ def test_install_reports_an_unsatisfiable_pin(session, hub, tmp_path):
     assert result["status"] == "error"
     assert result["error_type"] == "SkillNotFoundError"
     assert "1.0.0" in result["error"], "the error must list what IS published"
+
+
+def test_installing_a_skill_the_agent_bundles_says_the_bundled_copy_loads(
+    session, hub, tmp_path
+):
+    """The bundled root outranks ~/.gaia/skills, so the install is not what loads."""
+    key = hub.keygen()
+    hub.trust(key)
+    hub.publish(
+        _publishable(
+            tmp_path,
+            "note-taker",
+            description="A hub copy of a skill this agent already bundles.",
+            marker=PUBLISHED_MARKER,
+            version="9.0.0",
+            tier="community",
+        )
+    )
+
+    installed = call(session, "install_skill", name="note-taker")
+    try:
+        assert installed["status"] == "success", installed
+        assert installed["shadowed_by"]["root"] == "agent-bundled"
+        assert installed["shadowed_by"]["version"] == "1.0.0"
+        assert "GAIA already includes 'note-taker' 1.0.0" in installed["next_step"]
+        assert "only used by agents that don't include it" in installed["next_step"]
+
+        loaded = call(session, "load_skill", name="note-taker")
+        assert loaded["status"] == "success", loaded
+        assert NOTE_TAKER_MARKER in session.agent.system_prompt
+        assert PUBLISHED_MARKER not in session.agent.system_prompt
+    finally:
+        call(session, "remove_skill", name="note-taker")
 
 
 # ---------------------------------------------------------------------------

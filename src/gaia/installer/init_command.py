@@ -1809,7 +1809,9 @@ class InitCommand:
         """Install GAIA's embedded Lemonade if needed, then start it.
 
         Init is the recovery path, so it also replaces an instance running an
-        older version and one that stopped answering.
+        older version and one that stopped answering. The new version is
+        installed before the old one is stopped, so a failed download leaves
+        the old server running.
         """
         from gaia.llm.lemonade_embedded import (
             EmbeddedLemonade,
@@ -1818,7 +1820,19 @@ class InitCommand:
 
         embedded = EmbeddedLemonade(progress_callback=self._download_progress)
         try:
+            # is_installed() checks this version's own dist dir, so an older
+            # binary left on disk after a version change does not count.
+            if not self.force_reinstall and not embedded.is_installed():
+                self._install_embedded(embedded)
+
             current = embedded.status()
+            ready = current.running and current.version == embedded.version
+            if not ready or self.force_reinstall:
+                # Its shutdown stops the server it owns, so re-read the status.
+                if not self._replace_outdated_daemon():
+                    return False
+                current = embedded.status()
+
             if current.unresponsive_pid:
                 self._print(
                     f"   Lemonade Server (pid {current.unresponsive_pid}) stopped "
@@ -1835,16 +1849,9 @@ class InitCommand:
                 self._print("   Stopping Lemonade Server to reinstall it...")
                 embedded.stop()
 
-            # is_installed() checks this version's own dist dir, so an older
-            # binary left on disk after a version change does not count.
-            if self.force_reinstall or not embedded.is_installed():
-                self._print(f"   Downloading Lemonade Server v{embedded.version}...")
-                embedded.install(force=self.force_reinstall)
-                self._print("")
-                self._print_success(
-                    f"Installed Lemonade Server v{embedded.version} "
-                    f"in {embedded.dist_dir}"
-                )
+            if self.force_reinstall:
+                # A reinstall overwrites the running version's files.
+                self._install_embedded(embedded)
 
             status = embedded.start(install_if_missing=False)
         except EmbeddedLemonadeError as e:
@@ -1862,6 +1869,38 @@ class InitCommand:
             self._gaia_choice_pending = False
             self._print_success("Saved: GAIA uses its own Lemonade Server.")
         self._hand_server_to_daemon()
+        return True
+
+    def _install_embedded(self, embedded) -> None:
+        self._print(f"   Downloading Lemonade Server v{embedded.version}...")
+        embedded.install(force=self.force_reinstall)
+        self._print("")
+        self._print_success(
+            f"Installed Lemonade Server v{embedded.version} in {embedded.dist_dir}"
+        )
+
+    def _replace_outdated_daemon(self) -> bool:
+        """Stop a daemon left over from the previous release before the swap.
+
+        Left running, it would start its own release's Lemonade Server again
+        as soon as init stopped it.
+
+        Returns:
+            True when no outdated daemon is left, False after printing why.
+        """
+        from gaia.daemon import client as daemon_client
+        from gaia.daemon.errors import DaemonError
+
+        try:
+            why = daemon_client.replace_outdated_daemon()
+        except DaemonError as e:
+            self._print_error(str(e))
+            return False
+        if why:
+            self._print(
+                f"   Stopped GAIA's out-of-date background service ({why}); "
+                "it restarts on this release."
+            )
         return True
 
     def _hand_server_to_daemon(self) -> None:

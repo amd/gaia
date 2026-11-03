@@ -20,6 +20,7 @@ import {
   channelsOf,
   isPrerelease,
   makeVersionEntry,
+  parseScorecardScore,
   readResolvedAgentManifest,
   rebuildIndex,
   upsertVersion,
@@ -387,6 +388,18 @@ export async function handlePublish(
 
   const manifest = parseManifest(manifestText);
   assertAuthorAllowed(publisher, manifest.author);
+
+  // index.schema.json bounds eval_score to 0-100; an out-of-range score would publish an invalid index.
+  const evalScore = parseScorecardScore(evalScorecardText ?? null);
+  if (evalScore !== undefined && (evalScore < 0 || evalScore > 100)) {
+    throw new HttpError(
+      400,
+      "invalid_eval_score",
+      `${manifest.id}@${manifest.version}: the eval scorecard's aggregate.value is ${evalScore}, ` +
+        `but eval_score must be between 0 and 100. Regenerate the scorecard ` +
+        `(gen_scorecard.py) or fix aggregate.value in its front matter.`
+    );
+  }
 
   // `latest_version` is the stable channel and every existing client reads it,
   // so a pre-release on stable would hand an RC to everyone.

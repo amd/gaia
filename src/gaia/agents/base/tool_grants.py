@@ -14,6 +14,8 @@ So a grant is keyed on the *invocation*, not the tool name:
     run_shell_command  command="cd p && python -m pytest -q 2>&1"
                                                  ->  run_shell_command:pytest
     write_file         file_path="notes.md"      ->  write_file:notes.md
+    (safe host-resolved folder)                  ->  write_file:/project/*
+    (home/PATH/hidden safety path)               ->  write_file:/home/u/notes.md
 
 A shell grant covers a command *family*: the program and its subcommand,
 wherever it sits in a line. A ``cd``, a harmless redirection (``2>&1``) and a
@@ -37,9 +39,11 @@ it. Scoping keeps the affordance and takes away the blast radius.
 from __future__ import annotations
 
 import glob
+import ntpath
 import os
 import posixpath
 import re
+import shutil
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -198,8 +202,9 @@ _MAX_SHELL_SCOPE_WORDS = 2
 #: "any command, as long as you poll with it".
 _SHELL_TOOLS = frozenset({"run_shell_command", "run_cli_command", "wait_for_condition"})
 
-#: Tools whose blast radius is one path. The grant is that exact path — not its
-#: directory: the prompt named a file, so the grant covers a file.
+#: Tools whose blast radius is one path. A prompt for a file inside a named
+#: folder may offer a chat-scoped folder grant; a bare filename stays exact so
+#: it cannot silently follow a changing working directory.
 PATH_TOOLS = frozenset(
     {
         "write_file",
@@ -237,6 +242,9 @@ _UNGRANTABLE_TOOLS = frozenset({"capture_skill", PATH_ACCESS_PROMPT_TOOL})
 #: Prompt argument set by the agent (never the model) when a script it runs sits
 #: in its own scratch folder. Such a call is never offered "always".
 SCRATCH_ARG = "_scratch_dir"
+#: Prompt-only absolute target derived by the host's file preflight. It makes a
+#: folder grant stable without changing the tool's model-supplied arguments.
+RESOLVED_PATH_ARG = "_resolved_file_path"
 
 #: Tools whose every call is the same kind of action, so the family IS the
 #: tool. The label says how wide that is.
@@ -641,12 +649,62 @@ def _path_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
     # Normalised for matching, never resolved: this must stay a pure function of
     # the arguments, so it cannot depend on the filesystem or the process's cwd.
     normalised = posixpath.normpath(raw.replace("\\", "/"))
-    display = posixpath.basename(normalised) or normalised
+    # A resolved path has no working-directory ambiguity, so its parent can
+    # describe a folder grant only when the existing edit safety rules also
+    # allow silent edits in that folder. Home/drive roots, hidden paths, PATH
+    # directories, and Windows program shadows must keep prompting.
+    resolved_target = ""
+    resolved = args.get(RESOLVED_PATH_ARG)
+    if isinstance(resolved, str):
+        resolved_for_match = resolved.replace("\\", "/")
+        if ntpath.isabs(resolved) or posixpath.isabs(resolved_for_match):
+            resolved_target = posixpath.normpath(resolved_for_match)
+            parent = posixpath.dirname(resolved_target)
+            if (
+                parent not in ("", ".", "/")
+                and not re.fullmatch(r"[A-Za-z]:", parent)
+                and _folder_grant_is_safe(resolved_target, parent)
+            ):
+                return GrantScope(
+                    keys=(f"{tool_name}:{parent}/*",),
+                    label=f"{tool_name} on files in {parent}",
+                    subject=f"files in {parent}",
+                )
+    exact = resolved_target or normalised
+    exact_display = posixpath.basename(exact) or exact
     return GrantScope(
-        keys=(f"{tool_name}:{normalised}",),
-        label=f"{tool_name} on {display}",
-        subject=display,
+        keys=(f"{tool_name}:{exact}",),
+        label=f"{tool_name} on {exact_display}",
+        subject=exact_display,
     )
+
+
+def _folder_grant_is_safe(target: str, parent: str) -> bool:
+    """Keep folder grants aligned with the edit auto-accept exclusions."""
+    try:
+        real_parent = os.path.normcase(os.path.realpath(parent))
+        real_target = os.path.normcase(os.path.realpath(target))
+    except (OSError, ValueError):
+        return False
+    home = os.path.normcase(os.path.realpath(os.path.expanduser("~")))
+    if real_parent == home or os.path.dirname(real_parent) == real_parent:
+        return False
+    parts = {part.lower() for part in real_target.replace("\\", "/").split("/")}
+    if ".git" in parts or any(
+        part.startswith(".") and part not in (".", "..") for part in parts
+    ):
+        return False
+    if any(
+        entry and os.path.normcase(os.path.realpath(entry)) == real_parent
+        for entry in os.environ.get("PATH", "").split(os.pathsep)
+    ):
+        return False
+    if os.name == "nt":
+        stem, ext = os.path.splitext(os.path.basename(real_target))
+        pathext = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").lower().split(";")
+        if ext.lower() in pathext and shutil.which(stem) is not None:
+            return False
+    return True
 
 
 def _named_scope(

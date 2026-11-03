@@ -25,7 +25,7 @@ Two invariants hold for every migration:
    (``requires.config``) maps onto ``shell:execute:<bin>`` /
    ``filesystem:read:<path>``. Neither fits the ``experimental`` ceiling (and
    ``filesystem`` has no enforcement until the Phase 2 sandbox,
-   `#1019 <https://github.com/amd/gaia/issues/1019>`_), so such a skill is
+   `#2863 <https://github.com/amd/gaia/issues/2863>`_), so such a skill is
    reported **unmigratable with the reason** rather than quietly stripped of the
    permission to make the migration "succeed".
 
