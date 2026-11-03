@@ -42,9 +42,9 @@
 # pin them), which is its own change. A judge that cannot be reached at all is
 # covered: the transport raises and the step dies.
 #
-# JUDGE CREDENTIAL. This workflow selects CLAUDE_CODE_OAUTH_TOKEN by blanking
-# ANTHROPIC_API_KEY when a subscription token exists. Locally judge_client uses
-# ANTHROPIC_API_KEY when both are set; clear it to choose the CLI transport.
+# JUDGE CREDENTIAL. judge_client uses the subscription first (the token or the
+# CLI login), then ANTHROPIC_API_KEY. This workflow exports the key only when
+# no subscription token exists.
 # The key alone is
 # what this workflow asked for until the account behind it ran out of credit and
 # every run on every branch died ~25 minutes in.
@@ -334,8 +334,8 @@ jobs:
       - name: Preflight — judge credential (live probe)
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Blanked when the token is present: judge_client prefers the key, so
-          # leaving both set would keep using the key's account.
+          # Only without a subscription token. The token would win anyway, and the
+          # key then never reaches the job.
           ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           & $env:VENV_PY -m gaia.eval.judge_client --probe
@@ -431,7 +431,7 @@ jobs:
           # Judge credential for gaia.eval.judge_client — REQUIRED. When both
           # secrets are absent eval_drafting_report.py exits 1 (fail-loudly, never
           # a skip), so this step throws rather than shipping an un-judged gate.
-          # See the preflight above for why the key is blanked when OAuth is set.
+          # The key is exported only without a token, as in the preflight above.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
@@ -468,7 +468,7 @@ jobs:
         env:
           # Judge credential for the borderline equivalence judge — REQUIRED.
           # Absent -> the script fails loudly (NO fuzzy-only fallback).
-          # See the preflight above for why the key is blanked when OAuth is set.
+          # The key is exported only without a token, as in the preflight above.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
@@ -512,7 +512,7 @@ jobs:
         env:
           # Judge credential for gaia.eval.judge_client — REQUIRED. This gate has
           # no report-mode fallback: an absent credential fails the build.
-          # See the preflight above for why the key is blanked when OAuth is set.
+          # The key is exported only without a token, as in the preflight above.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |

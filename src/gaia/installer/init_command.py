@@ -78,6 +78,40 @@ def is_embedding_model_id(model_id: str) -> bool:
     return "embed" in model_id.lower()
 
 
+def is_tts_model_id(model_id: str) -> bool:
+    """Whether a model id names a text-to-speech model, which takes no chat request."""
+    from gaia.llm.lemonade_client import MODELS, ModelType
+
+    return any(
+        req.model_type is ModelType.TTS and req.model_id.lower() == model_id.lower()
+        for req in MODELS.values()
+    )
+
+
+def _model_role(model_id: str) -> str:
+    if is_embedding_model_id(model_id):
+        return "embedding"
+    if is_tts_model_id(model_id):
+        return "speech"
+    return "chat"
+
+
+def _speak_once(base_url: str, model_id: str) -> None:
+    """Synthesize one word, the request the text-to-speech tool makes.
+
+    Raises:
+        ConnectionError: Lemonade Server is not reachable.
+        LemonadeTTSError: The server refused the request or returned no audio.
+    """
+    from gaia.audio.lemonade_tts import LemonadeTTSClient, LemonadeTTSError
+
+    samples, _rate = LemonadeTTSClient(base_url=base_url, model=model_id).synthesize(
+        "ok"
+    )
+    if not len(samples):
+        raise LemonadeTTSError(f"{model_id} returned no audio")
+
+
 _TROUBLESHOOTING_URL = "https://amd-gaia.ai/docs/reference/troubleshooting"
 
 
@@ -298,7 +332,7 @@ class ModelLoad:
     """One model the `--check --load` probe loaded, or failed to."""
 
     id: str
-    role: str  # "chat" or "embedding"
+    role: str  # "chat", "embedding" or "speech"
     size_gb: Optional[float]
     loaded: bool
     error: Optional[str] = None
@@ -853,7 +887,7 @@ def _describe_model(
     """A model setup needs, its download size, and whether the server has it."""
     from gaia.llm.lemonade_client import LemonadeClientError
 
-    role = "embedding" if is_embedding_model_id(model_id) else "chat"
+    role = _model_role(model_id)
     try:
         size_gb = pending_download_sizes(client, [model_id], full=True)[model_id]
     except LemonadeClientError as e:
@@ -867,11 +901,13 @@ def _load_model_once(client, model_id: str) -> "ModelLoad":
     """Load one model through the same call the agent's first turn makes."""
     from gaia.llm.lemonade_client import LemonadeClientError
 
-    role = "embedding" if is_embedding_model_id(model_id) else "chat"
+    role = _model_role(model_id)
     size_gb = None
     try:
         size_gb = client.get_model_info(model_id)["size_gb"]
-        if role == "embedding":
+        if role == "speech":
+            _speak_once(client.base_url, model_id)
+        elif role == "embedding":
             response = client.embeddings(["ok"], model=model_id, timeout=120)
             data = response.get("data") if isinstance(response, dict) else None
             if not data or not data[0].get("embedding"):
@@ -2639,6 +2675,11 @@ class InitCommand:
         from gaia.llm.lemonade_client import InsufficientMemoryError
 
         try:
+            if is_tts_model_id(model_id):
+                # A speech model takes no chat request; the speech call loads it.
+                _speak_once(client.base_url, model_id)
+                return (True, None)
+
             # Check if profile requires specific context size for this model
             profile_config = INIT_PROFILES.get(self.profile, {})
             min_ctx = profile_config.get("min_context_size")
