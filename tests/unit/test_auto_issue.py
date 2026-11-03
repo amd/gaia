@@ -532,163 +532,217 @@ def test_a_base_release_pass_leaves_a_later_hotfix_issue_open():
     assert sorted(c[2] for c in gh.writes()) == ["1", "2", "3"]
 
 
-# --- eval_flagship: what a tier's pass may close ------------------------------
+# --- release evals: one issue per target, filed only for a measured regression --
+
+#: (workflow, job, target) for each release eval that files `eval-failure`.
+EVAL_ISSUE_JOBS = (
+    ("eval_flagship.yml", "release-escalation", "flagship"),
+    ("release_agent_gaia.yml", "eval-report", "agent-gaia"),
+)
 
 
-def _tiered_eval_issues():
+def _eval_job(workflow, job_id):
+    wf = yaml.safe_load((WORKFLOWS / workflow).read_text(encoding="utf-8"))
+    return wf["jobs"][job_id]
+
+
+def _with_mode(job, mode):
+    return next(
+        s
+        for s in job["steps"]
+        if str(s.get("uses", "")).endswith(".github/actions/auto-issue")
+        and s["with"]["mode"] == mode
+    )
+
+
+@pytest.mark.parametrize("workflow, job_id, target", EVAL_ISSUE_JOBS)
+def test_an_eval_issue_is_filed_only_for_a_measured_regression(
+    workflow, job_id, target
+):
+    job = _eval_job(workflow, job_id)
+    notice = next(s for s in job["steps"] if s.get("id") == "notice")
+    assert "util/eval_failure_notice.py" in notice["run"]
+    assert f"--target {target}" in notice["run"]
+    report = _with_mode(job, "report")
+    assert report["if"] == "steps.notice.outputs.verdict == 'regressed'"
+    w = report["with"]
+    # One issue per target, edited in place: never one per tag.
+    assert w["key"] == f"eval-regression/{target}"
+    assert w["update"] == "edit"
+    assert w["labels"] == "eval-failure"
+    assert w["title"] == "${{ steps.notice.outputs.title }}"
+    resolve = _with_mode(job, "resolve")
+    assert resolve["if"] == "steps.notice.outputs.verdict == 'passed'"
+    assert resolve["with"]["key"] == f"eval-regression/{target}"
+    assert "up-to-version" not in resolve["with"]
+
+
+@pytest.mark.parametrize("workflow, job_id, target", EVAL_ISSUE_JOBS)
+def test_untrusted_eval_text_reaches_the_issue_only_through_a_file(
+    workflow, job_id, target
+):
+    job = _eval_job(workflow, job_id)
+    report = _with_mode(job, "report")["with"]
+    assert "body" not in report
+    assert report["body-file"] == "${{ github.workspace }}/notice/body.md"
+    for step in job["steps"]:
+        # Every value a script reads comes in through env, never an expression.
+        assert "${{" not in step.get("run", ""), step.get("name")
+
+
+@pytest.mark.parametrize("workflow, job_id, target", EVAL_ISSUE_JOBS)
+def test_eval_issue_jobs_are_least_privilege_and_serialised(workflow, job_id, target):
+    job = _eval_job(workflow, job_id)
+    assert job["permissions"] == {"contents": "read", "issues": "write"}
+    assert job["concurrency"] == {
+        "group": f"eval-failure-issue-{target}",
+        "cancel-in-progress": False,
+    }
+    checkout = next(
+        s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout")
+    )
+    assert checkout["with"]["persist-credentials"] is False
+
+
+def _close_on_pass(job, gh, version):
+    """Run every resolve step a passing run takes, with a concrete tag."""
+    resolves = [
+        s
+        for s in job["steps"]
+        if s.get("with", {}).get("mode") == "resolve"
+        and s.get("if") == "steps.notice.outputs.verdict == 'passed'"
+    ]
+    assert len(resolves) == 2
+    for step in resolves:
+        w = step["with"]
+        args = []
+        for name in ("key", "key-prefix", "legacy-title-prefix"):
+            if name in w:
+                args += [f"--{name}", w[name]]
+        if "up-to-version" in w:
+            args.append(f"--up-to-version={version}")
+        _resolve(gh, *args)
+
+
+def _all_eval_issues():
     return [
-        _issue(1, "x", key="eval-flagship/smoke/v0.26.0-rc1"),
-        _issue(2, "x", key="eval-flagship/full/v0.26.0-rc2"),
-        _issue(3, "Flagship eval did not pass on v0.26.0-rc0"),
-        _issue(4, "x", key="eval-flagship/verify/v0.25.2"),
-        _issue(5, "x", key="eval-flagship/smoke/v0.26.0-rc9"),
+        _issue(1, "x", key="eval-regression/flagship"),
+        _issue(2, "x", key="eval-flagship/smoke/v0.26.0-rc1"),
+        _issue(3, "x", key="eval-flagship/full/v0.26.0-rc2"),
+        _issue(4, "Flagship eval did not pass on v0.26.0-rc0"),
+        _issue(5, "x", key="eval-flagship/smoke/v0.27.0-rc1"),
+        _issue(6, "x", key="eval-regression/agent-gaia"),
+        _issue(7, "x", key="eval-agent-gaia/agent-pkg-gaia-v0.3.3"),
+        _issue(8, "Agent release eval did not pass on agent-pkg-gaia-v0.3.2"),
+        _issue(9, "x", key="eval-agent-gaia/agent-pkg-gaia-v0.4.0"),
     ]
 
 
-def _escalation():
-    wf = yaml.safe_load((WORKFLOWS / "eval_flagship.yml").read_text(encoding="utf-8"))
-    return wf["jobs"]["release-escalation"]
+def test_a_flagship_pass_closes_its_issue_and_earlier_per_tag_ones():
+    gh = FakeGh(_all_eval_issues())
+    _close_on_pass(_eval_job("eval_flagship.yml", "release-escalation"), gh, "v0.26.0")
+    # Not a later line's per-tag issue (#5), nor anything of the agent's.
+    assert sorted(c[2] for c in gh.writes()) == ["1", "2", "3", "4"]
 
 
-def _escalation_step(name):
-    return next(s for s in _escalation()["steps"] if s.get("name") == name)
-
-
-def test_a_smoke_pass_closes_earlier_smoke_issues_not_a_failed_full_sweep():
-    gh = FakeGh(_tiered_eval_issues())
-    _resolve(
-        gh, "--key-prefix", "eval-flagship/smoke/\n", "--up-to-version=v0.26.0-rc3"
-    )
-    # Not the full sweep (#2), the unmarked legacy issue (#3), a final's verify
-    # issue (#4), or a later RC (#5).
-    assert [c[2] for c in gh.writes()] == ["1"]
-
-
-def test_a_full_pass_closes_smoke_full_and_legacy_issues_on_its_line():
-    gh = FakeGh(_tiered_eval_issues())
-    _resolve(
+def test_an_agent_pass_closes_only_the_agents_issues():
+    gh = FakeGh(_all_eval_issues())
+    _close_on_pass(
+        _eval_job("release_agent_gaia.yml", "eval-report"),
         gh,
-        "--key-prefix",
-        "eval-flagship/smoke/\neval-flagship/full/",
-        "--legacy-title-prefix",
-        "Flagship eval did not pass on ",
-        "--up-to-version=v0.26.0-rc3",
+        "agent-pkg-gaia-v0.3.4",
     )
-    assert sorted(c[2] for c in gh.writes()) == ["1", "2", "3"]
+    assert sorted(c[2] for c in gh.writes()) == ["6", "7", "8"]
 
 
-def test_the_escalation_keys_its_issue_by_tier_and_tag():
-    w = _escalation_step("File (or update) the issue for this tag")["with"]
-    assert (
-        w["key"] == "eval-flagship/${{ needs.eval-gate.outputs.tier }}/"
-        "${{ github.ref_name }}"
+def test_the_flagship_notice_reads_every_job_its_tiers_need():
+    job = _eval_job("eval_flagship.yml", "release-escalation")
+    assert set(job["needs"]) >= {"eval-gate", "lanes", "agent-eval", "verify-final"}
+    env = next(s for s in job["steps"] if s.get("id") == "notice")["env"]
+    assert env["LANES_RESULT"] == "${{ needs.agent-eval.result }}"
+    assert env["VERIFY_RESULT"] == "${{ needs.verify-final.result }}"
+    assert env["OUTCOMES_RESULT"] == "${{ needs.flagship-tasks.result }}"
+    assert env["BASELINE_DIR"] == "${{ needs.lanes.outputs.baseline_dir }}"
+
+
+def test_the_agent_notice_expects_what_the_eval_ran_against_its_baseline():
+    release = yaml.safe_load(
+        (WORKFLOWS / "release_agent_gaia.yml").read_text(encoding="utf-8")
     )
-
-
-def test_only_a_full_pass_adds_full_and_legacy_issues_to_its_close():
-    step = _escalation_step("Close the eval issues this pass disproves")
-    assert "tier != 'verify'" in step["if"]
-    w = step["with"]
-    lines = [ln.strip() for ln in w["key-prefix"].splitlines() if ln.strip()]
-    assert lines[0] == "eval-flagship/smoke/"
-    assert lines[1] == (
-        "${{ needs.eval-gate.outputs.tier == 'full' && 'eval-flagship/full/' || '' }}"
+    callee = yaml.safe_load(
+        (WORKFLOWS / "test_gaia_agent_eval.yml").read_text(encoding="utf-8")
     )
-    assert "tier == 'full'" in w["legacy-title-prefix"]
-    assert w["up-to-version"] == "${{ github.ref_name }}"
+    env = next(
+        s for s in release["jobs"]["eval-report"]["steps"] if s.get("id") == "notice"
+    )["env"]
+    # A category the notice does not expect is never reported as missing.
+    assert env["EVAL_CATEGORIES"] == release["jobs"]["gaia-eval"]["with"]["categories"]
+    assert env["BASELINE_DIR"] == callee["env"]["BASELINE_DIR"]
 
 
-def test_a_final_tag_closes_only_its_own_verify_issue():
-    step = _escalation_step("Close this final tag's own verify issue")
-    assert "tier == 'verify'" in step["if"]
-    w = step["with"]
-    assert "key-prefix" not in w and "legacy-title-prefix" not in w
-    assert w["key"] == "eval-flagship/verify/${{ github.ref_name }}"
+# --- the action's body-file input ---------------------------------------------
 
 
-def _run_outcome(tmp_path, **results):
+def _run_action_script(tmp_path, **env):
     bash = shutil.which("bash")
     if not bash:
         pytest.skip("bash not on PATH")
-    step = next(s for s in _escalation()["steps"] if s.get("id") == "outcome")
-    script = tmp_path / "outcome.sh"
+    action = yaml.safe_load((ACTION_DIR / "action.yml").read_text(encoding="utf-8"))
+    step = action["runs"]["steps"][0]
+    assert step["env"]["AI_BODY_FILE"] == "${{ inputs.body-file }}"
+    script = tmp_path / "run.sh"
     script.write_text(step["run"], encoding="utf-8", newline="\n")
-    out = tmp_path / "out.txt"
-    out.write_text("", encoding="utf-8")
-    env = {
+    argv_out = tmp_path / "argv.txt"
+    full_env = {
         "PATH": os.environ.get("PATH", ""),
-        "GITHUB_OUTPUT": str(out),
-        "TIER": results.get("tier", "smoke"),
-        "LANES_JOB": results.get("lanes", "success"),
-        "LANES_RESULT": results.get("agent_eval", "success"),
-        "OUTCOMES_RESULT": results.get("tasks", "success"),
-        "VERIFY_RESULT": results.get("verify", "skipped"),
+        "GITHUB_REPOSITORY": R,
+        "GITHUB_ACTION_PATH": str(tmp_path),
+        "RUNNER_TEMP": str(tmp_path),
+        "ARGV_OUT": str(argv_out),
+        "AI_MODE": "report",
+        "AI_KEY": "eval-regression/flagship",
+        "AI_TITLE": "t",
+        "AI_UPDATE": "edit",
+        **{k: "" for k in ("AI_LABELS", "AI_ASSIGNEES", "AI_BODY", "AI_BODY_FILE")},
+        **{k: "" for k in ("AI_LEGACY_TITLE", "AI_LEGACY_TITLE_PREFIX")},
+        **env,
     }
+    # A shell function stands in for auto_issue.py and records its argv.
+    shim = 'python3() { printf "%s\n" "$@" > "$ARGV_OUT"; }; . "$0"'
     proc = subprocess.run(
-        [bash, str(script)], env=env, capture_output=True, text=True, check=False
+        [bash, "-c", shim, str(script)],
+        env=full_env,
+        capture_output=True,
+        text=True,
+        check=False,
     )
-    state = re.findall(r"^state=(\w+)$", out.read_text(encoding="utf-8"), re.M)
-    return proc.returncode, state
+    argv = (
+        argv_out.read_text(encoding="utf-8").splitlines() if argv_out.exists() else []
+    )
+    return proc, argv
+
+
+def test_the_action_files_the_body_file_as_given(tmp_path):
+    body = tmp_path / "body.md"
+    body.write_text("| `x` | judge said $(whoami) |\n", encoding="utf-8")
+    proc, argv = _run_action_script(tmp_path, AI_BODY_FILE=str(body))
+    assert proc.returncode == 0, proc.stderr
+    assert f"--body-file={body}" in argv
 
 
 @pytest.mark.parametrize(
-    "results, expected",
+    "env, error",
     [
-        # Outcomes is skipped on an RC smoke by design: still a pass.
-        ({"tier": "smoke", "tasks": "skipped"}, ["passed"]),
-        ({"tier": "smoke", "agent_eval": "failure", "tasks": "skipped"}, ["failed"]),
-        ({"tier": "smoke", "lanes": "cancelled"}, ["failed"]),
-        # Lanes skipped without failing measured nothing: neither files nor closes.
-        ({"tier": "smoke", "agent_eval": "skipped", "tasks": "skipped"}, ["unproven"]),
-        ({"tier": "full"}, ["passed"]),
-        ({"tier": "full", "tasks": "skipped"}, ["unproven"]),
-        ({"tier": "full", "tasks": "failure"}, ["failed"]),
-        # A final tag runs only verify-final.
-        (
-            {
-                "tier": "verify",
-                "lanes": "skipped",
-                "agent_eval": "skipped",
-                "tasks": "skipped",
-                "verify": "success",
-            },
-            ["passed"],
-        ),
-        (
-            {
-                "tier": "verify",
-                "lanes": "skipped",
-                "agent_eval": "skipped",
-                "tasks": "skipped",
-                "verify": "failure",
-            },
-            ["failed"],
-        ),
-        (
-            {
-                "tier": "verify",
-                "lanes": "skipped",
-                "agent_eval": "skipped",
-                "tasks": "skipped",
-                "verify": "skipped",
-            },
-            ["unproven"],
-        ),
+        ({"AI_BODY": "inline"}, "not both"),
+        ({"AI_BODY": ""}, "missing or empty"),
     ],
 )
-def test_the_escalation_only_closes_on_a_pass_its_tier_actually_ran(
-    tmp_path, results, expected
-):
-    code, state = _run_outcome(tmp_path, **results)
-    assert code == 0
-    assert state == expected
-
-
-def test_an_unknown_tag_tier_fails_loudly(tmp_path):
-    code, state = _run_outcome(tmp_path, tier="backlog")
-    assert code != 0 and state == []
-    code, state = _run_outcome(tmp_path, tier="")
-    assert code != 0 and state == []
+def test_the_action_refuses_a_bad_body_file(tmp_path, env, error):
+    body = tmp_path / "body.md"
+    body.write_text("" if error == "missing or empty" else "text", encoding="utf-8")
+    proc, argv = _run_action_script(tmp_path, AI_BODY_FILE=str(body), **env)
+    assert proc.returncode != 0 and argv == []
+    assert error in proc.stdout
 
 
 # --- nightly-patch-release: a job's issue closes only when that job runs green --
