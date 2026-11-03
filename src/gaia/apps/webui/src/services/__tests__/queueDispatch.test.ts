@@ -187,6 +187,13 @@ describe('a message added to a reply that ended with nobody watching', () => {
         expect(states(A)).toEqual([['d', 'delivered']]);
     });
 
+    it('drops a queue when the chat was deleted before its outcome was read', async () => {
+        mockedApi.getFollowUpOutcome.mockRejectedValue(Object.assign(new Error('gone'), { httpStatus: 404 }));
+        queue(A, ['orphaned', 'delivered'], ['after', 'queued']);
+        await dispatchNext(A, manualSender().send, () => true);
+        expect(useChatStore.getState().messageQueues[A]).toBeUndefined();
+    });
+
     it('waits while its offer to the reply is still in flight', async () => {
         const { send, calls } = manualSender();
         queue(A, ['offering', 'sending'], ['next', 'queued']);
