@@ -16,9 +16,11 @@ import httpx
 import pytest
 
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, RISK_NOTE_ARG
 from gaia.agents.base.console import AgentConsole, format_confirmation_args
 from gaia.agents.base.model_features import COMPACT, FEATURE_TOOLS, FULL, withheld_tools
 from gaia.agents.base.offline import ONLINE_SERVICE_TOOLS, offline_refusal
+from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools._calendar import GoogleCalendarBackend, GraphCalendarBackend
 from gaia.agents.tools._calendar.scopes import (
@@ -31,6 +33,8 @@ from gaia.agents.tools._email.phishing import (
     UNTRUSTED_FIELD_OPEN,
 )
 from gaia.agents.tools.calendar_tools import CalendarToolsMixin
+from gaia.print_mode import configure_console
+from gaia.ui.sse_handler import SSEOutputHandler
 
 WRITE_TOOLS = {
     "create_calendar_event",
@@ -1168,3 +1172,330 @@ class TestEventsStateTheirWeekday:
         finally:
             monkeypatch.undo()
             time.tzset()
+
+
+# --- a calendar change always needs a person ------------------------------
+
+CREATE = {
+    "title": "Budget review",
+    "start": "2026-11-03T09:00:00-05:00",
+    "end": "2026-11-03T10:00:00-05:00",
+    "notify_attendees": ["dana@x.com"],
+    "calendar_account": ACCOUNT,
+}
+WRITE_CALLS = {
+    "create_calendar_event": CREATE,
+    "update_calendar_event": {**TARGET, "new_title": "Budget sync"},
+    "cancel_calendar_event": TARGET,
+}
+RLO, ZWSP, LRI, PDI = "\u202e", "\u200b", "\u2066", "\u2069"
+
+
+def _headless_skip(console):
+    """`gaia -p --dangerously-skip-permissions`."""
+    configure_console(console, skip_permissions=True, full_access=False)
+
+
+def _headless_full_access(console):
+    """`gaia -p --full-access`."""
+    configure_console(console, skip_permissions=False, full_access=True)
+
+
+def _env_preapproval(console):
+    """GAIA_AUTO_APPROVE_TOOLS=1, which the test sets itself."""
+
+
+def _events(handler):
+    events = []
+    while not handler.event_queue.empty():
+        events.append(handler.event_queue.get())
+    return events
+
+
+def _preapprove_by_env(monkeypatch):
+    # The variable is read from the environment as it was at startup.
+    monkeypatch.setattr(
+        "gaia.agents.base.console.auto_approve_env_enabled", lambda: True
+    )
+
+
+@pytest.fixture
+def no_env_preapproval(monkeypatch):
+    monkeypatch.delenv("GAIA_AUTO_APPROVE_TOOLS", raising=False)
+
+
+@pytest.mark.usefixtures("no_env_preapproval")
+class TestACalendarChangeNeedsAPerson:
+    @pytest.mark.parametrize(
+        "preapprove", [_headless_skip, _headless_full_access, _env_preapproval]
+    )
+    @pytest.mark.parametrize("tool", sorted(WRITE_TOOLS))
+    def test_a_preapproved_run_with_nobody_to_ask_refuses(
+        self, make_agent, monkeypatch, tool, preapprove
+    ):
+        if preapprove is _env_preapproval:
+            _preapprove_by_env(monkeypatch)
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        preapprove(agent.console)
+        result = _run(agent, tool, **WRITE_CALLS[tool])
+        assert result["success"] is False
+        assert "Not changed" in result["error"]
+        assert "--dangerously-skip-permissions" in result["error"]
+        assert agent.console.asked == [] and fake.requests == []
+
+    @pytest.mark.parametrize("via_env", [False, True])
+    @pytest.mark.parametrize("tool", sorted(WRITE_TOOLS))
+    def test_full_access_with_a_person_watching_still_asks(
+        self, make_agent, monkeypatch, tool, via_env
+    ):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        handler = SSEOutputHandler()
+        if via_env:
+            _preapprove_by_env(monkeypatch)
+        else:
+            handler.auto_approve_gated_tools = True
+            handler.full_access = True
+        handler.answers_confirmations = True
+        handler.confirm_timeout_seconds = 0.01
+        agent.console = handler
+        result = _run(agent, tool, **WRITE_CALLS[tool])
+        # Nobody answered in time, so it was denied rather than approved.
+        assert result["status"] == "denied"
+        assert fake.writes == []
+        request = next(e for e in _events(handler) if e["type"] == "permission_request")
+        assert request["tool"] == tool
+        assert NEEDS_PERSON_ARG not in request["args"]
+        assert "always_scope" not in request
+
+    @pytest.mark.parametrize("tool", sorted(WRITE_TOOLS))
+    def test_full_access_with_nobody_watching_refuses(self, make_agent, tool):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        handler = SSEOutputHandler()
+        handler.auto_approve_gated_tools = True
+        handler.full_access = True
+        agent.console = handler
+        result = _run(agent, tool, **WRITE_CALLS[tool])
+        assert "Not changed" in result["error"]
+        assert fake.writes == []
+        assert not any(e["type"] == "permission_request" for e in _events(handler))
+
+    @pytest.mark.parametrize("tool", sorted(WRITE_TOOLS))
+    def test_a_watched_unattended_run_still_refuses(self, make_agent, tool):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        handler = SSEOutputHandler()
+        handler.auto_approve_gated_tools = True
+        handler.answers_confirmations = True
+        handler.background_mode = True
+        agent.console = handler
+        result = _run(agent, tool, **WRITE_CALLS[tool])
+        assert "Not changed" in result["error"]
+        assert fake.writes == []
+
+    @pytest.mark.parametrize("tool", sorted(WRITE_TOOLS))
+    def test_a_watched_full_access_chat_runs_once_the_person_says_yes(
+        self, make_agent, tool
+    ):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        handler = SSEOutputHandler()
+        handler.auto_approve_gated_tools = True
+        handler.answers_confirmations = True
+        asked = []
+
+        def person(tool_name, tool_args, **_):
+            asked.append(tool_args)
+            return True
+
+        handler.confirm_tool_execution = person
+        agent.console = handler
+        _run(agent, tool, **WRITE_CALLS[tool])
+        assert asked and asked[0][NEEDS_PERSON_ARG] is True
+        assert fake.writes
+
+    @pytest.mark.parametrize("tool", sorted(WRITE_TOOLS))
+    def test_never_offered_always(self, make_agent, tool):
+        agent = make_agent(_FakeGoogle())
+        _run(agent, tool, **WRITE_CALLS[tool])
+        assert grant_scope(tool, agent.console.asked[0][1]) is None
+        assert grant_scope(tool, WRITE_CALLS[tool]) is None
+
+    @pytest.mark.parametrize("tool", sorted(WRITE_TOOLS))
+    def test_asking_normally_carries_no_person_marker(self, make_agent, tool):
+        agent = make_agent(_FakeGoogle())
+        _run(agent, tool, **WRITE_CALLS[tool])
+        assert NEEDS_PERSON_ARG not in agent.console.asked[0][1]
+
+    @pytest.mark.parametrize("tool", sorted(WRITE_TOOLS))
+    def test_the_model_cannot_send_the_marker_itself(self, make_agent, tool):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        result = _run(agent, tool, **WRITE_CALLS[tool], **{NEEDS_PERSON_ARG: True})
+        assert "Unexpected argument" in result["error"]
+        assert agent.console.asked == [] and fake.writes == []
+
+    def test_an_agent_that_does_not_list_the_tools_still_asks(self, make_agent):
+        class _Unlisted(_CalendarAgent):
+            CONFIRMATION_REQUIRED_TOOLS = frozenset()
+
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            agent = _Unlisted(silent_mode=True, skip_lemonade=True)
+        for tool in WRITE_TOOLS:
+            assert agent._tool_requires_confirmation(tool, WRITE_CALLS[tool])
+        assert not agent._tool_requires_confirmation("list_calendar_events", {})
+
+    @pytest.mark.parametrize(
+        "preapprove", [_headless_skip, _headless_full_access, _env_preapproval]
+    )
+    @pytest.mark.parametrize(
+        "tool,args",
+        [("list_calendar_events", {}), ("check_calendar_availability", WINDOW)],
+    )
+    def test_reads_still_run_unasked(
+        self, make_agent, monkeypatch, tool, args, preapprove
+    ):
+        if preapprove is _env_preapproval:
+            _preapprove_by_env(monkeypatch)
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        preapprove(agent.console)
+        result = _run(agent, tool, **args)
+        assert result["success"] is True
+        assert agent.console.asked == [] and fake.writes == []
+
+
+@pytest.mark.usefixtures("no_env_preapproval")
+class TestInviteesAreCheckedLikeEmailRecipients:
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "dana",
+            "dana@x@y.com",
+            "Dana <dana@x.com>",
+            "dana@x.com, eve@y.com",
+            "dana@x.com;eve@y.com",
+            "da na@x.com",
+            "dana\n@x.com",
+            "da\x00na@x.com",
+            f"da{RLO}na@x.com",
+            f"dana@exa{ZWSP}mple.com",
+            "dané@x.com",
+            "dana@-x-.comé",
+        ],
+    )
+    def test_a_malformed_address_is_refused_before_the_prompt(self, make_agent, bad):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        result = _run(
+            agent,
+            "create_calendar_event",
+            **{**CREATE, "notify_attendees": ["sam@x.com", bad]},
+        )
+        assert result["success"] is False
+        assert "notify_attendees" in result["error"]
+        assert agent.console.asked == [] and fake.writes == []
+
+    def test_an_international_domain_is_shown_and_invited_as_sent(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        _run(
+            agent,
+            "create_calendar_event",
+            **{**CREATE, "notify_attendees": ["dana@bücher.de"]},
+        )
+        assert agent.console.asked[0][1]["notify_attendees"] == [
+            "dana@xn--bcher-kva.de"
+        ]
+        sent = json.loads(fake.writes[0].content)
+        assert sent["attendees"] == [{"email": "dana@xn--bcher-kva.de"}]
+
+
+@pytest.mark.usefixtures("no_env_preapproval")
+class TestHiddenCharactersShowInThePrompt:
+    def test_create_shows_each_one_as_a_code(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        _run(
+            agent,
+            "create_calendar_event",
+            **{
+                **CREATE,
+                "title": f"Budget {RLO}weiver",
+                "location": f"Room{ZWSP} 4",
+                "description": f"Agenda{LRI} here{PDI}\nsecond line",
+            },
+        )
+        shown = agent.console.asked[0][1]
+        text = format_confirmation_args(shown)
+        assert "Budget [U+202E]weiver" in text
+        assert "Room[U+200B] 4" in text
+        assert "Agenda[U+2066] here[U+2069]" in text
+        assert not any(c in text for c in (RLO, ZWSP, LRI, PDI))
+        assert "[U+XXXX]" in shown[RISK_NOTE_ARG]
+        # Shown, never rewritten: the event is saved as the person approved it.
+        sent = json.loads(fake.writes[0].content)
+        assert sent["summary"] == f"Budget {RLO}weiver"
+
+    def test_a_line_break_in_a_one_line_field_is_shown(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        _run(agent, "create_calendar_event", **{**CREATE, "location": "A\nB"})
+        assert agent.console.asked[0][1]["location"] == "A[U+000A]B"
+
+    def test_update_shows_them_too(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        _run(
+            agent,
+            "update_calendar_event",
+            **{**TARGET, "new_title": f"Sync{RLO}", "new_location": f"R{ZWSP}9"},
+        )
+        text = format_confirmation_args(agent.console.asked[0][1])
+        assert "Sync[U+202E]" in text and "R[U+200B]9" in text
+        assert not any(c in text for c in (RLO, ZWSP))
+
+    def test_cancel_shows_a_marked_attendee_as_a_code(self, make_agent):
+        event = {**EVENT, "attendees": [{"email": f"dana{ZWSP}@x.com"}]}
+        agent = make_agent(_FakeGoogle(event))
+        _run(
+            agent,
+            "cancel_calendar_event",
+            **{**TARGET, "notify_attendees": [f"dana{ZWSP}@x.com"]},
+        )
+        text = format_confirmation_args(agent.console.asked[0][1])
+        assert "dana[U+200B]@x.com" in text and ZWSP not in text
+
+    def test_plain_text_carries_no_note(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        _run(agent, "create_calendar_event", **CREATE)
+        assert RISK_NOTE_ARG not in agent.console.asked[0][1]
+
+    def test_rtl_joiners_are_kept_as_written(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        title = "می\u200cخواهم"
+        _run(agent, "create_calendar_event", **{**CREATE, "title": title})
+        assert agent.console.asked[0][1]["title"] == title
+
+    def test_the_prompt_in_a_watched_chat_shows_the_codes(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        handler = SSEOutputHandler()
+        handler.auto_approve_gated_tools = True
+        handler.answers_confirmations = True
+        handler.confirm_timeout_seconds = 0.01
+        agent.console = handler
+        _run(agent, "create_calendar_event", **{**CREATE, "title": f"A{RLO}B"})
+        request = next(e for e in _events(handler) if e["type"] == "permission_request")
+        assert request["args"]["title"] == "A[U+202E]B"
+
+    def test_a_description_that_only_fits_raw_is_refused(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        result = _run(
+            agent,
+            "update_calendar_event",
+            **TARGET,
+            new_description="y" * 495 + RLO,
+        )
+        assert result["success"] is False and "500" in result["error"]
+        assert agent.console.asked == [] and fake.writes == []

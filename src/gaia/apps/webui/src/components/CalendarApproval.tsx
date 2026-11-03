@@ -28,9 +28,18 @@ function formatsFor(locale: string): Formats {
     return formats;
 }
 
+/** Characters that can hide or reorder text (`person_approval.py`'s `_HIDDEN_RE`). */
+// eslint-disable-next-line no-control-regex
+const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u180e\u200b\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+
+/** `[U+202E]` in place of each, so what is approved reads as what is saved. */
+function visibleText(value: string): string {
+    return value.replace(HIDDEN, (c) => `[U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}]`);
+}
+
 /** A model may copy an event's fence back into the call (`wrap_untrusted_field`). */
 function text(value: unknown): string {
-    return typeof value === 'string' ? value.replace(/<<<(END_)?UNTRUSTED_TEXT>>>/g, '').trim() : '';
+    return typeof value === 'string' ? visibleText(value.replace(/<<<(END_)?UNTRUSTED_TEXT>>>/g, '').trim()) : '';
 }
 
 /** Local midnight, so an all-day date can't slide to a neighbouring day. */

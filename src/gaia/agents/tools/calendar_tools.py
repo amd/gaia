@@ -22,6 +22,16 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, RISK_NOTE_ARG
+from gaia.agents.base.person_approval import (
+    HIDDEN_NOTE,
+    a_person_can_answer,
+    has_hidden,
+    preapproved,
+    sendable_address,
+    visible,
+    visible_line,
+)
 from gaia.agents.tools._calendar.errors import (
     CalendarAuthError,
     CalendarError,
@@ -58,6 +68,12 @@ logger = logging.getLogger(__name__)
 
 CALENDAR_PROVIDERS: Tuple[str, ...] = (GOOGLE_CONNECTOR_ID, MICROSOFT_CONNECTOR_ID)
 
+CALENDAR_WRITE_TOOLS = frozenset(
+    {"create_calendar_event", "update_calendar_event", "cancel_calendar_event"}
+)
+# Shown whole, line breaks kept; every other text argument is one line.
+_MULTILINE_ARGS = frozenset({"description", "new_description"})
+
 _DOCS_URL = "https://amd-gaia.ai/docs/guides/gaia"
 _DEFAULT_LIST_WINDOW_DAYS = 30
 # Under the CLI prompt's 600-character cut, so the person approves all of what is sent.
@@ -78,6 +94,14 @@ _WRITE_UNREADABLE_MESSAGE = (
     "The change went through, but the calendar's reply couldn't be read back, so its "
     "final details aren't known. Do not retry: that could notify people twice. Tell "
     "the person it went through and to check the calendar."
+)
+
+_NOBODY_TO_ASK_MESSAGE = (
+    "Not changed: calendar changes need a person's approval, and this run approves "
+    "tools automatically with nobody to ask. Turn Full access off in this chat, or "
+    "start the request from the GAIA terminal UI or Agent UI without "
+    "--dangerously-skip-permissions or GAIA_AUTO_APPROVE_TOOLS. Tell the user "
+    "nothing on the calendar changed."
 )
 
 _BUSY_MESSAGE = (
@@ -174,8 +198,28 @@ def _people(addresses: Any) -> List[str]:
     return people
 
 
+def _invitees(addresses: Any) -> List[str]:
+    """*addresses* as they will be invited, each checked like an email recipient."""
+    try:
+        return [
+            sendable_address(address, "notify_attendees")
+            for address in _people(addresses)
+        ]
+    except ValueError as exc:
+        raise CalendarError(str(exc)) from exc
+
+
+def _shown_arg(key: str, value: Any) -> Any:
+    if isinstance(value, str):
+        return visible(value) if key in _MULTILINE_ARGS else visible_line(value)
+    if isinstance(value, (list, tuple)):
+        return [visible_line(v) if isinstance(v, str) else v for v in value]
+    return value
+
+
 def _check_description(text: Any) -> None:
-    length = len(str(text or "").strip())
+    # Measured as shown: a hidden character takes more room on the prompt.
+    length = len(visible(str(text or "").strip()))
     if length > _MAX_DESCRIPTION_CHARS:
         raise CalendarError(
             f"The description is {length} characters, and the approval prompt can only "
@@ -295,6 +339,50 @@ def _merge_free_slots(
     return slots
 
 
+class _CalendarPreflight:
+    """A calendar change's checks, run before its prompt, and what that prompt shows.
+
+    Pre-approval answers prompts, and a calendar change reaches other people, so
+    it needs a person. Where a person can be asked, the
+    call is marked so they are. Where nobody can, it is refused.
+    """
+
+    def __init__(
+        self,
+        mixin: Any,
+        tool_name: str,
+        check: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]],
+    ):
+        self._mixin = mixin
+        self._tool_name = tool_name
+        self._check = check
+
+    def _preapproved(self) -> bool:
+        return preapproved(getattr(self._mixin, "console", None))
+
+    def __call__(self, args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if self._preapproved() and not a_person_can_answer(
+            getattr(self._mixin, "console", None)
+        ):
+            logger.info("calendar: %s refused, nobody can approve it", self._tool_name)
+            return _refusal(self._tool_name, _NOBODY_TO_ASK_MESSAGE)
+        return self._check(args)
+
+    def prompt_args_of(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        shown = {key: _shown_arg(key, value) for key, value in args.items()}
+        if self._tool_name == "create_calendar_event":
+            # The addresses as invited, so a look-alike domain shows as what it is.
+            shown["notify_attendees"] = _invitees(args.get("notify_attendees"))
+        written = [v for v in args.values() if isinstance(v, str)] + [
+            v for v in args.get("notify_attendees") or () if isinstance(v, str)
+        ]
+        if any(has_hidden(text) for text in written):
+            shown[RISK_NOTE_ARG] = f"{HIDDEN_NOTE} They are saved as written."
+        if self._preapproved():
+            shown[NEEDS_PERSON_ARG] = True
+        return shown
+
+
 class CalendarToolsMixin:
     """Google / Outlook calendar tools: ``register_calendar_tools()``.
 
@@ -305,6 +393,14 @@ class CalendarToolsMixin:
     _calendar_backend: Optional[CalendarBackend] = None
     _calendar_backend_is_owned = False
     _calendar_provider: Optional[str] = None
+
+    # On the mixin, so any agent composing these tools is gated by construction.
+    CONFIRMATION_HOOKS = ("_calendar_call_needs_confirmation",)
+
+    def _calendar_call_needs_confirmation(
+        self, tool_name: str, _tool_args=None
+    ) -> bool:
+        return tool_name in CALENDAR_WRITE_TOOLS
 
     def _build_calendar_backend(self) -> CalendarBackend:
         # The scenario eval auto-approves tool calls, so it must never reach a real
@@ -504,7 +600,7 @@ class CalendarToolsMixin:
         def _check_create(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             try:
                 parse_slot(str(args.get("start") or ""), str(args.get("end") or ""))
-                _people(args.get("notify_attendees"))
+                _invitees(args.get("notify_attendees"))
                 _check_description(args.get("description"))
             except CalendarError as exc:
                 return _refusal("create_calendar_event", str(exc))
@@ -675,7 +771,10 @@ class CalendarToolsMixin:
             except Exception as exc:  # surfaced, not swallowed
                 return _fail(exc, "check_calendar_availability")
 
-        @tool(atomic=True, preflight=_check_create)
+        @tool(
+            atomic=True,
+            preflight=_CalendarPreflight(mixin, "create_calendar_event", _check_create),
+        )
         def create_calendar_event(
             title: str,
             start: str,
@@ -714,7 +813,7 @@ class CalendarToolsMixin:
                 new_event = NewEvent(
                     title=title.strip(),
                     slot=parse_slot(start, end),
-                    attendees=tuple(_people(notify_attendees)),
+                    attendees=tuple(_invitees(notify_attendees)),
                     location=location.strip() or None,
                     description=description.strip() or None,
                 )
@@ -738,7 +837,10 @@ class CalendarToolsMixin:
             except Exception as exc:  # surfaced, not swallowed
                 return _fail(exc, "create_calendar_event")
 
-        @tool(atomic=True, preflight=_check_update)
+        @tool(
+            atomic=True,
+            preflight=_CalendarPreflight(mixin, "update_calendar_event", _check_update),
+        )
         def update_calendar_event(
             event_id: str,
             expected_title: str,
@@ -817,7 +919,10 @@ class CalendarToolsMixin:
             except Exception as exc:  # surfaced, not swallowed
                 return _fail(exc, "update_calendar_event")
 
-        @tool(atomic=True, preflight=_check_cancel)
+        @tool(
+            atomic=True,
+            preflight=_CalendarPreflight(mixin, "cancel_calendar_event", _check_cancel),
+        )
         def cancel_calendar_event(
             event_id: str,
             expected_title: str,
@@ -882,4 +987,4 @@ class CalendarToolsMixin:
                 return _fail(exc, "cancel_calendar_event")
 
 
-__all__ = ["CALENDAR_PROVIDERS", "CalendarToolsMixin"]
+__all__ = ["CALENDAR_PROVIDERS", "CALENDAR_WRITE_TOOLS", "CalendarToolsMixin"]

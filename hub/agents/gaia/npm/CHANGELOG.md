@@ -12,13 +12,15 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 - **The agent can use a Google or Outlook calendar.** Five new tools list
   events, check free time, and create, change or cancel events, which brings the
-  registered tool count to 106. Every write asks first, and the prompt shows the
+  registered tool count to 106. Every write asks a person first, even under full
+  access, and a run with nobody to ask refuses it. The prompt shows the
   event's title, start, who gets notified and what changes; a call that misstates
   them is refused before any prompt. `create_calendar_event` must state
   `calendar_account`, so the prompt shows where the event lands. Results name the
   account and say only its main calendar was read, and event text reaches the model
   marked as untrusted. A wrong event id is an error rather than "already gone", and a
-  description over 500 characters is refused. A recurring event changes one occurrence
+  description over 500 characters is refused. Hidden characters show in the prompt as
+  codes such as `[U+202E]`, and a malformed attendee address is refused. A recurring event changes one occurrence
   at a time. Consent now
   asks for `calendar.events` (Google) and `Calendars.ReadWrite` (Microsoft). Existing
   connections keep reading mail, and a calendar call names the command that adds

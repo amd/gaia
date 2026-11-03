@@ -295,6 +295,27 @@ describe('PermissionPrompt', () => {
             expect(facts).toHaveTextContent('Budget review');
         });
 
+        it('shows characters that hide or reorder text as visible codes', () => {
+            const facts = ask('create_calendar_event', {
+                title: 'Budget \u202eweiver', start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00',
+                notify_attendees: ['dana@x.com'], calendar_account: 'me@x.com',
+                location: 'Room\u200b 4', description: 'Agenda\u2066 here\u2069',
+            });
+            const shown = facts.textContent ?? '';
+            expect(shown).toContain('Budget [U+202E]weiver');
+            expect(shown).toContain('Room[U+200B] 4');
+            expect(shown).toContain('Agenda[U+2066] here[U+2069]');
+            expect(shown).not.toMatch(/[\u202e\u200b\u2066\u2069]/);
+        });
+
+        it('keeps the joiners right-to-left writing needs', () => {
+            const facts = ask('create_calendar_event', {
+                title: 'می\u200cخواهم', start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00',
+                notify_attendees: [], calendar_account: 'me@x.com',
+            });
+            expect(facts.textContent).toContain('می\u200cخواهم');
+        });
+
         it('an unreadable time still shows, as written', () => {
             const facts = ask('cancel_calendar_event', {
                 event_id: 'abc', expected_title: 'Sync', expected_start: 'tomorrow at nine', notify_attendees: [],
