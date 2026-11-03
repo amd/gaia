@@ -971,6 +971,32 @@ Deleting a chat deletes its copies.
     past the new limits. Turns older than the time limit go first, then the
     oldest until the total fits. The size limit never removes the newest turn.
   </Accordion>
+
+  <Accordion title="GET /api/speech/settings">
+    The read-aloud voice, speed and auto-read choice, with every voice offered:
+    `{"voice": "af_bella", "speed": 100, "auto": false, "min_speed": 50,
+    "max_speed": 200, "voices": [{"id": "af_bella", "name": "Bella",
+    "accent": "american", "gender": "female", "quality": "A-"}, ...]}`.
+    `speed` is a percentage of normal speed. Stored as `read_aloud_voice`,
+    `read_aloud_speed` and `read_aloud_auto` in `~/.gaia/config.json`, which
+    the TUI reads too.
+  </Accordion>
+
+  <Accordion title="PUT /api/speech/settings">
+    Save any of `voice` (a Kokoro voice id), `speed` (50–200) and `auto`; the
+    others keep their value. **422** names an unknown voice or a speed out of
+    range, and nothing is saved.
+  </Accordion>
+
+  <Accordion title="POST /api/speech">
+    Speak `text` (1–1000 characters) through Lemonade's `kokoro-v1` model and
+    return a 16-bit mono `audio/wav`, in the saved voice and speed unless the
+    body names `voice` or `speed`. Pulls the model on first use. **422** for
+    empty or over-long text or a bad voice or speed, **503** when Lemonade is
+    unreachable, **502** when Lemonade can't make the speech; each `detail`
+    says why. The app splits a long reply into pieces and plays them back to
+    back.
+  </Accordion>
 </AccordionGroup>
 
 ### Chat
