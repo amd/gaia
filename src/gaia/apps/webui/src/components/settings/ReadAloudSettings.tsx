@@ -117,7 +117,7 @@ export function ReadAloudSettings() {
                     {(SPEEDS.includes(settings.speed) ? SPEEDS : [...SPEEDS, settings.speed].sort((a, b) => a - b)).map((s) => (
                         <option key={s} value={s}>
                             {/* <option> holds text only, so isolate marks stand in for <bdi dir="ltr">. */}
-                            {s === 100 ? t('readAloud.settings.normalSpeed') : `⁦${(s / 100).toLocaleString(t.locale)}×⁩`}
+                            {s === 100 ? t.bare('readAloud.settings.normalSpeed') : `⁦${(s / 100).toLocaleString(t.locale)}×⁩`}
                         </option>
                     ))}
                 </select>

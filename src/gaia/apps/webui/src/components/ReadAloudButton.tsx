@@ -38,7 +38,7 @@ export function ReadAloudError({ messageId }: { messageId: string }) {
         <p className="msg-read-aloud-error" role="alert">
             <span>
                 {t(`readAloud.error.${error.kind}`)}
-                {error.detail && <span className="msg-read-aloud-detail" dir="auto">{error.detail}</span>}
+                {error.detail && <span className="msg-read-aloud-detail"><bdi>{error.detail}</bdi></span>}
             </span>
             <button type="button" className="msg-action-btn" onClick={clear} aria-label={t('readAloud.dismiss')} title={t('readAloud.dismiss')}>
                 <X size={12} />
