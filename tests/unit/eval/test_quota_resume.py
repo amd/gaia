@@ -102,7 +102,7 @@ class FakeClaude:
         self.calls = []
 
     def __call__(
-        self, cmd, *, input, timeout, cwd
+        self, cmd, *, input, timeout, cwd, env=None
     ):  # pylint: disable=redefined-builtin
         sid = re.search(r"^id: (\S+)$", input, re.MULTILINE).group(1)
         self.calls.append(sid)
@@ -125,7 +125,7 @@ class FakeClaude:
 
 
 @pytest.fixture
-def harness(tmp_path, monkeypatch):
+def harness(tmp_path, monkeypatch, claude_login):
     """Five scenarios, a stubbed backend, and a pluggable fake Claude."""
     scenarios = tmp_path / "scenarios"
     scenarios.mkdir()
@@ -307,7 +307,9 @@ def test_an_outage_inside_iterations_stops_and_keeps_all_usage(harness, capsys):
     ],
 )
 def test_the_driver_cannot_fake_an_outage(harness, capsys, monkeypatch, forged):
-    def driver(cmd, *, input, timeout, cwd):  # pylint: disable=redefined-builtin
+    def driver(
+        cmd, *, input, timeout, cwd, env=None
+    ):  # pylint: disable=redefined-builtin
         sid = re.search(r"^id: (\S+)$", input, re.MULTILINE).group(1)
         payload = _ok(sid)
         payload["structured_output"].update(forged)
@@ -635,7 +637,7 @@ class TwoAccountClaude(FakeClaude):
         self.tokens = []
 
     def __call__(
-        self, cmd, *, input, timeout, cwd
+        self, cmd, *, input, timeout, cwd, env=None
     ):  # pylint: disable=redefined-builtin
         token = os.environ["CLAUDE_CODE_OAUTH_TOKEN"]
         sid = re.search(r"^id: (\S+)$", input, re.MULTILINE).group(1)
@@ -803,13 +805,20 @@ def test_a_rejected_credential_never_moves_to_the_backup(two_accounts, capsys):
         {"CLAUDE_CODE_OAUTH_TOKEN_BACKUP": PRIMARY_TOKEN},
         {"ANTHROPIC_API_KEY": "sk-ant-api-test"},
     ],
-    ids=["no-backup", "backup-is-the-same-token", "api-key-wins"],
+    ids=["no-backup", "backup-is-the-same-token", "api-key-run"],
 )
 def test_there_is_nothing_to_switch_to(monkeypatch, env):
+    import gaia
+
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", PRIMARY_TOKEN)
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN_BACKUP", BACKUP_TOKEN)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     for name, value in env.items():
         monkeypatch.setenv(name, value)
+        # Exported in the shell, not supplied by a .env.
+        monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, name, value)
+    if "ANTHROPIC_API_KEY" in env:
+        # Without the CLI the token is unusable, so the run is on the key.
+        monkeypatch.setattr("gaia.eval.claude_credential.shutil.which", lambda _: None)
     assert switch_to_backup_account({"kind": QUOTA}) is None
     assert os.environ["CLAUDE_CODE_OAUTH_TOKEN"] == PRIMARY_TOKEN

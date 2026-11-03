@@ -537,8 +537,27 @@ def test_fast_mode_registers_only_the_conversational_surface():
         assert extra not in registered
 
 
-def test_fast_mode_meets_the_conversational_prefill_budget():
-    """#4103's acceptance criterion, measured rather than argued."""
+def test_fast_mode_meets_the_conversational_prefill_budget(monkeypatch):
+    """#4103's acceptance criterion, measured rather than argued.
+
+    The budget was set against the Linux environment block. Windows renders a
+    ~170-token larger one (PowerShell recipes), which fast mode does not own, so
+    the OS is pinned to keep the measurement the same on every dev box.
+    """
+    from types import SimpleNamespace
+
+    from gaia_agent import chat_agent
+
+    monkeypatch.setattr(
+        chat_agent,
+        "platform",
+        SimpleNamespace(
+            system=lambda: "Linux",
+            version=lambda: "#1 SMP",
+            release=lambda: "6.8.0",
+            machine=lambda: "x86_64",
+        ),
+    )
     with _agent(fast=True) as agent:
         prefill = _fixed_prefill(agent)
     assert prefill <= FAST_PREFILL_CEILING, (

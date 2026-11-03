@@ -755,27 +755,40 @@ def test_a_pull_answered_while_stop_lands_is_still_closed():
     """The POST answers in the gap between the worker's Stop check and the
     caller recording Stop: that response must still be closed, or Lemonade
     keeps downloading after the user was told it stopped."""
-    import time
+    import threading
     from unittest.mock import MagicMock
 
     from gaia.llm.retry import model_retry_notices
 
     response = MagicMock()
     response.status_code = 200
+    posting = threading.Event()
+    checking_stop = threading.Event()
+    sender = []
 
-    def slow_post(*_args, **_kwargs):
-        time.sleep(0.6)
+    def post_once_stop_is_checked(*_args, **_kwargs):
+        sender.append(threading.current_thread())
+        posting.set()
+        assert checking_stop.wait(10), "the Stop check never ran"
         return response
 
-    def slow_stop_check():
-        # The first check runs at ~0.5 s and takes 0.3 s: the POST answers
-        # (at ~0.6 s) while it is still deciding.
-        time.sleep(0.3)
+    def stop_check_that_outlasts_the_answer():
+        # Events, not sleeps: on a slow runner the answer must still land
+        # mid-check, never before the caller's first Stop check.
+        checking_stop.set()
+        assert posting.wait(10), "the POST was never sent"
+        sender[0].join(10)
+        assert not sender[0].is_alive(), "the POST never answered"
         return True
 
     client = _make_client()
-    with patch("gaia.llm.lemonade_client.requests.post", side_effect=slow_post):
-        with model_retry_notices(lambda _n: None, is_cancelled=slow_stop_check):
+    with patch(
+        "gaia.llm.lemonade_client.requests.post",
+        side_effect=post_once_stop_is_checked,
+    ):
+        with model_retry_notices(
+            lambda _n: None, is_cancelled=stop_check_that_outlasts_the_answer
+        ):
             with pytest.raises(ModelDownloadCancelledError):
                 for _event in client.pull_model_stream(model_name="Qwen3-0.6B-GGUF"):
                     pass

@@ -70,8 +70,8 @@ def _reaped_flag(m):
 # --- the pgid the OS handed to somebody else -------------------------------
 
 
-def test_recycled_pgid_does_not_resurrect_a_dead_sidecar(manager, monkeypatch):
-    monkeypatch.setattr(mgr.os, "name", "posix")
+def test_recycled_pgid_does_not_resurrect_a_dead_sidecar(manager, fake_os_name):
+    fake_os_name(mgr, "posix")
     manager._group_alive = lambda pgid: False
     assert manager.is_running is False, "empty group means the sidecar is gone"
 
@@ -80,8 +80,8 @@ def test_recycled_pgid_does_not_resurrect_a_dead_sidecar(manager, monkeypatch):
     assert manager.is_running is False, "a group that was empty can never come back"
 
 
-def test_shutdown_never_signals_a_recycled_pgid(manager, monkeypatch):
-    monkeypatch.setattr(mgr.os, "name", "posix")
+def test_shutdown_never_signals_a_recycled_pgid(manager, monkeypatch, fake_os_name):
+    fake_os_name(mgr, "posix")
     signalled = []
     # raising=False: os.killpg does not exist on Windows, where this test still runs.
     monkeypatch.setattr(
@@ -102,8 +102,8 @@ def test_shutdown_never_signals_a_recycled_pgid(manager, monkeypatch):
 # --- Windows: no group to probe, so the port is the only evidence ----------
 
 
-def test_windows_survivor_on_the_port_blocks_a_false_stopped(manager, monkeypatch):
-    monkeypatch.setattr(mgr.os, "name", "nt")
+def test_windows_survivor_on_the_port_blocks_a_false_stopped(manager, fake_os_name):
+    fake_os_name(mgr, "nt")
     manager._http_get = lambda url, timeout: _Resp(
         200, {"status": "ok", "service": _SPEC.service_id}
     )
@@ -117,8 +117,8 @@ def test_windows_survivor_on_the_port_blocks_a_false_stopped(manager, monkeypatc
     assert manager.is_running is True
 
 
-def test_windows_reports_a_clean_stop_when_the_port_is_dead(manager, monkeypatch):
-    monkeypatch.setattr(mgr.os, "name", "nt")
+def test_windows_reports_a_clean_stop_when_the_port_is_dead(manager, fake_os_name):
+    fake_os_name(mgr, "nt")
 
     def _refused(url, timeout):
         raise requests.exceptions.ConnectionError("refused")
@@ -133,9 +133,9 @@ def test_windows_reports_a_clean_stop_when_the_port_is_dead(manager, monkeypatch
     assert manager._proc is None
 
 
-def test_windows_ignores_a_foreign_service_on_a_reused_port(manager, monkeypatch):
+def test_windows_ignores_a_foreign_service_on_a_reused_port(manager, fake_os_name):
     """An unrelated service that grabbed our ephemeral port is not our orphan."""
-    monkeypatch.setattr(mgr.os, "name", "nt")
+    fake_os_name(mgr, "nt")
     manager._http_get = lambda url, timeout: _Resp(
         200, {"status": "ok", "service": "somebody-elses-server"}
     )

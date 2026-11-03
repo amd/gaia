@@ -480,45 +480,61 @@ jobs:
           # One assertion per line, never `test A && test B`: a failing
           # left-hand side of an && list is exempt from errexit, so the list
           # returns 1 and the script sails on. That silently disarms the only
-          # check that the package actually removed its binaries.
+          # check that the package actually removed its binaries. Each check
+          # says what it expected and what it got, so a failure is never silent.
+          CHECKS='
+            fail() { echo "::error::$*"; exit 1; }
+            expect() { [ "$2" = "$3" ] || fail "$1: expected [$3], got [$2]"; }
+            absent() { [ ! -e "$1" ] || fail "$1 exists, expected it gone"; }
+            executable() { [ -x "$1" ] || fail "$1 missing or not executable"; }
+          '
+          run_in() {
+            local image="$1" pkg="$2"
+            { printf '%s\n' "${CHECKS}"; cat; } | docker run --rm -i \
+              -e PKG="/pkg/${pkg}" -e VERSION -e PKG_VERSION -e BASE -e ORDER -e RPMCMP \
+              -v "${PWD}/dist:/pkg:ro" "${image}" bash -euo pipefail -s
+          }
+          export VERSION PKG_VERSION BASE ORDER RPMCMP
           echo "===== .deb on debian:bookworm ====="
-          docker run --rm -v "${PWD}/dist:/pkg:ro" debian:bookworm bash -euo pipefail -c "
-            test ! -e /usr/bin/gaia-tui
-            dpkg -i /pkg/${DEB}
-            test \"\$(dpkg-query -W -f='\${Version}' gaia)\" = '${PKG_VERSION}'
-            dpkg --compare-versions '${PKG_VERSION}' ${ORDER} '${BASE}'
-            test -x /usr/bin/gaia-tui
-            test -x /usr/bin/gaia-agent
-            command -v gaia-tui
+          run_in debian:bookworm "${DEB}" <<'EOF'
+            absent /usr/bin/gaia-tui
+            dpkg -i "${PKG}"
+            expect "installed version" "$(dpkg-query -W -f='${Version}' gaia)" "${PKG_VERSION}"
+            dpkg --compare-versions "${PKG_VERSION}" "${ORDER}" "${BASE}" || fail "dpkg: expected ${PKG_VERSION} ${ORDER} ${BASE}"
+            executable /usr/bin/gaia-tui
+            executable /usr/bin/gaia-agent
+            command -v gaia-tui || fail "gaia-tui not on PATH"
             gaia-tui version | tee /tmp/v
-            grep -q '${VERSION}' /tmp/v
-            grep -q '^Terminal=true' /usr/share/applications/gaia-tui.desktop
+            grep -qF "${VERSION}" /tmp/v || fail "gaia-tui version: expected ${VERSION}, got $(cat /tmp/v)"
+            grep -q '^Terminal=true' /usr/share/applications/gaia-tui.desktop || fail "gaia-tui.desktop lacks Terminal=true"
             mkdir -p /root/.gaia && echo keep > /root/.gaia/smoke-marker
             dpkg -r gaia
-            test ! -e /usr/bin/gaia-tui
-            test ! -e /usr/bin/gaia-agent
-            test -f /root/.gaia/smoke-marker
+            absent /usr/bin/gaia-tui
+            absent /usr/bin/gaia-agent
+            [ -f /root/.gaia/smoke-marker ] || fail "removal deleted ~/.gaia user data"
             echo 'OK - deb installed, ran, removed, user data intact'
-          "
+          EOF
+          # Installed the way the docs say: Fedora 45's RPM 6 refuses an
+          # unsigned package under plain `rpm -i`; dnf allows a local one.
           echo "===== .rpm on fedora:latest ====="
-          docker run --rm -v "${PWD}/dist:/pkg:ro" fedora:latest bash -euo pipefail -c "
-            test ! -e /usr/bin/gaia-tui
-            rpm -i /pkg/${RPM}
-            test \"\$(rpm -q --qf '%{VERSION}' gaia)\" = '${PKG_VERSION}'
-            test \"\$(rpm --eval '%{lua: print(rpm.vercmp(\"${PKG_VERSION}\", \"${BASE}\"))}')\" = '${RPMCMP}'
-            test -x /usr/bin/gaia-tui
-            test -x /usr/bin/gaia-agent
-            command -v gaia-tui
+          run_in fedora:latest "${RPM}" <<'EOF'
+            absent /usr/bin/gaia-tui
+            dnf install -y "${PKG}"
+            expect "installed version" "$(rpm -q --qf '%{VERSION}' gaia)" "${PKG_VERSION}"
+            expect "rpm.vercmp(${PKG_VERSION}, ${BASE})" "$(rpm --eval "%{lua: print(rpm.vercmp(\"${PKG_VERSION}\", \"${BASE}\"))}")" "${RPMCMP}"
+            executable /usr/bin/gaia-tui
+            executable /usr/bin/gaia-agent
+            command -v gaia-tui || fail "gaia-tui not on PATH"
             gaia-tui version | tee /tmp/v
-            grep -q '${VERSION}' /tmp/v
-            grep -q '^Terminal=true' /usr/share/applications/gaia-tui.desktop
+            grep -qF "${VERSION}" /tmp/v || fail "gaia-tui version: expected ${VERSION}, got $(cat /tmp/v)"
+            grep -q '^Terminal=true' /usr/share/applications/gaia-tui.desktop || fail "gaia-tui.desktop lacks Terminal=true"
             mkdir -p /root/.gaia && echo keep > /root/.gaia/smoke-marker
             rpm -e gaia
-            test ! -e /usr/bin/gaia-tui
-            test ! -e /usr/bin/gaia-agent
-            test -f /root/.gaia/smoke-marker
+            absent /usr/bin/gaia-tui
+            absent /usr/bin/gaia-agent
+            [ -f /root/.gaia/smoke-marker ] || fail "removal deleted ~/.gaia user data"
             echo 'OK - rpm installed, ran, removed, user data intact'
-          "
+          EOF
 
   # A matrix job reports the outputs of whichever leg happened to finish last,
   # so it cannot answer "did all three pass". This job runs only when every leg

@@ -76,6 +76,9 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 			}
 		}()
 	}
+	if err := update.Settle(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+	}
 	m := withLastModel(root.NewFlagshipModel(*agent, dev).
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
@@ -409,11 +412,13 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 				abandonWait: interruptAbandonWait,
 				release:     func() { signal.Stop(sigs) },
 			})
-		if res.Interrupted {
-			// Explicit, not left to the defer: a stop that could not end the
-			// agent must say so before the process exits.
-			if err := c.Close(); err != nil {
+		// Explicit, not left to the defer: a stop or an abandoned turn's cancel
+		// that did not land must say so before the process exits.
+		if err := c.Close(); err != nil {
+			if res.Interrupted {
 				fmt.Fprintf(os.Stderr, "❌ Could not stop the agent, so it may still be running: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 			}
 		}
 		return res.ExitCode, nil

@@ -166,6 +166,44 @@ describe("eval scorecard in catalog", () => {
     expect(entry.scorecard).toContain("# Test Agent — Eval Scorecard v0.1.0");
   });
 
+  it.each([150, -1])("rejects a scorecard whose aggregate score is %s", async (value) => {
+    const env = makeEnv();
+    const res = await worker.fetch(
+      publishRequest({
+        token: "tok_amd",
+        manifestYaml: sampleManifest({ id: "chat", version: "0.1.0" }),
+        artifact: "chat-wheel",
+        filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+        evalScorecard: SAMPLE_SCORECARD.replace("value: 87.5", `value: ${value}`),
+      }),
+      env as never
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as any;
+    expect(body.error.code).toBe("invalid_eval_score");
+    expect(body.error.message).toContain(`aggregate.value is ${value}`);
+    // Nothing was written, so the catalog stays valid against its schema.
+    const index = (await (await worker.fetch(get("/index.json"), env as never)).json()) as any;
+    expect(index.agents ?? []).toEqual([]);
+  });
+
+  it.each([0, 100])("accepts the boundary score %s", async (value) => {
+    const env = makeEnv();
+    const res = await worker.fetch(
+      publishRequest({
+        token: "tok_amd",
+        manifestYaml: sampleManifest({ id: "chat", version: "0.1.0" }),
+        artifact: "chat-wheel",
+        filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+        evalScorecard: SAMPLE_SCORECARD.replace("value: 87.5", `value: ${value}`),
+      }),
+      env as never
+    );
+    expect(res.status).toBe(201);
+    const index = (await (await worker.fetch(get("/index.json"), env as never)).json()) as any;
+    expect(index.agents[0].eval_score).toBe(value);
+  });
+
   it("omits eval_score and eval_scorecard_url when no scorecard is published", async () => {
     const env = makeEnv();
     await worker.fetch(
