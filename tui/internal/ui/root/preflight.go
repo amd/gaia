@@ -113,6 +113,7 @@ func (m FlagshipModel) preflightOptions() preflight.Options {
 	if opts.Logf == nil {
 		opts.Logf = m.logf
 	}
+	opts.OfferUpdate = m.updateCheck && m.chat == nil
 	return opts
 }
 

@@ -185,7 +185,7 @@ export function AdvancedSettings() {
                                 label={t('settings.advanced.disk')}
                                 value={<bdi dir="ltr">{status.disk_space_gb} GB</bdi>}
                                 ok={status.disk_space_gb > 5}
-                                hint={!status.model_loaded && status.disk_space_gb < 30 ? t('settings.advanced.diskLow', { size: `${status.disk_space_gb} GB` }) : undefined}
+                                hint={!status.model_loaded && status.disk_space_gb < 30 ? t('settings.advanced.diskLow', { need: '6 GB', size: `${status.disk_space_gb} GB` }) : undefined}
                             />
                         </div>
 
@@ -194,7 +194,7 @@ export function AdvancedSettings() {
                                 <div className="model-action-info">
                                     <span className="model-action-label">{t('settings.advanced.notDownloaded')}</span>
                                     <span className="model-action-desc">
-                                        {t('settings.advanced.notDownloadedHint', { name: modelName ?? '' })}
+                                        {t('settings.advanced.notDownloadedHint', { name: modelName ?? '', need: '6 GB' })}
                                     </span>
                                 </div>
                                 <button

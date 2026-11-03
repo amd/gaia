@@ -656,6 +656,7 @@ function App() {
         return (
             <div className="app">
                 <SetupScreen onReady={finishSetup} onClose={setup.state === 'addingLocal' ? leaveLocalSetup : undefined} />
+                <UpdateIndicator />
             </div>
         );
     }
