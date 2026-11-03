@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
+import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react';
 import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, RotateCw, X } from 'lucide-react';
 import { MessageBubble, isErrorContent } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
@@ -64,6 +64,10 @@ export { QUEUE_BUSY_WAIT_MS } from '../services/queueDispatch';
 const NO_QUEUE: QueuedMessage[] = [];
 // Slack for fractional scrollTop at non-100% zoom.
 const AT_BOTTOM_PX = 1;
+// How long after wheel/key/touch input an upward scroll still counts as the user's.
+const USER_SCROLL_MS = 500;
+const SCROLL_UP_KEYS = new Set(['PageUp', 'ArrowUp', 'Home']);
+const SCROLL_DOWN_KEYS = new Set(['PageDown', 'ArrowDown', 'End']);
 
 /** Notices by server message id: a refetch replaces messages, so they cannot live on them alone. */
 const historyNotices = new Map<number, string>();
@@ -219,6 +223,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const isNearBottomRef = useRef(true);
     const lastScrollTopRef = useRef(0);
     const lastDistFromBottomRef = useRef(0);
+    /** When the user last gave scroll input that can move the list up. */
+    const userScrollAtRef = useRef(0);
+    const scrollbarHeldRef = useRef(false);
+    const userScrolling = useCallback(
+        () => scrollbarHeldRef.current || Date.now() - userScrollAtRef.current < USER_SCROLL_MS,
+        [],
+    );
 
     // True once the user has navigated to another session. The store's
     // currentSessionId flips synchronously on switch (the displayed view lags
@@ -340,9 +351,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         const doScroll = () => {
             // Re-check: the user may have scrolled up since this was scheduled.
-            if (!isNearBottomRef.current) return;
+            if (!isNearBottomRef.current || userScrolling()) return;
             lastScrollRef.current = Date.now();
-            messagesEndRef.current?.scrollIntoView({ behavior: scrollBehavior() });
+            // Instant: a smooth follow still in flight would override the reader's wheel.
+            messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
         };
 
         if (elapsed >= THROTTLE_MS) {
@@ -417,18 +429,49 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const el = messagesScrollRef.current;
         if (!el) return;
         const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-        // Anchoring moves scrollTop and scrollHeight together, leaving the distance to the
-        // bottom unchanged; a user scroll changes it.
         const lastDist = lastDistFromBottomRef.current;
-        const movedUp = el.scrollTop < lastScrollTopRef.current && distFromBottom > lastDist;
+        // Anchoring and smooth auto-follow also move scrollTop; only user input means leaving.
+        const movedUp = el.scrollTop < lastScrollTopRef.current && userScrolling();
         lastScrollTopRef.current = el.scrollTop;
         lastDistFromBottomRef.current = distFromBottom;
-        // Any upward move stops auto-follow, even inside the 80px band; nothing else does.
         if (distFromBottom <= AT_BOTTOM_PX) isNearBottomRef.current = true;
         else if (movedUp) isNearBottomRef.current = false;
+        // Content growing above a reader keeps the distance, so only a real approach resumes.
         else if (distFromBottom <= 80 && distFromBottom < lastDist) isNearBottomRef.current = true;
         setShowScrollBtn(distFromBottom > 200);
+    }, [userScrolling]);
+
+    const markUserScroll = useCallback(() => { userScrollAtRef.current = Date.now(); }, []);
+    // Heading back down ends the hold, so a reader who returns to the bottom is followed at once.
+    const clearUserScroll = useCallback(() => { userScrollAtRef.current = 0; }, []);
+    const handleWheel = useCallback((e: ReactWheelEvent) => {
+        if (e.deltaY < 0) markUserScroll();
+        else if (e.deltaY > 0) clearUserScroll();
+    }, [markUserScroll, clearUserScroll]);
+    const handleScrollPointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+        const el = e.currentTarget;
+        // The scrollbar sits past clientWidth; a press on content (a card toggle) is not a scroll.
+        if (e.target === el && e.clientX - el.getBoundingClientRect().left >= el.clientWidth) {
+            scrollbarHeldRef.current = true;
+        }
     }, []);
+    useEffect(() => {
+        const release = () => { scrollbarHeldRef.current = false; };
+        const onKey = (e: KeyboardEvent) => {
+            const t = e.target;
+            if (t instanceof Element && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+            if (SCROLL_UP_KEYS.has(e.key) || (e.key === ' ' && e.shiftKey)) markUserScroll();
+            else if (SCROLL_DOWN_KEYS.has(e.key) || e.key === ' ') clearUserScroll();
+        };
+        window.addEventListener('pointerup', release);
+        window.addEventListener('pointercancel', release);
+        window.addEventListener('keydown', onKey);
+        return () => {
+            window.removeEventListener('pointerup', release);
+            window.removeEventListener('pointercancel', release);
+            window.removeEventListener('keydown', onKey);
+        };
+    }, [markUserScroll, clearUserScroll]);
 
     const panelWidth = useSessionPanelStore((s) => s.width);
     const revealPanelSection = useSessionPanelStore((s) => s.reveal);
@@ -437,8 +480,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const scrollToBottom = useCallback(() => {
         isNearBottomRef.current = true;
+        clearUserScroll();
         messagesEndRef.current?.scrollIntoView({ behavior: scrollBehavior() });
-    }, []);
+    }, [clearUserScroll]);
 
     // Stop: ask the server to cancel, but keep reading the stream. The run
     // outlives the connection (#1580) and closes with a `done` carrying the
@@ -1704,7 +1748,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 );
             })()}
 
-            <div className="messages-scroll" ref={messagesScrollRef} onScroll={handleScroll}>
+            <div
+                className="messages-scroll" ref={messagesScrollRef} onScroll={handleScroll}
+                onWheel={handleWheel} onTouchMove={markUserScroll} onPointerDown={handleScrollPointerDown}
+            >
                 <div className="messages-column">
                     {isLoadingMessages && (
                         <div className="skeleton-messages" aria-label="Loading messages">
