@@ -55,10 +55,8 @@ don't — the agent opens one only when the instructions send it there.
 ```
 query-helper/
 ├── SKILL.md
-├── references/
-│   └── query-syntax.md
-└── scripts/
-    └── build_query.py
+└── references/
+    └── query-syntax.md
 ```
 
 `references/` and `scripts/` are the [Agent Skills](https://agentskills.io)
@@ -190,4 +188,4 @@ or have your prompt say where the skill lives (`skill.directory`, returned by
 - [Agent Skills spec](/spec/agent-skills) — discovery roots, precedence, permissions, tiers
 - [Starter Skills](/guides/starter-skills) — ready-made skills to install and fork
 - [Composing Skills](/guides/composing-skills) — bundle skills with an agent and pick a set at runtime
-- [CLI Reference → Skills](/reference/cli#skills) — `gaia skill list|info|create|import|export`
+- [CLI Reference → Skills](/reference/cli#skills) — the 16 `gaia skill` verbs: author, audit, install, publish and trust skills

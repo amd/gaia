@@ -127,6 +127,10 @@ export async function dispatchNext(sessionId: string, send: QueuedSend, canSend:
                     log.chat.info(`Chat ${sessionId} is answering again; its queue waits for that turn to end`);
                     return;
                 }
+                if (httpStatus(err) === 404) {
+                    dropGone(sessionId);
+                    return;
+                }
                 log.chat.error(`Could not learn what chat ${sessionId}'s last reply did with the messages added to it`, err);
                 store().updateQueue(sessionId, (q) => messageQueue.failDelivered(
                     q, `GAIA could not say whether it read this message: ${errorText(err)}`,

@@ -351,8 +351,9 @@ class EmbeddedLemonadeOwner:
     def activity(self) -> Optional[LemonadeActivity]:
         """What GAIA's own server is doing, or None when none is running.
 
-        A recorded server that does not answer counts as busy: it may be
-        loading a large model, and it is never stopped for being idle.
+        A server that is still running but does not answer counts as busy: it
+        may be loading a large model, and it is never stopped for being idle.
+        One whose process has exited is not running.
 
         Never touches a server ``LEMONADE_BASE_URL`` names.
         """
