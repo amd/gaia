@@ -3,7 +3,7 @@ title: Dictation and voice mode
 description: Talk to GAIA in the Agent UI and the TUI, with dictation into the composer and a fast hands-free voice mode that speaks short answers and shows the full work on screen
 ---
 
-**Status: Design approved; implementation starting. Target: v0.26.0 ("Fast, focused flagship").**
+**Status: Design for a later release. Not part of the current release, and implementation has not started.**
 Baseline: `aaa056b7` on `main`, November 2, 2026, with Lemonade 2026.44.1. Builds on read-aloud
 (`feat/read-aloud`, not merged yet).
 
@@ -65,7 +65,7 @@ WebSocket), #2985 (untested voice-stack paths), #3494 (the mic hearing GAIA's ow
   would evict and reload. That is slower, not faster. Revisit if FLM models on the NPU turn out to
   sit in a separate slot.
 - **Audio straight into Gemma** (`gemma4-it-e2b-FLM` accepts audio). It skips ASR but gives no
-  live captions, and E2B's tool use is unproven. Not for v0.26.
+  live captions, and E2B's tool use is unproven. Not for the first version.
 - **Silence while tools run.** It feels broken.
 - **Scripted per-tool cues** ("Searching the web" every time). They're cheap, but they get tiring
   fast and say nothing about what this particular step is for. The model already writes a line
@@ -435,9 +435,9 @@ The apps recover by themselves wherever they can. Users are never told to run a 
     - a multi-tool task keeps its full detail
     - reasoning-down doesn't break tool choice
   - Re-run `gaia_voice`, `gaia_honesty` and `gaia_tool_selection` with the field unset; they
-    should match baseline. Name these categories in the PR for the next v0.26 RC.
+    should match baseline. Name these categories in the PR for the next RC.
 
-## Delivery sequence (v0.26.0)
+## Delivery sequence
 
 | PR | Scope | Depends on |
 |----|-------|-----------|
@@ -455,7 +455,7 @@ Each PR updates the docs it touches:
 
 ## Out of scope and open questions
 
-- **Out of scope for v0.26:**
+- **Out of scope for the first version:**
   - wake word
   - approving gated tools by voice
   - spoken barge-in in the TUI
