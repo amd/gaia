@@ -405,7 +405,10 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
         for m in raw_messages:
             msg = {
                 "role": m["role"],
-                "content": m["content"][:2000],
+                # Replies stay whole: a judge reads them, and a clipped one fails.
+                "content": (
+                    m["content"] if m["role"] == "assistant" else m["content"][:2000]
+                ),
             }
             steps = m.get("agent_steps") or []
             if steps:

@@ -169,3 +169,14 @@ def test_mcp_client_gets_transcript_through_live_http_route(
         listener.close()
         db.close()
         assert not worker.is_alive(), "HTTP test backend did not shut down"
+
+
+def test_a_reply_is_never_clipped_so_a_judge_can_see_all_of_it(server):
+    rows = [{"role": "assistant", "content": "z" * 5000}]
+
+    with patch(
+        "gaia.mcp.servers.agent_ui_mcp._api",
+        return_value={"messages": rows, "total": 1},
+    ):
+        result = server._tool_manager._tools["get_messages"].fn("session")
+    assert len(result["messages"][0]["content"]) == 5000

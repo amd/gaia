@@ -356,13 +356,6 @@ def _chunks_have_pages(chunks: List[Dict[str, Any]]) -> bool:
     return any("page" in chunk for chunk in chunks)
 
 
-_MARKER_NOTE = (
-    "A chunk's 'page' is where it starts; text after a '[Page N]' marker inside "
-    "it is on page N, so cite N for facts that follow the marker and the page "
-    "before N for facts ahead of it."
-)
-
-
 def _question_language_note(question: str, chunks: List[Dict[str, Any]]) -> str:
     """Name the question when the chunks could pull the answer into their language."""
     asked = text_scripts(question)
@@ -413,9 +406,7 @@ def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
         instruction += (
             "Format: 'According to <absolute_path> (page X):'\n"
             "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
-            "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n"
-            + _MARKER_NOTE
-            + "\n\n"
+            "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n\n"
         )
         if not all_paged:
             instruction += (
@@ -449,8 +440,7 @@ def _file_instruction(file_name: str, num_chunks: int, has_pages: bool) -> str:
         f"Your answer MUST start with: 'According to {file_name}, page X:' where X is the "
         "page number from the chunk's 'page' field.\n\n"
         f"Example: If chunk has 'page': 2, say 'According to {file_name}, page 2:'\n"
-        f"If info from multiple pages, say 'According to {file_name}, pages 2 and 5:'\n"
-        + _MARKER_NOTE
+        f"If info from multiple pages, say 'According to {file_name}, pages 2 and 5:'"
     )
 
 
@@ -499,6 +489,31 @@ def extract_page_from_chunk(
 
 # Markers the extractor writes inside a page, not at its start.
 _IN_PAGE_SECTION = re.compile(r"\s*(?:\*\*Content Extracted|### |\*\*Speaker Notes)")
+
+
+def split_entries_at_pages(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """*entries* with each page-spanning chunk split, so every 'page' field is true.
+
+    A model cites the field, so a chunk starting on page 22 that runs into page
+    23 would have page 23's facts cited as page 22.
+    """
+    split = []
+    for entry in entries:
+        content, page, start = entry["content"], entry.get("page"), 0
+        for marker in _PAGE_MARKER.finditer(content):
+            if page is None or _IN_PAGE_SECTION.match(content, marker.end()):
+                continue
+            text = content[start : marker.start()].strip()
+            if text:
+                split.append({**entry, "content": text, "page": page})
+            start, page = marker.start(), int(marker.group(1))
+        tail = {**entry, "content": content[start:]}
+        if page is not None:
+            tail["page"] = page
+        split.append(tail)
+    for number, entry in enumerate(split, 1):
+        entry["chunk_id"] = number
+    return split
 
 
 def _page_before(chunk_index, all_chunks, chunk_to_file):
@@ -573,6 +588,8 @@ class RAGToolsMixin:
                         "message": message,
                         "instruction": (
                             f"{message} "
+                            "If the user named a folder or file to index, call index_directory "
+                            "or index_document on it now, without asking, then query again. "
                             "For domain-specific questions (HR policies, PTO, remote work, company procedures, "
                             "financial data, project plans, technical specs): use the SMART DISCOVERY WORKFLOW — "
                             "use search_file to find relevant files, index_document to index them, then query_specific_file to answer. "
@@ -850,6 +867,7 @@ class RAGToolsMixin:
                     if _page is not None:
                         _entry["page"] = _page
                     formatted_chunks.append(_entry)
+                formatted_chunks = split_entries_at_pages(formatted_chunks)
 
                 # Update debug info with final chunks
                 if debug_info:
@@ -891,7 +909,7 @@ class RAGToolsMixin:
                     "status": "success",
                     "message": f"Found {len(top_chunks)} relevant document chunks",
                     "chunks": formatted_chunks,
-                    "num_chunks": len(top_chunks),
+                    "num_chunks": len(formatted_chunks),
                     "search_keys_used": search_keys,
                     "source_files": matched_source_files,
                     "instruction": _documents_instruction(
@@ -1334,6 +1352,7 @@ class RAGToolsMixin:
                     if _page is not None:
                         _entry["page"] = _page
                     formatted_chunks.append(_entry)
+                formatted_chunks = split_entries_at_pages(formatted_chunks)
 
                 result = {
                     "status": "success",
@@ -1344,7 +1363,7 @@ class RAGToolsMixin:
                     "auto_indexed": auto_indexed,
                     "instruction": _file_instruction(
                         Path(target_file).name,
-                        len(top_chunks),
+                        len(formatted_chunks),
                         _chunks_have_pages(formatted_chunks),
                     ),
                 }
