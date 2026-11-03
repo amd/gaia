@@ -65,6 +65,7 @@ export const enMessages = {
     'row.deleteConfirm': 'Delete?',
     'row.confirmDeleteAria': 'Confirm delete {title}',
     'row.clickAgain': 'Click again to delete',
+    'row.deleteMemoryNote': 'This also removes it from Memory. What GAIA learned about you stays in About you.',
     'row.tapAgain': '{label} Tap again',
 
     // New-chat screen
@@ -939,7 +940,7 @@ export const enMessages = {
     'settings.privacy.dataFolder': 'Data folder',
     'settings.privacy.undo': 'Undo history',
     'settings.privacy.deleteTitle': 'Delete chats',
-    'settings.privacy.deleteWarning': 'Deletes every chat and its messages. Documents and memory are kept.',
+    'settings.privacy.deleteWarning': 'Deletes every chat and its messages, and removes them from Memory. Documents are kept, and what GAIA learned about you stays in About you.',
     'settings.privacy.delete': 'Delete all chats',
     'settings.privacy.nothingToDelete': 'No chats to delete yet.',
     'settings.privacy.deleteConfirm': 'Click again to delete all chats',
