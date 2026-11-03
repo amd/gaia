@@ -282,6 +282,12 @@ class SkillLibraryToolsMixin:
                     "No skills are installed, and installing them needs a larger "
                     f"model. Tell the user so. See {_DOCS_URL}"
                 )
+            elif not hub_offered:
+                payload["hint"] = (
+                    "Searching and installing skills from the hub needs a larger "
+                    "model. If the user wants a skill not listed here, tell them "
+                    "so; they can pick one in the model list."
+                )
             return payload
 
         @tool(atomic=True)
