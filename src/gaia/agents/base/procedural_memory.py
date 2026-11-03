@@ -861,8 +861,10 @@ class ProceduralMemoryMixin:
 
         An episode is done once a pass handed it to the distiller, whatever the
         outcome — that is what stops a cluster the model could not distil from
-        being re-attempted on every session start.  ``force`` ignores the marks
-        so the whole window is re-read.
+        being re-attempted on every session start.  A marked episode with tool
+        calls newer than its mark is pending again: an Agent UI chat keeps its
+        id, so work done after it was consumed would otherwise never be read.
+        ``force`` ignores the marks so the whole window is re-read.
 
         Returns:
             ``(pending, already_consumed_ids)``.
@@ -871,6 +873,12 @@ class ProceduralMemoryMixin:
             return list(window), set()
 
         marks = store.get_synthesis_marks([s["session_id"] for s in window])
+        marks = {
+            s["session_id"]: marks[s["session_id"]]
+            for s in window
+            if s["session_id"] in marks
+            and (s.get("last_at") or "") <= marks[s["session_id"]]["marked_at"]
+        }
         if not marks:
             return list(window), set()
 

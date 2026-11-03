@@ -4575,6 +4575,10 @@ class MemoryMixin(ProceduralMemoryMixin):
             return
         if getattr(self, "_incognito", False):
             return
+        # A stopped turn can finish after its chat was deleted, so it files nothing.
+        cancel = getattr(self, "_cancel_event", None)
+        if cancel is not None and cancel.is_set():
+            return
 
         # Use original (pre-augmentation) user text for storage.
         clean_input = self._original_user_input or user_input

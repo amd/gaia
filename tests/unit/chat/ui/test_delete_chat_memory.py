@@ -7,6 +7,7 @@ delete can find them. Facts learned from the chat stay in "About you".
 """
 
 import sqlite3
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -114,8 +115,8 @@ def test_a_memory_failure_keeps_the_chat_and_says_so(client, store):
 
 def test_the_chat_agent_files_memory_under_the_chat_id(store):
     """ChatAgent hands init_memory its UI session id, even across a rebuild."""
-    pytest.importorskip("gaia_agent_chat")
-    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+    pytest.importorskip("gaia_agent")
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
     seen = []
 
@@ -128,6 +129,23 @@ def test_the_chat_agent_files_memory_under_the_chat_id(store):
             with pytest.raises(RuntimeError, match="stop after init_memory"):
                 ChatAgent(ChatAgentConfig(ui_session_id="chat-123", silent_mode=True))
     assert seen == ["chat-123", "chat-123"]
+
+
+def test_a_stopped_turn_finishing_after_the_delete_files_nothing(client, store):
+    """Deleting a busy relayed chat stops its turn, but the agent's thread can
+    still reach the post-turn hook after the delete has run."""
+    sid = client.post("/api/sessions", json={}).json()["id"]
+    agent = _Agent()
+    with patch.object(MemoryMixin, "_start_memory_embedder", return_value=True):
+        agent.init_memory(db_path=store._db_path, session_id=sid)
+    agent._cancel_event = threading.Event()
+
+    assert client.delete(f"/api/sessions/{sid}").status_code == 200
+    agent._cancel_event.set()
+    agent._after_process_query("late question", "late answer")
+    agent.memory_store.close()
+
+    assert _history_ids(client) == []
 
 
 def test_deleting_all_chats_empties_history_and_keeps_facts(client, store):
