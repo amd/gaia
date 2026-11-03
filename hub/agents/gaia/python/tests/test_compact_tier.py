@@ -65,6 +65,19 @@ def test_gemma_keeps_installed_skills_and_documents(gemma):
         assert name in gemma._tools_registry
 
 
+def test_gemma_is_told_capture_still_works_when_the_hub_is_withheld(gemma, tmp_path):
+    from gaia.skills.manager import SkillManager
+
+    gemma._skill_manager = SkillManager(
+        agent_skill_dirs=[], user_skills_root=tmp_path, claude_skill_dirs=[]
+    )
+    result = gemma._tools_registry["list_skills"]["function"]()
+
+    assert result["count"] == 0
+    assert "capture_skill" in result["hint"]
+    assert "capture_skill" not in withheld_tools(COMPACT)
+
+
 def test_gemma_is_not_told_about_withheld_features(gemma):
     prompt = gemma.system_prompt
     assert "DATA ANALYSIS WORKFLOW (Scratchpad)" not in prompt

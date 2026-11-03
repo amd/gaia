@@ -2,15 +2,19 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { ChevronDown, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
+import { ref } from '../../i18n/registry';
+import { useT } from '../../i18n/useT';
 import { ctxLabel } from '../modelMeta';
+import { isServerDown } from './ErrorNotice';
 import type { ContextChoice } from '../../types';
 
 const AUTOMATIC = 'auto';
 
 /** Context size for one local model: Automatic, or a size up to the most that fits this PC. */
 export function ModelContextSize({ model }: { model: string }) {
+    const t = useT();
     const [view, setView] = useState<ContextChoice | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
@@ -32,60 +36,65 @@ export function ModelContextSize({ model }: { model: string }) {
         try {
             const next = await api.setContextChoice(model, value === AUTOMATIC ? null : Number(value));
             setView(next);
-            const size = next.chosen ? ctxLabel(next.chosen) : 'the automatic size';
-            if (next.reload?.started) {
-                setNotice(`Reloading ${next.display_name} at ${size}. Chat pauses until it's back.`);
-            } else if (next.reload?.reason === 'already_loaded') {
-                setNotice(`Saved. ${next.display_name} is already loaded at ${size}, so nothing reloads.`);
-            } else if (next.reload?.reason === 'warm_up') {
-                setNotice(`Saved. GAIA is getting the model ready for a new chat, so ${next.display_name} switches to ${size} the next time it loads.`);
-            } else if (next.reload?.reason === 'busy') {
-                setNotice(`Saved. GAIA is answering right now, so ${next.display_name} switches to ${size} the next time it loads.`);
-            } else if (next.reload?.reason === 'not_gaias_server') {
-                setNotice(`Saved. GAIA doesn't reload models on your own server; ${next.display_name} uses ${size} the next time it loads.`);
-            } else if (next.reload?.reason === 'restarting') {
-                setNotice('Saved. A reload is already running; this size applies the next time the model loads.');
-            } else {
-                setNotice('Saved. It applies the next time this model loads.');
-            }
+            const params = {
+                name: next.display_name,
+                size: next.chosen ? ctxLabel(next.chosen) : ref('settings.ctx.automaticSize'),
+            };
+            const reason = next.reload?.reason;
+            if (next.reload?.started) setNotice(t('settings.ctx.reloading', params));
+            else if (reason === 'already_loaded') setNotice(t('settings.ctx.alreadyLoaded', params));
+            else if (reason === 'warm_up') setNotice(t('settings.ctx.warmUp', params));
+            else if (reason === 'busy') setNotice(t('settings.ctx.busy', params));
+            else if (reason === 'not_gaias_server') setNotice(t('settings.ctx.ownServer', params));
+            else if (reason === 'restarting') setNotice(t('settings.ctx.restarting'));
+            else setNotice(t('settings.ctx.nextLoad'));
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
         } finally {
             setBusy(false);
         }
-    }, [model]);
+    }, [model, t]);
 
-    if (error && !view) return <p className="settings-error" role="alert">{error}</p>;
-    if (!view) return <p className="settings-hint"><Loader2 size={13} className="spin" /> Checking context sizes…</p>;
+    if (error && !view) {
+        if (isServerDown(error)) return <p className="settings-hint">{t('settings.ctx.serverDown')}</p>;
+        return <p className="settings-error" role="alert">{error}</p>;
+    }
+    if (!view) return <p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.ctx.checking')}</p>;
 
     const selected = view.chosen != null ? String(view.chosen) : AUTOMATIC;
     const loadedDiffers = view.chosen != null && view.loaded_ctx != null && view.loaded_ctx !== view.chosen;
     return (
-        <div className="settings-field">
-            <label className="settings-label" htmlFor="ctx-size">Context size</label>
-            <select
-                id="ctx-size"
-                className="settings-input"
-                value={selected}
-                onChange={(e) => void apply(e.target.value)}
-                disabled={busy || view.options.length === 0}
-            >
-                <option value={AUTOMATIC}>Automatic{view.automatic ? ` (${ctxLabel(view.automatic)})` : ''}</option>
-                {view.options.map((o) => (
-                    <option key={o} value={String(o)}>{ctxLabel(o)} tokens</option>
-                ))}
-            </select>
-            <span className="settings-hint">
-                {view.note ?? (
-                    view.max_fit
-                        ? `Up to ${ctxLabel(view.max_fit)}, the most ${view.display_name} can hold on this PC (${view.memory_source}). A larger window uses more memory. GAIA reloads the model to apply it, except on a Lemonade you run yourself.`
-                        : null
-                )}
-                {loadedDiffers && ` Loaded now at ${ctxLabel(view.loaded_ctx)}.`}
-            </span>
-            {busy && <span className="settings-hint"><Loader2 size={13} className="spin" /> Applying…</span>}
+        <>
+            <div className="model-in-use-field">
+                <label className="settings-label" htmlFor="ctx-size">{t('settings.ctx.label')}</label>
+                <select
+                    id="ctx-size"
+                    className="settings-input"
+                    value={selected}
+                    onChange={(e) => void apply(e.target.value)}
+                    disabled={busy || view.options.length === 0}
+                >
+                    <option value={AUTOMATIC}>
+                        {view.automatic ? t.bare('settings.ctx.automaticAt', { size: ctxLabel(view.automatic) }) : t.bare('settings.ctx.automatic')}
+                    </option>
+                    {view.options.map((o) => (
+                        <option key={o} value={String(o)}>{t.bare('settings.ctx.tokens', { size: ctxLabel(o) })}</option>
+                    ))}
+                </select>
+            </div>
+            {view.note && <span className="settings-hint"><bdi>{view.note}</bdi></span>}
+            {!view.note && !!view.max_fit && (
+                <details className="settings-more">
+                    <summary><ChevronDown size={13} className="settings-disclosure-chevron" aria-hidden="true" /> {t('settings.ctx.about')}</summary>
+                    <span className="settings-hint">
+                        {t('settings.ctx.explain', { size: ctxLabel(view.max_fit), name: view.display_name, memory: view.memory_source })}
+                    </span>
+                </details>
+            )}
+            {loadedDiffers && <span className="settings-hint">{t('settings.ctx.loadedAt', { size: ctxLabel(view.loaded_ctx) })}</span>}
+            {busy && <span className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.ctx.applying')}</span>}
             {notice && <p className="settings-ok" role="status">{notice}</p>}
             {error && <p className="settings-error" role="alert">{error}</p>}
-        </div>
+        </>
     );
 }
