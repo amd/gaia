@@ -1309,8 +1309,9 @@ _TOOL_CALL_MARKUP_PATTERN = re.compile(
 )
 _ENVELOPE_KEYS = ("thought", "goal", "tool", "tool_args", "plan")
 _ASKS_TO_INDEX_PATTERN = re.compile(
-    r"\b(?:should|shall|may|can) I (?:go ahead and )?index\b"
-    r"|\b(?:would you like|do you want|want) me to (?:go ahead and )?index\b",
+    r"\b(?:should|shall|may|can) I (?:go ahead and |proceed (?:with|to) )?index"
+    r"|\b(?:would you like|do you want|want) me to (?:go ahead and )?index"
+    r"|\btell me to index",
     re.IGNORECASE,
 )
 _INDEX_TOOL_NAMES = ("index_directory", "index_document")
@@ -5668,6 +5669,16 @@ Do NOT wrap conversational replies in JSON.
                 }
             )
         return schemas
+
+    def _user_asked_to_index(self, user_input: str) -> bool:
+        """True when this turn or an earlier one in the session said "index"."""
+        said = [getattr(self, "_original_user_input", None) or user_input]
+        said += [
+            str(m.get("content", ""))
+            for m in self.conversation_history
+            if isinstance(m, dict) and m.get("role") == "user"
+        ]
+        return any(re.search(r"\bindex\b", text, re.IGNORECASE) for text in said)
 
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """Decode a reply and reject tool arguments that cannot be executed."""
@@ -11714,11 +11725,7 @@ Do NOT wrap conversational replies in JSON.
                     continue
                 if (
                     _ASKS_TO_INDEX_PATTERN.search(answer_candidate)
-                    and re.search(
-                        r"\bindex\b",
-                        getattr(self, "_original_user_input", None) or user_input,
-                        re.IGNORECASE,
-                    )
+                    and self._user_asked_to_index(user_input)
                     and any(name in self._tools_registry for name in _INDEX_TOOL_NAMES)
                     and steps_taken < steps_limit - 1
                     and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS

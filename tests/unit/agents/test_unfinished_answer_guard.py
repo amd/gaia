@@ -368,3 +368,39 @@ def test_offer_to_index_is_kept_when_the_user_did_not_ask(agent):
 
     assert len(sent) == 1
     assert _final_text(result) == offer
+
+
+def test_asking_to_index_in_a_later_turn_is_reprompted(agent):
+    _with_index_tool(agent)
+    agent.conversation_history = [
+        {"role": "user", "content": "Index ~/reports and tell me who led."},
+        {"role": "assistant", "content": "Nothing is indexed yet."},
+    ]
+    sent = _stub_chat(
+        agent,
+        "Should I proceed with indexing that directory now?",
+        "Total revenue is $3,044,000.",
+    )
+
+    result = agent.process_query("What's the total across all eight?", max_steps=10)
+
+    assert len(sent) == 2
+    assert "already told you to index it" in sent[1][-1]["content"]
+    assert _final_text(result) == "Total revenue is $3,044,000."
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Tell me to index the folder, and I'll process them all.",
+        "Shall I go ahead and index that directory now?",
+        "Do you want me to index it?",
+    ],
+)
+def test_offers_to_index_are_recognised(agent, answer):
+    _with_index_tool(agent)
+    sent = _stub_chat(agent, answer, "Done.")
+
+    agent.process_query("Index ~/reports, then summarize.", max_steps=10)
+
+    assert len(sent) == 2
