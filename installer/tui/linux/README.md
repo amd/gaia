@@ -102,8 +102,8 @@ Then install in a container that did **not** build the packages:
 docker run --rm -v "$PWD/dist:/out:ro" debian:bookworm \
   bash -c 'dpkg -i /out/gaia_1.4.0_amd64.deb && gaia-tui version && dpkg -P gaia'
 
-docker run --rm -v "$PWD/dist:/out:ro" fedora:41 \
-  bash -c 'rpm -i /out/gaia-1.4.0.x86_64.rpm && gaia-tui version && rpm -e gaia'
+docker run --rm -v "$PWD/dist:/out:ro" fedora:latest \
+  bash -c 'dnf install -y /out/gaia-1.4.0.x86_64.rpm && gaia-tui version && rpm -e gaia'
 ```
 
 Use `debian:bookworm`, not `-slim`. The slim image ships

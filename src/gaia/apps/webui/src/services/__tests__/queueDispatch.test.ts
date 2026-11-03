@@ -296,6 +296,19 @@ describe('a deleted chat', () => {
         await done;
         expect(useChatStore.getState().messageQueues[A]).toBeUndefined();
     });
+
+    it('drops its whole queue once the server says the chat is gone, and does not retry', async () => {
+        const { send, calls } = manualSender();
+        queue(A, ['orphan', 'queued'], ['also orphan', 'queued']);
+        stop = startQueueDispatcher(send);
+        poll([], 10);
+
+        await act(async () => { calls[0].settle({ kind: 'gone' }); });
+        expect(useChatStore.getState().messageQueues[A]).toBeUndefined();
+        poll([], 20);
+        await flush();
+        expect(calls).toHaveLength(1);
+    });
 });
 
 describe('sending in the background', () => {
@@ -330,6 +343,12 @@ describe('sending in the background', () => {
         const model = sendInBackground(A, 'y');
         callbacks.onError(Object.assign(new Error('model busy'), { httpStatus: 429 }));
         await expect(model).resolves.toEqual({ kind: 'busy' });
+    });
+
+    it('reports a chat the server no longer has as gone', async () => {
+        const outcome = sendInBackground(A, 'x');
+        callbacks.onError(Object.assign(new Error('Session not found'), { httpStatus: 404 }));
+        await expect(outcome).resolves.toEqual({ kind: 'gone' });
     });
 
     it('reports any other refusal as failed, with the reason', async () => {

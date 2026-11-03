@@ -84,6 +84,12 @@ export function isBusyError(err: unknown): boolean {
     return status === 409 || status === 429;
 }
 
+/** The server no longer has this chat (deleted), so its queue can never be sent. */
+function dropGone(sessionId: string): void {
+    log.chat.warn(`Chat ${sessionId} no longer exists; dropping its queued messages`);
+    useChatStore.getState().updateQueue(sessionId, () => []);
+}
+
 function hold(sessionId: string): void {
     useChatStore.getState().setQueueHold(sessionId, true);
     setTimeout(() => useChatStore.getState().setQueueHold(sessionId, false), QUEUE_BUSY_WAIT_MS);
