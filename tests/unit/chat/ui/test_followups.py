@@ -302,6 +302,23 @@ async def test_followup_outcome_stays_empty_for_a_live_chat_without_a_turn(runti
     }
 
 
+def test_deleted_chat_followup_outcome_is_404_over_http():
+    from fastapi.testclient import TestClient
+
+    from gaia.ui.server import create_app
+
+    client = TestClient(create_app(db_path=":memory:"), raise_server_exceptions=False)
+    session_id = client.post("/api/sessions", json={}).json()["id"]
+    assert client.get(f"/api/chat/followup/{session_id}").status_code == 200
+    assert client.delete(f"/api/sessions/{session_id}").status_code == 200
+
+    # A stale run entry must not mask the deletion as a busy 409.
+    with patch.object(chat.run_manager, "is_running", return_value=True):
+        resp = client.get(f"/api/chat/followup/{session_id}")
+
+    assert resp.status_code == 404
+
+
 def test_each_turn_replaces_the_last_outcome():
     agent = _Agent(drain=True)
     first = followups.open_inbox("s-out", agent, lambda _t: None)

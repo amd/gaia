@@ -72,12 +72,6 @@ function httpStatus(err: unknown): number | undefined {
     return typeof status === 'number' ? status : undefined;
 }
 
-/** The server no longer has this chat, so its local queue can never be sent. */
-function dropGone(sessionId: string): void {
-    log.chat.warn(`Chat ${sessionId} no longer exists; dropping its queued messages`);
-    useChatStore.getState().updateQueue(sessionId, () => []);
-}
-
 /** A server answer meaning "not now": another turn holds the chat, or the model. */
 export function isBusyError(err: unknown): boolean {
     const status = httpStatus(err);
