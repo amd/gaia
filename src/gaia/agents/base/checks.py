@@ -18,10 +18,17 @@ Pure and dependency-free: tools, the agent loop, and hub agents all import it.
 
 from __future__ import annotations
 
+import ast
+import bisect
 import hashlib
 import re
+import shlex
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, FrozenSet, Optional, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
+
+from gaia.logger import get_logger
+
+log = get_logger(__name__)
 
 #: Result key a command-running tool sets on every call that ran:
 #: ``CheckResult.to_dict()`` for a check, ``None`` for anything else.
@@ -118,10 +125,41 @@ _CHECK_COMMAND_RE = re.compile(
     re.IGNORECASE,
 )
 
-#: Launchers that run the next word as the program.
-_LAUNCHER_RE = re.compile(
-    r"(?:(?:uv|poetry|pipenv|hatch|pdm)\s+run\s+|npx\s+)?", re.IGNORECASE
+#: ``<tool> run`` launchers that run their first non-option word as the program.
+_RUN_LAUNCHERS = frozenset({"uv", "poetry", "pipenv", "hatch", "pdm"})
+#: Launchers that run their first non-option word as the program.
+_BARE_LAUNCHERS = frozenset({"npx"})
+#: Launcher options whose value is the next word (``uv run --with pytest x``).
+_LAUNCHER_VALUE_FLAGS = frozenset(
+    {
+        "--with",
+        "--with-editable",
+        "--with-requirements",
+        "--python",
+        "-p",
+        "--project",
+        "--directory",
+        "--env-file",
+        "--extra",
+        "--group",
+        "--only-group",
+        "--no-group",
+        "--package",
+        "--index",
+        "--index-url",
+        "--extra-index-url",
+        "--default-index",
+        "-i",
+        "--find-links",
+        "-f",
+        "--config-file",
+        "--cache-dir",
+    }
 )
+#: Python long options whose value is the next word.
+_PYTHON_LONG_VALUE_FLAGS = frozenset({"--check-hash-based-pycs"})
+#: The ``py`` launcher's version selector: ``-3``, ``-3.12``, ``-3.12-32``.
+_PY_VERSION_FLAG_RE = re.compile(r"-\d+(?:\.\d+)?(?:-\d+)?|-V:\S+")
 
 _LABEL_ALIASES = {
     "python -m pytest": "pytest",
@@ -242,21 +280,105 @@ def command_check_label(command: str) -> Optional[str]:
     return _label(match) if match else None
 
 
+def _program_name(word: str) -> str:
+    """*word*'s lowercased basename, no Windows suffix; ``python`` for any Python."""
+    program = re.split(r"[/\\]", word)[-1].lower()
+    program = re.sub(r"\.(?:exe|cmd|bat)$", "", program)
+    if program == "py" or re.fullmatch(r"python[\d.]*w?", program):
+        return "python"
+    return program
+
+
+def _python_module_argv(options: Sequence[str]) -> Optional[List[str]]:
+    """``[module, *args]`` when interpreter *options* end in ``-m module``, else None.
+
+    Skips interpreter flags (``-u``, ``-X dev``, ``-W error``, the ``py``
+    launcher's ``-3.12``). ``-c`` runs a code string and a bare word a script,
+    so neither is a module.
+    """
+    i = 0
+    while i < len(options):
+        word = options[i]
+        if not word.startswith("-") or word == "-":
+            return None
+        if word.startswith("--"):
+            i += 2 if word in _PYTHON_LONG_VALUE_FLAGS else 1
+            continue
+        if _PY_VERSION_FLAG_RE.fullmatch(word):
+            i += 1
+            continue
+        takes_next = False
+        for j, letter in enumerate(word[1:]):
+            if letter == "m":
+                module = word[j + 2 :]
+                rest = list(options[i + 1 :])
+                if module:
+                    return [module, *rest]
+                return rest or None
+            if letter == "c":
+                return None
+            if letter in "XW":
+                takes_next = j == len(word) - 2
+                break
+        i += 2 if takes_next else 1
+    return None
+
+
+def _after_launcher(
+    words: Sequence[str], start: int, program: str
+) -> Optional[Tuple[int, bool]]:
+    """Where the argv a launcher at *start* runs begins, or None if not a launcher.
+
+    ``(index, True)`` when ``uv run -m`` makes ``words[index:]`` a Python
+    module and its arguments. An index, not a copy, keeps a long chain linear.
+    """
+    if (
+        start + 1 < len(words)
+        and program in _RUN_LAUNCHERS
+        and words[start + 1] == "run"
+    ):
+        i = start + 2
+    elif program in _BARE_LAUNCHERS:
+        i = start + 1
+    else:
+        return None
+    while i < len(words) and words[i].startswith("-"):
+        word = words[i]
+        if word == "--":
+            return i + 1, False
+        if program == "uv" and word in ("-m", "--module"):
+            return i + 1, True
+        i += 2 if word in _LAUNCHER_VALUE_FLAGS else 1
+    return i, False
+
+
 def argv_check_label(argv: Sequence[str]) -> Optional[str]:
     """Runner label when *argv* launches a check runner, else ``None``.
 
-    The program has to BE the runner: ``pytest -q``, ``.venv/bin/python -m
-    pytest``, ``uv run pytest``. ``echo pytest`` and ``cat pytest.ini`` are not.
+    The program has to BE the runner: ``pytest -q``, ``.venv/bin/python -u -m
+    pytest``, ``py -m pytest``, ``uv run --with pytest pytest``, ``npm.cmd
+    test``. ``echo pytest`` and ``cat pytest.ini`` are not.
     """
     if not argv:
         return None
-    program = re.split(r"[/\\]", argv[0])[-1].lower()
-    program = re.sub(r"\.exe$", "", program)
-    program = re.sub(r"^python[\d.]*$", "python", program)
-    text = " ".join([program, *argv[1:]])
-    launcher = _LAUNCHER_RE.match(text)
-    start = launcher.end() if launcher else 0
-    match = _CHECK_COMMAND_RE.match(text, start)
+    start = 0
+    program = _program_name(argv[start])
+    # A loop, not recursion: ``uv run`` repeated 2000 times must not overflow.
+    while (launched := _after_launcher(argv, start, program)) is not None:
+        start, is_module = launched
+        if is_module:
+            words = ["python", "-m", *argv[start:]]
+            break
+        if start >= len(argv):
+            return None
+        program = _program_name(argv[start])
+    else:
+        words = [program, *argv[start + 1 :]]
+    if words[0] == "python":
+        module = _python_module_argv(words[1:])
+        if module is not None:
+            words = ["python", "-m", *module]
+    match = _CHECK_COMMAND_RE.match(" ".join(words))
     return _label(match) if match else None
 
 
@@ -326,17 +448,646 @@ def check_from_command(
     )
 
 
+#: In-process runner entry points, by the dotted name they are imported under.
+_RUNNER_CALLS: FrozenSet[str] = frozenset(
+    {
+        "pytest.main",
+        "unittest.main",
+        "unittest.TestProgram",
+        "unittest.TextTestRunner",
+        "unittest.runner.TextTestRunner",
+        "unittest.main.TestProgram",
+    }
+)
+
+#: Calls that start a program: how they name it, and the position of the
+#: argument that does. ``argv`` is an argv list or a command string, ``shell`` a
+#: command string, ``module`` a module run as ``python -m``, ``path`` a script,
+#: ``varargs`` the argv itself. ``execv`` is the program then an argv list whose
+#: first word is only its name; ``execl`` the same with the argv spread out.
+_LAUNCH_CALLS: Dict[str, Tuple[str, int]] = {
+    "subprocess.run": ("argv", 0),
+    "subprocess.call": ("argv", 0),
+    "subprocess.check_call": ("argv", 0),
+    "subprocess.check_output": ("argv", 0),
+    "subprocess.Popen": ("argv", 0),
+    "subprocess.getoutput": ("shell", 0),
+    "subprocess.getstatusoutput": ("shell", 0),
+    "os.system": ("shell", 0),
+    "os.popen": ("shell", 0),
+    "asyncio.create_subprocess_shell": ("shell", 0),
+    "asyncio.create_subprocess_exec": ("varargs", 0),
+    "runpy.run_module": ("module", 0),
+    "runpy.run_path": ("path", 0),
+    **{f"os.exec{s}": ("execv", 0) for s in ("v", "ve", "vp", "vpe")},
+    **{f"os.exec{s}": ("execl", 0) for s in ("l", "le", "lp", "lpe")},
+    **{f"os.spawn{s}": ("execv", 1) for s in ("v", "ve", "vp", "vpe")},
+    **{f"os.spawn{s}": ("execl", 1) for s in ("l", "le", "lp", "lpe")},
+    "os.posix_spawn": ("execv", 0),
+    "os.posix_spawnp": ("execv", 0),
+}
+#: Calls that return the module named by their first argument.
+_IMPORT_CALLS = frozenset({"__import__", "importlib.import_module"})
+#: Shells that run the word after ``-c`` as a command line.
+_POSIX_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+#: How deep a shell may wrap another before the reader stops looking.
+_MAX_SHELL_DEPTH = 4
+
+#: A word that stands for the Python interpreter when it starts an argv.
+_PYTHON_EXPRESSIONS = frozenset({"sys.executable"})
+#: Shell text between these runs as a separate command.
+_SHELL_COMMAND_BREAK_RE = re.compile(r"&&|\|\||[;|&\n]")
+#: ``NAME=value`` in front of a shell command sets its environment.
+_LEADING_ENV_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+#: A word whose value the code does not fix.
+_UNKNOWN = "\0"
+#: How deeply nested an expression the reader follows before leaving it open.
+_MAX_EXPRESSION_DEPTH = 64
+#: How many sub-expressions the reader reads for one launch call.
+_MAX_READ_STEPS = 5000
+#: How many it reads for a whole snippet; a remembered binding costs one.
+_MAX_SCRIPT_READ_STEPS = 200_000
+#: Longest quoted text tokenized (``shlex`` is slow); Windows caps a command at 32,767.
+_MAX_QUOTED_COMMAND_CHARS = 32_768
+#: Longest string or argv the reader builds by joining parts (``x = x + x``).
+_MAX_BUILT_SIZE = 1_000_000
+#: Characters (and argv words) a snippet may build and check through names, as
+#: this floor plus a multiple of its own length, so detection stays linear.
+_MIN_SCRIPT_CHECKED_SIZE = 65_536
+_SCRIPT_CHECKED_SIZE_PER_CHAR = 1
+#: Characters that make shell text need ``shlex`` rather than a whitespace split.
+_SHELL_QUOTING_RE = re.compile(r"[\"'\\]")
+#: What ``shlex`` splits unquoted text on.
+_SHELL_WHITESPACE_RE = re.compile(r"[ \t\r\n]+")
+#: How many ``__import__(...).x(...)`` calls deep a dotted name is followed.
+_MAX_IMPORT_CHAIN = 8
+
+
+def _dotted(node: ast.AST, aliases: Dict[str, str], depth: int = 0) -> Optional[str]:
+    """``a.b.c`` for a Name/Attribute chain, with its import alias resolved."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Call):
+        if depth >= _MAX_IMPORT_CHAIN:
+            return None
+        module = _imported_module(node, aliases, depth + 1)
+        if module is None:
+            return None
+        parts.append(module)
+        return ".".join(reversed(parts))
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(aliases.get(node.id, node.id))
+    return ".".join(reversed(parts))
+
+
+def _imported_module(
+    call: ast.Call, aliases: Dict[str, str], depth: int = 0
+) -> Optional[str]:
+    """The module ``__import__('x')`` / ``importlib.import_module('x')`` returns."""
+    if _dotted(call.func, aliases, depth) not in _IMPORT_CALLS or not call.args:
+        return None
+    arg = call.args[0]
+    if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
+        return None
+    if isinstance(call.func, ast.Name) and call.func.id == "__import__":
+        return arg.value.split(".")[0]
+    return arg.value
+
+
+#: List methods that grow a list in place, read as ``x = x + ...``.
+_GROW_METHODS = frozenset({"extend", "append"})
+
+
+def _grown(node: ast.AST, name: str, added: ast.AST) -> ast.BinOp:
+    """``name + added``, at *node*'s start so ``name`` reads the prior binding."""
+    at = {"lineno": node.lineno, "col_offset": node.col_offset}
+    at_end = {"end_lineno": node.lineno, "end_col_offset": node.col_offset}
+    left = ast.Name(id=name, ctx=ast.Load(), **at, **at_end)
+    return ast.BinOp(left=left, op=ast.Add(), right=added, **at, **at_end)
+
+
+def _assignment(node: ast.AST) -> Optional[Tuple[ast.AST, str, ast.AST]]:
+    """``(statement, name, value)`` when *node* binds one plain name, else None."""
+    if isinstance(node, (ast.Assign, ast.AnnAssign)):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if node.value is not None and len(targets) == 1:
+            if isinstance(targets[0], ast.Name):
+                return node, targets[0].id, node.value
+        return None
+    if isinstance(node, ast.AugAssign):
+        if isinstance(node.op, ast.Add) and isinstance(node.target, ast.Name):
+            return node, node.target.id, _grown(node, node.target.id, node.value)
+        return None
+    if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+        call = node.value
+        func = call.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in _GROW_METHODS
+            and isinstance(func.value, ast.Name)
+            and len(call.args) == 1
+            and not call.keywords
+        ):
+            added = call.args[0]
+            if func.attr == "append":
+                added = ast.List(
+                    elts=[added],
+                    ctx=ast.Load(),
+                    lineno=added.lineno,
+                    col_offset=added.col_offset,
+                    end_lineno=added.end_lineno,
+                    end_col_offset=added.end_col_offset,
+                )
+            return node, func.value.id, _grown(node, func.value.id, added)
+    return None
+
+
+class _LaunchReader:
+    """What a launch call in one parsed snippet would run.
+
+    A name reads as its latest assignment that finished before the use, so
+    ``args = ['pytest'] + args`` reads the right-hand ``args`` from the line
+    above. ``x += y``, ``x.extend(y)`` and ``x.append(y)`` read as
+    ``x = x + y`` (``[y]`` for append). A use with none before it (a function
+    body reading a global set later) reads the name's last assignment, unless
+    that one is already being read: a cycle stays unresolved instead of
+    recursing.
+    """
+
+    def __init__(
+        self,
+        statements: Sequence[ast.stmt],
+        aliases: Dict[str, str],
+        source_size: int = 0,
+    ):
+        self.aliases = aliases
+        self.values: List[ast.AST] = []
+        #: name -> [(end position, index into values)], in source order.
+        self.assigned: Dict[str, List[Tuple[Tuple[int, int], int]]] = {}
+        self._reading: set = set()
+        self.steps = 0
+        self._script_steps = 0
+        #: Reads cut short by a step budget: remembered only as too costly.
+        self._cuts = 0
+        #: (kind, binding index) -> fewest steps spent before a read of it was cut.
+        self._too_costly: Dict[Tuple[str, int], int] = {}
+        self._checked_size = 0
+        self._spent = False
+        self._max_checked_size = (
+            _MIN_SCRIPT_CHECKED_SIZE + _SCRIPT_CHECKED_SIZE_PER_CHAR * source_size
+        )
+        #: Reads cut short by the depth limit: remembered for that depth on.
+        self._depth_cuts = 0
+        #: (kind, binding index) -> (value, shallowest depth it holds from).
+        self._memo: Dict[Tuple[str, int], Tuple[Any, int]] = {}
+        #: Verdicts per launch target: shell text, and argv by identity (the
+        #: list is kept so its id stays unique), so a reused binding is judged once.
+        self.checked_text: Dict[str, bool] = {}
+        self.checked_argv: Dict[int, Tuple[List[str], bool]] = {}
+        bindings = [b for n in statements if (b := _assignment(n)) is not None]
+        for node, name, value in sorted(
+            bindings, key=lambda b: (b[0].lineno, b[0].col_offset)
+        ):
+            end = (node.end_lineno or node.lineno, node.end_col_offset or 0)
+            self.assigned.setdefault(name, []).append((end, len(self.values)))
+            self.values.append(value)
+
+    def _binding(self, node: ast.AST) -> Optional[int]:
+        """Index of the assignment a Name *node* reads, or None."""
+        if not isinstance(node, ast.Name):
+            return None
+        entries = self.assigned.get(node.id)
+        if not entries:
+            return None
+        use = (node.lineno, node.col_offset)
+        # Statements never overlap, so *entries* is sorted by end too.
+        before = bisect.bisect_right(entries, (use, len(self.values)))
+        index = entries[before - 1][1] if before else entries[-1][1]
+        return None if index in self._reading else index
+
+    def _exhausted(self, depth: int) -> bool:
+        """True once a read is too deep or too costly (``x = x + x`` doubles)."""
+        self.steps += 1
+        self._script_steps += 1
+        if depth > _MAX_EXPRESSION_DEPTH:
+            self._depth_cuts += 1
+            return True
+        if self.steps > _MAX_READ_STEPS or self._script_steps > _MAX_SCRIPT_READ_STEPS:
+            self._cuts += 1
+            return True
+        return False
+
+    def afford(self, size: int) -> bool:
+        """Charge *size* to the snippet's build-and-check budget; False once it is spent."""
+        if self._checked_size + size > self._max_checked_size:
+            # Bounded input guard, not a fallback: no real snippet builds this much.
+            if not self._spent:
+                self._spent = True
+                log.debug("Launch text past %d chars not read", self._max_checked_size)
+            return False
+        self._checked_size += size
+        return True
+
+    def _follow(self, index: int, kind: str, read, depth: int, cut: Any):
+        """*read* of binding *index*; each binding is read once per snippet.
+
+        A read the per-launch step budget cut short is remembered as too
+        costly, returning *cut*, for later reads that start no earlier.
+        """
+        key = (kind, index)
+        known = self._memo.get(key)
+        if known is not None and depth >= known[1]:
+            return known[0]
+        start = self.steps
+        if start >= self._too_costly.get(key, start + 1):
+            self._cuts += 1
+            return cut
+        cuts, depth_cuts = self._cuts, self._depth_cuts
+        self._reading.add(index)
+        try:
+            value = read(self.values[index], depth + 1)
+        finally:
+            self._reading.discard(index)
+        if self._cuts == cuts:
+            self._memo[key] = (value, depth if self._depth_cuts != depth_cuts else 0)
+        elif self._script_steps <= _MAX_SCRIPT_READ_STEPS:
+            self._too_costly[key] = min(start, self._too_costly.get(key, start))
+        return value
+
+    def text(self, node: ast.AST, depth: int = 0) -> Optional[str]:
+        """The string *node* evaluates to; ``_UNKNOWN`` marks parts left open."""
+        return self._string(node, depth)[0]
+
+    def word(self, node: ast.AST, depth: int = 0) -> str:
+        """One argv word or string part; ``python`` for ``sys.executable``."""
+        return self._string(node, depth)[1]
+
+    def _string(self, node: ast.AST, depth: int) -> Tuple[Optional[str], str]:
+        """``(text, word)`` for *node*, reading it once for both."""
+        # A literal is a leaf, so it costs no read step: a long argv still reads.
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value, node.value
+        if _is_python_expression(node, self.aliases):
+            return None, "python"
+        if self._exhausted(depth):
+            return None, _UNKNOWN
+        index = self._binding(node)
+        if index is not None:
+            return self._follow(index, "string", self._string, depth, (None, _UNKNOWN))
+        if (
+            isinstance(node, ast.Name)
+            and _dotted(node, self.aliases) in _PYTHON_EXPRESSIONS
+        ):
+            return None, "python"
+        text = self._composed(node, depth)
+        return text, _UNKNOWN if text is None else text
+
+    def _composed(self, node: ast.AST, depth: int) -> Optional[str]:
+        """The text of an f-string, a string sum or ``shutil.which(...)``.
+
+        None past :data:`_MAX_BUILT_SIZE`, so ``x = x + x`` stays small.
+        """
+        if isinstance(node, ast.JoinedStr):
+            parts, size = [], 0
+            for v in node.values:
+                part = (
+                    v.value
+                    if isinstance(v, ast.Constant)
+                    else self._string(v.value, depth + 1)[1]
+                )
+                size += len(part)
+                if size > _MAX_BUILT_SIZE:
+                    return None
+                parts.append(part)
+            return "".join(parts) if self.afford(size) else None
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            # ``sys.executable + ' -m pytest'``; a list sum is argv(), not text.
+            left, left_word = self._string(node.left, depth + 1)
+            right, right_word = self._string(node.right, depth + 1)
+            if left is None and right is None:
+                return None
+            size = len(left_word) + len(right_word)
+            if size > _MAX_BUILT_SIZE or not self.afford(size):
+                return None
+            return left_word + right_word
+        if isinstance(node, ast.Call):
+            name = _dotted(node.func, self.aliases)
+            if name == "shutil.which" and node.args:
+                return self._string(node.args[0], depth + 1)[0]
+        return None
+
+    def argv(self, node: ast.AST, depth: int = 0) -> Optional[List[str]]:
+        """*node* as an argv list, or None when it is not one."""
+        literal = _literal_argv(node, self.aliases)
+        if literal is not None:
+            return literal
+        if self._exhausted(depth):
+            return None
+        index = self._binding(node)
+        if index is not None:
+            return self._follow(index, "argv", self.argv, depth, None)
+        if isinstance(node, (ast.List, ast.Tuple)):
+            return [self.word(item, depth + 1) for item in node.elts]
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            # ``[sys.executable, '-m', 'pytest'] + sys.argv[1:]``: the head decides.
+            head = self.argv(node.left, depth + 1)
+            if head is None or len(head) >= _MAX_BUILT_SIZE:
+                return head
+            tail = self.argv(node.right, depth + 1)
+            tail = tail if tail is not None else [_UNKNOWN]
+            if not self.afford(len(head) + len(tail)):
+                return None
+            return (head + tail)[:_MAX_BUILT_SIZE]
+        if not isinstance(node, ast.Call):
+            return None
+        if _dotted(node.func, self.aliases) == "shlex.split" and node.args:
+            text = self.text(node.args[0], depth + 1)
+            return None if text is None else _split_words(text)
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "split"
+            and not node.args
+        ):
+            text = self.text(node.func.value, depth + 1)
+            return None if text is None else text.split()
+        return None
+
+
+def _is_python_expression(node: ast.AST, aliases: Dict[str, str]) -> bool:
+    """True for ``sys.executable`` written out, which no assignment rebinds."""
+    return (
+        isinstance(node, ast.Attribute)
+        and _dotted(node, aliases) in _PYTHON_EXPRESSIONS
+    )
+
+
+def _literal_argv(node: ast.AST, aliases: Dict[str, str]) -> Optional[List[str]]:
+    """A list or tuple of string literals and ``sys.executable``, else None."""
+    if not isinstance(node, (ast.List, ast.Tuple)):
+        return None
+    words = []
+    for item in node.elts:
+        if isinstance(item, ast.Constant) and isinstance(item.value, str):
+            words.append(item.value)
+        elif _is_python_expression(item, aliases):
+            words.append("python")
+        else:
+            return None
+    return words
+
+
+def _split_words(text: str) -> List[str]:
+    if not _SHELL_QUOTING_RE.search(text):
+        # Nothing quoted: the same words shlex gives, in linear time.
+        return [word for word in _SHELL_WHITESPACE_RE.split(text) if word]
+    if len(text) > _MAX_QUOTED_COMMAND_CHARS:
+        # Bounded input guard, not a fallback: no real command line is this long.
+        log.debug("Quoted command of %d chars not read for a test runner", len(text))
+        return []
+    try:
+        return shlex.split(text)
+    except ValueError:
+        return text.split()
+
+
+def _shell_command_in(words: Sequence[str]) -> Optional[str]:
+    """The command line a shell *words* runs (``sh -c '...'``, ``cmd /c ...``)."""
+    program = _program_name(words[0])
+    if program in _POSIX_SHELLS:
+        skip_next = False
+        for i, word in enumerate(words[1:], 1):
+            if skip_next:
+                skip_next = False
+                continue
+            if word in ("-o", "+o"):
+                skip_next = True
+                continue
+            if not word.startswith(("-", "+")) or word.startswith("--"):
+                return None
+            if word.startswith("-") and "c" in word[1:]:
+                return words[i + 1] if i + 1 < len(words) else None
+        return None
+    switches = {
+        "cmd": ("/c", "/k"),
+        "powershell": ("-c", "-command", "/c", "/command"),
+        "pwsh": ("-c", "-command", "/c", "/command"),
+    }.get(program)
+    if switches is None:
+        return None
+    for i, word in enumerate(words[1:], 1):
+        if word.lower() in switches:
+            return " ".join(words[i + 1 :]) or None
+    return None
+
+
+def _argv_runs_check(argv: Sequence[str], depth: int = 0) -> bool:
+    """True when *argv* starts a check runner, directly or through a shell.
+
+    An unknown program followed by interpreter flags and ``-m`` is an
+    interpreter path the code computed, such as ``os.path.join(venv, 'python')``.
+    """
+    words = list(argv)
+    if not words:
+        return False
+    if words[0] == _UNKNOWN and _python_module_argv(words[1:]) is not None:
+        words[0] = "python"
+    if argv_check_label(words) is not None:
+        return True
+    command = _shell_command_in(words)
+    return (
+        command is not None
+        and depth < _MAX_SHELL_DEPTH
+        and _shell_runs_check(command, depth + 1)
+    )
+
+
+def _shell_runs_check(text: str, depth: int = 0) -> bool:
+    """True when one command in shell *text* is a check runner."""
+    if len(text) > _MAX_QUOTED_COMMAND_CHARS and _SHELL_QUOTING_RE.search(text):
+        # Bounded input guard, not a fallback: no real command line is this long.
+        log.debug("Quoted shell text of %d chars not read for a test runner", len(text))
+        return False
+    for command in _SHELL_COMMAND_BREAK_RE.split(text):
+        words = _split_words(command)
+        start = 0
+        while start < len(words) and _LEADING_ENV_RE.match(words[start]):
+            start += 1
+        if start < len(words) and _argv_runs_check(words[start:], depth):
+            return True
+    return False
+
+
+def _launch_runs_check(
+    call: ast.Call, how: str, position: int, reader: _LaunchReader
+) -> bool:
+    """True when *call*, a launch of kind *how*, starts a check runner.
+
+    What a launch reads through names is charged to :meth:`_LaunchReader.afford`,
+    so many launches of long built text stay linear; literals are always checked.
+    """
+    args = call.args[position:]
+    if how in ("varargs", "execv", "execl"):
+        if not args:
+            return False
+        if how == "varargs":
+            words = [reader.word(a) for a in args]
+        elif how == "execl":
+            words = [reader.word(args[0]), *(reader.word(a) for a in args[2:])]
+        else:
+            argv = reader.argv(args[1]) if len(args) > 1 else None
+            words = [reader.word(args[0]), *(argv[1:] if argv else [])]
+        literal = all(_is_literal(a, reader.aliases) for a in args)
+        return _affordable(reader, words, literal) and _argv_runs_check(words)
+    target = args[0] if args else None
+    if target is None:
+        target = next((k.value for k in call.keywords if k.arg == "args"), None)
+    if target is None:
+        return False
+    literal = _is_literal(target, reader.aliases)
+    if how in ("module", "path"):
+        text = reader.text(target)
+        if text is None or not _affordable(reader, [text], literal):
+            return False
+        return _argv_runs_check(["python", "-m", text] if how == "module" else [text])
+    if how == "argv":
+        argv = reader.argv(target)
+        if argv is not None:
+            known = reader.checked_argv.get(id(argv))
+            if known is None:
+                verdict = _affordable(reader, argv, literal) and _argv_runs_check(argv)
+                known = reader.checked_argv[id(argv)] = (argv, verdict)
+            return known[1]
+    text = reader.text(target)
+    if text is None:
+        return False
+    if text not in reader.checked_text:
+        if not _affordable(reader, [text], literal):
+            return False
+        reader.checked_text[text] = _shell_runs_check(text)
+    return reader.checked_text[text]
+
+
+def _is_literal(node: ast.AST, aliases: Dict[str, str]) -> bool:
+    """True for a string literal or a list of them: its size is the source's own."""
+    if isinstance(node, ast.Constant):
+        return True
+    return (
+        _is_python_expression(node, aliases) or _literal_argv(node, aliases) is not None
+    )
+
+
+def _affordable(reader: _LaunchReader, words: Sequence[str], literal: bool) -> bool:
+    """True when *words* may be checked; a literal always may."""
+    return literal or reader.afford(len(words) + sum(len(w) for w in words))
+
+
+def invokes_test_runner(source: str) -> bool:
+    """True when Python *source* runs a test runner, not just prints its output.
+
+    A runner's summary line in the output is only evidence when the code
+    could have produced it: it calls ``pytest.main`` / ``unittest.main`` /
+    a ``TextTestRunner`` (also through ``__import__``), or launches a process
+    (``subprocess``, ``os.system``, ``os.exec*``, ``runpy``) whose program is
+    itself the runner (:func:`argv_check_label`), directly or through
+    ``sh -c`` / ``cmd /c``. ``subprocess.run(['cat', 'pytest.log'])`` launches
+    ``cat``, so it is not. Printing a saved log does neither. Unparseable
+    source never ran, so it is not a runner.
+
+    Not detected, so a claim built on them is challenged: a command kept in a
+    container (``cfg['cmd']``) or changed through another name.
+
+    Never raises: the run it inspects already happened, so a detector bug
+    reads as "no runner" (logged as a warning) instead of failing the tool.
+    """
+    try:
+        return _detect_test_runner(source)
+    except Exception:
+        log.warning(
+            "invokes_test_runner: detector failed; run not counted as a test run",
+            exc_info=True,
+        )
+        return False
+
+
+def _nodes(tree: ast.AST) -> List[ast.AST]:
+    """Every node under *tree*, in :func:`ast.walk` order, about twice as fast."""
+    nodes = [tree]
+    for node in nodes:
+        for field in node._fields:
+            value = getattr(node, field, None)
+            if isinstance(value, ast.AST):
+                nodes.append(value)
+            elif isinstance(value, list):
+                nodes.extend(item for item in value if isinstance(item, ast.AST))
+    return nodes
+
+
+def _detect_test_runner(source: str) -> bool:
+    """:func:`invokes_test_runner` without its guard, so tests see a crash."""
+    try:
+        tree = ast.parse(source or "")
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        # Too deeply nested for the parser: it could not have run either.
+        return False
+    # One walk, split once: a large snippet makes every pass over it cost.
+    nodes = _nodes(tree)
+    statements = [n for n in nodes if isinstance(n, ast.stmt)]
+    calls = [n for n in nodes if isinstance(n, ast.Call)]
+    aliases: Dict[str, str] = {}
+    for node in statements:
+        if isinstance(node, ast.Import):
+            for name in node.names:
+                aliases[name.asname or name.name.split(".")[0]] = (
+                    name.name if name.asname else name.name.split(".")[0]
+                )
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for name in node.names:
+                aliases[name.asname or name.name] = f"{node.module}.{name.name}"
+    for node in statements:
+        # ``pt = __import__('pytest')`` binds a module like an import does.
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+        ):
+            module = _imported_module(node.value, aliases)
+            if module is not None:
+                aliases[node.targets[0].id] = module
+    reader = _LaunchReader(statements, aliases, len(source or ""))
+    for node in calls:
+        name = _dotted(node.func, aliases)
+        if name in _RUNNER_CALLS:
+            return True
+        launch = _LAUNCH_CALLS.get(name or "")
+        reader.steps = 0
+        if launch is not None and _launch_runs_check(node, *launch, reader):
+            return True
+    return False
+
+
 def check_from_python_run(
-    target: str, return_code: int, stdout: Any = "", stderr: Any = ""
+    target: str,
+    return_code: int,
+    stdout: Any = "",
+    stderr: Any = "",
+    *,
+    source: str,
 ) -> Optional[CheckResult]:
     """The test run a Python file or snippet performed, read from its output.
 
-    Python can run anything, so only a runner's own summary line makes it a
-    check. *target* identifies what ran — the file and its arguments, or
-    :func:`snippet_target` — so reruns of the same code group together.
+    Python can run anything, so it is a check only when *source* — the code
+    that ran — invokes a runner (:func:`invokes_test_runner`) and the output
+    carries that runner's own summary line. *target* identifies what ran —
+    the file and its arguments, or :func:`snippet_target` — so reruns of the
+    same code group together.
     """
+    # The summary is a cheap scan; parsing a large source is not.
     found = runner_summary(_output(stdout, stderr))
-    if found is None:
+    if found is None or not invokes_test_runner(source):
         return None
     label, summary = found
     return CheckResult(

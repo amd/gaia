@@ -304,7 +304,7 @@ def test_flagship_default_lock_is_its_own_not_the_email_agents(tmp_path, monkeyp
     from gaia.daemon.sidecars import platform as plat
 
     monkeypatch.delenv("ASSETS_BASE_URL", raising=False)
-    lock = plat.load_lock(agent_dir_name="gaia")
+    lock = plat.load_lock(agent_id="gaia")
     expected = lock.binaries["linux-x64"]
     sess = _FakeSession(b"not-the-flagship-binary")
     with pytest.raises(IntegrityError) as exc_info:

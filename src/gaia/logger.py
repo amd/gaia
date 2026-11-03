@@ -46,25 +46,36 @@ def configure_console_encoding():
             # capture mechanism (causes "I/O operation on closed file" errors).
             for stream_name in ("stdout", "stderr"):
                 stream = getattr(sys, stream_name)
-                if stream and not stream.closed and hasattr(stream, "reconfigure"):
+                # A replacement stream (a tee, a capture) may lack .closed.
+                if (
+                    stream
+                    and not getattr(stream, "closed", False)
+                    and hasattr(stream, "reconfigure")
+                ):
                     stream.reconfigure(encoding="utf-8", errors="replace")
 
             # Also try to set the console code page to UTF-8
             try:
                 # chcp is a cmd.exe builtin; invoke via cmd /c so we avoid shell=True
+                # Not our stdin: cmd.exe would move a redirected file to its end.
                 subprocess.run(
                     ["cmd", "/c", "chcp", "65001"],
+                    stdin=subprocess.DEVNULL,
                     capture_output=True,
                     shell=False,
                     check=False,
                     timeout=10,
                 )
-            except (subprocess.SubprocessError, OSError, FileNotFoundError):
-                pass  # Ignore if chcp command fails
+            except (subprocess.SubprocessError, OSError) as e:
+                logging.getLogger(__name__).debug(
+                    "chcp 65001 failed; console code page unchanged: %s", e
+                )
 
-        except Exception:
-            # If configuration fails, fall back to original streams
-            pass
+        except (OSError, ValueError, LookupError, AttributeError, TypeError) as e:
+            # The streams keep their original encoding; output still works.
+            logging.getLogger(__name__).debug(
+                "UTF-8 console setup failed; using the original streams: %s", e
+            )
 
 
 class GaiaLogger:

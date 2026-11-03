@@ -331,6 +331,24 @@ describe('ChatView stream reliability', () => {
         expect(mockedApi.attachToRun).toHaveBeenCalledTimes(1);
     });
 
+    it('drops a pending reconnect when the chat view unmounts during the wait', async () => {
+        const view = await driveSend();
+        act(() => capturedCallbacks!.onError(new api.StreamDroppedError(new TypeError('network error'))));
+        act(() => attachCallbacks[0].onError(new api.StreamDroppedError(new TypeError('Failed to fetch'))));
+        view.unmount();
+        await new Promise((r) => setTimeout(r, 3_500));
+        expect(mockedApi.attachToRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not re-attach a stream that drops after the chat view unmounted', async () => {
+        const view = await driveSend();
+        act(() => capturedCallbacks!.onError(new api.StreamDroppedError(new TypeError('network error'))));
+        view.unmount();
+        act(() => attachCallbacks[0].onError(new api.StreamDroppedError(new TypeError('Failed to fetch'))));
+        await new Promise((r) => setTimeout(r, 3_500));
+        expect(mockedApi.attachToRun).toHaveBeenCalledTimes(1);
+    });
+
     it('closes the turn at once when Stop lands during a reconnect wait', async () => {
         await driveSend();
         act(() => capturedCallbacks!.onError(new api.StreamDroppedError(new TypeError('network error'))));

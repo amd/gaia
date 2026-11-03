@@ -65,19 +65,25 @@ def current_platform_key(plat: Optional[str] = None, arch: Optional[str] = None)
     return f"{os_key}-{arch_key}"
 
 
-def default_lock_path(agent_dir_name: str = "email") -> Path:
-    """Locate *agent_dir_name*'s binaries.lock.json (its npm package ships it)."""
-    # src/gaia/daemon/sidecars/platform.py -> repo root is parents[4].
-    repo_root = Path(__file__).resolve().parents[4]
-    return repo_root / "hub" / "agents" / agent_dir_name / "npm" / "binaries.lock.json"
+def default_lock_path(agent_id: str = "email") -> Path:
+    """Locate *agent_id*'s binaries.lock.json in the daemon's own checkout (the
+    agent's npm package ships the canonical one).
 
-
-def load_lock(
-    lock_path: Optional[Path] = None, agent_dir_name: str = "email"
-) -> BinaryLock:
-    path = (
-        Path(lock_path) if lock_path is not None else default_lock_path(agent_dir_name)
+    Follows the Python environment that launched the DAEMON; a caller in a
+    different checkout is compared against it in the registry (#2596).
+    """
+    from gaia.daemon.sidecars.spec import (
+        _default_email_src_dir,
+        agent_binary_lock_path,
+        repo_root_from_agent_dev_src_dir,
     )
+
+    repo_root = repo_root_from_agent_dev_src_dir(_default_email_src_dir(), "email")
+    return agent_binary_lock_path(repo_root, agent_id)
+
+
+def load_lock(lock_path: Optional[Path] = None, agent_id: str = "email") -> BinaryLock:
+    path = Path(lock_path) if lock_path is not None else default_lock_path(agent_id)
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError as e:

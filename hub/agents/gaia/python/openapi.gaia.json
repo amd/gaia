@@ -535,6 +535,56 @@
         "title": "ToolDecisionResponse",
         "type": "object"
       },
+      "ToolView": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "description": "Where it comes from: a KNOWN_TOOLS mixin name (rag, file_io, ...), mcp, skill, or agent for a tool the agent defines itself.",
+            "title": "Category",
+            "type": "string"
+          },
+          "description": {
+            "description": "What it does, as the model is told.",
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "description": "The tool's registered name.",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "category"
+        ],
+        "title": "ToolView",
+        "type": "object"
+      },
+      "ToolsResponse": {
+        "additionalProperties": false,
+        "description": "The tools a session's agent can call (contract >= 2.27).",
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/ToolView"
+            },
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "session_id",
+          "tools"
+        ],
+        "title": "ToolsResponse",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -586,7 +636,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.26"
+    "version": "2.27"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -1173,6 +1223,55 @@
           {}
         ],
         "summary": "Set Internet",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/sessions/{session_id}/tools": {
+      "get": {
+        "description": "The tools the session's agent can call now, skills loaded so far included.\n\nRead from the session's own agent, so it is what the next turn is offered.\nAn unknown session is a 404: building an agent just to list tools would\ndescribe a different agent than the one the chat talks to.",
+        "operationId": "list_tools_v1_gaia_sessions__session_id__tools_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "List Tools",
         "tags": [
           "gaia-query"
         ]

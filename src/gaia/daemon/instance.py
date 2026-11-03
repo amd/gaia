@@ -112,7 +112,7 @@ def read_instance(path: Optional[Path] = None) -> Optional[DaemonInstance]:
             gaia_version=str(data.get("gaia_version", "")),
             version_file=str(data.get("version_file", "")),
         )
-    except (ValueError, KeyError, TypeError) as e:
+    except (ValueError, KeyError, TypeError, OverflowError) as e:
         logger.warning(
             "daemon: %s is present but malformed (%s); treating as stale", path, e
         )

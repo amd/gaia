@@ -14,7 +14,7 @@ beforeEach(() => {
 describe('the model server is down', () => {
     it.each([
         '/usr/bin/lemonade-server serve --ctx-size 32768',
-        'LEMONADE_CTX_SIZE=32768 /usr/bin/lemond',
+        '/usr/bin/lemond',
     ])('prints the backend start command %s verbatim', (command) => {
         useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: command } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
@@ -54,7 +54,7 @@ describe('context window too small', () => {
     it('points at Settings instead of a shell command', () => {
         useChatStore.setState({ systemStatus: {
             lemonade_running: true, model_loaded: 'Gemma-4-E4B-it-GGUF', model_downloaded: true, expected_model_loaded: true,
-            context_size_sufficient: false, model_context_size: 8192, start_command: 'LEMONADE_CTX_SIZE=32768 /usr/bin/lemond',
+            context_size_sufficient: false, model_context_size: 8192, start_command: '/usr/bin/lemond',
         } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
         expect(screen.getByText(/LLM context window is too small/)).toBeInTheDocument();

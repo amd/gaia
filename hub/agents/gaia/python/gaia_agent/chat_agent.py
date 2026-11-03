@@ -163,6 +163,16 @@ def _imports_gaia_tools(code: str) -> Optional[str]:
     return match.group(0).strip() if match else None
 
 
+def _script_source(path: Path) -> str:
+    """The script that just ran, so its output counts as a test run only if it ran one."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        # Gone or unreadable after the run: its output alone proves nothing.
+        logger.debug("execute_python_file: cannot re-read %s: %s", path, e)
+        return ""
+
+
 def _python_run_result(
     run: Any,
     stdout: str,
@@ -2084,6 +2094,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             r.returncode,
                             r.stdout,
                             r.stderr,
+                            source=_script_source(p),
                         ),
                     )
                 except OSError as e:
@@ -2299,7 +2310,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 return attach_check(
                     result,
                     check_from_python_run(
-                        snippet_target(code), r.returncode, r.stdout, r.stderr
+                        snippet_target(code),
+                        r.returncode,
+                        r.stdout,
+                        r.stderr,
+                        source=code,
                     ),
                 )
 

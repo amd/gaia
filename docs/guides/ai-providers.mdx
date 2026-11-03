@@ -140,8 +140,9 @@ titles, memory upkeep, document summaries and `gaia llm`.
 
 ### Add a model from Hugging Face
 
-Any GGUF chat model on Hugging Face can join the local model list. Paste its link
-and GAIA checks it before saving anything:
+Any GGUF chat model on Hugging Face, or a FastFlowLM NPU model from the
+[FastFlowLM organization](https://huggingface.co/FastFlowLM), can join the local
+model list. Paste its link and GAIA checks it before saving anything:
 
 - **Hugging Face link** — any page of a model repo works: its card, `/tree/main`,
   `/discussions`, with a tracking query string or not. A link to one `.gguf` file
@@ -160,6 +161,13 @@ and GAIA checks it before saving anything:
   first, else the largest that fits. Choose another from the list if you prefer.
 - **Not already listed** — a model GAIA ships, one you already added, or a name
   Lemonade already uses for another model is refused.
+
+A FastFlowLM repo (its name ends in `-NPU2`) takes a shorter path. There is nothing to
+register, because only models in the FastFlowLM release your Lemonade runs can load, so
+GAIA looks the link up in that release's model list. It needs a Ryzen AI NPU, and it must be
+a chat model; embedding, transcription and single-turn builds are refused. Gemma 4 E4B on
+the NPU is already in the model list on a PC with an NPU it fits, so pasting its link points
+you there.
 
 A chat template without tool support is allowed with a warning: GAIA can chat with
 the model but can't use tools through it.

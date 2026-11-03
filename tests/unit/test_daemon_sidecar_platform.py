@@ -117,11 +117,6 @@ def test_default_lock_path_points_at_repo_lock():
     assert p.parts[-3:] == ("email", "npm", "binaries.lock.json")
 
 
-def test_default_lock_path_is_per_agent():
-    p = plat.default_lock_path("gaia")
-    assert p.parts[-3:] == ("gaia", "npm", "binaries.lock.json")
-
-
 def test_flagship_lock_loads_its_sidecar_component():
     """The flagship's schema-3.0 lock must yield its own sidecar pins, never the
     email agent's."""
@@ -129,7 +124,7 @@ def test_flagship_lock_loads_its_sidecar_component():
     raw = json.loads(path.read_text(encoding="utf-8"))
     sidecar = raw["components"]["sidecar"]
 
-    lock = plat.load_lock(agent_dir_name="gaia")
+    lock = plat.load_lock(agent_id="gaia")
 
     assert lock.base_url == sidecar["baseUrl"]
     assert lock.agent_version == sidecar["componentVersion"]
@@ -137,7 +132,7 @@ def test_flagship_lock_loads_its_sidecar_component():
     for key, entry in lock.binaries.items():
         assert entry.sha256 == sidecar["platforms"][key]["sha256"]
         assert entry.executable == sidecar["platforms"][key]["executable"]
-    email = plat.load_lock(agent_dir_name="email")
+    email = plat.load_lock(agent_id="email")
     assert lock.base_url != email.base_url
 
 
