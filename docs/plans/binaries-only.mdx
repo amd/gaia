@@ -35,8 +35,15 @@ still try to import the GAIA agent's Python package, which a normal install neve
   machine with no checkout and no `~/.gaia/venv`.
 
 The fix is a frozen `gaia` core shipped inside the Agent UI and TUI installers, every agent
-turn relayed to the hub binary, and no pip remedy anywhere a user can see it. §5 orders it
-into 11 reviewable PRs.
+turn relayed to the hub binary, and no pip remedy anywhere a user can see it. §6 orders it
+into reviewable PRs.
+
+**The goal is speed.** §5 records today's numbers as the baseline, and every conversion PR
+reports its before and after against it.
+
+**PyPI is for third-party developers building on GAIA, and only for them.** The Agent UI
+and the TUI never install a PyPI package on a user's PC: not on first run, not on update,
+not to repair, and not as text telling the user to.
 
 ---
 
@@ -226,13 +233,91 @@ The flagship freeze already solves most of this, and the core freeze should copy
 
 ---
 
-## §5 Recommended order
+## §5 Speed baseline
 
-Each step is one PR. Steps 1–6 need no freezing and fix real user failures now.
-Steps 7–10 depend on 7.
+Speed is why the apps go binaries-only, so the conversion is judged on measured time
+from a clean machine. Six metrics, each measured the same way before and after every
+conversion PR:
+
+| # | Metric | Starts | Ends |
+|---|---|---|---|
+| M1 | Installer to setup screen | Installer launched | Setup screen shown (today: the backend answers `GET /api/health`) |
+| M2 | Venv build | Backend install starts | `amd-gaia[ui]` installed and verified, split into uv and Python download, `uv venv`, `uv pip install`, and verify |
+| M3 | `gaia init`, per step | `gaia init --profile gaia --yes --progress-json` starts | Each step's last event: Lemonade, each model download, the agent download, verify |
+| M4 | Backend cold start | App launched with the backend already installed | `GET /api/health` answers |
+| M5 | Agent cold start | The daemon is asked for the `gaia` sidecar | The sidecar answers its health route |
+| M6 | First-chat latency | First chat message sent after setup | First token, and the finished answer, each recorded |
+
+### §5.1 Where each number comes from
+
+- **Clean GitHub runners (M1 proxy, M2 total, M5 proxy).** The installer journeys
+  (`test_installers_headless.yml`) install each release on a fresh runner and time every
+  phase. The raw samples for v0.25.4-rc3 (7 runs, 21 rows) are committed in
+  [`installer/headless/baselines/binaries-only-v0.25.4-rc3.json`](https://github.com/amd/gaia/blob/main/installer/headless/baselines/binaries-only-v0.25.4-rc3.json).
+  Reproduce the medians with
+  `python installer/headless/propose_thresholds.py --runs 7 --release v0.25.4-rc3`.
+- **A clean AMD PC (M2 split, M3, M4, M5, M6).** These need Lemonade, models and a GPU or
+  NPU, which runners don't have. The PC has no GAIA, no `~/.gaia`, no uv or Python cache,
+  no Hugging Face cache and no checkout, and it is idle: no eval or other model load
+  running. Run each metric three times from that state and record the median and every
+  sample.
+
+### §5.2 Baseline, v0.25.4-rc3 on clean GitHub runners
+
+Medians of 7 runs, in seconds.
+
+| Row | Install | First launch to serving backend | Install to serving backend |
+|---|---|---|---|
+| Windows setup, desktop app only | 44.3 | 76.2 | 123.5 |
+| Desktop app's own Windows setup | 21.0 | 59.5 | 80.5 |
+| macOS arm64 `.dmg` | 16.7 | 28.4 | 45.1 |
+| Ubuntu 24.04 `.deb` | 8.7 | 19.1 | 26.8 |
+
+| Row | Install | First turn through `gaia-agent` (fake model) | Install to first turn |
+|---|---|---|---|
+| Windows setup, terminal only | 36.4 | 15.5 | 53.7 |
+| macOS arm64 terminal `.pkg` | 3.0 | 8.0 | 11.0 |
+| Ubuntu 24.04 terminal `.deb` | 7.0 | 4.8 | 12.3 |
+
+- **The desktop app's first launch** includes building `~/.gaia/venv` from PyPI and the
+  backend's cold start, with `gaia init` skipped. It also includes the journey's fixed
+  10 s liveness wait and up to 3 s of polling. That 10 s is in every before and after
+  alike.
+- **The Windows setup's install** also installs Lemonade's MSI.
+- **The terminal's first turn** is a fake-model turn through the installed agent, so it
+  is mostly the agent's cold start (M5 proxy).
+
+### §5.3 Not measured yet
+
+| Metric | Status | What's needed |
+|---|---|---|
+| M2 split | Not captured | The journeys keep phase totals only. The backend installer already timestamps every stage in `~/.gaia/electron-install.log`; step 0 uploads that log as an artifact |
+| M3, M4, M5 on hardware, M6 | Not measured | A run on a clean AMD PC as described in §5.1. Not taken from the machine this plan was written on: it holds an editable `~/.gaia/venv` and warm caches, and an eval and other sessions' models were loaded at the time, so its numbers would be neither clean nor quiet |
+
+A baseline number is only ever copied from a real run. Never estimate one or edit it by
+hand. Gaps stay marked as gaps until a run fills them.
+
+### §5.4 How each conversion PR reports
+
+- Every PR in §6 states which metrics it should move and gives before/after medians for
+  those metrics, measured the same way. Use the same runner rows for CI metrics, or the
+  same clean PC for hardware metrics.
+- "Before" is the committed baseline, or the previous conversion PR's "after" if one
+  merged since.
+- A PR that makes a metric slower says so and why.
+- A change that improves a metric by less than the spread of its samples doesn't count as
+  a speedup.
+
+---
+
+## §6 Recommended order
+
+Each step is one PR. Step 0 lands first. Steps 1–6 need no freezing and fix real user
+failures now. Steps 8–10 depend on 7.
 
 | Step | Change | Fixes | Depends on |
 |---|---|---|---|
+| 0 | Measurement: the journeys upload `electron-install.log` (M2 split), plus a script that times M3–M6 on a clean PC into a JSON file beside the CI baseline. Run it once on a clean AMD PC and commit the numbers | §5.3 gaps | — |
 | 1 | `gaia` and `npu` init profiles stop installing pip extras. The app installs them already, and a frozen core bundles them | A5, D5 | — |
 | 2 | `gaia -p` and `gaia chat` relay through the daemon to the sidecar, reusing the scheduled-prompt relay (`ui/server.py:390`) | B1, B2 | — |
 | 3 | Skill preference schema comes from the sidecar | B7 | sidecar route |
@@ -247,7 +332,7 @@ Steps 7–10 depend on 7.
 
 ---
 
-## §6 Risks
+## §7 Risks
 
 - **Every check needs a clean machine.** Each in-process path passes on a developer box,
   because the editable venv makes `gaia_agent` importable. Steps 2–10 need a test-plan
@@ -266,9 +351,13 @@ Steps 7–10 depend on 7.
   Step 8 needs an upgrade test from the last venv-based release.
 - **Eval no longer measures what ships** while it stays in-process (§4.5). Name it in
   release notes until step 11 lands.
+- **The baseline is half-filled.** Until step 0 runs on a clean AMD PC, only the
+  clean-runner metrics have numbers. Runners have no GPU or NPU and a datacenter network,
+  so their install times run faster than a user's. Compare runner numbers only with
+  runner numbers.
 - **Unsigned binaries** will draw antivirus and SmartScreen warnings until signing lands.
 
-## §7 Open questions
+## §8 Open questions
 
 1. Should the frozen core bundle the talk/voice stack (`sounddevice`, Kokoro client), or
    leave voice out of the frozen app until it has evals?
