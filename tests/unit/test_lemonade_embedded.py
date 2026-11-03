@@ -20,6 +20,7 @@ from gaia.llm.lemonade_client import REQUEST_BUDGET_ENV
 from gaia.llm.lemonade_embedded import (
     _ASSET_TEMPLATES,
     EMBEDDABLE_SHA256,
+    OWN,
     EmbeddedLemonade,
     EmbeddedLemonadeError,
     UnsupportedPlatformError,
@@ -443,6 +444,31 @@ class TestStatus:
         )
         assert manager.recorded_health() == (True, {"status": "ok"})
         assert asked == [(4321, "k")]
+
+    def test_recorded_health_of_an_exited_server_is_no_server(
+        self, manager, monkeypatch
+    ):
+        """A stopped server must not read as one too busy to answer."""
+        import psutil
+
+        manager._write_state({"pid": 1, "port": 4321, "api_key": "k"})
+        monkeypatch.setattr(EmbeddedLemonade, "_health", lambda self, port, key: None)
+
+        def gone(pid):
+            raise psutil.NoSuchProcess(pid)
+
+        monkeypatch.setattr(psutil, "Process", gone)
+        assert manager.recorded_health() == (False, None)
+
+    def test_recorded_health_of_a_live_unanswering_server_is_recorded(
+        self, manager, monkeypatch
+    ):
+        manager._write_state({"pid": 1, "port": 4321, "api_key": "k"})
+        monkeypatch.setattr(EmbeddedLemonade, "_health", lambda self, port, key: None)
+        monkeypatch.setattr(
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: OWN
+        )
+        assert manager.recorded_health() == (True, None)
 
     def test_unreadable_state_file_is_discarded(self, manager):
         manager.root.mkdir(parents=True, exist_ok=True)

@@ -104,6 +104,18 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **Skill messages give commands that work and say what really happens.**
+  Installing a skill the agent already bundles now says the bundled copy is
+  the one that loads, instead of telling the model to load the install. The
+  commands GAIA names now run as written: `gaia skill import` gets
+  `--allow-experimental` for a skill that ships code, `gaia skill deltas
+  --drop-section` gets its `--scope`, and the nonexistent `gaia skill info
+  --remote` is replaced. The skills list no longer says a CLI such as `gh` is
+  refused until its skill loads (it asks you to approve each command), a
+  learned-change undo says it takes effect on the next start, and asking to
+  correct a skill that isn't loaded explains the lesson can be saved on your
+  next message. The docs no longer mention a `--skill-set` flag the agent
+  doesn't have.
 - **A printed test log no longer marks an answer verified.** A `run_python`
   snippet that printed an old log with a pytest summary counted as a test run
   (#4013). Python code now counts only when it runs a test runner itself:

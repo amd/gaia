@@ -529,3 +529,82 @@ test('each line of an email being approved takes its own direction', async ({ pa
     expect(gaps.english).toBeLessThan(40);
     expect(gaps.arabic).toBeLessThan(40);
 });
+
+/** The desktop app's updater in a given state; the browser preview has none. */
+function withUpdater(update: Record<string, unknown>) {
+    return async (page: Page) => {
+        await page.addInitScript((patch) => {
+            const state = {
+                status: 'idle', version: null, progress: 0, releaseNotes: null, error: null,
+                currentVersion: '0.25.4', pinnedVersion: null, autoUpdate: false, includePrereleases: false,
+                previousVersion: null, startFailed: false, installFailed: null, lastCheckError: null,
+                ...patch,
+            };
+            const resolved = async () => state;
+            // A refusal as Electron's IPC delivers it: the code inside the message.
+            const refuse = async () => {
+                throw new Error(
+                    "Error invoking remote method 'gaia:update:restart': Error: gaia-update-error:" +
+                        JSON.stringify({ code: 'diskSpace', params: { need: '1 GB', free: '412 MB' }, message: 'GAIA needs about 1 GB free' }),
+                );
+            };
+            Object.defineProperty(window, 'gaiaUpdater', {
+                value: {
+                    getStatus: resolved, check: resolved, listReleases: async () => [],
+                    restart: refuse, onStatusChange: () => () => undefined,
+                },
+            });
+        }, update);
+    };
+}
+
+const UPDATE_STATES: Record<string, Record<string, unknown>> = {
+    available: { status: 'available', version: '0.25.5-rc.3' },
+    downloading: { status: 'downloading', version: '0.25.5-rc.3', progress: 42 },
+    preparing: { status: 'downloading', version: '0.25.5-rc.3', progress: 100, preparing: true },
+    ready: { status: 'downloaded', version: '0.25.5-rc.3' },
+    'install failed': { installFailed: { target: '0.25.5-rc.3', from: '0.25.4' } },
+    'did not start': { startFailed: true, previousVersion: '0.25.3' },
+    'check failed': { status: 'error', error: 'net::ERR_INTERNET_DISCONNECTED' },
+};
+
+for (const locale of ['ar', 'en']) {
+    test.describe(`updates (${locale})`, () => {
+        for (const [name, update] of Object.entries(UPDATE_STATES)) {
+            test(`chip: ${name}`, async ({ page }, info) => {
+                await open(page, '', locale, withUpdater(update));
+                await expect(page.locator('.update-chip')).toBeVisible();
+                expect(await audit(page)).toEqual([]);
+                await page.screenshot({ path: info.outputPath('chip.png') });
+            });
+        }
+
+        test('settings, with the way back on offer', async ({ page }, info) => {
+            await open(page, '', locale, withUpdater({
+                previousVersion: '0.25.3',
+                installFailed: { target: '0.25.5-rc.3', from: '0.25.4' },
+                lastCheckError: 'net::ERR_INTERNET_DISCONNECTED',
+            }));
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            await page.locator('#updates-label').scrollIntoViewIfNeeded();
+            await expect(page.locator('#updates-back-hint')).toBeVisible();
+            expect(await audit(page)).toEqual([]);
+            await page.screenshot({ path: info.outputPath('settings.png') });
+        });
+
+        test('settings, after a restart refused for disk space', async ({ page }, info) => {
+            await open(page, '', locale, withUpdater({ status: 'downloaded', version: '0.25.5-rc.3' }));
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            await page.locator('#updates-label').scrollIntoViewIfNeeded();
+            await page.getByRole('button', { name: /Restart to install/ }).click();
+            const error = page.locator('.settings-error').filter({ hasText: '412' });
+            await expect(error).toBeVisible();
+            await expect(error).toContainText(locale === 'ar' ? 'يحتاج GAIA إلى نحو' : 'needs about');
+            // Isolated, a size reads "412 MB" in a right-to-left line, not "MB 412".
+            if (locale === 'ar') await expect(error).toContainText('⁨412 MB⁩');
+            await expect(error).not.toContainText('gaia-update-error');
+            expect(await audit(page)).toEqual([]);
+            await page.screenshot({ path: info.outputPath('settings-refused.png') });
+        });
+    });
+}

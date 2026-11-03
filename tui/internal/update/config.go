@@ -26,6 +26,8 @@ const (
 	autoUpdateKey = "autoUpdate"
 	prereleaseKey = "includePrereleases"
 	pinKey        = "tuiPinnedVersion"
+	previousKey   = "tuiPreviousVersion"
+	awaitingKey   = "tuiAwaitingInstall"
 )
 
 // homeDir is swapped by tests.
@@ -36,7 +38,17 @@ type Config struct {
 	AutoUpdate    bool   // install a newer release on quit; off by default
 	Prereleases   bool   // offer release candidates too; off by default
 	PinnedVersion string // a tag such as "v0.25.0", or "" when not pinned
+	Previous      string // the tag this install updated from, or "" when there is none
+	Awaiting      Awaiting
 	Path          string
+}
+
+// Awaiting is an install left to a window this process can't wait for; the
+// next launch can tell whether it landed. Tag is "" when there is none.
+type Awaiting struct {
+	Tag      string `json:"tag"`
+	Previous string `json:"previous"`
+	Pin      bool   `json:"pin"`
 }
 
 // ConfigPath is where the preferences are kept.
@@ -73,6 +85,14 @@ func ReadConfig() (Config, error) {
 	if v, ok := raw[pinKey].(string); ok {
 		cfg.PinnedVersion = v
 	}
+	if v, ok := raw[previousKey].(string); ok {
+		cfg.Previous = v
+	}
+	if v, ok := raw[awaitingKey].(map[string]any); ok {
+		cfg.Awaiting.Tag, _ = v["tag"].(string)
+		cfg.Awaiting.Previous, _ = v["previous"].(string)
+		cfg.Awaiting.Pin, _ = v["pin"].(bool)
+	}
 	return cfg, nil
 }
 
@@ -91,6 +111,44 @@ func SetPin(tag string) error {
 	}
 	return writeKey(pinKey, tag)
 }
+
+// Settle applies the pin and the way back of an install that landed since the
+// last launch, and forgets one that didn't.
+func Settle() error {
+	cfg, err := ReadConfig()
+	if err != nil {
+		return err
+	}
+	a := cfg.Awaiting
+	if a.Tag == "" || IsDevBuild() {
+		return nil
+	}
+	if SameVersion(a.Tag, Current) {
+		if err := land(a); err != nil {
+			return err
+		}
+	}
+	return writeKey(awaitingKey, nil)
+}
+
+// land records what an install changed once it is known to be in place.
+func land(a Awaiting) error {
+	if a.Previous != "" {
+		if err := setPrevious(a.Previous); err != nil {
+			return err
+		}
+	}
+	// An unpinned install also drops an older pin, or later checks would say
+	// updates are paused for a version no longer running.
+	pin := ""
+	if a.Pin {
+		pin = a.Tag
+	}
+	return SetPin(pin)
+}
+
+// setPrevious remembers the version to go back to if an update goes wrong.
+func setPrevious(tag string) error { return writeKey(previousKey, tag) }
 
 func readRaw(path string) (map[string]any, error) {
 	data, err := os.ReadFile(path)

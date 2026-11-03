@@ -124,6 +124,7 @@ from gaia.agents.base.task_lessons import attach as attach_task_lessons
 from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
+    RESOLVED_PATH_ARG,
     SCRATCH_ARG,
     command_reaches_folder,
     is_inside_folder,
@@ -6960,7 +6961,14 @@ Do NOT wrap conversational replies in JSON.
         reserved = sorted(
             key
             for key in (tool_args if isinstance(tool_args, dict) else {})
-            if key in (RISK_NOTE_ARG, SCRATCH_ARG, NEEDS_PERSON_ARG, EXACT_TEXT_ARG)
+            if key
+            in (
+                RISK_NOTE_ARG,
+                SCRATCH_ARG,
+                NEEDS_PERSON_ARG,
+                EXACT_TEXT_ARG,
+                RESOLVED_PATH_ARG,
+            )
         )
         if reserved:
             return {
@@ -7014,6 +7022,10 @@ Do NOT wrap conversational replies in JSON.
         prompt_args_of = getattr(preflight, "prompt_args_of", None)
         if callable(prompt_args_of):
             prompt_args = prompt_args_of(tool_args)
+        if isinstance(prompt_args, dict) and tool_name in PATH_TOOLS:
+            resolved_path = prompt_args.get("file_path")
+            if isinstance(resolved_path, str) and os.path.isabs(resolved_path):
+                prompt_args = {**prompt_args, RESOLVED_PATH_ARG: resolved_path}
         # Scratch writes never ask, so code run from there is asked about on
         # every run — the marker keeps "always" (and any broader grant) off it.
         scratch = _scratch_reached_by(self, tool_name, prompt_args)
