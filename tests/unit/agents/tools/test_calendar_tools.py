@@ -1880,18 +1880,31 @@ class TestIgnorableCharacters:
     def test_defined_uses_stay_clean(self, text):
         assert visible(text) == text and not has_hidden(text)
 
-    def test_the_emoji_list_is_unicodes(self):
-        regex = pytest.importorskip("regex")
-        pattern = regex.compile(r"\p{Extended_Pictographic}")
-        listed = [
-            cp
-            for cp in range(sys.maxunicode + 1)
-            if not 0xD800 <= cp <= 0xDFFF and pattern.match(chr(cp))
-        ]
-        ours = [
+    def test_the_emoji_list_is_well_formed(self):
+        """Unicode 17 Extended_Pictographic, as current browsers apply it.
+
+        Not compared with a library: each one carries its own Unicode version.
+        """
+        points = [
             cp for low, high in EXTENDED_PICTOGRAPHIC for cp in range(low, high + 1)
         ]
-        assert ours == listed
+        assert points == sorted(set(points)) and len(points) == 2848
+        for emoji in (
+            "\u00a9",
+            "\u2764",
+            "\u263a",
+            "\U0001f600",
+            "\U0001f37d",
+            "\U0001f525",
+        ):
+            assert any(low <= ord(emoji) <= high for low, high in EXTENDED_PICTOGRAPHIC)
+        for other in "aZ09#*\u845b\u0645 ":
+            assert not any(
+                low <= ord(other) <= high for low, high in EXTENDED_PICTOGRAPHIC
+            )
+        assert not any(
+            low <= cp <= high for cp in points for low, high in CJK_IDEOGRAPHS
+        )
 
     def test_the_ideograph_blocks_hold_every_cjk_ideograph(self):
         for cp in range(sys.maxunicode + 1):
