@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Mapping, Optional
 
 from gaia.env import dotenv_credential_file, working_dir_credential
+from gaia.eval.process_tree import NEW_GROUP, kill_tree
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -73,6 +74,14 @@ TOKEN_WITHOUT_CLI_ERROR = (
     "See src/gaia/eval/claude_credential.py for the order credentials are tried."
 )
 
+#: Fixed text per source, for messages that must not carry a credential value.
+_SOURCE_NAMES = {
+    OAUTH_TOKEN: "the Claude Code subscription (CLAUDE_CODE_OAUTH_TOKEN)",
+    CLI_LOGIN: "the Claude Code CLI login",
+    ENV_KEY: "ANTHROPIC_API_KEY from the environment",
+    DOTENV_KEY: "ANTHROPIC_API_KEY from a .env file",
+}
+
 _announced: set = set()
 _login_cache: Dict[tuple, bool] = {}
 
@@ -82,8 +91,15 @@ class ClaudeCredential:
     """The credential an eval will use. ``label`` is safe to print."""
 
     source: str
-    label: str
+    dotenv_path: Optional[str] = None
     api_key: Optional[str] = field(default=None, repr=False)
+
+    @property
+    def label(self) -> str:
+        """Where the credential came from; never any part of its value."""
+        if self.source == DOTENV_KEY and self.dotenv_path:
+            return f"{API_KEY_VAR} from {self.dotenv_path}"
+        return _SOURCE_NAMES[self.source]
 
     @property
     def is_subscription(self) -> bool:
@@ -113,27 +129,32 @@ def _auth_status(claude_bin: str, env: Mapping[str, str]) -> dict:
         k: v for k, v in env.items() if k.upper() not in (API_KEY_VAR, OAUTH_TOKEN_VAR)
     }
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(  # pylint: disable=consider-using-with
             [claude_bin, "auth", "status", "--json"],
-            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=AUTH_STATUS_TIMEOUT,
             env=child,
-            check=False,
+            **NEW_GROUP,
         )
-    except (OSError, subprocess.TimeoutExpired) as e:
-        raise RuntimeError(
-            f"Could not ask the Claude Code CLI ({claude_bin}) whether it is logged "
-            f"in: `claude auth status` failed ({e}). Update the CLI "
-            "(`npm install -g @anthropic-ai/claude-code`), or take it off PATH to "
-            "use ANTHROPIC_API_KEY."
+    except OSError as e:
+        raise _status_error(claude_bin, f"it could not start ({e})") from e
+    try:
+        stdout, stderr = proc.communicate(timeout=AUTH_STATUS_TIMEOUT)
+    except subprocess.TimeoutExpired as e:
+        # On Windows `claude` is a .cmd wrapper: killing only it leaves node
+        # running with the pipes open.
+        kill_tree(proc)
+        raise _status_error(
+            claude_bin, f"it did not answer within {AUTH_STATUS_TIMEOUT:.0f}s"
         ) from e
     try:
-        status = json.loads(proc.stdout or "")
+        status = json.loads(stdout or "")
     except json.JSONDecodeError as e:
-        detail = (proc.stderr or proc.stdout or "(no output)").strip()[:300]
+        detail = (stderr or stdout or "(no output)").strip()[:300]
         raise RuntimeError(
             f"`claude auth status --json` (from {claude_bin}) exited "
             f"{proc.returncode} without JSON, so its login is unknown: {detail}\n"
@@ -146,6 +167,15 @@ def _auth_status(claude_bin: str, env: Mapping[str, str]) -> dict:
             f"{type(status).__name__}, not an object. Update the CLI."
         )
     return status
+
+
+def _status_error(claude_bin: str, why: str) -> RuntimeError:
+    return RuntimeError(
+        f"Could not ask the Claude Code CLI ({claude_bin}) whether it is logged "
+        f"in: `claude auth status` failed, {why}. Update the CLI "
+        "(`npm install -g @anthropic-ai/claude-code`), or take it off PATH to "
+        "use ANTHROPIC_API_KEY."
+    )
 
 
 def cli_logged_in(claude_bin: str, env: Optional[Mapping[str, str]] = None) -> bool:
@@ -164,31 +194,32 @@ def cli_logged_in(claude_bin: str, env: Optional[Mapping[str, str]] = None) -> b
     return _login_cache[cache_key]
 
 
+def _claude_bin() -> Optional[str]:
+    return shutil.which("claude")
+
+
 def resolve_claude_credential(
     env: Optional[Mapping[str, str]] = None,
 ) -> ClaudeCredential:
     """The first usable credential in the order above; raises when there is none."""
     env = os.environ if env is None else env
-    claude_bin = shutil.which("claude")
+    claude_bin = _claude_bin()
     token = (env.get(OAUTH_TOKEN_VAR) or "").strip()
 
     if claude_bin and token:
-        return ClaudeCredential(
-            OAUTH_TOKEN, f"the Claude Code subscription ({OAUTH_TOKEN_VAR})"
-        )
+        return ClaudeCredential(OAUTH_TOKEN)
     if claude_bin and cli_logged_in(claude_bin, env):
-        return ClaudeCredential(CLI_LOGIN, "the Claude Code CLI login")
+        return ClaudeCredential(CLI_LOGIN)
 
-    key = api_key_credential(env)
-    if key is not None:
+    found = api_key_credential(env)
+    if found is not None:
         if token:
             log.warning(
-                "%s is set but the `claude` CLI is not on PATH, so it cannot be "
-                "used; using %s instead.",
-                OAUTH_TOKEN_VAR,
-                key.label,
+                "CLAUDE_CODE_OAUTH_TOKEN is set but the `claude` CLI is not on "
+                "PATH, so it cannot be used; using %s instead.",
+                _SOURCE_NAMES[found.source],
             )
-        return key
+        return found
     if token:
         raise RuntimeError(TOKEN_WITHOUT_CLI_ERROR)
     raise ValueError(MISSING_CREDENTIAL_ERROR)
@@ -206,12 +237,18 @@ def api_key_credential(
         return None
     path = dotenv_credential_file(API_KEY_VAR, value)
     if path:
-        return ClaudeCredential(DOTENV_KEY, f"{API_KEY_VAR} from {path}", value)
-    return ClaudeCredential(ENV_KEY, f"{API_KEY_VAR} from the environment", value)
+        return ClaudeCredential(DOTENV_KEY, dotenv_path=path, api_key=value)
+    return ClaudeCredential(ENV_KEY, api_key=value)
 
 
 def credential_present(env: Optional[Mapping[str, str]] = None) -> bool:
-    """True when :func:`resolve_claude_credential` would return a credential."""
+    """True when :func:`resolve_claude_credential` would return a credential.
+
+    False only when nothing is set. A credential that is set but unusable (a
+    token with no CLI, a CLI whose login cannot be read) raises its
+    ``RuntimeError``, so the caller fails loudly with the fix instead of the
+    generic "nothing set" message.
+    """
     try:
         resolve_claude_credential(env)
     except ValueError:
@@ -219,13 +256,14 @@ def credential_present(env: Optional[Mapping[str, str]] = None) -> bool:
     return True
 
 
-def announce(credential: ClaudeCredential, role: str = "Claude judge") -> None:
+def announce(chosen: ClaudeCredential, role: str = "Claude judge") -> None:
     """Print which credential *role* uses, once per process.
 
     stderr, not the logger: the eval report scripts and lane runners never set
-    up console logging, and this line must show in every run.
+    up console logging, and this line must show in every run. Only the fixed
+    source name and, for a ``.env``, the file's path are printed.
     """
-    line = f"{role}: using {credential.label}"
+    line = f"{role}: using {chosen.label}"
     if line in _announced:
         return
     _announced.add(line)

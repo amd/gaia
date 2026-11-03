@@ -125,7 +125,7 @@ class FakeClaude:
 
 
 @pytest.fixture
-def harness(tmp_path, monkeypatch):
+def harness(tmp_path, monkeypatch, claude_login):
     """Five scenarios, a stubbed backend, and a pluggable fake Claude."""
     scenarios = tmp_path / "scenarios"
     scenarios.mkdir()

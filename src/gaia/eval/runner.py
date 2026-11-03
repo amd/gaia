@@ -23,7 +23,6 @@ import logging
 import os
 import re
 import shutil
-import signal
 import statistics
 import subprocess
 import sys
@@ -47,6 +46,7 @@ from gaia.eval.claude_outage import (
 from gaia.eval.claude_usage import describe, merge_scenario_usage, usage_from_cli
 from gaia.eval.config import DEFAULT_AGENT_TYPE
 from gaia.eval.eval_lock import exclusive_eval
+from gaia.eval.process_tree import kill_tree as _kill_tree
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
 from gaia.eval.scorecard import NOT_RUN, SKIPPED_STATUSES
 from gaia.llm.local_only import assert_provider_permitted, cloud_blocked
@@ -2123,25 +2123,6 @@ def run_scripted_scenario(
 
 #: After a timeout, how long the killed driver's pipes get to drain.
 _DRIVER_DRAIN_S = 30
-
-
-def _kill_tree(proc: subprocess.Popen) -> None:
-    """Kill *proc* and every process it started.
-
-    Killing only ``claude`` leaves its MCP server holding the output pipes, so
-    reading them blocks and the timeout fires minutes late.
-    """
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-            capture_output=True,
-            check=False,
-        )
-    else:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)  # pylint: disable=no-member
-    with contextlib.suppress(OSError):
-        proc.kill()
 
 
 def _driver_auth():

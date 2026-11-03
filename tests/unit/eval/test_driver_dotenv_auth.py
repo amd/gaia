@@ -80,13 +80,18 @@ def _launch(tmp_path, mocker):
     return run.call_args.args[0], run.call_args.kwargs["env"]
 
 
-def test_cli_login_beats_an_exported_key(tmp_path, mocker, monkeypatch, capsys):
+def test_cli_login_beats_an_exported_key(
+    tmp_path, mocker, monkeypatch, claude_login, capsys
+):
     _shell_key(monkeypatch)
     cmd, env = _launch(tmp_path, mocker)
     assert "--bare" not in cmd
     # Not passing --bare is not enough: the CLI prefers an inherited key to OAuth.
-    assert env is not None and KEY not in env
-    assert env.get("PATH") == os.environ.get("PATH")
+    # Booleans, so a failure never prints the environment.
+    dropped_key = env is not None and KEY not in env
+    assert dropped_key
+    same_path = env.get("PATH") == os.environ.get("PATH")
+    assert same_path
     err = capsys.readouterr().err
     assert "Claude eval driver: using the Claude Code CLI login" in err
     assert SHELL_KEY not in err
@@ -97,7 +102,8 @@ def test_oauth_token_beats_an_exported_key(tmp_path, mocker, monkeypatch, capsys
     monkeypatch.setenv(TOKEN, "tok-SECRET")
     cmd, env = _launch(tmp_path, mocker)
     assert "--bare" not in cmd
-    assert KEY not in env and env[TOKEN] == "tok-SECRET"
+    kept_token_only = KEY not in env and env[TOKEN] == "tok-SECRET"
+    assert kept_token_only
     err = capsys.readouterr().err
     assert "using the Claude Code subscription (CLAUDE_CODE_OAUTH_TOKEN)" in err
     assert "tok-SECRET" not in err and SHELL_KEY not in err
@@ -110,7 +116,8 @@ def test_exported_key_when_logged_out(
     _dotenv_key(monkeypatch)
     cmd, env = _launch(tmp_path, mocker)
     assert cmd[:3] == ["/test/claude", "-p", "--bare"]
-    assert env is None
+    inherits = env is None
+    assert inherits
     err = capsys.readouterr().err
     assert "Claude eval driver: using ANTHROPIC_API_KEY from the environment" in err
     assert SHELL_KEY not in err and DOTENV_KEY not in err
@@ -122,7 +129,8 @@ def test_dotenv_key_is_last_and_reaches_the_child(
     _dotenv_key(monkeypatch)
     cmd, env = _launch(tmp_path, mocker)
     assert "--bare" in cmd
-    assert env[KEY] == DOTENV_KEY
+    carries_key = env[KEY] == DOTENV_KEY
+    assert carries_key
     err = capsys.readouterr().err
     assert "Claude eval driver: using ANTHROPIC_API_KEY from /work/project/.env" in err
     assert DOTENV_KEY not in err
@@ -134,7 +142,7 @@ def test_nothing_usable_raises(tmp_path, mocker, monkeypatch, logged_out):
         _launch(tmp_path, mocker)
 
 
-def test_message_is_printed_once_per_process(monkeypatch, capsys):
+def test_message_is_printed_once_per_process(monkeypatch, claude_login, capsys):
     runner._driver_auth()
     runner._driver_auth()
     assert capsys.readouterr().err.count("Claude eval driver: using") == 1

@@ -10,8 +10,10 @@ unscored case.
 """
 
 import json
+import os
 import subprocess
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -136,7 +138,7 @@ def test_oauth_token_wins_and_says_so(
 
 
 def test_cli_login_wins_over_an_exported_key(
-    monkeypatch, fake_claude_bin, exported_key, capsys
+    monkeypatch, claude_login, exported_key, capsys
 ):
     _stub_sdk_client(monkeypatch)
     assert isinstance(make_judge_client(), ClaudeCliClient)
@@ -145,7 +147,7 @@ def test_cli_login_wins_over_an_exported_key(
     _assert_no_secret(err)
 
 
-def test_cli_login_wins_over_a_dotenv_key(monkeypatch, fake_claude_bin, project_key):
+def test_cli_login_wins_over_a_dotenv_key(monkeypatch, claude_login, project_key):
     _stub_sdk_client(monkeypatch)
     assert isinstance(make_judge_client(), ClaudeCliClient)
 
@@ -263,7 +265,7 @@ def test_judge_credential_present(monkeypatch, no_claude_bin, env, expected):
     assert judge_client.judge_credential_present() is expected
 
 
-def test_a_logged_in_cli_counts_as_present(fake_claude_bin):
+def test_a_logged_in_cli_counts_as_present(claude_login):
     assert judge_client.judge_credential_present() is True
 
 
@@ -281,7 +283,7 @@ def test_max_tokens_reaches_only_the_sdk_client(monkeypatch, no_claude_bin):
     assert sentinel.kwargs == {"model": "m"}
 
 
-def test_the_message_is_printed_once(monkeypatch, fake_claude_bin, capsys):
+def test_the_message_is_printed_once(monkeypatch, claude_login, capsys):
     make_judge_client()
     make_judge_client()
     assert capsys.readouterr().err.count("Claude judge: using") == 1
@@ -329,41 +331,90 @@ def test_cli_login_reading(monkeypatch, status, logged_in):
     assert claude_credential.cli_logged_in("/usr/bin/claude", {}) is logged_in
 
 
-def test_auth_status_runs_without_the_key_or_token(monkeypatch):
+class _FakeStatusProc:
+    """Stands in for the `claude auth status` child."""
+
+    pid = 4242
+
+    def __init__(self, cmd, outcome, captured):
+        self.outcome = outcome
+        self.returncode = 0
+        captured["cmd"] = cmd
+
+    def communicate(self, timeout=None):
+        if isinstance(self.outcome, BaseException):
+            raise self.outcome
+        self.returncode = self.outcome[0]
+        return self.outcome[1], self.outcome[2]
+
+
+def _fake_popen(monkeypatch, outcome):
     captured = {}
 
-    def fake_run(cmd, **kwargs):
-        captured["cmd"] = cmd
-        captured["env"] = kwargs["env"]
-        return subprocess.CompletedProcess(cmd, 1, '{"loggedIn": false}', "")
+    def popen(cmd, **kwargs):
+        captured["kwargs"] = kwargs
+        if isinstance(outcome, OSError):
+            raise outcome
+        return _FakeStatusProc(cmd, outcome, captured)
 
-    monkeypatch.setattr(claude_credential.subprocess, "run", fake_run)
+    monkeypatch.setattr(claude_credential.subprocess, "Popen", popen)
+    return captured
+
+
+def test_auth_status_runs_without_the_key_or_token(monkeypatch):
+    captured = _fake_popen(monkeypatch, (1, '{"loggedIn": false}', ""))
     status = _REAL_AUTH_STATUS(
         "/usr/bin/claude",
         {"ANTHROPIC_API_KEY": ENV_KEY, "CLAUDE_CODE_OAUTH_TOKEN": OAUTH, "A": "1"},
     )
     assert status == {"loggedIn": False}
     assert captured["cmd"] == ["/usr/bin/claude", "auth", "status", "--json"]
-    assert captured["env"] == {"A": "1"}
+    child_env_is_clean = captured["kwargs"]["env"] == {"A": "1"}
+    assert child_env_is_clean
+    # Its own process group, so a timeout can kill the whole tree.
+    assert set(claude_credential.NEW_GROUP) <= set(captured["kwargs"])
+    assert captured["kwargs"]["stdin"] == subprocess.DEVNULL
 
 
 @pytest.mark.parametrize(
     "outcome",
     [
-        subprocess.TimeoutExpired("claude", 30),
         FileNotFoundError("claude"),
-        subprocess.CompletedProcess([], 1, "error: unknown command 'auth'", ""),
+        (1, "error: unknown command 'auth'", ""),
+        (0, "[1, 2]", ""),
     ],
+    ids=["cannot-start", "not-json", "not-an-object"],
 )
 def test_an_unreadable_login_check_is_an_error(monkeypatch, outcome):
-    def fake_run(cmd, **kwargs):
-        if isinstance(outcome, BaseException):
-            raise outcome
-        return outcome
-
-    monkeypatch.setattr(claude_credential.subprocess, "run", fake_run)
-    with pytest.raises(RuntimeError, match="npm install -g @anthropic-ai/claude-code"):
+    _fake_popen(monkeypatch, outcome)
+    with pytest.raises(RuntimeError, match="(npm install|Update the CLI)"):
         _REAL_AUTH_STATUS("/usr/bin/claude", {})
+
+
+def test_a_hung_login_check_kills_the_whole_tree(monkeypatch):
+    killed = []
+    _fake_popen(monkeypatch, subprocess.TimeoutExpired("claude", 30))
+    monkeypatch.setattr(claude_credential, "kill_tree", killed.append)
+    with pytest.raises(RuntimeError, match="did not answer within"):
+        _REAL_AUTH_STATUS("/usr/bin/claude", {})
+    assert [p.pid for p in killed] == [4242]
+
+
+def test_a_wedged_cli_wrapper_does_not_hang_the_check(monkeypatch, tmp_path):
+    """A wrapper whose own child keeps the pipes open, like Windows' claude.cmd."""
+    grandchild = "import time; time.sleep(120)"
+    if sys.platform == "win32":
+        wrapper = tmp_path / "claude.cmd"
+        wrapper.write_text(f'@"{sys.executable}" -c "{grandchild}"\r\n')
+    else:
+        wrapper = tmp_path / "claude"
+        wrapper.write_text(f"#!/bin/sh\n'{sys.executable}' -c '{grandchild}'\n")
+        wrapper.chmod(0o755)
+    monkeypatch.setattr(claude_credential, "AUTH_STATUS_TIMEOUT", 2.0)
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="did not answer within 2s"):
+        _REAL_AUTH_STATUS(str(wrapper), dict(os.environ))
+    assert time.monotonic() - started < 20
 
 
 def test_the_login_check_runs_once_per_cli(monkeypatch):
@@ -380,7 +431,7 @@ def test_the_login_check_runs_once_per_cli(monkeypatch):
 
 
 def test_the_cli_judge_child_does_not_inherit_the_key(
-    monkeypatch, fake_claude_bin, exported_key
+    monkeypatch, claude_login, exported_key
 ):
     captured = {}
 

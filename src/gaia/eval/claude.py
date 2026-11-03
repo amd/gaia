@@ -99,8 +99,8 @@ class ClaudeClient:
         if model is None:
             model = DEFAULT_CLAUDE_MODEL
         self.log = self.__class__.log  # Use the class-level logger for instances
-        api_key = api_key_credential()
-        if api_key is None:
+        found = api_key_credential()
+        if found is None:
             error_msg = (
                 "ANTHROPIC_API_KEY is not set in the environment or a .env file.\n\n"
                 "ClaudeClient calls the Messages API and needs a console API key:\n"
@@ -112,8 +112,8 @@ class ClaudeClient:
             )
             self.log.error(error_msg)
             raise ValueError(error_msg)
-        announce(api_key)
-        self.api_key = api_key.api_key
+        announce(found)
+        self.api_key = found.api_key
         # Initialize Anthropic client with retry support
         # The SDK handles exponential backoff automatically
         assert_provider_permitted("Anthropic Claude")

@@ -1335,7 +1335,9 @@ def test_an_unusable_reply_is_an_error_not_a_score(stdout):
         ft.parse_judgement(stdout, [_attempt("a")])
 
 
-def test_the_judge_has_no_tools_and_uses_the_key_only_when_given(monkeypatch):
+def test_the_judge_has_no_tools_and_uses_the_key_only_when_given(
+    monkeypatch, claude_login
+):
     monkeypatch.setattr(ft.shutil, "which", lambda name: "/bin/claude")
     oauth = ft.judge_command("claude-opus-5", {"CLAUDE_CODE_OAUTH_TOKEN": "t"})
     assert oauth[oauth.index("--tools") + 1] == ""
