@@ -10,6 +10,11 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **Reading text aloud no longer downloads a voice model mid-chat.**
+  `text_to_speech` used to pull Kokoro on first use; it now stops and asks you
+  to run `gaia download --agent talk` first. It also takes a `speed` (0.5-2.0),
+  defaults to the `af_bella` voice, writes only `.wav` files, and reads long
+  text in sentence-sized pieces joined into one file.
 - **A project's `.env` can only supply the Claude API key.** The sidecar reads
   `ANTHROPIC_API_KEY` from a `.env` in its working directory, for its own
   Claude calls, and ignores every other name there with one warning. Settings
