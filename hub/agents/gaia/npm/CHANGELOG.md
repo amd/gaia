@@ -10,6 +10,10 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **Updating the agent on a Mac no longer asks for keychain access again.** When
+  the daemon starts the sidecar, the daemon now reads saved keys for it. A sidecar
+  started without the daemon still reads the keychain itself. Requires a daemon
+  and agent from this release or later.
 - **A project's `.env` can only supply the Claude API key.** The sidecar reads
   `ANTHROPIC_API_KEY` from a `.env` in its working directory, for its own
   Claude calls, and ignores every other name there with one warning. Settings

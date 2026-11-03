@@ -103,6 +103,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Imported here, not at module scope: this is the branch that may use
         # FastAPI, and it is the only one that should have to have it.
         _configure_logging()
+        # Before the server imports anything that may read a secret.
+        try:
+            from gaia.connectors.daemon_keyring import install_daemon_keyring_from_env
+        except ImportError:  # amd-gaia older than this; the pin allows it
+            print(
+                "WARNING: this amd-gaia cannot read the keychain through the GAIA "
+                "daemon, so macOS may ask for keychain access after each update. "
+                "Fix: pip install --upgrade amd-gaia",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            install_daemon_keyring_from_env()
         from gaia_agent.server import serve_http
 
         return serve_http(args)

@@ -19,6 +19,7 @@ import math
 import os
 import secrets
 import socket
+import sys
 import time
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -91,7 +92,9 @@ def _load_extra_specs() -> dict:
     return specs
 
 
-def _build_registry(specs, forwarder, *, custody_auth=None, custody_base_url=None):
+def _build_registry(
+    specs, forwarder, *, custody_auth=None, custody_base_url=None, keychain_auth=None
+):
     """The daemon's sidecar registry, wired to the crash-reap ledger and the
     OAuth forward-out on-spawn push (#2154).
 
@@ -128,6 +131,7 @@ def _build_registry(specs, forwarder, *, custody_auth=None, custody_base_url=Non
         on_started=_on_started,
         custody_auth=custody_auth,
         custody_base_url=custody_base_url,
+        keychain_auth=keychain_auth,
     )
 
 
@@ -307,6 +311,9 @@ def run(host: str = HOST) -> None:
     # callback URL is the daemon's own loopback address.
     custody_store = CustodyStore(custody_db_path())
     custody_auth = CustodyAuth()
+    # Only macOS ties keychain approval to the build asking; elsewhere the
+    # sidecar keeps reading the OS store itself.
+    keychain_auth = CustodyAuth() if sys.platform == "darwin" else None
     custody_base_url = f"http://{host}:{port}"
 
     specs = {**builtin_specs(), **_load_extra_specs()}
@@ -316,6 +323,7 @@ def run(host: str = HOST) -> None:
         forwarder,
         custody_auth=custody_auth,
         custody_base_url=custody_base_url,
+        keychain_auth=keychain_auth,
     )
 
     from gaia.daemon.forward_refresh import ForwardRefresher
@@ -431,6 +439,7 @@ def run(host: str = HOST) -> None:
         broker=broker,
         custody_auth=custody_auth,
         custody_store=custody_store,
+        keychain_auth=keychain_auth,
         clock=clock,
         lemonade=lemonade,
         lemonade_owner=lemonade_owner,

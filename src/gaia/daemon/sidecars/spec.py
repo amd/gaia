@@ -90,6 +90,12 @@ class AgentSidecarSpec:
     health_timeout: float = 30.0
     grant_agent_id: Optional[str] = None
     forward_providers: Tuple[str, ...] = field(default_factory=tuple)
+    # macOS: read secrets through the daemon, for a frozen agent whose every
+    # update would otherwise re-prompt for each keychain item (#6481).
+    daemon_owns_keychain: bool = False
+    # First binary that deletes the keychain credential file. An older one would
+    # leave it readable, so it gets no file and reads the keychain itself.
+    keychain_file_min_version: Optional[str] = None
     forwarded_mode_env_var: Optional[str] = None
     required_connections: Tuple[ConnectorRequirement, ...] = field(
         default_factory=tuple
@@ -557,6 +563,8 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             # Listing a provider here would hand it credentials it cannot use.
             # required_connections feeds grant scope derivation, not forwarding.
             required_connections=_GAIA_REQUIRED_CONNECTIONS,
+            daemon_owns_keychain=True,
+            keychain_file_min_version="0.3.4",
             description=(
                 "The flagship agent — conversation, document Q&A, data "
                 "analysis, and web research, with memory that persists and "
