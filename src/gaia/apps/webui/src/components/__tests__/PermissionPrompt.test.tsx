@@ -316,6 +316,51 @@ describe('PermissionPrompt', () => {
             expect(facts.textContent).toContain('می\u200cخواهم');
         });
 
+        it('shows every format character, and the blank-looking letters, as codes', () => {
+            const kept = new Set([0x200c, 0x200d, 0x200e, 0x200f]);
+            const chars: number[] = [];
+            for (let cp = 0; cp <= 0x10ffff; cp++) {
+                if (cp >= 0xd800 && cp <= 0xdfff) continue;
+                if (!kept.has(cp) && /^\p{Cf}$/u.test(String.fromCodePoint(cp))) chars.push(cp);
+            }
+            chars.push(0x034f, 0x115f, 0x1160, 0x2800, 0x3164, 0xffa0, 0x0085, 0x2028);
+            expect(chars).toEqual(expect.arrayContaining([0xe0041, 0x061c, 0x206a, 0xfff9, 0x0600]));
+            const facts = ask('create_calendar_event', {
+                title: `${chars.map((cp) => `x${String.fromCodePoint(cp)}`).join('')}x`,
+                start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00',
+                notify_attendees: [], calendar_account: 'me@x.com',
+            });
+            const shown = facts.textContent ?? '';
+            for (const cp of chars) {
+                expect(shown).toContain(`x[U+${cp.toString(16).toUpperCase().padStart(4, '0')}]`);
+                expect(shown).not.toContain(String.fromCodePoint(cp));
+            }
+        });
+
+        it('shows a line break in a one-line field', () => {
+            const facts = ask('create_calendar_event', {
+                title: 'Lunch', start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00',
+                notify_attendees: [], calendar_account: 'me@x.com', location: 'A\nB',
+            });
+            expect(facts.textContent).toContain('A[U+000A]B');
+        });
+
+        it.each([
+            ['create_calendar_event', { title: 'Sync', start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00', calendar_account: 'me@x.com' }],
+            ['cancel_calendar_event', { event_id: 'abc', expected_title: 'Sync', expected_start: '2026-11-03T14:00:00Z' }],
+        ])('%s shows each address with the domain the provider sees', (tool, rest) => {
+            const facts = ask(tool, {
+                ...rest,
+                notify_attendees: ['ceo@\u0430pple.com', 'dana@exa\u200bmple.com', 'x@evil.com/y', 'sam@x.com'],
+            });
+            const shown = facts.textContent ?? '';
+            expect(shown).toContain('ceo@xn--pple-43d.com');
+            expect(shown).not.toContain('\u0430');
+            expect(shown).toContain('dana@exa[U+200B]mple.com');
+            expect(shown).toContain('x@evil.com/y');
+            expect(shown).toContain('sam@x.com');
+        });
+
         it('an unreadable time still shows, as written', () => {
             const facts = ask('cancel_calendar_event', {
                 event_id: 'abc', expected_title: 'Sync', expected_start: 'tomorrow at nine', notify_attendees: [],

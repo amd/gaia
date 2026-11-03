@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone, tzinfo
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
@@ -28,6 +27,7 @@ from gaia.agents.tools._calendar.model import (
     EventPatch,
     EventSlot,
     NewEvent,
+    event_path_segment,
     parse_instant,
 )
 
@@ -276,7 +276,7 @@ class GraphCalendarBackend:
 
     @staticmethod
     def _event_url(event_id: str) -> str:
-        return f"{GRAPH_API_BASE}/me/events/{quote(event_id, safe='')}"
+        return f"{GRAPH_API_BASE}/me/events/{event_path_segment(event_id)}"
 
     def list_events(self, window: CalendarWindow, *, limit: int) -> CalendarPage:
         events: List[CalendarEvent] = []

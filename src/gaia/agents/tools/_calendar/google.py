@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import quote
 
 import httpx
 
@@ -24,6 +23,7 @@ from gaia.agents.tools._calendar.model import (
     EventPatch,
     EventSlot,
     NewEvent,
+    event_path_segment,
 )
 
 GOOGLE_CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
@@ -193,7 +193,7 @@ class GoogleCalendarBackend:
 
     @staticmethod
     def _event_path(event_id: str) -> str:
-        return f"{_EVENTS_PATH}/{quote(event_id, safe='')}"
+        return f"{_EVENTS_PATH}/{event_path_segment(event_id)}"
 
     def list_events(self, window: CalendarWindow, *, limit: int) -> CalendarPage:
         events: List[CalendarEvent] = []

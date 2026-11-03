@@ -19,7 +19,7 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   `calendar_account`, so the prompt shows where the event lands. Results name the
   account and say only its main calendar was read, and event text reaches the model
   marked as untrusted. A wrong event id is an error rather than "already gone", and a
-  description over 500 characters is refused. Hidden characters show in the prompt as
+  description over 500 characters, or a title or location over 200, is refused. Hidden characters show in the prompt as
   codes such as `[U+202E]`, and a malformed attendee address is refused. A recurring event changes one occurrence
   at a time. Consent now
   asks for `calendar.events` (Google) and `Calendars.ReadWrite` (Microsoft). Existing

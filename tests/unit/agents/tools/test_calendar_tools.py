@@ -8,8 +8,11 @@ inferred. No network, no real calendar, no keychain.
 """
 
 import json
+import re
 import sys
+import unicodedata
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 import httpx
@@ -20,9 +23,18 @@ from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, RISK_NOTE_ARG
 from gaia.agents.base.console import AgentConsole, format_confirmation_args
 from gaia.agents.base.model_features import COMPACT, FEATURE_TOOLS, FULL, withheld_tools
 from gaia.agents.base.offline import ONLINE_SERVICE_TOOLS, offline_refusal
+from gaia.agents.base.person_approval import (
+    BLANK_LOOKING,
+    HIDDEN_CATEGORIES,
+    KEPT_AS_WRITTEN,
+    has_hidden,
+    is_hidden,
+    visible,
+)
 from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools._calendar import GoogleCalendarBackend, GraphCalendarBackend
+from gaia.agents.tools._calendar.errors import CalendarError
 from gaia.agents.tools._calendar.scopes import (
     SCOPE_GOOGLE_CALENDAR_EVENTS,
     SCOPE_GRAPH_CALENDARS_READWRITE,
@@ -1499,3 +1511,257 @@ class TestHiddenCharactersShowInThePrompt:
         )
         assert result["success"] is False and "500" in result["error"]
         assert agent.console.asked == [] and fake.writes == []
+
+
+# --- what the approval prompt shows ---------------------------------------
+
+_HIDING_EXAMPLES = [
+    "\U000e0041",  # tag letter
+    "\U000e007f",  # cancel tag
+    "\u061c",  # Arabic letter mark
+    "\u0600",  # Arabic number sign
+    "\u0605",
+    "\u206a",
+    "\u206f",
+    "\ufff9",
+    "\ufffb",
+    "\u034f",  # combining grapheme joiner
+    "\u115f",  # Hangul fillers
+    "\u1160",
+    "\u3164",
+    "\uffa0",
+    "\u2800",  # braille blank
+    "\u00ad",
+    "\u180e",
+    "\u2028",
+    "\u2029",
+    "\x85",
+    "\r",
+]
+
+
+def _every_char_in(categories):
+    return [
+        chr(cp)
+        for cp in range(sys.maxunicode + 1)
+        if not 0xD800 <= cp <= 0xDFFF and unicodedata.category(chr(cp)) in categories
+    ]
+
+
+class TestTheHiddenCharacterFilter:
+    def test_every_format_control_and_separator_char_is_shown_as_a_code(self):
+        missed = [
+            f"U+{ord(c):04X}"
+            for c in _every_char_in(HIDDEN_CATEGORIES)
+            if c not in KEPT_AS_WRITTEN and visible(c) != f"[U+{ord(c):04X}]"
+        ]
+        assert missed == []
+
+    def test_cf_has_no_gap(self):
+        cf = _every_char_in({"Cf"})
+        assert len(cf) > 150
+        kept = {c for c in cf if c in KEPT_AS_WRITTEN}
+        assert kept == {"\u200c", "\u200d", "\u200e", "\u200f"}
+        assert all(is_hidden(c) for c in cf if c not in kept)
+
+    @pytest.mark.parametrize("char", _HIDING_EXAMPLES)
+    def test_named_cases(self, char):
+        assert is_hidden(char)
+        assert visible(f"a{char}b") == f"a[U+{ord(char):04X}]b"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Budget review",
+            "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645",
+            "caf\u00e9 \U0001f389",
+            "line\tone",
+            "\u05e9\u05dc\u05d5\u05dd",
+        ],
+    )
+    def test_ordinary_text_is_untouched(self, text):
+        assert visible(text) == text and not has_hidden(text)
+
+    def test_the_browser_mirrors_the_same_lists(self):
+        source = (
+            Path(__file__).resolve().parents[4]
+            / "src/gaia/apps/webui/src/components/CalendarApproval.tsx"
+        ).read_text(encoding="utf-8")
+
+        def points(name):
+            line = next(
+                line
+                for line in source.splitlines()
+                if line.startswith(f"const {name} ")
+            )
+            return {chr(int(h, 16)) for h in re.findall(r"\\u([0-9A-Fa-f]{4})", line)}
+
+        assert points("KEPT_AS_WRITTEN") == set(KEPT_AS_WRITTEN)
+        assert points("BLANK_LOOKING") == set(BLANK_LOOKING)
+        class_line = next(
+            line
+            for line in source.splitlines()
+            if line.startswith("const HIDDEN_CLASS ")
+        )
+        assert set(re.findall(r"p\{(\w+)\}", class_line)) == set(HIDDEN_CATEGORIES)
+
+
+@pytest.mark.usefixtures("no_env_preapproval")
+class TestThePromptShowsWhatIsSent:
+    @pytest.mark.parametrize("char", _HIDING_EXAMPLES)
+    def test_each_case_shows_in_a_title(self, make_agent, char):
+        agent = make_agent(_FakeGoogle())
+        _run(agent, "create_calendar_event", **{**CREATE, "title": f"Lunch{char}x"})
+        text = format_confirmation_args(agent.console.asked[0][1])
+        assert f"Lunch[U+{ord(char):04X}]x" in text and char not in text
+
+    def test_existing_attendees_show_their_ascii_domain(self, make_agent):
+        lookalike = "ceo@\u0430pple.com"
+        event = {**EVENT, "attendees": [{"email": lookalike}]}
+        agent = make_agent(_FakeGoogle(event))
+        _run(
+            agent,
+            "cancel_calendar_event",
+            **{**TARGET, "notify_attendees": [lookalike]},
+        )
+        assert agent.console.asked[0][1]["notify_attendees"] == ["ceo@xn--pple-43d.com"]
+
+    @pytest.mark.parametrize("field", ["title", "location", "description"])
+    def test_fence_markers_are_removed_before_saving(self, make_agent, field):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        fenced = f"{UNTRUSTED_FIELD_OPEN}Room 4{UNTRUSTED_FIELD_CLOSE}"
+        _run(agent, "create_calendar_event", **{**CREATE, field: fenced})
+        assert agent.console.asked[0][1][field] == "Room 4"
+        sent = json.loads(fake.writes[0].content)
+        key = "summary" if field == "title" else field
+        assert sent[key] == "Room 4"
+
+    def test_fence_markers_are_removed_from_a_change(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        _run(
+            agent,
+            "update_calendar_event",
+            **TARGET,
+            new_title=f"{UNTRUSTED_FIELD_OPEN}Sync{UNTRUSTED_FIELD_CLOSE}",
+        )
+        assert "UNTRUSTED" not in format_confirmation_args(agent.console.asked[0][1])
+        assert json.loads(fake.writes[0].content)["summary"] == "Sync"
+
+    def test_a_title_of_only_markers_is_refused(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        result = _run(
+            agent,
+            "create_calendar_event",
+            **{**CREATE, "title": UNTRUSTED_FIELD_OPEN + UNTRUSTED_FIELD_CLOSE},
+        )
+        assert "title is required" in result["error"]
+        assert agent.console.asked == [] and fake.writes == []
+
+    @pytest.mark.parametrize(
+        "tool,field",
+        [
+            ("create_calendar_event", "title"),
+            ("create_calendar_event", "location"),
+            ("update_calendar_event", "new_title"),
+            ("update_calendar_event", "new_location"),
+        ],
+    )
+    def test_a_line_too_long_to_show_whole_is_refused(self, make_agent, tool, field):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        base = CREATE if tool == "create_calendar_event" else TARGET
+        result = _run(agent, tool, **{**base, field: "t" * 201})
+        assert result["success"] is False and "200" in result["error"]
+        assert agent.console.asked == [] and fake.writes == []
+
+    def test_a_line_that_only_fits_raw_is_refused(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        result = _run(
+            agent, "create_calendar_event", **{**CREATE, "title": "t" * 195 + RLO}
+        )
+        assert result["success"] is False and "200" in result["error"]
+
+    def test_a_line_at_the_limit_shows_whole(self, make_agent):
+        agent = make_agent(_FakeGoogle())
+        title = "t" * 200
+        _run(agent, "create_calendar_event", **{**CREATE, "title": title})
+        assert title in format_confirmation_args(agent.console.asked[0][1])
+
+    @pytest.mark.parametrize("event_id", [".", ".."])
+    @pytest.mark.parametrize("tool", ["update_calendar_event", "cancel_calendar_event"])
+    def test_a_dot_segment_is_not_an_event_id(self, make_agent, tool, event_id):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        args = {**WRITE_CALLS[tool], "event_id": event_id}
+        result = _run(agent, tool, **args)
+        assert result["success"] is False and "not an event id" in result["error"]
+        assert fake.requests == [] and agent.console.asked == []
+
+    @pytest.mark.parametrize("event_id", [".", ".."])
+    def test_graph_refuses_a_dot_segment_too(self, event_id):
+        fake = _FakeGraphCalendar()
+        backend = GraphCalendarBackend(
+            lambda: "tok", http_client=httpx.Client(transport=httpx.MockTransport(fake))
+        )
+        with pytest.raises(CalendarError, match="not an event id"):
+            backend.get_event(event_id)
+        assert fake.requests == []
+
+
+@pytest.mark.usefixtures("no_env_preapproval")
+class TestAPersonIsAskedWheneverOneCanAnswer:
+    def test_marked_on_a_watched_console_even_before_full_access(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        handler = SSEOutputHandler()
+        handler.answers_confirmations = True
+        asked = []
+        handler.confirm_tool_execution = lambda name, args, **_: asked.append(args)
+        agent.console = handler
+        _run(agent, "create_calendar_event", **CREATE)
+        assert asked[0][NEEDS_PERSON_ARG] is True
+
+    @pytest.mark.parametrize("tool", sorted(WRITE_TOOLS))
+    def test_full_access_turned_on_just_before_the_prompt_still_asks(
+        self, make_agent, tool
+    ):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        handler = SSEOutputHandler()
+        handler.answers_confirmations = True
+        handler.confirm_timeout_seconds = 0.01
+        noted = handler.note_call_args
+
+        def toggle_then_note(name, args):
+            handler.auto_approve_gated_tools = True
+            handler.full_access = True
+            noted(name, args)
+
+        handler.note_call_args = toggle_then_note
+        agent.console = handler
+        result = _run(agent, tool, **WRITE_CALLS[tool])
+        assert result["status"] == "denied" and fake.writes == []
+        assert any(e["type"] == "permission_request" for e in _events(handler))
+
+    def test_the_prompt_keeps_what_the_host_added(self, make_agent):
+        class _Host(_CalendarAgent):
+            def confirmation_args_for_call(self, tool_name, tool_args):
+                return {**tool_args, "_host_note": "added by the host"}
+
+        saved = dict(_TOOL_REGISTRY)
+        try:
+            with patch("gaia.agents.base.agent.AgentSDK"):
+                agent = _Host(silent_mode=True, skip_lemonade=True)
+            agent.console = _RecordingConsole()
+            agent._calendar_backend = _FakeGoogle().backend()
+            agent._calendar_provider = "google"
+            _run(agent, "create_calendar_event", **{**CREATE, "title": f"A{RLO}"})
+        finally:
+            _TOOL_REGISTRY.clear()
+            _TOOL_REGISTRY.update(saved)
+        shown = agent.console.asked[0][1]
+        assert shown["_host_note"] == "added by the host"
+        assert shown["title"] == "A[U+202E]"

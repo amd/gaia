@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from typing import Optional, Protocol, Tuple
+from urllib.parse import quote
 
 from gaia.agents.tools._calendar.errors import CalendarError
 
@@ -217,6 +218,15 @@ def event_span(
     )
 
 
+def event_path_segment(event_id: str) -> str:
+    """*event_id* as one URL path segment; a dot segment would name another path."""
+    if event_id in (".", ".."):
+        raise CalendarError(
+            f"{event_id!r} is not an event id. Use the id from list_calendar_events."
+        )
+    return quote(event_id, safe="")
+
+
 __all__ = [
     "CalendarBackend",
     "CalendarEvent",
@@ -226,6 +236,7 @@ __all__ = [
     "EventPatch",
     "EventSlot",
     "NewEvent",
+    "event_path_segment",
     "event_span",
     "is_bare_date",
     "parse_date",

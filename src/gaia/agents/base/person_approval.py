@@ -21,13 +21,16 @@ from typing import Any
 
 import idna
 
-# Controls and invisible characters that can hide or reorder text on the
-# approver's screen. Tab and newline are layout; the marks RTL and Indic writing
-# need (LRM, RLM, ZWJ, ZWNJ) can't reorder text, so they stay as written.
-_HIDDEN_RE = re.compile(
-    "[\x00-\x08\x0b-\x1f\x7f-\x9f\u00ad\u180e\u200b"
-    "\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff]"
+# Every format, control and line/paragraph separator character can hide or
+# reorder text on the approver's screen, as can a few letters that render blank.
+# Tab and newline are layout, and the joiners and marks RTL and Indic writing
+# need (ZWJ, ZWNJ, LRM, RLM) can't reorder text, so those stay as written.
+# CalendarApproval.tsx mirrors these lists; a test keeps them equal.
+HIDDEN_CATEGORIES = frozenset({"Cf", "Cc", "Zl", "Zp"})
+KEPT_AS_WRITTEN = frozenset(
+    {"\u0009", "\u000a", "\u200c", "\u200d", "\u200e", "\u200f"}
 )
+BLANK_LOOKING = frozenset({"\u034f", "\u115f", "\u1160", "\u2800", "\u3164", "\uffa0"})
 
 HIDDEN_NOTE = "Hidden characters are shown as [U+XXXX]."
 
@@ -49,14 +52,25 @@ def a_person_can_answer(console: Any) -> bool:
     )
 
 
+def is_hidden(char: str) -> bool:
+    """True when *char* can hide or reorder text, so a prompt shows its code."""
+    if char in KEPT_AS_WRITTEN:
+        return False
+    return char in BLANK_LOOKING or unicodedata.category(char) in HIDDEN_CATEGORIES
+
+
+def _unfolded(text: str) -> str:
+    return text.replace("\r\n", "\n")
+
+
 def has_hidden(text: str) -> bool:
-    return bool(_HIDDEN_RE.search(text.replace("\r\n", "\n")))
+    return any(is_hidden(char) for char in _unfolded(text))
 
 
 def visible(text: str) -> str:
     """*text* with every hiding or reordering character written as ``[U+XXXX]``."""
-    return _HIDDEN_RE.sub(
-        lambda match: f"[U+{ord(match.group()):04X}]", text.replace("\r\n", "\n")
+    return "".join(
+        f"[U+{ord(char):04X}]" if is_hidden(char) else char for char in _unfolded(text)
     )
 
 
@@ -72,7 +86,8 @@ def sendable_address(address: str, field: str) -> str:
     letter shows as what it is.
     """
     for char in address:
-        if unicodedata.category(char) in ("Cc", "Cf", "Zl", "Zp"):
+        # Stricter than display: no joiner or mark belongs in an address.
+        if is_hidden(char) or unicodedata.category(char) in HIDDEN_CATEGORIES:
             raise ValueError(
                 f"`{field}` has an address with an invisible or control character "
                 f"(U+{ord(char):04X}), which could disguise who receives it: "
@@ -102,9 +117,13 @@ def sendable_address(address: str, field: str) -> str:
 
 
 __all__ = [
+    "BLANK_LOOKING",
+    "HIDDEN_CATEGORIES",
     "HIDDEN_NOTE",
+    "KEPT_AS_WRITTEN",
     "a_person_can_answer",
     "has_hidden",
+    "is_hidden",
     "preapproved",
     "sendable_address",
     "visible",

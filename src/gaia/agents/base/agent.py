@@ -7006,10 +7006,14 @@ Do NOT wrap conversational replies in JSON.
         prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
         preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
         prompt_args = _with_resolved_target(prompt_args, preflight)
-        # A tool whose arguments don't say what will happen shows what will.
+        # A tool whose arguments don't say what will happen shows what will,
+        # on top of whatever the host already added to the prompt.
         prompt_args_of = getattr(preflight, "prompt_args_of", None)
         if callable(prompt_args_of):
-            prompt_args = prompt_args_of(tool_args)
+            shown = prompt_args_of(tool_args)
+            prompt_args = (
+                {**prompt_args, **shown} if isinstance(prompt_args, dict) else shown
+            )
         if isinstance(prompt_args, dict) and tool_name in PATH_TOOLS:
             resolved_path = prompt_args.get("file_path")
             if isinstance(resolved_path, str) and os.path.isabs(resolved_path):

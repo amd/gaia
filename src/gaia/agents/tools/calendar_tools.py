@@ -17,7 +17,6 @@ as untrusted. The checks strip that fence, because a model may copy it back.
 """
 
 import json
-import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -63,8 +62,9 @@ from gaia.agents.tools._email.phishing import (
     wrap_untrusted_field,
 )
 from gaia.agents.tools.email_tools import EMAIL_AGENT_ID
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 CALENDAR_PROVIDERS: Tuple[str, ...] = (GOOGLE_CONNECTOR_ID, MICROSOFT_CONNECTOR_ID)
 
@@ -78,6 +78,7 @@ _DOCS_URL = "https://amd-gaia.ai/docs/guides/gaia"
 _DEFAULT_LIST_WINDOW_DAYS = 30
 # Under the CLI prompt's 600-character cut, so the person approves all of what is sent.
 _MAX_DESCRIPTION_CHARS = 500
+_MAX_LINE_CHARS = 200
 _MAX_LIST_LIMIT = 250
 _AVAILABILITY_MAX_EVENTS = 2500
 
@@ -209,23 +210,41 @@ def _invitees(addresses: Any) -> List[str]:
         raise CalendarError(str(exc)) from exc
 
 
+def _plain(text: Any) -> str:
+    """Event text as saved, without the fence markers a prompt would hide."""
+    return strip_untrusted_field_markers(str(text or "")).strip()
+
+
+def _shown_invitee(address: str) -> str:
+    """An address as the provider will see its domain, so a look-alike shows."""
+    try:
+        return sendable_address(address, "notify_attendees")
+    except ValueError:
+        # Display only: an address an event already holds is shown with its codes.
+        return visible_line(address)
+
+
 def _shown_arg(key: str, value: Any) -> Any:
     if isinstance(value, str):
-        return visible(value) if key in _MULTILINE_ARGS else visible_line(value)
+        text = _plain(value)
+        return visible(text) if key in _MULTILINE_ARGS else visible_line(text)
     if isinstance(value, (list, tuple)):
-        return [visible_line(v) if isinstance(v, str) else v for v in value]
+        return [_shown_invitee(_plain(v)) if isinstance(v, str) else v for v in value]
     return value
 
 
-def _check_description(text: Any) -> None:
+def _check_shown_length(text: Any, what: str, limit: int) -> None:
     # Measured as shown: a hidden character takes more room on the prompt.
-    length = len(visible(str(text or "").strip()))
-    if length > _MAX_DESCRIPTION_CHARS:
+    length = len(visible(_plain(text)))
+    if length > limit:
         raise CalendarError(
-            f"The description is {length} characters, and the approval prompt can only "
-            f"show {_MAX_DESCRIPTION_CHARS} whole. Shorten it to that, or put a link "
-            "to the longer text in it, then retry."
+            f"The {what} is {length} characters, and the approval prompt can only "
+            f"show {limit} whole. Shorten it to that, then retry."
         )
+
+
+def _check_description(text: Any) -> None:
+    _check_shown_length(text, "description", _MAX_DESCRIPTION_CHARS)
 
 
 def _who_gets_told(event: CalendarEvent) -> List[str]:
@@ -343,8 +362,8 @@ class _CalendarPreflight:
     """A calendar change's checks, run before its prompt, and what that prompt shows.
 
     Pre-approval answers prompts, and a calendar change reaches other people, so
-    it needs a person. Where a person can be asked, the
-    call is marked so they are. Where nobody can, it is refused.
+    it needs a person. Where a person can be asked, the call is marked so they
+    are. Where nobody can, it is refused.
     """
 
     def __init__(
@@ -378,7 +397,10 @@ class _CalendarPreflight:
         ]
         if any(has_hidden(text) for text in written):
             shown[RISK_NOTE_ARG] = f"{HIDDEN_NOTE} They are saved as written."
-        if self._preapproved():
+        # Marked wherever a person can answer, so Full access turned on while
+        # this prompt is being built still reaches them.
+        console = getattr(self._mixin, "console", None)
+        if self._preapproved() or a_person_can_answer(console):
             shown[NEEDS_PERSON_ARG] = True
         return shown
 
@@ -601,10 +623,12 @@ class CalendarToolsMixin:
             try:
                 parse_slot(str(args.get("start") or ""), str(args.get("end") or ""))
                 _invitees(args.get("notify_attendees"))
+                _check_shown_length(args.get("title"), "title", _MAX_LINE_CHARS)
+                _check_shown_length(args.get("location"), "location", _MAX_LINE_CHARS)
                 _check_description(args.get("description"))
             except CalendarError as exc:
                 return _refusal("create_calendar_event", str(exc))
-            if not str(args.get("title") or "").strip():
+            if not _plain(args.get("title")):
                 return _refusal("create_calendar_event", "title is required.")
             try:
                 account = mixin._calendar_run(lambda _: mixin._calendar_account())
@@ -623,6 +647,10 @@ class CalendarToolsMixin:
         def _patch_from(args: Dict[str, Any]) -> EventPatch:
             new_start = str(args.get("new_start") or "").strip()
             new_end = str(args.get("new_end") or "").strip()
+            _check_shown_length(args.get("new_title"), "new title", _MAX_LINE_CHARS)
+            _check_shown_length(
+                args.get("new_location"), "new location", _MAX_LINE_CHARS
+            )
             _check_description(args.get("new_description"))
             if bool(new_start) != bool(new_end):
                 raise CalendarError(
@@ -630,10 +658,10 @@ class CalendarToolsMixin:
                     "is what the person approved."
                 )
             patch = EventPatch(
-                title=str(args.get("new_title") or "").strip() or None,
+                title=_plain(args.get("new_title")) or None,
                 slot=parse_slot(new_start, new_end) if new_start else None,
-                location=str(args.get("new_location") or "").strip() or None,
-                description=str(args.get("new_description") or "").strip() or None,
+                location=_plain(args.get("new_location")) or None,
+                description=_plain(args.get("new_description")) or None,
             )
             if patch.is_empty():
                 raise CalendarError(
@@ -811,11 +839,11 @@ class CalendarToolsMixin:
                 return json.dumps(refusal, indent=2)
             try:
                 new_event = NewEvent(
-                    title=title.strip(),
+                    title=_plain(title),
                     slot=parse_slot(start, end),
                     attendees=tuple(_invitees(notify_attendees)),
-                    location=location.strip() or None,
-                    description=description.strip() or None,
+                    location=_plain(location) or None,
+                    description=_plain(description) or None,
                 )
                 created = mixin._calendar_run(
                     lambda backend: backend.create_event(new_event)
