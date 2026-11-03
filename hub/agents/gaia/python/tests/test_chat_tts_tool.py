@@ -67,3 +67,26 @@ def test_tts_tool_uses_configured_model_and_reports_real_chunks(tts_tool):
     assert result["chunks"] == 2
     assert result["model"] == "kokoro-v1"
     assert result["output_path"] == str(target)
+
+
+def test_tts_default_output_gets_an_inline_player(tts_tool, tmp_path, monkeypatch):
+    import gaia.config
+    from gaia.ui.generated_media import media_card
+
+    monkeypatch.setattr(gaia.config, "GAIA_CONFIG_DIR", tmp_path / "config")
+    tool, _allowed = tts_tool
+
+    with patch("gaia.audio.lemonade_tts.LemonadeTTSClient") as client:
+
+        def synthesize(_text, destination, **_kwargs):
+            Path(destination).write_bytes(b"wav")
+            return 0.5, 1
+
+        client.return_value.synthesize_to_wav_long.side_effect = synthesize
+        result = tool("Read this aloud.")
+
+    assert result["status"] == "success"
+    card = media_card({"type": "tool_result", "success": True, "data": result})
+    assert card is not None
+    assert card["render"] == "audio"
+    assert card["data"]["src"].startswith("/api/media/audio/speech_")
