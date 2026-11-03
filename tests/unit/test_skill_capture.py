@@ -123,6 +123,9 @@ class TestCaptureFromText:
         assert entry.captured is True
         assert entry.code_trusted is False
         assert entry.version == "1.0.0"
+        from gaia.skills.audit.findings import content_digest
+
+        assert entry.content_digest == content_digest(manager.user_root / entry.name)
 
     def test_name_override(self, manager):
         result = capture_skill(_markdown(), name="my-notes", manager=manager)
