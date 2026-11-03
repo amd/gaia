@@ -60,7 +60,7 @@ from gaia.utils.terminal import (
     popen_outliving_job,
     windows_hidden_popen_kwargs,
 )
-from gaia.version import LEMONADE_VERSION
+from gaia.version import LEMONADE_VERSION, parse_version
 
 log = get_logger(__name__)
 
@@ -873,6 +873,22 @@ class EmbeddedLemonade:
             True if :attr:`daemon_path` exists.
         """
         return self.daemon_path.is_file()
+
+    def replaces_older_install(self) -> bool:
+        """Whether an older version is unpacked, which this one upgrades.
+
+        GAIA keeps its own server on the version it targets, so a start
+        installs over an older one instead of asking the user to.
+        """
+        target = parse_version(self.version)
+        dist = self.root / "dist"
+        if target is None or not dist.is_dir():
+            return False
+        return any(
+            (found := parse_version(entry.name)) is not None and found < target
+            for entry in dist.iterdir()
+            if entry.is_dir()
+        )
 
     # -- install ----------------------------------------------------------
 
@@ -1839,6 +1855,11 @@ class EmbeddedLemonade:
                 port, timeout, install_if_missing, owner_pid, owner_started
             )
 
+    def is_older(self, version: Optional[str]) -> bool:
+        """Whether *version* predates the one this instance targets."""
+        found, target = parse_version(version), parse_version(self.version)
+        return found is not None and target is not None and found < target
+
     def _start_locked(
         self,
         port: Optional[int],
@@ -1848,6 +1869,14 @@ class EmbeddedLemonade:
         owner_started: Optional[float],
     ) -> EmbeddedStatus:
         existing = self._status(reap=False)
+        if existing.running and self.is_older(existing.version):
+            log.warning(
+                "Embedded Lemonade %s is running; replacing it with %s",
+                existing.version,
+                self.version,
+            )
+            self._stop_locked(_STOP_TIMEOUT)
+            existing = self._status(reap=False)
         if existing.running:
             if existing.version != self.version:
                 raise EmbeddedLemonadeError(
@@ -1875,7 +1904,7 @@ class EmbeddedLemonade:
             )
 
         if not self.is_installed():
-            if not install_if_missing:
+            if not install_if_missing and not self.replaces_older_install():
                 raise EmbeddedLemonadeError(
                     f"Embedded Lemonade {self.version} is not installed at "
                     f"{self.dist_dir}. Run `gaia lemonade embedded start` "

@@ -1677,9 +1677,8 @@ class LemonadeManager:
                         f"trained context of {new_ceiling})."
                     )
             else:
-                # No known ceiling explains the shortfall — an old Lemonade
-                # that doesn't honor/expose ctx_size at all, not a real
-                # per-model cap. Unlike the known-ceiling branch above,
+                # No known ceiling explains the shortfall — the server did
+                # not report the window it loaded, not a real per-model cap. Unlike the known-ceiling branch above,
                 # ``_context_ceiling`` stays unset here, so nothing would
                 # stop `ensure_ready` retrying this reload every recheck
                 # interval forever. Preserve the pre-#2992 behaviour: assume

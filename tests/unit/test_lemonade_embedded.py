@@ -664,17 +664,61 @@ class TestStatus:
         assert killed == [4321], "stalled daemon was never signalled"
         assert not manager.state_path.exists()
 
-    def test_start_refuses_when_a_different_version_is_running(
-        self, manager, monkeypatch
-    ):
+    def test_start_refuses_when_a_newer_version_is_running(self, manager, monkeypatch):
         manager._write_state(
-            {"pid": 1, "port": 4321, "api_key": "k", "version": "11.7.0"}
+            {"pid": 1, "port": 4321, "api_key": "k", "version": "9999.1.0"}
         )
         monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: {"ok": True})
         with pytest.raises(EmbeddedLemonadeError) as exc:
             manager.start()
-        assert "11.7.0" in str(exc.value)
+        assert "9999.1.0" in str(exc.value)
         assert "stop" in str(exc.value)
+
+    def test_start_replaces_an_older_running_version(self, manager, monkeypatch):
+        """GAIA's own server is upgraded in place; the user runs nothing."""
+        manager._write_state(
+            {"pid": 1, "port": 4321, "api_key": "k", "version": "11.7.0"}
+        )
+        monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: {"ok": True})
+        stopped = []
+
+        def fake_stop(self, timeout):
+            stopped.append(timeout)
+            self._clear_state()
+            return True
+
+        class Reached(Exception):
+            pass
+
+        def reached_install(self, force=False):
+            raise Reached
+
+        monkeypatch.setattr(EmbeddedLemonade, "_stop_locked", fake_stop)
+        monkeypatch.setattr(EmbeddedLemonade, "install", reached_install)
+        with pytest.raises(Reached):
+            manager.start()
+        assert stopped, "the older server was left running"
+
+    def test_an_older_install_is_upgraded_without_being_asked(
+        self, manager, monkeypatch
+    ):
+        (manager.root / "dist" / "11.9.0").mkdir(parents=True)
+        assert manager.replaces_older_install()
+
+        class Reached(Exception):
+            pass
+
+        def reached_install(self, force=False):
+            raise Reached
+
+        monkeypatch.setattr(EmbeddedLemonade, "install", reached_install)
+        with pytest.raises(Reached):
+            manager.start(install_if_missing=False)
+
+    def test_only_an_older_install_counts_as_one_to_upgrade(self, manager):
+        (manager.root / "dist" / manager.version).mkdir(parents=True)
+        (manager.root / "dist" / "9999.1.0").mkdir(parents=True)
+        assert not manager.replaces_older_install()
 
     def test_live_instance_is_reported_with_its_base_url(self, manager, monkeypatch):
         manager._write_state(

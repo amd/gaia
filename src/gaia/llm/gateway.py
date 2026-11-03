@@ -53,7 +53,7 @@ from gaia.llm.local_only import (
 )
 from gaia.llm.retry import http_body_text
 from gaia.logger import get_logger
-from gaia.version import LEMONADE_GATEWAY_MIN_VERSION
+from gaia.version import LEMONADE_MIN_VERSION
 
 log = get_logger(__name__)
 
@@ -703,10 +703,12 @@ class GatewayManager:
                 f"restart Lemonade before setting one here."
             )
         if response.status_code == 404 and "cloud" in url:
+            from gaia.llm.lemonade_launcher import describe_upgrade_hint
+
             return GatewayError(
-                f"Lemonade at {self.base_url} has no cloud-provider API "
-                f"(needs >= {LEMONADE_GATEWAY_MIN_VERSION}). "
-                f"Upgrade with `gaia init` and re-run this command."
+                f"Lemonade at {self.base_url} has no cloud-provider API, so it "
+                f"is older than v{LEMONADE_MIN_VERSION}, the oldest version GAIA "
+                f"supports. {describe_upgrade_hint(self.base_url)}"
             )
         return GatewayError(
             f"{method} {url} failed with HTTP {response.status_code}"
@@ -827,24 +829,19 @@ class GatewayManager:
         result = self._request(
             "POST", "install", payload=payload, timeout=_DISCOVERY_TIMEOUT, redact=True
         )
-        self._reject_server_without_cloud_offload(result, api_key)
+        self._reject_key_that_discovered_nothing(result, api_key)
         state = GatewayState.load()
         state.base_url = payload["base_url"]
         state.save()
         return result
 
-    def _reject_server_without_cloud_offload(
+    def _reject_key_that_discovered_nothing(
         self, install_result: Dict[str, Any], api_key: Optional[str]
     ) -> None:
-        """Fail loudly when the running Lemonade predates cloud offload.
+        """Fail loudly when Lemonade took the key but the gateway listed nothing.
 
-        The 404 check in ``_http_error`` cannot catch this. A pre-11.8 server
-        answers the cloud routes with 200, reports ``status: success``, lists
-        the provider in ``system-info`` — and discovers nothing. It also has no
-        ``version`` field to compare, so a version check reads ``None`` and
-        skips. Observed on 11.5.0: every signal said the gateway was registered
-        while zero models existed, and the user is then sent to debug a token
-        that is fine.
+        Lemonade stores a key without validating it, so a ``status: success``
+        with zero models means the gateway refused the key.
 
         Only decides when a key was supplied. Without one, zero models is the
         expected pre-auth state and means nothing about the server.
@@ -857,13 +854,10 @@ class GatewayManager:
         if not (auth.get("runtime_key_set") or auth.get("env_var_set")):
             return
         raise GatewayError(
-            f"Lemonade accepted the gateway registration but discovered no "
-            f"models. The usual cause is a Lemonade older than "
-            f"{LEMONADE_GATEWAY_MIN_VERSION}: cloud offload arrived in that "
-            f"release, and earlier servers answer these routes with success "
-            f"while doing nothing. Check with `lemonade --version` and upgrade "
-            f"via `gaia init`. If the server is new enough, the gateway "
-            f"rejected the key — run scripts/diagnose-gateway-auth.ps1."
+            "Lemonade accepted the gateway registration but discovered no "
+            "models, so the gateway rejected the key. Check that the key is "
+            "current; scripts/diagnose-gateway-auth.ps1 shows what the gateway "
+            "answered."
         )
 
     def uninstall(self) -> Dict[str, Any]:

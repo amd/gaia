@@ -41,9 +41,9 @@ const (
 )
 
 // MinExternalVersion is the oldest Lemonade GAIA adopts as the user's server.
-// Must equal INIT_PROFILES["gaia"]["min_lemonade_version"] in
-// src/gaia/installer/init_command.py (a drift test pins the two).
-const MinExternalVersion = "10.9.0"
+// Must equal LEMONADE_MIN_VERSION in src/gaia/version.py (a drift test pins
+// the two).
+const MinExternalVersion = "2026.44.1"
 
 // SwitchBackHint is how a user goes back to GAIA's own server.
 const SwitchBackHint = "run `gaia config set lemonade_mode gaia` to use GAIA's own instead"

@@ -11,6 +11,7 @@ import pytest
 
 from gaia.daemon.lemonade import EmbeddedLemonadeOwner, LemonadeNotManaged
 from gaia.llm.lemonade_embedded import EmbeddedLemonadeError, EmbeddedStatus
+from gaia.version import parse_version
 
 VERSION = "11.8.1"
 #: This daemon's pid in every test.
@@ -42,10 +43,12 @@ def _running(port=51234, version=VERSION, owner_pid=None):
     )
 
 
-def _embedded(status, installed=True):
+def _embedded(status, installed=True, older_install=False):
     embedded = mock.Mock()
     embedded.version = VERSION
     embedded.is_installed.return_value = installed
+    embedded.replaces_older_install.return_value = older_install
+    embedded.is_older.side_effect = lambda v: parse_version(v) < parse_version(VERSION)
     embedded.status.return_value = status
     embedded.start.return_value = _running(port=60000)
     embedded.log_path = "/gaia/lemonade/lemond.log"
@@ -82,14 +85,31 @@ class TestEnsure:
             install_if_missing=False, owner_pid=OWNER, owner_started=mock.ANY
         )
 
-    def test_older_version_is_reported_not_replaced(self):
-        """Replacing a running server is `gaia init`'s call, not the daemon's."""
-        embedded = _embedded(_running(version="0.0.1"))
-        with pytest.raises(EmbeddedLemonadeError, match="gaia init"):
+    def test_older_version_is_upgraded_not_reported(self):
+        """GAIA keeps its own server current; the user is asked for nothing."""
+        embedded = _embedded(_running(version="0.0.1", owner_pid=OWNER))
+        ensured = _owner(embedded).ensure()
+
+        assert ensured.started is True
+        embedded.start.assert_called_once_with(
+            install_if_missing=False, owner_pid=OWNER, owner_started=mock.ANY
+        )
+
+    def test_newer_version_is_reported_not_replaced(self):
+        """A newer GAIA's server is not this one's to downgrade."""
+        embedded = _embedded(_running(version="9999.1.0", owner_pid=OWNER))
+        with pytest.raises(EmbeddedLemonadeError, match="needs v"):
             _owner(embedded).ensure()
 
         embedded.stop.assert_not_called()
         embedded.start.assert_not_called()
+
+    def test_an_older_install_is_upgraded_on_start(self):
+        embedded = _embedded(
+            _status(installed=False), installed=False, older_install=True
+        )
+        assert _owner(embedded).ensure().started is True
+        embedded.start.assert_called_once()
 
     def test_slow_server_is_reported_never_killed(self):
         """A server that stopped answering is reported; only `gaia init`,

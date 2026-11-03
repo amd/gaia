@@ -160,9 +160,9 @@ type Model struct {
 func (m Model) Cloud() bool { return m.Recipe == "cloud" || m.Provider != "" || IsCloudID(m.ID) }
 
 // Window is the context window to show: the provider's for a cloud model, the
-// configured one for a local model. Older Lemonade lists only ContextLength.
+// configured one for a local model.
 func (m Model) Window() int {
-	if m.Cloud() && m.MaxContextWindow > 0 {
+	if m.Cloud() {
 		return m.MaxContextWindow
 	}
 	return m.ContextLength

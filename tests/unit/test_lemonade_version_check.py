@@ -14,9 +14,17 @@ from gaia.llm.lemonade_client import (
     LemonadeStatus,
     LemonadeVersionError,
 )
-from gaia.version import LEMONADE_MIN_VERSION, LEMONADE_VERSION, parse_version
+from gaia.version import LEMONADE_MIN_VERSION, LEMONADE_VERSION
 
-_REMEDY = "gaia init --force-reinstall"
+_REMEDY = "lemonade-server.ai"
+
+
+@pytest.fixture(autouse=True)
+def _users_own_server(monkeypatch):
+    """Judge a server the user runs, whatever this machine has installed."""
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda base_url=None: False
+    )
 
 
 def _make_client():
@@ -28,11 +36,11 @@ class TestCheckVersionCompatibility:
 
     # -- below the floor (incompatible) ---------------------------------
 
-    @pytest.mark.parametrize("found", ["10.1.0", "9.5.0", "9.1.0~4.deadbee"])
+    @pytest.mark.parametrize("found", ["11.9.0", "2026.39.1", "2026.44.0~4.deadbee"])
     def test_below_floor_raises_with_both_versions_and_the_fix(self, found):
         with pytest.raises(LemonadeVersionError) as excinfo:
             _make_client()._check_version_compatibility(
-                "11.0.0", actual_version=found, quiet=True
+                "2026.50.0", actual_version=found, quiet=True
             )
         message = str(excinfo.value)
         assert found in message
@@ -44,40 +52,53 @@ class TestCheckVersionCompatibility:
     def test_version_error_is_a_client_error(self):
         assert issubclass(LemonadeVersionError, LemonadeClientError)
 
+    def test_gaias_own_server_asks_the_user_for_nothing(self, monkeypatch):
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_launcher.gaia_runs_lemonade",
+            lambda base_url=None: True,
+        )
+        with pytest.raises(LemonadeVersionError) as excinfo:
+            _make_client()._check_version_compatibility(
+                LEMONADE_VERSION, actual_version="11.9.0", quiet=True
+            )
+        message = str(excinfo.value)
+        assert "GAIA updates its own Lemonade Server" in message
+        assert "gaia " not in message
+
     # -- at/above the floor but below the expected pin (compatible) -----
-    # This is the #2130 scenario: Lemonade 10.10.0 with GAIA pinned to 11.0.0.
+    # The #2130 scenario: a supported Lemonade older than the one GAIA pins.
 
     def test_at_floor_but_below_expected_returns_true(self):
         result = _make_client()._check_version_compatibility(
-            "11.0.0", actual_version="10.10.0", quiet=True
+            "2026.50.0", actual_version=LEMONADE_MIN_VERSION, quiet=True
         )
         assert result is True
 
     def test_at_floor_but_below_expected_prints_low_key_note(self, capsys):
         _make_client()._check_version_compatibility(
-            "11.0.0", actual_version="10.10.0", quiet=False
+            "2026.50.0", actual_version=LEMONADE_MIN_VERSION, quiet=False
         )
         captured = capsys.readouterr().out
-        assert "10.10.0" in captured
-        assert "11.0.0" in captured
+        assert LEMONADE_MIN_VERSION in captured
+        assert "2026.50.0" in captured
         assert "consider updating" in captured.lower()
 
     def test_exact_match_is_silent(self, capsys):
         result = _make_client()._check_version_compatibility(
-            "11.0.0", actual_version="11.0.0", quiet=False
+            LEMONADE_VERSION, actual_version=LEMONADE_VERSION, quiet=False
         )
         assert result is True
         assert capsys.readouterr().out == ""
 
     def test_newer_than_expected_returns_true(self):
         result = _make_client()._check_version_compatibility(
-            "11.0.0", actual_version="12.0.0", quiet=True
+            LEMONADE_VERSION, actual_version="2027.1.0", quiet=True
         )
         assert result is True
 
     def test_quiet_suppresses_the_note(self, capsys):
         _make_client()._check_version_compatibility(
-            "11.1.0", actual_version="11.0.0", quiet=True
+            "2026.50.0", actual_version=LEMONADE_MIN_VERSION, quiet=True
         )
         assert capsys.readouterr().out == ""
 
@@ -193,21 +214,12 @@ class TestGetStatusCatalogFailure:
 class TestTheFloorIsDefinedOnce:
     """The installer and the client gate read the same floor."""
 
-    def test_all_profile_minimums_are_accepted_by_the_client_gate(self):
-        client = _make_client()
+    def test_no_profile_declares_its_own_floor(self):
         for profile_name, profile_config in INIT_PROFILES.items():
-            min_version = profile_config["min_lemonade_version"]
-            result = client._check_version_compatibility(
-                LEMONADE_VERSION, actual_version=min_version, quiet=True
-            )
-            assert result is True, (
-                f"profile {profile_name!r} accepts Lemonade {min_version}, but "
-                "the client's version-floor check rejects it"
-            )
+            assert "min_lemonade_version" not in profile_config, profile_name
 
-    def test_lemonade_min_version_is_the_lowest_profile_floor(self):
-        lowest = min(
-            (cfg["min_lemonade_version"] for cfg in INIT_PROFILES.values()),
-            key=parse_version,
+    def test_the_floor_is_accepted_by_the_client_gate(self):
+        result = _make_client()._check_version_compatibility(
+            LEMONADE_VERSION, actual_version=LEMONADE_MIN_VERSION, quiet=True
         )
-        assert lowest == LEMONADE_MIN_VERSION
+        assert result is True

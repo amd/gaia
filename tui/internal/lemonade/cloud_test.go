@@ -64,7 +64,7 @@ func TestWindowIsTheProvidersForCloudAndConfiguredForLocal(t *testing.T) {
 		want  int
 	}{
 		{Model{ID: "fireworks.deepseek-v4p1-flash", Recipe: "cloud", ContextLength: 4096, MaxContextWindow: 1048576}, 1048576},
-		{Model{ID: "fireworks.older", Recipe: "cloud", ContextLength: 262144}, 262144},
+		{Model{ID: "fireworks.unlisted", Recipe: "cloud", ContextLength: 4096}, 0},
 		{Model{ID: "Gemma-4-E4B-it-GGUF", Recipe: "llamacpp", ContextLength: 65536, MaxContextWindow: 131072}, 65536},
 	}
 	for _, c := range cases {

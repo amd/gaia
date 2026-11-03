@@ -1759,7 +1759,6 @@ class TestLemonadeClientMock(unittest.TestCase):
     @responses.activate
     def test_validate_context_size_insufficient(self):
         """Test validate_context_size returns False when context is insufficient."""
-        # Lemonade 9.1.4+ format: ctx_size in all_models_loaded[N].recipe_options
         health_response = {
             "status": "ok",
             "model_loaded": TEST_MODEL,
@@ -1782,17 +1781,20 @@ class TestLemonadeClientMock(unittest.TestCase):
             responses.GET, f"{API_BASE}/health", json=health_response, status=200
         )
 
-        # The restart hint depends on what this host has installed; pin a
-        # legacy install so the rendered command is the same everywhere.
-        legacy = LemonadeTooling(
+        # The restart hint depends on what this host has installed; pin one
+        # so the rendered advice is the same everywhere.
+        installed = LemonadeTooling(
             found=True,
-            kind="legacy",
-            client_path="lemonade-server",
-            server_launcher="lemonade-server",
+            kind="modern",
+            client_path="/usr/bin/lemonade",
+            server_launcher="/usr/bin/lemond",
         )
         with (
             patch("gaia.llm.lemonade_launcher.gaia_runs_lemonade", return_value=False),
-            patch("gaia.llm.lemonade_launcher.resolve_lemonade", return_value=legacy),
+            patch(
+                "gaia.llm.lemonade_launcher.resolve_lemonade", return_value=installed
+            ),
+            patch("platform.system", return_value="Linux"),
         ):
             valid, error = self.client.validate_context_size(
                 required_tokens=32768, quiet=True
@@ -1801,7 +1803,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         self.assertFalse(valid)
         self.assertIsNotNone(error)
         self.assertIn("4096", error)
-        self.assertIn("--ctx-size 32768", error)
+        self.assertIn("32768", error)
 
     @responses.activate
     def test_validate_context_size_health_failure(self):
@@ -1817,27 +1819,6 @@ class TestLemonadeClientMock(unittest.TestCase):
         )
 
         # Should return True to not block on connection errors
-        self.assertTrue(valid)
-        self.assertIsNone(error)
-
-    @responses.activate
-    def test_validate_context_size_legacy_format(self):
-        """Test validate_context_size with older Lemonade format (pre-9.1.4)."""
-        # Legacy format: context_size at top level (pre-9.1.4)
-        health_response = {
-            "status": "ok",
-            "context_size": 32768,
-            "model_loaded": TEST_MODEL,
-            "checkpoint_loaded": "amd/Llama-3.2-3B-Instruct-GGUF",
-        }
-        responses.add(
-            responses.GET, f"{API_BASE}/health", json=health_response, status=200
-        )
-
-        valid, error = self.client.validate_context_size(
-            required_tokens=32768, quiet=True
-        )
-
         self.assertTrue(valid)
         self.assertIsNone(error)
 
@@ -2428,11 +2409,10 @@ class TestLemonadeClientMock(unittest.TestCase):
             logging.disable(logging.NOTSET)
 
 
-class TestLaunchServerModernLegacyDispatch(unittest.TestCase):
+class TestLaunchServerDispatch(unittest.TestCase):
     """AC7 (issue #316): launch_server() must build its Popen argv/env from
-    resolve_lemonade()/build_start_command() rather than the hardcoded
-    ["lemonade-server", "serve"] literal, so it works against both modern
-    (LemonadeServer.exe / lemond) and legacy (lemonade-server) tooling.
+    resolve_lemonade()/build_start_command() rather than a hardcoded
+    command, so it starts LemonadeServer.exe or lemond as installed.
     """
 
     def setUp(self):
@@ -2491,43 +2471,6 @@ class TestLaunchServerModernLegacyDispatch(unittest.TestCase):
         self.assertEqual(env.get("GAIA_TEST_SENTINEL"), "1")
         self.assertIn("PATH", env)
 
-    @patch(
-        "gaia.llm.lemonade_client.LemonadeClient._classify_port_listeners",
-        return_value=([], []),
-    )
-    @patch("subprocess.Popen")
-    @patch("gaia.llm.lemonade_client.build_start_command")
-    @patch("gaia.llm.lemonade_client.resolve_lemonade")
-    def test_launch_server_legacy_fallback_unchanged(
-        self, mock_resolve, mock_build_cmd, mock_popen, mock_kill_port
-    ):
-        """When resolve_lemonade() resolves to legacy tooling, the Popen argv
-        shape must remain byte-identical to today's:
-        ["lemonade-server", "serve", "--ctx-size", "N"] — regression guard."""
-        from gaia.llm.lemonade_launcher import LemonadeTooling, StartSpec
-
-        mock_resolve.return_value = LemonadeTooling(
-            found=True,
-            kind="legacy",
-            client_path="lemonade-server",
-            server_launcher="lemonade-server",
-        )
-        mock_build_cmd.return_value = StartSpec(
-            argv=["lemonade-server", "serve", "--ctx-size", "32768"],
-            env={},
-        )
-        mock_popen.return_value = MagicMock()
-
-        client = LemonadeClient(host=HOST, port=PORT, verbose=False)
-        with patch.object(client, "health_check", return_value=None):
-            with patch("socket.create_connection"):
-                client.launch_server(background="silent", ctx_size=32768)
-
-        mock_popen.assert_called_once()
-        call_args, call_kwargs = mock_popen.call_args
-        argv = call_args[0] if call_args else call_kwargs.get("args")
-        self.assertEqual(argv, ["lemonade-server", "serve", "--ctx-size", "32768"])
-
     @patch("gaia.llm.lemonade_client.terminate_pid")
     @patch(
         "gaia.llm.lemonade_client.LemonadeClient._classify_port_listeners",
@@ -2546,14 +2489,11 @@ class TestLaunchServerModernLegacyDispatch(unittest.TestCase):
 
         mock_resolve.return_value = LemonadeTooling(
             found=True,
-            kind="legacy",
-            client_path="lemonade-server",
-            server_launcher="lemonade-server",
+            kind="modern",
+            client_path="/usr/bin/lemonade",
+            server_launcher="/usr/bin/lemond",
         )
-        mock_build_cmd.return_value = StartSpec(
-            argv=["lemonade-server", "serve", "--ctx-size", "32768"],
-            env={},
-        )
+        mock_build_cmd.return_value = StartSpec(argv=["/usr/bin/lemond"], env={})
         mock_popen.return_value = MagicMock()
 
         client = LemonadeClient(host=HOST, port=PORT, verbose=False)

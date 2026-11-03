@@ -59,8 +59,12 @@ INSTALLER_SHA256 = {
     "v2026.44.1/Lemonade-2026.44.1-Darwin.pkg": "5af69a31a7603c5024fbc43ce630b9ddf65233adebf7f6ba263ad50962da3e0d",
 }
 
-# The Windows installers of every older release GAIA supports (back to
-# LEMONADE_MIN_VERSION). Uninstalling an older Lemonade can fall back to
+#: The oldest Lemonade release GAIA can remove when it upgrades a PC. Older
+#: than LEMONADE_MIN_VERSION on purpose: these are the versions it moves off.
+OLDEST_REMOVABLE_LEMONADE = "10.2.0"
+
+# The Windows installers of every older release GAIA can remove (back to
+# OLDEST_REMOVABLE_LEMONADE). Uninstalling an older Lemonade can fall back to
 # downloading its MSI, which is verified like any other download. Append-only:
 # a version bump moves the outgoing version's two MSI pins here, and pins any
 # release it skips. tests/fixtures/lemonade/release_tags.txt lists them all.
@@ -404,8 +408,8 @@ class LemonadeInstaller:
                 return LemonadeInfo(
                     installed=False,
                     error=(
-                        "Lemonade Server not found (no modern install at its "
-                        "canonical path, no lemonade-server in PATH)"
+                        "Lemonade Server not found (no install at its "
+                        "canonical path)"
                     ),
                 )
 
@@ -416,10 +420,7 @@ class LemonadeInstaller:
                 return LemonadeInfo(
                     installed=True,
                     path=tooling.client_path,
-                    error=(
-                        f"Failed to get version from {tooling.client_path} "
-                        f"({tooling.kind} tooling)"
-                    ),
+                    error=(f"Failed to get version from {tooling.client_path}"),
                 )
 
             return LemonadeInfo(

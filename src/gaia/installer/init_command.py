@@ -183,8 +183,6 @@ INIT_PROFILES = {
         "agent": "gaia",
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~6 GB",
-        # EmbeddingGemma loads only on Lemonade v10.9.0+ (see the chat profile).
-        "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,
         # [ui] is [rag] plus the daemon, which gaia-tui, `gaia hub install`
         # and `gaia chat --ui` all need.
@@ -195,7 +193,6 @@ INIT_PROFILES = {
         "agent": "minimal",
         "models": ["Gemma-4-E4B-it-GGUF"],
         "approx_size": "~6 GB",
-        "min_lemonade_version": LEMONADE_MIN_VERSION,
         "min_context_size": 32768,
         "pip_extras": [],
     },
@@ -207,7 +204,6 @@ INIT_PROFILES = {
             "Gemma-4-E4B-it-GGUF",  # Agentic reasoning + VLM + prompt enhancement (~6GB)
         ],
         "approx_size": "~10 GB",
-        "min_lemonade_version": LEMONADE_MIN_VERSION,
         "min_context_size": 32768,
         "pip_extras": [],
     },
@@ -216,10 +212,6 @@ INIT_PROFILES = {
         "agent": "chat",
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~6 GB",
-        # EmbeddingGemma is validated on Lemonade v10.9.0; older bundled
-        # llama.cpp builds fail to load it. Floor the version so init fails
-        # loudly instead of the embedder failing at first RAG index.
-        "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,
         "pip_extras": ["rag"],
     },
@@ -228,8 +220,6 @@ INIT_PROFILES = {
         "agent": "rag",
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~6 GB",
-        # EmbeddingGemma loads only on Lemonade v10.9.0+ (see chat profile).
-        "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,
         "pip_extras": ["rag"],
     },
@@ -238,7 +228,6 @@ INIT_PROFILES = {
         "agent": "vlm",
         "models": ["Gemma-4-E4B-it-GGUF"],
         "approx_size": "~6 GB",
-        "min_lemonade_version": LEMONADE_MIN_VERSION,
         "min_context_size": 32768,
         "pip_extras": [],
     },
@@ -247,10 +236,6 @@ INIT_PROFILES = {
         "agent": "email",
         "models": ["Gemma-4-E4B-it-GGUF"],
         "approx_size": "~6 GB",
-        # Keep in lock-step with gaia_agent_email.version.MIN_LEMONADE_VERSION
-        # and the email gaia-agent.yaml manifest (the GET /v1/email/init readiness
-        # check reads the same minimum). A test asserts the three agree.
-        "min_lemonade_version": LEMONADE_MIN_VERSION,
         "min_context_size": 32768,
         "pip_extras": [],
     },
@@ -266,7 +251,6 @@ INIT_PROFILES = {
         # The chat model is Gemma 4 E4B's NPU twin (``with_chat_model``).
         "models": ["gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"],
         "approx_size": "~10 GB",
-        "min_lemonade_version": LEMONADE_MIN_VERSION,
         # The floor every profile shares (issue #1745); the chat model itself
         # loads at its own window, 64K for the NPU twin.
         "min_context_size": 32768,
@@ -282,8 +266,6 @@ INIT_PROFILES = {
         "agent": "all",
         "models": None,
         "approx_size": "~26 GB",
-        # Includes EmbeddingGemma, which loads only on Lemonade v10.9.0+.
-        "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,  # Max requirement across all agents
         "pip_extras": ["rag"],
     },
@@ -431,14 +413,12 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
         _model_ids_match,
         find_model_requirement,
         kv_cache_for,
-        lemonade_server_version,
         runs_on_npu,
     )
     from gaia.llm.model_fit import (
         ModelFitError,
         capacity_from_system_info,
         check_fit,
-        check_server_supports,
         npu_capacity,
     )
 
@@ -470,12 +450,6 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
                 "Choose a smaller one with `gaia config set default_model <id>` "
                 "(`/provider` in the TUI lists what fits), then re-run `gaia init`."
             )
-    if mr and mr.min_lemonade_version:
-        supported = check_server_supports(
-            mr.min_lemonade_version, lemonade_server_version(client)
-        )
-        if not supported.fits:
-            raise ModelFitError(f"default_model {model_id} {supported.reason}.")
 
 
 def pending_download_sizes(client, model_ids, full: bool = False) -> dict:
@@ -620,33 +594,24 @@ def skipped_gemma(profile: str, model_ids) -> bool:
     )
 
 
-def configured_server_too_old(health: object, profile: str, url: str) -> Optional[str]:
-    """Why a user-chosen server can't serve *profile*, or None if it can.
+def configured_server_too_old(health: object, url: str) -> Optional[str]:
+    """Why a user-chosen server is too old for GAIA, or None if it is not.
 
     Shared by `gaia init` and `gaia init --check` so they can never disagree.
-    A server that advertises no parseable version is logged and allowed, since
-    there is nothing to compare.
+    Every supported Lemonade reports its version on ``/health``, so a server
+    that reports none, or none GAIA can read, is refused too.
     """
     from gaia.agents.base.readiness import version_meets_min
+    from gaia.llm.lemonade_launcher import describe_upgrade_hint
 
     version = health.get("version") if isinstance(health, dict) else None
-    minimum = INIT_PROFILES[profile].get("min_lemonade_version")
-    verdict = version_meets_min(version, minimum)
-    if verdict is None and minimum:
-        log.warning(
-            "Could not read a version from the Lemonade Server at %s (got %r); "
-            "not checking it against the '%s' profile's minimum v%s",
-            url,
-            version,
-            profile,
-            minimum,
-        )
-    if verdict is False:
-        return (
-            f"Lemonade Server at {url} is v{version}; the '{profile}' profile "
-            f"needs v{minimum} or newer"
-        )
-    return None
+    if version_meets_min(version, LEMONADE_MIN_VERSION):
+        return None
+    found = f"v{version}" if version else "no version"
+    return (
+        f"Lemonade Server at {url} reports {found}; GAIA needs "
+        f"v{LEMONADE_MIN_VERSION} or newer. {describe_upgrade_hint(url)}"
+    )
 
 
 def check_setup_status(
@@ -760,7 +725,7 @@ def check_setup_status(
             stage="server",
         )
     if configured:
-        too_old = configured_server_too_old(health, profile, base_url)
+        too_old = configured_server_too_old(health, base_url)
         if too_old:
             return SetupStatus(ready=False, reasons=[too_old], stage="server")
 
@@ -1946,13 +1911,10 @@ class InitCommand:
             self._print(f"   Start that server, or {switch_back_hint()}.")
             return False
 
-        too_old = configured_server_too_old(health, self.profile, url)
+        too_old = configured_server_too_old(health, url)
         if too_old:
-            self._print_error(f"{too_old}.")
-            self._print(
-                "   Upgrade it from https://lemonade-server.ai, or "
-                f"{switch_back_hint()}."
-            )
+            self._print_error(too_old)
+            self._print(f"   Or {switch_back_hint()}.")
             return False
 
         version = health.get("version") if isinstance(health, dict) else None

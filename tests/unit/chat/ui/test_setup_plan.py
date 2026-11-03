@@ -49,7 +49,7 @@ def config_file(tmp_path, monkeypatch):
 class _FakeLemonade:
     """A running Lemonade on a PC with *capacity*; *downloaded* models are on disk."""
 
-    def __init__(self, capacity, downloaded=(), version="11.8.0"):
+    def __init__(self, capacity, downloaded=(), version="2026.44.1"):
         self.capacity = capacity
         self.downloaded = set(downloaded)
         self.version = version
@@ -84,7 +84,7 @@ class _FakeLemonade:
 def running(monkeypatch):
     """Point the plan at a fake running server on *capacity*."""
 
-    def use(capacity, downloaded=(), version="11.8.0"):
+    def use(capacity, downloaded=(), version="2026.44.1"):
         fake = _FakeLemonade(capacity, downloaded, version)
         monkeypatch.setattr(sp, "_client", lambda url: fake)
         return fake
@@ -173,17 +173,6 @@ def test_options_show_the_catalog_size(running):
     running(BIG_GPU)
     options = {o["id"]: o for o in sp.build_plan()["options"]}
     assert options[DEFAULT_MODEL_NAME]["size_gb"] == 5.6
-
-
-def test_a_model_this_lemonade_is_too_old_for_is_not_offered(running):
-    """It fits the PC, but setup would refuse it on this server's version."""
-    running(BIG_GPU, version="10.9.1")
-    options = {o["id"]: o for o in sp.build_plan()["options"]}
-    assert options[LARGE_DEFAULT_MODEL_NAME]["fits"] is False
-    assert "Lemonade" in options[LARGE_DEFAULT_MODEL_NAME]["reason"]
-    assert options[DEFAULT_MODEL_NAME]["fits"] is True
-    with pytest.raises(sp.NeedsAcknowledgement, match="Lemonade v11"):
-        sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
 
 
 def test_picking_the_smaller_model_saves_it_and_drops_the_large_download(
