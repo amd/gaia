@@ -891,6 +891,7 @@ const messages: Messages = {
     'setup.offer.usingOwn': 'سيُعدّ GAIA خادم Lemonade الخاص به.',
     'setup.offer.label': 'استخدام خادم Lemonade الخاص بك',
     'setup.offer.title': 'استخدم خادم Lemonade الذي تشغّله في',
+    'setup.offer.whatGaiaDoes': 'ما يفعله GAIA على خادمك',
     'setup.offer.keyPlaceholder': 'مفتاح API الذي شُغّل به خادم Lemonade',
     'setup.offer.keyLabel': 'مفتاح Lemonade API',
     'setup.offer.useMine': 'استخدام خادمي',

@@ -88,6 +88,7 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
     const [checking, setChecking] = useState(false);
     const [key, setKey] = useState('');
     const [needsKey, setNeedsKey] = useState(false);
+    const [more, setMore] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [chosen, setChosen] = useState<'external' | 'gaia' | null>(null);
@@ -183,7 +184,10 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
             <span className="setup-choice-title">
                 {t('setup.offer.title')} <bdi dir="ltr">{found.url}{found.version ? ` (v${found.version})` : ''}</bdi>
             </span>
-            <span className="setup-choice-note"><bdi dir="ltr">{target.what_gaia_does}</bdi></span>
+            <button type="button" className="setup-log-toggle setup-offer-more" onClick={() => setMore((m) => !m)} aria-expanded={more} aria-controls="setup-offer-detail">
+                <ChevronRight size={13} className={more ? 'is-open' : ''} aria-hidden="true" /> {t('setup.offer.whatGaiaDoes')}
+            </button>
+            {more && <p className="setup-choice-note" id="setup-offer-detail"><bdi dir="ltr">{target.what_gaia_does}</bdi></p>}
             {needsKey && (
                 <input
                     className="settings-input"

@@ -1211,6 +1211,11 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         await offer(FOUND);
         expect(await screen.findByRole('form', { name: 'Use your Lemonade Server' }))
             .toHaveTextContent('Use the Lemonade you already run at http://localhost:13305/api/v1 (v10.3.0)');
+        // The detail waits behind its own chevron; the choice is what shows.
+        expect(screen.queryByText(TARGET.what_gaia_does)).toBeNull();
+        const more = screen.getByRole('button', { name: 'What GAIA does on your server' });
+        expect(more).toHaveAttribute('aria-expanded', 'false');
+        fireEvent.click(more);
         expect(screen.getByText(TARGET.what_gaia_does)).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Use mine' }));
         await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith(

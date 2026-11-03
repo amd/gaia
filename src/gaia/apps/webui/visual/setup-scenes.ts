@@ -184,10 +184,18 @@ interface SetupAnswers {
     gpu?: object;
     hardware?: object;
     gatewayReachable?: boolean;
+    /** A Lemonade the user already runs, which Check this PC offers. */
+    theirs?: boolean;
 }
 
+const THEIRS_TARGET = {
+    mode: 'gaia', saved_mode: null, source: 'default', base_url: null, saved_base_url: null, api_key_stored: false, offer: true,
+    what_gaia_does: "GAIA registers its embedding model (user.embeddinggemma-300m-GGUF) on your server and loads its chat and embedding models there. It does not change your server's own setup: no cloud providers or keys, no backends, no saved load options, and it never unloads or deletes your models. It never starts a Lemonade while set to use yours.",
+};
+const THEIRS_FOUND = { found: { url: 'http://localhost:13305/api/v1', version: '2026.44.1', status: 'ok', message: null }, unchecked: [] };
+
 /** First-run setup, every call the screens make answered from the backend's shapes. */
-export async function withSetup(page: Page, { status = { state: 'idle' }, plan = PLAN, gpu = NO_GPU, hardware = HARDWARE, gatewayReachable = true }: SetupAnswers = {}): Promise<void> {
+export async function withSetup(page: Page, { status = { state: 'idle' }, plan = PLAN, gpu = NO_GPU, hardware = HARDWARE, gatewayReachable = true, theirs = false }: SetupAnswers = {}): Promise<void> {
     const prices = { provider: 'fireworks', models: [{ model: 'qwen', name: 'Qwen3.6', rank: 1, note: null, price: { input_per_million: 0.5, cached_input_per_million: 0.1, output_per_million: 3, source: 'list price' } }], source: 'Fireworks list price', note: null };
     const answers: Record<string, unknown> = {
         'GET /setup/check': { ready: false, stage: 'setup', reasons: [], steps: [{ key: 'server', label: 'Install the local model server', detail: 'about 1 minute' }] },
@@ -199,7 +207,8 @@ export async function withSetup(page: Page, { status = { state: 'idle' }, plan =
             cards: [{ skill: 'check-in', title: 'Check in', note: 'Pick up where you left off', prompt: 'Good morning.', needs_input: false }],
             working_folder: { path: '/home/you', name: 'you', gaia_folder: false, choosable: true },
         },
-        'GET /lemonade/target': { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: null, saved_base_url: null, api_key_stored: false, offer: false, what_gaia_does: '' },
+        'GET /lemonade/target': theirs ? THEIRS_TARGET : { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: null, saved_base_url: null, api_key_stored: false, offer: false, what_gaia_does: '' },
+        'GET /lemonade/detect': theirs ? THEIRS_FOUND : { found: null, unchecked: [] },
         'GET /providers': providers(gatewayReachable),
         'GET /spending/prices/fireworks': prices,
         'GET /spending/prices/amd': { provider: 'amd', models: [], source: null, note: 'Prices are set by the organization that runs the gateway.' },
@@ -309,6 +318,16 @@ export const SETUP_SCENES: SetupScene[] = [
             await page.locator('.found-more').click();
             await expect(page.locator('.setup-checks-done .setup-rows')).toBeVisible();
             await expect(page.locator('.found-table').last()).toBeVisible();
+        },
+    },
+    {
+        // A Lemonade the user already runs: the choice up front, what GAIA does there behind a disclosure.
+        name: 'check-offer',
+        answers: { theirs: true },
+        reach: async (page) => {
+            await expect(page.locator('.setup-lemonade')).toBeVisible();
+            await page.locator('.setup-offer-more').click();
+            await expect(page.locator('#setup-offer-detail')).toBeVisible();
         },
     },
     {

@@ -891,6 +891,7 @@ export const enMessages = {
     'setup.offer.usingOwn': 'GAIA will set up its own Lemonade Server.',
     'setup.offer.label': 'Use your Lemonade Server',
     'setup.offer.title': 'Use the Lemonade you already run at',
+    'setup.offer.whatGaiaDoes': 'What GAIA does on your server',
     'setup.offer.keyPlaceholder': 'The API key your Lemonade Server was started with',
     'setup.offer.keyLabel': 'Lemonade API key',
     'setup.offer.useMine': 'Use mine',
