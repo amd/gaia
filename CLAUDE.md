@@ -434,13 +434,13 @@ want to test an installed wheel.
 **Claude access is almost always already available** when you are running from a Claude Code session — it comes from the user's Claude Code subscription, **not** from an exported `ANTHROPIC_API_KEY`. An empty `ANTHROPIC_API_KEY` therefore does **not** mean you lack Claude access, and is never a reason to skip the eval. Check access in this order:
 
 1. **Confirm subscription auth first.** If you are running inside a Claude Code session, the subscription is active — that *is* your Claude access. The env var being unset is expected and fine. `ANTHROPIC_API_KEY` is rarely needed.
-2. **Only then consider the key.** `gaia eval`'s judge client ([`src/gaia/eval/claude.py`](src/gaia/eval/claude.py)) reads `ANTHROPIC_API_KEY` from the environment specifically, so it is the *fallback* path used when an eval subprocess can't ride the subscription. Check it only when you actually need that path:
+2. **Only then consider the key.** `gaia eval` uses the subscription first (`CLAUDE_CODE_OAUTH_TOKEN` or the `claude` CLI login), then `ANTHROPIC_API_KEY` from the environment, then from a `.env` ([`src/gaia/eval/claude_credential.py`](src/gaia/eval/claude_credential.py)), and prints which one it uses. The key is the *fallback* path for when there is no login. Check it only when you actually need that path:
 
 ```bash
 echo "${ANTHROPIC_API_KEY:0:8}"   # prints the first 8 chars if set; empty is normal
 ```
 
-Only if the eval genuinely requires the key (the subprocess errors with `ANTHROPIC_API_KEY not found`) and it is absent, ask the user to export it. "I didn't run the eval because the env var looked empty" is not acceptable — verify auth access first.
+Only if the eval genuinely requires the key (it errors with `No Claude credential for the eval`) and it is absent, ask the user to export it. "I didn't run the eval because the env var looked empty" is not acceptable — verify auth access first.
 
 **How to run:**
 

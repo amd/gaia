@@ -64,7 +64,8 @@ def _rag(doc: Path):
 
 def _texts(result):
     assert result["status"] == "success", result
-    return [chunk["content"] for chunk in result["chunks"]]
+    # A small index comes back whole; unmatched chunks carry a zero score.
+    return [c["content"] for c in result["chunks"] if c["relevance_score"] > 0]
 
 
 def test_searches_read_the_chunks_once_and_follow_changes(tmp_path, reads):

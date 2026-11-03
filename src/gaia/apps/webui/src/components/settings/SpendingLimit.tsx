@@ -4,11 +4,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
+import { useT } from '../../i18n/useT';
 import { formatTotal } from './cloudPrice';
 import type { SpendingReport } from '../../types';
 
 /** This month's cloud spending at list price, and an optional monthly limit. */
 export function SpendingLimit() {
+    const t = useT();
     const [report, setReport] = useState<SpendingReport | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [draft, setDraft] = useState('');
@@ -33,7 +35,7 @@ export function SpendingLimit() {
     if (!report) {
         return error
             ? <p className="settings-error" role="alert">{error}</p>
-            : <p className="settings-hint"><Loader2 size={13} className="spin" /> Loading this month&rsquo;s spending…</p>;
+            : <p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.spend.loading')}</p>;
     }
 
     const limit = report.limit_usd;
@@ -42,44 +44,41 @@ export function SpendingLimit() {
     const dirty = parsed !== limit;
 
     return (
-        <section className="settings-field spending" aria-label="Cloud spending">
-            <span className="settings-label">Cloud spending this month</span>
+        <section className="settings-field spending" aria-label={t('settings.spend.aria')}>
+            <span className="settings-label">{t('settings.spend.title')}</span>
             <p className="spending-total">
-                <strong>{formatTotal(report.total_usd)}</strong>
-                {limit != null && <> of your {formatTotal(limit)} limit</>}
-                <span className="settings-hint"> · {report.turns} cloud {report.turns === 1 ? 'chat turn' : 'chat turns'}, at list price</span>
+                <bdi dir="ltr"><strong>{formatTotal(report.total_usd)}</strong></bdi>
+                {limit != null && <> {t('settings.spend.ofLimit', { limit: formatTotal(limit) })}</>}
+                <span className="settings-hint"> · {t.plural('settings.spend.turns', report.turns)}</span>
             </p>
             {report.unpriced_turns > 0 && (
                 <p className="settings-hint">
-                    Plus {report.unpriced_turns} {report.unpriced_turns === 1 ? 'turn' : 'turns'} on models with an unknown
-                    price, not included above.
+                    {t.plural('settings.spend.unpriced', report.unpriced_turns)}
                 </p>
             )}
             {report.state === 'near' && (
                 <p className="spending-warning" role="status">
-                    <AlertTriangle size={13} aria-hidden="true" /> Close to your limit. GAIA stops before a cloud chat once
-                    it&rsquo;s reached.
+                    <AlertTriangle size={13} aria-hidden="true" /> {t('settings.spend.near')}
                 </p>
             )}
             {report.state === 'reached' && (
                 <div className="spending-warning" role="alert">
                     <p>
-                        <AlertTriangle size={13} aria-hidden="true" /> You&rsquo;ve reached your limit, so cloud chats are
-                        stopped until next month. Models on this PC still work.
+                        <AlertTriangle size={13} aria-hidden="true" /> {t('settings.spend.reached')}
                     </p>
                     <button type="button" className="btn-secondary" disabled={busy} onClick={() => void apply(api.allowSpendingThisMonth)}>
-                        Allow more this month
+                        {t('settings.spend.allow')}
                     </button>
                 </div>
             )}
             {report.state === 'allowed_over' && (
-                <p className="settings-hint">Over your limit; you allowed more for this month.</p>
+                <p className="settings-hint">{t('settings.spend.allowed')}</p>
             )}
             <form
                 className="settings-row"
                 onSubmit={(e) => { e.preventDefault(); if (draftValid && dirty) void apply(() => api.setSpendingLimit(parsed)); }}
             >
-                <label className="spending-limit-label" htmlFor="spend-limit">Monthly limit ($)</label>
+                <label className="spending-limit-label" htmlFor="spend-limit">{t('settings.spend.limit')}</label>
                 <input
                     id="spend-limit"
                     className="settings-input"
@@ -87,24 +86,22 @@ export function SpendingLimit() {
                     min="0.01"
                     step="0.01"
                     inputMode="decimal"
-                    placeholder="No limit"
+                    placeholder={t.bare('settings.spend.noLimit')}
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     aria-invalid={!draftValid}
                 />
                 <button type="submit" className="btn-secondary" disabled={busy || !draftValid || !dirty}>
-                    {busy ? <Loader2 size={13} className="spin" /> : null} Save
+                    {busy ? <Loader2 size={13} className="spin" /> : null} {t('settings.advanced.save')}
                 </button>
                 {limit != null && (
                     <button type="button" className="btn-secondary" disabled={busy} onClick={() => void apply(() => api.setSpendingLimit(null))}>
-                        Remove limit
+                        {t('settings.spend.removeLimit')}
                     </button>
                 )}
             </form>
             <span className="settings-hint">
-                Counts cloud chats in GAIA&rsquo;s Agent UI at list price, without cache discounts. Your provider&rsquo;s bill
-                is the final word. Turns that fail or are stopped before a reply aren&rsquo;t counted. Models with an unknown price, like the AMD LLM Gateway&rsquo;s, add nothing to the total,
-                but are stopped too once the limit is reached.
+                {t('settings.spend.how')}
             </span>
             {error && <p className="settings-error" role="alert">{error}</p>}
         </section>
