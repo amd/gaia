@@ -15,6 +15,7 @@ The fixtures are trimmed from real runs' public artifacts:
 """
 
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -507,3 +508,32 @@ def test_judge_text_cannot_plant_links_images_or_issue_refs(hostile, gone):
 def test_neutralised_brackets_render_as_brackets_not_broken_entities():
     out = notice_mod.clean("a [b] c", 100)
     assert out == "a &#91;b&#93; c"
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "\\[x\\]",
+        "\\[a\\](https://evil.example)",
+        "\\\\[x\\\\]",
+        "\\\\\\[x]",
+        "[x\\]",
+        "\\#91 and \\@someone",
+        "cell \\| break",
+    ],
+)
+def test_a_judge_backslash_cannot_turn_an_escape_into_a_live_issue_link(hostile):
+    # Markdown reads `\&#91;` as an escaped `&`, leaving a literal `#91`
+    # that GitHub links as an issue. Each entity must follow an even run of
+    # backslashes, so the backslashes escape each other and the entity renders.
+    out = notice_mod.clean(hostile, 400)
+    for match in re.finditer(r"(\\*)&#9[13];", out):
+        assert len(match.group(1)) % 2 == 0, out
+    for match in re.finditer(r"(\\*)\|", out):
+        assert len(match.group(1)) % 2 == 1, out  # the pipe stays escaped
+    assert "://" not in out
+
+
+def test_a_judge_backslash_bracket_renders_as_typed():
+    out = notice_mod.clean("\\[a\\]", 100)
+    assert out == "\\\\&#91;a\\\\&#93;"
