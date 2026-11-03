@@ -538,9 +538,12 @@ class CanonicalTranslator:
             note = str(args.get(RISK_NOTE_ARG) or "") or plain_risk_note(
                 event.get("risk")
             )
+        elif tool in PATH_TOOLS or tool in CALENDAR_WRITE_TOOLS:
+            # A file prompt's note says what else a yes grants; a calendar
+            # prompt's, that its text holds characters that don't show.
+            note = str(args.get(RISK_NOTE_ARG) or "")
         else:
-            # A file prompt's note says what else a yes grants.
-            note = str(args.get(RISK_NOTE_ARG) or "") if tool in PATH_TOOLS else ""
+            note = ""
         if note:
             summary = f"{summary}\n{note}"
         # confirm_url omitted: stateless stop-and-hand-off (D1, spec §5 / Q4).

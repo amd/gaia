@@ -2194,3 +2194,37 @@ class TestIdeographVariantMarksAreNoted:
     )
     def test_has_unseen(self, text, expected):
         assert has_unseen(text) is expected
+
+
+@pytest.mark.usefixtures("no_env_preapproval")
+class TestTheTerminalSummaryCarriesTheNote:
+    def _summary(self, make_agent, title):
+        from gaia.ui.sse_translation import CanonicalTranslator
+
+        agent = make_agent(_FakeGoogle())
+        sidecar = SSEOutputHandler()
+        sidecar.answers_confirmations = True
+        sidecar.confirm_timeout_seconds = 0.01
+        agent.console = sidecar
+        _run(agent, "create_calendar_event", **{**CREATE, "title": title})
+        request = next(e for e in _events(sidecar) if e["type"] == "permission_request")
+        (wire,) = CanonicalTranslator("r1", agent_id="gaia").translate(request)
+        return wire["summary"]
+
+    @pytest.mark.parametrize(
+        "title",
+        ["\u845b\U000e0100\u98fe\u533a", "Budget \u202eweiver"],
+    )
+    def test_text_with_unseen_characters_is_noted(self, make_agent, title):
+        summary = self._summary(make_agent, title)
+        assert summary.count(HIDDEN_NOTE) == 1
+        assert summary.endswith(f"{HIDDEN_NOTE} They are saved as written.")
+
+    def test_a_coded_character_shows_in_the_summary(self, make_agent):
+        assert "[U+202E]" in self._summary(make_agent, "Budget \u202eweiver")
+
+    @pytest.mark.parametrize(
+        "title", ["\u5c71\u7530", "Team lunch \U0001f37d\ufe0f", "Budget review"]
+    )
+    def test_plain_text_gets_no_note(self, make_agent, title):
+        assert HIDDEN_NOTE not in self._summary(make_agent, title)

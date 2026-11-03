@@ -366,6 +366,21 @@ describe('PermissionPrompt', () => {
             expect(screen.queryByTestId('perm-calendar-unseen')).toBeNull();
         });
 
+        it('a relayed card shows the note once, though its summary carries it too', () => {
+            const note = "This text holds characters that don't show. Those that hide or reorder text " +
+                'appear as [U+XXXX]; ideograph variant marks are kept as written. They are saved as written.';
+            useNotificationStore.getState().addNotification(request({
+                tool: 'create_calendar_event',
+                toolArgs: {
+                    title: '\u845b\u{E0100}\u98fe', start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00',
+                    notify_attendees: [], calendar_account: 'me@x.com', _risk_note: note,
+                },
+                summary: `Title: x\nNotifies: nobody\n${note}`,
+            }));
+            render(<PermissionPrompt sessionId="chat-1" />);
+            expect(document.body.textContent?.split(note).length).toBe(2);
+        });
+
         it('keeps a byte-order mark at either end visible', () => {
             const facts = ask('create_calendar_event', {
                 title: '\ufeffBudget\ufeff', start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00',
