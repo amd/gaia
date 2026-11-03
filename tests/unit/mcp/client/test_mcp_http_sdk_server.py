@@ -5,12 +5,13 @@
 The toy server in ``test_mcp_handshake.py`` accepts any POST, so it can't show
 what a spec-compliant server requires: the ``Accept`` header, the
 ``Mcp-Session-Id`` it hands out, the ``MCP-Protocol-Version`` header, and
-answers sent as SSE streams. These tests run the real server in a thread.
+answers sent as SSE streams. Most tests here run the real server in a thread;
+the rest fake ``urlopen`` for replies it doesn't produce on its own.
 """
 
 from __future__ import annotations
 
-import socket
+import http.client
 import threading
 import time
 import urllib.error
@@ -36,12 +37,6 @@ MODES = {
 }
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 @pytest.fixture
 def sdk_server():
     servers = []
@@ -54,11 +49,10 @@ def sdk_server():
             """Add two numbers."""
             return a + b
 
-        port = _free_port()
         config = uvicorn.Config(
             mcp.streamable_http_app(**options),
             host="127.0.0.1",
-            port=port,
+            port=0,
             log_level="warning",
         )
         server = uvicorn.Server(config)
@@ -70,6 +64,7 @@ def sdk_server():
                 raise RuntimeError("MCP SDK server did not start")
             time.sleep(0.05)
         servers.append((server, thread))
+        port = server.servers[0].sockets[0].getsockname()[1]
         return f"http://127.0.0.1:{port}/mcp"
 
     yield start
@@ -116,6 +111,26 @@ def test_disconnect_ends_the_session_on_the_server(sdk_server):
     with pytest.raises(urllib.error.HTTPError) as excinfo:
         urllib.request.urlopen(probe, timeout=10)
     assert excinfo.value.code == 404
+
+
+def test_reconnect_works_after_the_server_forgets_the_session(sdk_server):
+    url = sdk_server()
+    transport = HTTPTransport(url, timeout=10)
+    client = MCPClient("sdk", transport)
+    assert client.connect(), client.last_error
+    forget = urllib.request.Request(
+        url, headers={"Mcp-Session-Id": transport.session_id}, method="DELETE"
+    )
+    urllib.request.urlopen(forget, timeout=10).close()
+
+    with pytest.raises(RuntimeError, match="no longer knows this session"):
+        client.list_tools(refresh=True)
+
+    try:
+        assert client.connect(), client.last_error
+        assert [t.name for t in client.list_tools(refresh=True)] == ["add"]
+    finally:
+        client.disconnect()
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +192,30 @@ def test_sse_stream_without_the_reply_raises(monkeypatch):
         HTTPTransport("http://mcp.test").send_request("ping")
 
 
+def test_sse_data_split_over_lines_is_joined(monkeypatch):
+    stream = (
+        ": keep-alive\n\n"
+        "id: 7\nretry: 1000\ndata:\n\n"
+        'event: message\ndata: {"jsonrpc": "2.0",\ndata: "id": 0, "result": {}}\n\n'
+    )
+    _fake_urlopen(monkeypatch, _Reply(stream, "text/event-stream"))
+
+    response = HTTPTransport("http://mcp.test").send_request("ping")
+
+    assert response == {"jsonrpc": "2.0", "id": 0, "result": {}}
+
+
+def test_sse_error_with_a_null_id_is_returned(monkeypatch):
+    error = (
+        '{"jsonrpc": "2.0", "id": null, "error": {"code": -32600, "message": "bad"}}'
+    )
+    _fake_urlopen(monkeypatch, _Reply(_sse(error), "text/event-stream"))
+
+    response = HTTPTransport("http://mcp.test").send_request("ping")
+
+    assert response["error"]["message"] == "bad"
+
+
 def test_session_and_version_headers_follow_initialize(monkeypatch):
     init = '{"jsonrpc": "2.0", "id": 0, "result": {"protocolVersion": "2025-06-18"}}'
     sent = _fake_urlopen(
@@ -221,3 +260,18 @@ def test_disconnect_tolerates_a_server_that_refuses_delete(monkeypatch):
 
     assert sent[1].get_method() == "DELETE"
     assert transport.session_id is None and not transport.is_connected()
+
+
+def test_disconnect_survives_a_broken_delete_reply(monkeypatch):
+    init = '{"jsonrpc": "2.0", "id": 0, "result": {}}'
+    _fake_urlopen(
+        monkeypatch,
+        _Reply(init, headers={"Mcp-Session-Id": "abc"}),
+        http.client.IncompleteRead(b""),
+    )
+    transport = HTTPTransport("http://mcp.test")
+    transport.send_request("initialize")
+
+    transport.disconnect()
+
+    assert transport.session_id is None

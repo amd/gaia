@@ -3,6 +3,7 @@
 
 """HTTP transport for MCP protocol communication."""
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -72,7 +73,12 @@ class HTTPTransport(MCPTransport):
                     f"MCP server at {self.url} refused to end the session: "
                     f"HTTP {e.code}"
                 )
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        except (
+            urllib.error.URLError,
+            http.client.HTTPException,
+            TimeoutError,
+            ConnectionError,
+        ) as e:
             logger.warning(f"Could not end the MCP session at {self.url}: {e}")
 
     def send_request(
@@ -104,6 +110,11 @@ class HTTPTransport(MCPTransport):
         if self.debug:
             logger.debug(f"Sending HTTP request: {json.dumps(request, indent=2)}")
 
+        if method == "initialize":
+            # A new session starts without the old one's headers.
+            self.session_id = None
+            self.protocol_version = None
+
         content_type, body = self._post(request)
         if "text/event-stream" in content_type:
             response_json = self._reply_from_sse(body, request["id"])
@@ -129,7 +140,8 @@ class HTTPTransport(MCPTransport):
         """Return the message answering ``request_id`` from an SSE stream.
 
         The stream can carry the server's own notifications before the reply,
-        so messages with another id (or none) are skipped.
+        so those are skipped. An error with a null id is the server refusing
+        the request itself, so it is returned.
         """
         for event in body.replace("\r\n", "\n").split("\n\n"):
             data = "\n".join(
@@ -143,11 +155,16 @@ class HTTPTransport(MCPTransport):
                 message = json.loads(data)
             except json.JSONDecodeError as e:
                 raise ValueError(f"Invalid JSON in SSE event from {self.url}: {e}")
-            if isinstance(message, dict) and message.get("id") == request_id:
+            if not isinstance(message, dict):
+                continue
+            if message.get("id") == request_id:
+                return message
+            if message.get("id") is None and "error" in message:
                 return message
         raise ValueError(
             f"MCP server at {self.url} closed the SSE stream without "
-            f"answering request {request_id}"
+            f"answering request {request_id}. Resuming a stream with "
+            f"Last-Event-ID is not supported yet."
         )
 
     def send_notification(self, method: str, params: Dict[str, Any] = None) -> None:
@@ -208,6 +225,8 @@ class HTTPTransport(MCPTransport):
                 return content_type, response.read().decode("utf-8")
         except urllib.error.URLError as e:
             if getattr(e, "code", None) == 404 and self.session_id:
+                self.session_id = None
+                self.protocol_version = None
                 raise RuntimeError(
                     f"MCP server at {self.url} no longer knows this session. "
                     f"Reconnect to start a new one."
