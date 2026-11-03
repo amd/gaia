@@ -2393,10 +2393,10 @@ func TestTheShortfallRowShowsTheActualWindowAndTheExpectedOne(t *testing.T) {
 	}
 	assertRealCommand(t, row)
 	assertRunnable(t, row.Remedy.Command)
-	// The window in the command is the DERIVED one, never a literal.
-	if strings.Contains(row.Remedy.Command, ctxSizeEnv) &&
-		!strings.Contains(row.Remedy.Command, fmt.Sprint(profileCtxTarget())) {
-		t.Errorf("the remedy names a window other than the profile's: %q", row.Remedy.Command)
+	// Modern Lemonade reads no context-size variable (#3320), so naming one
+	// would promise a fix the restart cannot deliver.
+	if strings.Contains(row.Remedy.Command, "LEMONADE_CTX_SIZE") {
+		t.Errorf("the remedy names a variable Lemonade never reads: %q", row.Remedy.Command)
 	}
 	// It must not promise a cure it cannot deliver — the window is set at load
 	// time, so a restart is a good bet and not a guarantee.

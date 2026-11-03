@@ -465,6 +465,14 @@
     color: var(--danger);
 }
 
+.sb-row-menu-note {
+    max-width: 260px;
+    margin: 0;
+    padding: 2px 12px 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
 /* Phone rename: Save and Cancel, since a phone has no visible way to finish an edit. */
 .sb-row-edit-btn {
     display: inline-flex;

@@ -97,8 +97,13 @@ def loaded(name, device="gpu", recipe="llamacpp", backend_dir="vulkan", ctx=6553
     }
 
 
-def _cap(memory_gb, source="AMD iGPU", disk=None):
-    return MachineCapacity(memory_gb=memory_gb, memory_source=source, disk_free_gb=disk)
+def _cap(memory_gb, source="AMD iGPU", disk=None, npu=None):
+    return MachineCapacity(
+        memory_gb=memory_gb,
+        memory_source=source,
+        disk_free_gb=disk,
+        npu_memory_gb=npu,
+    )
 
 
 # ── #5214: the device each model runs on ──────────────────────────────────

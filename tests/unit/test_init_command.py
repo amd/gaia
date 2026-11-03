@@ -10,7 +10,7 @@ These tests use mocking to avoid actual network calls and installations.
 import io
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 from gaia.installer.lemonade_installer import (
     InstallResult,
@@ -568,14 +568,18 @@ class TestLemonadeReady(unittest.TestCase):
         )
         return embedded
 
-    def _run_embedded(self, embedded, **kwargs):
+    def _run_embedded(self, embedded, replace=None, **kwargs):
         cmd, buf = self._cmd(**kwargs)
+        if replace is None:
+            replace = MagicMock(return_value=None)
         with (
             patch("gaia.llm.lemonade_embedded.EmbeddedLemonade", return_value=embedded),
+            patch("gaia.daemon.client.replace_outdated_daemon", replace),
             patch.object(cmd, "_hand_server_to_daemon") as hand_off,
         ):
             ok = cmd._ensure_lemonade_ready()
         self.hand_off = hand_off
+        self.replace = replace
         return ok, buf.getvalue()
 
     def test_the_started_server_is_handed_to_the_daemon(self):
@@ -662,6 +666,72 @@ class TestLemonadeReady(unittest.TestCase):
 
         self.assertTrue(ok)
         install.assert_called_once_with(force=False)
+
+    def test_an_outdated_daemon_is_replaced_before_the_server_is_swapped(self):
+        """Left running, it restarts its own release's server from its dist."""
+        old = self._status(running=True, version="0.0.1", port=1, pid=1)
+        embedded = self._embedded(old, installed=False)
+        calls = MagicMock()
+        calls.attach_mock(embedded.install, "install")
+        calls.attach_mock(embedded.stop, "stop")
+        calls.attach_mock(embedded.start, "start")
+
+        def replace_daemon():
+            # The old daemon stops the server it owns on its way out.
+            embedded.status.return_value = self._status()
+            return "it runs GAIA 0.25.1, and 0.25.2 is installed"
+
+        replace = MagicMock(side_effect=replace_daemon)
+        calls.attach_mock(replace, "replace")
+
+        ok, out = self._run_embedded(embedded, replace=replace)
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            [c[0] for c in calls.mock_calls], ["install", "replace", "start"]
+        )
+        self.assertIn("0.25.1", out)
+
+    def test_a_stopped_server_also_replaces_an_outdated_daemon(self):
+        embedded = self._embedded(self._status())
+        ok, _ = self._run_embedded(embedded)
+
+        self.assertTrue(ok)
+        self.replace.assert_called_once_with()
+
+    def test_a_current_running_server_leaves_the_daemon_to_hand_off(self):
+        """The hand-off restarts an outdated daemon once it is free."""
+        embedded = self._embedded(self._status(running=True, port=51234, pid=1))
+        ok, _ = self._run_embedded(embedded)
+
+        self.assertTrue(ok)
+        self.replace.assert_not_called()
+
+    def test_an_outdated_daemon_that_will_not_stop_fails_the_step(self):
+        from gaia.daemon.errors import DaemonError
+
+        old = self._status(running=True, version="0.0.1", port=1, pid=1)
+        embedded = self._embedded(old)
+        replace = MagicMock(side_effect=DaemonError("did not stop when asked"))
+        ok, out = self._run_embedded(embedded, replace=replace)
+
+        self.assertFalse(ok)
+        self.assertIn("did not stop when asked", out)
+        embedded.stop.assert_not_called()
+        embedded.start.assert_not_called()
+
+    def test_a_failed_download_leaves_the_old_server_running(self):
+        from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+
+        old = self._status(running=True, version="0.0.1", port=1, pid=1)
+        embedded = self._embedded(old, installed=False)
+        embedded.install.side_effect = EmbeddedLemonadeError("download failed")
+        ok, out = self._run_embedded(embedded)
+
+        self.assertFalse(ok)
+        self.assertIn("download failed", out)
+        embedded.stop.assert_not_called()
+        self.replace.assert_not_called()
 
     def test_unresponsive_instance_is_stopped_before_starting(self):
         embedded = self._embedded(self._status(port=1, unresponsive_pid=77))
@@ -1595,6 +1665,37 @@ class TestInstallViaPpa(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("Ubuntu 22.04", result.error)
         mock_run.assert_not_called()
+
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data=('ID=fedora\nVERSION_ID="41"\nPRETTY_NAME="Fedora Linux 41"\n'),
+    )
+    def test_check_linux_version_rejects_non_debian_distros_with_manual_remedy(
+        self, mock_os_release
+    ):
+        """Non-Debian systems do not receive an apt command they cannot run."""
+        error = LemonadeInstaller._check_linux_version()
+
+        self.assertIsNotNone(error)
+        self.assertIn("Fedora Linux 41", error)
+        self.assertIn("Lemonade PPA", error)
+        self.assertIn("lemonade-server.ai", error)
+        self.assertIn("LEMONADE_BASE_URL", error)
+
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data=(
+            'ID=pop\nID_LIKE="ubuntu debian"\n'
+            'VERSION_ID="24.04"\nPRETTY_NAME="Pop!_OS 24.04 LTS"\n'
+        ),
+    )
+    def test_check_linux_version_accepts_ubuntu_family_derivative(
+        self, mock_os_release
+    ):
+        """Ubuntu-family derivatives retain the PPA path via ID_LIKE."""
+        assert LemonadeInstaller._check_linux_version() is None
 
     @patch("os.geteuid", return_value=1000, create=True)
     @patch("shutil.which", return_value=None)
