@@ -1148,6 +1148,40 @@ jobs:
         --model claude-opus-5-5
         --allowedTools Read,Grep,Glob,Bash
 
+  # issue-triage labels with GITHUB_TOKEN, and that `labeled` event starts no workflow, so
+  # a `bug` it adds never reached auto-fix. Dispatch it instead. An issue that already had
+  # `bug` when opened (the bug template) got auto-fix from the `opened` event.
+  triage-autofix-handoff:
+    needs: issue-triage
+    if: |
+      !cancelled() &&
+      github.repository == 'amd/gaia' &&
+      github.event_name == 'issues' &&
+      github.event.action == 'opened' &&
+      !contains(github.event.issue.labels.*.name, 'bug') &&
+      needs.issue-triage.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: read
+      actions: write   # `gh workflow run`, the one event a GITHUB_TOKEN may trigger
+    steps:
+      - name: Send a newly triaged bug to auto-fix
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REF: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          labels=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
+          if [[ ",$labels," != *",bug,"* ]]; then
+            echo "Triage did not label #$ISSUE_NUMBER a bug; auto-fix not started."
+            exit 0
+          fi
+          gh workflow run claude.yml --repo "$REPO" --ref "$REF" -f issue_number="$ISSUE_NUMBER"
+          echo "Triage labelled #$ISSUE_NUMBER a bug, so auto-fix was dispatched." >> "$GITHUB_STEP_SUMMARY"
+
   # Auto-fix: attempt to implement a fix for bulletproof, easy bug reports
   #
   # Runs in parallel with issue-handler on `issues: opened` (issue-handler posts a
@@ -1187,7 +1221,8 @@ jobs:
   # issues decline in triage (few turns); full fix attempts use up to max-turns 100.
   auto-fix:
     # Fires on: issue opened/reopened with `bug` already attached, the `bug` label
-    # being added later, OR a dispatch from scripts/audit/promote_autofix.py. The
+    # being added later, OR a dispatch from triage-autofix-handoff or
+    # scripts/audit/promote_autofix.py. The
     # `labeled` clause checks the specific label so adding an unrelated label to a
     # bug issue doesn't re-trigger a fix attempt. The dispatch exists because a label
     # added with GITHUB_TOKEN creates no `issues` run.
@@ -1209,17 +1244,37 @@ jobs:
     env:
       ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
     steps:
+      # A relabel or a second dispatch must not redo a fix, or push over commits a
+      # maintainer added to its branch.
+      - name: Skip if a fix PR is already open
+        id: existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          pr=$(gh pr list --repo "$REPO" --head "autofix/issue-$ISSUE_NUMBER" --state open \
+                 --json number --jq '.[0].number // empty')
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+          if [ -n "$pr" ]; then
+            echo "Issue #$ISSUE_NUMBER already has fix PR #$pr open, so auto-fix did not run." >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=Auto-fix skipped::#$ISSUE_NUMBER already has fix PR #$pr open"
+          fi
+
       - name: Checkout repository
+        if: steps.existing.outputs.pr == ''
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Python
+        if: steps.existing.outputs.pr == ''
         uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
       - name: Install dependencies
+        if: steps.existing.outputs.pr == ''
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           # faiss-cpu + pypdf are required by tests/unit/test_doc_examples_runnable.py;
@@ -1229,6 +1284,7 @@ jobs:
           uv pip install --system -e ".[api]"
 
       - name: Pick the Claude account
+        if: steps.existing.outputs.pr == ''
         id: claude_account
         uses: ./.github/actions/claude-credential
         with:
@@ -1237,6 +1293,7 @@ jobs:
           what: "The auto-fix attempt"
 
       - name: Attempt auto-fix
+        if: steps.existing.outputs.pr == ''
         id: claude   # referenced by the Notify step's execution_file check below
         uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
         with:
@@ -1371,8 +1428,16 @@ jobs:
             with: one-sentence root cause (`file.py:line`), a fenced ```diff block of the
             proposed change, and what a human must verify before merging. Then stop.
             **C — DECLINE:** root cause is opaque (no testable hypothesis), OR it's a feature /
-            perf / LLM-behavior / duplicate issue, OR a security issue. Exit silently without a
+            perf / LLM-behavior / duplicate issue, OR a security issue. Exit without an issue
             comment — except security issues, which follow HARD CONSTRAINTS.
+
+            **Record the outcome on every path, a decline or an abandoned fix included.** Before
+            you stop, write `/tmp/autofix-outcome.md`. Its first line is exactly one of
+            `Outcome: A`, `Outcome: B`, `Outcome: C` or `Outcome: FAILED`, and its second line
+            is one plain sentence saying why. A workflow step reads it: a missing file, or `A`
+            with no open PR from `autofix/issue-${{ env.ISSUE_NUMBER }}`, fails the job. Write
+            `FAILED` when validation failed or a command you needed kept failing. Never put
+            security details in it.
 
             ## PHASE 2: IMPLEMENT (only if outcome A)
 
@@ -1409,7 +1474,7 @@ jobs:
             3. **If lint OR tests fail:**
                - Try to fix the issue (one retry only).
                - If still failing after retry, abandon:
-                 - Delete the branch: `git checkout main && git branch -D autofix/issue-${{ env.ISSUE_NUMBER }}`
+                 - Switch back: `git checkout main` (leave the local branch; the runner is thrown away)
                  - Post a comment on the issue (write body to /tmp/fail-comment.md first):
                    `gh issue comment ${{ env.ISSUE_NUMBER }} --body-file /tmp/fail-comment.md`
                    Comment content:
@@ -1512,6 +1577,11 @@ jobs:
               this). Lint/tests not COVERING a non-Python fix is not a failure — see PHASE 3.
             - No Claude attribution anywhere — commits, PR body, comments — including Co-Authored-By.
             - Stay in scope: only the files the fix needs.
+            - Run no git command that writes `.git/config`: `git config`, `git push -u` /
+              `--set-upstream`, `git branch -D` / `-m` / `--set-upstream-to`, `git remote`. On this
+              runner such a write leaves `.git/config.lock` behind, and every later config write
+              then fails with "could not lock config file". The git identity and push credentials
+              are already set up. If you see that error, abandon as in PHASE 3 and quote it.
             - This JOB must never execute against the Lemonade server, AMD hardware, or external
               services — do not run them here. This does NOT bar fixing bugs that need those to
               validate: open the PR (as a draft) and put that validation in the manual test plan
@@ -1525,6 +1595,44 @@ jobs:
             --max-turns 100
             --model claude-opus-5-5
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
+
+      # The run's only record of a decline, and the check that a claimed PR exists. The
+      # file is model-written from untrusted issue text: it goes to the summary only,
+      # never to stdout, where a line could be read as a workflow command.
+      - name: Check the auto-fix outcome
+        if: steps.claude.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          OUTCOME_FILE: /tmp/autofix-outcome.md
+        run: |
+          set -euo pipefail
+          if [ ! -s "$OUTCOME_FILE" ]; then
+            echo "::error title=Auto-fix ended without an outcome::#$ISSUE_NUMBER: Claude stopped without writing $OUTCOME_FILE, so nothing says whether it fixed, proposed or declined."
+            exit 1
+          fi
+          outcome=$(head -n 1 "$OUTCOME_FILE" | tr -d '\r' | sed -nE 's/^Outcome: (A|B|C|FAILED)$/\1/p')
+          {
+            echo "## Auto-fix for #$ISSUE_NUMBER"
+            echo
+            cat "$OUTCOME_FILE"
+          } >> "$GITHUB_STEP_SUMMARY"
+          case "$outcome" in
+            A)
+              pr=$(gh pr list --repo "$REPO" --head "autofix/issue-$ISSUE_NUMBER" --state open \
+                     --json number --jq '.[0].number // empty')
+              if [ -z "$pr" ]; then
+                echo "::error title=Auto-fix PR missing::#$ISSUE_NUMBER: outcome A, but no open PR comes from autofix/issue-$ISSUE_NUMBER."
+                exit 1
+              fi
+              echo "Opened PR #$pr for #$ISSUE_NUMBER." ;;
+            B|C) echo "Outcome $outcome for #$ISSUE_NUMBER; the job summary says why." ;;
+            # An abandoned fix already told the issue why, so a second comment would be noise.
+            FAILED) echo "::warning title=Auto-fix abandoned::#$ISSUE_NUMBER: the job summary says why." ;;
+            *)
+              echo "::error title=Auto-fix outcome unreadable::#$ISSUE_NUMBER: the first line of $OUTCOME_FILE is not 'Outcome: A|B|C|FAILED'."
+              exit 1 ;;
+          esac
 
       # auto-fix has no continue-on-error (a code-writing job must fail loudly), but
       # a failure here — including a dep-install abort before Claude runs — is otherwise
