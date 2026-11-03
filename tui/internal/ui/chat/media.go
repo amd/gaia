@@ -28,6 +28,16 @@ type mediaActionResultMsg struct {
 	err    error
 }
 
+var allowedMediaExtensions = map[string]struct{}{
+	".png": {}, ".jpg": {}, ".jpeg": {}, ".webp": {},
+	".wav": {}, ".mp3": {}, ".ogg": {}, ".flac": {},
+}
+
+func isAllowedMediaPath(path string) bool {
+	_, ok := allowedMediaExtensions[strings.ToLower(filepath.Ext(path))]
+	return ok
+}
+
 func (m ChatModel) latestMediaCard() (mediaCard, bool) {
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		msg := m.messages[i]
@@ -39,7 +49,7 @@ func (m ChatModel) latestMediaCard() (mediaCard, bool) {
 			continue
 		}
 		path := filepath.Clean(strings.TrimSpace(card.Path))
-		if path == "." || !filepath.IsAbs(path) {
+		if path == "." || !filepath.IsAbs(path) || !isAllowedMediaPath(path) {
 			continue
 		}
 		info, err := os.Stat(path)

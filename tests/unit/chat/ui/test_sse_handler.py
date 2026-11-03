@@ -2326,6 +2326,19 @@ class TestRenderMapResultData:
         [event] = _drain(handler)
         assert "result_data" not in event
 
+    def test_media_result_never_turns_an_unknown_extension_into_a_card(
+        self, handler, tmp_path
+    ):
+        output = tmp_path / "unexpected.txt"
+        output.write_text("not media")
+        handler.print_tool_usage("generate_image")
+        _drain(handler)
+        handler.pretty_print_json(
+            {"status": "success", "image_path": str(output)}, title="Result"
+        )
+        [event] = _drain(handler)
+        assert "result_data" not in event
+
     def test_unparseable_string_does_not_crash_and_omits_result_data(self, handler):
         handler.print_tool_usage("pre_scan_inbox")
         _drain(handler)

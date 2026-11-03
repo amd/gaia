@@ -68,6 +68,13 @@ _DIFF_CARD_MAX_CHARS = 64_000
 #: relayed result is reduced to.
 RESULT_PATH_KEYS = ("file_path", "image_path", "audio_path")
 
+#: Generated media file types that a client may later open through an explicit
+#: card action.  Keep this intentionally narrow: a successful tool result is
+#: not enough to turn an arbitrary local file into a launchable UI payload.
+MEDIA_OUTPUT_EXTENSIONS = frozenset(
+    {".png", ".jpg", ".jpeg", ".webp", ".wav", ".mp3", ".ogg", ".flac"}
+)
+
 #: A tool result with one of these statuses did not do its job.
 FAILED_TOOL_STATUSES = FAILED_STATUSES
 
@@ -1173,7 +1180,7 @@ class SSEOutputHandler(OutputHandler):
         if path_key is None:
             return None
         path = Path(envelope[path_key]).expanduser()
-        if not path.is_absolute():
+        if not path.is_absolute() or path.suffix.lower() not in MEDIA_OUTPUT_EXTENSIONS:
             return None
         try:
             stat = path.stat()

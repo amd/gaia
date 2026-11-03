@@ -30,6 +30,15 @@ func TestLatestMediaCardRequiresAnExistingAbsoluteFile(t *testing.T) {
 	if _, ok := m.latestMediaCard(); ok {
 		t.Fatal("latestMediaCard accepted a relative path")
 	}
+
+	unknown := filepath.Join(t.TempDir(), "result.txt")
+	if err := os.WriteFile(unknown, []byte("not media"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.messages[0].Data = json.RawMessage(`{"kind":"media","path":` + strconvQuote(unknown) + `,"media_type":"image"}`)
+	if _, ok := m.latestMediaCard(); ok {
+		t.Fatal("latestMediaCard accepted an unknown extension")
+	}
 }
 
 func TestMediaActionCmdReportsMissingCard(t *testing.T) {
