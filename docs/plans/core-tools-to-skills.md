@@ -14,8 +14,8 @@ The first three moves, in order:
    and `image-gen` already exist and name exactly these tools. Saves **1,386 tokens**
    (994 on compact).
 2. **Email behind `inbox-triage`.** Eight tools that do nothing until a mailbox is
-   connected. Saves **1,350 tokens**. On compact it also stops three email tools from
-   leaking past the feature tier (540 tokens).
+   connected. Saves **1,350 tokens** on the full tier. Compact models already lose all
+   eight to the feature tier.
 3. **Skill authoring and hub tools behind a bundled `skill-manager` skill.** Capture,
    lessons, status, install, search and remove. Saves **1,171 tokens** (656 on compact).
 
@@ -33,8 +33,10 @@ All three need one small framework change first (see [the mechanism](#the-mechan
   separately with the driver check stubbed: 972 tokens, so 15,825 in total with
   Playwright installed.
 - **Compact tier today:** `model_features.COMPACT` withholds scratchpad, five email
-  tools, image generation and three hub tools, 2,308 tokens. Gemma-4-E4B therefore
-  sees about **12,545 tokens**.
+  tools, image generation and three hub tools, 2,308 tokens. The fix on
+  `claude/skills-hub-evaluation-plan-b4e2a7` hides the other three email tools too
+  (540 more; see [findings](#findings-outside-this-plan)). With that fix, Gemma-4-E4B
+  sees about **12,005 tokens**.
 - Eval coverage is a word match of each tool name across `eval/scenarios/*`.
 - Per-tool counts add up to about 90 tokens more than the rendered total, because the
   JSON array wrapping tokenizes differently. The savings below use the per-tool sums.
@@ -49,7 +51,7 @@ saves nothing there.
 | **Desktop extras** | `read_clipboard`, `write_clipboard`, `notify_desktop`, `list_windows`, `text_to_speech` | 534 / 534 | **Gate behind a new bundled `desktop` skill** | Rare, single-shot asks. One scenario in all of `eval/`. Registered inline in `ChatAgent`, not even a mixin | `web_system`, `tool_selection`, `gaia_tool_selection` |
 | **Music and sound generation** | `generate_music`, `generate_sound_effect`, `list_audio_generation_models` | 460 / 460 | **Gate behind `music-gen`** (exists) | The skill's `tools_required` is exactly these three. No scenario calls them | `gaia_media`, `gaia_skills_tasks` + a new load-path scenario |
 | **Image generation** | `generate_image`, `list_sd_models`, `get_generation_history` | 392 / 0 | **Gate behind `image-gen`** (exists) | Already withheld on compact. Its prompt persona was already moved into the skill (`_get_mixin_prompts`) | `vision`, `adversarial` (injected image requests) |
-| **Email** | 8 tools from `EmailToolsMixin` | 1,350 / 540 | **Gate behind `inbox-triage`** (exists) | Useless without a connected mailbox. Compact passed 2/12 and followed phishing. `FEATURE_TOOLS["email"]` lists only 5 of the 8 tools, so `get_thread`, `list_connected_mailboxes` and `list_waiting_on_you` still reach compact | `gaia_email`, `adversarial`, `gaia_skills_tasks` |
+| **Email** | 8 tools from `EmailToolsMixin` | 1,350 / 0 | **Gate behind `inbox-triage`** (exists) | Useless without a connected mailbox. Compact passed 2/12 and followed phishing. Compact already hides all eight once the email tier fix lands | `gaia_email`, `adversarial`, `gaia_skills_tasks` |
 | **Skill authoring and hub** | `capture_skill`, `remember_skill_lesson`, `skill_status`, `install_skill`, `search_skill_hub`, `remove_skill` | 1,171 / 656 | **Gate behind a bundled `skill-manager` skill** | Library management, not task work. Hub half already withheld on compact | `gaia_skills_capture`, `gaia_skills_lifecycle` |
 | **Live browser** (`[browser]` extra) | 8 `browser_*` tools | 972 / 972 (when installed) | **Gate behind a bundled `browse-live` skill** | Opt-in extra, signed-in sessions and click confirmations. Fetching pages covers most web asks. No scenario calls them | `gaia_web` + a new scenario (none exists) |
 | **Media transcription** | `transcribe_media`, `refine_transcript` | 460 / 460 | **Gate behind `transcribe-meeting`** (exists), second wave | Single workflow. But the prompt promises "never refuse an .mp4", so the catalogue line must catch a bare "transcribe this" first | `gaia_media`, `gaia_voice` |
@@ -126,8 +128,8 @@ once, when the model asks for the skill. Every other turn is byte-identical.
 
 | Step | Full tier | Compact |
 |---|---:|---:|
-| Today | 14,853 | ~12,545 |
-| Top three moves | −3,907 (26%) | −2,190 (17%) |
+| Today (with the email tier fix) | 14,853 | ~12,005 |
+| Top three moves | −3,907 (26%) | −1,650 (14%) |
 | + code index outside repos, transcription, RAG debug | −1,137 | −1,137 |
 | + duplicate cleanup | ~−1,000 | ~−1,000 |
 | **After all** | **~8,800** | **~8,200** |
@@ -137,8 +139,11 @@ run in parallel with the gating work.
 
 ## Findings outside this plan
 
-- `FEATURE_TOOLS["email"]` misses `get_thread`, `list_connected_mailboxes` and
-  `list_waiting_on_you`. Compact models are offered three email tools the tier is meant
-  to withhold.
+- **Already fixed on `claude/skills-hub-evaluation-plan-b4e2a7`:** on `dca0ef8f1`,
+  `FEATURE_TOOLS["email"]` missed `get_thread`, `list_connected_mailboxes` and
+  `list_waiting_on_you`. That let compact models read the mailbox through
+  `list_waiting_on_you`, which the skills-hub eval caught on Gemma-4-E4B. The fix adds
+  all three, plus a test that checks the list against every tool the email mixin
+  registers.
 - The data-file rules say email is unsupported, yet the flagship registers eight email
   tools on the full tier.
