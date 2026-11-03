@@ -39,7 +39,8 @@ type Sheet =
  * Settings > Model, for models on this PC: the setup checklist with live state
  * (Apply downloads what is ticked and missing; nothing is deleted except by an
  * explicit Remove), the GPU memory split on an integrated GPU, and the
- * downloads in progress, shown in `downloadsSlot` when the page gives one.
+ * downloads in progress, shown in `downloadsSlot` when the page gives one
+ * (`null` while that slot is still mounting).
  */
 export function LocalModelsSections({ downloadsSlot }: { downloadsSlot?: HTMLElement | null }) {
     const t = useT();
@@ -267,7 +268,7 @@ export function LocalModelsSections({ downloadsSlot }: { downloadsSlot?: HTMLEle
                 </SettingsDisclosure>
             )}
 
-            {downloadsSlot ? createPortal(downloads, downloadsSlot) : downloads}
+            {downloadsSlot ? createPortal(downloads, downloadsSlot) : downloadsSlot === undefined && downloads}
 
             {sheet?.kind === 'remove' && (
                 <ConfirmSheet

@@ -142,6 +142,18 @@ describe('Settings > Models on this PC', () => {
         fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Stop' }));
         await waitFor(() => expect(mocked.cancelSetup).toHaveBeenCalled());
     });
+
+    it('puts downloads in the page slot, and nowhere while that slot is still mounting', async () => {
+        mocked.getSetupStatus.mockResolvedValue(runStatus([progress({ id: GEMMA.id, roles: ['vision'], state: 'downloading', bytes_done: 2e9, bytes_total: 5.97e9 })], { state: 'idle' }));
+        const { rerender } = render(<LocalModelsSections downloadsSlot={null} />);
+        await waitFor(() => expect(row('Gemma-4-E4B-it')).toHaveAccessibleName(/Downloading/));
+        expect(screen.queryByRole('region', { name: 'Downloads' })).not.toBeInTheDocument();
+        const slot = document.body.appendChild(document.createElement('div'));
+        rerender(<LocalModelsSections downloadsSlot={slot} />);
+        expect(within(slot).getByRole('region', { name: 'Downloads' })).toBeInTheDocument();
+        expect(screen.getAllByRole('region', { name: 'Downloads' })).toHaveLength(1);
+        slot.remove();
+    });
 });
 
 describe('downloads outside setup', () => {
