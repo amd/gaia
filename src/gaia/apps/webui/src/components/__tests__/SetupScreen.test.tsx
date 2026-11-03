@@ -1254,6 +1254,18 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         await waitFor(() => expect(bar()).toEqual(['Continue']));
     });
 
+    it('keeps the Checks log free of unknown values and of a server verdict before the choice', async () => {
+        mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
+        await offer(FOUND);
+        await screen.findByRole('form', { name: 'Use your Lemonade Server' });
+        fireEvent.click(screen.getByRole('button', { name: 'Checks log' }));
+        await screen.findByText(/Waiting for you to choose which Lemonade GAIA uses/);
+        const text = document.querySelector('.setup-log-pre')?.textContent ?? '';
+        expect(text).toMatch(/^This PC: AMD Radeon 8060S/);
+        expect(text).not.toMatch(/\?/);
+        expect(text).not.toMatch(/No model server answering yet/);
+    });
+
     it('reads the device and the models again from their server', async () => {
         await offer(FOUND);
         const plans = mockedApi.getSetupPlan.mock.calls.length;

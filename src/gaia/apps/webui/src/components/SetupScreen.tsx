@@ -861,8 +861,13 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     // What the checks did before any run printed a line, so the Checks log is never empty.
     const checkNotes: string[] = [];
     if (hardware) {
-        checkNotes.push(`This PC: ${[hardware.gpu_name, hardware.npu_detected ? 'NPU' : null].filter(Boolean).join(', ') || 'no GPU reported'}; `
-            + `${plan?.system?.physical_memory ?? '?'} installed, ${hardware.ram_gb ?? '?'} GB the OS can use; ${hardware.disk_free_gb != null ? Math.round(hardware.disk_free_gb) : '?'} GB free on disk`);
+        const memory = [
+            plan?.system?.physical_memory ? `${plan.system.physical_memory} installed` : null,
+            hardware.ram_gb != null ? `${hardware.ram_gb} GB the OS can use` : null,
+        ].filter(Boolean).join(', ');
+        const disk = hardware.disk_free_gb != null ? `${Math.round(hardware.disk_free_gb)} GB free on disk` : null;
+        checkNotes.push(`This PC: ${[hardware.gpu_name, hardware.npu_detected ? 'NPU' : null].filter(Boolean).join(', ') || 'no GPU reported'}`
+            + [memory, disk].filter(Boolean).map((part) => `; ${part}`).join(''));
     } else if (hardwareError) {
         checkNotes.push(`Couldn't read this PC: ${hardwareError}`);
     }
@@ -872,7 +877,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             : lemonadeChoice === 'gaia' ? "You chose GAIA's own Lemonade"
                 : 'Waiting for you to choose which Lemonade GAIA uses');
     }
-    if (plan) {
+    // Until the user picks a server, GAIA has none of its own to report on.
+    if (plan && !(lemonadeFound && !lemonadeChoice)) {
         checkNotes.push(plan.lemonade.reachable
             ? `Model server answering at ${plan.lemonade.url ?? 'its address'}`
             : 'No model server answering yet');
