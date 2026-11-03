@@ -17,20 +17,45 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Any
+from typing import Any, Iterator, Tuple
 
 import idna
 
-# Every format, control and line/paragraph separator character can hide or
-# reorder text on the approver's screen, as can a few letters that render blank.
-# Tab and newline are layout, and the joiners and marks RTL and Indic writing
-# need (ZWJ, ZWNJ, LRM, RLM) can't reorder text, so those stay as written.
+# Shown as a code: every format, control and line/paragraph separator
+# character, every Default_Ignorable_Code_Point (Unicode's list of characters
+# that render as nothing), and a few letters that render blank. Tab and newline
+# are layout, and the joiners and marks RTL and Indic writing need (ZWJ, ZWNJ,
+# LRM, RLM) can't reorder text, so those stay as written. A variation selector
+# stays only as the one directly after a visible character, as emoji use it.
 # CalendarApproval.tsx mirrors these lists; a test keeps them equal.
 HIDDEN_CATEGORIES = frozenset({"Cf", "Cc", "Zl", "Zp"})
 KEPT_AS_WRITTEN = frozenset(
     {"\u0009", "\u000a", "\u200c", "\u200d", "\u200e", "\u200f"}
 )
 BLANK_LOOKING = frozenset({"\u034f", "\u115f", "\u1160", "\u2800", "\u3164", "\uffa0"})
+DEFAULT_IGNORABLE = (
+    (0x00AD, 0x00AD),
+    (0x034F, 0x034F),
+    (0x061C, 0x061C),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x206F),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
+VARIATION_SELECTORS = (
+    (0xFE00, 0xFE0F),
+    (0xE0100, 0xE01EF),
+)
 
 HIDDEN_NOTE = "Hidden characters are shown as [U+XXXX]."
 
@@ -52,25 +77,59 @@ def a_person_can_answer(console: Any) -> bool:
     )
 
 
+def _among(ranges: Tuple[Tuple[int, int], ...], char: str) -> bool:
+    point = ord(char)
+    return any(low <= point <= high for low, high in ranges)
+
+
+def is_variation_selector(char: str) -> bool:
+    return _among(VARIATION_SELECTORS, char)
+
+
 def is_hidden(char: str) -> bool:
-    """True when *char* can hide or reorder text, so a prompt shows its code."""
-    if char in KEPT_AS_WRITTEN:
+    """True when *char* hides or reorders text wherever it stands.
+
+    A variation selector depends on what it follows: see :func:`visible`.
+    """
+    if char in KEPT_AS_WRITTEN or is_variation_selector(char):
         return False
-    return char in BLANK_LOOKING or unicodedata.category(char) in HIDDEN_CATEGORIES
+    return (
+        char in BLANK_LOOKING
+        or unicodedata.category(char) in HIDDEN_CATEGORIES
+        or _among(DEFAULT_IGNORABLE, char)
+    )
 
 
 def _unfolded(text: str) -> str:
     return text.replace("\r\n", "\n")
 
 
+def _marked(text: str) -> Iterator[Tuple[str, bool]]:
+    """Each character of *text*, and whether a prompt shows it as a code."""
+    previous = ""
+    for char in _unfolded(text):
+        if is_variation_selector(char):
+            hidden = (
+                not previous
+                or previous.isspace()
+                or previous in KEPT_AS_WRITTEN
+                or is_hidden(previous)
+                or is_variation_selector(previous)
+            )
+        else:
+            hidden = is_hidden(char)
+        yield char, hidden
+        previous = char
+
+
 def has_hidden(text: str) -> bool:
-    return any(is_hidden(char) for char in _unfolded(text))
+    return any(hidden for _, hidden in _marked(text))
 
 
 def visible(text: str) -> str:
     """*text* with every hiding or reordering character written as ``[U+XXXX]``."""
     return "".join(
-        f"[U+{ord(char):04X}]" if is_hidden(char) else char for char in _unfolded(text)
+        f"[U+{ord(char):04X}]" if hidden else char for char, hidden in _marked(text)
     )
 
 
@@ -87,7 +146,11 @@ def sendable_address(address: str, field: str) -> str:
     """
     for char in address:
         # Stricter than display: no joiner or mark belongs in an address.
-        if is_hidden(char) or unicodedata.category(char) in HIDDEN_CATEGORIES:
+        if (
+            is_hidden(char)
+            or is_variation_selector(char)
+            or unicodedata.category(char) in HIDDEN_CATEGORIES
+        ):
             raise ValueError(
                 f"`{field}` has an address with an invisible or control character "
                 f"(U+{ord(char):04X}), which could disguise who receives it: "
@@ -118,12 +181,15 @@ def sendable_address(address: str, field: str) -> str:
 
 __all__ = [
     "BLANK_LOOKING",
+    "DEFAULT_IGNORABLE",
     "HIDDEN_CATEGORIES",
     "HIDDEN_NOTE",
     "KEPT_AS_WRITTEN",
+    "VARIATION_SELECTORS",
     "a_person_can_answer",
     "has_hidden",
     "is_hidden",
+    "is_variation_selector",
     "preapproved",
     "sendable_address",
     "visible",

@@ -28,54 +28,111 @@ function formatsFor(locale: string): Formats {
     return formats;
 }
 
-/**
- * Shown as a code, as `person_approval.py` does: every format, control and line or
- * paragraph separator character, and letters that render blank. Layout and the marks
- * RTL and Indic writing need stay as written. A Python test keeps the lists equal.
+/*
+ * Shown as a code, exactly as `person_approval.py` does: every format, control and
+ * line or paragraph separator character, every Default_Ignorable_Code_Point, and
+ * letters that render blank. Layout and the marks RTL and Indic writing need stay as
+ * written, and so does one variation selector right after a visible character, as
+ * emoji use it. A Python test keeps these lists equal to that file's.
  */
 const KEPT_AS_WRITTEN = new Set(['\u0009', '\u000A', '\u200C', '\u200D', '\u200E', '\u200F']);
-const BLANK_LOOKING = '\u034F\u115F\u1160\u2800\u3164\uFFA0';
-const HIDDEN_CLASS = `[\\p{Cf}\\p{Cc}\\p{Zl}\\p{Zp}${BLANK_LOOKING}]`;
-const HIDDEN = new RegExp(HIDDEN_CLASS, 'gu');
-const ONE_HIDDEN = new RegExp(`^${HIDDEN_CLASS}$`, 'u');
+const BLANK_LOOKING = new Set(['\u034F', '\u115F', '\u1160', '\u2800', '\u3164', '\uFFA0']);
+const DEFAULT_IGNORABLE: ReadonlyArray<readonly [number, number]> = [
+    [0x00AD, 0x00AD],
+    [0x034F, 0x034F],
+    [0x061C, 0x061C],
+    [0x115F, 0x1160],
+    [0x17B4, 0x17B5],
+    [0x180B, 0x180F],
+    [0x200B, 0x200F],
+    [0x202A, 0x202E],
+    [0x2060, 0x206F],
+    [0x3164, 0x3164],
+    [0xFE00, 0xFE0F],
+    [0xFEFF, 0xFEFF],
+    [0xFFA0, 0xFFA0],
+    [0xFFF0, 0xFFF8],
+    [0x1BCA0, 0x1BCA3],
+    [0x1D173, 0x1D17A],
+    [0xE0000, 0xE0FFF],
+];
+const VARIATION_SELECTORS: ReadonlyArray<readonly [number, number]> = [
+    [0xFE00, 0xFE0F],
+    [0xE0100, 0xE01EF],
+];
+const HIDDEN_CATEGORY = /^[\p{Cf}\p{Cc}\p{Zl}\p{Zp}]$/u;
+
+function among(ranges: ReadonlyArray<readonly [number, number]>, char: string): boolean {
+    const point = char.codePointAt(0) ?? -1;
+    return ranges.some(([low, high]) => low <= point && point <= high);
+}
+
+const variationSelector = (char: string) => among(VARIATION_SELECTORS, char);
 
 function hidden(char: string): boolean {
-    return !KEPT_AS_WRITTEN.has(char) && ONE_HIDDEN.test(char);
+    if (KEPT_AS_WRITTEN.has(char) || variationSelector(char)) return false;
+    return BLANK_LOOKING.has(char) || HIDDEN_CATEGORY.test(char) || among(DEFAULT_IGNORABLE, char);
 }
 
 /** `[U+202E]` in place of each, so what is approved reads as what is saved. */
 function visibleText(value: string, multiline: boolean): string {
-    const shown = value.replace(/\r\n/g, '\n').replace(HIDDEN, (c) => (
-        hidden(c) ? `[U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}]` : c
-    ));
+    let previous = '';
+    let shown = '';
+    for (const char of value.replace(/\r\n/g, '\n')) {
+        const isHidden = variationSelector(char)
+            ? !previous || /^\s$/u.test(previous) || KEPT_AS_WRITTEN.has(previous) || hidden(previous) || variationSelector(previous)
+            : hidden(char);
+        shown += isHidden ? `[U+${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}]` : char;
+        previous = char;
+    }
     return multiline ? shown : shown.replace(/\n/g, '[U+000A]');
 }
 
-/** A model may copy an event's fence back into the call (`wrap_untrusted_field`). */
-function plain(value: unknown): string {
-    return typeof value === 'string' ? value.replace(/<<<(END_)?UNTRUSTED_TEXT>>>/g, '').trim() : '';
+const FENCE_OPEN = '<<<UNTRUSTED_TEXT>>>';
+const FENCE_CLOSE = '<<<END_UNTRUSTED_TEXT>>>';
+
+function fenceSide(char: string): string {
+    if (char === '<' || char === '>') return char;
+    const folded = char.normalize('NFKC');
+    return folded === '<' || folded === '>' ? folded : '';
 }
 
+/** Mirrors `strip_untrusted_field_markers` (`untrusted_text.py`): no fence can be spelled from what is left. */
+function plain(value: unknown): string {
+    if (typeof value !== 'string') return '';
+    let text = value;
+    let previous = '';
+    while (previous !== text) {
+        previous = text;
+        text = text.split(FENCE_OPEN).join('').split(FENCE_CLOSE).join('');
+    }
+    const chars = [...text];
+    let out = '';
+    let start = 0;
+    while (start < chars.length) {
+        const side = fenceSide(chars[start]);
+        if (!side) {
+            out += chars[start];
+            start += 1;
+            continue;
+        }
+        let count = 0;
+        let last = start;
+        for (let at = start; at < chars.length; at++) {
+            if (fenceSide(chars[at]) === side) {
+                count += 1;
+                last = at;
+            } else if (!hidden(chars[at])) break;
+        }
+        out += count >= 3 ? side + side : chars.slice(start, last + 1).join('');
+        start = last + 1;
+    }
+    return out;
+}
+
+/** GAIA sends the checked values (addresses as notified), so this only makes them visible. */
 function text(value: unknown, multiline = false): string {
     return visibleText(plain(value), multiline);
-}
-
-/** Characters that would make a URL parse a different host than the address names. */
-const NOT_A_HOST = /[\s/\\?#:@[\]%]/u;
-
-/** An address with its domain as the provider sees it, so a look-alike letter shows (`sendable_address`). */
-function person(value: unknown): string {
-    const address = plain(value);
-    const at = address.lastIndexOf('@');
-    const domain = address.slice(at + 1);
-    const ascii = /^[ -~]*$/.test(domain);
-    if (at < 0 || ascii || NOT_A_HOST.test(domain) || [...domain].some(hidden)) return visibleText(address, false);
-    try {
-        return visibleText(`${address.slice(0, at)}@${new URL(`http://${domain}/`).hostname}`, false);
-    } catch {
-        // Not a domain a provider would accept: shown as written, with its codes.
-        return visibleText(address, false);
-    }
 }
 
 /** Local midnight, so an all-day date can't slide to a neighbouring day. */
@@ -113,7 +170,7 @@ function Name({ value }: { value: string }) {
 /** The title, time, account and people a calendar approval turns on, with no click needed. */
 export function CalendarApproval({ tool, args }: { tool: string; args: Record<string, unknown> }) {
     const t = useT();
-    const people = Array.isArray(args.notify_attendees) ? args.notify_attendees.map(person).filter(Boolean) : [];
+    const people = Array.isArray(args.notify_attendees) ? args.notify_attendees.map((value) => text(value)).filter(Boolean) : [];
     const rows: Array<[string, ReactNode]> = [];
     const named = (label: string, value: unknown, multiline = false) => {
         const shown = text(value, multiline);

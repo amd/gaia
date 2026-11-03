@@ -79,6 +79,7 @@ from gaia.agents.base.tool_grants import (
     PATH_TOOLS,
     SCRATCH_ARG,
 )
+from gaia.agents.base.untrusted_text import strip_untrusted_field_markers
 from gaia.ui.event_narration import (
     DEBUG_CHANNEL,
     derive_narration,
@@ -589,6 +590,13 @@ class CanonicalTranslator:
             prompt_context["working_directory"] = str(folder)
         if args.get(RISK_NOTE_ARG):
             prompt_context["risk_note"] = str(args[RISK_NOTE_ARG])
+        # A calendar card shows the checked values: the addresses as notified,
+        # the event's real title, text with its hidden characters as codes.
+        if tool in CALENDAR_WRITE_TOOLS:
+            shown_args, _ = bounded_prompt_args(
+                {k: v for k, v in args.items() if k not in PROMPT_ONLY_ARGS}
+            )
+            prompt_context["shown_args"] = shown_args
         # Where a relative write really lands; the model's own spelling stays in args.
         shown_path = args.get("file_path")
         if isinstance(shown_path, str) and shown_path != call_args.get("file_path"):
@@ -771,8 +779,6 @@ CALENDAR_WRITE_TOOLS = frozenset(
     {"create_calendar_event", "update_calendar_event", "cancel_calendar_event"}
 )
 
-#: A model may copy an event's fence (``wrap_untrusted_field``) back into a call.
-_UNTRUSTED_FIELD_MARKER_RE = re.compile(r"<<<(?:END_)?UNTRUSTED_TEXT>>>")
 
 #: Longest a command may be before its middle is elided. Head AND tail are
 #: kept: for a shell line the part the decision turns on is often at the end.
@@ -905,7 +911,7 @@ def render_calendar_summary(args: Dict[str, Any]) -> str:
 
     def plain(key: str) -> str:
         value = str(args.get(key) or "")
-        return _UNTRUSTED_FIELD_MARKER_RE.sub("", value).strip()
+        return strip_untrusted_field_markers(value).strip()
 
     def span(begins: str, ends: str) -> str:
         return f"{plain(begins)} to {plain(ends)}" if plain(ends) else plain(begins)
@@ -925,7 +931,7 @@ def render_calendar_summary(args: Dict[str, Any]) -> str:
     lines = [f"{label}: {value}" for label, value in rows if value]
     people = args.get("notify_attendees")
     names = [
-        _UNTRUSTED_FIELD_MARKER_RE.sub("", str(p))
+        strip_untrusted_field_markers(str(p))
         for p in (people if isinstance(people, list) else [])
     ]
     lines.append(f"Notifies: {', '.join(names) or 'nobody'}")

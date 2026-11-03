@@ -7,6 +7,7 @@ import { PermissionPrompt } from '../PermissionPrompt';
 import { useChatStore } from '../../stores/chatStore';
 import { useNotificationStore } from '../../stores/notificationStore';
 import type { GaiaNotification } from '../../types/agent';
+import parity from './fixtures/approval-text-parity.json';
 
 const originalRespond = useNotificationStore.getState().respondToPermission;
 const respond = vi.fn();
@@ -345,20 +346,32 @@ describe('PermissionPrompt', () => {
             expect(facts.textContent).toContain('A[U+000A]B');
         });
 
-        it.each([
-            ['create_calendar_event', { title: 'Sync', start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00', calendar_account: 'me@x.com' }],
-            ['cancel_calendar_event', { event_id: 'abc', expected_title: 'Sync', expected_start: '2026-11-03T14:00:00Z' }],
-        ])('%s shows each address with the domain the provider sees', (tool, rest) => {
-            const facts = ask(tool, {
-                ...rest,
-                notify_attendees: ['ceo@\u0430pple.com', 'dana@exa\u200bmple.com', 'x@evil.com/y', 'sam@x.com'],
+        it('shows the addresses GAIA checked, as given', () => {
+            const facts = ask('cancel_calendar_event', {
+                event_id: 'abc', expected_title: 'Sync', expected_start: '2026-11-03T14:00:00Z',
+                notify_attendees: ['ceo@xn--pple-43d.com', 'dana@exa\u200bmple.com', 'sam@x.com'],
             });
             const shown = facts.textContent ?? '';
             expect(shown).toContain('ceo@xn--pple-43d.com');
-            expect(shown).not.toContain('\u0430');
             expect(shown).toContain('dana@exa[U+200B]mple.com');
-            expect(shown).toContain('x@evil.com/y');
             expect(shown).toContain('sam@x.com');
+        });
+
+        it('keeps a byte-order mark at either end visible', () => {
+            const facts = ask('create_calendar_event', {
+                title: '\ufeffBudget\ufeff', start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00',
+                notify_attendees: [], calendar_account: 'me@x.com',
+            });
+            expect(facts.textContent).toContain('[U+FEFF]Budget[U+FEFF]');
+        });
+
+        it.each(parity.map((c) => [JSON.stringify(c.input), c] as const))('shows %s exactly as GAIA does', (_label, { input, shown }) => {
+            const facts = ask('create_calendar_event', {
+                title: input, start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00',
+                notify_attendees: [], calendar_account: 'me@x.com',
+            });
+            const title = [...facts.querySelectorAll('dt')].find((dt) => dt.textContent === 'Title');
+            expect(title?.nextElementSibling?.textContent).toBe(shown);
         });
 
         it('an unreadable time still shows, as written', () => {

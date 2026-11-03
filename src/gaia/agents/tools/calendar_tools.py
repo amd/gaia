@@ -233,9 +233,12 @@ def _shown_arg(key: str, value: Any) -> Any:
     return value
 
 
-def _check_shown_length(text: Any, what: str, limit: int) -> None:
-    # Measured as shown: a hidden character takes more room on the prompt.
-    length = len(visible(_plain(text)))
+def _check_shown_length(
+    text: Any, what: str, limit: int, *, multiline: bool = False
+) -> None:
+    # Measured as shown: a hidden character or line break takes more room there.
+    shown = visible(_plain(text)) if multiline else visible_line(_plain(text))
+    length = len(shown)
     if length > limit:
         raise CalendarError(
             f"The {what} is {length} characters, and the approval prompt can only "
@@ -244,7 +247,11 @@ def _check_shown_length(text: Any, what: str, limit: int) -> None:
 
 
 def _check_description(text: Any) -> None:
-    _check_shown_length(text, "description", _MAX_DESCRIPTION_CHARS)
+    _check_shown_length(text, "description", _MAX_DESCRIPTION_CHARS, multiline=True)
+
+
+def _call_key(args: Dict[str, Any]) -> str:
+    return json.dumps(args, sort_keys=True, default=str)
 
 
 def _who_gets_told(event: CalendarEvent) -> List[str]:
@@ -395,6 +402,14 @@ class _CalendarPreflight:
         written = [v for v in args.values() if isinstance(v, str)] + [
             v for v in args.get("notify_attendees") or () if isinstance(v, str)
         ]
+        if self._tool_name != "create_calendar_event":
+            # The event as the provider holds it: a case-insensitive match lets
+            # the model's spelling differ from who is really told.
+            event = self._mixin._calendar_targets.pop(_call_key(args))
+            told = _who_gets_told(event)
+            shown["expected_title"] = visible_line(event.title.strip())
+            shown["notify_attendees"] = [_shown_invitee(a) for a in told]
+            written += [event.title, *told]
         if any(has_hidden(text) for text in written):
             shown[RISK_NOTE_ARG] = f"{HIDDEN_NOTE} They are saved as written."
         # Marked wherever a person can answer, so Full access turned on while
@@ -415,6 +430,8 @@ class CalendarToolsMixin:
     _calendar_backend: Optional[CalendarBackend] = None
     _calendar_backend_is_owned = False
     _calendar_provider: Optional[str] = None
+    # The event the last change was checked against, for its prompt to show.
+    _calendar_targets: Optional[Dict[str, CalendarEvent]] = None
 
     # On the mixin, so any agent composing these tools is gated by construction.
     CONFIRMATION_HOOKS = ("_calendar_call_needs_confirmation",)
@@ -675,15 +692,17 @@ class CalendarToolsMixin:
                 _patch_from(args)
             except CalendarError as exc:
                 return _refusal("update_calendar_event", str(exc))
-            _, refusal = mixin._calendar_target(
-                args, "update_calendar_event", cancelling=False
-            )
-            return refusal
+            return _checked_target(args, "update_calendar_event", cancelling=False)
 
         def _check_cancel(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-            _, refusal = mixin._calendar_target(
-                args, "cancel_calendar_event", cancelling=True
-            )
+            return _checked_target(args, "cancel_calendar_event", cancelling=True)
+
+        def _checked_target(
+            args: Dict[str, Any], action: str, *, cancelling: bool
+        ) -> Optional[Dict[str, Any]]:
+            event, refusal = mixin._calendar_target(args, action, cancelling=cancelling)
+            if event is not None:
+                mixin._calendar_targets = {_call_key(args): event}
             return refusal
 
         @tool(atomic=True)
