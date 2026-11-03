@@ -846,13 +846,17 @@ async def send_followup(request: FollowUpRequest):
 
 
 @router.get("/api/chat/followup/{session_id}")
-async def followup_outcome(session_id: str):
+async def followup_outcome(session_id: str, db: ChatDatabase = Depends(get_db)):
     """What the chat's last finished turn did with the messages added to it.
 
     ``taken`` were read by the turn and recorded in the chat; ``returned`` were
     not and should go out as their own messages. 409 while a turn still runs,
-    since its follow-ups have no outcome yet.
+    since its follow-ups have no outcome yet. A deleted chat is a terminal
+    condition for queued messages, so it must not look like an empty outcome.
     """
+    # Check existence first: a stale run entry must not turn a deleted chat into
+    # a misleading 409, and the client uses 404 to discard its local queue.
+    _require_session(db, session_id)
     if run_manager.is_running(session_id):
         raise HTTPException(
             status_code=409,

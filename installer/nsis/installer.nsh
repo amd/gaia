@@ -27,7 +27,7 @@
 ; either — NSIS prohibits using `!undef` on MUI macro-reserved symbols
 ; between the two page insertions when they're both emitted by a parent
 ; script we don't control. The simplest robust fix is to drop the
-; checkbox entirely and write the autostart key unconditionally. This
+; checkbox entirely and write the autostart key on a fresh install. This
 ; matches the plan's "default ON" intent and mirrors how Slack/Discord
 ; behave. Users who want to disable autostart can:
 ;
@@ -55,15 +55,38 @@
 ; Using HKCU (not HKLM) matches perMachine=false in electron-builder.yml
 ; — we're a per-user install, so per-user autostart is correct.
 
+; At file scope, not in a macro: electron-builder may expand a macro twice.
+!include "LogicLib.nsh"
+
+!ifndef BUILD_UNINSTALLER
+  Var gaiaPriorInstall
+  Var gaiaAutostart
+!endif
+
+; Read first: the old version's uninstaller deletes the sign-in entry before
+; customInstall runs.
+!macro customInit
+  ; Both hives: the per-user or all-users choice isn't made yet.
+  ReadRegStr $gaiaPriorInstall HKCU "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
+  ${If} $gaiaPriorInstall == ""
+    ReadRegStr $gaiaPriorInstall HKLM "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
+  ${EndIf}
+  ReadRegStr $gaiaAutostart HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_NAME}"
+!macroend
+
 !macro customInstall
   ; Clean up the old autostart key from pre-rename installs so users
   ; who upgrade from "GAIA Agent UI" don't end up with an orphaned
   ; Run entry pointing at a binary path that no longer exists.
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "GAIA Agent UI"
 
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
-      "${PRODUCT_NAME}" \
-      '"$INSTDIR\${PRODUCT_FILENAME}.exe" --minimized'
+  ; An update keeps the user's sign-in choice.
+  ${If} $gaiaPriorInstall == ""
+  ${OrIf} $gaiaAutostart != ""
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
+        "${PRODUCT_NAME}" \
+        '"$INSTDIR\${PRODUCT_FILENAME}.exe" --minimized'
+  ${EndIf}
 !macroend
 
 ; ─── Uninstall: clean up the autostart Run key ─────────────────────────

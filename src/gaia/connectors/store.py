@@ -182,7 +182,12 @@ def _wrap_keyring_call(operation: str):
 # ``None`` ("reconnect") on any mismatch — a torn state can never surface as a
 # truncated-but-valid-looking token.
 _CHUNK_CHARS = 1024
-_CHUNK_SENTINEL = "\x00gaia-chunked\x00"  # cannot occur inside a JSON blob
+# No NUL: the macOS backend cuts a stored value at the first one. A JSON blob
+# starts with "{", and no credential format starts with this.
+_CHUNK_SENTINEL = "gaia-chunked-v2:"
+# Earlier releases wrote this. It still reads back whole on Windows and Linux.
+_LEGACY_CHUNK_SENTINEL = "\x00gaia-chunked\x00"
+_CHUNK_SENTINELS = (_CHUNK_SENTINEL, _LEGACY_CHUNK_SENTINEL)
 
 
 def _payload_crc(payload: str) -> str:
@@ -258,7 +263,10 @@ def _kr_set(username: str, payload: str) -> None:
 def _parse_manifest(raw: str) -> Optional[tuple[int, Optional[str]]]:
     """Parse ``<SENTINEL><count>[:<crc>]`` → ``(count, crc)``. ``None`` if the
     manifest is malformed. ``crc`` is ``None`` for a legacy count-only manifest."""
-    body = raw[len(_CHUNK_SENTINEL) :]
+    sentinel = (
+        _CHUNK_SENTINEL if raw.startswith(_CHUNK_SENTINEL) else _LEGACY_CHUNK_SENTINEL
+    )
+    body = raw[len(sentinel) :]
     count_str, _, crc = body.partition(":")
     try:
         return int(count_str), (crc or None)
@@ -273,7 +281,15 @@ def _kr_get(username: str) -> Optional[str]:
     mid-rewrite) resolves to ``None`` — never a truncated-but-valid-looking
     value."""
     raw = _kr_raw_get(username)
-    if raw is None or not raw.startswith(_CHUNK_SENTINEL):
+    if raw == "":
+        # An earlier release's manifest as macOS kept it; nothing stores an empty value.
+        logger.warning(
+            "Keychain entry %s lost its chunk manifest; treating it as not stored. "
+            "Save or reconnect it to replace it.",
+            username,
+        )
+        return None
+    if raw is None or not raw.startswith(_CHUNK_SENTINELS):
         return raw
     parsed = _parse_manifest(raw)
     if parsed is None:
@@ -298,7 +314,7 @@ def _kr_delete(username: str) -> None:
     """Delete a (possibly chunked) value and all its chunk slots. Idempotent."""
     raw = _kr_raw_get(username)
     _kr_raw_delete(username)
-    if raw is not None and raw.startswith(_CHUNK_SENTINEL):
+    if raw is not None and raw.startswith(_CHUNK_SENTINELS):
         parsed = _parse_manifest(raw)
         count = parsed[0] if parsed else 0
         for idx in range(count):

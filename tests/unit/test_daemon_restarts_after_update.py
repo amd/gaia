@@ -274,6 +274,29 @@ def test_a_daemon_that_cannot_be_asked_to_stop_says_what_to_run(running, monkeyp
     assert calls["spawned"] == 0
 
 
+def test_replacing_before_a_server_swap_ignores_busy(running, monkeypatch):
+    """The swap cuts the work off anyway, and the old daemon would undo it."""
+    state, calls, path = running
+    state["inst"] = _inst(gaia_version="0.25.1", version_file=str(path))
+    state["busy"] = "the GAIA terminal app is still using it"
+    monkeypatch.setattr(client, "pid_alive", lambda pid: True)
+
+    why = client.replace_outdated_daemon()
+
+    assert "0.25.1" in why
+    assert calls == {"shutdown": [4242], "spawned": 0}
+
+
+def test_replacing_leaves_a_current_or_missing_daemon(running, monkeypatch):
+    state, calls, _path = running
+    monkeypatch.setattr(client, "pid_alive", lambda pid: True)
+    assert client.replace_outdated_daemon() is None
+
+    state["inst"] = None
+    assert client.replace_outdated_daemon() is None
+    assert calls == {"shutdown": [], "spawned": 0}
+
+
 class _Response:
     def __init__(self, status_code, body=None):
         self.status_code = status_code

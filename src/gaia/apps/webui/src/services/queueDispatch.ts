@@ -26,6 +26,7 @@ export const QUEUE_BUSY_WAIT_MS = 3_000;
 export type SendOutcome =
     | { kind: 'accepted' }
     | { kind: 'busy' }
+    | { kind: 'gone' }
     | { kind: 'failed'; error: string };
 
 /** Starts `text` as the chat's next turn; resolves once the server took it, or didn't. */
@@ -77,6 +78,12 @@ export function isBusyError(err: unknown): boolean {
     return status === 409 || status === 429;
 }
 
+/** The server no longer has this chat (deleted), so its queue can never be sent. */
+function dropGone(sessionId: string): void {
+    log.chat.warn(`Chat ${sessionId} no longer exists; dropping its queued messages`);
+    useChatStore.getState().updateQueue(sessionId, () => []);
+}
+
 function hold(sessionId: string): void {
     useChatStore.getState().setQueueHold(sessionId, true);
     setTimeout(() => useChatStore.getState().setQueueHold(sessionId, false), QUEUE_BUSY_WAIT_MS);
@@ -120,6 +127,10 @@ export async function dispatchNext(sessionId: string, send: QueuedSend, canSend:
                     log.chat.info(`Chat ${sessionId} is answering again; its queue waits for that turn to end`);
                     return;
                 }
+                if (httpStatus(err) === 404) {
+                    dropGone(sessionId);
+                    return;
+                }
                 log.chat.error(`Could not learn what chat ${sessionId}'s last reply did with the messages added to it`, err);
                 store().updateQueue(sessionId, (q) => messageQueue.failDelivered(
                     q, `GAIA could not say whether it read this message: ${errorText(err)}`,
@@ -148,6 +159,10 @@ export async function dispatchNext(sessionId: string, send: QueuedSend, canSend:
             log.chat.info(`Queued message found chat ${sessionId} busy; holding it`);
             store().updateQueue(sessionId, (q) => messageQueue.notStarted(q, next.id));
             hold(sessionId);
+            return;
+        }
+        if (result.kind === 'gone') {
+            dropGone(sessionId);
             return;
         }
         log.chat.error(`Queued message for chat ${sessionId} was not sent: ${result.error}`);
@@ -188,6 +203,7 @@ export const sendInBackground: QueuedSend = (sessionId, text) => new Promise((re
         onError: (err) => {
             if (isStreamInterrupted(err)) accepted();
             else if (isBusyError(err)) settle({ kind: 'busy' });
+            else if (httpStatus(err) === 404) settle({ kind: 'gone' });
             else settle({ kind: 'failed', error: errorText(err) });
         },
     });

@@ -641,6 +641,7 @@ function App() {
         return (
             <div className="app">
                 <SetupScreen onReady={finishSetup} />
+                <UpdateIndicator />
             </div>
         );
     }
