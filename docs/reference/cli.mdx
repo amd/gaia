@@ -1889,8 +1889,10 @@ What it does not cover:
   own copy of GAIA, so a cloud model named in a request to it isn't checked. Update
   the agent with `gaia agent install <id>`.
 - A key set in Lemonade's own environment (for example
-  `LEMONADE_FIREWORKS_API_KEY`), or a key a Lemonade you run yourself holds: GAIA's own
-  requests are still refused, but a program talking to Lemonade directly could use it.
+  `LEMONADE_FIREWORKS_API_KEY`), or a key held by a Lemonade you chose (with
+  `LEMONADE_BASE_URL` or `gaia lemonade connect`): GAIA leaves that server's keys alone
+  and its own requests are still refused, but a program talking to Lemonade directly
+  could use it.
   If GAIA can't reach its Lemonade when you turn Local only on, it says so; restart
   Lemonade to drop any key it still holds.
 
