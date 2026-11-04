@@ -10,6 +10,9 @@ the screenshot, and name what looks wrong before you say it's fine. Arabic layou
 bugs once shipped past 2,100 passing tests and a DOM audit because nobody looked: the
 audit only asked two questions, and the bugs were answers to questions it never asked.
 
+Testing a whole release or RC rather than one change? Use the
+`testing-agent-ui-release` skill; it runs this review on every screen it touches.
+
 ## 1. Run the checks
 
 ```bash
