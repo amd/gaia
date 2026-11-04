@@ -547,55 +547,87 @@ function isFileLockedError(output) {
   return /os error 32/i.test(output) || /being used by another process/i.test(output);
 }
 
-/** The name of the file uv could not replace, or null when its output names none. */
-function lockedFileName(output) {
-  const m = /failed to \w+ (?:file|directory) `([^`]+)`/i.exec(output || "");
-  return m ? m[1].split(/[\\/]/).pop() : null;
+/** The files uv could not replace, as absolute paths, in the order it named them. */
+function lockedFiles(output) {
+  const files = [];
+  for (const m of String(output || "").matchAll(/failed to \w+ (?:file|directory) `([^`]+)`/gi)) {
+    const file = path.resolve(m[1]);
+    if (!files.includes(file)) files.push(file);
+  }
+  return files;
 }
 
-const MOVED_ASIDE_SUFFIX = /\.exe\.old-\d+$/i;
+const MOVED_ASIDE_SUFFIX = /\.old-\d+$/i;
+
+function sameFile(a, b) {
+  return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+}
 
 /**
- * Rename the venv's launchers so uv can write new ones (#6570). Windows lets a
- * running or open .exe be renamed, and renaming a hard link moves only this
- * venv's name for the file. Returns the names moved.
+ * Rename each locked launcher in the venv's Scripts folder to <name>.old-<ts>
+ * so uv can write a fresh one (#6570). A launcher something is running can't
+ * be renamed; it is left alone. Returns [{ file, aside }] for those moved.
  */
-function moveLaunchersAside() {
-  const dir = path.join(GAIA_VENV, "Scripts");
+function moveLockedAside(files) {
+  const scripts = path.join(GAIA_VENV, "Scripts");
   const stamp = Date.now();
   const moved = [];
-  for (const name of listDir(dir)) {
-    // The interpreter is uv's --python for the retry, and pip never replaces it.
-    if (!/\.exe$/i.test(name) || /^python[\d.]*w?\.exe$/i.test(name)) continue;
-    const file = path.join(dir, name);
+  for (const file of files) {
+    if (!/\.exe$/i.test(file) || !sameFile(path.dirname(file), scripts)) continue;
+    const aside = `${file}.old-${stamp}`;
     try {
-      fs.renameSync(file, `${file}.old-${stamp}`);
-      moved.push(name);
+      fs.renameSync(file, aside);
+      moved.push({ file, aside });
+      log(`Moved locked ${file} aside to ${path.basename(aside)}`);
     } catch (err) {
-      logError(`Could not move ${file} aside (${err.code || "error"}): ${err.message}`);
+      log(`Could not move locked ${file} aside (${err.code || err.message}); it stays where it is`);
     }
   }
-  log(
-    moved.length
-      ? `Moved ${moved.join(", ")} aside in ${dir} (renamed to <name>.old-${stamp})`
-      : `Nothing in ${dir} could be moved aside`
-  );
   return moved;
 }
 
-/** Delete launchers an earlier upgrade moved aside; one still in use waits for a later install. */
+/** Put back every moved launcher uv did not replace, so a failed upgrade leaves the venv whole. */
+function putBackUnreplaced(moved) {
+  for (const { file, aside } of moved) {
+    if (fs.existsSync(file)) {
+      log(`${path.basename(file)} was reinstalled; ${path.basename(aside)} is deleted on a later install`);
+      continue;
+    }
+    try {
+      fs.renameSync(aside, file);
+    } catch (err) {
+      throw new Error(`Could not put ${aside} back at ${file}: ${err.message}`);
+    }
+    log(`Put ${path.basename(file)} back from ${path.basename(aside)}`);
+  }
+}
+
+/**
+ * Tidy what an earlier upgrade moved aside. A .old file whose original was
+ * reinstalled is deleted unless still in use; one whose original is missing
+ * is put back, newest first.
+ */
 function removeMovedLaunchers() {
   const dir = path.join(GAIA_VENV, "Scripts");
-  for (const name of listDir(dir)) {
-    if (!MOVED_ASIDE_SUFFIX.test(name)) continue;
-    const file = path.join(dir, name);
+  const stampOf = (name) => Number(/\.old-(\d+)$/i.exec(name)[1]);
+  const leftovers = listDir(dir)
+    .filter((name) => MOVED_ASIDE_SUFFIX.test(name))
+    .sort((a, b) => stampOf(b) - stampOf(a));
+  for (const name of leftovers) {
+    const aside = path.join(dir, name);
+    const file = aside.replace(MOVED_ASIDE_SUFFIX, "");
+    if (!fs.existsSync(file)) {
+      fs.renameSync(aside, file);
+      log(`Put ${path.basename(file)} back from ${name}: no newer copy was installed`);
+      continue;
+    }
     try {
-      fs.unlinkSync(file);
-      log(`Removed ${file}, moved aside by an earlier upgrade`);
+      fs.unlinkSync(aside);
+      log(`Removed ${aside}, moved aside by an earlier upgrade`);
     } catch (err) {
       // Windows refuses to delete a program that is running (EPERM) or open (EBUSY).
       if (err.code !== "EBUSY" && err.code !== "EPERM") throw err;
-      log(`Left ${file} in place: it is still in use (${err.code})`);
+      log(`Left ${aside} in place: it is still in use (${err.code})`);
     }
   }
 }
@@ -1009,13 +1041,15 @@ async function runPreChecks(opts = {}) {
 // ── uv install ───────────────────────────────────────────────────────────────
 
 class InstallError extends Error {
-  constructor(message, { stage, code, suggestion, reason } = {}) {
+  constructor(message, { stage, code, suggestion, reason, lockedFiles } = {}) {
     super(message);
     this.name = "InstallError";
     this.stage = stage || null;
     this.code = code || null;
     this.suggestion = suggestion || null;
     this.reason = reason || null;
+    // The files another program held open, for main to find who holds them.
+    this.lockedFiles = lockedFiles || null;
   }
 }
 
@@ -1688,31 +1722,32 @@ async function installBackend(opts = {}) {
     );
     await sleep(backoffMs);
   }
-  // Another process can hold gaia.exe open through a hard link from uv's
-  // cache, out of reach of the orphan cleanup (#6570).
-  if (
-    IS_WINDOWS &&
-    installResult.code !== 0 &&
-    isFileLockedError(`${installResult.stdout || ""}\n${installResult.stderr || ""}`) &&
-    moveLaunchersAside().length > 0
-  ) {
-    report(STAGES.INSTALL_PACKAGE, 0, "Another program has GAIA's files open — retrying the install");
-    installResult = await runCommand("uv", useNativeTls ? [...pipArgs, "--native-tls"] : pipArgs, {
-      stageLabel: "pip",
-    });
+  // A launcher that is only open, not running, can be renamed out of uv's way (#6570).
+  const firstOutput = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
+  if (IS_WINDOWS && installResult.code !== 0 && isFileLockedError(firstOutput)) {
+    const moved = moveLockedAside(lockedFiles(firstOutput));
+    if (moved.length > 0) {
+      report(STAGES.INSTALL_PACKAGE, 0, "Another program has GAIA's files open — retrying the install");
+      installResult = await runCommand("uv", useNativeTls ? [...pipArgs, "--native-tls"] : pipArgs, {
+        stageLabel: "pip",
+      });
+      putBackUnreplaced(moved);
+    }
   }
   if (installResult.code !== 0) {
     const output = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
     let suggestion;
     if (isFileLockedError(output)) {
       // pip's own line is already in the log, which the setup screen's details show.
-      const file = lockedFileName(output);
+      const files = lockedFiles(output);
+      const names = files.map((file) => path.basename(file)).join(", ");
       throw new InstallError(
-        `GAIA couldn't replace its own files because another program has them open${file ? ` (${file})` : ""}.`,
+        `GAIA couldn't replace its own files because another program has them open${names ? ` (${names})` : ""}.`,
         {
           stage: STAGES.INSTALL_PACKAGE,
           code: installResult.code,
           reason: FAILURE_REASONS.LOCKED,
+          lockedFiles: files,
           suggestion:
             "Close other GAIA apps and any terminal running gaia, or restart your PC, then try again. " +
             `The log at ${LOG_FILE} names the file.`,

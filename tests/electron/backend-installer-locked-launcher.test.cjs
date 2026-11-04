@@ -1,7 +1,8 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// An upgrade must get past a gaia.exe that another program holds open (#6570).
+// An upgrade that hits a launcher another program holds open (#6570): only the
+// locked launcher is moved aside, and the venv is never left without one.
 
 const fs = require("fs");
 const os = require("os");
@@ -11,9 +12,7 @@ const { EventEmitter } = require("events");
 
 const installerPath = path.resolve(__dirname, "../../src/gaia/apps/webui/services/backend-installer.cjs");
 
-const LOCK_OUTPUT =
-  "error: failed to remove file `C:\\Users\\x\\.gaia\\venv\\Lib\\site-packages\\../../Scripts/gaia.exe`: " +
-  "The process cannot access the file because it is being used by another process. (os error 32)\n";
+const WIN_VENV = ["python.exe", "pythonw.exe", "gaia.exe", "gaia-mcp.exe", "uvicorn.exe"];
 
 let home;
 
@@ -25,18 +24,28 @@ afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-function venvDir(platform) {
-  return path.join(home, ".gaia", "venv", platform === "win32" ? "Scripts" : "bin");
-}
+const scriptsDir = (platform) => path.join(home, ".gaia", "venv", platform === "win32" ? "Scripts" : "bin");
 
 function seedVenv(platform, names) {
-  const dir = venvDir(platform);
+  const dir = scriptsDir(platform);
   fs.mkdirSync(dir, { recursive: true });
-  for (const name of names) fs.writeFileSync(path.join(dir, name), name);
+  for (const name of names) fs.writeFileSync(path.join(dir, name), `old ${name}`);
   return dir;
 }
 
-/** pipResults: one { code, stderr } per `uv pip install`; other uv calls succeed. */
+/** uv's error for a launcher it could not replace, spelled the way uv spells it. */
+function lockOutput(name) {
+  const via = [home, ".gaia", "venv", "Lib", "site-packages", "..", "..", "Scripts", name].join(path.sep);
+  return (
+    `error: failed to remove file \`${via}\`: ` +
+    "The process cannot access the file because it is being used by another process. (os error 32)\n"
+  );
+}
+
+/**
+ * pipResults: one per `uv pip install`: { code, stderr, writes: [names uv
+ * writes into Scripts] }. Other uv calls succeed.
+ */
 function loadInstaller(platform, pipResults, fsOverrides = {}) {
   const queue = [...pipResults];
   const spawn = jest.fn((cmd, args) => {
@@ -45,6 +54,7 @@ function loadInstaller(platform, pipResults, fsOverrides = {}) {
     child.stderr = new EventEmitter();
     const result = args[0] === "pip" ? queue.shift() || { code: 0 } : { code: 0 };
     queueMicrotask(() => {
+      for (const name of result.writes || []) fs.writeFileSync(path.join(scriptsDir(platform), name), `new ${name}`);
       if (result.stderr) child.stderr.emit("data", Buffer.from(result.stderr));
       child.emit("exit", result.code);
     });
@@ -77,76 +87,131 @@ function loadInstaller(platform, pipResults, fsOverrides = {}) {
 }
 
 const install = (installer) => installer.installBackend({ version: "0.25.4", isPackaged: false });
+const read = (dir, name) => fs.readFileSync(path.join(dir, name), "utf8");
+const asides = (dir) => fs.readdirSync(dir).filter((n) => /\.old-\d+$/.test(n)).sort();
 
 describe("Windows: a locked launcher", () => {
-  const WIN_VENV = ["python.exe", "pythonw.exe", "gaia.exe", "gaia-mcp.exe"];
-
-  test("is moved aside and the install retried exactly once", async () => {
-    seedVenv("win32", WIN_VENV);
-    const { installer, pipCalls } = loadInstaller("win32", [
-      { code: 2, stderr: LOCK_OUTPUT },
-      { code: 2, stderr: LOCK_OUTPUT },
-      { code: 0 },
-    ]);
-
-    await install(installer).catch(() => {});
-
-    expect(pipCalls()).toHaveLength(2);
-  });
-
-  test("a retry that succeeds completes the install and keeps the interpreter in place", async () => {
+  test("only the locked launcher is moved aside, and the install retried exactly once", async () => {
     const dir = seedVenv("win32", WIN_VENV);
-    const { installer, pipCalls, logged } = loadInstaller("win32", [{ code: 2, stderr: LOCK_OUTPUT }], {
-      // uv writes fresh launchers on the retry.
-      renameSync: (from, to) => {
-        fs.renameSync(from, to);
-        fs.writeFileSync(from, "new");
-      },
-    });
+    const { installer, pipCalls } = loadInstaller("win32", [
+      { code: 2, stderr: lockOutput("gaia.exe") },
+      { code: 0, writes: ["gaia.exe"] },
+    ]);
 
     await install(installer);
 
     expect(pipCalls()).toHaveLength(2);
-    const names = fs.readdirSync(dir);
-    expect(names).toEqual(expect.arrayContaining(["python.exe", "pythonw.exe", "gaia.exe", "gaia-mcp.exe"]));
-    expect(names.filter((n) => /^gaia\.exe\.old-\d+$/.test(n))).toHaveLength(1);
-    expect(names.filter((n) => /^gaia-mcp\.exe\.old-\d+$/.test(n))).toHaveLength(1);
-    expect(names.some((n) => n.startsWith("python") && n.includes(".old-"))).toBe(false);
-    expect(logged()).toMatch(/Moved .*gaia\.exe.* aside/);
+    expect(asides(dir)).toEqual([expect.stringMatching(/^gaia\.exe\.old-\d+$/)]);
+    for (const name of ["python.exe", "pythonw.exe", "gaia-mcp.exe", "uvicorn.exe"]) {
+      expect(read(dir, name)).toBe(`old ${name}`);
+    }
+  });
+
+  test("a retry that reinstalls the launcher completes the install", async () => {
+    const dir = seedVenv("win32", WIN_VENV);
+    const { installer, logged } = loadInstaller("win32", [
+      { code: 2, stderr: lockOutput("gaia.exe") },
+      { code: 0, writes: ["gaia.exe"] },
+    ]);
+
+    await install(installer);
+
+    expect(read(dir, "gaia.exe")).toBe("new gaia.exe");
+    expect(logged()).toMatch(/Moved locked .*gaia\.exe aside/);
     expect(installer.getState().state).toBe(installer.STATES.READY);
   });
 
-  test("a second lock failure ends in a plain-language error, pip's line in the log", async () => {
-    seedVenv("win32", WIN_VENV);
+  test("a launcher the retry did not reinstall is put back", async () => {
+    const dir = seedVenv("win32", WIN_VENV);
+    const { installer } = loadInstaller("win32", [
+      { code: 2, stderr: lockOutput("gaia.exe") },
+      { code: 0 },
+    ]);
+
+    await install(installer);
+
+    expect(read(dir, "gaia.exe")).toBe("old gaia.exe");
+    expect(asides(dir)).toEqual([]);
+  });
+
+  test("a retry that fails puts the moved launcher back before reporting", async () => {
+    const dir = seedVenv("win32", WIN_VENV);
     const { installer, pipCalls, logged } = loadInstaller("win32", [
-      { code: 2, stderr: LOCK_OUTPUT },
-      { code: 2, stderr: LOCK_OUTPUT },
+      { code: 2, stderr: lockOutput("gaia.exe") },
+      { code: 2, stderr: lockOutput("gaia-mcp.exe") },
     ]);
 
     const err = await install(installer).catch((e) => e);
 
     expect(pipCalls()).toHaveLength(2);
+    expect(read(dir, "gaia.exe")).toBe("old gaia.exe");
+    expect(asides(dir)).toEqual([]);
     expect(err.name).toBe("InstallError");
     expect(err.reason).toBe(installer.FAILURE_REASONS.LOCKED);
     expect(err.stage).toBe(installer.STAGES.INSTALL_PACKAGE);
     expect(err.message).toBe(
-      "GAIA couldn't replace its own files because another program has them open (gaia.exe)."
+      "GAIA couldn't replace its own files because another program has them open (gaia-mcp.exe)."
     );
-    expect(err.message).not.toMatch(/pip|os error/i);
+    expect(err.lockedFiles).toEqual([path.join(dir, "gaia-mcp.exe")]);
     expect(err.suggestion).toMatch(/restart your PC/);
     expect(logged()).toContain("(os error 32)");
   });
 
-  test("files an earlier upgrade moved aside are deleted at the next install", async () => {
-    const dir = seedVenv("win32", [...WIN_VENV, "gaia.exe.old-1700000000000", "gaia-mcp.exe.old-1700000000000"]);
+  test("a running launcher that can't be renamed is left alone and not retried", async () => {
+    const dir = seedVenv("win32", WIN_VENV);
+    const busy = Object.assign(new Error("EBUSY: resource busy or locked, rename"), { code: "EBUSY" });
+    const { installer, pipCalls } = loadInstaller("win32", [{ code: 2, stderr: lockOutput("gaia.exe") }], {
+      renameSync: () => {
+        throw busy;
+      },
+    });
+
+    const err = await install(installer).catch((e) => e);
+
+    expect(pipCalls()).toHaveLength(1);
+    expect(fs.readdirSync(dir).sort()).toEqual([...WIN_VENV].sort());
+    expect(err.reason).toBe(installer.FAILURE_REASONS.LOCKED);
+    expect(err.lockedFiles).toEqual([path.join(dir, "gaia.exe")]);
+  });
+
+  test("a locked file outside the venv's Scripts folder is never moved", async () => {
+    const dir = seedVenv("win32", WIN_VENV);
+    const elsewhere = path.join(home, "other", "gaia.exe");
+    const output =
+      `error: failed to remove file \`${elsewhere}\`: being used by another process. (os error 32)\n`;
+    const { installer, pipCalls } = loadInstaller("win32", [{ code: 2, stderr: output }]);
+
+    await install(installer).catch(() => {});
+
+    expect(pipCalls()).toHaveLength(1);
+    expect(asides(dir)).toEqual([]);
+  });
+});
+
+describe("Windows: what an earlier upgrade moved aside", () => {
+  test("is deleted once a fresh launcher sits at the original name", async () => {
+    const dir = seedVenv("win32", [...WIN_VENV, "gaia.exe.old-1700000000000"]);
     const { installer } = loadInstaller("win32", [{ code: 0 }]);
 
     await install(installer);
 
-    expect(fs.readdirSync(dir).filter((n) => n.includes(".old-"))).toEqual([]);
+    expect(asides(dir)).toEqual([]);
   });
 
-  test("a moved-aside file still in use is left for a later start", async () => {
+  test("is put back, newest first, when the original is missing", async () => {
+    const names = WIN_VENV.filter((n) => n !== "uvicorn.exe");
+    const dir = seedVenv("win32", [...names, "uvicorn.exe.old-100", "uvicorn.exe.old-200"]);
+    fs.writeFileSync(path.join(dir, "uvicorn.exe.old-200"), "newest uvicorn.exe");
+    const { installer, logged } = loadInstaller("win32", [{ code: 0 }]);
+
+    await install(installer);
+
+    expect(read(dir, "uvicorn.exe")).toBe("newest uvicorn.exe");
+    expect(asides(dir)).toEqual([]);
+    expect(logged()).toMatch(/Put uvicorn\.exe back/);
+  });
+
+  test("one still in use is left for a later install", async () => {
     const dir = seedVenv("win32", [...WIN_VENV, "gaia.exe.old-1", "gaia-mcp.exe.old-1"]);
     const inUse = Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
     const { installer, logged } = loadInstaller("win32", [{ code: 0 }], {
@@ -158,11 +223,11 @@ describe("Windows: a locked launcher", () => {
 
     await install(installer);
 
-    expect(fs.readdirSync(dir).filter((n) => n.includes(".old-"))).toEqual(["gaia.exe.old-1"]);
+    expect(asides(dir)).toEqual(["gaia.exe.old-1"]);
     expect(logged()).toMatch(/gaia\.exe\.old-1.*still in use/);
   });
 
-  test("any other error deleting a moved-aside file fails the install", async () => {
+  test("any other error deleting one fails the install", async () => {
     seedVenv("win32", [...WIN_VENV, "gaia.exe.old-1"]);
     const broken = Object.assign(new Error("EIO: i/o error"), { code: "EIO" });
     const { installer, pipCalls } = loadInstaller("win32", [{ code: 0 }], {
@@ -179,7 +244,7 @@ describe("Windows: a locked launcher", () => {
 describe("non-Windows", () => {
   test("a lock-shaped failure is not retried and nothing is renamed", async () => {
     const dir = seedVenv("linux", ["python", "gaia", "gaia.exe.old-1"]);
-    const { installer, pipCalls } = loadInstaller("linux", [{ code: 2, stderr: LOCK_OUTPUT }]);
+    const { installer, pipCalls } = loadInstaller("linux", [{ code: 2, stderr: lockOutput("gaia.exe") }]);
 
     const err = await install(installer).catch((e) => e);
 
