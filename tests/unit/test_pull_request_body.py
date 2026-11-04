@@ -75,8 +75,19 @@ def test_miscased_builtin_is_sent_under_its_registered_name():
 
 @pytest.mark.parametrize("model_id", ["user.not-a-real-model", "USER.not-a-real-model"])
 def test_unknown_user_model_raises_instead_of_a_name_only_pull(model_id):
-    with pytest.raises(ValueError, match="not in GAIA's model registry"):
+    with pytest.raises(ValueError, match="Add a model from Hugging Face"):
         pull_request_body(model_id)
+
+
+def test_unknown_user_model_message_gives_user_facing_advice():
+    """The 400 reaches the Agent UI as-is, so it must not send people to code."""
+    with pytest.raises(ValueError) as exc:
+        pull_request_body("user.not-a-real-model")
+    message = str(exc.value)
+    assert "Settings > Model > Add a model from Hugging Face" in message
+    assert "gaia init" not in message
+    assert "MODELS" not in message
+    assert "lemonade_client" not in message
 
 
 def test_unknown_non_user_model_is_left_to_lemonade_by_name():
@@ -88,7 +99,7 @@ def test_unknown_non_user_model_is_left_to_lemonade_by_name():
 def test_custom_entry_missing_its_checkpoint_raises(monkeypatch):
     broken = dataclasses.replace(MODELS["embeddinggemma"], checkpoint=None)
     monkeypatch.setattr(lc, "find_model_requirement", lambda _id: broken)
-    with pytest.raises(ValueError, match="checkpoint and recipe are unknown"):
+    with pytest.raises(ValueError, match="Add a model from Hugging Face"):
         pull_request_body(broken.model_id)
 
 
