@@ -2376,21 +2376,6 @@ def _probe_misses_only_another_model(
     return not _model_ids_match(probed, model_id)
 
 
-def _host_corrected_hint(hint: str | None) -> str | None:
-    """Replace a sidecar hint that names a command this host does not have.
-
-    An agent package ships its own copy of the "start Lemonade" advice, and an
-    older one still names ``lemonade-server serve`` — a CLI that Lemonade
-    10.7 removed. The host knows what is actually installed, so it substitutes
-    its own answer rather than relaying one the user cannot act on.
-    """
-    if not hint or "lemonade-server serve" not in hint:
-        return hint
-    from gaia.llm.lemonade_launcher import describe_start_hint
-
-    return describe_start_hint().instruction
-
-
 def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
     """Hand Lemonade the remembered key for a cloud model before a relayed turn.
 
@@ -2438,6 +2423,52 @@ def _refuse_internet_off(
     sse_handler._emit(
         {"type": "agent_error", "content": profile.internet_upgrade_message}
     )
+
+
+def relay_one_prompt(
+    handler,
+    prompt: str,
+    *,
+    agent_type: str,
+    model_id: str | None,
+    memory: str,
+    max_steps: int | None,
+) -> str | None:
+    """One prompt through *agent_type*'s installed binary, with no chat history.
+
+    Returns the answer, or None when the run ended without one. An error the
+    agent reported, or a failed run, raises :class:`RuntimeError` with its text.
+    *handler* must be a background-mode ``SSEOutputHandler``: its events are
+    read back here once the turn ends.
+    """
+    _dispatch_sidecar_query(
+        handler,
+        ChatRequest(session_id="", message=prompt, agent_type=agent_type),
+        history_pairs=[],
+        model_id=model_id,
+        agent_type=agent_type,
+        memory=memory,
+        max_steps=max_steps,
+    )
+    # Drained only after the turn ends: safe because event_queue is unbounded.
+    answer = None
+    failure = None
+    while not handler.event_queue.empty():
+        event = handler.event_queue.get_nowait()
+        if not event:
+            continue
+        if event.get("type") == "agent_error":
+            failure = str(event.get("content") or "The GAIA agent reported an error.")
+        elif event.get("type") == "answer":
+            answer = event
+    if failure:
+        raise RuntimeError(failure)
+    if answer is None:
+        return None
+    content = str(answer.get("content") or "")
+    if answer.get("failed"):
+        raise RuntimeError(content or "The GAIA agent's run failed.")
+    return content
 
 
 def _dispatch_sidecar_query(
@@ -2668,7 +2699,7 @@ def _dispatch_sidecar_query(
             model_id,
         )
     elif status_code != 200:
-        hint = _host_corrected_hint((init_body or {}).get("hint"))
+        hint = (init_body or {}).get("hint")
         if profile.readiness_is_blocking or not _probe_is_only_unreachable(init_body):
             msg = (
                 f"The {profile.display_name} agent isn't ready yet"
@@ -5068,6 +5099,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 model_messages=model_messages,
                 turn_summary=turn_summary,
                 ends_turn=True,
+                stopped=turn_cancelled,
             )
             link_warning = (
                 turn_box["recording"].link_message(msg_id)
@@ -5163,6 +5195,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     model_messages=result_holder.get("model_messages"),
                     turn_summary=turn_summary,
                     ends_turn=True,
+                    stopped=turn_cancelled,
                 )
                 done_event = _done_event(
                     msg_id,
@@ -5356,7 +5389,7 @@ async def _run_chat_lifecycle(
                 await run.slot.acquire()
             except TurnCancelled:
                 msg_id = db.add_message(
-                    session_id, "assistant", "Cancelled.", ends_turn=True
+                    session_id, "assistant", "Cancelled.", ends_turn=True, stopped=True
                 )
                 _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
                 return

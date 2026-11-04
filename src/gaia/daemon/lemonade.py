@@ -5,7 +5,8 @@
 The daemon starts the server when it comes up and whenever a client asks, and
 stops it when the daemon shuts down, so nobody has to run ``gaia init`` again
 after a reboot. Installing it stays ``gaia init``'s job: the daemon only starts
-what is already installed. A ``LEMONADE_BASE_URL``, or the saved
+what is already installed, except that an older install is upgraded in place
+to the version this GAIA targets. A ``LEMONADE_BASE_URL``, or the saved
 ``lemonade_mode: external`` choice, means the user runs their own server, so
 the daemon leaves Lemonade alone -- and :meth:`EmbeddedLemonadeOwner.reconfigure`
 stops GAIA's own when the user switches to theirs.
@@ -181,7 +182,8 @@ class EmbeddedLemonadeOwner:
 
         A healthy server someone else started is claimed, so this daemon stops
         it later. One a crashed daemon left that is not answering, or runs
-        another version, is reaped and replaced.
+        another version, is reaped and replaced. One on an older version, or an
+        older install, is upgraded to the version this GAIA targets.
 
         Raises:
             LemonadeNotManaged: ``LEMONADE_BASE_URL`` or the saved setting names
@@ -217,7 +219,7 @@ class EmbeddedLemonadeOwner:
                     f"Start that server, or {switch_back_hint()}."
                 )
             embedded = self._factory()
-            if not embedded.is_installed():
+            if not embedded.is_installed() and not embedded.replaces_older_install():
                 raise LemonadeNotManaged(
                     "GAIA's Lemonade Server is not installed. Run `gaia init` to "
                     "install it."
@@ -233,13 +235,20 @@ class EmbeddedLemonadeOwner:
                 )
             if current.running and current.version == embedded.version:
                 return self._claim(embedded, current)
-            if current.running and not orphaned:
+            if (
+                current.running
+                and not orphaned
+                and not embedded.is_older(current.version)
+            ):
                 raise EmbeddedLemonadeError(
                     f"GAIA's Lemonade Server v{current.version} is running, "
                     f"but this GAIA needs v{embedded.version}. Run `gaia init` "
                     "to replace it."
                 )
-            if orphaned:
+            # An older one that still answers is replaced by start() only once
+            # the new version is on disk, so a failed download leaves it up.
+            replaced_on_start = current.running and embedded.is_older(current.version)
+            if orphaned and not replaced_on_start:
                 logger.warning(
                     "daemon: reaping embedded Lemonade (pid %s) left by daemon "
                     "pid %s, which exited; it was %s",
@@ -256,6 +265,7 @@ class EmbeddedLemonadeOwner:
                 install_if_missing=False,
                 owner_pid=self._owner_pid,
                 owner_started=self._owner_started,
+                upgrade_older=True,
             )
             logger.info(
                 "daemon: started embedded Lemonade %s on port %s",

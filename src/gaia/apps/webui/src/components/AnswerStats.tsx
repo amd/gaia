@@ -2,22 +2,89 @@
 // SPDX-License-Identifier: MIT
 
 import { useState } from 'react';
+import { bracketParts, pluralKey, ref, type MessageKey, type Param, type Say } from '../i18n/registry';
+import { tEn, useT, type Translate } from '../i18n/useT';
 import type { InferenceStats } from '../types';
+import './AnswerStats.css';
+
+/** Marks a number with its unit, so the renderer can keep it left to right. */
+type Mark = (text: string) => string;
+const plain: Mark = (text) => text;
+const marked: Mark = (text) => `\uE000${text}\uE001`;
+const MARKED = /\uE000([^\uE001]*)\uE001/;
 
 /** `40200` -> "40 s", `400` -> "under a second", `95000` -> "1 min 35 s". */
-export function spokenDuration(ms: number): string {
-    if (ms < 1000) return 'under a second';
+export function spokenDuration(ms: number, say: Say = tEn.bare, mark: Mark = plain): string {
+    if (ms < 1000) return say('answer.duration.underSecond');
     const total = Math.round(ms / 1000);
-    if (total < 60) return `${total} s`;
+    if (total < 60) return mark(say('answer.duration.sec', { n: total }));
     const mins = Math.floor(total / 60);
     const secs = total % 60;
-    return secs ? `${mins} min ${secs} s` : `${mins} min`;
+    return mark(secs ? say('answer.duration.minSec', { m: mins, s: secs }) : say('answer.duration.min', { n: mins }));
 }
 
 /** How a turn that never finished its answer ended. */
 export type TurnEnding = 'stopped' | 'interrupted';
 
-const ENDED_AFTER: Record<TurnEnding, string> = { stopped: 'Stopped after', interrupted: 'Interrupted after' };
+const LEAD: Record<TurnEnding | 'answered', readonly [MessageKey, MessageKey]> = {
+    answered: ['answer.answeredIn', 'answer.answeredInPlace'],
+    stopped: ['answer.stoppedAfter', 'answer.stoppedAfterPlace'],
+    interrupted: ['answer.interruptedAfter', 'answer.interruptedAfterPlace'],
+};
+
+const CHIPS: Record<string, MessageKey> = { GPU: 'device.gpu', NPU: 'device.npu', CPU: 'device.cpu' };
+
+/** The backend's English place ("on your GPU", "via Fireworks AI") as a message each language words itself. */
+function placeParam(place: string): Param {
+    if (place === 'on this PC') return ref('answer.place.thisPc');
+    const via = /^via (.+)$/.exec(place);
+    if (via) return ref('answer.place.via', { provider: via[1] });
+    const chips = /^on your (.+)$/.exec(place)?.[1].split(' and ').map((name) => CHIPS[name]);
+    if (chips?.every(Boolean)) {
+        const device = chips.slice(1).reduce<Param>((a, chip) => ref('answer.place.pair', { a, b: ref(chip) }), ref(chips[0]));
+        return ref('answer.place.on', { device });
+    }
+    // A shape this list doesn't know yet shows as the backend wrote it.
+    return place;
+}
+
+function summaryLine(
+    latencyMs: number | undefined,
+    stats: InferenceStats | undefined,
+    ended: TurnEnding | undefined,
+    say: Say,
+    mark: Mark,
+): string | null {
+    const parts: string[] = [];
+    const place = stats?.place ? placeParam(stats.place) : null;
+    if (latencyMs != null && latencyMs > 0) {
+        const [bare, at] = LEAD[ended ?? 'answered'];
+        const time = spokenDuration(latencyMs, say, mark);
+        parts.push(place ? say(at, { time, place }) : say(bare, { time }));
+    } else if (place) {
+        parts.push(say(ended ? 'answer.ranPlace' : 'answer.answeredPlace', { place }));
+    }
+    if (stats?.time_to_first_token != null && stats.time_to_first_token > 0) {
+        const time = spokenDuration(stats.time_to_first_token * 1000, say, mark);
+        parts.push(say(parts.length ? 'answer.firstWord' : 'answer.firstWordLead', { time }));
+    }
+    // The agent's own count, the figure the TUI and evals report.
+    if (stats?.steps != null && stats.steps > 0) {
+        parts.push(say(pluralKey('answer.steps', stats.steps), { n: stats.steps }));
+    }
+    return parts.length ? parts.join(' · ') : null;
+}
+
+function composeSummary(
+    latencyMs: number | undefined,
+    stats: InferenceStats | undefined,
+    ended: TurnEnding | undefined,
+    t: Translate,
+    mark: Mark,
+): string | null {
+    if (summaryLine(latencyMs, stats, ended, tEn.bare, plain) === null) return null;
+    return t.compose((say) => summaryLine(latencyMs, stats, ended, say, mark) ?? '');
+}
 
 /** "Answered in 40 s on your GPU · first word in 1 s", or null with nothing to say.
  *  A turn that never finished says how it ended instead of claiming an answer. */
@@ -25,46 +92,56 @@ export function answerSummary(
     latencyMs: number | undefined,
     stats: InferenceStats | undefined,
     ended?: TurnEnding,
+    t: Translate = tEn,
 ): string | null {
-    const parts: string[] = [];
-    if (latencyMs != null && latencyMs > 0) {
-        const lead = ended ? ENDED_AFTER[ended] : 'Answered in';
-        parts.push(`${lead} ${spokenDuration(latencyMs)}${stats?.place ? ` ${stats.place}` : ''}`);
-    } else if (stats?.place) {
-        parts.push(`${ended ? 'Ran' : 'Answered'} ${stats.place}`);
-    }
-    if (stats?.time_to_first_token != null && stats.time_to_first_token > 0) {
-        const first = `first word in ${spokenDuration(stats.time_to_first_token * 1000)}`;
-        parts.push(parts.length ? first : first[0].toUpperCase() + first.slice(1));
-    }
-    // The agent's own count, the figure the TUI and evals report.
-    if (stats?.steps != null && stats.steps > 0) {
-        parts.push(`${stats.steps} step${stats.steps !== 1 ? 's' : ''}`);
-    }
-    return parts.length ? parts.join(' · ') : null;
+    return composeSummary(latencyMs, stats, ended, t, plain);
 }
 
 /** The measured numbers behind the summary, one per line. */
-export function exactStats(latencyMs: number | undefined, stats: InferenceStats | undefined): string[] {
+export function exactStats(
+    latencyMs: number | undefined,
+    stats: InferenceStats | undefined,
+    t: Translate = tEn,
+    mark: Mark = plain,
+): string[] {
     const lines: string[] = [];
-    if (latencyMs != null && latencyMs > 0) lines.push(`Total time ${(latencyMs / 1000).toFixed(1)} s`);
+    if (latencyMs != null && latencyMs > 0) {
+        lines.push(t.compose((say) => say('answer.exact.total', {
+            time: mark(say('answer.duration.sec', { n: (latencyMs / 1000).toFixed(1) })),
+        })));
+    }
     if (stats?.time_to_first_token != null && stats.time_to_first_token > 0) {
-        lines.push(`First token ${(stats.time_to_first_token * 1000).toFixed(0)} ms`);
+        const ms = (stats.time_to_first_token * 1000).toFixed(0);
+        lines.push(t.compose((say) => say('answer.exact.firstToken', { time: mark(say('answer.duration.ms', { n: ms })) })));
     }
     if (stats?.output_tokens != null && stats.output_tokens > 0) {
-        lines.push(`${(stats.input_tokens ?? 0).toLocaleString()} → ${stats.output_tokens.toLocaleString()} tokens`);
+        const flow = mark(`${(stats.input_tokens ?? 0).toLocaleString()} → ${stats.output_tokens.toLocaleString()}`);
+        lines.push(t.compose((say) => say('answer.exact.tokens', { flow })));
     }
     if (stats?.tokens_per_second != null && stats.tokens_per_second > 0) {
-        lines.push(`${stats.tokens_per_second} tokens/s`);
+        lines.push(t('answer.exact.rate', { n: stats.tokens_per_second }));
     }
     return lines;
 }
 
+/** Text with each marked number in its own left-to-right `<bdi>`. */
+function Marked({ text }: { text: string }) {
+    return <>{text.split(MARKED).map((piece, i) => (i % 2 ? <bdi dir="ltr" key={i}>{piece}</bdi> : piece))}</>;
+}
+
+/** A composed line, its bracketed English set apart as the quieter gloss. */
+function Line({ text }: { text: string }) {
+    const [own, english] = bracketParts(text);
+    if (english === undefined) return <Marked text={own} />;
+    return <><Marked text={own} />{' '}<small className="i18n-gloss" lang="en"><Marked text={english} /></small></>;
+}
+
 /** The answer footer in plain words; a click shows the exact numbers. */
 export function AnswerStats({ latencyMs, stats, ended }: { latencyMs?: number; stats?: InferenceStats; ended?: TurnEnding }) {
+    const t = useT();
     const [open, setOpen] = useState(false);
-    const summary = answerSummary(latencyMs, stats, ended);
-    const exact = exactStats(latencyMs, stats);
+    const summary = composeSummary(latencyMs, stats, ended, t, marked);
+    const exact = exactStats(latencyMs, stats, t, marked);
     if (!summary && exact.length === 0) return null;
     return (
         <>
@@ -73,13 +150,13 @@ export function AnswerStats({ latencyMs, stats, ended }: { latencyMs?: number; s
                     type="button"
                     className="msg-stats-summary"
                     aria-expanded={open}
-                    title={exact.join('\n')}
+                    title={exactStats(latencyMs, stats, t).join('\n')}
                     onClick={() => setOpen((v) => !v)}
                 >
-                    {summary ?? 'Details'}
+                    {summary ? <Line text={summary} /> : t('answer.details')}
                 </button>
             </span>
-            {open && exact.map((line) => <span key={line}>{line}</span>)}
+            {open && exact.map((line) => <span key={line}><Line text={line} /></span>)}
         </>
     );
 }

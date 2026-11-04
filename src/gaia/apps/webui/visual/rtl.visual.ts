@@ -13,6 +13,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import { ANSWER_SESSION, MODEL_LIST, NOW, SYSTEM_STATUS, mockApi, useLocale, useTheme, withConnectors, withDesktopBridges, withModelPage, withSettingsPanes } from './fixtures';
+import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -57,6 +58,13 @@ const audit = (page: Page): Promise<string[]> =>
             const box = el.getBoundingClientRect();
             return box.width > 0 && box.height > 0 && el.checkVisibility();
         };
+        // A row that scrolls sideways by design, like the setup rail on a phone.
+        const inSideScroller = (el: Element) => {
+            for (let at = el.parentElement; at && at !== document.body; at = at.parentElement) {
+                if (['auto', 'scroll'].includes(getComputedStyle(at).overflowX) && at.scrollWidth > at.clientWidth) return true;
+            }
+            return false;
+        };
         const latin = /[A-Za-z]/;
         const arabic = /[\u0600-\u06ff]/;
 
@@ -66,7 +74,7 @@ const audit = (page: Page): Promise<string[]> =>
             if (!shown(el)) continue;
             const box = el.getBoundingClientRect();
             const style = getComputedStyle(el);
-            if ((box.right > innerWidth + 1 || box.left < -1) && style.position !== 'fixed' && !el.closest('svg')) {
+            if ((box.right > innerWidth + 1 || box.left < -1) && style.position !== 'fixed' && !el.closest('svg') && !inSideScroller(el)) {
                 problems.push(`off screen: ${label(el)}`);
             }
 
@@ -145,6 +153,24 @@ const audit = (page: Page): Promise<string[]> =>
                 problems.push(`gloss is as large as its label: ${label(gloss)}`);
             }
             if (Number(style.fontWeight) > 400) problems.push(`gloss is bold: ${label(gloss)}`);
+        }
+
+        // A button cut off by the window's edge can't be read or pressed; one in
+        // a strip that scrolls sideways is reached by scrolling it.
+        const inScroller = (el: Element) => {
+            for (let p = el.parentElement; p; p = p.parentElement) {
+                const x = getComputedStyle(p).overflowX;
+                // A strip: it scrolls sideways and has nothing to scroll down to.
+                const strip = p.scrollWidth > p.clientWidth && p.scrollHeight <= p.clientHeight + 1;
+                if ((x === 'auto' || x === 'scroll') && strip) return true;
+            }
+            return false;
+        };
+        for (const button of document.querySelectorAll('button')) {
+            if (!shown(button) || inScroller(button)) continue;
+            const r = button.getBoundingClientRect();
+            if (r.left < -1 || r.right > window.innerWidth + 1) problems.push(`button runs off the window: ${label(button)}`);
+            if (button.scrollWidth > button.clientWidth + 1) problems.push(`label spills out of its button: ${label(button)}`);
         }
 
         // An icon and its label need space between them, in either direction.
@@ -322,6 +348,22 @@ for (const locale of ['ar', 'en']) {
         expect(onTop, 'the close button is covered by scrolled content').toBe(true);
     });
 }
+
+/** Text left in English in the Arabic UI, outside names, numbers and the English gloss. */
+const leftoverEnglish = (root: Page) =>
+    root.locator('.setup').evaluate((setup) => {
+        const left: string[] = [];
+        const walker = document.createTreeWalker(setup, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const parent = node.parentElement!;
+            const text = node.textContent?.trim() ?? '';
+            if (!/[A-Za-z]{3,}/.test(text) || /[؀-ۿ]/.test(text)) continue;
+            if (parent.closest('bdi, .i18n-gloss, pre, code, [dir="ltr"], .setup-result-error')) continue;
+            if (parent.checkVisibility()) left.push(text);
+        }
+        return left;
+    });
+
 
 /** Saves what a test sees when GAIA_VISUAL_SHOTS names a folder, so a person can read it. */
 async function shot(page: Page, name: string): Promise<void> {
@@ -560,9 +602,9 @@ for (const locale of ['ar', 'en']) {
 }
 
 /** Visible text left in English on an Arabic screen; names and paths sit in <bdi>. */
-const untranslated = (page: Page): Promise<string[]> =>
-    page.evaluate(() => {
-        const root = document.querySelector('.settings-scroll') as Element;
+const untranslated = (page: Page, scope = '.settings-scroll'): Promise<string[]> =>
+    page.evaluate((scope) => {
+        const root = document.querySelector(scope) as Element;
         const left = new Set<string>();
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
         for (let n = walker.nextNode(); n; n = walker.nextNode()) {
@@ -573,7 +615,34 @@ const untranslated = (page: Page): Promise<string[]> =>
             left.add(text.slice(0, 60));
         }
         return [...left];
-    });
+    }, scope);
+
+const LOCAL_STATUS = {
+    state: 'loaded', active_model: 'Gemma-4-E4B-it-GGUF', active_display_name: 'Gemma 4 E4B', active_remote: false,
+    model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B',
+    placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'reported', warning: null },
+    ctx_size: 65536, memory: { source: 'AMD iGPU', total_gb: 112, free_gb: 80.5, model_gb: 30.8 }, memory_error: null,
+    error: null, base_url: 'http://127.0.0.1:13305', owner: 'gaia', busy: false, restarting: false, restart_error: null,
+};
+
+const POPOVER_STATES: Array<[string, Record<string, unknown>]> = [
+    ['local', LOCAL_STATUS],
+    ['cloud', { ...LOCAL_STATUS, active_model: 'deepseek-v4p1-flash', active_display_name: 'DeepSeek V4.1 Flash', active_remote: true }],
+];
+
+for (const locale of ['ar', 'en']) {
+    for (const [state, status] of POPOVER_STATES) {
+        test(`sidebar model-status popover: ${state} (${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => { await p.route('**/api/providers/local/status', (route) => route.fulfill({ json: status })); });
+            await page.locator('.sb-location').click();
+            const popover = page.locator('.popover .model-status');
+            await expect(popover.locator('.model-status-grid')).toBeVisible();
+            await shot(page, `model-status-${locale}-${state}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.popover .model-status')).toEqual([]);
+        });
+    }
+}
 
 for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
     test(`settings ${section} pane has no leftover English`, async ({ page }) => {
@@ -739,67 +808,140 @@ const SETUP_RUNNING = {
     overall: { bytes_done: 9.93e9, bytes_total: 29.6e9, speed_bps: 0, eta_s: null, percent: 33, failed: 1 },
 };
 
-/** First-run setup, with the model screen's data from the backend shapes. */
-async function withSetup(page: Page, status: object = { state: 'idle' }): Promise<void> {
-    const answers: Record<string, unknown> = {
-        'GET /setup/check': { ready: false, stage: 'setup', reasons: [], steps: [{ key: 'server', label: 'Install the local model server', detail: 'about 1 minute' }] },
-        'GET /setup/plan': SETUP_PLAN,
-        'GET /setup/status': status,
-        'GET /gpu-memory': SETUP_GPU,
-        'GET /onboarding/preflight': { compatible: true, blockers: [], warnings: [], ram_gb: 128, gpu_name: 'AMD Radeon 8060S', npu_detected: true, disk_free_gb: 25, lemonade_running: true },
-        'GET /lemonade/target': { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: null, saved_base_url: null, api_key_stored: false, offer: false, what_gaia_does: '' },
-    };
-    await page.route('**/api/**', async (route) => {
-        const url = new URL(route.request().url());
-        const key = `${route.request().method()} ${url.pathname.replace(/^\/api/, '')}`;
-        if (key in answers) await route.fulfill({ json: answers[key] });
-        else await route.fallback();
+for (const locale of ['ar', 'en']) {
+    test.describe(`first-run setup (${locale})`, () => {
+        for (const s of SETUP_SCENES) {
+            test(s.name, async ({ page }) => {
+                await open(page, '', locale, (p) => withSetup(p, s.answers));
+                await s.reach(page);
+                expect(await audit(page)).toEqual([]);
+            });
+        }
+
+        for (const name of NARROW_SCENES) {
+            test(`${name} at phone width`, async ({ page }) => {
+                await page.setViewportSize({ width: 390, height: 844 });
+                const s = scene(name);
+                await open(page, '', locale, (p) => withSetup(p, s.answers));
+                await s.reach(page);
+                expect(await audit(page)).toEqual([]);
+            });
+        }
+
+        test('narrow window: no sideways scroll', async ({ page }) => {
+            await page.setViewportSize({ width: 320, height: 720 });
+            const s = scene('models');
+            await open(page, '', locale, (p) => withSetup(p, s.answers));
+            await s.reach(page);
+            expect(await audit(page)).toEqual([]);
+        });
     });
 }
 
 for (const locale of ['ar', 'en']) {
-    test.describe(`first-run setup (${locale})`, () => {
-        test('choosing models, with the won\'t-fit and disk warnings', async ({ page }) => {
-            await open(page, '', locale, (p) => withSetup(p));
-            await page.locator('.setup-step.is-current .btn-primary').click();
-            await expect(page.locator('.mc-list').first()).toBeVisible();
-            await page.locator('.mc-more summary').first().click();
-            await page.locator('.mc-more').first().getByRole('checkbox').first().click();
-            await expect(page.locator('.mc-disk-warn')).toBeVisible();
-            await expect(page.locator('.mc-warn.is-big')).toBeVisible();
-            expect(await audit(page)).toEqual([]);
+    test(`a long model name stays inside the Test step's failure card (${locale})`, async ({ page }) => {
+        const s = scene('test-long');
+        await open(page, '', locale, (p) => withSetup(p, s.answers));
+        await s.reach(page);
+        const clipped = await page.locator('.setup-failure').evaluate((card) => {
+            const box = card.getBoundingClientRect();
+            return [...card.querySelectorAll('button')].filter((b) => {
+                const r = b.getBoundingClientRect();
+                return r.right > box.right + 1 || r.left < box.left - 1;
+            }).map((b) => b.textContent);
         });
+        expect(clipped).toEqual([]);
+    });
+}
 
-        test('downloading, one row failed', async ({ page }) => {
-            await open(page, '', locale, (p) => withSetup(p, SETUP_RUNNING));
-            await expect(page.locator('.dl-row.is-failed')).toBeVisible();
+test.describe('first-run setup in the dark theme', () => {
+    for (const s of SETUP_SCENES) {
+        test(s.name, async ({ page }) => {
+            await open(page, '', 'ar', (p) => withSetup(p, s.answers), 'dark');
+            await s.reach(page);
             expect(await audit(page)).toEqual([]);
         });
+    }
+});
 
-        test('phone width: the default chat model select keeps its full width', async ({ page }) => {
-            await page.setViewportSize({ width: 390, height: 844 });
-            await open(page, '', locale, (p) => withSetup(p));
-            await page.locator('.setup-step.is-current .btn-primary').click();
-            const select = page.locator('.mc-select');
-            await expect(select).toBeVisible();
-            const [box, row] = await Promise.all([select.boundingBox(), page.locator('.mc-default').boundingBox()]);
-            // Wrapped onto its own line at the row's full width, not squeezed beside the label.
-            expect(box!.width).toBeGreaterThan(row!.width * 0.9);
-            expect(await select.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
-            expect(await audit(page)).toEqual([]);
+test.describe('first-run setup leaves no English in Arabic', () => {
+    for (const s of SETUP_SCENES) {
+        test(s.name, async ({ page }) => {
+            await open(page, '', 'ar', (p) => withSetup(p, s.answers));
+            await s.reach(page);
+            expect(await leftoverEnglish(page)).toEqual([]);
         });
+    }
+});
+
+/** The desktop app's install bridge, stuck on one status. */
+async function withInstall(page: Page, status: object): Promise<void> {
+    await page.addInitScript((initial) => {
+        Object.assign(window, {
+            gaiaInstall: {
+                onProgress: () => () => {},
+                status: async () => initial,
+                retry: async () => true,
+                openLogFile: async () => ({ ok: true, message: null }),
+            },
+        });
+    }, status);
+}
+
+const INSTALL_RUNNING = { phase: 'running', stage: 'install-package', percent: 42, message: '', error: null };
+const INSTALL_REFRESHING = { ...INSTALL_RUNNING, stage: 'agent-refresh', percent: null };
+const INSTALL_FAILED = {
+    ...INSTALL_RUNNING,
+    phase: 'failed',
+    error: {
+        stage: 'install-package',
+        reason: 'network',
+        message: 'Failed to install amd-gaia[ui]==0.25.4 (pip exit 1).',
+        logTail: ['$ uv pip install amd-gaia[ui]==0.25.4', '  [pip] error: Failed to fetch https://pypi.org/simple/numpy/', '  exit code: 1'],
+    },
+};
+
+for (const locale of ['ar', 'en']) {
+    test.describe(`engine install (${locale})`, () => {
+        for (const theme of ['light', 'dark'] as const) {
+            test(`running, ${theme}`, async ({ page }) => {
+                await open(page, '?engine=install', locale, (p) => withInstall(p, INSTALL_RUNNING), theme);
+                await expect(page.locator('progress')).toHaveAttribute('value', '42');
+                expect(await audit(page)).toEqual([]);
+            });
+
+            test(`agent refresh, ${theme}`, async ({ page }) => {
+                await open(page, '?engine=install', locale, (p) => withInstall(p, INSTALL_REFRESHING), theme);
+                await expect(page.locator('progress')).not.toHaveAttribute('value', /./);
+                expect(await audit(page)).toEqual([]);
+            });
+
+            test(`failed with Details open, ${theme}`, async ({ page }) => {
+                await open(page, '?engine=install', locale, (p) => withInstall(p, INSTALL_FAILED), theme);
+                await page.locator('.engine-details summary').click();
+                await expect(page.locator('.engine-log')).toBeVisible();
+                expect(await audit(page)).toEqual([]);
+            });
+        }
 
         test('narrow window: no sideways scroll', async ({ page }) => {
             await page.setViewportSize({ width: 320, height: 720 });
-            await open(page, '', locale, (p) => withSetup(p));
-            await page.locator('.setup-step.is-current .btn-primary').click();
-            await expect(page.locator('.mc-list').first()).toBeVisible();
+            await open(page, '?engine=install', locale, (p) => withInstall(p, INSTALL_FAILED));
+            await page.locator('.engine-details summary').click();
+            expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
             expect(await audit(page)).toEqual([]);
         });
     });
 }
 
-test('window controls take the color of the sidebar beneath them', async ({ page }) => {
+test('a browser never shows the install screen, even when the URL asks', async ({ page }) => {
+    await open(page, '?engine=install');
+    await expect(page.locator('.engine')).toHaveCount(0);
+    await expect(page.locator('.sb')).toBeVisible();
+});
+
+/** The Windows desktop frame: the window controls are drawn over the app's top-right corner. */
+async function withWindowsControls(page: Page): Promise<void> {
     await page.addInitScript(() => {
         const calls: unknown[] = [];
         Object.assign(window, {
@@ -813,27 +955,121 @@ test('window controls take the color of the sidebar beneath them', async ({ page
             },
         });
     });
-    await open(page);
-    const [last, sidebar] = await page.evaluate(() => [
-        (window as unknown as { __colors: { color: string }[] }).__colors.at(-1)?.color,
-        getComputedStyle(document.documentElement).getPropertyValue('--bg-sidebar').trim(),
-    ]);
-    expect(last).toBe(sidebar);
+}
 
-    await page.locator('.sb').getByRole('button', { name: /الإعدادات/ }).first().click();
-    await expect(page.locator('.settings-overlay')).toBeVisible();
-    await expect.poll(async () => brightness(await lastColor(page))).toBeLessThan(brightness(sidebar));
+for (const [locale, settings, beneath] of [['ar', /الإعدادات/, '--bg-sidebar'], ['en', /^Settings$/, '--bg-primary']] as const) {
+    test(`window controls take the color beneath them and dim with a modal (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withWindowsControls);
+        const behind = await page.evaluate((token) => getComputedStyle(document.documentElement).getPropertyValue(token).trim(), beneath);
+        await expect.poll(() => lastColor(page)).toBe(behind);
 
-    await page.keyboard.press('Escape');
-    await expect(page.locator('.settings-overlay')).toHaveCount(0);
-    await expect.poll(() => lastColor(page)).toBe(sidebar);
+        await page.locator('.sb').getByRole('button', { name: settings }).first().click();
+        await expect(page.locator('.settings-overlay')).toBeVisible();
+        await expect.poll(async () => brightness(await lastColor(page))).toBeLessThan(brightness(behind));
+
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.settings-overlay')).toHaveCount(0);
+        await expect.poll(() => lastColor(page)).toBe(behind);
+        expect(await refusedColors(page)).toEqual([]);
+    });
+}
+
+test('window controls dim under the missing-model dialog too', async ({ page }) => {
+    await open(page, '', 'en', async (p) => {
+        await withWindowsControls(p);
+        await withMissingModel(p);
+    });
+    const canvas = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim());
+    await page.locator('textarea').first().fill('hello');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.model-needed')).toBeVisible();
+    await expect.poll(async () => brightness(await lastColor(page))).toBeLessThan(brightness(canvas));
+    expect(await refusedColors(page)).toEqual([]);
 });
+
+/** Colors the desktop window would refuse: main.cjs takes only #rrggbb. */
+const refusedColors = (page: Page): Promise<string[]> =>
+    page.evaluate(() =>
+        (window as unknown as { __colors: { color: string; symbolColor: string }[] }).__colors
+            .flatMap((c) => [c.color, c.symbolColor])
+            .filter((c) => !/^#[\da-f]{6}$/i.test(c)),
+    );
+
+/** The width Windows 11 gives minimize, maximize and close; a browser reports no controls. */
+const WINDOW_CONTROLS_W = 138;
+
+for (const locale of ['ar', 'en']) {
+    test(`the top notice keeps its action clear of the window controls (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withWindowsControls);
+        await page.evaluate((w) => document.documentElement.style.setProperty('--titlebar-controls-w', `${w}px`), WINDOW_CONTROLS_W);
+        const notice = page.locator('.app-notice').first();
+        await expect(notice.getByRole('button')).toBeVisible();
+        const controls = { left: 1400 - WINDOW_CONTROLS_W, bottom: 48 };
+        const boxes = await notice.evaluate((el) =>
+            [el, ...el.querySelectorAll('button, a')].map((n) => {
+                const box = n.getBoundingClientRect();
+                return { right: box.right, top: box.top };
+            }),
+        );
+        for (const box of boxes) {
+            expect(box.right > controls.left && box.top < controls.bottom, JSON.stringify(box)).toBe(false);
+        }
+        expect(await audit(page)).toEqual([]);
+    });
+}
 
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
     await open(page);
     await expect(page.locator('.app-notice')).toContainText('غير مثبّت');
     await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
 });
+
+/** A first message whose chat model isn't downloaded, on a disk too small for it. */
+async function withMissingModel(page: Page): Promise<void> {
+    await page.route('**/api/setup/needs/chat', (route) =>
+        route.fulfill({
+            json: {
+                job: 'chat',
+                needed: true,
+                model: { id: 'Gemma-4-E4B-it-GGUF', name: 'Gemma 4 E4B (Multimodal)', size_gb: 5.97, source: 'huggingface.co/unsloth/gemma-4-E4B-it-GGUF' },
+                disk_free_gb: 2.4,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the missing-model prompt warns about disk space (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withMissingModel);
+        await page.locator('textarea').first().fill('hello');
+        await page.keyboard.press('Enter');
+        const dialog = page.locator('.model-needed');
+        await expect(dialog).toBeVisible();
+        await expect(dialog.getByRole('alert')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await expect(dialog.getByRole('alert')).toContainText(locale === 'ar' ? 'حرّر' : 'Free 3.6 GB first');
+    });
+}
+
+/** The notice a chat shows when reading images is off because chat runs on the NPU. */
+async function withImagesOffOnNpu(page: Page): Promise<void> {
+    await page.route('**/api/setup/needs/chat', (route) =>
+        route.fulfill({ json: { job: 'chat', needed: false, model: null, disk_free_gb: null, off: 'npu' } }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the NPU image notice says why and offers no download (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withImagesOffOnNpu);
+        await page.locator('textarea').first().fill('hello');
+        await page.keyboard.press('Enter');
+        const dialog = page.locator('.model-needed');
+        await expect(dialog).toBeVisible();
+        await expect(dialog.getByRole('button')).toHaveCount(2);
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `npu-image-notice-${locale}`);
+    });
+}
 
 test('composer chips stay whole at phone width', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 780 });

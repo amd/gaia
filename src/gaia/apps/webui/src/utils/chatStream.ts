@@ -83,6 +83,7 @@ export function fromApiMessages(raw: unknown[] | undefined): Message[] {
             cards: m.cards || cardsFromSteps(agentSteps),
             stats: m.stats || m.inference_stats || undefined,
             turnSummary: m.turnSummary || m.turn_summary || undefined,
+            stopState: m.stopState ?? (m.stopped ? 'stopped' : undefined),
         };
     });
 }

@@ -7,6 +7,14 @@ contract version is tracked separately as
 
 ## [Unreleased]
 
+### Changed
+
+- **Needs Lemonade Server 2026.44.1 or newer.** `GET /v1/email/init` now
+  reports `min_version: "2026.44.1"` (was `10.2.0`) and answers not-ready on
+  anything older. GAIA updates its own Lemonade Server itself; the `hint` for
+  a user-run server points at https://lemonade-server.ai instead of a command.
+  `gaia-agent.yaml`'s `requirements.min_lemonade_version` moves with it.
+
 ### Fixed
 
 - **A chat that switches model mid-conversation gets the model it asked

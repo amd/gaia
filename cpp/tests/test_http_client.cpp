@@ -468,9 +468,69 @@ TEST(LemonadeErrorDecodeTest, StreamingSseErrorEventSurfacesContextRemedy) {
     EXPECT_NE(msg.find("Server context window too small"), std::string::npos) << msg;
     EXPECT_NE(msg.find("prompt is 40000 tokens"), std::string::npos) << msg;
     EXPECT_NE(msg.find("n_ctx=16384"), std::string::npos) << msg;
-    EXPECT_NE(msg.find("start-lemonade.ps1 -CtxSize"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("GAIA_CONTEXT_SIZE"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("at least 65536"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("restart the agent"), std::string::npos) << msg;
     EXPECT_EQ(msg.find("LEMONADE_CTX_SIZE"), std::string::npos) << msg;
     EXPECT_EQ(msg.find("lemonade-server serve"), std::string::npos) << msg;
+    EXPECT_EQ(msg.find("start-lemonade.ps1"), std::string::npos) << msg;
+    // OS-neutral: no cmd-only `set X=Y`, and no `--save-options`, which the
+    // agent's own load at its configured window would override.
+    EXPECT_EQ(msg.find("set GAIA_CONTEXT_SIZE="), std::string::npos) << msg;
+    EXPECT_EQ(msg.find("--save-options"), std::string::npos) << msg;
+}
+
+namespace {
+
+std::string ctxOverflowRemedy(const json& inner) {
+    const json details = {{"response", {{"error", inner}}}};
+    const json body = {{"error", {{"message", "llama-server error"}, {"details", details}}}};
+    bench::MockLlmServer server;
+    server.enableSseStreaming(true);
+    server.pushSseStream("data: " + body.dump() + "\n\ndata: [DONE]\n\n");
+    LemonadeClient client(server.baseUrl());
+    return streamError(client);
+}
+
+const char* kOverflowMessage = "request exceeds the available context size";
+
+} // namespace
+
+TEST(LemonadeErrorDecodeTest, ContextRemedyWindowExceedsPromptLargerThan64K) {
+    const std::string msg = ctxOverflowRemedy(
+        {{"message", kOverflowMessage}, {"n_ctx", 65536}, {"n_prompt_tokens", 100000}});
+    EXPECT_NE(msg.find("at least 131072"), std::string::npos) << msg;
+}
+
+TEST(LemonadeErrorDecodeTest, ContextRemedyWindowIsStrictlyAbovePowerOfTwoPrompt) {
+    const std::string msg = ctxOverflowRemedy(
+        {{"message", kOverflowMessage}, {"n_ctx", 32768}, {"n_prompt_tokens", 65536}});
+    EXPECT_NE(msg.find("at least 131072"), std::string::npos) << msg;
+}
+
+TEST(LemonadeErrorDecodeTest, ContextRemedyWindowIsAboveCurrentWindow) {
+    // A server reporting a prompt below n_ctx must still be told to grow.
+    const std::string msg = ctxOverflowRemedy(
+        {{"message", kOverflowMessage}, {"n_ctx", 16384}, {"n_prompt_tokens", 100}});
+    EXPECT_NE(msg.find("at least 32768"), std::string::npos) << msg;
+}
+
+TEST(LemonadeErrorDecodeTest, ContextRemedyWithoutTokenCountsSuggestsNoNumber) {
+    const std::string msg = ctxOverflowRemedy({{"message", kOverflowMessage}});
+    EXPECT_NE(msg.find("a larger window"), std::string::npos) << msg;
+    EXPECT_EQ(msg.find("at least"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("GAIA_CONTEXT_SIZE"), std::string::npos) << msg;
+}
+
+TEST(LemonadeErrorDecodeTest, ContextRemedyNearIntMaxDoesNotOverflow) {
+    const std::string msg = ctxOverflowRemedy(
+        {{"message", kOverflowMessage}, {"n_ctx", 16384}, {"n_prompt_tokens", 2147483647}});
+    EXPECT_NE(msg.find("at least 2147483648"), std::string::npos) << msg;
+}
+
+TEST(LemonadeErrorDecodeTest, OtherErrorsCarryNoContextRemedy) {
+    const std::string msg = ctxOverflowRemedy({{"message", "model not found"}, {"n_ctx", 16384}});
+    EXPECT_EQ(msg, "model not found");
 }
 
 TEST(LemonadeErrorDecodeTest, StreamingUnterminatedErrorEventIsNotLost) {

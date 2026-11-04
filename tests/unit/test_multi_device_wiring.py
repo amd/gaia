@@ -16,6 +16,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from gaia.version import LEMONADE_VERSION
+
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "fixtures", "hardware")
 
 
@@ -32,6 +34,7 @@ def _make_status(running=True, context_size=32768, loaded_models=None):
         context_size=context_size,
         loaded_models=loaded_models,
         busy=False,
+        version=LEMONADE_VERSION,
     )
 
 

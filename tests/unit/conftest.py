@@ -185,6 +185,24 @@ def _isolate_daemon_home(tmp_path_factory):
         yield
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _no_real_agent_turn():
+    """Stop setup's test turn starting a daemon and the assistant's program.
+
+    Session-wide because a setup run's thread can outlive its test, past any
+    per-test mock. Tests of the turn itself call ``.real``.
+    """
+    from gaia.ui import setup_runner
+
+    def no_agent_turn(model_id=None):
+        return None
+
+    no_agent_turn.real = setup_runner._agent_turn_problem
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(setup_runner, "_agent_turn_problem", no_agent_turn)
+        yield
+
+
 # Spawn attempts made outside any test's own guard: one line per attempt
 # naming the test running at the time, the thread, and the test code calling.
 _STRAY_SPAWN_ATTEMPTS: list = []

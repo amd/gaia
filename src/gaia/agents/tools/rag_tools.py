@@ -221,6 +221,18 @@ def _rag_not_available() -> str:
     return f"RAG not available. {missing_extra_hint('rag')}"
 
 
+def _rag_unavailable_message(host: Any) -> str:
+    """Why a document tool cannot run.
+
+    "Install the RAG extra" is only true when the extra failed to import.
+    A config or embedder error keeps its own cause.
+    """
+    error = getattr(host, "_rag_init_error", None)
+    if error is None or isinstance(error, ImportError):
+        return _rag_not_available()
+    return f"RAG failed to start: {type(error).__name__}: {error}"
+
+
 def _embedding_next_step(unreachable: bool, retry: str, busy: bool = False) -> str:
     if busy:
         return (
@@ -386,6 +398,42 @@ def _answers_in_question_language(mixin: Any):
                     getattr(mixin, "_memory_turn_query", ""),
                     result.get("chunks") or [],
                 )
+            return result
+
+        return wrapper
+
+    return wrap
+
+
+_SEARCH_AGAIN_NOTE = (
+    "\n\nIf these chunks do not answer the question, do not say so yet: search once "
+    "more with different words (other terms for the same thing, and the question's "
+    "words in the document's language). If that search misses too, say it is not "
+    "in the documents."
+)
+
+
+_NO_TURN = object()
+
+
+def _asks_once_for_another_search(mixin: Any):
+    """Ask for one more search before "not in the document", once per turn.
+
+    Only the turn's first search that returns chunks carries the note, so it
+    buys one extra search and never a chain of them.
+    """
+
+    def wrap(search: Callable[..., Dict[str, Any]]):
+        @functools.wraps(search)
+        def wrapper(*args, **kwargs) -> Dict[str, Any]:
+            result = search(*args, **kwargs)
+            if result.get("status") != "success" or not result.get("chunks"):
+                return result
+            turn = getattr(mixin, "_turn_seq", None)
+            if getattr(mixin, "_search_again_turn", _NO_TURN) == turn:
+                return result
+            mixin._search_again_turn = turn
+            result["instruction"] = result.get("instruction", "") + _SEARCH_AGAIN_NOTE
             return result
 
         return wrapper
@@ -591,6 +639,7 @@ class RAGToolsMixin:
             atomic=True,
         )
         @_answers_in_question_language(self)
+        @_asks_once_for_another_search(self)
         def query_documents(
             query: str, debug: bool = False  # pylint: disable=unused-argument
         ) -> Dict[str, Any]:
@@ -603,7 +652,12 @@ class RAGToolsMixin:
             """
             rag = _require_rag(self)
             try:
-                # Check if RAG is initialized and has documents
+                # None with no startup error means RAG is off. A recorded failure is an error.
+                if not rag and getattr(self, "_rag_init_error", None) is not None:
+                    return {
+                        "status": "error",
+                        "error": _rag_unavailable_message(self),
+                    }
                 if not rag or not rag.index or len(rag.chunks) == 0:
                     message = self._no_documents_message()
                     return {
@@ -976,6 +1030,7 @@ class RAGToolsMixin:
             timeout=600,
         )
         @_answers_in_question_language(self)
+        @_asks_once_for_another_search(self)
         def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
             """
             Query a specific file for fast, targeted retrieval.
@@ -987,7 +1042,7 @@ class RAGToolsMixin:
                 if not rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 # Debug information collection
@@ -1445,7 +1500,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 # Debug information collection
@@ -1615,7 +1670,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 # Before the existence probe, as in read_file.
@@ -1746,12 +1801,8 @@ class RAGToolsMixin:
             try:
                 if not self.rag:
                     return {
-                        "status": "success",
-                        "documents": [],
-                        "count": 0,
-                        "total_chunks": 0,
-                        "total_size_mb": 0,
-                        "message": self._no_documents_message(),
+                        "status": "error",
+                        "error": _rag_unavailable_message(self),
                     }
                 docs = list(self.rag.indexed_files)
 
@@ -1828,7 +1879,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
                 status = self.rag.get_status()
 
@@ -1882,7 +1933,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 matching_files = _match_indexed_files(self.rag.indexed_files, file_path)
@@ -2194,7 +2245,7 @@ references from the section summaries.
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 matching_files = _match_indexed_files(self.rag.indexed_files, file_name)
@@ -2310,7 +2361,7 @@ references from the section summaries.
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 dir_path = _resolve_target(

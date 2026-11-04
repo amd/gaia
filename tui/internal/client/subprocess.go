@@ -37,10 +37,10 @@ const closeGrace = 2 * time.Second
 // nothing to save exits at once, so this only costs time when it is needed.
 const agentExitGrace = 20 * time.Second
 
-var subprocessLemonadePorts = []string{"13305", "8000"}
+var subprocessLemonadePorts = []string{"13305"}
 
 // detectLemonadeURL resolves configured and embedded endpoints before probing
-// legacy ports. An unrelated local server cannot override the private runtime.
+// the default port. An unrelated local server cannot override the private runtime.
 func detectLemonadeURL() string {
 	// The user's own server: the child reads the saved choice itself, so
 	// pinning a URL here could only point it somewhere else.
@@ -346,7 +346,7 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 		return turnState{}, err
 	}
 	// Resolve once for the child so provider setup and Python use the same
-	// endpoint, even when a second server answers on a legacy port.
+	// endpoint.
 	if url := detectLemonadeURL(); url != "" {
 		cmd.Env = append(os.Environ(), "LEMONADE_BASE_URL="+url)
 		// GAIA's own server moves port and key when the daemon restarts it; the
