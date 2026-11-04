@@ -890,6 +890,25 @@ class EmbeddedLemonade:
             if entry.is_dir()
         )
 
+    def older_installed_version(self) -> Optional[str]:
+        """The newest other version unpacked here, or None.
+
+        A GAIA upgrade that moves the pinned version leaves the previous one in
+        ``dist/``: that machine was set up and needs an update, not first-run setup.
+        """
+        dist = self.root / "dist"
+        if not dist.is_dir():
+            return None
+        name = self.daemon_path.name
+        found = [
+            d.name
+            for d in dist.iterdir()
+            if d.name != self.version and (d / name).is_file()
+        ]
+        return max(
+            found, key=lambda v: [int(n) for n in re.findall(r"\d+", v)], default=None
+        )
+
     # -- install ----------------------------------------------------------
 
     def install(self, force: bool = False) -> Path:

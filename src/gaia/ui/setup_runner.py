@@ -161,6 +161,7 @@ def run_args(
     keep_trying: bool = False,
     extra_models: Optional[List[str]] = None,
     server_only: bool = False,
+    upgrade_embedded: bool = False,
 ) -> List[str]:
     # --yes: nobody can answer a prompt on a pipe. --skip-webui-build: a source
     # checkout would otherwise rebuild the very UI that is running this.
@@ -184,7 +185,7 @@ def run_args(
         args.append("--skip-chat-model")
     if gaia_lemonade:
         args.append("--gaia-lemonade")
-    if server_only:
+    if server_only or upgrade_embedded:
         args.append("--server-only")
     for model_id in extra_models or []:
         args += ["--download-model", model_id]
@@ -499,8 +500,17 @@ def step_labels(
     users_server: Optional[str] = None,
     chat_model: Optional[str] = None,
     server_only: bool = False,
+    upgrade_embedded: bool = False,
 ) -> List[Dict[str, str]]:
     """The steps as the user reads them: their server, and the model setup chose."""
+    if upgrade_embedded:
+        return [
+            {
+                "key": PHASE_SERVER,
+                "label": "Update the local model server",
+                "detail": "your downloaded models stay",
+            }
+        ]
     server = (
         {
             "key": PHASE_SERVER,
@@ -698,6 +708,8 @@ class SetupRun:
     keep_trying: bool = False
     #: Only start the model server; the models are chosen and pulled after.
     server_only: bool = False
+    #: Upgrade an existing embedded Lemonade artifact without model downloads.
+    upgrade_embedded: bool = False
     #: Models pulled beside the profile's; setup has no load check for them.
     extra_models: List[str] = field(default_factory=list)
     #: A model's download failed in this run: its row already says why.
@@ -711,7 +723,7 @@ class SetupRun:
 
     def stage(self) -> str:
         """The screen stage this run is at, for its log."""
-        if self.server_only:
+        if self.server_only or self.upgrade_embedded:
             return "check"
         if self.phase == PHASE_FINISH or self.state == "verifying" or self.tests:
             return "test"
@@ -734,7 +746,11 @@ class SetupRun:
         reached = PHASES.index(self.phase) if self.phase in PHASES else -1
         steps = []
         labels = step_labels(
-            self.skip_chat_model, self.users_server, self.chat_model, self.server_only
+            self.skip_chat_model,
+            self.users_server,
+            self.chat_model,
+            self.server_only,
+            self.upgrade_embedded,
         )
         for i, step in enumerate(labels):
             if self.state == "ready" or i < reached:
@@ -761,6 +777,7 @@ class SetupRun:
             "skip_chat_model": self.skip_chat_model,
             "gaia_lemonade": self.gaia_lemonade,
             "server_only": self.server_only,
+            "upgrade_embedded": self.upgrade_embedded,
             "model_failed": self.model_failed,
             "components": dict(self.components),
             "tests": list(self.tests.values()),
@@ -861,11 +878,14 @@ class SetupRunner:
         keep_trying: bool = False,
         extra_models: Optional[List[str]] = None,
         server_only: bool = False,
+        upgrade_embedded: bool = False,
     ) -> Dict[str, Any]:
         """Start setup; *gaia_lemonade* sets up and saves GAIA's own server.
 
         *extra_models* are pulled beside the plan's. *server_only* starts the
         model server and stops there, so the models can be chosen against it.
+        *upgrade_embedded* replaces a mismatched embedded server without
+        re-running first-time model setup.
         """
         if gaia_lemonade:
             from gaia.llm.lemonade_choice import env_override_note
@@ -897,6 +917,7 @@ class SetupRunner:
                 allow_low_disk=allow_low_disk,
                 keep_trying=keep_trying,
                 server_only=server_only,
+                upgrade_embedded=upgrade_embedded,
                 extra_models=list(extra_models or []),
             )
             command = run_command(skip_chat_model, gaia_lemonade)
@@ -912,6 +933,7 @@ class SetupRunner:
                             keep_trying,
                             extra_models,
                             server_only,
+                            upgrade_embedded,
                         )
                     ),
                     stdout=subprocess.PIPE,
@@ -1321,9 +1343,13 @@ class SetupRunner:
                 )
                 run.note(f"Setup failed: {run.error}")
                 return
-            if run.server_only:
-                # Nothing downloaded yet, so there is nothing to load.
-                run.state, run.text = "ready", "The local model server is running"
+            if run.server_only or run.upgrade_embedded:
+                # Nothing downloaded, so there is nothing to load; an update keeps the models.
+                run.state, run.text = "ready", (
+                    "The local model server is running"
+                    if run.server_only
+                    else "Lemonade Server upgraded"
+                )
                 run.note(run.text)
                 return
             run.state = "verifying"
