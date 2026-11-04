@@ -479,6 +479,25 @@ func TestMissingCLISetupCheckDoesNotSuggestGaiaInit(t *testing.T) {
 	}
 }
 
+// A terminal-only install has no `gaia` CLI. Pressing enter on a setup step
+// said to run setup in a terminal and showed `gaia init`: the same missing CLI.
+func TestSetupWithoutTheCLINamesTheInstaller(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) { return "", gaiainit.ErrNoCLI })
+
+	for _, kind := range []FixKind{FixInstallServer, FixRunSetup} {
+		d := localRunner{}.Fix(context.Background(), localCfg(), kind, nil).Diagnosis
+		if d.Command != gaiainit.InstallCommand || d.PowerShell != gaiainit.InstallPowerShellCommand {
+			t.Errorf("fix %v suggests %q / %q, want the installers", kind, d.Command, d.PowerShell)
+		}
+		if strings.Contains(d.Command+d.Remedy, "gaia init") || strings.Contains(d.Remedy, "in a terminal") {
+			t.Errorf("fix %v remedy %q points back at the missing CLI", kind, d.Remedy)
+		}
+		if d.Cause == "" || d.Cause[0] < 'A' || d.Cause[0] > 'Z' {
+			t.Errorf("fix %v cause %q must read as a sentence after \"Setup stopped. \"", kind, d.Cause)
+		}
+	}
+}
+
 // Exit 2 is what an installed gaia older than `--check` returns for
 // "unrecognized arguments". Reading it as "not ready" ran a full multi-minute
 // `gaia init` on EVERY launch.
