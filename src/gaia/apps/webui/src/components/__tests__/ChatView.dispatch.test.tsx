@@ -131,6 +131,73 @@ describe('ChatView dispatch', () => {
         expect(useChatStore.getState().pendingPrompt).toBeNull();
     });
 
+    it('shows the held opening message while GAIA starts, and hides it once sent (#6644)', async () => {
+        useChatStore.setState({
+            pendingPrompt: { sessionId: SESSION.id, text: 'held for startup' },
+            systemStatus: { init_state: 'initializing' } as never,
+        });
+
+        await act(async () => {
+            render(<ChatView sessionId={SESSION.id} />);
+            await new Promise((r) => setTimeout(r, 0));
+        });
+
+        expect(screen.getByLabelText('Message waiting to send')).toHaveTextContent('held for startup');
+        expect(screen.getByText('Sends once GAIA has started.')).toBeInTheDocument();
+
+        await act(async () => {
+            useChatStore.setState({ systemStatus: { init_state: 'ready' } as never });
+            await new Promise((r) => setTimeout(r, 0));
+        });
+
+        expect(screen.queryByLabelText('Message waiting to send')).toBeNull();
+    });
+
+    it('sends the held opening message once, ahead of a queued one, across status flips (#6644)', async () => {
+        useChatStore.setState({
+            pendingPrompt: { sessionId: SESSION.id, text: 'first' },
+            messageQueues: { [SESSION.id]: [{ id: 1, text: 'second', state: 'queued' }] },
+            systemStatus: { init_state: 'initializing' } as never,
+        });
+
+        await act(async () => {
+            render(<ChatView sessionId={SESSION.id} />);
+            await new Promise((r) => setTimeout(r, 0));
+        });
+        expect(mockedApi.sendMessageStream).not.toHaveBeenCalled();
+
+        for (const state of ['ready', 'initializing', 'ready'] as const) {
+            await act(async () => {
+                useChatStore.setState({ systemStatus: { init_state: state } as never });
+                await new Promise((r) => setTimeout(r, 0));
+            });
+        }
+
+        expect(mockedApi.sendMessageStream).toHaveBeenCalledTimes(1);
+        expect(mockedApi.sendMessageStream.mock.calls[0][1]).toBe('first');
+        expect(useChatStore.getState().messageQueues[SESSION.id]?.map((m) => m.text)).toEqual(['second']);
+    });
+
+    it('sends the held opening message when startup ends degraded, so its failure shows (#6644)', async () => {
+        useChatStore.setState({
+            pendingPrompt: { sessionId: SESSION.id, text: 'first' },
+            systemStatus: { init_state: 'initializing' } as never,
+        });
+
+        await act(async () => {
+            render(<ChatView sessionId={SESSION.id} />);
+            await new Promise((r) => setTimeout(r, 0));
+        });
+        await act(async () => {
+            useChatStore.setState({ systemStatus: { init_state: 'degraded' } as never });
+            await new Promise((r) => setTimeout(r, 0));
+        });
+
+        expect(mockedApi.sendMessageStream).toHaveBeenCalledTimes(1);
+        expect(mockedApi.sendMessageStream.mock.calls[0][1]).toBe('first');
+        expect(useChatStore.getState().pendingPrompt).toBeNull();
+    });
+
     it('leaves a message meant for another chat unsent (#5924)', async () => {
         const meant = { sessionId: 'another-chat', text: 'not for this chat' };
         useChatStore.setState({ pendingPrompt: meant });

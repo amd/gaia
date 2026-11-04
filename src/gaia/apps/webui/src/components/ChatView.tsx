@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
+import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Clock } from 'lucide-react';
 import { MessageBubble, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
@@ -1849,6 +1849,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <PermissionPrompt sessionId={sessionId} />
                     <ContextWarning usage={contextUsage} />
                     <OfflineNotice sessionId={sessionId} />
+                    {pendingPrompt && initializing && (
+                        <ul className="queued-messages" aria-label="Message waiting to send" aria-live="polite">
+                            <li className="queued-message is-queued">
+                                <Clock size={12} aria-hidden="true" />
+                                <span className="queued-message-text" title={pendingPrompt.text}>{pendingPrompt.text}</span>
+                                <span className="queued-message-state">Sends once GAIA has started.</span>
+                            </li>
+                        </ul>
+                    )}
                     <QueuedMessages
                         items={queue}
                         onRemove={(id) => setQueue((q) => messageQueue.remove(q, id))}
