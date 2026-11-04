@@ -333,6 +333,53 @@ def test_live_detects_empty_response(scaffolded_python, monkeypatch):
         cli_agent.cmd_test(_test_args(scaffolded_python, lint=False, live=True))
 
 
+class _UnreachableModelAgent:
+    """Shape of Agent.process_query when Lemonade refuses the connection."""
+
+    def process_query(self, prompt, **kwargs):
+        return {
+            "status": "failed",
+            "result": "Failed to load Gemma-4-E4B-it-GGUF: connection refused",
+            "system_prompt": "You are a helpful agent.",
+            "model_unreachable": True,
+            "model_failed": True,
+        }
+
+
+def test_live_detects_unreachable_model(scaffolded_python, monkeypatch):
+    monkeypatch.setattr(
+        cli_agent, "_instantiate_agent", lambda pkg, parsed: _UnreachableModelAgent()
+    )
+    with pytest.raises(cli_agent.AgentWorkflowError, match="model was unreachable"):
+        cli_agent.cmd_test(_test_args(scaffolded_python, lint=False, live=True))
+
+
+@pytest.mark.parametrize(
+    "result,expected",
+    [
+        ({"status": "success", "result": "hi"}, None),
+        ({"status": "incomplete", "result": "partial"}, None),
+        ("plain string", None),
+        ({"model_unreachable": True}, "the model was unreachable"),
+        ({"model_failed": True}, "the model call failed"),
+        ({"status": "error", "error": "boom"}, "status 'error' (boom)"),
+        (
+            {"status": "failed", "error_history": [{"error": "timeout"}]},
+            "status 'failed' (timeout)",
+        ),
+        ({"status": "failed"}, "status 'failed'"),
+    ],
+)
+def test_failed_response(result, expected):
+    assert cli_agent._failed_response(result) == expected
+
+
+def test_nonempty_response_ignores_metadata_only_dict():
+    # system_prompt and conversation are always set on an Agent result.
+    result = {"result": "", "system_prompt": "x", "conversation": [{"role": "user"}]}
+    assert not cli_agent._nonempty_response(result)
+
+
 @pytest.fixture
 def starters_package(tmp_path, monkeypatch):
     module_name = "gaia_test_starters"

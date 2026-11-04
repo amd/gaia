@@ -871,6 +871,13 @@ def _run_live_gates(pkg_dir: Path, timeout: int) -> None:
                 f"agent crashed on prompt {prompt!r}: {error}. Fix the agent "
                 f"and re-run 'gaia agent test --live'."
             ) from error
+        failure = _failed_response(result)
+        if failure:
+            raise AgentWorkflowError(
+                f"agent failed on prompt {prompt!r}: {failure}. Check that "
+                f"Lemonade Server is running and the model is loaded, then "
+                f"re-run 'gaia agent test --live'."
+            )
         if not _nonempty_response(result):
             raise AgentWorkflowError(
                 f"agent returned an empty response for prompt {prompt!r}. "
@@ -1238,9 +1245,34 @@ def _nonempty_response(result) -> bool:
             val = result.get(key)
             if isinstance(val, str) and val.strip():
                 return True
-        # A dict with any truthy content counts as a response.
-        return any(bool(v) for v in result.values())
+        # Metadata (system_prompt, conversation, ...) is always present on an
+        # Agent result, so only the answer keys above count as a response.
+        return False
     return True
+
+
+def _failed_response(result) -> Optional[str]:
+    """Why a process_query result is a failure, or None if it isn't one.
+
+    Agent.process_query reports an unreachable model or a failed turn in the
+    result dict instead of raising, and still fills ``result`` with an error
+    message, so a non-empty answer alone does not mean the agent worked.
+    """
+    if not isinstance(result, dict):
+        return None
+    if result.get("model_unreachable"):
+        return "the model was unreachable"
+    if result.get("model_failed"):
+        return "the model call failed"
+    status = result.get("status")
+    if status in ("failed", "error"):
+        errors = result.get("error_history") or []
+        last = errors[-1] if errors else None
+        if isinstance(last, dict):
+            last = last.get("error") or last.get("message")
+        detail = result.get("error") or last
+        return f"status {status!r}" + (f" ({detail})" if detail else "")
+    return None
 
 
 def _ensure_on_path(pkg_dir: Path) -> None:
