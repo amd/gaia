@@ -1468,6 +1468,34 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** A measured context two turns from overflowing, so the meter, its popover and the warning all show. */
+const MEASURED_CONTEXT = {
+    available: true, window: 65536, reply_reserve: 4096, system: 3900, tools: 2600, documents: 4000, history: 11350,
+    query: 0, used: 21850, history_budget: 20000, history_used: 11350, turns_in_view: 4, turns_hidden: 2,
+    at_risk: ['لخّص تقرير الربع الثالث', 'من تأخر من الموردين؟'], at_risk_tokens: 3000,
+    tokenizer: { exact: true, model: 'Gemma-4-E4B-it-GGUF' }, model: 'Gemma-4-E4B-it-GGUF',
+};
+
+async function withMeasuredContext(page: Page): Promise<void> {
+    await page.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({ json: MEASURED_CONTEXT }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the context meter, its popover and its warning (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withMeasuredContext);
+        const meter = page.locator('button.context-meter');
+        await expect(meter).toBeVisible();
+        await expect(page.locator('.context-warning')).toBeVisible();
+        await meter.click();
+        await expect(page.locator('.context-meter-panel')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') {
+            expect(await untranslated(page, '.context-meter-panel')).toEqual([]);
+            expect(await untranslated(page, '.context-warning')).toEqual([]);
+        }
+    });
+}
+
 test('composer chips stay whole at phone width', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 780 });
     await open(page);
