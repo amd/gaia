@@ -125,3 +125,66 @@ def test_scope_rejects_string_argument():
         pytest.raises(TypeError, match="sequence"),
     ):
         _ScopedAgent(silent_mode=True, skip_lemonade=True, tool_scope="scope_allowed")
+
+
+def test_scope_blocks_extraction_helper_from_global_writer(scoped_agent, monkeypatch):
+    class Ledger:
+        sources = set()
+        requested = set()
+        results = {"source.txt": "done"}
+        exported = set()
+
+        @staticmethod
+        def key(path):
+            return str(path)
+
+        @staticmethod
+        def export(path):
+            return "inventory"
+
+    writes = []
+    scoped_agent._extraction_ledger = Ledger()
+    scoped_agent._register_extraction_tool()
+    monkeypatch.setitem(
+        scoped_agent._tools_registry,
+        "write_file",
+        {"function": lambda **kwargs: writes.append(kwargs)},
+    )
+    result = scoped_agent._tools_registry["save_extracted_items"]["function"](
+        "inventory.md"
+    )
+
+    assert result["status"] == "error"
+    assert "unavailable" in result["error"]
+    assert writes == []
+
+
+def test_project_map_helper_uses_execution_scope():
+    from gaia.agents.base.project_map import ProjectMapMixin
+
+    class Host:
+        _tools_registry = {"index_codebase": {"function": object()}}
+
+        def _execution_tool_registry(self):
+            return {}
+
+    assert ProjectMapMixin._tool_names(Host()) == {}
+
+
+def test_audio_helper_uses_execution_scope(monkeypatch, tmp_path):
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+    from gaia.agents.tools.audio_tools import AudioToolsMixin
+
+    calls = []
+    monkeypatch.setitem(
+        _TOOL_REGISTRY,
+        "index_document",
+        {"function": lambda path: calls.append(path)},
+    )
+
+    class Host:
+        def _execution_tool_registry(self):
+            return {}
+
+    assert AudioToolsMixin._index_refined(Host(), tmp_path / "meeting.txt") is False
+    assert calls == []

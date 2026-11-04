@@ -3645,7 +3645,8 @@ Do NOT wrap conversational replies in JSON.
                     "status": "error",
                     "error": "Extract every source successfully before saving the inventory",
                 }
-            writer = self._tools_registry.get("write_file")
+            registry = self._execution_tool_registry()
+            writer = registry.get("write_file")
             if writer is None:
                 return {
                     "status": "error",
@@ -7019,6 +7020,9 @@ Do NOT wrap conversational replies in JSON.
         # (``rss-digest/fetch_rss``); the normalization below is only a typo rescue.
         tool_name = tool_name.strip().removesuffix("()").strip()
         execution_registry = self._execution_tool_registry()
+        # Dynamic tool loading records recency; it never widens this agent's
+        # execution registry. Scope checks therefore remain authoritative even
+        # when a tool name was registered globally but not shown here.
         if tool_name not in execution_registry:
             tool_name = tool_name.replace("-", "_")
         if (
@@ -7029,7 +7033,7 @@ Do NOT wrap conversational replies in JSON.
             return {
                 **NOT_EXECUTED,
                 "status": "error",
-                "error": "Tool is not permitted by this agent's execution scope.",
+                "error": "Tool is not available to this agent. Use only the tools you were given.",
             }
 
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
