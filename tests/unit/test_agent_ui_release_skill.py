@@ -298,3 +298,30 @@ def test_png_writer_round_trips_pixels(tmp_path):
         zlib.decompress(data[idat + 4 : idat + 4 + length])
         == b"\x00\xff\x00\x00\x00\xff\x00"
     )
+
+
+# ── pc_evals: which permission prompts the benchmark driver allows ──────
+
+
+evals = _load("pc_evals")
+TASK = r"C:\Users\me\kw-eval\runs\gaia-agent-ui\assistant-1\as-res-convert-units"
+
+
+def _prompt(question: str, target: str) -> str:
+    return "\n".join([question, "", target, "", "Details", "Allow once", "Deny"])
+
+
+@pytest.mark.parametrize(
+    "question, target, allowed",
+    [
+        ("Let GAIA use this folder?", TASK, True),
+        ("Allow writing file?", TASK + r"\summary.md", True),
+        ("Allow running a shell command?", "python tools/convert_units.py 72", True),
+        ("Allow running a shell command?", r"type C:\Users\me\.ssh\id_rsa", False),
+        ("Allow running a shell command?", r"type ..\..\secrets.txt", False),
+        ("Let GAIA use this folder?", r"C:\Users\me\Documents", False),
+        ("Allow running a shell command?", r"type \\server\share\x.txt", False),
+    ],
+)
+def test_benchmark_driver_allows_only_the_task_folder(question, target, allowed):
+    assert evals.approve(_prompt(question, target), TASK) is allowed

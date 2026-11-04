@@ -218,7 +218,14 @@ python $SK/pc_evals.py check                  # version, clean copy, grading set
 python $SK/pc_evals.py prepare $RUN --suite smoke
 ```
 
-For each task, one at a time:
+`pc_evals.py drive $RUN --cdp 9333` runs every prepared task through the window over
+DevTools: one chat each, the prompt typed in. It allows a permission prompt only when the
+prompt names the task folder or is a relative command with no `..`, records each
+answer, and logs every approval and denial to `bench/approvals.json`. Read that log
+before trusting a failure: the first version of this rule denied a task's own
+`python tools/…` run and failed a task GAIA had done right.
+
+To do it by hand instead, for each task, one at a time:
 
 1. Open a new chat and set the folder chip to the task folder (native picker: paste
    the path).
@@ -266,6 +273,13 @@ findings into issues:
 
 ## 7. Fix in parallel
 
+**Check for auto-fix PRs first.** Filing with the `bug` label starts the repo's auto-fix
+workflow, which opens a draft PR per issue on an `autofix/issue-<N>` branch within
+minutes: `gh pr list -R amd/gaia --search "autofix/issue-<N> in:head"`. Before starting
+fixes, decide per issue: leave it to the auto-fix draft and retest that branch, or fix it
+yourself and comment on the draft with your retested branch. Never open a second PR
+without saying so on the first.
+
 Start **one session per issue** (`start_session`), in its own worktree, with
 [references/fix-brief.md](references/fix-brief.md) filled in. Send them all at once,
 and give them independent issues. Two fixes in the same component go to one session,
@@ -305,6 +319,14 @@ PRs.
    will get. That means the next RC (ask the person to cut one; this skill never tags),
    or a `build-installers.yml` run on `main`
    (`launch_isolated.py fetch <root> --run <id>`).
+
+   Before then, a packaged build of the integration branch is close enough to catch
+   packaging-only bugs. Run
+   `cd src/gaia/apps/webui && npx electron-builder --win dir --config electron-builder.yml --publish never`
+   to get an unsigned `dist-app/win-unpacked/gaia-desktop.exe`, with no installer, version
+   file or signing needed. Launch it with `--wheel` set to the integration wheel. Computer
+   use is often denied for unsigned or dev executables, so plan to drive it with
+   `cdp.py` and take native captures with `capture_window.py --pid`, and say so in the report.
 
 Every retest is a new round:
 

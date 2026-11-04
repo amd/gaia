@@ -34,5 +34,6 @@ model, so the person thinks the switch worked and it didn't.
 </details>
 ```
 
-Labels: `bug`, plus the area label if one exists. Severity goes in the body, not as an
-invented label. Add `p1` only for critical/high when the repo uses that label.
+Labels: `bug`, plus the area label if one exists. `bug` starts the auto-fix workflow
+(see SKILL.md §7). Severity goes in the body, not as an invented label. Add `p1` only
+for critical/high when the repo uses that label.

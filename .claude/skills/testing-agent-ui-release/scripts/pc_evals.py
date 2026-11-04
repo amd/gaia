@@ -11,6 +11,7 @@ kwengine/ and tools/run_eval.py).
     pc_evals.py prepare RUN_DIR --suite smoke            # build task folders; prints folder + prompt file
     #   ...drive the app: new chat, folder chip -> task folder, paste the prompt, wait for the answer...
     pc_evals.py record RUN_DIR kw-00-smoke --port P      # answer + timing from the backend -> kwengine record
+    pc_evals.py drive RUN_DIR --cdp 9333 --port P        # or: every task over DevTools, approvals logged
     pc_evals.py grade RUN_DIR                            # close the app first; prints the grader's summary.md
 
 Scores come only from the package's grader. If grading cannot run (no answers
@@ -223,6 +224,97 @@ def cmd_record(a) -> None:
     )
 
 
+def approve(prompt: str, folder: str) -> bool:
+    """Allow a permission prompt only for the task's own folder.
+
+    It names the folder, or it is a command with no drive path and no `..`. Such a
+    command runs in the chat's folder, which this chat already confined to the task
+    folder. Denying those failed a task the agent had done right.
+    """
+    text = prompt.lower().replace("/", "\\")
+    if folder.lower().replace("/", "\\") in text:
+        return True
+    asked = text.split("details")[0].split("?", 1)[-1]
+    return ":\\" not in asked and "\\\\" not in asked and ".." not in text
+
+
+def cmd_drive(a) -> None:
+    """Run every prepared task through the window over DevTools, one chat each, then record it."""
+    import time
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import cdp
+
+    prep = json.loads((bench_dir(a.run) / "prepared.json").read_text(encoding="utf-8"))
+    log = []
+    for task in prep["tasks"]:
+        page = cdp.Page(a.cdp)
+        if not page.eval(cdp.CLICK_JS % json.dumps("New chat")):
+            sys.exit(
+                "No 'New chat' button: is the window on the chat screen, in English?"
+            )
+        time.sleep(2)
+        page.eval("document.querySelector('textarea').focus()")
+        page.call("Input.insertText", {"text": task["prompt"]})
+        for kind in ("keyDown", "keyUp"):
+            page.call(
+                "Input.dispatchKeyEvent",
+                {
+                    "type": kind,
+                    "key": "Enter",
+                    "code": "Enter",
+                    "windowsVirtualKeyCode": 13,
+                },
+            )
+        deadline = time.time() + task["max_minutes"] * 60
+        time.sleep(5)
+        while time.time() < deadline:
+            prompt = page.eval(
+                "(() => { const d = document.querySelector('[class*=permission], [role=alertdialog]');"
+                " return d ? d.innerText : '' })()"
+            )
+            if prompt:
+                ok = approve(prompt, task["folder"])
+                labels = ["Allow for this chat", "Allow once"] if ok else ["Deny"]
+                choice = next(
+                    (lb for lb in labels if page.eval(cdp.CLICK_JS % json.dumps(lb))),
+                    None,
+                )
+                if choice is None:
+                    sys.exit(
+                        f"{task['id']}: a prompt has none of {labels}:\n{prompt[:300]}"
+                    )
+                log.append(
+                    {"task": task["id"], "prompt": prompt[:400], "choice": choice}
+                )
+                print(f"{task['id']}: {choice}: {prompt.splitlines()[0][:80]}")
+                time.sleep(3)
+                continue
+            if not get(a.port, "/api/system/work-in-progress")["answers"]:
+                break
+            time.sleep(4)
+        page.close()
+        timed_out = time.time() >= deadline
+        print(f"{task['id']}: {'TIMED OUT' if timed_out else 'answered'}")
+        cmd_record(
+            argparse.Namespace(
+                run=a.run,
+                task=task["id"],
+                port=a.port,
+                session=None,
+                force=a.force,
+                outcome="stalled-asked-human" if timed_out else "finished",
+                evals_dir=a.evals_dir,
+            )
+        )
+    (bench_dir(a.run) / "approvals.json").write_text(
+        json.dumps(log, indent=1), encoding="utf-8"
+    )
+    print(
+        f"Every approval and denial: {bench_dir(a.run) / 'approvals.json'}. Close the app, then grade."
+    )
+
+
 def cmd_grade(a) -> None:
     d = evals_dir(a)
     prep = json.loads((bench_dir(a.run) / "prepared.json").read_text(encoding="utf-8"))
@@ -293,6 +385,27 @@ def main() -> None:
     )
     sp.add_argument("--force", action="store_true")
     sp.set_defaults(fn=cmd_record)
+    sp = sub.add_parser(
+        "drive", help="Run the prepared tasks through the window over DevTools"
+    )
+    sp.add_argument("run", type=Path)
+    sp.add_argument(
+        "--cdp",
+        type=int,
+        required=True,
+        help="DevTools port (launch_isolated.py --cdp)",
+    )
+    sp.add_argument(
+        "--port",
+        type=int,
+        default=int(env_port) if env_port else None,
+        required=not env_port,
+        help="The test app's backend port (or GAIA_UI_PORT)",
+    )
+    sp.add_argument(
+        "--force", action="store_true", help="Replace results already recorded"
+    )
+    sp.set_defaults(fn=cmd_drive)
     sp = sub.add_parser("grade")
     sp.add_argument("run", type=Path)
     sp.set_defaults(fn=cmd_grade)
