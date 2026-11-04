@@ -41,9 +41,9 @@ MODES = (MODE_GAIA, MODE_EXTERNAL)
 #: Credential-store slot for the user's Lemonade API key.
 API_KEY_SECRET_NAME = "lemonade_api_key"
 
-#: Ports a locally installed Lemonade listens on: the current default, then
-#: the pre-10.1 one. Same list the TUI's preflight probes.
-DETECT_PORTS = (13305, 8000)
+#: Ports a locally installed Lemonade listens on. Same list the TUI's
+#: preflight probes.
+DETECT_PORTS = (13305,)
 
 # A busy server accepts the connection at once but can take seconds to answer.
 _DETECT_TIMEOUT = (0.5, 10.0)
@@ -295,10 +295,10 @@ class ProbeResult:
 
 
 def minimum_version() -> str:
-    """The oldest Lemonade the flagship profile runs against."""
-    from gaia.installer.init_command import DEFAULT_INIT_PROFILE, INIT_PROFILES
+    """The oldest Lemonade GAIA runs against."""
+    from gaia.version import LEMONADE_MIN_VERSION
 
-    return INIT_PROFILES[DEFAULT_INIT_PROFILE]["min_lemonade_version"]
+    return LEMONADE_MIN_VERSION
 
 
 def probe(

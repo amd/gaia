@@ -428,15 +428,90 @@ def fetch_manifest(
     base_url: Optional[str] = None,
     fetcher: Optional[Fetcher] = None,
 ) -> Dict[str, Any]:
-    """Fetch the per-agent aggregate manifest (``agents/<id>/manifest.json``)."""
+    """Fetch the per-agent aggregate manifest (``agents/<id>/manifest.json``).
+
+    Raises:
+        CatalogError: the manifest is not the shape the installer reads; the
+            message names the URL and the first field that is wrong.
+    """
     fetcher = fetcher or fetch_bytes
-    data = _fetch_json(manifest_url(agent_id, base_url), fetcher)
+    url = manifest_url(agent_id, base_url)
+    data = _fetch_json(url, fetcher)
     if not isinstance(data, dict) or not data.get("versions"):
         raise CatalogError(
             f"Hub manifest for '{agent_id}' is malformed or has no published "
             f"versions. Try again later or check GAIA_HUB_URL."
         )
+    problem = _manifest_shape_problem(data)
+    if problem:
+        raise CatalogError(
+            f"The hub manifest at {url} is malformed: {problem}. Check "
+            "GAIA_HUB_URL, or report it at https://github.com/amd/gaia/issues."
+        )
     return data
+
+
+_ARTIFACT_KEYS = ("filename", "path", "sha256")
+
+
+def _artifact_shape_problem(artifact: Any, where: str, required) -> Optional[str]:
+    if not isinstance(artifact, dict):
+        return f"{where} is {type(artifact).__name__}, not an object"
+    for key in _ARTIFACT_KEYS:
+        if key not in artifact:
+            if key in required:
+                return f"{where} has no '{key}'"
+            continue
+        if not isinstance(artifact[key], str):
+            return f"{where}.{key} is {type(artifact[key]).__name__}, not a string"
+    size = artifact.get("size_bytes")
+    if size is not None and (isinstance(size, bool) or not isinstance(size, int)):
+        return f"{where}.size_bytes is {type(size).__name__}, not a number"
+    return None
+
+
+def _manifest_shape_problem(data: Dict[str, Any]) -> Optional[str]:
+    """The first field the installer would misread, or None for a good manifest."""
+    for key in ("id", "language", "latest_version", "min_gaia_version"):
+        if data.get(key) is not None and not isinstance(data[key], str):
+            return f"'{key}' is {type(data[key]).__name__}, not a string"
+    requirements = data.get("requirements")
+    if requirements is not None:
+        if not isinstance(requirements, dict):
+            return f"'requirements' is {type(requirements).__name__}, not an object"
+        platforms = requirements.get("platforms")
+        if platforms is not None and (
+            not isinstance(platforms, list)
+            or not all(isinstance(p, str) for p in platforms)
+        ):
+            return "'requirements.platforms' is not a list of strings"
+    versions = data["versions"]
+    if not isinstance(versions, dict):
+        return f"'versions' is {type(versions).__name__}, not an object"
+    for version, entry in versions.items():
+        where = f"versions['{version}']"
+        if not isinstance(entry, dict):
+            return f"{where} is {type(entry).__name__}, not an object"
+        floor = entry.get("min_gaia_version")
+        if floor is not None and not isinstance(floor, str):
+            return f"{where}.min_gaia_version is {type(floor).__name__}, not a string"
+        artifacts = entry.get("artifacts")
+        if artifacts is not None:
+            if not isinstance(artifacts, list):
+                return f"{where}.artifacts is {type(artifacts).__name__}, not a list"
+            for i, artifact in enumerate(artifacts):
+                problem = _artifact_shape_problem(
+                    artifact, f"{where}.artifacts[{i}]", _ARTIFACT_KEYS
+                )
+                if problem:
+                    return problem
+        if entry.get("artifact") is not None:
+            problem = _artifact_shape_problem(
+                entry["artifact"], f"{where}.artifact", ()
+            )
+            if problem:
+                return problem
+    return None
 
 
 # ---------------------------------------------------------------------------

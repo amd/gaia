@@ -47,7 +47,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     const hasActiveConversation = !!currentSessionId && messages.length > 0;
 
     const modelName = systemStatus?.default_model_name ?? DEFAULT_MODEL_NAME;
-    const { isDownloadingModel, downloadModel } = useModelActions(modelName);
+    const { isDownloadingModel, downloadError, downloadModel } = useModelActions(modelName);
 
     // Track previous warning-worthy states so the banner reappears when
     // a new issue is detected after being dismissed.
@@ -120,8 +120,8 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     {isError ? (
                         <>
                             Download of <strong>{downloadName}</strong> failed.{' '}
-                            {activeProgress?.message && (
-                                <span className="connection-banner__hint">{activeProgress.message}</span>
+                            {(downloadError ?? activeProgress?.message) && (
+                                <span className="connection-banner__hint">{downloadError ?? activeProgress?.message}</span>
                             )}
                         </>
                     ) : (

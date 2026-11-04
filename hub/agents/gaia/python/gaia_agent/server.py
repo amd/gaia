@@ -1052,10 +1052,12 @@ async def init() -> Dict[str, Any]:
             f"See {_DOCS_URL}."
         )
     elif compatible is False:
+        from gaia.llm.lemonade_launcher import describe_upgrade_hint
+
+        upgrade = await asyncio.to_thread(describe_upgrade_hint, probe["base_url"])
         hint = (
             f"Lemonade {probe['version']} is older than the required "
-            f"{LEMONADE_MIN_VERSION}. Run `gaia init --force-reinstall`, then "
-            "re-check."
+            f"{LEMONADE_MIN_VERSION}. {upgrade}"
         )
     elif not probe["present"]:
         # `gaia download` takes no positional model — argparse exits 2 on it.

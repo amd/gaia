@@ -39,6 +39,7 @@ NOT_ANSWERING = (
     "GAIA's Lemonade Server (pid 1) is running but not answering; it may still "
     "be loading a model."
 )
+from gaia.version import LEMONADE_VERSION
 
 
 class _Http:
@@ -351,7 +352,9 @@ class TestANewSessionWaitsToo:
         monkeypatch.setattr(
             lc.LemonadeClient,
             "get_status",
-            lambda self: lc.LemonadeStatus(running=True, url=self.base_url),
+            lambda self: lc.LemonadeStatus(
+                version=LEMONADE_VERSION, running=True, url=self.base_url
+            ),
         )
         return world
 

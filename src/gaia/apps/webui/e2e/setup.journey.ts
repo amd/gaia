@@ -16,8 +16,9 @@ const ALL_MODELS = [CHAT_MODEL, EMBEDDER];
 const start = (page: Page, say: Say) => page.getByRole('button', { name: say('setup.plan.start') });
 const newChat = (page: Page, say: Say) => page.getByRole('main', { name: say('newChat.label') });
 
-/** The app, set up already: both models are on the fake from the start. */
+/** The app, set up already: the agent is installed and both models are on the fake. */
 async function openSetUp(journey: import('./harness').Journey, open: () => Promise<void>, page: Page, say: Say): Promise<void> {
+    journey.installAgent();
     await journey.startFake({ models: ALL_MODELS });
     await journey.startBackend();
     await open();
@@ -203,6 +204,19 @@ test('Settings runs setup again', async ({ page, journey, say, shot, open }) => 
     await page.getByRole('button', { name: say('setup.plan.startNoDownload') }).click();
     await testToReady(page, say, shot);
     expect(journey.pulls(), 'everything was already on this PC').toEqual([]);
+});
+
+test('a server that already has the models still gets setup, which installs the agent', async ({ page, journey, say, shot, open }) => {
+    await journey.startFake({ models: ALL_MODELS });
+    await journey.startBackend();
+    await open();
+    await expect(page.locator('main.setup')).toBeVisible({ timeout: 2 * 60_000 });
+    await pastChecks(page, say);
+    await shot('agent-missing');
+    await page.getByRole('button', { name: say('setup.plan.startNoDownload') }).click();
+    await testToReady(page, say, shot);
+    await expectTestsPassed(page, journey.url, ['chat', 'vision', 'embedding', 'agent']);
+    expect(journey.pulls(), 'the models were already on the server').toEqual([]);
 });
 
 test('with no models, a chat asks to download one', async ({ page, journey, lang, say, shot, open }) => {

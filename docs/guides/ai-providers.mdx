@@ -66,9 +66,6 @@ Lemonade:
   details line says what it needs against what this PC has.
 - **fit unknown** — Lemonade did not report this PC's GPU memory or the model's
   size, so it cannot be judged and is not downloaded.
-- **needs newer Lemonade** — the model needs a newer Lemonade than this PC runs
-  (Qwen3.6 35B A3B needs v11.7.0, Qwen3.8 Flash Next v2026.39.1). Upgrade with
-  `gaia init --force-reinstall`.
 
 A model fits when its size plus 5% and 1 GB of working room fits the memory
 llama.cpp loads into — on a Strix Halo that is the GPU carve-out plus shared
@@ -338,7 +335,7 @@ over `LEMONADE_API_KEY`. Otherwise GAIA reads its embedded-server credential fro
 `$GAIA_HOME/lemonade/state.json` (`~/.gaia` by default) and uses it only for the
 matching local HTTP server and port.
 
-Cloud routing requires Lemonade **11.8.1 or later** and is experimental upstream.
+Cloud routing is experimental upstream.
 An empty model list is reported as a discovery problem, not a successful connection.
 Check credentials, account model access, the gateway URL, and Lemonade's server log.
 

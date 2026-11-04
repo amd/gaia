@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 import requests
 
+from gaia.version import LEMONADE_VERSION
+
 # from gaia.logger import get_logger
 
 
@@ -387,6 +389,7 @@ class TestLemonadeManagerContextMessage(unittest.TestCase):
         mock_client = MagicMock()
         mock_status = MagicMock()
         mock_status.running = True
+        mock_status.version = LEMONADE_VERSION
         mock_status.busy = False
         mock_status.context_size = 4096
         mock_status.loaded_models = [
@@ -428,6 +431,7 @@ class TestLemonadeManagerContextMessage(unittest.TestCase):
         mock_client = MagicMock()
         mock_status = MagicMock()
         mock_status.running = True
+        mock_status.version = LEMONADE_VERSION
         mock_status.busy = False
         mock_status.context_size = 4096
         mock_status.loaded_models = [
@@ -471,6 +475,7 @@ class TestLemonadeManagerContextMessage(unittest.TestCase):
         mock_client = MagicMock()
         mock_status = MagicMock()
         mock_status.running = True
+        mock_status.version = LEMONADE_VERSION
         mock_status.busy = False
         mock_status.context_size = 4096
         mock_client.get_status.return_value = mock_status
