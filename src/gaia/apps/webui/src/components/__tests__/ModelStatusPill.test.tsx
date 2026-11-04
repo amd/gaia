@@ -64,6 +64,20 @@ describe('ModelStatusPill', () => {
         expect(screen.getByRole('button', { name: 'Local · Gemma 4 E4B, model stopped' })).toBeInTheDocument();
     });
 
+    it('does not show loaded while a different model is the one loaded', () => {
+        useModelStore.setState({
+            active: {
+                provider: 'local', model: 'gemma4-it-e4b-FLM', display_name: 'Gemma 4 E4B NPU', label: 'Gemma', remote: false,
+                is_default: false, inference_remote: false,
+            },
+        });
+        render(<ModelStatusPill />);
+        const pill = screen.getByRole('button', { name: 'Local · Gemma 4 E4B NPU, model not loaded' });
+        expect(pill.querySelector('.sb-location-dot')).not.toHaveClass('is-loaded');
+        act(() => useChatStore.setState({ systemStatus: { lemonade_running: true, model_loaded: 'user.GEMMA4-IT-E4B-FLM' } as SystemStatus }));
+        expect(screen.getByRole('button', { name: 'Local · Gemma 4 E4B NPU, model loaded' })).toBeInTheDocument();
+    });
+
     it('shows the place and the model on separate lines and keeps the full name in the tooltip', () => {
         render(<ModelStatusPill />);
         const pill = screen.getByRole('button', { name: /Local · Gemma 4 E4B/ });
