@@ -293,3 +293,46 @@ def test_disconnect_survives_a_broken_delete_reply(monkeypatch):
     transport.disconnect()
 
     assert transport.session_id is None
+
+
+def test_sse_reply_to_another_request_is_not_taken_for_ours(monkeypatch):
+    stale = '{"jsonrpc": "2.0", "id": 99, "result": {"stale": true}}'
+    batch = '[{"jsonrpc": "2.0", "id": 0, "result": {}}]'
+    _fake_urlopen(monkeypatch, _Reply(_sse(stale, batch), "text/event-stream"))
+
+    with pytest.raises(ValueError, match="without answering request 0"):
+        HTTPTransport("http://mcp.test").send_request("ping")
+
+
+def test_sse_event_with_broken_json_fails_loudly(monkeypatch):
+    _fake_urlopen(monkeypatch, _Reply(_sse('{"jsonrpc": '), "text/event-stream"))
+
+    with pytest.raises(ValueError, match="Invalid JSON in SSE event"):
+        HTTPTransport("http://mcp.test").send_request("ping")
+
+
+def test_404_without_a_session_is_not_reported_as_an_expired_session(monkeypatch):
+    missing = urllib.error.HTTPError("http://mcp.test", 404, "Not Found", {}, None)
+    _fake_urlopen(monkeypatch, missing)
+    transport = HTTPTransport("http://mcp.test")
+
+    with pytest.raises(RuntimeError, match="HTTP request to http://mcp.test failed"):
+        transport.send_request("initialize")
+
+
+def test_reinitialize_drops_the_old_session_headers(monkeypatch):
+    init = '{"jsonrpc": "2.0", "id": 0, "result": {"protocolVersion": "2025-06-18"}}'
+    sent = _fake_urlopen(
+        monkeypatch,
+        _Reply(init, headers={"Mcp-Session-Id": "old"}),
+        _Reply('{"jsonrpc": "2.0", "id": 1, "result": {}}'),
+    )
+    transport = HTTPTransport("http://mcp.test")
+
+    transport.send_request("initialize")
+    transport.send_request("initialize")
+
+    second = dict(sent[1].header_items())
+    assert "Mcp-session-id" not in second
+    assert "Mcp-protocol-version" not in second
+    assert transport.protocol_version is None
