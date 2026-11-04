@@ -23,6 +23,7 @@ Read-only: nothing here changes app state.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -98,7 +99,8 @@ def cmd_find(a) -> None:
         try:
             with urllib.request.urlopen(req, timeout=0.5) as r:
                 body = json.loads(r.read().decode("utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, http.client.HTTPException):
+            # Not every loopback listener speaks HTTP; those are simply not GAIA.
             continue
         if isinstance(body, dict) and body.get("service") == "gaia-agent-ui":
             st = get(port, "/api/system/status")
