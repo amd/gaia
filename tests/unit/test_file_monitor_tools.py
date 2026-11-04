@@ -3,7 +3,9 @@
 """Registry coverage for the directory-watching FileToolsMixin."""
 
 import importlib
+from types import SimpleNamespace
 
+from gaia.agents.base.tools import tool_category
 from gaia.agents.registry import KNOWN_TOOLS
 
 
@@ -18,3 +20,13 @@ class TestRegistryEntry:
         module = importlib.import_module(module_path)
         mixin = getattr(module, class_name)
         assert hasattr(mixin, "register_file_tools")
+
+    def test_add_watch_directory_is_categorized_under_file_monitor(self):
+        """The UI groups the watch tool under the registry name, not agent."""
+        entry = {
+            "function": SimpleNamespace(
+                __module__="gaia.agents.tools.file_monitor_tools"
+            )
+        }
+
+        assert tool_category("add_watch_directory", entry) == "file_monitor"
