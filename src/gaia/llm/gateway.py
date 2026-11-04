@@ -630,31 +630,30 @@ def resolve_gateway_token() -> str:
 
 
 def lemonade_key_conflict(source: str, status: GatewayStatus) -> Optional[str]:
-    """Why a token from *source* can't be the key Lemonade uses, else None.
+    """Why a token from *source* may not be the key Lemonade uses, else None.
 
     Lemonade's own ``LEMONADE_AMD_API_KEY`` beats any token GAIA hands it, and
     no API reads it back, so the one copy GAIA can share with it is the same
-    variable in GAIA's environment. Any other source is a second copy.
+    variable in GAIA's environment. Any other source is a second copy, which
+    may match today and drift later.
     """
     if not status.env_var_set or source == GATEWAY_ENV_VAR:
         return None
     return (
-        f"Claude gateway models would not use the same token as your other "
-        f"gateway models. Lemonade reads {GATEWAY_ENV_VAR} from its own "
-        f"environment, which GAIA cannot see, so Claude would get "
-        f"{describe_token_source(source)} instead, and the two can differ. "
-        f"Set {GATEWAY_ENV_VAR} to the same key in GAIA's environment, or unset "
-        f"it in Lemonade's environment, restart Lemonade, and run `gaia gateway "
-        f"auth`. See https://amd-gaia.ai/docs/guides/llm-gateway."
+        f"Claude gateway models send {describe_token_source(source)}, while "
+        f"your other gateway models use the {GATEWAY_ENV_VAR} Lemonade reads "
+        f"from its own environment, which GAIA cannot see. These are two "
+        f"copies that can drift apart. To make them one, set {GATEWAY_ENV_VAR} "
+        f"to the same key in GAIA's environment. "
+        f"See https://amd-gaia.ai/docs/guides/llm-gateway."
     )
 
 
-def check_claude_token_source(source: str) -> None:
-    """Refuse a Claude-route token Lemonade can't be sharing.
+def warn_if_claude_token_may_drift(source: str) -> None:
+    """Warn when the Claude route's token is a second copy of Lemonade's key.
 
-    Raises:
-        GatewayError: Lemonade holds its own environment key and *source* is a
-            different copy (see ``lemonade_key_conflict``).
+    Only a warning: GAIA can't read Lemonade's key, so the copies may well
+    match. A 401 then names this cause (``explain_rejected_token``).
     """
     try:
         status = GatewayManager().status(timeout=STATUS_PROBE_TIMEOUT)
@@ -665,7 +664,7 @@ def check_claude_token_source(source: str) -> None:
         return
     conflict = lemonade_key_conflict(source, status)
     if conflict:
-        raise GatewayError(conflict)
+        log.warning(conflict)
 
 
 def explain_rejected_token(
@@ -684,7 +683,9 @@ def explain_rejected_token(
     if status is not None:
         conflict = lemonade_key_conflict(source, status)
         if conflict:
-            return conflict
+            return (
+                f"If other gateway models still work, those copies differ. {conflict}"
+            )
     used = f"Claude used {describe_token_source(source)}."
     if status is None or not status.installed:
         return f"{used} {generic}"

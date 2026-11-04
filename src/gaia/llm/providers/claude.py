@@ -1221,7 +1221,7 @@ class GatewayClaudeProvider(ClaudeProvider):
         from gaia.llm import gateway  # pylint: disable=import-outside-toplevel
 
         token, self._gateway_token_source = gateway.resolve_gateway_token_with_source()
-        gateway.check_claude_token_source(self._gateway_token_source)
+        gateway.warn_if_claude_token_may_drift(self._gateway_token_source)
         return sdk.Anthropic(
             # Explicit, so the SDK reads no ANTHROPIC_* credential from the
             # environment. _build_params omits the header it would carry.

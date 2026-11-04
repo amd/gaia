@@ -523,34 +523,72 @@ def test_claude_shares_lemonade_s_environment_key(fake_sdk, monkeypatch):
     assert _sent_token(fake_sdk) == GATEWAY_TOKEN
 
 
-@pytest.mark.parametrize("source", ["GAIA_GATEWAY_TOKEN", "store"])
-def test_a_second_copy_beside_lemonade_s_environment_key_is_refused(
-    fake_sdk, monkeypatch, gateway_env, source
-):
-    """The #6387 repro: Lemonade runs on its env key, GAIA holds another copy.
-
-    Lemonade refuses runtime tokens in that state, so GAIA can't sync it, and
-    it can't read the key back. Sending the other copy is what made Claude 401
-    while DeepSeek worked; refuse before any request instead.
-    """
+def _second_copy(monkeypatch, gateway_env, source, value):
+    """Lemonade on its own env key; GAIA holding *value* from another source."""
     monkeypatch.delenv(gateway_env.GATEWAY_ENV_VAR)
     if source == "store":
-        monkeypatch.setattr(gateway_env, "read_stored_token", lambda: "stale-copy")
+        monkeypatch.setattr(gateway_env, "read_stored_token", lambda: value)
     else:
-        monkeypatch.setenv("GAIA_GATEWAY_TOKEN", "stale-copy")
-    lemonade = _lemonade_reports(monkeypatch, env_var_set=True)
+        monkeypatch.setenv("GAIA_GATEWAY_TOKEN", value)
+    return _lemonade_reports(monkeypatch, env_var_set=True)
 
-    with pytest.raises(gateway_env.GatewayError) as raised:
-        _gateway_client()
 
-    message = str(raised.value)
+def _drift_warnings(caplog):
+    return [
+        r
+        for r in caplog.records
+        if r.levelname == "WARNING" and "two copies that can drift" in r.getMessage()
+    ]
+
+
+@pytest.mark.parametrize("source", ["GAIA_GATEWAY_TOKEN", "store"])
+def test_a_matching_second_copy_still_works_with_one_warning(
+    fake_sdk, monkeypatch, gateway_env, source, caplog
+):
+    """GAIA can't read Lemonade's env key, so a copy that matches must keep working."""
+    lemonade = _second_copy(monkeypatch, gateway_env, source, "same-key")
+    with caplog.at_level("WARNING", logger="gaia.llm.gateway"):
+        client = _gateway_client()
+    client._client.messages.create.return_value = _response("pong")
+
+    assert client.chat([{"role": "user", "content": "hi"}]) == "pong"
+    assert _sent_token(fake_sdk) == "same-key"
+    warnings = _drift_warnings(caplog)
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
     assert "LEMONADE_AMD_API_KEY to the same key in GAIA's environment" in message
+    assert "same-key" not in message
+    lemonade.status.assert_called_once_with(timeout=5)
+
+
+@pytest.mark.parametrize("source", ["GAIA_GATEWAY_TOKEN", "store"])
+def test_a_drifted_second_copy_fails_on_the_401_naming_the_cause(
+    fake_sdk, monkeypatch, gateway_env, source
+):
+    """The #6387 repro: Lemonade runs on its env key, GAIA holds a stale copy.
+
+    The request goes out with GAIA's token, no retry with another one, and the
+    401 says which copy failed and how to make them one.
+    """
+    _second_copy(monkeypatch, gateway_env, source, "stale-copy")
+    client = _gateway_client()
+    assert _sent_token(fake_sdk) == "stale-copy"
+
+    message = _rejected(fake_sdk, client)
+    assert "those copies differ" in message
     assert (
         "GAIA_GATEWAY_TOKEN" if source == "GAIA_GATEWAY_TOKEN" else "credential store"
     ) in message
+    assert "LEMONADE_AMD_API_KEY to the same key in GAIA's environment" in message
     assert "stale-copy" not in message
-    assert fake_sdk.Anthropic.last_init is None
-    lemonade.status.assert_called_once_with(timeout=5)
+    assert client._client.messages.create.call_count == 1
+
+
+def test_a_shared_env_key_logs_no_drift_warning(fake_sdk, monkeypatch, caplog):
+    _lemonade_reports(monkeypatch, env_var_set=True)
+    with caplog.at_level("WARNING", logger="gaia.llm.gateway"):
+        _gateway_client()
+    assert not _drift_warnings(caplog)
 
 
 @pytest.mark.parametrize("held", [{"runtime_key_set": True}, {}])
@@ -615,7 +653,7 @@ def test_401_after_lemonade_gained_an_env_key_names_the_conflict(
     client = _gateway_client()
     _lemonade_reports(monkeypatch, env_var_set=True)
     message = _rejected(fake_sdk, client)
-    assert "would not use the same token as your other gateway models" in message
+    assert "those copies differ" in message
 
 
 def test_unreachable_gateway_names_the_vpn(fake_sdk):
