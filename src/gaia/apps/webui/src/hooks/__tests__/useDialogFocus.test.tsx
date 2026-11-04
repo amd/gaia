@@ -153,6 +153,26 @@ describe('useDialogFocus', () => {
         expect(screen.getByRole('textbox', { name: 'When' })).toHaveFocus();
     });
 
+    it('returns focus to the trigger even when an autoFocus field took it on open', async () => {
+        const user = userEvent.setup();
+        render(
+            <Page
+                dialog={(close) => (
+                    <Dialog>
+                        <button onClick={close}>Close</button>
+                        <textarea aria-label="When" autoFocus />
+                    </Dialog>
+                )}
+            />,
+        );
+
+        await user.click(byName('Open'));
+        expect(screen.getByRole('textbox', { name: 'When' })).toHaveFocus();
+        await user.click(byName('Close'));
+
+        expect(byName('Open')).toHaveFocus();
+    });
+
     it('focuses the dialog itself when it has nothing tabbable', async () => {
         const user = userEvent.setup();
         render(<Page dialog={() => <Dialog><p>Loading…</p></Dialog>} />);
@@ -187,6 +207,6 @@ describe('useDialogFocus', () => {
         await user.click(byName('Close'));
 
         expect(screen.queryByRole('button', { name: 'Open' })).toBeNull();
-        expect(document.activeElement).not.toBe(byName('Elsewhere'));
+        expect(document.activeElement).toBe(document.body);
     });
 });

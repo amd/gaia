@@ -25,9 +25,20 @@ export function useDialogFocus(
         initialRef.current = initialFocus;
     });
 
+    // Read during render, before React commits: an `autoFocus` child takes
+    // focus at commit, so an effect would see that child instead of the
+    // control that opened the dialog.
+    const openedRef = useRef(false);
+    const previousRef = useRef<HTMLElement | null>(null);
+    if (isOpen && !openedRef.current) {
+        const active = document.activeElement;
+        previousRef.current = active instanceof HTMLElement ? active : null;
+    }
+
     useEffect(() => {
         if (!isOpen) return;
-        const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        openedRef.current = true;
+        const previous = previousRef.current;
         const container = containerRef.current;
         if (container && !container.contains(document.activeElement)) {
             const target = initialRef.current?.() ?? tabbableIn(container)[0];
@@ -39,6 +50,7 @@ export function useDialogFocus(
             }
         }
         return () => {
+            openedRef.current = false;
             if (previous?.isConnected) previous.focus();
         };
     }, [containerRef, isOpen]);
