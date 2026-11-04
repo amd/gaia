@@ -52,9 +52,12 @@ def record(sha=HEAD, verdict="Request changes", pr=7):
 class FakeGh:
     """Answers the calls check_review_verdict makes; records them."""
 
-    def __init__(self, runs=(), artifacts=None, labels=(), events=(), roles=None):
+    def __init__(
+        self, runs=(), artifacts=None, labels=(), events=(), roles=None, expired=()
+    ):
         self.runs = list(runs)  # (run_id, created_at)
         self.artifacts = artifacts or {}  # run_id -> verdict.json text
+        self.expired = set(expired)  # run_ids whose artifact aged out
         self.labels = list(labels)
         self.events = list(events)  # (login, type)
         self.roles = roles or {}
@@ -95,19 +98,25 @@ class FakeGh:
                 )
             if path.endswith("artifacts?name=review-verdict"):
                 run_id = int(path.split("/runs/")[1].split("/")[0])
-                return "review-verdict\n" if run_id in self.artifacts else ""
+                if run_id in self.expired:
+                    # A re-run can leave an aged-out copy beside a live one.
+                    return "true\nfalse\n" if run_id in self.artifacts else "true\n"
+                return "false\n" if run_id in self.artifacts else ""
             if "/issues/7/events" in path:
                 return "\n".join(
                     json.dumps({"login": login, "type": kind})
                     for login, kind in self.events
                 )
             if "/collaborators/" in path:
-                return self.roles.get(
-                    path.split("/collaborators/")[1].split("/")[0], ""
-                )
+                login = path.split("/collaborators/")[1].split("/")[0]
+                if login not in self.roles:
+                    raise self.not_found("gh: Not Found (HTTP 404)")
+                return self.roles[login]
             if "/statuses/" in path:
                 return ""
         raise AssertionError(f"unexpected gh call {args}")
+
+    not_found = RuntimeError
 
     def status(self):
         return next(c for c in self.calls if "statuses" in " ".join(c))
@@ -137,6 +146,7 @@ def test_parse_record(verdict, text, expected):
         ((HEAD, "Request changes"), False, "failure"),
         ((HEAD, ""), False, "failure"),
         ((OLD, "Request changes"), False, "pending"),
+        ("expired", False, "pending"),
         ((OLD, "clear"), False, "success"),
         ((HEAD, "Request changes"), True, "success"),
     ],
@@ -185,6 +195,35 @@ def test_a_finished_silent_rereview_clears_it(verdict, monkeypatch):
     assert "state=success" in gh.status()
 
 
+def test_an_expired_record_holds_the_status_pending(verdict, monkeypatch):
+    # Run 1's Request changes aged out; it must not read as "No review to answer".
+    gh = FakeGh(runs=[(1, "2026-01-01T00:00:00Z")], expired=[1])
+    monkeypatch.setattr(verdict, "_gh", gh)
+    verdict.evaluate("amd/gaia", 7)
+    assert "state=pending" in gh.status()
+    assert not any(c[:2] == ("run", "download") for c in gh.calls)
+
+
+def test_an_older_record_does_not_stand_in_for_an_expired_one(verdict, monkeypatch):
+    gh = FakeGh(
+        runs=[(1, "2026-01-01T00:00:00Z"), (2, "2026-01-02T00:00:00Z")],
+        artifacts={1: record(verdict="Approve")},
+        expired=[2],
+    )
+    monkeypatch.setattr(verdict, "_gh", gh)
+    verdict.evaluate("amd/gaia", 7)
+    assert "state=pending" in gh.status()
+
+
+def test_a_live_artifact_beside_an_expired_one_is_still_read(verdict, monkeypatch):
+    gh = FakeGh(
+        runs=[(1, "2026-01-01T00:00:00Z")], artifacts={1: record()}, expired=[1]
+    )
+    monkeypatch.setattr(verdict, "_gh", gh)
+    verdict.evaluate("amd/gaia", 7)
+    assert "state=failure" in gh.status()
+
+
 def test_another_prs_record_on_the_branch_is_ignored(verdict, monkeypatch):
     gh = FakeGh(runs=[(1, "2026-01-01T00:00:00Z")], artifacts={1: record(pr=99)})
     monkeypatch.setattr(verdict, "_gh", gh)
@@ -219,6 +258,46 @@ def test_only_a_maintainer_can_override(
     assert ("state=success" in gh.status()) is overridden
 
 
+def test_a_removed_collaborator_cannot_override(verdict, monkeypatch):
+    gh = FakeGh(
+        runs=[(1, "2026-01-01T00:00:00Z")],
+        artifacts={1: record()},
+        labels=["review-override"],
+        events=[("gone", "User")],
+    )
+    gh.not_found = verdict.NotFound
+    monkeypatch.setattr(verdict, "_gh", gh)
+    verdict.evaluate("amd/gaia", 7)
+    assert "state=failure" in gh.status()
+
+
+def test_only_a_404_on_the_permission_lookup_means_not_a_maintainer(
+    verdict, monkeypatch
+):
+    gh = FakeGh(
+        runs=[(1, "2026-01-01T00:00:00Z")],
+        artifacts={1: record()},
+        labels=["review-override"],
+        events=[("gone", "User")],
+    )
+    monkeypatch.setattr(verdict, "_gh", gh)
+    with pytest.raises(RuntimeError, match="HTTP 404"):
+        verdict.evaluate("amd/gaia", 7)
+
+
+def test_gh_raises_not_found_only_for_a_404(verdict, monkeypatch):
+    def fake_run(stderr):
+        return lambda *a, **k: subprocess.CompletedProcess(a, 1, "", stderr)
+
+    monkeypatch.setattr(verdict.subprocess, "run", fake_run("gh: Not Found (HTTP 404)"))
+    with pytest.raises(verdict.NotFound):
+        verdict._gh("api", "repos/amd/gaia")
+    monkeypatch.setattr(verdict.subprocess, "run", fake_run("gh: Server (HTTP 500)"))
+    with pytest.raises(RuntimeError) as err:
+        verdict._gh("api", "repos/amd/gaia")
+    assert not isinstance(err.value, verdict.NotFound)
+
+
 def test_an_unlabelled_pr_reads_no_label_history(verdict, monkeypatch):
     gh = FakeGh(events=[("maint", "User")], roles={"maint": "admin"})
     monkeypatch.setattr(verdict, "_gh", gh)
@@ -232,6 +311,7 @@ def test_every_description_fits_a_commit_status(verdict):
         (HEAD, "Request changes"),
         (HEAD, ""),
         (OLD, "Request changes"),
+        verdict.EXPIRED,
     ):
         assert len(verdict.decide(review, HEAD, False)[1]) <= 140
 
