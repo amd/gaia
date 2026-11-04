@@ -85,6 +85,8 @@ def test_unknown_user_model_message_gives_user_facing_advice():
         pull_request_body("user.not-a-real-model")
     message = str(exc.value)
     assert "Settings > Model > Add a model from Hugging Face" in message
+    assert "/provider, choose Local, then ctrl+a" in message
+    assert "`gaia model add <link>`" in message
     assert "gaia init" not in message
     assert "MODELS" not in message
     assert "lemonade_client" not in message

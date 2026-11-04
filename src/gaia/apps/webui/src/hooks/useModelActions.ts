@@ -68,6 +68,9 @@ export function useModelActions(defaultModelName?: string, contextSize?: number)
 
     const modelName = defaultModelName ?? DEFAULT_MODEL_NAME;
 
+    // A refusal was about the old model; don't show it against the new one.
+    useEffect(() => setDownloadError(null), [modelName]);
+
     const loadModel = useCallback(async (name?: string, ctxSize?: number) => {
         const target = name ?? modelName;
         const ctx = ctxSize ?? MIN_CONTEXT_SIZE;

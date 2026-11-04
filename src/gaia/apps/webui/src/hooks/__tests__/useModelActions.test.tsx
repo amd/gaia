@@ -49,6 +49,21 @@ describe('useModelActions.downloadModel', () => {
         unmount();
     });
 
+    it('drops the error when the default model changes', async () => {
+        rejectWith400(UNKNOWN);
+        const { result, rerender } = renderHook(({ name }) => useModelActions(name), {
+            initialProps: { name: 'user.not-real' },
+        });
+        await act(() => result.current.downloadModel(false));
+        expect(result.current.downloadError).toBe(UNKNOWN);
+
+        rerender({ name: 'user.not-real' });
+        expect(result.current.downloadError).toBe(UNKNOWN);
+
+        rerender({ name: 'Gemma-4-E4B-it-GGUF' });
+        expect(result.current.downloadError).toBeNull();
+    });
+
     it('reports a failure that is not an ApiError too', async () => {
         mockedApi.downloadModel.mockRejectedValueOnce('socket closed');
         const { result } = renderHook(() => useModelActions());
