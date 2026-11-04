@@ -4674,6 +4674,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 elif event_type == "commentary":
                     # Those chunks narrated a tool call; the answer starts after it.
                     full_response = ""
+                elif event_type == "thinking" and event.get("retracts_answer"):
+                    # Those chunks were reasoning a lone </think> closed.
+                    full_response = ""
                 elif event_type == "agent_error" and event.get("fatal"):
                     # A relayed sidecar's terminal error: the turn ends here.
                     fatal_error = event.get("content") or ""

@@ -393,7 +393,12 @@ class CanonicalTranslator:
         if self._reasoning:
             # Pieces carry their own spacing, so they go out as they came.
             delta = str(event.get("content", ""))
-            return [{"type": "reasoning", "delta": delta}] if delta else []
+            if not delta:
+                return []
+            out: Dict[str, Any] = {"type": "reasoning", "delta": delta}
+            if event.get("retracts_answer"):
+                out["retracts_answer"] = True
+            return [out]
         # Reasoning narration folds to status, NOT token (token is answer text the
         # UI commits to the message). See spec §6.2 / Q1.
         content = str(event.get("content", "")).strip()

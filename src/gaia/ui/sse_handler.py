@@ -39,6 +39,7 @@ from gaia.llm.providers.lemonade import (
     TOOL_CALL_PROGRESS_INTERVAL_S,
     TOOL_CALL_PROGRESS_MIN_CHARS,
 )
+from gaia.llm.reasoning import THINK_CLOSE, THINK_OPEN, has_lone_close
 from gaia.ui import scripted_user
 from gaia.ui.event_narration import (
     DEBUG_CHANNEL,
@@ -565,6 +566,8 @@ class SSEOutputHandler(OutputHandler):
         self._in_thinking = False  # True while inside a <think>...</think> block
         # Part of the open <think> block already went out.
         self._thinking_streamed = False
+        # This reply has shown a think tag, so a later </think> is not lone.
+        self._reply_saw_think = False
         self._json_filtered = False  # True after a JSON block was suppressed; used to eat trailing } artifacts
         # Where the brace scan of a still-open envelope stopped, and the head of
         # the buffer it scanned: a long tool call is scanned once, not per token.
@@ -673,6 +676,10 @@ class SSEOutputHandler(OutputHandler):
             self._text_since_tool = ""
         elif etype == "answer":
             self._text_since_tool = ""
+        elif etype == "thinking" and event.get("retracts_answer"):
+            # The text shown since the last tool was reasoning, not commentary.
+            self._text_since_tool = ""
+            self._shown_fence, self._shown_line_start = None, True
         self.event_queue.put(event)
 
     def _fence_at(self, unshown: str) -> "tuple[Optional[str], bool]":
@@ -685,6 +692,7 @@ class SSEOutputHandler(OutputHandler):
         self._shown_line_start = True
         self._raw_line_start = True
         self._call_progress_next = 0.0
+        self._reply_saw_think = False
 
     def _elapsed(self) -> float:
         if self._start_time is None:
@@ -1592,7 +1600,13 @@ class SSEOutputHandler(OutputHandler):
             ):
                 self._envelope_scan = None  # a cancelled stream left it behind
             while self._in_thinking or (
-                self._envelope_scan is None and "<think>" in self._stream_buffer
+                self._envelope_scan is None
+                and (
+                    THINK_OPEN in self._stream_buffer
+                    or (
+                        not self._reply_saw_think and THINK_CLOSE in self._stream_buffer
+                    )
+                )
             ):
                 if self._in_thinking:
                     # We're inside a thinking block — look for closing tag
@@ -1623,10 +1637,17 @@ class SSEOutputHandler(OutputHandler):
                             self._thinking_streamed = True
                         self._stream_buffer = ""
                         return
+                elif not self._reply_saw_think and has_lone_close(self._stream_buffer):
+                    head, _, self._stream_buffer = self._stream_buffer.partition(
+                        THINK_CLOSE
+                    )
+                    self._retract_as_reasoning(head)
+                    continue
                 else:
                     # Not in thinking — look for opening tag
                     open_idx = self._stream_buffer.find("<think>")
                     if open_idx >= 0:
+                        self._reply_saw_think = True
                         # Emit any text before <think> as regular content,
                         # stripping thought/tool-call JSON artifacts that the
                         # model sometimes outputs before its think block.
@@ -1817,6 +1838,23 @@ class SSEOutputHandler(OutputHandler):
             self._stream_buffer = ""
         if end_of_stream:
             self._answer_stream = None
+
+    def _retract_as_reasoning(self, head: str) -> None:
+        """A lone ``</think>`` ended reasoning that streamed as answer text.
+
+        Everything shown since the last tool call, plus *head*, goes to the
+        thinking step; ``retracts_answer`` tells the consumer to drop it from
+        the answer it has drawn so far.
+        """
+        self._reply_saw_think = True
+        shown = self._text_since_tool
+        reasoning = (shown + head).strip()
+        if not reasoning:
+            return
+        event: Dict[str, Any] = {"type": "thinking", "content": reasoning}
+        if shown:
+            event["retracts_answer"] = True
+        self._emit(event)
 
     def _emit_answer_text(self, text: str) -> None:
         if text:

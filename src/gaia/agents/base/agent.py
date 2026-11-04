@@ -179,6 +179,8 @@ from gaia.llm.providers.lemonade import (
     MODEL_SERVER_DOWN,
     LemonadeStreamCutOffError,
 )
+from gaia.llm.reasoning import split_reasoning as _split_reasoning
+from gaia.llm.reasoning import strip_reasoning
 from gaia.llm.retry import (
     RetryNotice,
     RetryState,
@@ -1240,32 +1242,6 @@ _SINGLE_TOOL_DONE_SUFFIX = (
 # A rewritten answer can make a new false claim, so it gets a second
 # correction; the same claim repeated is a disagreement, kept with a caveat.
 _MAX_TEST_CLAIM_CORRECTIONS = 2
-_THINK_BLOCK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
-# Anchored: only a reply that *opens* with an unclosed block was cut off
-# mid-thought. A `<think>` mentioned mid-sentence is prose, and treating it as
-# reasoning silently deletes everything the model said after it.
-_CUT_OFF_THINK_PATTERN = re.compile(r"\A<think>(?!.*</think>)(.*)\Z", re.DOTALL)
-
-
-def _split_reasoning(text: str) -> Tuple[str, Optional[str]]:
-    """Split inline ``<think>`` reasoning out of a reply.
-
-    Returns ``(answer_text, reasoning)``. A reply that *opens* with an unclosed
-    ``<think>`` was cut off mid-thought and is reasoning to the end, and text
-    before a lone ``</think>`` (the template opened the block in the prompt) is
-    reasoning.
-    """
-    parts: List[str] = []
-    if "</think>" in text and "<think>" not in text.split("</think>", 1)[0]:
-        head, _, text = text.partition("</think>")
-        parts.append(head.strip())
-    cut_off = _CUT_OFF_THINK_PATTERN.match(text.lstrip())
-    if cut_off:
-        parts.append(cut_off.group(1).strip())
-        text = ""
-    parts.extend(m.strip() for m in _THINK_BLOCK_PATTERN.findall(text))
-    answer = _THINK_BLOCK_PATTERN.sub("", text).strip()
-    return answer, "\n\n".join(p for p in parts if p) or None
 
 
 def _response_reasoning(response: Any) -> Optional[str]:
@@ -7570,9 +7546,7 @@ Do NOT wrap conversational replies in JSON.
                 }
             )
 
-        response = re.sub(
-            r"<think>.*?</think>", "", response or "", flags=re.DOTALL
-        ).strip()
+        response = strip_reasoning(response or "")
         if not response:
             raise _NotAnAnswer("the model returned an empty reply")
         try:

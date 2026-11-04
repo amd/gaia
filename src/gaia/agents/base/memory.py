@@ -94,6 +94,7 @@ from gaia.llm.lemonade_client import (
     configured_lemonade_url,
     find_model_requirement,
 )
+from gaia.llm.reasoning import strip_reasoning
 from gaia.llm.retry import (
     current_cancel_check,
     current_retry_listener,
@@ -2260,9 +2261,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             response = outcome["response"]
             raw_text = response.text if hasattr(response, "text") else str(response)
-            # The streamed reply wraps reasoning in <think>, unclosed when the
-            # budget ran out mid-thought; what is left is the answer.
-            raw_text = re.sub(r"<think>.*?(</think>|$)", "", raw_text, flags=re.DOTALL)
+            raw_text = strip_reasoning(raw_text)
             if (
                 getattr(response, "finish_reason", None) == "length"
                 and not raw_text.strip()
@@ -2846,10 +2845,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     raw_text = (
                         response.text if hasattr(response, "text") else str(response)
                     )
-                    raw_text = re.sub(
-                        r"<think>.*?</think>", "", raw_text, flags=re.DOTALL
-                    )
-                    raw_text = raw_text.strip()
+                    raw_text = strip_reasoning(raw_text)
                     if raw_text.startswith("```"):
                         raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
                         raw_text = re.sub(r"\s*```$", "", raw_text)
@@ -3134,8 +3130,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
 
                 raw_text = response.text if hasattr(response, "text") else str(response)
-                raw_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
-                raw_text = raw_text.strip()
+                raw_text = strip_reasoning(raw_text)
                 if raw_text.startswith("```"):
                     raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
                     raw_text = re.sub(r"\s*```$", "", raw_text)
