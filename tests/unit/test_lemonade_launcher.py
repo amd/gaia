@@ -98,30 +98,8 @@ def test_modern_canonical_path_wins_over_legacy_on_path(mocker):
     assert tooling.kind == "modern"
 
 
-def test_legacy_lemonade_server_dev_treated_as_legacy_hit(mocker):
-    """shutil.which("lemonade-server-dev") is an equivalent legacy hit
-    (the pip/CI variant of the legacy CLI)."""
-    mocker.patch.dict(os.environ, {}, clear=True)
-    mocker.patch("platform.system", return_value="Linux")
-    # No modern canonical binary present.
-    mocker.patch("pathlib.Path.exists", return_value=False)
-
-    def which_side_effect(name):
-        if name == "lemonade-server-dev":
-            return "/usr/local/bin/lemonade-server-dev"
-        return None
-
-    mocker.patch("shutil.which", side_effect=which_side_effect)
-
-    tooling = resolve_lemonade()
-
-    assert tooling.found is True
-    assert tooling.kind == "legacy"
-
-
-def test_legacy_only_no_modern_present(mocker):
-    """Only legacy lemonade-server on PATH, no modern canonical binary ->
-    kind == 'legacy'."""
+def test_a_pre_10_7_cli_alone_is_not_a_supported_install(mocker):
+    """A leftover lemonade-server CLI is not a Lemonade GAIA can run."""
     mocker.patch.dict(os.environ, {}, clear=True)
     mocker.patch("platform.system", return_value="Linux")
     mocker.patch("pathlib.Path.exists", return_value=False)
@@ -129,8 +107,7 @@ def test_legacy_only_no_modern_present(mocker):
 
     tooling = resolve_lemonade()
 
-    assert tooling.found is True
-    assert tooling.kind == "legacy"
+    assert tooling.found is False
 
 
 def test_nothing_found_returns_not_found(mocker):
@@ -169,27 +146,6 @@ def test_get_installed_version_parses_modern_client_output(mocker):
     assert version == "10.7.0"
 
 
-def test_get_installed_version_parses_legacy_client_output(mocker):
-    """Legacy `lemonade-server --version` output still parses correctly
-    (regression guard — AC2)."""
-    mocker.patch.dict(os.environ, {}, clear=True)
-    mocker.patch("platform.system", return_value="Linux")
-    mocker.patch("pathlib.Path.exists", return_value=False)
-    mocker.patch("shutil.which", return_value="/usr/bin/lemonade-server")
-
-    tooling = resolve_lemonade()
-    assert tooling.kind == "legacy"
-
-    mock_run = mocker.patch("subprocess.run")
-    mock_run.return_value.returncode = 0
-    mock_run.return_value.stdout = "lemonade-server 9.1.4"
-    mock_run.return_value.stderr = ""
-
-    version = get_installed_version(tooling)
-
-    assert version == "9.1.4"
-
-
 # ---------------------------------------------------------------------------
 # build_start_command() (AC4)
 # ---------------------------------------------------------------------------
@@ -210,54 +166,12 @@ def test_build_start_command_modern_windows(mocker):
         ),
     )
 
-    spec = build_start_command(tooling, ctx_size=32768)
+    spec = build_start_command(tooling)
 
     assert spec.argv == [
         r"C:\Users\test\AppData\Local\lemonade_server\bin\LemonadeServer.exe",
         "--silent",
     ]
-    assert spec.env == {}
-
-
-def test_build_start_command_legacy(mocker):
-    """Legacy (non-Windows): argv=['lemonade-server', 'serve', '--ctx-size',
-    '32768'] — unchanged from today's behavior."""
-    from gaia.llm.lemonade_launcher import LemonadeTooling
-
-    mocker.patch("platform.system", return_value="Linux")
-    tooling = LemonadeTooling(
-        found=True,
-        kind="legacy",
-        client_path="lemonade-server",
-        server_launcher="lemonade-server",
-    )
-
-    spec = build_start_command(tooling, ctx_size=32768)
-
-    assert spec.argv == ["lemonade-server", "serve", "--ctx-size", "32768"]
-    assert spec.env == {}
-
-
-def test_build_start_command_legacy_windows_includes_no_tray(mocker):
-    """Legacy on Windows: argv gains '--no-tray' alongside '--ctx-size'
-    (preserves today's Windows auto-start argv byte-for-byte)."""
-    from gaia.llm.lemonade_launcher import LemonadeTooling
-
-    mocker.patch("platform.system", return_value="Windows")
-    tooling = LemonadeTooling(
-        found=True,
-        kind="legacy",
-        client_path=r"C:\lemonade-server.exe",
-        server_launcher=r"C:\lemonade-server.exe",
-    )
-
-    spec = build_start_command(tooling, ctx_size=32768)
-
-    assert spec.argv[0] == r"C:\lemonade-server.exe"
-    assert spec.argv[1] == "serve"
-    assert "--no-tray" in spec.argv
-    idx = spec.argv.index("--ctx-size")
-    assert spec.argv[idx + 1] == "32768"
     assert spec.env == {}
 
 
@@ -277,7 +191,7 @@ def test_build_start_command_modern_linux_uses_systemctl(mocker):
         server_launcher="/usr/bin/lemond",
     )
 
-    spec = build_start_command(tooling, ctx_size=32768)
+    spec = build_start_command(tooling)
 
     assert spec.argv == ["systemctl", "--user", "start", "lemond"]
     assert spec.env == {}
@@ -294,7 +208,7 @@ def test_env_override_modern_non_exe_launched_verbatim(mocker):
     assert tooling.source == "env"
     assert tooling.kind == "modern"
 
-    spec = build_start_command(tooling, ctx_size=32768)
+    spec = build_start_command(tooling)
 
     assert spec.argv == ["/opt/lemonade/lemond"]
     assert spec.env == {}
@@ -318,7 +232,7 @@ def test_no_process_gaia_spawns_disables_vulkan_coopmat_globally(
     from gaia.llm.lemonade_launcher import LemonadeTooling
 
     mocker.patch("platform.system", return_value=system)
-    spec = build_start_command(LemonadeTooling(found=True, **tooling_kwargs), None)
+    spec = build_start_command(LemonadeTooling(found=True, **tooling_kwargs))
 
     assert "GGML_VK_DISABLE_COOPMAT" not in spec.env
 
@@ -334,7 +248,7 @@ def test_probe_resolved_modern_linux_still_uses_systemctl(mocker):
     assert tooling.source == "probe"
     assert tooling.kind == "modern"
 
-    spec = build_start_command(tooling, ctx_size=32768)
+    spec = build_start_command(tooling)
 
     assert spec.argv == ["systemctl", "--user", "start", "lemond"]
 
@@ -514,7 +428,7 @@ def test_build_start_command_modern_macos_starts_the_daemon_not_systemctl(mocker
         server_launcher=MACOS_DAEMON,
     )
 
-    spec = build_start_command(tooling, ctx_size=32768)
+    spec = build_start_command(tooling)
 
     assert spec.argv == [MACOS_DAEMON]
     assert "systemctl" not in spec.argv
@@ -532,7 +446,7 @@ def test_build_start_command_modern_macos_without_launcher_fails_loudly(mocker):
     )
 
     with pytest.raises(ValueError, match="lemond"):
-        build_start_command(tooling, ctx_size=None)
+        build_start_command(tooling)
 
 
 def test_macos_end_to_end_resolve_then_start_command(mocker):
@@ -543,7 +457,7 @@ def test_macos_end_to_end_resolve_then_start_command(mocker):
     mocker.patch("shutil.which", return_value=None)
     only_these_paths_exist(mocker, MACOS_DAEMON, MACOS_CLIENT)
 
-    spec = build_start_command(resolve_lemonade(), ctx_size=65536)
+    spec = build_start_command(resolve_lemonade())
 
     assert spec.argv == [MACOS_DAEMON]
     assert spec.env == {}
@@ -581,27 +495,6 @@ def test_start_hint_modern_linux_names_systemctl_not_lemonade_server(mocker):
     assert hint.foreground is False
 
 
-def test_start_hint_legacy_still_names_lemonade_server_serve(mocker):
-    """A real legacy install DOES have the CLI — keep telling it the truth."""
-    from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
-
-    mocker.patch("platform.system", return_value="Linux")
-    mocker.patch(
-        "gaia.llm.lemonade_launcher.resolve_lemonade",
-        return_value=LemonadeTooling(
-            found=True,
-            kind="legacy",
-            client_path="/usr/local/bin/lemonade-server",
-            server_launcher="/usr/local/bin/lemonade-server",
-        ),
-    )
-
-    hint = describe_start_hint(ctx_size=8192)
-
-    assert hint.command == ("/usr/local/bin/lemonade-server serve --ctx-size 8192")
-    assert hint.foreground is True
-
-
 def test_start_hint_modern_windows_points_at_the_tray_not_a_shell_command(mocker):
     """Modern Windows has no start command a user would run — the server is
     launched from the tray icon, so emit prose and NO command."""
@@ -625,9 +518,9 @@ def test_start_hint_modern_windows_points_at_the_tray_not_a_shell_command(mocker
     assert "tray" in hint.instruction.lower()
 
 
-def test_start_hint_legacy_windows_path_is_joined_for_cmd_not_posix(mocker):
+def test_start_hint_windows_override_path_is_joined_for_cmd_not_posix(mocker):
     """A Windows path must not come back wrapped in POSIX single quotes —
-    `'C:\\x\\lemonade-server.exe' serve` is not runnable in cmd.exe."""
+    `'C:\\x\\lemond'` is not runnable in cmd.exe."""
     from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
 
     mocker.patch("platform.system", return_value="Windows")
@@ -635,9 +528,10 @@ def test_start_hint_legacy_windows_path_is_joined_for_cmd_not_posix(mocker):
         "gaia.llm.lemonade_launcher.resolve_lemonade",
         return_value=LemonadeTooling(
             found=True,
-            kind="legacy",
-            client_path=r"C:\Program Files\lemonade\lemonade-server.exe",
-            server_launcher=r"C:\Program Files\lemonade\lemonade-server.exe",
+            kind="modern",
+            client_path=r"C:\Program Files\lemonade\lemond",
+            server_launcher=r"C:\Program Files\lemonade\lemond",
+            source="env",
         ),
     )
 
@@ -646,9 +540,9 @@ def test_start_hint_legacy_windows_path_is_joined_for_cmd_not_posix(mocker):
     # A quoted path needs `&` in PowerShell, so no one line serves both shells.
     assert hint.command is None
     assert hint.instruction == (
-        'Run in Command Prompt: "C:\\Program Files\\lemonade\\lemonade-server.exe" '
-        "serve --no-tray — or in PowerShell: "
-        "& 'C:\\Program Files\\lemonade\\lemonade-server.exe' serve --no-tray"
+        'Run in Command Prompt: "C:\\Program Files\\lemonade\\lemond" '
+        "— or in PowerShell: "
+        "& 'C:\\Program Files\\lemonade\\lemond'"
     )
 
 
@@ -701,15 +595,16 @@ def test_start_hint_windows_keeps_one_command_when_both_shells_agree(mocker):
         "gaia.llm.lemonade_launcher.resolve_lemonade",
         return_value=LemonadeTooling(
             found=True,
-            kind="legacy",
-            client_path=r"C:\lemonade\lemonade-server.exe",
-            server_launcher=r"C:\lemonade\lemonade-server.exe",
+            kind="modern",
+            client_path=r"C:\lemonade\lemond",
+            server_launcher=r"C:\lemonade\lemond",
+            source="env",
         ),
     )
 
     hint = describe_start_hint(ctx_size=None)
 
-    assert hint.command == r"C:\lemonade\lemonade-server.exe serve --no-tray"
+    assert hint.command == r"C:\lemonade\lemond"
     assert hint.instruction == f"Run: {hint.command}"
 
 

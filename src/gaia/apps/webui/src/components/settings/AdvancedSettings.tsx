@@ -11,7 +11,7 @@ import { formatGb } from '../../utils/modelLabels';
 import { useT } from '../../i18n/useT';
 import type { SystemStatus, MCPServerStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
-import { namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
+import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
 import { ModelServerPanel } from './ModelServerPanel';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import '../SettingsModal.css';
@@ -135,7 +135,7 @@ export function AdvancedSettings() {
 
     // null: an unreadable config hides the model; the banner shows config_error.
     const modelName = status ? status.default_model_name : DEFAULT_MODEL_NAME;
-    const { isLoadingModel, isDownloadingModel, loadModel, downloadModel } = useModelActions(modelName ?? undefined);
+    const { isLoadingModel, isDownloadingModel, downloadError, loadModel, downloadModel } = useModelActions(modelName ?? undefined);
 
     const version = __APP_VERSION__;
 
@@ -210,6 +210,7 @@ export function AdvancedSettings() {
                                 </button>
                             </div>
                         )}
+                        {notDownloaded && downloadError && <ErrorNotice message={downloadError} />}
 
                         {needsLoad && (
                             <div className="model-action-row model-action-row--load">
@@ -279,6 +280,7 @@ export function AdvancedSettings() {
                                     </button>
                                 </div>
                             )}
+                            {!notDownloaded && downloadError && <ErrorNotice message={downloadError} />}
                         </details>
                     </>
                 ) : (

@@ -422,25 +422,6 @@ class TestGaiaDispatch:
         assert calls == []
         assert handler.events[0]["type"] == "agent_error"
 
-    def test_a_stale_start_command_is_replaced_with_this_hosts_answer(
-        self, monkeypatch
-    ):
-        """An older agent package still says `lemonade-server serve`, a CLI
-        Lemonade 10.7 removed. Relaying it verbatim hands the user a command
-        that does not exist."""
-        body = self._init_body(
-            reachable=False,
-            hint="not reachable — start it with `lemonade-server serve`",
-        )
-        _, calls = self._patch(monkeypatch, _FakeHandle(init_result=(503, body)))
-        handler = _FakeSSEHandler()
-        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
-
-        _dispatch_sidecar_query(handler, request, [], "m", "gaia")
-
-        assert len(calls) == 1
-        assert "lemonade-server serve" not in handler.events[0]["message"]
-
     def test_email_not_ready_still_blocks(self, monkeypatch):
         """Email's /init IS a gate — provisioning is a step the user finishes
         on the agent card, and a triage against an unprovisioned mailbox

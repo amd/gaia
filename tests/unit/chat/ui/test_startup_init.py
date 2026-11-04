@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gaia.ui.server import create_app
+from gaia.version import LEMONADE_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +176,7 @@ def test_boot_check_never_loads_a_model(app, selected):
     client.base_url = "http://localhost:13305/api/v1"
     client.get_model_max_context_window.return_value = None
     client.get_status.return_value = LemonadeStatus(
-        running=True, context_size=0, loaded_models=[]
+        version=LEMONADE_VERSION, running=True, context_size=0, loaded_models=[]
     )
 
     LemonadeManager.reset()

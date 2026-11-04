@@ -221,6 +221,18 @@ def _rag_not_available() -> str:
     return f"RAG not available. {missing_extra_hint('rag')}"
 
 
+def _rag_unavailable_message(host: Any) -> str:
+    """Why a document tool cannot run.
+
+    "Install the RAG extra" is only true when the extra failed to import.
+    A config or embedder error keeps its own cause.
+    """
+    error = getattr(host, "_rag_init_error", None)
+    if error is None or isinstance(error, ImportError):
+        return _rag_not_available()
+    return f"RAG failed to start: {type(error).__name__}: {error}"
+
+
 def _embedding_next_step(unreachable: bool, retry: str, busy: bool = False) -> str:
     if busy:
         return (
@@ -640,7 +652,12 @@ class RAGToolsMixin:
             """
             rag = _require_rag(self)
             try:
-                # Check if RAG is initialized and has documents
+                # None with no startup error means RAG is off. A recorded failure is an error.
+                if not rag and getattr(self, "_rag_init_error", None) is not None:
+                    return {
+                        "status": "error",
+                        "error": _rag_unavailable_message(self),
+                    }
                 if not rag or not rag.index or len(rag.chunks) == 0:
                     message = self._no_documents_message()
                     return {
@@ -1025,7 +1042,7 @@ class RAGToolsMixin:
                 if not rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 # Debug information collection
@@ -1483,7 +1500,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 # Debug information collection
@@ -1653,7 +1670,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 # Before the existence probe, as in read_file.
@@ -1784,12 +1801,8 @@ class RAGToolsMixin:
             try:
                 if not self.rag:
                     return {
-                        "status": "success",
-                        "documents": [],
-                        "count": 0,
-                        "total_chunks": 0,
-                        "total_size_mb": 0,
-                        "message": self._no_documents_message(),
+                        "status": "error",
+                        "error": _rag_unavailable_message(self),
                     }
                 docs = list(self.rag.indexed_files)
 
@@ -1866,7 +1879,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
                 status = self.rag.get_status()
 
@@ -1920,7 +1933,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 matching_files = _match_indexed_files(self.rag.indexed_files, file_path)
@@ -2232,7 +2245,7 @@ references from the section summaries.
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 matching_files = _match_indexed_files(self.rag.indexed_files, file_name)
@@ -2348,7 +2361,7 @@ references from the section summaries.
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 dir_path = _resolve_target(

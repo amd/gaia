@@ -192,7 +192,7 @@ _real_pip_run_pip = hub_installer._default_run_pip
 _FAKE_HEALTH_BODY = json.dumps(
     {
         "status": "ok",
-        "version": "10.9.0",
+        "version": "2026.44.1",
         "all_models_loaded": [
             {
                 "model_name": "Gemma-4-E4B-it-GGUF",

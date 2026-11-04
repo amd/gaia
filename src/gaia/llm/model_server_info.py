@@ -86,8 +86,7 @@ def embedder_avoids_rocm(
 def available_llamacpp_backends(system_info: Any) -> List[Dict[str, str]]:
     """The llama.cpp backends a user may choose on this machine.
 
-    Only ones GAIA has tested, and only in a state Lemonade can run: an
-    older Lemonade that reports no ``backends`` offers nothing to choose.
+    Only ones GAIA has tested, and only in a state Lemonade can run.
     """
     backends = _as_dict(llamacpp_recipe(system_info).get("backends"))
     usable = []
