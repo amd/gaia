@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
-import type { EngineInstallError, EngineInstallReason, EngineInstallStatus } from '../types/agent';
+import type { EngineInstallError, EngineInstallReason, EngineInstallStatus, EngineLockHolder } from '../types/agent';
 import './EngineInstallScreen.css';
 
 const AGENT_REFRESH_STAGE = 'agent-refresh';
@@ -40,6 +40,18 @@ function failureHint(error: EngineInstallError, t: Translate): string {
     return t(error.stage === AGENT_REFRESH_STAGE ? 'engine.hint.agent' : 'engine.hint.other');
 }
 
+/** The programs holding GAIA's files, when a 'locked' failure could name them. */
+function lockHolders(error: EngineInstallError): EngineLockHolder[] | null {
+    return error.reason === 'locked' && error.lockedBy?.length ? error.lockedBy : null;
+}
+
+function holderLine(holder: EngineLockHolder, t: Translate): string {
+    const name = holder.name ?? String(holder.pid);
+    const folder = holder.folder;
+    if (holder.isGaia) return folder ? t('engine.locked.gaia', { name, folder }) : t('engine.locked.gaiaNoFolder', { name });
+    return folder ? t('engine.locked.other', { name, folder }) : t('engine.locked.otherNoFolder', { name });
+}
+
 function Progress({ status }: { status: EngineInstallStatus }) {
     const t = useT();
     const label = stageLabel(status.stage, t);
@@ -55,23 +67,46 @@ function Progress({ status }: { status: EngineInstallStatus }) {
     );
 }
 
-function Failure({ error, busy, notice, onRetry, onContinue, onRevert, onOpenLog }: {
+function Failure({ error, busy, notice, onRetry, onCloseLockers, onContinue, onRevert, onOpenLog }: {
     error: EngineInstallError;
     busy: boolean;
     notice: string | null;
     onRetry: () => void;
+    onCloseLockers: () => void;
     onContinue: () => void;
     onRevert: () => void;
     onOpenLog: () => void;
 }) {
     const t = useT();
+    const holders = lockHolders(error);
+    // Only GAIA's own processes are offered for closing; any other program is just named.
+    const canClose = holders !== null && holders.every((h) => h.isGaia);
+    const many = (holders?.length ?? 0) > 1;
     return (
         <div className="engine-failure">
             <div role="alert">
-                <p className="engine-hint">{failureHint(error, t)}</p>
+                {holders ? (
+                    <>
+                        {holders.map((h) => <p key={h.pid} className="engine-hint">{holderLine(h, t)}</p>)}
+                        {!canClose && <p className="engine-hint">{t(many ? 'engine.locked.closeThenMany' : 'engine.locked.closeThen')}</p>}
+                    </>
+                ) : (
+                    <p className="engine-hint">{failureHint(error, t)}</p>
+                )}
                 <p className="engine-error"><bdi dir="ltr">{error.message}</bdi></p>
             </div>
-            <button type="button" className="btn-primary engine-retry" disabled={busy} onClick={onRetry} autoFocus>
+            {canClose && (
+                <button type="button" className="btn-primary engine-retry" disabled={busy} onClick={onCloseLockers} autoFocus>
+                    {t(many ? 'engine.locked.closeMany' : 'engine.locked.close')}
+                </button>
+            )}
+            <button
+                type="button"
+                className={`${canClose ? 'btn-secondary' : 'btn-primary'} engine-retry`}
+                disabled={busy}
+                onClick={onRetry}
+                autoFocus={!canClose}
+            >
                 {t('engine.tryAgain')}
             </button>
             {error.stage === AGENT_REFRESH_STAGE && (
@@ -124,6 +159,12 @@ export function EngineInstallScreen() {
         window.gaiaInstall!.retry().catch(fail).finally(() => setBusy(false));
     }, [fail]);
 
+    const closeLockers = useCallback(() => {
+        setBusy(true);
+        setNotice(null);
+        window.gaiaInstall!.closeLockingPrograms().catch(fail).finally(() => setBusy(false));
+    }, [fail]);
+
     const continueAnyway = useCallback(() => {
         setBusy(true);
         setNotice(null);
@@ -158,7 +199,7 @@ export function EngineInstallScreen() {
                 <div className="engine-inner">
                     <h1 className="engine-title">{title}</h1>
                     {failed ? (
-                        <Failure error={error} busy={busy} notice={notice} onRetry={retry} onContinue={continueAnyway} onRevert={revert} onOpenLog={openLog} />
+                        <Failure error={error} busy={busy} notice={notice} onRetry={retry} onCloseLockers={closeLockers} onContinue={continueAnyway} onRevert={revert} onOpenLog={openLog} />
                     ) : (
                         <>
                             <p className="engine-lede">{t('engine.lede')}</p>
