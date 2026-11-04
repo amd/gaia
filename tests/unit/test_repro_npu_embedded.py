@@ -290,3 +290,31 @@ def test_a_holder_that_stops_answering_is_a_failing_row(tmp_path, monkeypatch):
     assert last["ok"] is False
     assert last["request"] == "second Lemonade still answers after GAIA's loads"
     assert "stopped answering" in repro.summarize([run.record])
+
+
+def test_a_lemonade_that_could_not_start_fails_the_job(tmp_path, monkeypatch):
+    monkeypatch.setattr(repro, "machine_facts", lambda: {"platform": "test"})
+    monkeypatch.setattr(repro, "users_own_lemonade", lambda: {})
+
+    def spawn(argv, timeout, env):
+        out = Path(argv[argv.index("--out-dir") + 1])
+        version = argv[argv.index("--one-version") + 1]
+        record = (
+            version_record()
+            if version == "2026.44.1"
+            else {"lemonade": version, "fatal": "RuntimeError: no sha256 asset"}
+        )
+        (out / "version.json").write_text(json.dumps(record), encoding="utf-8")
+        return {"exit": 1, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr("gaia.version.LEMONADE_VERSION", "2026.44.1")
+    args = repro.argparse.Namespace(
+        lemonade=["2026.46.0=typo-tag"],
+        model=["gemma4-it-e4b-FLM"],
+        request=["plain"],
+        holder_model="",
+        workdir=str(tmp_path),
+        output=str(tmp_path / "out.tar.gz"),
+    )
+    # Exit 2 means the run itself broke, so the workflow goes red.
+    assert repro.run_all(args, spawn=spawn) == 2

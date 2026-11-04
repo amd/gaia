@@ -160,6 +160,11 @@ _LINUX_FACTS = {
     "/etc/security/limits.d/*",
     "systemd_user_memlock": "systemctl show user@$(id -u).service -p LimitMEMLOCK",
     "ulimit_l": "ulimit -Sl; ulimit -Hl",
+    # Whether an unprivileged user-manager scope can lift memlock past 8 MB.
+    "user_manager_memlock": "systemctl --user show -p DefaultLimitMEMLOCK 2>&1",
+    "systemd_run_user_memlock": "timeout 20 systemd-run --user --scope --quiet "
+    "-p LimitMEMLOCK=infinity bash -c 'ulimit -Sl; ulimit -Hl' 2>&1",
+    "sudo_noninteractive": "sudo -n true 2>&1 && echo yes",
     "free": "free -g",
 }
 
@@ -895,10 +900,9 @@ def run_all(args: argparse.Namespace, spawn: Callable[..., Dict] = run) -> int:
         tar.add(report, arcname="gaia-npu-repro")
     print(summary)
     print(f"Report: {output}")
-    failed = any(
-        v.get("fatal") or any(c.get("ok") is False for c in v.get("cells", []))
-        for v in results
-    )
+    if any(v.get("fatal") for v in results):
+        return 2
+    failed = any(c.get("ok") is False for v in results for c in v.get("cells", []))
     return 1 if failed else 0
 
 
