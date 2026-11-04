@@ -4,7 +4,8 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { UpdatesSection } from '../UpdatesSection';
+import { UpdatesSection, describeUpdateStatus } from '../UpdatesSection';
+import { translator } from '../../../i18n/useT';
 import { UpdateIndicator } from '../../UpdateIndicator';
 import { INITIAL_STATE } from '../../../hooks/useUpdateStatus';
 import type { UpdateState } from '../../../hooks/useUpdateStatus';
@@ -55,8 +56,31 @@ describe('UpdatesSection', () => {
     it('says it could not read the update status instead of claiming up to date', async () => {
         bridge.getStatus.mockRejectedValueOnce(new Error('No handler registered'));
         render(<UpdatesSection />);
-        await screen.findByText(/couldn't read the update status: no handler registered/i, { selector: '[role="status"]' });
+        await screen.findByText(
+            /couldn't read the update status \(no handler registered\)\. press check for updates to try again, or restart gaia\./i,
+            { selector: '[role="status"]' },
+        );
         expect(screen.queryByText(/up to date/i, { selector: '[role="status"]' })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /check for updates/i })).toBeEnabled();
+    });
+
+    it('drops the read failure once the updater pushes a real status', async () => {
+        bridge.getStatus.mockRejectedValueOnce(new Error('No handler registered'));
+        render(<UpdatesSection />);
+        await screen.findByText(/couldn't read the update status/i, { selector: '[role="status"]' });
+        act(() => push({ status: 'available', version: '0.26.0' }));
+        await screen.findByText(/gaia 0\.26\.0 is available/i, { selector: '[role="status"]' });
+        expect(screen.queryByText(/couldn't read the update status/i, { selector: '[role="status"]' })).not.toBeInTheDocument();
+    });
+
+    it('says the update status could not be read in Arabic, reason kept whole', () => {
+        const line = describeUpdateStatus(
+            { ...INITIAL_STATE, readError: 'No handler registered' },
+            translator('ar'),
+        );
+        expect(line).toContain('تعذّرت قراءة حالة التحديث');
+        expect(line).toContain('\u2068No handler registered\u2069');
+        expect(line).not.toContain('محدّث');
     });
 
     it('shows auto-update off by default', async () => {

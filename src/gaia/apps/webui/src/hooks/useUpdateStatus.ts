@@ -110,6 +110,7 @@ export function useUpdateStatus(): UpdateState {
         if (!updater) return;
 
         let mounted = true;
+        let pushed = false;
 
         // Fetch the current state immediately (covers the race where a
         // status event fires before we mount).
@@ -120,11 +121,14 @@ export function useUpdateStatus(): UpdateState {
             })
             .catch((err) => {
                 log.system.error('Reading the update status failed', err);
-                if (mounted) setState((prev) => ({ ...prev, readError: updateErrorReason(err) }));
+                // A status the updater already pushed is newer than this failure.
+                if (mounted && !pushed) setState((prev) => ({ ...prev, readError: updateErrorReason(err) }));
             });
 
         const unsubscribe = updater.onStatusChange((s) => {
-            if (mounted && s) setState(s);
+            if (!s) return;
+            pushed = true;
+            if (mounted) setState(s);
         });
 
         return () => {

@@ -74,7 +74,9 @@ const audit = (page: Page): Promise<string[]> =>
             if (!shown(el)) continue;
             const box = el.getBoundingClientRect();
             const style = getComputedStyle(el);
-            if ((box.right > innerWidth + 1 || box.left < -1) && style.position !== 'fixed' && !el.closest('svg') && !inSideScroller(el)) {
+            // Screen-reader-only text is clipped to 1px, so its unwrapped overflow is never seen.
+            const srOnly = el.closest('.visually-hidden');
+            if ((box.right > innerWidth + 1 || box.left < -1) && style.position !== 'fixed' && !el.closest('svg') && !srOnly && !inSideScroller(el)) {
                 problems.push(`off screen: ${label(el)}`);
             }
 
@@ -589,6 +591,20 @@ for (const locale of ['ar', 'en']) {
             if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
         });
     }
+
+    test(`desktop app and updates: status unreadable (${locale})`, async ({ page }) => {
+        const failure = "Error invoking remote method 'gaia-updater:get-status': Error: No handler registered for 'gaia-updater:get-status'";
+        await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withDesktopBridges(p, {}, failure); });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const updates = page.locator('.settings-disclosure', { hasText: /Updates/ });
+        await expect(updates).toHaveAttribute('open', '');
+        await expect(updates).toContainText(locale === 'ar' ? 'تعذّرت قراءة حالة التحديث' : "Couldn't read the update status");
+        await expect(updates).not.toContainText(/up to date|محدّث/);
+        await updates.scrollIntoViewIfNeeded();
+        await shot(page, `updates-${locale}-unreadable`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
 
     test(`notifications on the desktop app (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withDesktopBridges(p); });

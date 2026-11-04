@@ -360,9 +360,12 @@ export async function withConnectors(page: Page, connectors: unknown[] = CONNECT
     });
 }
 
-/** The Electron bridges the browser lacks, so desktop-only settings render. */
-export async function withDesktopBridges(page: Page, update: Record<string, unknown> = {}): Promise<void> {
-    await page.addInitScript((state) => {
+/**
+ * The Electron bridges the browser lacks, so desktop-only settings render.
+ * `statusReadError`: `getStatus` rejects with it, as when the updater's IPC handler is missing.
+ */
+export async function withDesktopBridges(page: Page, update: Record<string, unknown> = {}, statusReadError?: string): Promise<void> {
+    await page.addInitScript(({ state, readError }) => {
         const tray = { minimizeToTray: true, startOnLogin: false, startMinimized: false };
         const status = {
             status: 'idle', version: null, progress: 0, releaseNotes: null, error: null, currentVersion: '0.25.4',
@@ -375,11 +378,11 @@ export async function withDesktopBridges(page: Page, update: Record<string, unkn
         Object.assign(window, {
             gaiaAPI: withStubs({ tray: withStubs({ getConfig: async () => ({ tray }), setConfig: async () => ({ tray }) }) }),
             gaiaUpdater: {
-                getStatus: same, check: same, onStatusChange: () => () => {}, listReleases: async () => [], installVersion: same,
+                getStatus: readError ? async () => { throw new Error(readError); } : same, check: same, onStatusChange: () => () => {}, listReleases: async () => [], installVersion: same,
                 resumeUpdates: same, setAutoUpdate: same, setIncludePrereleases: same, downloadUpdate: same, restart: same,
             },
         });
-    }, update);
+    }, { state: update, readError: statusReadError ?? null });
 }
 
 /** Pick the theme before the app's first paint, the way a returning user would. */
