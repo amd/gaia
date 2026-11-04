@@ -289,3 +289,26 @@ def test_an_installed_server_is_not_given_a_guessed_path(monkeypatch):
     hint = lemonade_log_hint("http://localhost:13305/api/v1")
     assert hint == "Lemonade's server log has the full error."
     assert "server.log" not in hint
+
+
+def test_a_bare_error_body_with_only_a_message_keeps_its_detail():
+    """Newer OpenAI SDKs pass the error object as ``body`` and drop it from str()."""
+
+    class _SDKError(Exception):
+        status_code = 500
+        body = {"message": "The request fails unexpectedly"}
+
+    try:
+        try:
+            raise _SDKError("Error code: 500 - The request fails unexpectedly")
+        except _SDKError as inner:
+            raise LemonadeClientError(
+                "Streaming chat completion failed (HTTP 500)"
+            ) from inner
+    except LemonadeClientError as e:
+        classified = classify_lemonade_exception(e)
+    assert isinstance(classified, LemonadeServerError)
+    assert classified.user_message.startswith(
+        "The local LLM server answered with an error (HTTP 500): "
+        "The request fails unexpectedly."
+    )

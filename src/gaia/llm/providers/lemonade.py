@@ -569,7 +569,10 @@ def lemonade_error_envelope(
         body = getattr(cur, "body", None)
         if isinstance(body, dict):
             err = body.get("error", body)
-            if isinstance(err, dict) and (err.get("code") or err.get("type")):
+            # Newer SDKs hand over the bare error object, sometimes with only a message.
+            if isinstance(err, dict) and (
+                err.get("code") or err.get("type") or err.get("message")
+            ):
                 status = getattr(cur, "status_code", None)
                 return (status if isinstance(status, int) else None), err
         text = str(cur)
