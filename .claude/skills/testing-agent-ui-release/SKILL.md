@@ -52,6 +52,9 @@ These come from earlier passes that went wrong:
 - **Look before you pass.** Read every screenshot before you mark an item passed. A
   pass needs what you saw (`--note`) and, for anything visual, a saved image
   (`--evidence`).
+- **Match the evidence to the claim.** A check for "the answer kept its text" must look in
+  the answer, not the whole page. A page-wide match once found the word in the question
+  and passed an answer that had no text at all.
 - **Look as hard before you fail.** Before filing, rule out three things: your own
   test setup (a missing Desktop folder, `GAIA_DISABLE_UPDATE`), invalid input (`*` is
   not a legal Windows path character), and UI that appears only on hover or focus
