@@ -2346,6 +2346,8 @@ const messages: Messages = {
     'resources.sendRecv': '↑ {send} ↓ {recv}',
     'resources.send': 'إرسال {rate}',
     'resources.receive': 'استلام {rate}',
+    'resources.unavailable': 'غير متاح',
+    'resources.unavailableWhy': 'تعذّرت قراءة استخدام {label} على هذا الجهاز: {reason}',
     'resources.numbered': '{label} {n}',
     'resources.inUse': 'قيد الاستخدام: {size}',
     'resources.reading': 'جارٍ القراءة…',

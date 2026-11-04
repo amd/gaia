@@ -1042,9 +1042,17 @@ export interface RemoveModelRequest {
 export interface ResourceUsage {
   cpu?: CpuUsage | null;
   devices?: DeviceUsage[];
+  /**
+   * Why GPUs and NPUs can't be read, when CPU and memory still can.
+   */
+  devices_error?: string | null;
   interval_ms: number;
   memory?: MemoryUsage | null;
   networks?: NetworkUsage[];
+  /**
+   * Why network adapters can't be read, when CPU and memory still can.
+   */
+  networks_error?: string | null;
   /**
    * False until the first sample is in.
    */

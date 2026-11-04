@@ -107,6 +107,23 @@ describe('ResourceMonitor', () => {
         expect(screen.getByText('GPU 1')).toBeInTheDocument();
     });
 
+    it('keeps CPU and memory when only the GPU and network fail, and says which part is missing', async () => {
+        responses = [json({
+            ...USAGE,
+            devices: [],
+            networks: [],
+            devices_error: "function 'D3DKMTEnumAdapters3' not found",
+            networks_error: 'GetIfTable2 failed (0x00000032)',
+        })];
+        render(<ResourceMonitor onClose={() => {}} />);
+        await screen.findByText('4.70 GHz');
+        expect(tile('Memory')).toHaveTextContent('45.0/63.6 GB');
+        expect(tile('GPU')).toHaveTextContent(/^GPUUnavailable$/);
+        expect(tile('GPU')).toHaveAttribute('title', "GPU usage can't be read on this PC: function 'D3DKMTEnumAdapters3' not found");
+        expect(tile('Network')).toHaveTextContent(/^NetworkUnavailable$/);
+        expect(screen.queryByRole('status')).toBeNull();
+    });
+
     it('says it is reading until the first sample is in', async () => {
         responses = [json({ interval_ms: 1000, ready: false, devices: [] })];
         render(<ResourceMonitor onClose={() => {}} />);

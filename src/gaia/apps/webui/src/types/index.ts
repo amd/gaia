@@ -1495,4 +1495,8 @@ export interface ResourceUsage {
     memory?: MemoryUsage | null;
     devices?: DeviceUsage[];
     networks?: NetworkUsage[];
+    /** Why GPUs and NPUs can't be read, when CPU and memory still can. */
+    devices_error?: string | null;
+    /** Why network adapters can't be read, when CPU and memory still can. */
+    networks_error?: string | null;
 }

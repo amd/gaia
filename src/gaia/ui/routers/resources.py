@@ -62,6 +62,14 @@ class ResourceUsage(BaseModel):
     memory: Optional[MemoryUsage] = None
     devices: List[DeviceUsage] = Field(default_factory=list)
     networks: List[NetworkUsage] = Field(default_factory=list)
+    devices_error: Optional[str] = Field(
+        default=None,
+        description="Why GPUs and NPUs can't be read, when CPU and memory still can.",
+    )
+    networks_error: Optional[str] = Field(
+        default=None,
+        description="Why network adapters can't be read, when CPU and memory still can.",
+    )
 
 
 # Reads this PC's hardware load, so a cross-site GET must not reach it.

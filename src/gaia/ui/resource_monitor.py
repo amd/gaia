@@ -24,7 +24,17 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Deque, Dict, Iterable, List, Optional, Tuple
+from typing import (
+    Callable,
+    Deque,
+    Dict,
+    Generic,
+    Iterable,
+    List,
+    Optional,
+    Tuple,
+    TypeVar,
+)
 
 import psutil
 
@@ -77,6 +87,61 @@ class Sample:
     memory_total_bytes: int
     devices: List[DeviceSample] = field(default_factory=list)
     networks: List[NetworkSample] = field(default_factory=list)
+    # Why GPUs/NPUs or networks can't be read, when only that part failed.
+    devices_error: Optional[str] = None
+    networks_error: Optional[str] = None
+
+
+T = TypeVar("T")
+
+# What breaking GPU or network reads raise: a failed counter or API call, an
+# unreadable file, or a Windows export missing from an older build.
+_PART_ERRORS = (ResourceProbeError, OSError, AttributeError)
+
+
+class OptionalPart(Generic[T]):
+    """A GPU or network reading that can fail on its own.
+
+    CPU and memory still show when it does; the part reports why it's
+    missing instead, logs the cause once, and stays off until the sampler
+    restarts.
+    """
+
+    def __init__(
+        self,
+        what: str,
+        start: Callable[[], T],
+        close: Callable[[T], None] = lambda _: None,
+    ) -> None:
+        self.what = what
+        self.error: Optional[str] = None
+        self._state: Optional[T] = None
+        self._close = close
+        try:
+            self._state = start()
+        except _PART_ERRORS as e:
+            self._broke(e)
+
+    def read(self, fn: Callable[[T], list]) -> list:
+        if self._state is None:
+            return []
+        try:
+            return fn(self._state)
+        except _PART_ERRORS as e:
+            self.close()
+            self._broke(e)
+            return []
+
+    def _broke(self, e: Exception) -> None:
+        self.error = str(e) or type(e).__name__
+        logger.warning(
+            "Resource monitor: %s usage unavailable: %s", self.what, e, exc_info=True
+        )
+
+    def close(self) -> None:
+        if self._state is not None:
+            state, self._state = self._state, None
+            self._close(state)
 
 
 # key -> (name, description, kind, bytes sent, bytes received)
@@ -421,25 +486,67 @@ class _PdhQuery:
         self._pdh.PdhCloseQuery(self._query)
 
 
+def _collected(paths: Dict[str, str]) -> _PdhQuery:
+    query = _PdhQuery(paths)
+    try:
+        query.collect()
+    except ResourceProbeError:
+        query.close()
+        raise
+    return query
+
+
+def _open_windows_gpus() -> Tuple[List[Adapter], _PdhQuery]:
+    adapters = windows_adapters()
+    query = _collected(
+        {
+            "engine": r"\GPU Engine(*)\Utilization Percentage",
+            "dedicated": r"\GPU Adapter Memory(*)\Dedicated Usage",
+            "shared": r"\GPU Adapter Memory(*)\Shared Usage",
+        }
+    )
+    return adapters, query
+
+
+def _read_windows_gpus(state: Tuple[List[Adapter], _PdhQuery]) -> List[DeviceSample]:
+    adapters, query = state
+    query.collect()
+    loads = busiest_engine(query.array("engine"))
+    mem = adapter_memory(query.array("dedicated"), query.array("shared"))
+    return [
+        DeviceSample(
+            key=a.key,
+            name=a.name,
+            kind=a.kind,
+            percent=loads.get(a.key, 0.0),
+            memory_used_bytes=mem.get(a.key),
+        )
+        for a in adapters
+    ]
+
+
 class WindowsProbe:
-    def __init__(self) -> None:
-        self.adapters = windows_adapters()
-        self._query = _PdhQuery(
+    """CPU and memory must read; GPUs and networks may fail on their own
+    (a VM, Remote Desktop, or a PC with no GPU driver has no GPU counters)."""
+
+    def __init__(
+        self,
+        open_gpus: Callable[[], Tuple[List[Adapter], _PdhQuery]] = _open_windows_gpus,
+        read_networks: Callable[[], NetCounters] = windows_networks,
+    ) -> None:
+        self._query = _collected(
             {
                 "cpu": r"\Processor Information(_Total)\% Processor Utility",
                 "perf": r"\Processor Information(_Total)\% Processor Performance",
                 "freq": r"\Processor Information(_Total)\Processor Frequency",
-                "engine": r"\GPU Engine(*)\Utilization Percentage",
-                "dedicated": r"\GPU Adapter Memory(*)\Dedicated Usage",
-                "shared": r"\GPU Adapter Memory(*)\Shared Usage",
             }
         )
-        try:
-            self._query.collect()
-            self._net = NetworkRates(windows_networks)
-        except ResourceProbeError:
-            self._query.close()
-            raise
+        self._gpus: OptionalPart = OptionalPart(
+            "GPU and NPU", open_gpus, close=lambda state: state[1].close()
+        )
+        self._net: OptionalPart = OptionalPart(
+            "network", lambda: NetworkRates(read_networks)
+        )
 
     def sample(self) -> Sample:
         self._query.collect()
@@ -449,30 +556,22 @@ class WindowsProbe:
         perf = self._query.value("perf")
         freq_mhz = self._query.value("freq")
         ghz = perf * freq_mhz / 100 / 1000 if perf is not None and freq_mhz else None
-        loads = busiest_engine(self._query.array("engine"))
-        mem = adapter_memory(
-            self._query.array("dedicated"), self._query.array("shared")
-        )
+        devices = self._gpus.read(_read_windows_gpus)
+        networks = self._net.read(lambda rates: rates.sample())
         vm = psutil.virtual_memory()
         return Sample(
             cpu_percent=min(100.0, cpu),
             cpu_ghz=ghz,
             memory_used_bytes=vm.total - vm.available,
             memory_total_bytes=vm.total,
-            devices=[
-                DeviceSample(
-                    key=a.key,
-                    name=a.name,
-                    kind=a.kind,
-                    percent=loads.get(a.key, 0.0),
-                    memory_used_bytes=mem.get(a.key),
-                )
-                for a in self.adapters
-            ],
-            networks=self._net.sample(),
+            devices=devices,
+            networks=networks,
+            devices_error=self._gpus.error,
+            networks_error=self._net.error,
         )
 
     def close(self) -> None:
+        self._gpus.close()
         self._query.close()
 
 
@@ -543,13 +642,31 @@ def posix_networks(sys_net: Path = _SYS_NET) -> NetCounters:
     return out
 
 
+def _read_sysfs_gpus(gpus: List[Tuple[Path, str]]) -> List[DeviceSample]:
+    devices = []
+    for dev, name in gpus:
+        if _runtime_suspended(dev):
+            # Reading a suspended GPU would wake it, or fail on newer kernels.
+            devices.append(DeviceSample(str(dev), name, "gpu", 0.0))
+            continue
+        busy = _read_int(dev / "gpu_busy_percent")
+        if busy is None:
+            raise ResourceProbeError(f"Could not read {dev / 'gpu_busy_percent'}")
+        vram = _read_int(dev / "mem_info_vram_used")
+        gtt = _read_int(dev / "mem_info_gtt_used")
+        used = None if vram is None and gtt is None else (vram or 0) + (gtt or 0)
+        devices.append(
+            DeviceSample(str(dev), name, "gpu", float(busy), memory_used_bytes=used)
+        )
+    return devices
+
+
 class PosixProbe:
     def __init__(self, drm_root: Path = _DRM, sys_net: Path = _SYS_NET) -> None:
-        self._gpus = sysfs_gpus(drm_root)
-        self.adapters = [
-            Adapter(key=str(dev), name=name, kind="gpu") for dev, name in self._gpus
-        ]
-        self._net = NetworkRates(lambda: posix_networks(sys_net))
+        self._gpus: OptionalPart = OptionalPart("GPU", lambda: sysfs_gpus(drm_root))
+        self._net: OptionalPart = OptionalPart(
+            "network", lambda: NetworkRates(lambda: posix_networks(sys_net))
+        )
         psutil.cpu_percent(interval=None)
 
     def sample(self) -> Sample:
@@ -563,30 +680,17 @@ class PosixProbe:
             except (OSError, NotImplementedError) as e:
                 logger.debug("CPU clock speed unavailable: %s", e)
         vm = psutil.virtual_memory()
-        devices = []
-        for (dev, name), adapter in zip(self._gpus, self.adapters):
-            if _runtime_suspended(dev):
-                # Reading a suspended GPU would wake it, or fail on newer kernels.
-                devices.append(DeviceSample(adapter.key, name, "gpu", 0.0))
-                continue
-            busy = _read_int(dev / "gpu_busy_percent")
-            if busy is None:
-                raise ResourceProbeError(f"Could not read {dev / 'gpu_busy_percent'}")
-            vram = _read_int(dev / "mem_info_vram_used")
-            gtt = _read_int(dev / "mem_info_gtt_used")
-            used = None if vram is None and gtt is None else (vram or 0) + (gtt or 0)
-            devices.append(
-                DeviceSample(
-                    adapter.key, name, "gpu", float(busy), memory_used_bytes=used
-                )
-            )
+        devices = self._gpus.read(_read_sysfs_gpus)
+        networks = self._net.read(lambda rates: rates.sample())
         return Sample(
             cpu_percent=psutil.cpu_percent(interval=None),
             cpu_ghz=freq.current / 1000 if freq and freq.current else None,
             memory_used_bytes=vm.total - vm.available,
             memory_total_bytes=vm.total,
             devices=devices,
-            networks=self._net.sample(),
+            networks=networks,
+            devices_error=self._gpus.error,
+            networks_error=self._net.error,
         )
 
     def close(self) -> None:
@@ -663,10 +767,13 @@ class ResourceSampler:
                     self._history.append(sample)
                     self._error = None
                     self._logged_error = None
+                    # Set ready before letting go, so a sampler started
+                    # right after this one never sees a stale ready flag.
+                    self._ready.set()
                     if self._clock() - self._last_read > self._idle_stop:
                         self._thread = None
-                self._ready.set()
-                if self._thread is not threading.current_thread():
+                    current = self._thread is threading.current_thread()
+                if not current:
                     return
             with self._lock:
                 if self._thread is threading.current_thread():
@@ -684,8 +791,9 @@ class ResourceSampler:
             else:
                 logger.warning("Resource monitor %s again: %s", what, e)
             self._error = message
-            self._thread = None
-        self._ready.set()
+            if self._thread is threading.current_thread():
+                self._thread = None
+            self._ready.set()
 
     def stop(self) -> None:
         self._stop.set()
@@ -754,6 +862,8 @@ def to_payload(history: List[Sample], interval_s: float) -> dict:
         },
         "devices": devices,
         "networks": networks,
+        "devices_error": latest.devices_error,
+        "networks_error": latest.networks_error,
     }
 
 

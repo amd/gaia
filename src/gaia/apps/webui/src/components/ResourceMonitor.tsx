@@ -121,6 +121,19 @@ function rate(bps: number): string {
     return `${formatRate(bps, unit)} ${unit[1]}`;
 }
 
+/** A part that can't be read while CPU and memory still can: says so, with the reason on hover. */
+function unavailable(t: Translate, tone: Tile['tone'], label: string, reason: string): Tile {
+    return {
+        key: `${tone}-unavailable`,
+        tone,
+        label,
+        value: '',
+        detail: t('resources.unavailable'),
+        title: t('resources.unavailableWhy', { label, reason }),
+        history: [],
+    };
+}
+
 export function buildTiles(t: Translate, usage: ResourceUsage): Tile[] {
     const tiles: Tile[] = [];
     if (usage.cpu) {
@@ -162,6 +175,7 @@ export function buildTiles(t: Translate, usage: ResourceUsage): Tile[] {
             history: dev.history,
         });
     }
+    if (usage.devices_error) tiles.push(unavailable(t, 'gpu', t('resources.gpu'), usage.devices_error));
     const networks = usage.networks ?? [];
     for (const net of networks) {
         // One unit for both, the larger one's, as Task Manager shows "S: 0 R: 8.0 Kbps".
@@ -186,6 +200,7 @@ export function buildTiles(t: Translate, usage: ResourceUsage): Tile[] {
             max: rateScale([...net.recv_history, ...net.send_history]),
         });
     }
+    if (usage.networks_error) tiles.push(unavailable(t, 'network', t('resources.network'), usage.networks_error));
     return tiles;
 }
 

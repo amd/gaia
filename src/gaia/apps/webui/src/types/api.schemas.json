@@ -3426,6 +3426,18 @@
         "title": "Devices",
         "type": "array"
       },
+      "devices_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Why GPUs and NPUs can't be read, when CPU and memory still can.",
+        "title": "Devices Error"
+      },
       "interval_ms": {
         "title": "Interval Ms",
         "type": "integer"
@@ -3446,6 +3458,18 @@
         },
         "title": "Networks",
         "type": "array"
+      },
+      "networks_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Why network adapters can't be read, when CPU and memory still can.",
+        "title": "Networks Error"
       },
       "ready": {
         "description": "False until the first sample is in.",

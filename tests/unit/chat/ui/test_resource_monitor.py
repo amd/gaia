@@ -273,18 +273,46 @@ def test_posix_probe_leaves_a_sleeping_gpu_asleep(tmp_path):
     [gpu] = probe.sample().devices
     assert (gpu.percent, gpu.memory_used_bytes) == (0.0, None)
     (dev / "power" / "runtime_status").write_text("active\n")
-    with pytest.raises(rm.ResourceProbeError, match="gpu_busy_percent"):
-        probe.sample()
+    assert "gpu_busy_percent" in probe.sample().devices_error
 
 
-def test_posix_probe_fails_loudly_when_a_gpu_stops_reporting(tmp_path):
+def test_a_gpu_that_stops_reporting_says_why_and_cpu_still_shows(tmp_path, caplog):
     dev = tmp_path / "card0" / "device"
     dev.mkdir(parents=True)
     (dev / "gpu_busy_percent").write_text("1")
     probe = rm.PosixProbe(drm_root=tmp_path)
     (dev / "gpu_busy_percent").unlink()
-    with pytest.raises(rm.ResourceProbeError, match="gpu_busy_percent"):
-        probe.sample()
+    s = probe.sample()
+    assert s.devices == []
+    assert "gpu_busy_percent" in s.devices_error
+    assert 0 <= s.cpu_percent <= 100
+    # Stays off and logs the cause once, not every second.
+    probe.sample()
+    assert len([r for r in caplog.records if "unavailable" in r.getMessage()]) == 1
+    payload = rm.to_payload([s], 1.0)
+    assert payload["devices"] == [] and "gpu_busy_percent" in payload["devices_error"]
+
+
+def test_an_optional_part_that_cannot_start_reports_why():
+    def no_counters():
+        raise rm.ResourceProbeError("PdhAddEnglishCounter failed (0xc0000bb8)")
+
+    part = rm.OptionalPart("GPU and NPU", no_counters)
+    assert part.read(lambda state: [1]) == []
+    assert part.error == "PdhAddEnglishCounter failed (0xc0000bb8)"
+
+
+def test_an_optional_part_closes_what_it_opened_when_a_read_breaks():
+    closed = []
+    part = rm.OptionalPart("network", lambda: "state", close=closed.append)
+
+    def broken(state):
+        raise OSError("adapter vanished")
+
+    assert part.read(broken) == []
+    assert closed == ["state"] and part.error == "adapter vanished"
+    part.close()
+    assert closed == ["state"]  # closed once
 
 
 # ── Route ────────────────────────────────────────────────────────────────────
@@ -379,6 +407,7 @@ def test_windows_probe_reads_real_counters():
     assert [d.key for d in s.devices] == [a.key for a in adapters]
     assert all(0 <= d.percent <= 100 for d in s.devices)
     assert s.networks == [] or all(n.kind and n.name for n in s.networks)
+    assert s.devices_error is None and s.networks_error is None
 
 
 # ── Network ──────────────────────────────────────────────────────────────────
@@ -482,6 +511,25 @@ def test_posix_networks_keeps_hardware_interfaces_that_are_up(tmp_path, monkeypa
         "net_eth0": ("eth0", "eth0", "ethernet", 1, 2),
         "net_wlan0": ("wlan0", "wlan0", "wifi", 1, 2),
     }
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows performance counters")
+def test_windows_cpu_and_memory_survive_missing_gpu_counters():
+    def no_gpus():
+        raise AttributeError("function 'D3DKMTEnumAdapters3' not found")
+
+    def no_networks():
+        raise rm.ResourceProbeError("GetIfTable2 failed (0x00000032)")
+
+    probe = rm.WindowsProbe(open_gpus=no_gpus, read_networks=no_networks)
+    try:
+        time.sleep(1)
+        s = probe.sample()
+    finally:
+        probe.close()
+    assert 0 <= s.cpu_percent <= 100 and s.memory_total_bytes > 0
+    assert s.devices == [] and "D3DKMTEnumAdapters3" in s.devices_error
+    assert s.networks == [] and "GetIfTable2" in s.networks_error
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows IP Helper")

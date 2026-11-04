@@ -2347,6 +2347,8 @@ export const enMessages = {
     'resources.sendRecv': 'S: {send} R: {recv}',
     'resources.send': 'Send {rate}',
     'resources.receive': 'Receive {rate}',
+    'resources.unavailable': 'Unavailable',
+    'resources.unavailableWhy': "{label} usage can't be read on this PC: {reason}",
     'resources.numbered': '{label} {n}',
     'resources.inUse': '{size} in use',
     'resources.reading': 'Reading…',

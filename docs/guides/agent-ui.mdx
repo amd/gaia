@@ -120,7 +120,9 @@ window is hidden, GAIA stops measuring about 15 seconds later.
 
 On Linux the GPU tile appears for AMD GPUs, and macOS shows CPU, memory and
 network only. When usage can't be read, the strip says so and dims the last readings
-until it can read them again.
+until it can read them again. If only the GPU or network can't be read, as in
+a virtual machine or over Remote Desktop, CPU and memory keep showing and that
+tile says **Unavailable**, with the reason when you point at it.
 
 ### Type While GAIA Works
 
