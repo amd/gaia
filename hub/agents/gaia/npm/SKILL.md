@@ -334,7 +334,7 @@ The canonical event shapes, as emitted:
 
 | Event | Shape |
 |---|---|
-| `status` | `{ type, message, phase?, words?, chars?, queue? }` — progress and reasoning narration. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`, `model_queue`) names what the model is doing; show it as the live line, not as narration. `model_queue` means the turn is waiting for the model behind another request: it repeats every ~2 s with a `queue` object (`event`, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`), so its steady arrival means queued, not stuck |
+| `status` | `{ type, message, phase?, words?, chars?, queue? }` — progress and reasoning narration. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`, `model_queue`, `reconnecting`) names what the model is doing; show it as the live line, not as narration. `model_queue` means the turn is waiting for the model behind another request: it repeats every ~2 s with a `queue` object (`event`, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`), so its steady arrival means queued, not stuck. `reconnecting` is sent once while GAIA's own Lemonade Server restarts; the turn retries when it is back |
 | `token` | `{ type, delta }` — answer text to append |
 | `reasoning` | `{ type, delta }` — the model's reasoning, only when the request set `reasoning: true` (contract ≥ 2.22); join the deltas as they come and keep them apart from the answer |
 | `tool_call` | `{ type, tool, args, mcp_server?, mcp_server_label?, mcp_tool? }` — an MCP tool names its connector (`mcp_server_label`, e.g. `"Git"`) and the server's own tool name (`mcp_tool`, e.g. `"git_log"`); label the call with those, not the prefixed `tool` |
