@@ -155,7 +155,7 @@ describe('EngineInstallScreen after a failure', () => {
     it.each([
         ['network', 'Check your internet connection'],
         ['tls', 'company proxy'],
-        ['locked', 'Another GAIA program'],
+        ['locked', 'restart your PC'],
     ] as const)('names the fix for a %s failure', async (reason, hint) => {
         mountBridge({ ...FAILED, error: { ...ERROR, stage: 'install-package', reason } });
         render(<EngineInstallScreen />);

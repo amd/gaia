@@ -1245,7 +1245,7 @@ export const enMessages = {
     'engine.hint.disk': 'Free up some disk space, then try again.',
     'engine.hint.network': 'Check your internet connection, then try again.',
     'engine.hint.tls': 'Your network doesn’t trust the download server’s certificate, which usually means a company proxy. Ask your IT team to trust it, then try again.',
-    'engine.hint.locked': 'Another GAIA program is using these files. Close it, then try again.',
+    'engine.hint.locked': 'Another program still has GAIA’s files open. Close other GAIA apps and terminals, or restart your PC, then try again.',
     'engine.hint.agent': 'Check your internet connection, then try again. Your chats and models are safe.',
     'engine.hint.other': 'Try again. If it keeps failing, Details has the log.',
     'engine.tryAgain': 'Try again',

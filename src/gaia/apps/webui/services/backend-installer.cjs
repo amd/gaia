@@ -547,6 +547,59 @@ function isFileLockedError(output) {
   return /os error 32/i.test(output) || /being used by another process/i.test(output);
 }
 
+/** The name of the file uv could not replace, or null when its output names none. */
+function lockedFileName(output) {
+  const m = /failed to \w+ (?:file|directory) `([^`]+)`/i.exec(output || "");
+  return m ? m[1].split(/[\\/]/).pop() : null;
+}
+
+const MOVED_ASIDE_SUFFIX = /\.exe\.old-\d+$/i;
+
+/**
+ * Rename the venv's launchers so uv can write new ones (#6570). Windows lets a
+ * running or open .exe be renamed, and renaming a hard link moves only this
+ * venv's name for the file. Returns the names moved.
+ */
+function moveLaunchersAside() {
+  const dir = path.join(GAIA_VENV, "Scripts");
+  const stamp = Date.now();
+  const moved = [];
+  for (const name of listDir(dir)) {
+    // The interpreter is uv's --python for the retry, and pip never replaces it.
+    if (!/\.exe$/i.test(name) || /^python[\d.]*w?\.exe$/i.test(name)) continue;
+    const file = path.join(dir, name);
+    try {
+      fs.renameSync(file, `${file}.old-${stamp}`);
+      moved.push(name);
+    } catch (err) {
+      logError(`Could not move ${file} aside (${err.code || "error"}): ${err.message}`);
+    }
+  }
+  log(
+    moved.length
+      ? `Moved ${moved.join(", ")} aside in ${dir} (renamed to <name>.old-${stamp})`
+      : `Nothing in ${dir} could be moved aside`
+  );
+  return moved;
+}
+
+/** Delete launchers an earlier upgrade moved aside; one still in use waits for a later install. */
+function removeMovedLaunchers() {
+  const dir = path.join(GAIA_VENV, "Scripts");
+  for (const name of listDir(dir)) {
+    if (!MOVED_ASIDE_SUFFIX.test(name)) continue;
+    const file = path.join(dir, name);
+    try {
+      fs.unlinkSync(file);
+      log(`Removed ${file}, moved aside by an earlier upgrade`);
+    } catch (err) {
+      // Windows refuses to delete a program that is running (EPERM) or open (EBUSY).
+      if (err.code !== "EBUSY" && err.code !== "EPERM") throw err;
+      log(`Left ${file} in place: it is still in use (${err.code})`);
+    }
+  }
+}
+
 /**
  * Detect a transient network failure in `uv pip install` output so the
  * install stage can retry instead of failing the whole bootstrap. The
@@ -1553,6 +1606,7 @@ async function installBackend(opts = {}) {
   // Stage 3: pip install
   setState(STATES.INSTALLING, { stage: STAGES.INSTALL_PACKAGE, version });
   report(STAGES.INSTALL_PACKAGE, 0, `Installing ${pipPackage}`);
+  if (IS_WINDOWS) removeMovedLaunchers();
 
   const pipArgs = [
     "pip",
@@ -1568,7 +1622,7 @@ async function installBackend(opts = {}) {
   // deps (numpy, faiss, pypdfium2, …) are fetched live from PyPI even
   // when the gaia wheel itself is local, so a single broken-pipe mid-download
   // would otherwise fail the whole bootstrap (and block a release). File-lock
-  // failures (Windows os-error-32) are NOT retried — they need user action.
+  // failures (Windows os-error-32) get their own single retry after this loop.
   let installResult;
   if (!localWheel && isBackendPrefetched(version)) {
     report(STAGES.INSTALL_PACKAGE, 0, `Installing ${pipPackage} from the downloaded update`);
@@ -1634,16 +1688,36 @@ async function installBackend(opts = {}) {
     );
     await sleep(backoffMs);
   }
+  // Another process can hold gaia.exe open through a hard link from uv's
+  // cache, out of reach of the orphan cleanup (#6570).
+  if (
+    IS_WINDOWS &&
+    installResult.code !== 0 &&
+    isFileLockedError(`${installResult.stdout || ""}\n${installResult.stderr || ""}`) &&
+    moveLaunchersAside().length > 0
+  ) {
+    report(STAGES.INSTALL_PACKAGE, 0, "Another program has GAIA's files open — retrying the install");
+    installResult = await runCommand("uv", useNativeTls ? [...pipArgs, "--native-tls"] : pipArgs, {
+      stageLabel: "pip",
+    });
+  }
   if (installResult.code !== 0) {
-    // Windows: an upgrade can't replace gaia.exe while a previous GAIA
-    // process still holds it open (issue #1388). The orphan cleanup in
-    // main.cjs should have killed it first; if the lock persists, point the
-    // user at the live process rather than the generic manual-install hint.
     const output = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
     let suggestion;
     if (isFileLockedError(output)) {
-      suggestion =
-        "A running GAIA process is locking the install. Close GAIA completely (including any leftover gaia.exe in Task Manager), then relaunch.";
+      // pip's own line is already in the log, which the setup screen's details show.
+      const file = lockedFileName(output);
+      throw new InstallError(
+        `GAIA couldn't replace its own files because another program has them open${file ? ` (${file})` : ""}.`,
+        {
+          stage: STAGES.INSTALL_PACKAGE,
+          code: installResult.code,
+          reason: FAILURE_REASONS.LOCKED,
+          suggestion:
+            "Close other GAIA apps and any terminal running gaia, or restart your PC, then try again. " +
+            `The log at ${LOG_FILE} names the file.`,
+        }
+      );
     } else if (isTlsCertError(output)) {
       suggestion =
         "PyPI's certificate isn't trusted on this network — usually a corporate proxy presenting its own root CA. " +

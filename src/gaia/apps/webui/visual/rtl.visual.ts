@@ -900,6 +900,14 @@ const INSTALL_FAILED = {
         logTail: ['$ uv pip install amd-gaia[ui]==0.25.4', '  [pip] error: Failed to fetch https://pypi.org/simple/numpy/', '  exit code: 1'],
     },
 };
+const INSTALL_LOCKED = {
+    ...INSTALL_FAILED,
+    error: {
+        ...INSTALL_FAILED.error,
+        reason: 'locked',
+        message: "GAIA couldn't replace its own files because another program has them open (gaia.exe).",
+    },
+};
 
 for (const locale of ['ar', 'en']) {
     test.describe(`engine install (${locale})`, () => {
@@ -923,6 +931,13 @@ for (const locale of ['ar', 'en']) {
                 expect(await audit(page)).toEqual([]);
             });
         }
+
+        test('failed on a file another program holds open', async ({ page }) => {
+            await open(page, '?engine=install', locale, (p) => withInstall(p, INSTALL_LOCKED));
+            await expect(page.locator('.engine-hint')).toBeVisible();
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `engine-locked-${locale}`);
+        });
 
         test('narrow window: no sideways scroll', async ({ page }) => {
             await page.setViewportSize({ width: 320, height: 720 });
