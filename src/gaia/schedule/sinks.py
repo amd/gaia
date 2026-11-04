@@ -157,29 +157,28 @@ def _to_windows_notification(title: str, output: str) -> None:
     env = os.environ.copy()
     env["GAIA_NOTIFY_TITLE"] = title
     env["GAIA_NOTIFY_MESSAGE"] = output
+    process = subprocess.Popen(
+        ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
     try:
-        process = subprocess.Popen(
-            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+        return_code = process.wait(timeout=_WINDOWS_NOTIFICATION_STARTUP_GRACE_S)
+    except subprocess.TimeoutExpired:
+        # MessageBox::Show remains open until the user dismisses it. Once
+        # PowerShell stayed alive through startup, the notification is on
+        # screen; do not make a scheduled job wait for user interaction.
+        return
+    if return_code:
+        stderr = (
+            process.stderr.read().decode(errors="replace") if process.stderr else ""
         )
-        try:
-            return_code = process.wait(timeout=_WINDOWS_NOTIFICATION_STARTUP_GRACE_S)
-        except subprocess.TimeoutExpired:
-            # MessageBox::Show remains open until the user dismisses it. Once
-            # PowerShell stayed alive through startup, the notification is on
-            # screen; do not make a scheduled job wait for user interaction.
-            return
-        if return_code:
-            stderr = process.stderr.read().decode(errors="replace") if process.stderr else ""
-            raise RuntimeError(
-                f"Windows notification PowerShell exited with code {return_code}: "
-                f"{stderr[:200]}. Choose a different --sink or check PowerShell."
-            )
-    except FileNotFoundError:
-        raise
+        raise RuntimeError(
+            f"Windows notification PowerShell exited with code {return_code}: "
+            f"{stderr[:200]}. Choose a different --sink or check PowerShell."
+        )
 
 
 def _osa(text: str) -> str:
