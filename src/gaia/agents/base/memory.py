@@ -537,6 +537,9 @@ class _ExtractionJob:
     #: When the user said it (ISO). A memory forgotten after this moment is
     #: not stored from this turn, even though the job runs later.
     said_at: Optional[str] = None
+    #: ``MemoryStore.erase_count()`` when the turn began; an erase since drops
+    #: what the job would store.
+    erase_count: Optional[int] = None
 
 
 # ============================================================================
@@ -978,8 +981,8 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         # Step 1: Open/create DB, apply schema migrations
         self._memory_store = MemoryStore(db_path)
-        # An erase from another chat or window shows up as a newer stamp.
-        self._seen_erased_at: Optional[str] = self._memory_store.erased_at()
+        # An erase from another chat or window shows up as a higher count.
+        self._seen_erase_count: Optional[int] = self._memory_store.erase_count()
 
         self._memory_context = context
         self._auto_extract_enabled = True
@@ -2541,6 +2544,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         existing_items: List[Dict],
         context: Optional[str] = None,
         said_at: Optional[str] = None,
+        erase_count: Optional[int] = None,
     ) -> int:
         """Execute the operations returned by _extract_via_llm().
 
@@ -2556,6 +2560,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 a context switch mid-extraction cannot misfile the result.
             said_at: When the turn was said. A memory the user forgot after
                 that is not stored again from it.
+            erase_count: ``MemoryStore.erase_count()`` when the turn began.
+                Once memory is erased since, nothing more is applied.
 
         Returns:
             How many operations were applied.
@@ -2563,14 +2569,14 @@ class MemoryMixin(ProceduralMemoryMixin):
         store = self._memory_store
         target_context = context if context is not None else self._memory_context
         applied = 0
-        if said_at is not None and store.erased_after(said_at):
-            logger.info(
-                "[MemoryMixin] extraction: not stored, the user erased all memory "
-                "after this turn was said"
-            )
-            return applied
-
         for op in operations:
+            # Per op: an erase can land between two writes of the same job.
+            if store.erased_since(erase_count):
+                logger.info(
+                    "[MemoryMixin] extraction: not stored, the user erased all "
+                    "memory after this turn began"
+                )
+                return applied
             try:
                 op_type = op["op"]
 
@@ -2782,6 +2788,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                     )
                     return result
                 try:
+                    # Before reading: an erase from here on drops this window.
+                    erase_count = store.erase_count()
                     # Oldest first — get_history() returns the NEWEST turns.
                     turns = store.get_unconsolidated_turns(
                         session_id, limit=CONSOLIDATION_WINDOW_TURNS
@@ -2847,6 +2855,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                         raw_text = re.sub(r"\s*```$", "", raw_text)
 
                     data = json.loads(raw_text)
+                    if store.erased_since(erase_count):
+                        logger.info(
+                            "[MemoryMixin] consolidation: memory was erased "
+                            "while session %s was summarised; nothing stored",
+                            session_id[:8],
+                        )
+                        return result
 
                     # Store summary as a note
                     summary = data.get("summary", "")
@@ -2859,7 +2874,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                             session_id[:8],
                         )
                         summary = ""
-                    if summary:
+                    if summary and not store.erased_since(erase_count):
                         summary_id = store.store(
                             category="note",
                             content=summary,
@@ -2912,6 +2927,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                                 str(ki["content"])[:80],
                             )
                             continue
+                        if store.erased_since(erase_count):
+                            return result
                         if _copied_from_material(
                             str(ki["content"]), user_said, assistant_said
                         ):
@@ -3248,10 +3265,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         store = getattr(self, "_memory_store", None)
         if store is None:
             return
-        erased_at = store.erased_at()
-        if erased_at is None or erased_at == getattr(self, "_seen_erased_at", None):
+        erase_count = store.erase_count()
+        if erase_count == getattr(self, "_seen_erase_count", 0):
             return
-        self._seen_erased_at = erased_at
+        self._seen_erase_count = erase_count
         logger.info("[MemoryMixin] memory was erased elsewhere; dropping it here")
         self._rebuild_faiss_index()
         self._refresh_stable_memory_prompt()
@@ -3793,7 +3810,11 @@ class MemoryMixin(ProceduralMemoryMixin):
             # before the first turn; report failures through the current handler.
             self.report_memory_unavailable()
 
-            self._drop_memory_erased_elsewhere()
+            # First, so an erase landing anywhere in this turn keeps it out of
+            # memory; a forget in this turn postdates it.
+            self._turn_said_at = datetime.now().astimezone().isoformat()
+            store = getattr(self, "_memory_store", None)
+            self._turn_erase_count = store.erase_count() if store else None
 
             # Run deferred LLM startup tasks on first real query (after self.chat
             # exists). Not in a private or memory-off turn: upkeep sends existing
@@ -3805,10 +3826,11 @@ class MemoryMixin(ProceduralMemoryMixin):
                 with turn_metrics.pre_turn_span(self, "memory_post_init"):
                     self._run_memory_post_init()
 
+            # After upkeep, which can take long enough for an erase to land.
+            self._drop_memory_erased_elsewhere()
+
             # Save original so _after_process_query stores the clean user text
             self._original_user_input = user_input
-            # Before this turn's tools run: a forget in this turn postdates it.
-            self._turn_said_at = datetime.now().astimezone().isoformat()
             self._turn_failures = {}
             self._turn_lessons = []
             self._turn_tool_record = []
@@ -3888,7 +3910,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         error=error_msg,
                         duration_ms=duration_ms,
                         executed=True,
-                        said_at=getattr(self, "_turn_said_at", None),
+                        erase_count=getattr(self, "_turn_erase_count", None),
                     )
                     self._auto_store_error(tool_name, error_msg, tool_args)
                     self._note_failure(tool_name, tool_args, error_msg, None)
@@ -3926,7 +3948,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         error=error_msg,
                         duration_ms=duration_ms,
                         executed=check_was_executed(result),
-                        said_at=getattr(self, "_turn_said_at", None),
+                        erase_count=getattr(self, "_turn_erase_count", None),
                     )
 
                     # Auto-store novel errors as knowledge
@@ -4239,9 +4261,13 @@ class MemoryMixin(ProceduralMemoryMixin):
         Checked by every automatic writer itself, not only its callers: a
         private chat or memory-off must hold whichever path reaches it.
         """
+        store = getattr(self, "_memory_store", None)
+        turn_erase_count = getattr(self, "_turn_erase_count", None)
         return (
             getattr(self, "_incognito", False)
-            or getattr(self, "_memory_store", None) is None
+            or store is None
+            # This turn began before the user erased all of memory.
+            or (turn_erase_count is not None and store.erased_since(turn_erase_count))
         )
 
     def _forget_errors_for_operation(self, tool_name: str, tool_args: Any) -> None:
@@ -4646,13 +4672,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
             else:
                 # A secret refused as a memory must not sit in the searchable log.
-                said_at = getattr(self, "_turn_said_at", None)
+                erase_count = getattr(self, "_turn_erase_count", None)
                 self._memory_store.store_turn(
                     session_id,
                     "user",
                     self._mask_credentials(clean_input),
                     context=ctx,
-                    said_at=said_at,
+                    erase_count=erase_count,
                 )
                 self._memory_store.store_turn(
                     session_id,
@@ -4660,7 +4686,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     self._mask_credentials(response),
                     context=ctx,
                     preserve_full=preserve_full,
-                    said_at=said_at,
+                    erase_count=erase_count,
                 )
         except Exception as e:
             logger.warning("[MemoryMixin] failed to store conversation: %s", e)
@@ -4691,6 +4717,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 read_scope=self._read_scope(),
                 said_at=getattr(self, "_turn_said_at", None)
                 or datetime.now().astimezone().isoformat(),
+                erase_count=getattr(self, "_turn_erase_count", None),
             )
         )
 
@@ -4868,7 +4895,11 @@ class MemoryMixin(ProceduralMemoryMixin):
             )
             applied = (
                 self._execute_extraction_operations(
-                    operations, existing, context=job.context, said_at=job.said_at
+                    operations,
+                    existing,
+                    context=job.context,
+                    said_at=job.said_at,
+                    erase_count=job.erase_count,
                 )
                 if operations
                 else 0
@@ -5493,7 +5524,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 return {"status": "error", "message": str(e)}
             finally:
                 # The rows may be gone even when the scrub fails; stop using them.
-                mixin._seen_erased_at = mixin._memory_store.erased_at()
+                mixin._seen_erase_count = mixin._memory_store.erase_count()
                 mixin._rebuild_faiss_index()
                 mixin._refresh_stable_memory_prompt()
             return {

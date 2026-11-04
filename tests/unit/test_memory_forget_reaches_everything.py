@@ -13,6 +13,7 @@ forgotten trip included, from past conversations. Runs against a real
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -103,13 +104,13 @@ def test_something_said_again_after_forgetting_is_found(store):
 
 def test_learning_queued_before_forget_everything_does_not_refill_memory(store):
     host = _Host(store, [])
-    said = datetime.now().astimezone().isoformat()
+    began = store.erase_count()
     _tool("forget_everything")()
 
     applied = host._execute_extraction_operations(
         [{"op": "add", "category": "fact", "content": "User's name is Jordan"}],
         existing_items=[],
-        said_at=said,
+        erase_count=began,
     )
 
     assert applied == 0
@@ -119,12 +120,11 @@ def test_learning_queued_before_forget_everything_does_not_refill_memory(store):
 def test_something_said_after_forget_everything_is_learned(store):
     host = _Host(store, [])
     _tool("forget_everything")()
-    said = (datetime.now().astimezone() + timedelta(seconds=1)).isoformat()
 
     applied = host._execute_extraction_operations(
         [{"op": "add", "category": "fact", "content": "User's name is Jordan"}],
         existing_items=[],
-        said_at=said,
+        erase_count=store.erase_count(),
     )
 
     assert applied == 1
@@ -226,10 +226,20 @@ def test_erasing_again_after_a_blocked_scrub_clears_the_file(store, tmp_path):
 
 
 class _AgentBase:
+    """The agent loop: runs *during_turn* in place of the model's tool calls."""
+
+    during_turn = None
+
     def process_query(self, user_input, **kwargs):
+        if self.during_turn is not None:
+            self.during_turn()
         return self.get_memory_system_prompt()
 
     def _execute_tool(self, tool_name, tool_args):
+        if tool_args.get("path") == "missing.txt":
+            return {"status": "error", "error": "File not found: missing.txt"}
+        if tool_args.get("command") == "pytest -x":
+            return {"status": "error", "error": "unrecognized arguments: -x"}
         return {"status": "success", "result": "done"}
 
     def rebuild_system_prompt(self):
@@ -243,7 +253,27 @@ class _Chat(_Host, _AgentBase):
 def _open_chat(store, session_id):
     chat = _Chat(store, [])
     chat._memory_session_id = session_id
+    chat._auto_extract_enabled = False
     return chat
+
+
+def _turn(chat, user_input, reply="Done."):
+    prompt = chat.process_query(user_input)
+    chat._after_process_query(user_input, reply)
+    return prompt
+
+
+def _erase_from_memory_page(tmp_path):
+    """Erase the way the Memory page does: its own connection to the file."""
+    page = MemoryStore(db_path=tmp_path / "memory.db")
+    try:
+        page.clear_all()
+    finally:
+        page.close()
+
+
+def _rows(store, table, where=""):
+    return store._conn.execute(f"SELECT COUNT(*) FROM {table} {where}").fetchone()[0]
 
 
 def test_another_open_chat_stops_showing_what_forget_everything_erased(store):
@@ -283,40 +313,112 @@ def test_a_chat_with_nothing_erased_keeps_its_frozen_prompt(store):
     assert chat.process_query("hello again") == first
 
 
-def _rows(store, table):
-    return store._conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-
-
-def test_a_turn_finishing_after_forget_everything_writes_no_history(store):
+def test_an_erase_during_a_turn_keeps_the_turn_out_of_memory(store, tmp_path):
     chat = _open_chat(store, "s-busy")
-    chat._turn_said_at = datetime.now().astimezone().isoformat()
-    chat._original_user_input = "Book my trip to Lisbon in December"
-    chat._auto_extract_enabled = False
 
-    assert _tool("forget_everything")()["status"] == "cleared"
-    chat._execute_tool("search_web", {"query": "Lisbon flights December"})
-    chat._after_process_query(
-        "Book my trip to Lisbon in December", "I found three Lisbon flights."
-    )
+    def tools_then_erase_then_tools():
+        chat._execute_tool("run_shell_command", {"command": "pytest -x"})
+        _erase_from_memory_page(tmp_path)
+        # A fix (a lesson), a new failure (an error memory) and a plain call.
+        chat._execute_tool("run_shell_command", {"command": "pytest -q"})
+        chat._execute_tool("read_file", {"path": "missing.txt"})
+        chat._execute_tool("search_web", {"query": "Lisbon flights December"})
 
+    chat.during_turn = tools_then_erase_then_tools
+    _turn(chat, "Book my trip to Lisbon in December", "I found three flights.")
+
+    assert _rows(store, "knowledge") == 0
     assert _rows(store, "conversations") == 0
     assert _rows(store, "tool_history") == 0
 
 
-def test_a_turn_said_after_forget_everything_is_logged(store):
-    chat = _open_chat(store, "s-new")
-    chat._auto_extract_enabled = False
-    _tool("forget_everything")()
-    chat._turn_said_at = (
-        datetime.now().astimezone() + timedelta(seconds=1)
-    ).isoformat()
-    chat._original_user_input = "Plan a trip to Porto"
+def test_an_erase_while_the_turn_starts_up_keeps_it_out_of_memory(store, tmp_path):
+    store.store(category="fact", content="User's trip to Lisbon is in December")
+    chat = _open_chat(store, "s-starting")
+    assert "Lisbon" in chat.process_query("hi")
+    chat._memory_post_init_pending = True
+    chat._run_memory_post_init = lambda: _erase_from_memory_page(tmp_path)
 
-    chat._execute_tool("search_web", {"query": "Porto"})
-    chat._after_process_query("Plan a trip to Porto", "Here is a Porto plan.")
+    prompt = _turn(chat, "When is my Lisbon trip?", "It is in December.")
+
+    assert "Lisbon" not in prompt
+    assert _rows(store, "conversations") == 0
+
+
+def test_a_turn_begun_after_forget_everything_is_logged(store):
+    chat = _open_chat(store, "s-new")
+    _tool("forget_everything")()
+    chat.during_turn = lambda: chat._execute_tool("search_web", {"query": "Porto"})
+
+    _turn(chat, "Plan a trip to Porto", "Here is a Porto plan.")
 
     assert _rows(store, "conversations") == 2
     assert _rows(store, "tool_history") == 1
+
+
+def test_an_erase_between_two_extracted_memories_stops_the_second(
+    store, tmp_path, monkeypatch
+):
+    host = _Host(store, [])
+    began = store.erase_count()
+    monkeypatch.setattr(
+        host,
+        "_embed_and_index",
+        lambda *args: _erase_from_memory_page(tmp_path),
+    )
+
+    applied = host._execute_extraction_operations(
+        [
+            {"op": "add", "category": "fact", "content": "User's name is Jordan"},
+            {"op": "add", "category": "fact", "content": "Jordan lives in Lisbon"},
+        ],
+        existing_items=[],
+        erase_count=began,
+    )
+
+    assert applied == 1
+    assert _rows(store, "knowledge") == 0
+
+
+def test_an_erase_while_an_old_chat_is_summarised_stores_nothing(store, tmp_path):
+    host = _Host(store, [])
+    for i in range(6):
+        store.store_turn("s-old", "user", f"My trip to Lisbon with Sam, part {i}")
+    old = (datetime.now().astimezone() - timedelta(days=30)).isoformat()
+    store._conn.execute("UPDATE conversations SET timestamp = ?", (old,))
+    store._conn.commit()
+    reply = (
+        '{"summary": "User planned a Lisbon trip with Sam.", "knowledge": '
+        '[{"category": "fact", "content": "User is travelling to Lisbon with Sam"}]}'
+    )
+
+    def summarise(messages, **kwargs):
+        _erase_from_memory_page(tmp_path)
+        return MagicMock(text=reply, finish_reason="stop")
+
+    host.chat.send_messages.side_effect = summarise
+
+    result = host.consolidate_old_sessions()
+
+    assert result["extracted_items"] == 0
+    assert _rows(store, "knowledge") == 0
+
+
+def test_forget_everything_erases_the_goals_skill_learning_kept(store, tmp_path):
+    _Host(store, [])
+    store.mark_sessions_synthesized(
+        ["s-trip"],
+        outcome="unusable",
+        goal="Plan my Lisbon trip with Sam",
+        detail="Lisbon plan had one step",
+    )
+
+    _tool("forget_everything")()
+
+    marks = store.get_synthesis_marks(["s-trip"])
+    assert marks["s-trip"]["outcome"] == "unusable"
+    assert marks["s-trip"]["goal"] is None
+    assert b"lisbon" not in _on_disk(tmp_path)
 
 
 def test_forget_everything_leaves_deleted_chats_deleted(store):

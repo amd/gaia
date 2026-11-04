@@ -1070,7 +1070,7 @@ class MemoryStore:
         context: str = "global",
         *,
         preserve_full: bool = False,
-        said_at: str | None = None,
+        erase_count: int | None = None,
     ) -> None:
         """Store one conversation turn.
 
@@ -1081,8 +1081,9 @@ class MemoryStore:
         turn up to 256000 characters, or fail explicitly above that bound.
         Empty or whitespace-only turns are silently skipped — they add no
         signal to conversation history and pollute FTS5 with empty entries.
-        A turn said (``said_at``, ISO) before all of memory was erased is
-        dropped, so a turn still finishing does not refill the log.
+        A turn that began before all of memory was erased (``erase_count`` as
+        read then, see :meth:`erase_count`) is dropped, so a turn still
+        finishing does not refill the log.
         """
         if not content or not content.strip():
             return  # Skip empty turns
@@ -1094,10 +1095,10 @@ class MemoryStore:
             content = content[:MAX_TURN_LENGTH]
         now = _now_iso()
         with self._locked():
-            if self._erased_after_locked(said_at):
+            if erase_count is not None and self._erase_count_locked() != erase_count:
                 logger.info(
                     "[MemoryStore] turn not stored: all memory was erased after "
-                    "it was said"
+                    "it began"
                 )
                 return
             try:
@@ -2774,12 +2775,12 @@ class MemoryStore:
         error: str | None = None,
         duration_ms: int | None = None,
         executed: bool = True,
-        said_at: str | None = None,
+        erase_count: int | None = None,
     ) -> None:
         """Log a tool call to tool_history.
 
-        Dropped when its turn was said (``said_at``, ISO) before all of memory
-        was erased.
+        Dropped when all of memory was erased after its turn began
+        (``erase_count`` as read then).
         """
         now = _now_iso()
         args_json = _bounded_args_json(args)
@@ -2792,10 +2793,10 @@ class MemoryStore:
             error = error[:MAX_FTS_QUERY_LENGTH]
 
         with self._locked():
-            if self._erased_after_locked(said_at):
+            if erase_count is not None and self._erase_count_locked() != erase_count:
                 logger.info(
                     "[MemoryStore] %s call not logged: all memory was erased "
-                    "after its turn was said",
+                    "after its turn began",
                     tool_name,
                 )
                 return
@@ -4580,29 +4581,30 @@ class MemoryStore:
                 raise
         logger.info("[MemoryStore] FTS5 indexes rebuilt")
 
-    _ERASED_META_KEY = "erased_at"
+    _ERASE_COUNT_KEY = "erase_count"
 
-    def erased_at(self) -> Optional[str]:
-        """When all of memory was last erased (an ISO timestamp), or None."""
+    def erase_count(self) -> int:
+        """How many times all of memory has been erased.
+
+        Work that started before an erase holds the count it saw and drops its
+        writes once the count moves. A counter, not a time, so a clock set
+        ahead or back cannot drop or let through every later write.
+        """
         with self._locked():
-            return self._erased_at_locked()
+            return self._erase_count_locked()
 
-    def _erased_at_locked(self) -> Optional[str]:
+    def _erase_count_locked(self) -> int:
         row = self._conn.execute(
-            "SELECT value FROM meta WHERE key = ?", (self._ERASED_META_KEY,)
+            "SELECT value FROM meta WHERE key = ?", (self._ERASE_COUNT_KEY,)
         ).fetchone()
-        return row[0] if row is not None else None
+        return int(row[0]) if row is not None else 0
 
-    def erased_after(self, said_at: str) -> bool:
-        """Whether all of memory was erased at or after *said_at* (an ISO timestamp)."""
-        with self._locked():
-            return self._erased_after_locked(said_at)
-
-    def _erased_after_locked(self, said_at: Optional[str]) -> bool:
-        if said_at is None:
+    def erased_since(self, erase_count: Optional[int]) -> bool:
+        """Whether memory was erased after *erase_count* was read (None: no)."""
+        if erase_count is None:
             return False
-        erased = self._erased_at_locked()
-        return erased is not None and _as_datetime(erased) >= _as_datetime(said_at)
+        with self._locked():
+            return self._erase_count_locked() != erase_count
 
     def clear_all(self) -> Dict:
         """Permanently delete all knowledge, tool history, and conversation data.
@@ -4636,11 +4638,16 @@ class MemoryStore:
                     self._conn.execute(f"INSERT INTO {fts}({fts}) VALUES('optimize')")
                 # No conversation is left to relearn from.
                 self._conn.execute("DELETE FROM forgotten")
-                # A learning job still queued from before must not refill memory.
+                # Session goals are the user's own first message; the marks
+                # stay so learned procedures are not distilled again.
+                self._conn.execute(
+                    "UPDATE synthesis_marks SET goal = NULL, detail = NULL"
+                )
+                # Work begun before this must not refill memory.
                 self._conn.execute(
                     "INSERT INTO meta (key, value) VALUES (?, ?) "
                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    (self._ERASED_META_KEY, datetime.now().astimezone().isoformat()),
+                    (self._ERASE_COUNT_KEY, str(self._erase_count_locked() + 1)),
                 )
                 self._conn.commit()
             except Exception:
