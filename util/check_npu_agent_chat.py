@@ -548,6 +548,12 @@ def run(args: argparse.Namespace) -> None:
             raise CheckFailed(f"teardown failed: {'; '.join(trouble)}")
 
 
+def _utf8_stdout() -> None:
+    """Echo gaia init's output on a Windows cp1252 console without crashing."""
+    if (sys.stdout.encoding or "").lower() not in ("utf-8", "utf8"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--model", required=True, help="FLM chat model to test")
@@ -562,6 +568,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="pass --force-models to gaia init (re-downloads cached models)",
     )
     args = parser.parse_args(argv)
+    _utf8_stdout()
     try:
         run(args)
     except CheckFailed as e:
