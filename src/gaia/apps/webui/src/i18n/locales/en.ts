@@ -1303,6 +1303,7 @@ export const enMessages = {
     'engine.hint.network': 'Check your internet connection, then try again.',
     'engine.hint.tls': 'Your network doesn’t trust the download server’s certificate, which usually means a company proxy. Ask your IT team to trust it, then try again.',
     'engine.hint.locked': 'Another program still has GAIA’s files open. Close other GAIA apps and terminals, or restart your PC, then try again.',
+    'engine.hint.daemon': 'GAIA’s background service is still running and has no window to close. Restart your PC, then try again.',
     'engine.locked.gaia': 'Another copy of GAIA ({name}, started from {folder}) has GAIA’s files open.',
     'engine.locked.gaiaNoFolder': 'Another copy of GAIA ({name}) has GAIA’s files open.',
     'engine.locked.other': 'Another program ({name}, in {folder}) has GAIA’s files open.',
