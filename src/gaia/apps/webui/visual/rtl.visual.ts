@@ -235,6 +235,17 @@ const audit = (page: Page): Promise<string[]> =>
             }
         }
 
+        // A failed reply's text keeps clear of its red bar, on whichever side the bar sits.
+        for (const reply of document.querySelectorAll('.msg-error')) {
+            const body = reply.querySelector('.msg-body');
+            if (!body || !shown(reply)) continue;
+            const box = reply.getBoundingClientRect();
+            const inner = body.getBoundingClientRect();
+            const rtl = getComputedStyle(reply).direction === 'rtl';
+            const gap = rtl ? box.right - inner.right : inner.left - box.left;
+            if (gap < 8) problems.push(`failed reply's text touches its bar (${Math.round(gap)}px): ${label(reply)}`);
+        }
+
         // An icon and its label need space between them, in either direction.
         for (const button of document.querySelectorAll('button')) {
             const icon = button.querySelector(':scope > svg');
@@ -262,6 +273,40 @@ test('finished answer', async ({ page }) => {
     await expect(page.getByText('Action items from Aug 28')).toBeVisible();
     expect(await audit(page)).toEqual([]);
 });
+
+/** POST /api/chat/send answers with one "Reading your request" status, then holds the turn open. */
+function holdOnReading(): void {
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (!url.includes('/api/chat/send')) return realFetch(input, init);
+        const event = { type: 'status', status: 'working', phase: 'reading', message: 'Reading your request' };
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+            },
+        });
+        return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+}
+
+for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 'Reading your request']] as const) {
+    test(`live status line while the answer is prepared (${locale})`, async ({ page }) => {
+        await page.addInitScript(holdOnReading);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Summarize the minutes');
+        await box.press('Enter');
+        const line = page.locator('.thinking-indicator').last();
+        await expect(line.locator('.thinking-indicator-text')).toContainText(reading);
+        await page.clock.setFixedTime(NOW.getTime() + 12_000);
+        const seconds = line.locator('.thinking-indicator-elapsed bdi');
+        await expect(seconds).toHaveText(/^\d+s$/);
+        expect(await seconds.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+        await shot(page, `live-status-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
 
 test('documents', async ({ page }) => {
     await open(page);
@@ -331,6 +376,40 @@ test('session panel with Arabic names', async ({ page }) => {
     const gaps = await arabicNameGaps(page);
     expect(gaps).toHaveLength(2);
     for (const gap of gaps) expect(gap.right, gap.name ?? '').toBeLessThanOrEqual(1);
+    expect(await audit(page)).toEqual([]);
+});
+
+test('a long hyphenated folder path wraps as one unit, below its Arabic label', async ({ page }) => {
+    const path = `C:\\gtest\\h-r6\\${'a-long-folder-name\\'.repeat(4)}.gaia\\documents`;
+    await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {
+        await p.route(`**/api/sessions/${ANSWER_SESSION}/environment`, (route) =>
+            route.fulfill({
+                json: {
+                    session_id: ANSWER_SESSION,
+                    folders: [{ path, kind: 'folder', source: 'gaia_documents', removable: false }],
+                    removed: [], internet: true, enforced: true,
+                },
+            }),
+        );
+    });
+    const el = page.locator('.sp-item-path', { hasText: 'h-r6' });
+    await expect(el).toBeVisible();
+    const layout = await el.evaluate((node) => {
+        const box = node.getBoundingClientRect();
+        const text = document.createRange();
+        text.selectNodeContents(node);
+        const label = document.createRange();
+        label.setStart(node.parentElement!, 0);
+        label.setEndBefore(node);
+        return {
+            lines: new Set([...text.getClientRects()].map((r) => Math.round(r.top))).size,
+            boxes: node.getClientRects().length,
+            labelInside: [...label.getClientRects()].some((r) => r.width > 0 && r.bottom > box.top + 1),
+        };
+    });
+    expect(layout.lines, 'the path should be long enough to wrap').toBeGreaterThan(1);
+    expect(layout.boxes, 'the path splits into pieces around the label').toBe(1);
+    expect(layout.labelInside, 'the label sits between the halves of the path').toBe(false);
     expect(await audit(page)).toEqual([]);
 });
 
@@ -664,20 +743,20 @@ for (const locale of ['ar', 'en']) {
 }
 
 /** Visible text left in English on an Arabic screen; names and paths sit in <bdi>. */
-const untranslated = (page: Page, scope = '.settings-scroll'): Promise<string[]> =>
-    page.evaluate((scope) => {
-        const root = document.querySelector(scope) as Element;
+const untranslated = (page: Page, within = '.settings-scroll', userText = 'bdi'): Promise<string[]> =>
+    page.evaluate(([selector, skip]) => {
+        const root = document.querySelector(selector) as Element;
         const left = new Set<string>();
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
         for (let n = walker.nextNode(); n; n = walker.nextNode()) {
             const text = n.textContent?.trim() ?? '';
             const el = n.parentElement as Element;
             if (!/[A-Za-z]{3}/.test(text) || /[\u0600-\u06ff]/.test(text) || !el.checkVisibility()) continue;
-            if (el.closest('.i18n-gloss, code, bdi, kbd, select, .provider-tab, .skill-row-name, .connector-tile-type, .beta-badge, .status-label, .status-value')) continue;
+            if (el.closest(`.i18n-gloss, code, bdi, kbd, select, .provider-tab, .skill-row-name, .connector-tile-type, .beta-badge, .status-label, .status-value, ${skip}`)) continue;
             left.add(text.slice(0, 60));
         }
         return [...left];
-    }, scope);
+    }, [within, userText]);
 
 const LOCAL_STATUS = {
     state: 'loaded', active_model: 'Gemma-4-E4B-it-GGUF', active_display_name: 'Gemma 4 E4B', active_remote: false,
@@ -719,6 +798,82 @@ for (const section of ['general', 'permissions', 'skills', 'memory', 'notificati
     });
 }
 
+/** Schedules with a failed run, a chat to open and a run history; and a "when" GAIA can't read. */
+async function withSchedules(page: Page, schedules: unknown[] = SCHEDULE_ROWS): Promise<void> {
+    await page.route('**/api/schedules', (route) => route.fulfill({ json: { schedules, total: schedules.length } }));
+    await page.route('**/api/schedules/*/results*', (route) => route.fulfill({
+        json: { results: [
+            { id: 'r1', task_id: 's1', executed_at: new Date(NOW.getTime() - 7 * 60_000).toISOString(), result: '3 new items', error: null },
+            { id: 'r2', task_id: 's1', executed_at: new Date(NOW.getTime() - 3 * 3_600_000).toISOString(), result: null, error: 'The model server stopped.' },
+        ] },
+    }));
+    await page.route('**/api/schedules/parse', (route) => route.fulfill({
+        json: { interval_seconds: 0, time_of_day: null, start_hour: null, end_hour: null, days_of_week: null, description: "25:00 isn't a time — use 0:00–23:59.", next_run_at: null, valid: false },
+    }));
+}
+
+const SCHEDULE_ROW = {
+    id: 's1', name: 'Morning brief', interval_seconds: 86_400, prompt: 'Summarize my unread email and calendar for today',
+    status: 'active', created_at: null, last_run_at: new Date(NOW.getTime() - 7 * 60_000).toISOString(),
+    next_run_at: new Date(NOW.getTime() + 17 * 60_000).toISOString(), last_result: '3 new items', run_count: 9, error_count: 1,
+    session_id: 'chat-1', schedule_config: null, description: 'Daily at 8:00 AM', last_error: 'The model server stopped.',
+};
+const SCHEDULE_ROWS = [SCHEDULE_ROW, { ...SCHEDULE_ROW, id: 's2', name: 'Weekly budget check-in', status: 'paused', next_run_at: null, error_count: 0, last_error: null, session_id: null, description: 'Every Monday at 9:00 AM' }];
+
+/** Titles, labels and placeholders in the schedules dialog that carry no Arabic. */
+const untranslatedAttributes = (page: Page): Promise<string[]> =>
+    page.locator('.schedule-modal').evaluate((root) =>
+        [root.closest('[role="dialog"]')!, ...root.querySelectorAll('[title], [aria-label], [placeholder]')].flatMap((el) =>
+            ['aria-label', 'placeholder', ...(el.closest('.schedule-card-meta') ? [] : ['title'])]
+                .map((a) => el.getAttribute(a) ?? '')
+                .filter((v) => /[A-Za-z]{3}/.test(v) && !/[؀-ۿ]/.test(v))));
+
+for (const locale of ['ar', 'en']) {
+    test.describe(`scheduled tasks (${locale})`, () => {
+        const openSchedules = async (page: Page, schedules?: unknown[]) => {
+            await open(page, '', locale, (p) => withSchedules(p, schedules));
+            await page.locator('.sb').getByRole('button', { name: locale === 'ar' ? /المهام المجدولة/ : /Scheduled tasks/ }).click();
+            await expect(page.locator('.schedule-modal')).toBeVisible();
+        };
+        const check = async (page: Page, name: string) => {
+            await shot(page, `schedules-${locale}-${name}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') {
+                expect(await untranslated(page, '.schedule-modal', '[dir="auto"], textarea')).toEqual([]);
+                expect(await untranslatedAttributes(page)).toEqual([]);
+            }
+        };
+
+        test('empty', async ({ page }) => {
+            await openSchedules(page, []);
+            await expect(page.locator('.schedule-empty')).toBeVisible();
+            await check(page, 'empty');
+        });
+
+        test('list with a failed run and its history open', async ({ page }) => {
+            await openSchedules(page);
+            await page.locator('.schedule-card').first().click();
+            await expect(page.locator('.schedule-result-item')).toHaveCount(2);
+            await check(page, 'list');
+        });
+
+        test('new schedule, nothing typed yet', async ({ page }) => {
+            await openSchedules(page, []);
+            await page.locator('.schedule-modal .btn-primary').click();
+            await expect(page.locator('.schedule-nl-input')).toBeVisible();
+            await check(page, 'form-empty');
+        });
+
+        test('new schedule with a "when" GAIA cannot read', async ({ page }) => {
+            await openSchedules(page);
+            await page.locator('.schedule-modal .btn-primary').click();
+            await page.locator('.schedule-nl-input').fill('daily at 25:00');
+            await expect(page.locator('.schedule-parsed-hint')).toBeVisible();
+            await check(page, 'form-invalid');
+        });
+    });
+}
+
 const RAW_SERVER_ERROR = "The local model server is not reachable at http://127.0.0.1:59987/api/v1 (HTTPConnectionPool(host='127.0.0.1', port=59987): Max retries exceeded)";
 
 for (const locale of ['ar', 'en']) {
@@ -737,6 +892,72 @@ for (const locale of ['ar', 'en']) {
         await expect(page.getByText('HTTPConnectionPool')).toBeHidden();
         await expect(page.locator('.settings-notice .btn-secondary')).toBeVisible();
         await shot(page, `model-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+/** GAIA answered once that this chat was running, then stopped listening. */
+async function withGaiaStoppedMidAnswer(page: Page): Promise<void> {
+    let polls = 0;
+    await page.route('**/api/chat/active', (route) => (polls++ === 0
+        ? route.fulfill({ json: { session_ids: [ANSWER_SESSION], queued: [], awaiting_user: {} } })
+        : route.abort('connectionrefused')));
+    await page.route(/\/api\/(chat\/attach|sessions\/[^/]+\/(changes|outputs))/, (route) => route.abort('connectionrefused'));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`GAIA stopped mid-answer: plain words, a retry, no raw error, not running (${locale})`, async ({ page }) => {
+        test.setTimeout(60_000);
+        await open(page, `#${ANSWER_SESSION}`, locale, withGaiaStoppedMidAnswer);
+        const stopped = locale === 'ar' ? 'توقّف GAIA قبل أن يُكمل هذه الإجابة' : 'GAIA stopped before it finished this answer';
+        // Three re-attaches, the last 10 s after the second.
+        await expect(page.getByText(stopped)).toBeVisible({ timeout: 30_000 });
+        await expect(page.getByText(/Failed to fetch/)).toHaveCount(0);
+        await expect(page.getByText(/may still finish/)).toHaveCount(0);
+        await expectVisibleTryAgain(page, locale);
+        await expect(page.locator('.sb-dot.is-running')).toHaveCount(0);
+        await shot(page, `gaia-stopped-mid-answer-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+/** The reply's text asks the user to press Try again, so the button must be on screen, labelled, without a hover. */
+async function expectVisibleTryAgain(page: Page, locale: string): Promise<void> {
+    const retry = page.getByRole('button', { name: /Try again/ });
+    await expect(retry).toHaveCount(1);
+    await expect(retry).toHaveText(locale === 'ar' ? /حاول مجددًا/ : /Try again/);
+    const opacity = await retry.evaluate((el) => {
+        let o = 1;
+        for (let at: Element | null = el; at; at = at.parentElement) o *= Number(getComputedStyle(at).opacity);
+        return o;
+    });
+    expect(opacity).toBeGreaterThan(0.99);
+}
+
+const PARTIAL_ANSWER = 'Coral reefs cover less than one percent of the ocean floor.';
+const INTERRUPTED_NOTICE = 'This answer was interrupted when GAIA closed. Send again to retry.';
+
+/** What a reopened chat holds after GAIA restarted: the saved part of the answer, closed by the server's notice. */
+async function withInterruptedAnswer(page: Page): Promise<void> {
+    await page.route(new RegExp(`/api/sessions/${ANSWER_SESSION}/messages(\\?|$)`), (route) => route.fulfill({
+        json: {
+            messages: [
+                { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Write a 1500-word essay about coral reefs.', created_at: '2026-06-10T00:00:00Z', rag_sources: null },
+                { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: `${PARTIAL_ANSWER}\n\n${INTERRUPTED_NOTICE}`, created_at: '2026-06-10T00:00:05Z', rag_sources: null },
+            ],
+            total: 2,
+        },
+    }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`after GAIA restarts, a cut-off answer says so in plain words and offers Try again (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withInterruptedAnswer);
+        await expect(page.getByText(PARTIAL_ANSWER)).toBeVisible();
+        if (locale === 'ar') await expect(page.getByText('انقطعت هذه الإجابة عندما أُغلق GAIA')).toBeVisible();
+        await expect(page.getByText(/Send again to retry/)).toHaveCount(0);
+        await expectVisibleTryAgain(page, locale);
+        await shot(page, `gaia-restarted-interrupted-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
 }

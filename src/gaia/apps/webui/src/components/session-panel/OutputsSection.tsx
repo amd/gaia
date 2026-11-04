@@ -9,12 +9,13 @@ import {
 } from 'lucide-react';
 import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
+import { requestErrorParam } from '../../utils/requestErrors';
 import { log } from '../../utils/logger';
 import { useTurnEnd } from '../../hooks/useTurnEnd';
 import { useUndoEvents } from '../../utils/undoEvents';
 import { PanelSection } from './PanelSection';
 import type { OutputItem, OutputKind } from '../../types/sessionPanel';
-import { ref, type MessageKey, type Params } from '../../i18n/registry';
+import { ref, type MessageKey, type Param, type Params } from '../../i18n/registry';
 import { tEn, useT, type Translate } from '../../i18n/useT';
 
 /** Rows shown before "Show more". */
@@ -30,11 +31,6 @@ const KIND: Record<OutputKind, { label: MessageKey; Icon: typeof FileText }> = {
 };
 
 const CHANGE_LABEL = { created: 'out.change.created', edited: 'out.change.edited', deleted: 'out.change.deleted' } as const;
-
-function errorText(err: unknown): string {
-    if (err instanceof api.ApiError) return err.detail || err.message;
-    return err instanceof Error ? err.message : String(err);
-}
 
 /** "3 min ago", from a UTC `YYYY-MM-DD HH:MM:SS`. */
 export function whenText(utc: string | null, now = Date.now(), t: Translate = tEn): string {
@@ -78,7 +74,7 @@ export function OutputsSection({ sessionId, busy, onJumpToMessage }: OutputsSect
 function OutputsList({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) {
     const t = useT();
     const [items, setItems] = useState<OutputItem[] | null>(null);
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<Param | null>(null);
     const [actionError, setActionError] = useState<string | null>(null);
     const [all, setAll] = useState(false);
 
@@ -94,7 +90,7 @@ function OutputsList({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) 
             .catch((err) => {
                 if (!live) return;
                 log.ui.warn(`Could not list what session=${sessionId} produced`, err);
-                setError(errorText(err));
+                setError(requestErrorParam(err));
             });
         return () => { live = false; };
     }, [sessionId]);
@@ -105,7 +101,7 @@ function OutputsList({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) 
 
     const act = (op: Promise<unknown>, name: string) => {
         setActionError(null);
-        op.catch((err) => setActionError(t('sp.couldntOpen', { name, error: errorText(err) })));
+        op.catch((err) => setActionError(t('sp.couldntOpen', { name, error: requestErrorParam(err) })));
     };
 
     if (error) return <p className="sp-error">{t('out.listError', { error })}</p>;
