@@ -2344,3 +2344,89 @@ def test_no_build_reason_reads_a_release_candidates_own_build(tmp_path, monkeypa
         platform_key="linux-arm64",
         install_root=tmp_path,
     )
+
+
+# ---------------------------------------------------------------------------
+# A manifest of the wrong shape is a loud catalog error naming the URL, never a
+# crash deep in version or artifact selection.
+# ---------------------------------------------------------------------------
+
+
+def _break(manifest, how):
+    entry = manifest["versions"][manifest["latest_version"]]
+    if how == "artifacts as a dict":
+        entry["artifacts"] = {a["filename"]: a for a in entry["artifacts"]}
+    elif how == "an artifact with no path":
+        del entry["artifacts"][0]["path"]
+    elif how == "an artifact with no filename":
+        del entry["artifacts"][0]["filename"]
+    elif how == "a numeric checksum":
+        entry["artifacts"][0]["sha256"] = 1234
+    elif how == "an artifact that is a string":
+        entry["artifacts"][0] = "gaia-agent-win32-x64.exe"
+    elif how == "versions as a list":
+        manifest["versions"] = [entry]
+    elif how == "a version that is a string":
+        manifest["versions"][manifest["latest_version"]] = "0.1.0"
+    elif how == "requirements as a string":
+        manifest["requirements"] = "win-x64"
+    elif how == "platforms as a string":
+        manifest["requirements"]["platforms"] = "win-x64"
+    elif how == "a singular artifact that is a list":
+        entry["artifact"] = [entry["artifact"]]
+    elif how == "a size that is text":
+        entry["artifacts"][0]["size_bytes"] = "12 MB"
+    return manifest
+
+
+_BROKEN_SHAPES = [
+    "artifacts as a dict",
+    "an artifact with no path",
+    "an artifact with no filename",
+    "a numeric checksum",
+    "an artifact that is a string",
+    "versions as a list",
+    "a version that is a string",
+    "requirements as a string",
+    "platforms as a string",
+    "a singular artifact that is a list",
+    "a size that is text",
+]
+
+
+@pytest.mark.parametrize("how", _BROKEN_SHAPES)
+def test_a_malformed_manifest_is_a_catalog_error_naming_the_url(tmp_path, how):
+    from gaia.hub import catalog
+
+    manifest = _break(
+        _binary_manifest(platform_keys=("win32-x64",), singular_key="win32-x64"), how
+    )
+    fetcher, _ = _serving_manifest(manifest)
+
+    with pytest.raises(catalog.CatalogError) as exc:
+        installer.no_build_reason(
+            "email",
+            base_url=BASE,
+            fetcher=fetcher,
+            platform_key="win32-x64",
+            install_root=tmp_path,
+        )
+
+    assert catalog.manifest_url("email", BASE) in str(exc.value)
+    assert "malformed" in str(exc.value)
+
+
+def test_a_well_formed_manifest_still_installs(tmp_path):
+    manifest = _binary_manifest(platform_keys=("win32-x64",), singular_key="win32-x64")
+    fetcher, _ = _serving_manifest(manifest)
+
+    assert (
+        installer.no_build_reason(
+            "email",
+            base_url=BASE,
+            fetcher=fetcher,
+            platform_key="win32-x64",
+            install_root=tmp_path,
+        )
+        is None
+    )

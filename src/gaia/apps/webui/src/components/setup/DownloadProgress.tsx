@@ -54,7 +54,8 @@ const STATE_KEY: Record<SetupModelState, Parameters<Translate>[0]> = {
 export function downloadsActive(status: SetupRunStatus | null): boolean {
     if (!status) return false;
     if (status.state === 'running' || status.state === 'verifying') return true;
-    return !!status.models?.some((m) => m.state === 'downloading' || m.state === 'queued');
+    // A row verifying outside a run is Retry testing it again.
+    return !!status.models?.some((m) => m.state === 'downloading' || m.state === 'queued' || m.state === 'verifying');
 }
 
 function failureText(m: SetupModelProgress, name: string, freeGb: number | null, t: Translate): string {
@@ -68,6 +69,14 @@ function failureText(m: SetupModelProgress, name: string, freeGb: number | null,
         }
         case 'verify':
             return t('setup.fail.verify', { name });
+        case 'memory':
+            return t('setup.fail.testMemory', { name });
+        case 'stuck':
+            return t('setup.fail.testStuck', { name });
+        case 'answer':
+            return t('setup.fail.testAnswer', { name });
+        case 'window':
+            return t('setup.fail.testWindow', { name });
         case 'path_too_long':
             return t('setup.fail.pathTooLong', { name });
         default:
@@ -267,8 +276,9 @@ export function DownloadProgress({ status, names, freeGb = null, onCancel, onRet
     const [announce, setAnnounce] = useState('');
     const [alert, setAlert] = useState('');
     const seen = useRef<{ states: Map<string, SetupModelState>; quarter: number } | null>(null);
-    // The run's load check: when each row started being checked, for its elapsed time.
-    const checking = status.state === 'verifying';
+    // The run's load check, or Retry testing a row again: when each row started, for its elapsed time.
+    const checking = status.state === 'verifying'
+        || (status.state !== 'running' && models.some((m) => m.state === 'verifying'));
     const checkStarted = useRef(new Map<string, number>());
 
     // A countdown (keep trying) and a check's elapsed time move between polls.

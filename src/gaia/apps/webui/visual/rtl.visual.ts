@@ -602,9 +602,9 @@ for (const locale of ['ar', 'en']) {
 }
 
 /** Visible text left in English on an Arabic screen; names and paths sit in <bdi>. */
-const untranslated = (page: Page): Promise<string[]> =>
-    page.evaluate(() => {
-        const root = document.querySelector('.settings-scroll') as Element;
+const untranslated = (page: Page, scope = '.settings-scroll'): Promise<string[]> =>
+    page.evaluate((scope) => {
+        const root = document.querySelector(scope) as Element;
         const left = new Set<string>();
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
         for (let n = walker.nextNode(); n; n = walker.nextNode()) {
@@ -615,7 +615,34 @@ const untranslated = (page: Page): Promise<string[]> =>
             left.add(text.slice(0, 60));
         }
         return [...left];
-    });
+    }, scope);
+
+const LOCAL_STATUS = {
+    state: 'loaded', active_model: 'Gemma-4-E4B-it-GGUF', active_display_name: 'Gemma 4 E4B', active_remote: false,
+    model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B',
+    placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'reported', warning: null },
+    ctx_size: 65536, memory: { source: 'AMD iGPU', total_gb: 112, free_gb: 80.5, model_gb: 30.8 }, memory_error: null,
+    error: null, base_url: 'http://127.0.0.1:13305', owner: 'gaia', busy: false, restarting: false, restart_error: null,
+};
+
+const POPOVER_STATES: Array<[string, Record<string, unknown>]> = [
+    ['local', LOCAL_STATUS],
+    ['cloud', { ...LOCAL_STATUS, active_model: 'deepseek-v4p1-flash', active_display_name: 'DeepSeek V4.1 Flash', active_remote: true }],
+];
+
+for (const locale of ['ar', 'en']) {
+    for (const [state, status] of POPOVER_STATES) {
+        test(`sidebar model-status popover: ${state} (${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => { await p.route('**/api/providers/local/status', (route) => route.fulfill({ json: status })); });
+            await page.locator('.sb-location').click();
+            const popover = page.locator('.popover .model-status');
+            await expect(popover.locator('.model-status-grid')).toBeVisible();
+            await shot(page, `model-status-${locale}-${state}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.popover .model-status')).toEqual([]);
+        });
+    }
+}
 
 for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
     test(`settings ${section} pane has no leftover English`, async ({ page }) => {

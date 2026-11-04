@@ -139,6 +139,25 @@ describe("a failed install", () => {
     engine.stop();
   });
 
+  test("a log that can't be read still shows the failure screen, saying why", async () => {
+    const { engine, installer, send, onFailed } = setup({
+      ensureBackend: jest.fn().mockRejectedValue(installError("boom")),
+    });
+    installer.readLogTail.mockImplementation(() => {
+      throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
+    });
+
+    engine.run();
+    await tick();
+
+    expect(sent(send).at(-1)).toMatchObject({
+      phase: "failed",
+      error: { logTail: ["The install log could not be read: EBUSY: resource busy or locked"] },
+    });
+    expect(onFailed).toHaveBeenCalled();
+    engine.stop();
+  });
+
   test("the failure is sent before the window is surfaced", async () => {
     const { engine, send, onFailed } = setup({
       ensureBackend: jest.fn().mockRejectedValue(installError("boom")),
