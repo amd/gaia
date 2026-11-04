@@ -1387,7 +1387,7 @@ export const enMessages = {
     'settings.skills.yoursNote': 'From your {path} folder.',
     'settings.skills.yoursEmpty': 'None yet. Add a folder with a SKILL.md file to {path} and reopen this page.',
     'settings.skills.project': 'From this project',
-    'settings.skills.projectNote': 'In the .claude/skills folder of the project GAIA is working in. Their instructions load; any tools or commands they ask for stay off until you import them.',
+    'settings.skills.projectNote': 'In the {path} folder of the project GAIA is working in. Their instructions load; any tools or commands they ask for stay off until you import them.',
     'settings.skills.import': 'From Claude Code',
     'settings.skills.importNote': 'Found in your Claude Code skill folders. GAIA reads them in place and does not change them.',
     'settings.skills.alwaysOn': 'Always on',

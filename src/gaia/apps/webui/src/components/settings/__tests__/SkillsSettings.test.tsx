@@ -145,4 +145,16 @@ describe('SkillsSettings', () => {
         expect(raw).toBeGreaterThanOrEqual(3);
         expect(isolated).toBe(raw);
     });
+
+    it('keeps the project skills folder left to right in Arabic', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.listSkills.mockResolvedValue({ skills: [skill('deploy-helper', 'Deploy', null, 'claude-project')], invalid: {} });
+        const { container } = render(<SkillsSettings onUseSkill={vi.fn()} />);
+        await screen.findByText('deploy-helper');
+        const text = container.textContent ?? '';
+        const raw = text.split('.claude/skills').length - 1;
+        const isolated = text.split('\u2068.claude/skills\u2069').length - 1;
+        expect(raw).toBe(2);
+        expect(isolated).toBe(raw);
+    });
 });

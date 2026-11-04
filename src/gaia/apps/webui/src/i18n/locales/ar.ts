@@ -1387,7 +1387,7 @@ const messages: Messages = {
     'settings.skills.yoursNote': 'من مجلد {path}.',
     'settings.skills.yoursEmpty': 'لا يوجد شيء بعد. أضف مجلدًا فيه ملف SKILL.md إلى {path} وأعد فتح هذه الصفحة.',
     'settings.skills.project': 'من هذا المشروع',
-    'settings.skills.projectNote': 'في مجلد .claude/skills للمشروع الذي يعمل عليه GAIA. تُحمَّل تعليماتها؛ وتبقى الأدوات والأوامر التي تطلبها متوقفة حتى تستوردها.',
+    'settings.skills.projectNote': 'في مجلد {path} للمشروع الذي يعمل عليه GAIA. تُحمَّل تعليماتها؛ وتبقى الأدوات والأوامر التي تطلبها متوقفة حتى تستوردها.',
     'settings.skills.import': 'من Claude Code',
     'settings.skills.importNote': 'موجودة في مجلدات مهارات Claude Code. يقرؤها GAIA في مكانها ولا يغيّرها.',
     'settings.skills.alwaysOn': 'مفعّلة دائمًا',

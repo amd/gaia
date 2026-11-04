@@ -654,21 +654,25 @@ for (const section of ['general', 'permissions', 'skills', 'memory', 'notificati
         await page.locator('.settings-disclosure:not([open]) > summary, .settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
         await page.waitForTimeout(100);
         expect(await untranslated(page)).toEqual([]);
-        expect(await bareHomePaths(page)).toEqual([]);
+        expect(await barePaths(page)).toEqual([]);
     });
 }
 
-/** `~/` paths on an Arabic screen outside an LTR isolate or `<bdi dir="ltr">`, where bidi scrambles them. */
-const bareHomePaths = (page: Page): Promise<string[]> =>
+/**
+ * Paths starting `~/` or `.dir/` on an Arabic screen outside an LTR isolate or `<bdi dir="ltr">`,
+ * where bidi moves the leading punctuation to the far end ("gaia/skills./~").
+ */
+const barePaths = (page: Page): Promise<string[]> =>
     page.evaluate(() => {
         const root = document.querySelector('.settings-scroll') as Element;
         const bare: string[] = [];
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
         for (let n = walker.nextNode(); n; n = walker.nextNode()) {
             const text = n.textContent ?? '';
-            if (!text.includes('~/') || n.parentElement?.closest('bdi[dir="ltr"]')) continue;
+            const path = /(?:^|[\s(])(?:~\/|\.[A-Za-z][\w-]*\/)/;
+            if (!path.test(text) || n.parentElement?.closest('bdi[dir="ltr"]')) continue;
             const stripped = text.replace(/[⁦⁨][^⁦-⁩]*⁩/g, '');
-            if (stripped.includes('~/')) bare.push(text.trim().slice(0, 60));
+            if (path.test(stripped)) bare.push(text.trim().slice(0, 60));
         }
         return bare;
     });

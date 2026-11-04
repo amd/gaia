@@ -4,20 +4,21 @@
 import { useEffect, useState } from 'react';
 import { ChevronDown, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
-import type { MessageKey } from '../../i18n/registry';
+import type { MessageKey, Params } from '../../i18n/registry';
 import { useT } from '../../i18n/useT';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import type { SkillInfo, SkillSource } from '../../types';
 
-const GROUPS: Array<{ source: SkillSource; title: MessageKey; note: MessageKey; empty?: MessageKey }> = [
+// Paths go in as params, so the translator keeps them left to right inside an Arabic sentence.
+const SKILLS_DIR = { path: '~/.gaia/skills' };
+const PROJECT_SKILLS_DIR = { path: '.claude/skills' };
+
+const GROUPS: Array<{ source: SkillSource; title: MessageKey; note: MessageKey; empty?: MessageKey; params?: Params }> = [
     { source: 'agent-bundled', title: 'settings.skills.bundled', note: 'settings.skills.bundledNote' },
-    { source: 'user', title: 'settings.skills.yours', note: 'settings.skills.yoursNote', empty: 'settings.skills.yoursEmpty' },
-    { source: 'claude-project', title: 'settings.skills.project', note: 'settings.skills.projectNote' },
+    { source: 'user', title: 'settings.skills.yours', note: 'settings.skills.yoursNote', empty: 'settings.skills.yoursEmpty', params: SKILLS_DIR },
+    { source: 'claude-project', title: 'settings.skills.project', note: 'settings.skills.projectNote', params: PROJECT_SKILLS_DIR },
     { source: 'claude-import', title: 'settings.skills.import', note: 'settings.skills.importNote' },
 ];
-
-// A param, so the translator keeps the path left to right inside an Arabic sentence.
-const SKILLS_DIR = { path: '~/.gaia/skills' };
 
 /** The skills GAIA can load, with a way to start a chat that uses one. */
 export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => void }) {
@@ -90,9 +91,9 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
                 const total = (skills ?? []).filter((s) => s.source === g.source).length;
                 if (rows.length === 0 && (q || !g.empty)) return null;
                 return (
-                    <SettingsDisclosure key={g.source} title={t(g.title)} count={total} hint={t(g.note, SKILLS_DIR)} defaultOpen={g.source === 'user'} forceOpen={!!q}>
+                    <SettingsDisclosure key={g.source} title={t(g.title)} count={total} hint={t(g.note, g.params)} defaultOpen={g.source === 'user'} forceOpen={!!q}>
                         <section aria-label={t(g.title)}>
-                            {rows.length === 0 ? <p className="settings-hint">{g.empty && t(g.empty, SKILLS_DIR)}</p> : <ul className="skill-list">{rows.map(renderRow)}</ul>}
+                            {rows.length === 0 ? <p className="settings-hint">{g.empty && t(g.empty, g.params)}</p> : <ul className="skill-list">{rows.map(renderRow)}</ul>}
                         </section>
                     </SettingsDisclosure>
                 );
