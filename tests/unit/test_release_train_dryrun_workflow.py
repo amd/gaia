@@ -227,6 +227,48 @@ def test_it_only_builds_its_own_commit(workflow):
             assert job["with"]["ref"] == "${{ github.sha }}", name
 
 
+@pytest.mark.parametrize("flavor", ["rc", "final"])
+def test_the_setup_waits_on_the_binaries_not_the_packages(workflow, flavor):
+    jobs = workflow["jobs"]
+    binaries = jobs[f"tui-{flavor}-binaries"]
+    assert binaries["needs"] == "plan", "the binaries need no sidecar"
+    assert binaries["with"]["installers"] is False
+    packages = jobs[f"tui-{flavor}"]
+    assert packages["with"]["build_binaries"] is False
+    assert f"tui-{flavor}-binaries" in packages["needs"]
+    setup = jobs[f"setup-{flavor}"]
+    assert f"tui-{flavor}-binaries" in setup["needs"]
+    assert f"tui-{flavor}" not in setup["needs"]
+    for name in (f"tui-{flavor}-binaries", f"tui-{flavor}"):
+        assert name in jobs["verify"]["needs"], f"verify does not gate on {name}"
+
+
+def test_a_windows_setup_from_this_run_skips_the_fetch_hop():
+    jobs = _load(WORKFLOWS / "windows_setup.yml")["jobs"]
+    assert jobs["agent-ui-setup"]["if"] == "inputs.agent_ui_artifact == ''"
+    build = jobs["build"]
+    assert "!cancelled()" in build["if"]
+    assert "needs.agent-ui-setup.result == 'success'" in build["if"]
+    assert (
+        "(inputs.agent_ui_artifact != '' && needs.agent-ui-setup.result == 'skipped')"
+        in build["if"]
+    )
+    (check,) = [
+        s
+        for s in build["steps"]
+        if s.get("name") == "Check the desktop app setup from this run"
+    ]
+    assert check["if"] == "inputs.agent_ui_artifact != ''"
+    assert (
+        "verify(" in check["run"] and "exactly one desktop app source" in check["run"]
+    )
+    # A skipped fetch must not skip these through the implicit success().
+    assert jobs["smoke"]["if"] == (
+        "${{ !cancelled() && needs.build.result == 'success' }}"
+    )
+    assert jobs["ok"]["if"] == "${{ !cancelled() && needs.smoke.result == 'success' }}"
+
+
 def test_job_conditions_survive_a_skipped_ancestor(workflow):
     for name, job in workflow["jobs"].items():
         cond = str(job.get("if", ""))

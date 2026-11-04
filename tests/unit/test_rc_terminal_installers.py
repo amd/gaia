@@ -117,10 +117,45 @@ def test_nothing_publishes_unless_every_package_installed(publish):
 def test_installers_ok_means_every_leg_smoke_tested():
     callee = _jobs("tui_installers.yml")
     assert callee["installers-ok"]["needs"] == "tui-installers-smoke"
-    assert "if" not in callee["installers-ok"], (
-        "installers-ok must run only when every smoke leg passed; an if: would let "
-        "it report ok for a partial set"
+    # A matrix job's result is success only when every leg passed; anything
+    # looser would let it report ok for a partial set.
+    assert callee["installers-ok"]["if"] == (
+        "${{ !cancelled() && needs.tui-installers-smoke.result == 'success' }}"
     )
+    assert callee["tui-installers-smoke"]["if"] == (
+        "${{ !cancelled() && needs.tui-installers.result == 'success' }}"
+    )
+
+
+def test_the_installers_reuse_binaries_only_when_told_to():
+    callee = _jobs("tui_installers.yml")
+    inputs = _triggers("tui_installers.yml")["workflow_call"]["inputs"]
+    assert inputs["build_binaries"]["default"] is True
+    assert callee["tui-build"]["if"] == "inputs.build_binaries"
+    cond = callee["tui-installers"]["if"]
+    assert "inputs.installers" in cond and "!cancelled()" in cond
+    # A skipped build is fine only when the caller said it built them already.
+    assert "needs.tui-build.result == 'success'" in cond
+    assert "(!inputs.build_binaries && needs.tui-build.result == 'skipped')" in cond
+
+
+def test_the_windows_setup_waits_on_the_binaries_not_the_packages(publish):
+    binaries = publish["tui-binaries"]
+    assert binaries["uses"] == "./.github/workflows/tui_installers.yml"
+    assert binaries["needs"] == ["validate"], "the binaries need no sidecar"
+    assert binaries["with"]["installers"] is False
+    assert not binaries["with"].get("artifact_prefix")
+
+    tui = publish["tui-installers"]
+    assert tui["with"]["build_binaries"] is False
+    assert "tui-binaries" in tui["needs"]
+    assert "needs.tui-binaries.outputs.binaries_ok == 'true'" in tui["if"]
+
+    setup = publish["windows-setup"]
+    assert "tui-installers" not in setup["needs"]
+    assert "tui-binaries" in setup["needs"]
+    assert "needs.tui-binaries.outputs.binaries_ok == 'true'" in setup["if"]
+    assert "needs.tui-installers" not in setup["if"]
 
 
 # ── The attach ───────────────────────────────────────────────────────────────

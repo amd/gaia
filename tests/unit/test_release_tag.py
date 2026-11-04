@@ -408,8 +408,9 @@ def test_every_tag_builds_the_windows_setup_for_its_own_release(publish):
     )
     assert f"({NOT_RC} || needs.rc-flagship.result == 'success')" in setup["if"]
     # This run's own desktop app build, never a published release.
-    assert setup["with"]["agent_ui_publish_run_sha"] == "${{ github.sha }}"
+    assert setup["with"]["agent_ui_artifact"] == "windows-installer"
     assert "agent_ui_release" not in setup["with"]
+    assert "agent_ui_publish_run_sha" not in setup["with"]
     assert "build-desktop-installers" in setup["needs"]
     for job in (tui, setup):
         assert job["with"]["version"] == "${{ needs.validate.outputs.npm_version }}"
