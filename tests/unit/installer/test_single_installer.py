@@ -88,7 +88,9 @@ def _fpm_relations(deb: dict) -> list[tuple[str, str]]:
     """(field, value) for every Debian relationship passed through to fpm."""
     out = []
     for arg in deb.get("fpm", []):
-        m = re.match(r"--(replaces|conflicts|breaks|provides|deb-field)[= ](.*)", arg)
+        m = re.match(
+            r"--(?:deb-)?(replaces|conflicts|breaks|provides|field)[= ](.*)", arg
+        )
         if m:
             out.append((m.group(1), m.group(2).strip().strip("'\"")))
     return out
@@ -114,7 +116,7 @@ def test_desktop_deb_never_forces_the_terminal_package_out(field):
     # version numbers, so any Breaks/Conflicts on `gaia` also removes the
     # terminal app (or makes dpkg -i refuse) -- the bug this package name fixes.
     for name, value in _fpm_relations(_deb()):
-        if name == "deb-field":
+        if name == "field":
             assert not re.search(rf"(?i)^{field}\s*:.*\bgaia\b(?!-)", value), value
         else:
             assert not (name == field and re.match(r"gaia\b(?!-)", value)), value
