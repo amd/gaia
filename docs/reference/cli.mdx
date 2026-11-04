@@ -640,44 +640,6 @@ arm64) and on Apple Silicon Macs. Intel Macs have no upstream Lemonade build —
 **Corrupted Model Detection:** `gaia init` verifies each model with a quick inference test. If a model fails verification (e.g., corrupted download), you'll see instructions to manually delete and re-download it, or use `gaia init --force-models` to force re-download all models.
 </Tip>
 
-### Install Command
-
-Install individual GAIA components.
-
-```bash
-gaia install [OPTIONS]
-```
-
-**Options:**
-
-| Option | Type | Description |
-|--------|------|-------------|
-| `--lemonade` | flag | Install Lemonade Server |
-| `--yes, -y` | flag | Skip confirmation prompts |
-| `--silent` | flag | Silent installation (no UI, no desktop shortcuts) |
-
-**Examples:**
-
-<CodeGroup>
-```bash Install Lemonade
-gaia install --lemonade
-```
-
-```bash Non-Interactive
-gaia install --lemonade --yes
-```
-
-```bash Silent (no UI, no shortcuts)
-gaia install --lemonade --silent
-```
-</CodeGroup>
-
-<Note>
-If a different version of Lemonade is already installed, you'll be prompted to uninstall first.
-</Note>
-
-The installer is downloaded to a file of its own in the temp folder and checked against its expected size and SHA-256 before it runs. It is deleted after a successful install. After a failed one it is kept, and its path is printed so you can retry by hand. If Windows Installer still holds the file, GAIA can't delete it; it logs a warning with the path instead.
-
 ### Uninstall Command
 
 Tiered cleanup of GAIA components. By default, the OS-native uninstall (Add or Remove Programs, drag to Trash, `apt remove`) only removes the app — user data in `~/.gaia/` is preserved. This command lets you escalate cleanup as far as you want.
@@ -692,7 +654,7 @@ gaia uninstall [OPTIONS]
 |--------|------|-------------|
 | `--venv` | flag | Remove the Python environment (`~/.gaia/venv/`) |
 | `--purge` | flag | Remove venv + chats + documents + memory + sessions + undo snapshots of changed files + config + installed agents + caches + embedded Lemonade + logs + installer binaries (`~/.gaia/bin`) + traces + daemon state (`~/.gaia/host`) + saved sign-ins and API keys + the desktop app's `gaia` shim, and undo the installer's PATH edits |
-| `--purge-lemonade` | flag | Also remove Lemonade Server (requires `--purge`) |
+| `--purge-lemonade` | flag | Also remove a system-wide Lemonade Server — one you installed, or one an older GAIA installer added (requires `--purge`). GAIA's own Lemonade is removed by `--purge` |
 | `--purge-models` | flag | Also remove downloaded Lemonade models (requires `--purge`) |
 | `--purge-hf-cache` | flag | Also remove `~/.cache/huggingface/` (requires `--purge`) |
 | `--dry-run` | flag | Show what would be removed without deleting anything |
@@ -717,7 +679,7 @@ gaia uninstall --purge
 gaia uninstall --purge --purge-models
 ```
 
-```bash Purge Including Lemonade Server
+```bash Purge Including a System-Wide Lemonade Server
 gaia uninstall --purge --purge-lemonade --yes
 ```
 </CodeGroup>

@@ -3,12 +3,12 @@
 
 """Shape tests for the Lemonade installer download URLs.
 
-These are hermetic: they assert the URL/filename built for every (platform,
-arch) pair we claim to support, and that unsupported ones fail loudly. A
-mocked HTTP layer only proves we *called* something, so the companion test
+These are hermetic: they assert the URL/filename built for each Windows MSI
+the uninstall downloads, and that other platforms fail loudly. A mocked HTTP
+layer only proves we *called* something, so the companion test
 ``tests/integration/test_lemonade_release_assets.py`` resolves the same URLs
 against the live upstream release — that is the one that catches an asset
-rename (the .deb gained a ``debian13`` infix and the old name now 404s).
+rename.
 """
 
 import urllib.error
@@ -52,37 +52,10 @@ class TestDownloadUrlShape:
         installer = _installer(system, machine, minimal)
         assert installer.get_installer_filename() == expected_asset
 
-    def test_linux_deb_carries_distro_infix(self):
-        """Regression guard: the infix-less name 404s upstream."""
-        url = _installer("Linux", "x86_64").get_download_url()
-        assert "-debian13_amd64.deb" in url
-        assert f"lemonade-server_{LEMONADE_VERSION}_amd64.deb" not in url
-
-    def test_macos_yields_pkg(self):
-        url = _installer("Darwin", "arm64").get_download_url()
-        assert url.endswith(".pkg")
-
-    def test_intel_mac_raises_rather_than_installing_arm64_binaries(self):
-        """The .pkg payload is arm64-only and installs happily on Intel."""
-        installer = _installer("Darwin", "x86_64")
-        with pytest.raises(RuntimeError) as exc:
-            installer.get_download_url()
-        message = str(exc.value)
-        assert "x86_64" in message
-        assert "Apple-Silicon-only" in message
-
-    def test_unsupported_arch_raises_naming_the_arch(self):
-        installer = _installer("Linux", "armv7l")
-        with pytest.raises(RuntimeError) as exc:
-            installer.get_download_url()
-        message = str(exc.value)
-        assert "armv7l" in message
-        assert "amd64" in message and "arm64" in message
-        assert f"releases/tag/v{LEMONADE_VERSION}" in message
-
-    def test_unsupported_platform_raises(self):
-        installer = _installer("FreeBSD", "x86_64")
-        with pytest.raises(RuntimeError, match="not supported"):
+    @pytest.mark.parametrize("system", ["Linux", "Darwin", "FreeBSD"])
+    def test_only_windows_downloads_an_installer(self, system):
+        installer = _installer(system, "x86_64")
+        with pytest.raises(RuntimeError, match="only to uninstall it on Windows"):
             installer.get_download_url()
 
 
@@ -90,7 +63,7 @@ class TestVerifyDownloadUrl:
     """verify_download_url turns an upstream rename into an actionable error."""
 
     def test_404_raises_with_url_version_and_asset_list(self):
-        installer = _installer("Linux", "x86_64")
+        installer = _installer("Windows", "AMD64")
         url = installer.get_download_url()
         error = urllib.error.HTTPError(url, 404, "Not Found", {}, None)
 
@@ -105,7 +78,7 @@ class TestVerifyDownloadUrl:
         assert f"releases/tag/v{LEMONADE_VERSION}" in message
 
     def test_unreachable_host_blames_the_network_not_a_rename(self):
-        installer = _installer("Darwin", "arm64")
+        installer = _installer("Windows", "AMD64")
         with patch(
             "urllib.request.urlopen",
             side_effect=urllib.error.URLError("nodename nor servname provided"),
@@ -120,7 +93,7 @@ class TestVerifyDownloadUrl:
         assert "renamed" not in message
 
     def test_timeout_is_wrapped_not_leaked(self):
-        installer = _installer("Linux", "x86_64")
+        installer = _installer("Windows", "AMD64")
         with patch("urllib.request.urlopen", side_effect=TimeoutError()):
             with pytest.raises(LemonadeAssetError) as exc:
                 installer.verify_download_url(timeout=1)
@@ -128,7 +101,7 @@ class TestVerifyDownloadUrl:
 
     def test_missing_asset_writes_nothing_to_disk(self, tmp_path):
         """The 404 must stop the download before the file is created."""
-        installer = _installer("Linux", "x86_64")
+        installer = _installer("Windows", "AMD64")
         url = installer.get_download_url()
         error = urllib.error.HTTPError(url, 404, "Not Found", {}, None)
 
@@ -142,9 +115,9 @@ class TestVerifyDownloadUrl:
         self, tmp_path, monkeypatch
     ):
         """A proxy that 403s HEAD must not block a GET that would succeed."""
-        installer = _installer("Linux", "x86_64")
+        installer = _installer("Windows", "AMD64")
         url = installer.get_download_url()
-        payload = b"deb-bytes"
+        payload = b"msi-bytes"
 
         class _Response:
             headers = {"content-length": str(len(payload))}
@@ -168,12 +141,12 @@ class TestVerifyDownloadUrl:
                 raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
             return _Response()
 
-        _pin(monkeypatch, installer, b"deb-bytes")
+        _pin(monkeypatch, installer, b"msi-bytes")
         with patch("urllib.request.urlopen", side_effect=_urlopen):
             dest = installer.download_installer(dest_dir=str(tmp_path))
 
         assert calls == ["HEAD", "GET"]
-        assert dest.read_bytes() == b"deb-bytes"
+        assert dest.read_bytes() == b"msi-bytes"
 
 
 class _Stream:
@@ -432,137 +405,7 @@ class TestPartialDownloadIsRemoved:
 
 
 class TestDownloadedInstallerLifecycle:
-    """The CLI and uninstall delete what they downloaded, except to retry."""
-
-    def _run_cli_install(
-        self,
-        tmp_path,
-        monkeypatch,
-        success,
-        name="Lemonade-Darwin-abc.pkg",
-        during_download=lambda: None,
-    ):
-        from gaia.installer import lemonade_installer as mod
-
-        downloaded = tmp_path / name
-
-        class _Fake:
-            system = "darwin"
-
-            def check_installation(self):
-                return mod.LemonadeInfo(installed=success)
-
-            def needs_install(self, info):
-                return True
-
-            def download_installer(self):
-                downloaded.write_bytes(b"pkg")
-                during_download()
-                return downloaded
-
-            def install(self, path, silent=False):
-                if success:
-                    return mod.InstallResult(success=True, version="1")
-                return mod.InstallResult(
-                    success=False, error=f"Retry manually: sudo installer -pkg {path}"
-                )
-
-        monkeypatch.setattr(mod, "LemonadeInstaller", _Fake)
-        monkeypatch.setattr(
-            "sys.argv", ["gaia", "install", "--lemonade", "--yes"], raising=True
-        )
-        from gaia.cli import main
-
-        with pytest.raises(SystemExit) as exit_:
-            main()
-        return downloaded, exit_.value.code
-
-    def test_cli_deletes_the_installer_after_a_successful_install(
-        self, tmp_path, monkeypatch
-    ):
-        downloaded, code = self._run_cli_install(tmp_path, monkeypatch, success=True)
-        assert code == 0
-        assert not downloaded.exists()
-
-    def test_cli_keeps_the_installer_its_retry_hint_names(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        downloaded, code = self._run_cli_install(tmp_path, monkeypatch, success=False)
-        assert code == 1
-        assert downloaded.exists()
-        out = capsys.readouterr().out
-        assert f"sudo installer -pkg {downloaded}" in out
-        assert f"kept at {downloaded}" in out
-
-    @staticmethod
-    def _left_by_earlier_runs(tmp_path, names, age_s=2 * 3600):
-        import os
-        import time
-
-        paths = []
-        for name in names:
-            path = tmp_path / name
-            path.write_bytes(b"old")
-            written = time.time() - age_s
-            os.utime(path, (written, written))
-            paths.append(path)
-        return paths
-
-    def test_a_successful_install_removes_installers_earlier_failures_kept(
-        self, tmp_path, monkeypatch
-    ):
-        import os
-        import time
-
-        kept = self._left_by_earlier_runs(
-            tmp_path,
-            [
-                "lemonade-a1b2c3d4.msi",
-                "lemonade-server-minimal-zz_9y8x7.msi",
-                "Lemonade-2026.40.0-Darwin-k3j4h5g6.pkg",
-            ],
-        )
-        unrelated = self._left_by_earlier_runs(
-            tmp_path,
-            [
-                "lemonade-notes.txt",
-                "lemonade-abc.msi",
-                "lemonade-a1b2c3d4.msi.bak",
-                "other-a1b2c3d4.msi",
-            ],
-        )
-        # Another install finished this download and is waiting at sudo.
-        finished_elsewhere = self._left_by_earlier_runs(
-            tmp_path, ["Lemonade-2026.42.1-Darwin-p0o9i8u7.pkg"], age_s=600
-        )
-        another_download = tmp_path / "lemonade-q1w2e3r4.msi"
-
-        def _another_run_is_downloading():
-            another_download.write_bytes(b"partial")
-            later = time.time() + 60
-            os.utime(another_download, (later, later))
-
-        downloaded, code = self._run_cli_install(
-            tmp_path,
-            monkeypatch,
-            success=True,
-            name="Lemonade-2026.42.1-Darwin-m5n6b7v8.pkg",
-            during_download=_another_run_is_downloading,
-        )
-        assert code == 0
-        assert not downloaded.exists()
-        assert [p.name for p in kept if p.exists()] == []
-        assert all(p.exists() for p in unrelated)
-        assert all(p.exists() for p in finished_elsewhere)
-        assert another_download.exists()
-
-    def test_a_failed_install_keeps_installers_earlier_failures_kept(
-        self, tmp_path, monkeypatch
-    ):
-        kept = self._left_by_earlier_runs(tmp_path, ["lemonade-a1b2c3d4.msi"])
-        _downloaded, code = self._run_cli_install(tmp_path, monkeypatch, success=False)
-        assert code == 1
-        assert all(p.exists() for p in kept)
+    """Uninstall deletes the MSI it downloaded."""
 
     def _uninstaller(self, monkeypatch, version="10.9.0"):
         from gaia.installer import lemonade_installer as mod

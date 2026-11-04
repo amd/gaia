@@ -33,7 +33,7 @@ from pathlib import Path
 import pytest
 
 from gaia.agents.base.readiness import parse_version, version_meets_min
-from gaia.installer.lemonade_installer import LemonadeInfo, LemonadeInstaller
+from gaia.installer.lemonade_installer import LemonadeInfo
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeVersionError
 from gaia.llm.lemonade_launcher import _VERSION_RE
 from gaia.version import LEMONADE_MIN_VERSION, LEMONADE_VERSION
@@ -50,11 +50,6 @@ DEV_OF_FLOOR = f"{LEMONADE_MIN_VERSION}~12.abc1234"
 LAST_SEMVER = "11.9.0"
 
 
-def _installer_parse(version):
-    """The bound installer method, which takes no state beyond ``self``."""
-    return LemonadeInstaller._parse_version(None, version)
-
-
 def _info_parse(version):
     """``LemonadeInfo.version_tuple`` — the copy that parses the INSTALLED version.
 
@@ -68,7 +63,6 @@ def _info_parse(version):
 # Every independent parser, so a fix applied to only some of them fails here.
 PARSERS = [
     pytest.param(parse_version, id="readiness"),
-    pytest.param(_installer_parse, id="lemonade_installer"),
     pytest.param(_info_parse, id="lemonade_info_version_tuple"),
 ]
 
@@ -268,7 +262,6 @@ def test_the_core_parsers_are_one_implementation():
     expected = canonical(probe)
     for parser in (
         parse_version,
-        _installer_parse,
         _info_parse,
     ):
         assert parser(probe) == expected

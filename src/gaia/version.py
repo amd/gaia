@@ -120,19 +120,5 @@ def build_info() -> Dict[str, Optional[str]]:
     }
 
 
-def get_version_with_hash() -> str:
-    """Get the full version string including git hash.
-    Only used during build/installer process.
-
-    Returns:
-        str: Version string in format 'v{version}+{hash}'
-    """
-    git_hash = get_git_hash()
-    if git_hash:
-        return f"v{__version__}+{git_hash}"
-    else:
-        return f"v{__version__}"
-
-
 # For regular package usage - just version number
 version = get_package_version()
