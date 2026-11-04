@@ -72,3 +72,34 @@ describe('answer file paths', () => {
         expect(document.querySelector('code.inline-code')?.textContent).toBe(code);
     });
 });
+
+describe('paths with spaces', () => {
+    const SPACED = 'C:\\Users\\test\\Documents\\Q3 report.txt';
+
+    it.each([
+        ['in prose', `Summarize ${SPACED} for me.`],
+        ['in inline code', `Summarize \`${SPACED}\` for me.`],
+    ])('links the whole path %s', (_label, content) => {
+        renderAnswer(content);
+        expect(links().map((l) => l.textContent)).toEqual([SPACED]);
+    });
+
+    it('links the whole path in the user\'s own message', () => {
+        const message: Message = {
+            id: 2, session_id: 's', role: 'user', content: `Summarize ${SPACED}`, created_at: '', rag_sources: null,
+        };
+        render(<MessageBubble message={message} />);
+        expect(links().map((l) => l.textContent)).toEqual([SPACED]);
+    });
+
+    it.each([
+        ['a folder another separator follows', 'Installed to C:\\Program Files\\GAIA\\gaia.exe today.', 'C:\\Program Files\\GAIA\\gaia.exe'],
+        ['a trailing folder separator', 'Look in C:\\Program Files\\GAIA\\ first.', 'C:\\Program Files\\GAIA\\'],
+        ['a sentence after a folder', 'Saved to C:\\out\\Q3 and then closed.', 'C:\\out\\Q3'],
+        ['a sentence after a file', 'Saved C:\\out\\a.txt and b.txt here.', 'C:\\out\\a.txt'],
+        ['a second path', 'Copied C:\\out\\x and D:\\y\\z.txt', 'C:\\out\\x'],
+    ])('stops at the right place after %s', (_label, content, first) => {
+        renderAnswer(content);
+        expect(links()[0].textContent).toBe(first);
+    });
+});
