@@ -680,6 +680,7 @@ def test_run_endpoint_asks_before_downloading_past_the_free_space(
             "keep_trying": False,
             "extra_models": [],
             "server_only": False,
+            "upgrade_embedded": False,
         }
     ]
 
@@ -754,6 +755,57 @@ def test_server_only_run_skips_the_disk_check_and_takes_no_extras(
         headers=UI,
     )
     assert r.status_code == 422 and len(seen) == 1
+
+
+def test_upgrade_embedded_run_uses_no_model_downloads(client, flm_box, monkeypatch):
+    flm_box(downloaded=(DEFAULT_MODEL_NAME,), free_gb=0.1)
+    seen = []
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: seen.append(k) or {"state": "running"},
+    )
+    r = client.post("/api/setup/run", json={"upgrade_embedded": True}, headers=UI)
+    assert r.status_code == 200
+    assert seen == [
+        {
+            "allow_low_disk": False,
+            "keep_trying": False,
+            "extra_models": [],
+            "server_only": False,
+            "upgrade_embedded": True,
+        }
+    ]
+
+
+def test_setup_run_rejects_extra_models_during_embedded_upgrade(client, monkeypatch):
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: pytest.fail("must not start"),
+    )
+    r = client.post(
+        "/api/setup/run",
+        json={"upgrade_embedded": True, "extra_models": [DEFAULT_MODEL_NAME]},
+        headers=UI,
+    )
+    assert r.status_code == 422
+    assert "no extra_models" in r.json()["detail"]
+
+
+def test_setup_run_rejects_conflicting_server_only_and_upgrade(client, monkeypatch):
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: pytest.fail("must not start"),
+    )
+    r = client.post(
+        "/api/setup/run",
+        json={"server_only": True, "upgrade_embedded": True},
+        headers=UI,
+    )
+    assert r.status_code == 422
+    assert "not both" in r.json()["detail"]
 
 
 def test_catalog_separates_gaias_models_from_ones_only_in_lemonade(flm_box):

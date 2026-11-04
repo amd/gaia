@@ -311,9 +311,11 @@ class SetupStatus:
 
     ready: bool
     reasons: list
-    #: "setup" when `gaia init` still has work to do, "server" when the model
-    #: server is installed but will not answer, "load" when everything is
-    #: downloaded but a model would not load — which re-running setup cannot fix.
+    #: "setup" when `gaia init` still has work to do, "upgrade" when GAIA can
+    #: update an existing embedded Lemonade without downloading models, "server"
+    #: when the model server is installed but will not answer, "load" when
+    #: everything is downloaded but a model would not load — which re-running
+    #: setup cannot fix.
     stage: Optional[str] = None
     #: One ModelLoad per model the load check tried; empty unless ``load=True``.
     models: list = field(default_factory=list)
@@ -727,6 +729,21 @@ def check_setup_status(
                 ],
                 stage="server",
             )
+        # A new pinned version is an update, not first-run setup: the models stay.
+        older = (
+            status.version
+            if status.running and status.version != embedded.version
+            else None if status.installed else embedded.older_installed_version()
+        )
+        if older:
+            return SetupStatus(
+                ready=False,
+                reasons=[
+                    f"GAIA's Lemonade Server is v{older}; this GAIA "
+                    f"needs v{embedded.version}"
+                ],
+                stage="upgrade",
+            )
         if not status.installed:
             return SetupStatus(
                 ready=False,
@@ -738,15 +755,6 @@ def check_setup_status(
                 ready=False,
                 reasons=["GAIA's Lemonade Server is installed but not running"],
                 stage="server",
-            )
-        if status.version != embedded.version:
-            return SetupStatus(
-                ready=False,
-                reasons=[
-                    f"GAIA's Lemonade Server is v{status.version}; this GAIA "
-                    f"needs v{embedded.version}"
-                ],
-                stage="setup",
             )
         base_url = status.base_url
 
