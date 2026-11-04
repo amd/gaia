@@ -3749,13 +3749,18 @@ Do NOT wrap conversational replies in JSON.
         self.model_features = features
 
     def _execution_tool_registry(self) -> MutableMapping[str, Any]:
-        """Return the registry this agent is permitted to execute."""
+        """Return the registry this agent is permitted to execute.
+
+        Lightweight Agent test doubles and older subclasses may not initialize
+        the optional scope field.  Treat a missing field like the constructor's
+        legacy ``None`` default so adding tool scopes does not break those
+        callers.
+        """
         registry = self._tools_registry
-        if self._tool_scope is None:
+        scope = getattr(self, "_tool_scope", None)
+        if scope is None:
             return registry
-        return {
-            name: entry for name, entry in registry.items() if name in self._tool_scope
-        }
+        return {name: entry for name, entry in registry.items() if name in scope}
 
     def _format_tools_for_prompt(self, filter_to: Optional[List[str]] = None) -> str:
         """Format the registered tools into a string for the prompt.
@@ -3773,8 +3778,9 @@ Do NOT wrap conversational replies in JSON.
         else:
             registry = self._tools_registry
             items = [(n, registry[n]) for n in filter_to if n in registry]
-        if self._tool_scope is not None:
-            items = [(n, info) for n, info in items if n in self._tool_scope]
+        scope = getattr(self, "_tool_scope", None)
+        if scope is not None:
+            items = [(n, info) for n, info in items if n in scope]
 
         for name, tool_info in items:
             params_str = ", ".join(
@@ -4931,11 +4937,12 @@ Do NOT wrap conversational replies in JSON.
 
     def get_tools_info(self) -> Dict[str, Any]:
         """Get information about tools available to this agent."""
-        if self._tool_scope is None:
+        scope = getattr(self, "_tool_scope", None)
+        if scope is None:
             return self._tools_registry
         return {
             name: self._tools_registry[name]
-            for name in self._tool_scope
+            for name in scope
             if name in self._tools_registry
         }
 
@@ -5761,8 +5768,9 @@ Do NOT wrap conversational replies in JSON.
         else:
             registry = self._tools_registry
             items = [(n, registry[n]) for n in filter_to if n in registry]
-        if self._tool_scope is not None:
-            items = [(n, info) for n, info in items if n in self._tool_scope]
+        scope = getattr(self, "_tool_scope", None)
+        if scope is not None:
+            items = [(n, info) for n, info in items if n in scope]
 
         schemas = []
         for name, tool_info in items:
@@ -7026,7 +7034,7 @@ Do NOT wrap conversational replies in JSON.
         if tool_name not in execution_registry:
             tool_name = tool_name.replace("-", "_")
         if (
-            self._tool_scope is not None
+            getattr(self, "_tool_scope", None) is not None
             and tool_name in self._tools_registry
             and tool_name not in execution_registry
         ):
