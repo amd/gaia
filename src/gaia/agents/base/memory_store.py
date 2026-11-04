@@ -1095,7 +1095,7 @@ class MemoryStore:
             content = content[:MAX_TURN_LENGTH]
         now = _now_iso()
         with self._locked():
-            if erase_count is not None and self._erase_count_locked() != erase_count:
+            if self._erased_since_for_write_locked(erase_count):
                 logger.info(
                     "[MemoryStore] turn not stored: all memory was erased after "
                     "it began"
@@ -2793,7 +2793,7 @@ class MemoryStore:
             error = error[:MAX_FTS_QUERY_LENGTH]
 
         with self._locked():
-            if erase_count is not None and self._erase_count_locked() != erase_count:
+            if self._erased_since_for_write_locked(erase_count):
                 logger.info(
                     "[MemoryStore] %s call not logged: all memory was erased "
                     "after its turn began",
@@ -3644,7 +3644,7 @@ class MemoryStore:
         now = _now_iso()
 
         with self._locked():
-            if erase_count is not None and self._erase_count_locked() != erase_count:
+            if self._erased_since_for_write_locked(erase_count):
                 logger.info(
                     "[MemoryStore] procedure not stored: all memory was erased "
                     "after it began"
@@ -4334,7 +4334,7 @@ class MemoryStore:
         now = _now_iso()
         rows = [(sid, outcome, goal, detail, now) for sid in ids]
         with self._locked():
-            if erase_count is not None and self._erase_count_locked() != erase_count:
+            if self._erased_since_for_write_locked(erase_count):
                 logger.info(
                     "[MemoryStore] synthesis marks not stored: all memory was "
                     "erased after the pass began"
@@ -4621,6 +4621,29 @@ class MemoryStore:
             "SELECT value FROM meta WHERE key = ?", (self._ERASE_COUNT_KEY,)
         ).fetchone()
         return int(row[0]) if row is not None else 0
+
+    def _erased_since_for_write_locked(self, erase_count: Optional[int]) -> bool:
+        """Check *erase_count* under SQLite's write lock, ahead of a write.
+
+        The process lock alone misses an erase still uncommitted on another
+        connection. ``BEGIN IMMEDIATE`` waits for it, so the count read here is
+        final until this write commits. On True the transaction it began is
+        rolled back.
+        """
+        if erase_count is None:
+            return False
+        began = not self._conn.in_transaction
+        if began:
+            self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            erased = self._erase_count_locked() != erase_count
+        except Exception:
+            if began:
+                self._conn.rollback()
+            raise
+        if erased and began:
+            self._conn.rollback()
+        return erased
 
     def erased_since(self, erase_count: Optional[int]) -> bool:
         """Whether memory was erased after *erase_count* was read (None: no)."""
