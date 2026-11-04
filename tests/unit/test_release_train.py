@@ -187,7 +187,15 @@ def build_art(
         )
         for d, names in (
             (win, [f"{ui}-x64-setup.exe", f"{ui}-x64-setup.exe.blockmap"]),
-            (mac, [f"{ui}-arm64.dmg", f"{ui}-arm64.dmg.blockmap"]),
+            (
+                mac,
+                [
+                    f"{ui}-arm64.dmg",
+                    f"{ui}-arm64.dmg.blockmap",
+                    f"{ui}-arm64.zip",
+                    f"{ui}-arm64.zip.blockmap",
+                ],
+            ),
             (lin, [f"{ui}-x86_64.AppImage"]),
         ):
             for n in names:
