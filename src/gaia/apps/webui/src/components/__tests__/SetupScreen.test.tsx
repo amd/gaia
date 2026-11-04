@@ -238,6 +238,15 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledExactlyOnceWith(false, false, { serverOnly: true }));
     });
 
+    it("doesn't offer to install GAIA's own once it is already running", async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue({ ...TARGET, offer: true });
+        mockedApi.detectLemonade.mockRejectedValue(new Error('timed out'));
+        mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
+        renderSetup();
+        await screen.findByRole('button', { name: 'Check again' });
+        expect(screen.queryByRole('button', { name: "Install GAIA's own" })).not.toBeInTheDocument();
+    });
+
     it('offers Try again when starting the model server is refused', async () => {
         mockedApi.getSetupPlan.mockResolvedValue(COLD_SERVER);
         mockedApi.startSetup.mockRejectedValueOnce(new Error('connection reset')).mockResolvedValue(SERVER_RUNNING);

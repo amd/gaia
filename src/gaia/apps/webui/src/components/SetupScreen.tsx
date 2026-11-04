@@ -80,7 +80,7 @@ const OFFERED: ReadonlyArray<LemonadeFound['status']> = ['ok', 'needs_key', 'too
  * First run on a PC that already runs Lemonade: offer it, so GAIA does not
  * install a second server and a second copy of every model.
  */
-function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChosen: (mode: 'external' | 'gaia') => void; onNothingToOffer?: () => void; onFound?: (found: LemonadeFound) => void }) {
+function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound, canInstallOwn = true }: { onChosen: (mode: 'external' | 'gaia') => void; onNothingToOffer?: () => void; onFound?: (found: LemonadeFound) => void; canInstallOwn?: boolean }) {
     const t = useT();
     const [offer, setOffer] = useState<{ target: LemonadeTarget; found: LemonadeFound } | null>(null);
     const [checkError, setCheckError] = useState<string | null>(null);
@@ -164,7 +164,8 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
                     <button type="button" className="btn-secondary" disabled={checking} onClick={() => void detect()}>
                         {checking && <Loader2 size={13} className="spin" />} {t('setup.offer.checkAgain')}
                     </button>
-                    {onNothingToOffer && (
+                    {/* Only before GAIA's own server starts: after, it is already running. */}
+                    {onNothingToOffer && canInstallOwn && (
                         <button type="button" className="btn-primary" disabled={checking} onClick={onNothingToOffer}>
                             {t('setup.offer.useOwn')}
                         </button>
@@ -1024,6 +1025,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             {statusRead && plan && ((!plan.lemonade.reachable && !serverRun) || (checksDone && viewing == null && plan.lemonade.mode !== 'external')) && (
                                 <ExistingLemonadeOffer
                                     onNothingToOffer={lemonadeNothing}
+                                    canInstallOwn={!plan.lemonade.reachable && !serverRun}
                                     onFound={setLemonadeFound}
                                     onChosen={(mode) => { setUsersServer(mode === 'external'); setLemonadeChoice(mode); setLemonadeSettled(true); loadHardware(); void loadPlan(); }}
                                 />

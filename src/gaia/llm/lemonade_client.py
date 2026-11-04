@@ -446,7 +446,7 @@ def resolve_default_vision_model() -> Optional[str]:
     chosen = config.vision_model
     if chosen:
         return chosen
-    return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
+    return current if current in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
 
 
 def resident_vision_model(configured: str, base_url: Optional[str] = None) -> str:

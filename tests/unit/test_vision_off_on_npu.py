@@ -58,6 +58,11 @@ def test_it_follows_the_model_chat_reopens_on(chat_model):
     assert lc.resolve_default_vision_model() is None
 
 
+def test_images_are_read_by_the_model_chat_reopens_on(chat_model):
+    chat_model(NPU, last_model=lc.LARGE_DEFAULT_MODEL_NAME)
+    assert lc.resolve_default_vision_model() == lc.LARGE_DEFAULT_MODEL_NAME
+
+
 def test_a_cloud_chat_falls_back_to_the_local_default(chat_model):
     chat_model(NPU, last_model="fireworks.deepseek-v4p1-flash")
     assert lc.resolve_default_vision_model() is None
