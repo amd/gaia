@@ -8298,7 +8298,11 @@ def _bootstrap_infer():
     reading it.
     """
     from gaia.agents.base.discovery import SystemDiscovery
-    from gaia.agents.base.inferred_insights import parse_inferred_insights
+    from gaia.agents.base.inferred_insights import (
+        DEFAULT_CONFIDENCE,
+        normalize_confidence,
+        parse_inferred_insights,
+    )
     from gaia.agents.base.memory_store import MemoryStore
 
     print("\n=== GAIA Memory — AI Profile Inference ===")
@@ -8517,9 +8521,16 @@ def _bootstrap_infer():
     try:
         for i, insight in enumerate(insights, 1):
             content = insight["content"].strip()[:200]
-            confidence = float(insight.get("confidence", 0.7))
+            raw_confidence = insight.get("confidence", DEFAULT_CONFIDENCE)
+            confidence = normalize_confidence(raw_confidence)
+            if confidence is None:
+                print(
+                    f"  ({i}/{len(insights)}) Skipped: confidence "
+                    f"{raw_confidence!r} is not a number or low/medium/high: {content}"
+                )
+                skipped += 1
+                continue
             domain = insight.get("domain", "general")
-            confidence = max(0.0, min(1.0, confidence))
 
             print(f"  ({i}/{len(insights)}) [{confidence:.0%}] {content}")
             try:

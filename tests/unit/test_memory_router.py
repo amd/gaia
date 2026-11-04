@@ -2309,6 +2309,27 @@ class TestStreamInferenceModel:
         assert "incomplete or malformed" in resp.text
         assert '"total": 1' in resp.text
 
+    def test_word_confidences_are_mapped_and_unusable_ones_skipped(
+        self, client, tmp_path
+    ):
+        # #6637: models sometimes answer "high" instead of a number.
+        reply = json.dumps(
+            [
+                {"content": "Uses Blender for 3D work", "confidence": "HIGH "},
+                {"content": "Likes jazz", "confidence": "very sure"},
+                {"content": "Edits video", "confidence": 0.5},
+            ]
+        )
+        resp, _create = self._stream(
+            client, tmp_path, default_model="Qwen3.6-35B-A3B-GGUF", reply=reply
+        )
+
+        assert resp.status_code == 200
+        assert resp.text.count('"type": "insight"') == 2
+        assert '"confidence": 0.9' in resp.text
+        assert "Skipped insight 'Likes jazz'" in resp.text
+        assert '"total": 2' in resp.text
+
 
 # ===========================================================================
 # Failures the dashboard used to show as success (#4824)
