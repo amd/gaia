@@ -1782,6 +1782,8 @@ class InitCommand:
                 )
                 if not self._install_backend():
                     return self._fail_before_agent(has_hub_agent_check)
+                if self.profile == "npu":
+                    self._offer_memlock_fix_for_npu_profile()
 
             # Any PC with an NPU gets its backend, so the NPU models show up in
             # the model pickers without a separate profile.
@@ -2372,6 +2374,15 @@ class InitCommand:
                 "See https://amd-gaia.ai/docs/guides/npu#linux, then re-run "
                 "`gaia init`."
             )
+
+    def _offer_memlock_fix_for_npu_profile(self) -> None:
+        """``--profile npu``: offer the locked-memory fix before the NPU model is
+        judged, so the fit check that follows doesn't stop on it unasked."""
+        from gaia.llm import npu_linux
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        info = LemonadeClient(verbose=self.verbose).get_system_info()
+        self._offer_memlock_fix(npu_linux.check(info))
 
     def _offer_memlock_fix(self, problems) -> bool:
         """Raise the locked-memory limit FastFlowLM needs, when someone is here

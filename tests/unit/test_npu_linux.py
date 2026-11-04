@@ -418,6 +418,8 @@ def test_setup_does_not_call_the_npu_model_a_fit(not_set_up):
     fit = memory_fit(NPU_DEFAULT_MODEL_NAME, 9.1, capacity)
     assert fit["fits"] is False
     assert "locked-memory limit" in fit["fit_reason"]
+    # Picking it is refused like any NPU model that can't run, not offered as a memory risk.
+    assert fit["fit_code"] == "npu"
     assert npu_chat_models_that_fit(capacity) == []
 
 
@@ -807,6 +809,23 @@ class TestInitOffersTheFix:
         monkeypatch.setattr(npu_linux, "apply_memlock_fix", applied)
         assert not self.init(monkeypatch, **kwargs)._offer_memlock_fix(list(MEMLOCK))
         applied.assert_not_called()
+
+    def test_profile_npu_offers_it_before_judging_the_model(self, monkeypatch):
+        from gaia.llm import lemonade_client
+
+        info = {"os_version": "Linux", "devices": {"amd_npu": {"available": True}}}
+        client = MagicMock()
+        client.get_system_info.return_value = info
+        monkeypatch.setattr(lemonade_client, "LemonadeClient", lambda **kw: client)
+        checked = MagicMock(return_value=list(MEMLOCK))
+        monkeypatch.setattr(npu_linux, "check", checked)
+        applied = MagicMock()
+        monkeypatch.setattr(npu_linux, "apply_memlock_fix", applied)
+        cmd = self.init(monkeypatch)
+        cmd.verbose = False
+        cmd._offer_memlock_fix_for_npu_profile()
+        checked.assert_called_once_with(info)
+        applied.assert_called_once()
 
     def test_a_refused_prompt_is_reported(self, monkeypatch):
         def refuse():

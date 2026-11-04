@@ -42,7 +42,7 @@ once:
 - **In the app:** setup shows the NPU as **not set up yet**, with a **Raise the limit**
   button. It asks for an administrator password through your desktop's usual prompt, then
   asks you to restart the PC.
-- **`gaia init`** asks the same question in the terminal.
+- **`gaia init`** and **`gaia init --profile npu`** ask the same question in the terminal.
 - **The GAIA desktop app's `.deb`** does it while installing, on a PC whose NPU driver is
   loaded.
 
@@ -63,7 +63,8 @@ GAIA's files. Setup says so. Check `DefaultLimitMEMLOCK` in `/etc/systemd/user.c
 GAIA checks all four before it offers the NPU, and once the backend is installed it runs
 FastFlowLM's own check (`flm validate`) as well. When one is missing, setup shows what is
 missing and how to fix it, and keeps chat on the GPU. Fix it, then choose **Check again**.
-`gaia init --profile npu` stops with the same list. Settings › Model doesn't offer the NPU
+`gaia init --profile npu` offers to raise the locked-memory limit, then stops with the same
+list for whatever is still missing. Settings › Model doesn't offer the NPU
 model for download until then, and an NPU model you already have shows what is missing.
 When you run Lemonade yourself, GAIA judges only the NPU's driver and firmware: that
 Lemonade's own service sets its limits.

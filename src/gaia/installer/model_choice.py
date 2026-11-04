@@ -303,6 +303,7 @@ def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, A
                 "need_gb": None,
                 "capacity_gb": None,
                 "fit_reason": not_ready,
+                "fit_code": FIT_NPU,
             }
     mr = find_model_requirement(model_id)
     kv = kv_cache_for(mr, capacity) if mr else 0.0
