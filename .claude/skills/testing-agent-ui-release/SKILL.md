@@ -146,8 +146,10 @@ granted as itself:
 request_access(apps=["C:\\gaia-test\\app-v0.25.4-rc3\\gaia-desktop.exe"], clipboardWrite=true)
 ```
 
-`open_application` can still refuse a path grant, so bring the window forward by
-clicking it instead. The tray and taskbar need "File Explorer" (click tier only). The installer window is
+**Never call `open_application` on GAIA.** It launches a new GAIA on the person's real
+profile, and one such launch started upgrading their own `~/.gaia/venv`. Bring the test
+window forward by clicking it. When Windows *Click to Do* covers it, grant `clicktodo.exe`
+and press Escape. The tray and taskbar need "File Explorer" (click tier only). The installer window is
 granted by its exe name. The Claude app itself is never grantable.
 
 | Do | Because |

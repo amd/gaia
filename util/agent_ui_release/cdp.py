@@ -145,7 +145,10 @@ KEYS = {
 
 CLICK_JS = """(() => {
   const want = %s.toLowerCase();
-  const els = [...document.querySelectorAll('button, a, [role=button], [role=menuitem], [role=tab], label')];
+  // A person can't click past an open dialog, so look only inside the topmost one.
+  const dialogs = [...document.querySelectorAll('[role=dialog], [role=alertdialog], [aria-modal=true]')];
+  const scope = dialogs.length ? dialogs[dialogs.length - 1] : document;
+  const els = [...scope.querySelectorAll('button, a, [role=button], [role=menuitem], [role=tab], label')];
   const hit = els.filter(e => (e.innerText || e.getAttribute('aria-label') || '').trim().toLowerCase() === want)
            .concat(els.filter(e => (e.innerText || e.getAttribute('aria-label') || '').toLowerCase().includes(want)));
   if (!hit.length) return null;
