@@ -1067,12 +1067,13 @@ class TestCheckSetupStatus(unittest.TestCase):
         )
 
     @staticmethod
-    def _embedded(status):
+    def _embedded(status, older=None):
         from gaia.version import LEMONADE_VERSION
 
         embedded = MagicMock()
         embedded.version = LEMONADE_VERSION
         embedded.status.return_value = status
+        embedded.older_installed_version.return_value = older
         return patch(
             "gaia.llm.lemonade_embedded.EmbeddedLemonade", return_value=embedded
         )
@@ -1123,8 +1124,8 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertFalse(status.ready)
         self.assertIn("pid 77", status.reasons[0])
 
-    def test_older_embedded_version_is_not_ready(self):
-        """init would replace it, so --check must not call it ready."""
+    def test_older_embedded_version_requests_an_upgrade_not_first_run_setup(self):
+        """An app upgrade replaces the embedded server but keeps model data."""
         from gaia.installer.init_command import check_setup_status
 
         running = self._status(
@@ -1134,7 +1135,62 @@ class TestCheckSetupStatus(unittest.TestCase):
             status = check_setup_status(profile="chat")
 
         self.assertFalse(status.ready)
+        self.assertEqual(status.stage, "upgrade")
         self.assertIn("v0.0.1", status.reasons[0])
+
+    def test_new_pin_not_yet_unpacked_while_the_old_one_runs_is_an_upgrade(self):
+        """After a GAIA upgrade the new version's dist dir does not exist yet."""
+        from gaia.installer.init_command import check_setup_status
+
+        running = self._status(
+            installed=False,
+            running=True,
+            version="0.0.1",
+            port=1,
+            pid=2,
+            base_url="http://x/api/v1",
+        )
+        with self._embedded(running):
+            status = check_setup_status(profile="chat")
+
+        self.assertEqual(status.stage, "upgrade")
+        self.assertIn("v0.0.1", status.reasons[0])
+
+    def test_new_pin_not_unpacked_with_only_an_older_one_on_disk_is_an_upgrade(self):
+        from gaia.installer.init_command import check_setup_status
+
+        with self._embedded(self._status(installed=False), older="0.0.1"):
+            status = check_setup_status(profile="chat")
+
+        self.assertEqual(status.stage, "upgrade")
+        self.assertIn("v0.0.1", status.reasons[0])
+
+    def test_nothing_on_disk_is_first_run_setup(self):
+        from gaia.installer.init_command import check_setup_status
+
+        with self._embedded(self._status(installed=False), older=None):
+            status = check_setup_status(profile="chat")
+
+        self.assertEqual(status.stage, "setup")
+
+    def test_older_installed_version_reads_other_unpacked_versions(self):
+        import platform
+        import tempfile
+        from pathlib import Path
+
+        from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+        with tempfile.TemporaryDirectory() as home:
+            embedded = EmbeddedLemonade(home=Path(home))
+            self.assertIsNone(embedded.older_installed_version())
+            daemon = "lemond.exe" if platform.system() == "Windows" else "lemond"
+            for version in ("9.2.0", "10.10.1", embedded.version):
+                d = embedded.root / "dist" / version
+                d.mkdir(parents=True)
+                (d / daemon).write_bytes(b"")
+            # A half-unpacked dir with no daemon does not count.
+            (embedded.root / "dist" / "99.0.0").mkdir()
+            self.assertEqual(embedded.older_installed_version(), "10.10.1")
 
     def test_ready_when_server_up_and_required_models_present(self):
         from gaia.installer.init_command import check_setup_status
