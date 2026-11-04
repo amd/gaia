@@ -175,6 +175,30 @@ class TestExtrasInstallFailureIsLoud:
         verify.assert_not_called()
         completion.assert_not_called()
 
+    def test_skip_pip_extras_installs_no_packages(self, monkeypatch):
+        """The apps pass --skip-pip-extras: they ship their packages and never pip-install."""
+        cmd = InitCommand(
+            profile="rag", yes=True, skip_models=True, skip_pip_extras=True
+        )
+        cmd._print = lambda msg, end="\n": None
+        monkeypatch.setattr(cmd, "_ensure_lemonade_ready", lambda: True)
+        monkeypatch.setattr(cmd, "_ensure_llamacpp_backend", lambda: True)
+        extras = MagicMock(return_value=True)
+        monkeypatch.setattr(cmd, "_install_pip_extras", extras)
+        monkeypatch.setattr(cmd, "_verify_setup", MagicMock(return_value=True))
+        monkeypatch.setattr(cmd, "_print_completion", MagicMock())
+        monkeypatch.setattr(init_command, "stdin_is_tty", lambda: True)
+
+        cmd.run()
+        extras.assert_not_called()
+
+    def test_the_cli_parses_skip_pip_extras(self):
+        from gaia.cli import build_parser
+
+        parser = build_parser()
+        assert parser.parse_args(["init", "--skip-pip-extras"]).skip_pip_extras is True
+        assert parser.parse_args(["init"]).skip_pip_extras is False
+
 
 class TestAgentUiMissingDependencies:
     def test_prints_an_install_command_that_targets_this_interpreter(
