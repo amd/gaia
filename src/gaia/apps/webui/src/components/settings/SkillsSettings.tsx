@@ -16,6 +16,9 @@ const GROUPS: Array<{ source: SkillSource; title: MessageKey; note: MessageKey; 
     { source: 'claude-import', title: 'settings.skills.import', note: 'settings.skills.importNote' },
 ];
 
+// A param, so the translator keeps the path left to right inside an Arabic sentence.
+const SKILLS_DIR = { path: '~/.gaia/skills' };
+
 /** The skills GAIA can load, with a way to start a chat that uses one. */
 export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => void }) {
     const t = useT();
@@ -67,7 +70,7 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
             <p className="settings-pane-lede">{t('settings.skills.lede')}</p>
             <details className="settings-more">
                 <summary><ChevronDown size={13} className="settings-disclosure-chevron" aria-hidden="true" /> {t('settings.model.howItWorks')}</summary>
-                <p className="settings-hint">{t('settings.skills.how')}</p>
+                <p className="settings-hint">{t('settings.skills.how', SKILLS_DIR)}</p>
             </details>
             {error && <p className="settings-error" role="alert">{error}</p>}
             {!skills && !error && <p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}
@@ -87,9 +90,9 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
                 const total = (skills ?? []).filter((s) => s.source === g.source).length;
                 if (rows.length === 0 && (q || !g.empty)) return null;
                 return (
-                    <SettingsDisclosure key={g.source} title={t(g.title)} count={total} hint={t(g.note)} defaultOpen={g.source === 'user'} forceOpen={!!q}>
+                    <SettingsDisclosure key={g.source} title={t(g.title)} count={total} hint={t(g.note, SKILLS_DIR)} defaultOpen={g.source === 'user'} forceOpen={!!q}>
                         <section aria-label={t(g.title)}>
-                            {rows.length === 0 ? <p className="settings-hint">{g.empty && t(g.empty)}</p> : <ul className="skill-list">{rows.map(renderRow)}</ul>}
+                            {rows.length === 0 ? <p className="settings-hint">{g.empty && t(g.empty, SKILLS_DIR)}</p> : <ul className="skill-list">{rows.map(renderRow)}</ul>}
                         </section>
                     </SettingsDisclosure>
                 );
