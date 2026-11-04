@@ -215,7 +215,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
                   {/* Tool info for permission requests */}
                   {n.type === 'permission_request' && n.tool && n.tool !== PATH_ACCESS_TOOL && (
                     <span className="notification-tool">
-                      Tool: <code>{n.tool}</code>
+                      Tool: <code dir="ltr">{n.tool}</code>
                     </span>
                   )}
 
@@ -223,7 +223,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
                     <div className="notification-policy-details">
                       {n.tool && (
                         <span className="notification-tool">
-                          Tool: <code>{n.tool}</code>
+                          Tool: <code dir="ltr">{n.tool}</code>
                         </span>
                       )}
                       {n.reason && (

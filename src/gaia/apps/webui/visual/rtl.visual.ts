@@ -1062,6 +1062,55 @@ test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
     await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
 });
 
+/** POST /api/chat/send streams `events`, then stays open, as a turn waiting on the user does. */
+function streamThenWait(events: unknown[]): void {
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (!url.includes('/api/chat/send')) return realFetch(input, init);
+        const encoder = new TextEncoder();
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                for (const event of events) controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+            },
+        });
+        return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+}
+
+const PYTHON_PROMPT = [{
+    type: 'permission_request', tool: 'run_python', tool_label: 'running python', confirm_id: 'c-rtl',
+    args: { code: 'p = r"C:\\Users\\you\\notes.txt"\nt = open(p, encoding="utf-8").read()\nprint(len(t))' },
+}];
+
+for (const locale of ['ar', 'en']) {
+    test(`a permission prompt's code reads left to right (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, PYTHON_PROMPT);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('count the characters in my notes');
+        await page.keyboard.press('Enter');
+        const code = page.getByTestId('perm-code');
+        await expect(code).toBeVisible();
+        const style = await code.evaluate((el) => {
+            const s = getComputedStyle(el);
+            return { direction: s.direction, textAlign: s.textAlign };
+        });
+        expect(style.direction).toBe('ltr');
+        expect(['left', 'start']).toContain(style.textAlign);
+        // The first line's text starts at the block's left edge, not its right.
+        const gap = await code.evaluate((el) => {
+            const range = document.createRange();
+            range.selectNodeContents(el.firstChild!);
+            return range.getClientRects()[0].left - el.getBoundingClientRect().left;
+        });
+        expect(gap).toBeLessThan(16);
+        await expect(page.locator('.perm-card-title bdi')).toHaveText('Allow running python?');
+        await expect(page.getByRole('button', { name: /Allow once/ })).toContainText(locale === 'ar' ? 'السماح مرة واحدة' : 'Allow once');
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `permission-python-${locale}`);
+    });
+}
+
 /** A first message whose chat model isn't downloaded, on a disk too small for it. */
 async function withMissingModel(page: Page): Promise<void> {
     await page.route('**/api/setup/needs/chat', (route) =>
