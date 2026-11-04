@@ -232,7 +232,6 @@ if (-not (Test-Path "$uiDir\gaia-desktop.exe")) { throw "gaia-desktop.exe did no
 if (-not (Test-Path $uiArp)) { throw "no Installed-apps entry for the desktop app" }
 if (-not (Test-Path "$desktop\GAIA.lnk")) { throw "no desktop shortcut for the desktop app" }
 if (-not (Test-Path "$startMenu\GAIA.lnk")) { throw "no Start menu shortcut for the desktop app" }
-if (-not (Get-ItemProperty -Path $runKey -Name 'GAIA' -ErrorAction SilentlyContinue)) { throw "no autostart entry for the desktop app" }
 if ((Get-FileHash "$tuiDir\gaia-tui.exe" -Algorithm SHA256).Hash -ne $before.Hash) { throw "adding the desktop app changed the terminal" }
 
 # ── 5. Plain /S with both installed updates both, and leaves one of each ──

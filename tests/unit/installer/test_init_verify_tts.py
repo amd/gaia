@@ -41,7 +41,20 @@ def _client():
     client.list_models.return_value = {
         "data": [{"id": "Gemma-4-E4B-it-GGUF", "recipe_options": {"ctx_size": 65536}}]
     }
-    client.chat_completions.return_value = {"choices": [{"message": {"content": "ok"}}]}
+    # Setup shows a vision model a red image, so the fake reads it.
+    client.chat_completions.side_effect = lambda **kw: {
+        "choices": [
+            {
+                "message": {
+                    "content": (
+                        "red"
+                        if isinstance(kw["messages"][-1]["content"], list)
+                        else "ok"
+                    )
+                }
+            }
+        ]
+    }
     client.embeddings.return_value = {"data": [{"embedding": [0.1] * 8}]}
     return client
 

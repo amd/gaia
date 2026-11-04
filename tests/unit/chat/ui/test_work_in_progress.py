@@ -51,7 +51,7 @@ def _session(client, title):
 def test_nothing_running(client):
     resp = client.get("/api/system/work-in-progress")
     assert resp.status_code == 200
-    assert resp.json() == {"answers": [], "indexing": []}
+    assert resp.json() == {"answers": [], "indexing": [], "setup": False}
 
 
 def test_running_answers_are_named(client):

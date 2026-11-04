@@ -61,6 +61,7 @@
     "test:watch": "vitest",
     "test:visual": "vite build && playwright test -c visual/playwright.config.ts",
     "test:rtl": "vite build && playwright test -c visual/playwright.config.ts rtl --project=light",
+    "test:scroll": "vite build && playwright test -c visual/playwright.config.ts autoscroll --project=light",
     "gen:api-types": "node scripts/gen-api-types.mjs"
   },
   "dependencies": {

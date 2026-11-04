@@ -393,6 +393,42 @@ def _answers_in_question_language(mixin: Any):
     return wrap
 
 
+_SEARCH_AGAIN_NOTE = (
+    "\n\nIf these chunks do not answer the question, do not say so yet: search once "
+    "more with different words (other terms for the same thing, and the question's "
+    "words in the document's language). If that search misses too, say it is not "
+    "in the documents."
+)
+
+
+_NO_TURN = object()
+
+
+def _asks_once_for_another_search(mixin: Any):
+    """Ask for one more search before "not in the document", once per turn.
+
+    Only the turn's first search that returns chunks carries the note, so it
+    buys one extra search and never a chain of them.
+    """
+
+    def wrap(search: Callable[..., Dict[str, Any]]):
+        @functools.wraps(search)
+        def wrapper(*args, **kwargs) -> Dict[str, Any]:
+            result = search(*args, **kwargs)
+            if result.get("status") != "success" or not result.get("chunks"):
+                return result
+            turn = getattr(mixin, "_turn_seq", None)
+            if getattr(mixin, "_search_again_turn", _NO_TURN) == turn:
+                return result
+            mixin._search_again_turn = turn
+            result["instruction"] = result.get("instruction", "") + _SEARCH_AGAIN_NOTE
+            return result
+
+        return wrapper
+
+    return wrap
+
+
 def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
     """How query_documents asks the model to cite: the full path, plus pages if any."""
     instruction = (
@@ -591,6 +627,7 @@ class RAGToolsMixin:
             atomic=True,
         )
         @_answers_in_question_language(self)
+        @_asks_once_for_another_search(self)
         def query_documents(
             query: str, debug: bool = False  # pylint: disable=unused-argument
         ) -> Dict[str, Any]:
@@ -976,6 +1013,7 @@ class RAGToolsMixin:
             timeout=600,
         )
         @_answers_in_question_language(self)
+        @_asks_once_for_another_search(self)
         def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
             """
             Query a specific file for fast, targeted retrieval.

@@ -7,7 +7,7 @@
 ;   Desktop app  runs the embedded, unmodified electron-builder setup
 ;                (gaia-agent-ui-<v>-x64-setup.exe /S /currentuser). That setup
 ;                stays the app's owner -- its files, Installed-apps entry,
-;                shortcuts, autostart and uninstaller -- because electron-updater
+;                shortcuts and uninstaller -- because electron-updater
 ;                re-runs exactly that file to update the app. A second owner here
 ;                would be duplicated by the first auto-update.
 ;   Terminal     gaia-tui + gaia-agent, PATH, Windows Terminal profile, shortcuts,
@@ -27,21 +27,17 @@
 ; through it would mean carrying an Electron app's assumptions (asar, an app
 ; bundle, a chrome-sandbox) for two files that need none of them. The
 ; conventions this repo already established for the Agent UI installer --
-; per-user install, the pinned Lemonade MSI, "leave ~/.gaia alone unless asked"
-; -- are followed here; see installer/nsis/installer.nsh for their original
-; statement and rationale.
+; per-user install, "leave ~/.gaia alone unless asked" -- are followed here; see
+; installer/nsis/installer.nsh for their original statement and rationale.
 ;
-; Nothing is downloaded at INSTALL time -- the Lemonade MSI is bundled -- so the
-; install itself works offline and behind a proxy. Lemonade's -minimal MSI is a
-; bootstrap that fetches its runtime on first run, so running a model still
-; needs the network once.
+; Nothing is downloaded at INSTALL time, so the install itself works offline and
+; behind a proxy. GAIA's own Lemonade Server and models come with first-run setup
+; in the app; no system-wide Lemonade is installed.
 ;
 ; Build:
 ;   makensis -DVERSION=<x.y.z, or x.y.z-rc.N for a release candidate> \
 ;            -DVERSION_QUAD=<x.y.z.0, VERSION's four-integer form> \
 ;            -DPAYLOAD_DIR=<dir with gaia-tui.exe, gaia-agent.exe, LICENSE.md> \
-;            -DLEMONADE_MSI=<path to lemonade-server-minimal.msi> \
-;            -DLEMONADE_VERSION=<LEMONADE_VERSION from src/gaia/version.py> \
 ;            -DICON=<path to gaia.ico> \
 ;            -DFONTS_DIR=<dir staged by installer/tui/fetch_fonts.py> \
 ;            -DAGENT_UI_SETUP=<path to gaia-agent-ui-<v>-x64-setup.exe> \
@@ -62,12 +58,6 @@ Unicode true
 !endif
 !ifndef PAYLOAD_DIR
   !error "PAYLOAD_DIR is required: the directory holding gaia-tui.exe, gaia-agent.exe and LICENSE.md"
-!endif
-!ifndef LEMONADE_MSI
-  !error "LEMONADE_MSI is required: the pinned lemonade-server-minimal.msi to bundle. This installer is offline by contract, so the MSI must be downloaded and verified by the build, not fetched at install time."
-!endif
-!ifndef LEMONADE_VERSION
-  !error "LEMONADE_VERSION is required: the version of the bundled MSI, shown to the user during install"
 !endif
 !ifndef ICON
   !error "ICON is required: -DICON=src/gaia/img/gaia.ico"
@@ -93,12 +83,10 @@ Unicode true
 !define PRODUCT_PUBLISHER "Advanced Micro Devices, Inc."
 !define PRODUCT_URL       "https://amd-gaia.ai"
 !define DOCS_URL          "https://amd-gaia.ai/docs"
-!define INSTALL_DOCS_URL  "https://amd-gaia.ai/docs/guides/install"
 ; Kept from the TUI-only setup so an upgrade lands on the same Installed-apps entry.
 !define UNINST_KEY        "Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub"
 !define TUI_EXE           "gaia-tui.exe"
 !define AGENT_EXE         "gaia-agent.exe"
-!define LEMONADE_MSI_NAME "lemonade-server-minimal.msi"
 
 ; The desktop app's registry identity, as electron-builder derives it:
 ; UUIDv5(appId "ai.amd.gaia", electron-builder's namespace). Pinned by
@@ -354,7 +342,7 @@ FunctionEnd
 ; ─── Install ───────────────────────────────────────────────────────────────
 ;
 ; Section order is execution order and the components-page order: preflight,
-; Lemonade, desktop app, terminal, terminal profile. .onInit and the selection
+; desktop app, terminal, terminal profile. .onInit and the selection
 ; logic sit after the last section because a section's index only exists below
 ; its own Section line.
 
@@ -400,42 +388,6 @@ FunctionEnd
 ; setup leaves the machine exactly as it found it.
 Section "-Preflight" SecPreflight
   Call Preflight
-SectionEnd
-
-Section "-Lemonade" SecLemonade
-  ; The local inference server GAIA runs models on. Bundled rather than
-  ; downloaded so this installer works offline; $PLUGINSDIR is auto-deleted on
-  ; exit, so the MSI does not linger on disk.
-  ;
-  ; A Lemonade failure does not abort the GAIA install -- both front ends walk
-  ; the user through finishing setup -- but it is never swallowed: the
-  ; real-failure branch raises a dialog naming the exit code and what to do
-  ; next. Same contract as installer/nsis/installer.nsh, made visible rather
-  ; than log-only. Runs before the desktop app, whose own setup then re-runs the
-  ; same MSI as a no-op (0, or 1638 when this one is newer).
-  SetOutPath "$PLUGINSDIR"
-  File "/oname=${LEMONADE_MSI_NAME}" "${LEMONADE_MSI}"
-  DetailPrint "Installing Lemonade Server ${LEMONADE_VERSION}..."
-  ClearErrors
-  ExecWait 'msiexec /i "$PLUGINSDIR\${LEMONADE_MSI_NAME}" /qn /norestart' $0
-  ${If} $0 == 0
-    DetailPrint "Lemonade Server installed successfully."
-  ${ElseIf} $0 == 1638
-    ; ERROR_PRODUCT_VERSION — a newer Lemonade is already installed.
-    DetailPrint "Lemonade Server: a newer version is already installed (bundled MSI skipped)."
-  ${ElseIf} $0 == 3010
-    ; ERROR_SUCCESS_REBOOT_REQUIRED — installed; reboot pending.
-    DetailPrint "Lemonade Server installed (reboot pending)."
-  ${Else}
-    DetailPrint "Lemonade Server install FAILED with exit code $0."
-    ; /SD IDOK or a silent install blocks here forever on an invisible dialog.
-    MessageBox MB_OK|MB_ICONEXCLAMATION \
-      "The bundled Lemonade Server did not install (msiexec exit code $0). Setup will still install the rest of GAIA.$\r$\n$\r$\nGAIA needs Lemonade to run models locally. When Setup finishes, open GAIA - the desktop app, or gaia-tui in a new terminal - and it will offer to finish the setup.$\r$\n$\r$\nDetails: ${INSTALL_DOCS_URL}" \
-      /SD IDOK
-  ${EndIf}
-  ; Not back to $INSTDIR: SetOutPath creates the folder, and a desktop-app-only
-  ; install must not leave an empty terminal folder. The terminal section sets
-  ; its own.
 SectionEnd
 
 Section "GAIA Agent UI (desktop app)" SecUI
@@ -797,7 +749,7 @@ SectionEnd
 ; ─── Component selection ───────────────────────────────────────────────────
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecUI} "GAIA Agent UI, the desktop app: a window with chat, your documents and files, and every tool call shown as it runs. Adds a GAIA shortcut to the desktop and Start menu, and starts with Windows (turn that off in the app's tray menu)."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecUI} "GAIA Agent UI, the desktop app: a window with chat, your documents and files, and every tool call shown as it runs. Adds a GAIA shortcut to the desktop and Start menu."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "GAIA Terminal UI (gaia-tui): the same agent in your terminal, on your PATH, with a GAIA profile for Windows Terminal. Adds a GAIA Terminal UI shortcut to the desktop and Start menu."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
@@ -854,11 +806,9 @@ Function HasAllUsersUi
 FunctionEnd
 
 Function .onInit
-  ; $PLUGINSDIR is where the bundled Lemonade MSI is unpacked, and it does not
-  ; exist until something asks for it. MUI2 alone never does -- the Agent UI's
-  ; installer.nsh gets away with omitting this only because electron-builder's
-  ; generated script calls it first. Without it SetOutPath lands on "" and the
-  ; MSI install fails for every user.
+  ; $PLUGINSDIR is where the desktop app setup is unpacked, and it does not
+  ; exist until something asks for it. MUI2 alone never does. Without it
+  ; SetOutPath lands on "" and the desktop app install fails for every user.
   InitPluginsDir
   ; electron-builder writes the desktop app's all-users key in the 64-bit view;
   ; a 32-bit NSIS process would otherwise read WOW6432Node and never see it.
@@ -1076,10 +1026,8 @@ Section "Uninstall"
 
   Call un.RemoveFromUserPath
 
-  ; Lemonade Server is deliberately NOT uninstalled: the MSI registers it as an
-  ; independent Windows product other things may be using, and it is removed the
-  ; same way whether it arrived here or from a standalone MSI --
-  ; `gaia uninstall --purge-lemonade`. Same contract as installer/nsis/installer.nsh.
+  ; A system Lemonade Server from an earlier setup is deliberately NOT uninstalled:
+  ; other things may be using it. `gaia uninstall --purge-lemonade` removes it.
 
   ; Optional cleanup deletes the entire shared GAIA home, including other
   ; installations' runtimes. Interactive and silent defaults preserve it.
