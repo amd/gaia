@@ -566,6 +566,41 @@ class TestKnownFailuresFile:
                 ), f"{row} has no {e['phase']} phase"
 
 
+class TestKnownFailureSchedule:
+    ENTRY = {"issue": 5527}
+
+    @staticmethod
+    def _issue(state="OPEN", reason=None, milestone="v0.25.5 — Critical bugs"):
+        return {
+            "state": state,
+            "stateReason": reason,
+            "milestone": {"title": milestone} if milestone else None,
+        }
+
+    def test_an_open_issue_on_an_unshipped_milestone_may_stay(self):
+        assert journey.unscheduled_known(self.ENTRY, self._issue(), False) is None
+
+    def test_a_fixed_issue_stays_until_its_release_ships(self):
+        issue = self._issue("CLOSED", "COMPLETED")
+        assert journey.unscheduled_known(self.ENTRY, issue, False) is None
+
+    def test_an_entry_past_its_shipped_milestone_fails(self):
+        # #5527 at v0.25.2: still milestoned v0.25.2, released, journeys still green.
+        issue = self._issue(milestone="v0.25.2 — Polish & security")
+        assert "has shipped" in journey.unscheduled_known(self.ENTRY, issue, True)
+
+    @pytest.mark.parametrize("milestone", [None, "Backlog"])
+    def test_an_entry_without_a_release_milestone_fails(self, milestone):
+        issue = self._issue(milestone=milestone)
+        assert "no release milestone" in journey.unscheduled_known(
+            self.ENTRY, issue, False
+        )
+
+    def test_an_issue_closed_unfixed_fails(self):
+        issue = self._issue("CLOSED", "NOT_PLANNED")
+        assert "without a fix" in journey.unscheduled_known(self.ENTRY, issue, False)
+
+
 # ── the fake model server ────────────────────────────────────────────────────
 
 

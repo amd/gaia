@@ -1,0 +1,213 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Diagnostic repro for #6632: an NPU chat through GAIA's own Lemonade, run
+# cell by cell (Lemonade version x FLM model x context window x request) by
+# util/repro_npu_embedded.py. It uploads one tarball with the summary table,
+# every HTTP error body, the Lemonade and FLM logs, and the machine's NPU
+# setup (driver, firmware, /dev/accel, memlock).
+#
+# Dispatch only: the self-hosted Strix Halo pool is shared and scarce. The
+# Linux runner is the one that matters; the Windows runner is a control that
+# shows the same cells on the platform where the NPU path is proven.
+#
+# This is not the release-test NPU chat job; it changes nothing and gates
+# nothing. Each run uses a throwaway GAIA_HOME and its own Lemonade port, and
+# the last step stops anything it started.
+name: NPU repro (embedded Lemonade)
+
+on:
+  workflow_dispatch:
+    inputs:
+      runners:
+        description: 'Where to run'
+        type: choice
+        options: [linux, windows, both]
+        default: linux
+      lemonade:
+        description: 'More Lemonade releases to try beside GAIA''s own, VERSION=TAG separated by spaces (empty: GAIA''s only)'
+        required: false
+        default: '2026.46.0=candidate-v2026.46.0'
+      models:
+        description: 'FLM models, separated by spaces'
+        required: false
+        default: 'gemma4-it-e4b-FLM gemma3-4b-FLM'
+      gaia_ref:
+        description: 'Install GAIA from this ref instead of this one (the script still comes from this ref)'
+        required: false
+        default: ''
+      memlock:
+        description: 'Linux locked-memory limit for the run: as-is (a fresh desktop session) or unlimited (a PC with the NPU fix applied; needs passwordless sudo on the runner)'
+        type: choice
+        options: [as-is, unlimited]
+        default: as-is
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    name: Repro on Linux Strix Halo
+    if: inputs.runners != 'windows'
+    runs-on: [self-hosted, Linux, xsj-dispatch, strix-halo]
+    timeout-minutes: 360
+    env:
+      LEMONADE_EXTRA: ${{ inputs.lemonade }}
+      MODELS: ${{ inputs.models }}
+      GAIA_REF: ${{ inputs.gaia_ref }}
+      MEMLOCK: ${{ inputs.memlock }}
+    steps:
+      - name: Paths for this run
+        run: |
+          {
+            echo "REPRO_WORKDIR=$RUNNER_TEMP/npu-repro"
+            echo "VENV=$RUNNER_TEMP/npu-repro-venv"
+          } >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7
+
+      - name: Check out the GAIA under test
+        if: inputs.gaia_ref != ''
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.gaia_ref }}
+          path: gaia-under-test
+
+      - name: Install GAIA and the flagship agent into a fresh venv
+        run: |
+          set -euo pipefail
+          # Not every pool host has curl, which the uv installer needs.
+          mkdir -p "$RUNNER_TEMP/uv-bin"
+          python3 -c "import urllib.request, sys; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" \
+            https://github.com/astral-sh/uv/releases/download/0.13.1/uv-x86_64-unknown-linux-gnu.tar.gz \
+            "$RUNNER_TEMP/uv.tar.gz"
+          tar -xzf "$RUNNER_TEMP/uv.tar.gz" -C "$RUNNER_TEMP/uv-bin" --strip-components=1
+          UV="$RUNNER_TEMP/uv-bin/uv"
+          "$UV" venv "$VENV" --python 3.12 --seed
+          src="."
+          if [ -n "$GAIA_REF" ]; then src="./gaia-under-test"; fi
+          "$UV" pip install --python "$VENV/bin/python" "$src[ui,rag]" "$src/hub/agents/gaia/python" psutil
+          "$VENV/bin/gaia" --version
+
+      - name: Run the repro
+        run: |
+          set -uo pipefail
+          # #6632: FastFlowLM needs locked memory far above a desktop session's
+          # 8 MB. "unlimited" lifts this shell's limit, which GAIA's Lemonade
+          # and its FLM child inherit, as on a PC with the NPU fix applied.
+          if [ "$MEMLOCK" = "unlimited" ]; then
+            if ! sudo -n prlimit --pid $$ --memlock=unlimited:unlimited; then
+              echo "::error::memlock=unlimited needs passwordless sudo for prlimit on this runner, or the runner service started with LimitMEMLOCK=infinity (systemctl edit actions.runner.*.service)."
+              exit 2
+            fi
+          fi
+          echo "memlock for this run: soft $(ulimit -Sl), hard $(ulimit -Hl)"
+          extra=()
+          for spec in $LEMONADE_EXTRA; do extra+=(--lemonade "$spec"); done
+          for model in $MODELS; do extra+=(--model "$model"); done
+          "$VENV/bin/python" util/repro_npu_embedded.py \
+            --workdir "$REPRO_WORKDIR" \
+            --output "$RUNNER_TEMP/gaia-npu-repro-linux.tar.gz" "${extra[@]}"
+          code=$?
+          cat "$REPRO_WORKDIR/report/summary.md" >> "$GITHUB_STEP_SUMMARY" || true
+          # Exit 1 is a cell that failed: the finding, not a broken run.
+          if [ "$code" -ge 2 ]; then exit "$code"; fi
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gaia-npu-repro-linux
+          path: ${{ runner.temp }}/gaia-npu-repro-linux.tar.gz
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Leave the machine clean
+        if: always()
+        run: |
+          # An empty pattern would match (and kill) every process the runner owns.
+          [ -n "${REPRO_WORKDIR:-}" ] || exit 0
+          leftovers=$(pgrep -f "$REPRO_WORKDIR" || true)
+          if [ -n "$leftovers" ]; then
+            echo "::warning::Stopping processes the repro left behind: $leftovers"
+            ps -o pid,cmd -p $leftovers || true
+            kill $leftovers || true
+            sleep 5
+            kill -9 $(pgrep -f "$REPRO_WORKDIR") 2>/dev/null || true
+          fi
+          rm -rf "$REPRO_WORKDIR" "$VENV" "$RUNNER_TEMP/uv-bin" "$RUNNER_TEMP/uv.tar.gz"
+
+  windows:
+    name: Control on Windows Strix Halo
+    if: inputs.runners != 'linux'
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
+    timeout-minutes: 360
+    defaults:
+      run:
+        # Windows PowerShell 5.1 reads BOM-less scripts as ANSI: keep run bodies ASCII.
+        shell: powershell
+    env:
+      LEMONADE_EXTRA: ${{ inputs.lemonade }}
+      MODELS: ${{ inputs.models }}
+      GAIA_REF: ${{ inputs.gaia_ref }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check out the GAIA under test
+        if: inputs.gaia_ref != ''
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.gaia_ref }}
+          path: gaia-under-test
+
+      - name: Install GAIA and the flagship agent into a fresh venv
+        run: |
+          $venv = Join-Path $env:RUNNER_TEMP 'npu-repro-venv'
+          python -m venv $venv
+          if ($LASTEXITCODE -ne 0) { throw "python -m venv failed" }
+          $src = '.'
+          if ($env:GAIA_REF) { $src = '.\gaia-under-test' }
+          & "$venv\Scripts\python.exe" -m pip install --quiet "$src[ui,rag]" "$src\hub\agents\gaia\python" psutil
+          if ($LASTEXITCODE -ne 0) { throw "installing GAIA failed" }
+          & "$venv\Scripts\gaia.exe" --version
+          "VENV=$venv" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "REPRO_WORKDIR=$(Join-Path $env:RUNNER_TEMP 'npu-repro')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Run the repro
+        run: |
+          $extra = @()
+          foreach ($spec in ($env:LEMONADE_EXTRA -split ' ' | Where-Object { $_ })) { $extra += @('--lemonade', $spec) }
+          foreach ($model in ($env:MODELS -split ' ' | Where-Object { $_ })) { $extra += @('--model', $model) }
+          $out = Join-Path $env:RUNNER_TEMP 'gaia-npu-repro-windows.tar.gz'
+          & "$env:VENV\Scripts\python.exe" util\repro_npu_embedded.py --workdir $env:REPRO_WORKDIR --output $out @extra
+          $code = $LASTEXITCODE
+          Get-Content (Join-Path $env:REPRO_WORKDIR 'report\summary.md') -ErrorAction SilentlyContinue | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          # Exit 1 is a cell that failed: the finding, not a broken run.
+          if ($code -ge 2) { exit $code }
+          exit 0
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gaia-npu-repro-windows
+          path: ${{ runner.temp }}/gaia-npu-repro-windows.tar.gz
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Leave the machine clean
+        if: always()
+        run: |
+          $root = $env:REPRO_WORKDIR
+          if ($root) {
+            Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root) } | ForEach-Object {
+              Write-Host "Stopping $($_.ProcessId) $($_.ExecutablePath)"
+              Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+            Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+          }
+          if ($env:VENV) { Remove-Item -Recurse -Force $env:VENV -ErrorAction SilentlyContinue }

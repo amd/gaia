@@ -138,6 +138,8 @@ If a step fails, the window shows the error with a **Try again** button, and **D
 
 After an app update, the same screen updates the backend and then the GAIA agent. Your models stay as they are. If the agent update fails, **Try again** picks it up, and the next launch does too.
 
+Before it updates the backend, the app stops GAIA's background service (the GAIA daemon) and the agents it runs, because Windows can't replace files a running program holds. The service has no window, so if it won't stop, the screen says so: restart your PC, then choose **Try again**.
+
 ### Choose where chat runs
 
 The app then opens on its setup screen, which asks where chat should run:
@@ -314,6 +316,8 @@ To turn update checks off entirely, set `GAIA_DISABLE_UPDATE=1` before launching
 ## Uninstalling
 
 GAIA follows the platform convention: removing the app leaves your user data (chats, documents, downloaded models) behind by default. To remove the data too, run the `gaia uninstall` CLI from a terminal — it has tiered flags so you can decide exactly what to keep.
+
+The Windows uninstaller and `apt remove` also stop GAIA's background service (the GAIA daemon) and the agents it runs. macOS and AppImage have no uninstall step, so after you delete the app they keep running until you restart.
 
 ### Windows
 
