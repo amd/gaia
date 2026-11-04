@@ -130,23 +130,12 @@ def test_a_running_server_costs_exactly_one_probe(tmp_path, client, monkeypatch)
 # ---------------------------------------------------------------------------
 
 
-def test_a_stopped_server_is_started_and_the_window_is_passed_to_the_launcher(
+def test_a_stopped_server_is_started_without_a_window_in_its_command(
     tmp_path, client, monkeypatch, installed
 ):
-    """The ctx_size must reach ``build_start_command``, which is what decides
-    how it is carried — an env var for a modern install, a flag for the legacy
-    CLI. A server started without it answers /health and then fails every long
-    request, which reads as an agent bug rather than a launch bug."""
+    """Lemonade reads no start-time window; it goes with every ``/load``. A
+    window in the start command would claim a setting the server ignores."""
     monkeypatch.setattr(sup, "_port_is_open", lambda *a, **k: False)
-    seen = {}
-    real_build = sup.build_start_command
-
-    def spy(tooling, ctx_size):
-        seen["ctx_size"] = ctx_size
-        return real_build(tooling, ctx_size)
-
-    monkeypatch.setattr(sup, "build_start_command", spy)
-
     spawned = []
 
     def fake_spawn(spec):
@@ -162,8 +151,9 @@ def test_a_stopped_server_is_started_and_the_window_is_passed_to_the_launcher(
     state = s.ensure_running(ctx_size=65536)
 
     assert state.started is True
-    assert seen["ctx_size"] == 65536
     assert len(spawned) == 1
+    assert "65536" not in " ".join(spawned[0].argv)
+    assert spawned[0].env == {}
 
 
 def test_not_installed_names_the_installer_and_spawns_nothing(
@@ -283,7 +273,7 @@ def test_a_launch_that_cannot_exec_shows_the_full_command(
     monkeypatch.setattr(sup, "resolve_lemonade", lambda: tooling)
     _spawn_fails(monkeypatch)
     s = _supervisor(tmp_path, client, monkeypatch)
-    expected = render_command(build_start_command(tooling, 65536))
+    expected = render_command(build_start_command(tooling))
     assert "LEMONADE_CTX_SIZE" not in expected
 
     with pytest.raises(LemonadeStartError) as e:
@@ -573,8 +563,8 @@ def test_a_real_spawn_merges_the_spec_env_into_the_parent_environment(
 
     real_build = sup.build_start_command
 
-    def redirect_argv_mark_env(tooling, ctx_size):
-        spec = real_build(tooling, ctx_size)
+    def redirect_argv_mark_env(tooling):
+        spec = real_build(tooling)
         assert spec.env == {}, f"modern launch grew an env: {spec.env}"
         # Proves the spec's own env still reaches the child through the merge.
         spec.env["GAIA_SPEC_MARKER"] = "from-spec"

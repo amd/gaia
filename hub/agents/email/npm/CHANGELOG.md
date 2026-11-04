@@ -9,6 +9,9 @@ behind any entry — API shapes, endpoints, and version semantics — see
 - **The drafting eval's judge prefers your Claude Code login.** It now uses
   the subscription before `ANTHROPIC_API_KEY`, and prints which credential
   it uses. Only the eval changes; the agent itself does not call Claude.
+- **Needs Lemonade Server 2026.44.1 or newer.** `init()` reports the agent
+  not ready on an older Lemonade, and its hint says how to update it. GAIA
+  updates the Lemonade it installs on its own.
 - **Switching model mid-chat takes effect.** In a conversation that keeps its
   session, a turn that asks for a different model now runs on that model
   instead of the one the conversation started with.

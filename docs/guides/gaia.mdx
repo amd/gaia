@@ -28,7 +28,7 @@ GAIA is the agent a new user meets first. One agent handles the everyday work yo
 
 | | |
 |---|---|
-| Local model server | Lemonade **10.2.0** or newer, running |
+| Local model server | Lemonade **2026.44.1** or newer, running |
 | Model | `Gemma-4-E4B-it-GGUF` (downloaded) |
 | RAM | 8 GB minimum |
 | Platforms | Windows x64, Linux x64, macOS Apple Silicon |
@@ -74,7 +74,7 @@ Inference runs locally by default. The sidecar's `/query` endpoint accepts `prov
 
 ### Check it's ready before you ask it anything
 
-`GET /v1/gaia/init` is a read-only preflight: it probes Lemonade, compares its version against the 10.2.0 floor, and confirms the model is downloaded. It never pulls or loads a model.
+`GET /v1/gaia/init` is a read-only preflight: it probes Lemonade, compares its version against the 2026.44.1 floor, and confirms the model is downloaded. It never pulls or loads a model.
 
 ```bash
 curl -s http://127.0.0.1:8141/v1/gaia/init

@@ -498,16 +498,17 @@ def version_meets_min(found: Optional[str], minimum: Optional[str]) -> Optional[
 def pull_model(probe_base: str, model_id: str) -> None:
     """Tell a RUNNING backend to download ``model_id``.
 
-    Lemonade wants opposite payloads for its two kinds of model, and sending the
-    wrong one fails on a COLD cache only — so both directions survive every
-    warm-machine test:
+    The body is :func:`gaia.llm.lemonade_client.pull_request_body` — the same
+    one the Agent UI download uses. Lemonade wants opposite payloads for its
+    two kinds of model, and sending the wrong one fails on a COLD cache only:
 
     * **Built-in** (``Gemma-4-E4B-it-GGUF``, the ``*-FLM`` models) — name only.
       Passing ``recipe`` makes Lemonade treat the call as a *new* registration,
       which requires a ``user.`` prefix, and it 400s (#1655).
     * **Custom, ``user.``-prefixed** (the EmbeddingGemma embedder) — these are
       not registered yet, so the first pull must carry ``checkpoint`` +
-      ``recipe`` (+ ``embedding`` for an embedder). Name only returns HTTP 500
+      ``recipe`` (+ ``embedding`` for an embedder, and ``mmproj`` / ``vision`` /
+      ``reasoning`` when the model needs them). Name only returns HTTP 500
       ``not registered with Lemonade Server``.
 
     Sending name only for everything is what this used to do, which made the
@@ -515,7 +516,7 @@ def pull_model(probe_base: str, model_id: str) -> None:
     fix could not succeed. Found on a machine whose chat model already worked.
 
     A gateway-hosted model has no weights at all and raises ``RuntimeError``
-    before any request goes out.
+    before any request goes out. An unknown ``user.`` id raises ``ValueError``.
 
     Raises ``requests.RequestException``, ``ValueError`` or ``RuntimeError`` on
     failure; the caller surfaces it as a loud ``✗`` line.
@@ -526,36 +527,12 @@ def pull_model(probe_base: str, model_id: str) -> None:
     import requests
 
     from gaia.llm.lemonade_client import (
-        MODELS,
-        is_cloud_model,
         lemonade_auth_headers,
+        pull_request_body,
         resolve_lemonade_api_key,
     )
 
-    if is_cloud_model(model_id):
-        # A gateway model has no weights to fetch. Lemonade 400s on a pull for
-        # one, and the message talks about a download the user cannot perform.
-        raise RuntimeError(
-            f"'{model_id}' is hosted on a gateway, so there is nothing to "
-            f"download. If it is unavailable, check the gateway connection "
-            f"with `gaia gateway status`."
-        )
-
-    payload = {"model_name": model_id}
-    if model_id.startswith("user."):
-        requirement = next((m for m in MODELS.values() if m.model_id == model_id), None)
-        if requirement is None:
-            raise ValueError(
-                f"Cannot pull custom model '{model_id}': it is not in GAIA's "
-                "model registry, so its checkpoint and recipe are unknown. "
-                "Add it to MODELS in gaia.llm.lemonade_client, or run "
-                "`gaia init`."
-            )
-        payload.update(
-            checkpoint=requirement.checkpoint,
-            recipe=requirement.recipe,
-            embedding=requirement.embedding,
-        )
+    payload = pull_request_body(model_id)
 
     resp = requests.post(
         f"{probe_base}/pull",

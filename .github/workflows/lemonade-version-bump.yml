@@ -221,9 +221,9 @@ jobs:
                to
                  `LEMONADE_VERSION = "${{ steps.detect.outputs.target_version }}"`
                This constant is the single source of truth — CI and the installer derive the
-               download URLs from it. Do NOT touch the per-profile `min_lemonade_version`
-               floors in src/gaia/installer/init_command.py (those are deliberately
-               conservative minimums, not "latest").
+               download URLs from it. Do NOT touch `LEMONADE_MIN_VERSION` in the same
+               file (the oldest version GAIA runs against, raised deliberately, not
+               "latest").
             3. Refresh the embeddable SHA-256 pins. `gaia lemonade embedded install`
                verifies its download against the digests in
                `EMBEDDABLE_SHA256` (src/gaia/llm/lemonade_embedded.py), keyed by asset
@@ -263,7 +263,7 @@ jobs:
                compares every pin against the release API and fails on any mismatch.
 
                Then update `tests/fixtures/lemonade/release_tags.txt`, which lists every
-               supported release, oldest first. Find every stable release newer than
+               release GAIA can remove, oldest first. Find every stable release newer than
                `v${{ steps.detect.outputs.current_version }}`, up to and including the
                target:
                  ```

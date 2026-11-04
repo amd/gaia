@@ -20,6 +20,7 @@ import pytest
 
 from gaia.llm.lemonade_client import LemonadeClientError, LemonadeStatus
 from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
+from gaia.version import LEMONADE_VERSION
 
 # A co-loaded non-LLM model. Its tiny ctx_size must never be mistaken for the
 # server's, and its presence must never be mistaken for "a chat model is up".
@@ -47,6 +48,7 @@ def _reset_manager():
 
 def _status(running=True, context_size=0, loaded_models=None):
     return LemonadeStatus(
+        version=LEMONADE_VERSION,
         running=running,
         context_size=context_size,
         loaded_models=[] if loaded_models is None else loaded_models,
