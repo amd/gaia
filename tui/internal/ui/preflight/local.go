@@ -851,6 +851,10 @@ func (l localRunner) verifyModelsWith(ctx context.Context) (Row, string, string,
 		}
 	}
 
+	if st.AgentOnly() {
+		return l.agentMissingRow(st), "", "", st
+	}
+
 	// Not downloaded yet: the normal state of a first run.
 	row.State = StateFailed
 	row.FirstRun = true
@@ -888,6 +892,27 @@ func (l localRunner) verifyModelsWith(ctx context.Context) (Row, string, string,
 	}
 	row.Raw = strings.Join(st.Reasons, "\n")
 	return row, "", "", st
+}
+
+// agentMissingRow is a first run whose models are all on the server already:
+// setup installs only the GAIA agent, so offering a model download would lie.
+func (l localRunner) agentMissingRow(st gaiainit.Status) Row {
+	return Row{
+		Key:         KeyModel,
+		State:       StateFailed,
+		FirstRun:    true,
+		Disposition: status.DispositionHalt,
+		Line:        "models downloaded — the GAIA agent needs installing",
+		Step:        "install the GAIA agent",
+		Detail:      "Your models are already on the model server. Setup installs the GAIA agent and downloads no models.",
+		Fix:         FixRunSetup,
+		Remedy: Remedy{
+			Action:  "Setup installs the GAIA agent.",
+			Command: gaiainit.RunCommand(l.skipChatModel()),
+			Where:   installDocs,
+		},
+		Raw: strings.Join(st.Reasons, "\n"),
+	}
 }
 
 // loadFailedRow is a model that is downloaded and will not load — a real

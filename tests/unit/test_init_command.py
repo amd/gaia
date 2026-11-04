@@ -1051,6 +1051,66 @@ class TestCheckSetupStatus(unittest.TestCase):
         os.environ["GAIA_HOME"] = home.name
         os.environ.pop("GAIA_CONFIG_DIR", None)
         self._install_flagship()
+        # The hub, as `gaia init` reads it: a build for this machine unless a
+        # test serves a different one.
+        self.hub_manifest = self._flagship_manifest(
+            ("win32-x64", "linux-x64", "darwin-arm64")
+        )
+        self.hub_fetches = []
+        self.host_key = "win32-x64"
+        hub = patch("gaia.hub.catalog.fetch_bytes", side_effect=self._serve_hub)
+        hub.start()
+        self.addCleanup(hub.stop)
+        for target in (
+            "gaia.hub.installer.current_platform_key",
+            "gaia.hub.compatibility.current_platform_key",
+        ):
+            host = patch(target, side_effect=lambda *a: self.host_key)
+            host.start()
+            self.addCleanup(host.stop)
+
+    @staticmethod
+    def _flagship_manifest(platform_keys):
+        names = {
+            "win32-x64": "gaia-agent-win32-x64.exe",
+            "linux-x64": "gaia-agent-linux-x64",
+            "darwin-arm64": "gaia-agent-darwin-arm64",
+        }
+        artifacts = [
+            {
+                "filename": names[k],
+                "path": f"agents/gaia/0.3.2/{names[k]}",
+                "size_bytes": 1,
+                "sha256": "ab" * 32,
+            }
+            for k in platform_keys
+        ]
+        return {
+            "id": "gaia",
+            "language": "python",
+            "security_tier": "verified",
+            "latest_version": "0.3.2",
+            "requirements": {"platforms": []},
+            "versions": {
+                "0.3.2": {
+                    "version": "0.3.2",
+                    "artifact": artifacts[0],
+                    "artifacts": artifacts,
+                }
+            },
+        }
+
+    def _serve_hub(self, url, *args, **kwargs):
+        import json
+
+        self.hub_fetches.append(url)
+        if self.hub_manifest is None:
+            from gaia.hub.catalog import CatalogError
+
+            raise CatalogError(f"could not reach {url}")
+        if url.endswith("/agents/gaia/manifest.json"):
+            return json.dumps(self.hub_manifest).encode("utf-8")
+        raise AssertionError(f"the check must download nothing else: {url}")
 
     @staticmethod
     def _install_flagship():
@@ -1263,6 +1323,7 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertFalse(status.ready)
         self.assertEqual(status.stage, "setup")
         self.assertEqual(status.reasons, [self.AGENT_MISSING])
+        self.assertTrue(status.agent_missing)
 
     def test_installed_flagship_with_models_present_is_ready(self):
         """An existing user who has the agent is never sent back into setup."""
@@ -1378,6 +1439,78 @@ class TestCheckSetupStatus(unittest.TestCase):
             status = check_setup_status(profile="gaia")
 
         self.assertEqual(status.stage, "upgrade")
+
+    def test_installed_agent_never_asks_the_hub(self):
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.ready)
+        self.assertEqual(self.hub_fetches, [])
+
+    def _on_a_pc_without_a_build(self):
+        self._remove_flagship()
+        self.host_key = "linux-arm64"
+
+    def test_no_agent_build_for_this_pc_is_not_a_setup_loop(self):
+        """init finishes without the agent here, so setup must not be offered
+        again on every launch; the check says why chat is unavailable."""
+        self._on_a_pc_without_a_build()
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.ready)
+        self.assertIsNone(status.stage)
+        self.assertEqual(status.reasons, [])
+        self.assertFalse(status.agent_missing)
+        self.assertEqual(len(status.warnings), 1)
+        self.assertIn(
+            "No GAIA agent build for this PC (linux-arm64)", status.warnings[0]
+        )
+        self.assertIn("chat isn't available here", status.warnings[0])
+
+    def test_no_agent_build_still_proves_the_models_load(self):
+        self._on_a_pc_without_a_build()
+        status, client = self._check_with_models(load=True)
+
+        self.assertTrue(status.ready)
+        self.assertEqual(len(status.warnings), 1)
+        client._ensure_model_loaded.assert_called_once()
+
+    def test_no_agent_build_does_not_hide_missing_models(self):
+        self._on_a_pc_without_a_build()
+        status, _ = self._check_with_models(have=False)
+
+        self.assertEqual(status.stage, "setup")
+        self.assertFalse(status.agent_missing)
+        self.assertNotIn(self.AGENT_MISSING, status.reasons)
+        self.assertEqual(len(status.warnings), 1)
+
+    def test_a_supported_pc_without_the_agent_still_needs_setup(self):
+        self._remove_flagship()
+        self.host_key = "darwin-arm64"
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+        self.assertEqual(status.warnings, [])
+
+    def test_an_unreachable_hub_reports_the_agent_missing(self):
+        """Not knowing is not "no build": setup then names the hub error."""
+        self._remove_flagship()
+        self.hub_manifest = None
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    def test_no_agent_build_json_keeps_the_exit_code_ready(self):
+        import json
+
+        self._on_a_pc_without_a_build()
+        status, _ = self._check_with_models()
+        payload = json.loads(json.dumps(status.to_json()))
+
+        self.assertTrue(payload["ready"])
+        self.assertFalse(payload["agent_missing"])
+        self.assertEqual(len(payload["warnings"]), 1)
 
     def test_a_server_that_will_not_answer_outranks_a_missing_agent(self):
         from gaia.installer.init_command import check_setup_status
