@@ -101,8 +101,9 @@ Unlike unit tests that check individual functions, Agent Eval tests the **full s
     | `GAIA_EVAL_SCRIPTED_USER=1` | Lets a scenario script a user who declines commands (`setup.decline_commands`). Without it, pre-flight stops with a 403 from `/api/eval/scripted-user`. |
     | `GAIA_EVAL_MAILBOX` | Points the mail tools at the offline fixture mailbox the `gaia_email` scenarios read. |
 
-    Long-term memory is also off by default in the Agent UI. Switch it on in the
-    Memory dashboard, or with:
+    Memory scenarios also need long-term memory switched on. It is on by
+    default; if you turned it off, switch it back on in the Memory dashboard,
+    or with:
 
     ```bash
     curl -X PUT http://localhost:4200/api/memory/settings \
