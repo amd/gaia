@@ -2795,7 +2795,8 @@ class TestEmbedderLoadFailure:
         )
         message = failed_host.memory_unavailable_message()
         assert "would not load" in message
-        assert "llamacpp_backend=cpu" in message
+        # Not a backend GAIA has tested: the remedy stays on Vulkan.
+        assert "llamacpp_backend=cpu" not in message
         assert "GGML_VK_DISABLE_COOPMAT=1" in message
         assert "server log" in message
         assert "unreachable" not in message

@@ -138,8 +138,9 @@ class KeywordIndex:
                 matched.setdefault(position, []).append(word)
 
         # Plus one, so a word in every chunk of a small document still counts a little.
+        # A word no chunk holds weighs as if one did, or it outweighs every match.
         weights = {
-            word: math.log((total + 1) / (held_by[word] + 1)) + 1 / (total + 1)
+            word: math.log((total + 1) / (max(held_by[word], 1) + 1)) + 1 / (total + 1)
             for word in query_words
         }
         whole = sum(weights.values()) + sum(

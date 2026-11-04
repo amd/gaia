@@ -99,6 +99,7 @@ from gaia.llm.lemonade_client import (
     _endpoint_label,
     configured_lemonade_url,
     resolve_default_chat_model,
+    resolve_default_vision_model,
     resolve_lemonade_base_url,
 )
 from gaia.mcp.mixin import MCPClientMixin
@@ -1447,7 +1448,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
 1. **FACTUAL ACCURACY RULE — always retrieve before answering.** Any factual question about indexed documents (numbers, dates, names, policies, sections) → call `query_specific_file` or `query_documents` first, then answer from the retrieved chunks. Don't answer from training knowledge, even if you "know" the topic. This applies on every turn — "indexed" means stored in the RAG index, NOT in your context window.
 
-2. **Never invent content.** Quote numbers / dates / section refs verbatim from the retrieved chunks. Don't round, don't extrapolate, don't cite a section number you didn't see in a chunk. If the answer is not in the retrieved chunks, say "That's not in the document" and STOP — never supplement with "but approximately X" or "typically Y".
+2. **Never invent content.** Quote numbers / dates / section refs verbatim from the chunks. Don't round, don't extrapolate, don't cite a section number no chunk shows. If no chunk answers it, search once more in other words; if that misses too, say "That's not in the document" and STOP — never supplement with "but approximately X" or "typically Y".
 
 3. **Multi-fact requests → one query per fact.** If asked for 3 things, issue at least 3 targeted queries. Don't combine into one fuzzy query.
 
@@ -2325,7 +2326,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             # getattr: tools can register from super().__init__(), before
             # _base_url is assigned. None then falls through to the resolver.
             self.init_vlm(
-                base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None))
+                model=resolve_default_vision_model(),
+                base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None)),
             )
             logger.debug(
                 "VLM tools registered (analyze_image, answer_question_about_image)"

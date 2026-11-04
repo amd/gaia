@@ -128,6 +128,11 @@ jobs:
           npx playwright install --with-deps chromium
           npm run test:rtl
 
+      - name: Check auto-scroll in a real browser
+        run: |
+          cd src/gaia/apps/webui
+          npm run test:scroll
+
   test-apps-integration:
     name: Test Apps Integration
     runs-on: ubuntu-latest

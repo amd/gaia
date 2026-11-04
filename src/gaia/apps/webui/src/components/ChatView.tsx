@@ -9,6 +9,7 @@ import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
 import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
 import { RecordingProgress } from './RecordingProgress';
+import { ensureModel, modelKnownReady } from '../stores/modelNeededStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
@@ -43,6 +44,7 @@ import { useAttachments } from '../hooks/useAttachments';
 import { useAnswerComparison } from '../hooks/useAnswerComparison';
 import { useContextUsage } from '../hooks/useContextUsage';
 import { useJumpToMessage } from '../hooks/useJumpToMessage';
+import { useFollowScroll } from '../hooks/useFollowScroll';
 import { useChatExport } from '../hooks/useChatExport';
 import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { usePolicyToast } from '../hooks/usePolicyToast';
@@ -185,6 +187,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     /** The agent's own step number for the live turn, from its `step` events. */
     const toolOccurredRef = useRef(false);
     const sendMessageRef = useRef<(text?: string, options?: SendOptions) => void>(() => {});
+    const checkingModelRef = useRef(false);
     // Messages typed while a reply runs, kept per chat in the store, and whether the user stopped that reply.
     const queue = useChatStore((s) => s.messageQueues[sessionId] ?? NO_QUEUE);
     const setQueue = useCallback(
@@ -217,6 +220,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
      *  Auto-scroll only fires when this is true, so scrolling up to read
      *  earlier messages won't be interrupted by new streaming content. */
     const isNearBottomRef = useRef(true);
+    const { userScrolling, clearUserScroll, listProps: followListProps } =
+        useFollowScroll(messagesScrollRef, isNearBottomRef, (dist) => setShowScrollBtn(dist > 200));
 
     // True once the user has navigated to another session. The store's
     // currentSessionId flips synchronously on switch (the displayed view lags
@@ -337,8 +342,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const THROTTLE_MS = 100;
 
         const doScroll = () => {
+            // Re-check: the user may have scrolled up since this was scheduled.
+            if (!isNearBottomRef.current || userScrolling()) return;
             lastScrollRef.current = Date.now();
-            messagesEndRef.current?.scrollIntoView({ behavior: scrollBehavior() });
+            // Instant: a smooth follow still in flight would override the reader's wheel.
+            messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
         };
 
         if (elapsed >= THROTTLE_MS) {
@@ -407,16 +415,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setPendingReceiptScroll(null);
     }, [pendingReceiptScroll, notificationPanelVisible]);
 
-    // Track scroll position — drives both the scroll-to-bottom button and
-    // the isNearBottom flag that gates auto-scroll during streaming.
-    const handleScroll = useCallback(() => {
-        const el = messagesScrollRef.current;
-        if (!el) return;
-        const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-        isNearBottomRef.current = distFromBottom <= 80;
-        setShowScrollBtn(distFromBottom > 200);
-    }, []);
-
     const panelWidth = useSessionPanelStore((s) => s.width);
     const revealPanelSection = useSessionPanelStore((s) => s.reveal);
 
@@ -424,8 +422,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const scrollToBottom = useCallback(() => {
         isNearBottomRef.current = true;
+        clearUserScroll();
         messagesEndRef.current?.scrollIntoView({ behavior: scrollBehavior() });
-    }, []);
+    }, [clearUserScroll]);
 
     // Stop: ask the server to cancel, but keep reading the stream. The run
     // outlives the connection (#1580) and closes with a `done` carrying the
@@ -514,6 +513,17 @@ export function ChatView({ sessionId }: ChatViewProps) {
             if (isStreaming) log.chat.debug('Send blocked: already streaming');
             if (isInitializing) log.chat.debug('Send blocked: system initializing');
             return;
+        }
+
+        // Asked here so a send that was going to be queued or refused asks nothing.
+        if (!reattach && !fromQueue && !(modelKnownReady('chat') && (!attach.hasImage || modelKnownReady('vision')))) {
+            if (checkingModelRef.current) return;
+            checkingModelRef.current = true;
+            try {
+                if (!(await ensureModel('chat')) || (attach.hasImage && !(await ensureModel('vision')))) return;
+            } finally {
+                checkingModelRef.current = false;
+            }
         }
 
         // Build message text with attachment references
@@ -1569,6 +1579,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const documents = dropped.filter((file) => !isMediaFile(file.name));
         if (documents.length === 0) return;
 
+        if (!(await ensureModel('embedding'))) return;
         for (const file of documents) {
             log.doc.info(`Dropped on chat view: ${file.name}`);
             try {
@@ -1725,7 +1736,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 );
             })()}
 
-            <div className="messages-scroll" ref={messagesScrollRef} onScroll={handleScroll}>
+            <div className="messages-scroll" ref={messagesScrollRef} {...followListProps}>
                 <div className="messages-column">
                     {isLoadingMessages && (
                         <div className="skeleton-messages" aria-label="Loading messages">

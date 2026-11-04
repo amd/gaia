@@ -155,12 +155,13 @@ export function ModelServerPanel() {
         );
     }
 
+    // Only backends GAIA has tested, which the server lists; no Auto, since Lemonade's own pick may not be one.
     const available = info.available_backends ?? [];
     const preferred = info.preferred_backend ?? null;
-    const choices = ['auto', ...available.map((b) => b.name)];
-    // A saved choice this machine no longer offers stays visible so it can be undone.
+    const choices = available.map((b) => b.name);
+    // A saved choice GAIA no longer offers stays visible so it can be switched off.
     if (preferred && !choices.includes(preferred)) choices.push(preferred);
-    const selected = preferred ?? 'auto';
+    const selected = preferred ?? info.default_backend ?? null;
     const installable = available.filter((b) => b.state === 'installable').map((b) => backendLabel(b.name));
     const chatIsLocalLlamacpp = !!chat?.name && chat.recipe === 'llamacpp';
 
@@ -218,9 +219,7 @@ export function ModelServerPanel() {
                                     onClick={() => { if (name !== selected) void choose(name); }}
                                 >
                                     {saving === name ? <Loader2 size={12} className="spin" /> : null}
-                                    {name === 'auto'
-                                        ? `Auto${info.default_backend ? ` (${backendLabel(info.default_backend)})` : ''}`
-                                        : backendLabel(name)}
+                                    {backendLabel(name)}
                                 </button>
                             ))}
                         </div>

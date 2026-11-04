@@ -26,11 +26,8 @@ router = APIRouter(tags=["lemonade"])
 
 #: What GAIA does on a server it does not own, shown before the user switches.
 WHAT_GAIA_DOES = (
-    "GAIA registers its embedding model (user.embeddinggemma-300m-GGUF) on "
-    "your server and loads its chat and embedding models there. It does not "
-    "change your server's own setup: no cloud providers or keys, no backends, "
-    "no saved load options, and it never unloads or deletes your models. It "
-    "never starts a Lemonade while set to use yours."
+    "GAIA downloads and runs its models on your server. It leaves your "
+    "server's settings and your own models as they are."
 )
 
 

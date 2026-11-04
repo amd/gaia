@@ -3,9 +3,9 @@
 
 """The desktop installer must leave Lemonade and the sign-in choice alone on update.
 
-The bundled MSI force-stops every lemond on the PC, and the old version's
-uninstaller deletes the sign-in entry before ``customInstall`` runs, so both are
-decided from what ``customInit`` reads first.
+GAIA bundles its own Lemonade, so the installer never runs a Lemonade MSI. The
+old version's uninstaller deletes the sign-in entry before ``customInstall``
+runs, so whether to write it back is decided from what ``customInit`` reads.
 """
 
 import re
@@ -25,21 +25,17 @@ def _macro(name: str) -> str:
     )
 
 
-def test_prior_install_is_read_from_both_hives_before_anything_is_removed():
+def test_the_sign_in_entry_is_read_before_the_old_uninstaller_removes_it():
     init = _macro("customInit")
-    assert 'ReadRegStr $gaiaPriorInstall HKCU "${UNINSTALL_REGISTRY_KEY}"' in init
-    assert 'ReadRegStr $gaiaPriorInstall HKLM "${UNINSTALL_REGISTRY_KEY}"' in init
-    assert "ReadRegStr $gaiaAutostart HKCU" in init
+    assert "ReadRegStr $GaiaRunValue HKCU" in init
+    assert "ReadRegStr $GaiaRunLegacy HKCU" in init
 
 
-def test_the_msi_runs_only_on_a_fresh_install():
+def test_the_installer_never_runs_a_lemonade_msi():
+    assert "msiexec" not in _macro("customInstall")
+
+
+def test_the_sign_in_entry_is_written_only_if_it_was_there():
     install = _macro("customInstall")
-    guard = install.rindex('${If} $gaiaPriorInstall == ""')
-    assert guard < install.index("msiexec")
-    assert "${OrIf}" not in install[guard:]
-
-
-def test_an_update_writes_the_sign_in_entry_only_if_it_was_there():
-    install = _macro("customInstall")
-    guard = install.index('${OrIf} $gaiaAutostart != ""')
+    guard = install.rindex('${If} $GaiaRunValue != ""')
     assert guard < install.index('WriteRegStr HKCU "Software\\Microsoft')

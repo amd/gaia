@@ -416,13 +416,31 @@ VISION_CHAT_MODELS = frozenset(
 )
 
 
-def resolve_default_vision_model() -> str:
+#: Why there is no vision model: GAIA reads no images while chat runs on the NPU.
+VISION_OFF_ON_NPU = (
+    "GAIA can't read images while it runs on the NPU, because the NPU model "
+    "doesn't read images. To read images, switch the chat model to the GPU in "
+    "Settings > Model."
+)
+
+
+def resolve_default_vision_model() -> Optional[str]:
     """The model that reads text in scans and images when nobody passed one.
 
-    The PC's chat model when it reads images, because that one is already
+    None while the chat model runs on the NPU: reading images is off there, so
+    no second model is loaded next to it (:data:`VISION_OFF_ON_NPU` says why).
+    Otherwise ``vision_model`` from setup when the user chose one; else the
+    PC's chat model when it reads images, because that one is already
     downloaded and resident; else :data:`DEFAULT_MODEL_NAME`.
     """
+    from gaia.config import GaiaConfig
+
     model = resolve_default_chat_model()
+    if runs_on_npu(model):
+        return None
+    chosen = GaiaConfig.load().vision_model
+    if chosen:
+        return chosen
     return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
 
 
@@ -510,6 +528,27 @@ def cloud_model_provider(
         return metadata.get("cloud_provider") or provider
     if provider in {"fireworks", "amd"}:
         return provider
+    return None
+
+
+#: Lowest ``reasoning_effort`` each cloud model family accepts, matched as a
+#: case-insensitive prefix of the upstream id. Gateways 400 on values a model
+#: doesn't support, so a model missing here gets no ``reasoning_effort`` at all.
+_CLOUD_LOWEST_REASONING_EFFORT = (
+    ("claude-opus-5", "none"),
+    ("deepseek-v4", "none"),
+    ("qwen3.8-flash-next", "low"),
+)
+
+
+def cloud_lowest_reasoning_effort(model_id: Optional[str]) -> Optional[str]:
+    """The lowest ``reasoning_effort`` cloud *model_id* is known to accept, or None."""
+    if not cloud_model_provider(model_id):
+        return None
+    upstream_id = model_id.partition(".")[2].lower()
+    for prefix, effort in _CLOUD_LOWEST_REASONING_EFFORT:
+        if upstream_id.startswith(prefix):
+            return effort
     return None
 
 
@@ -2278,6 +2317,11 @@ DEFAULT_MODEL_LADDER = (LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME)
 #: NPU belong here.
 NPU_MODEL_LADDER = (NPU_DEFAULT_MODEL_NAME,)
 
+#: Models GAIA's evals cover; setup labels every other chat or vision model Untested.
+VERIFIED_MODELS = frozenset(
+    {*DEFAULT_MODEL_LADDER, *NPU_MODEL_LADDER, DEFAULT_EMBEDDING_MODEL}
+)
+
 #: A GPU default's NPU twin: the same model, built for FastFlowLM.
 NPU_TWINS = {DEFAULT_MODEL_NAME: NPU_DEFAULT_MODEL_NAME}
 
@@ -2390,7 +2434,7 @@ def free_memory_shortfall(client, requirement, capacity) -> Optional[str]:
     )
     return (
         f"not enough free memory to load it now: {verdict.reason}. {holder}, "
-        "then re-run `gaia init` to use it"
+        "then choose it in the model settings"
     )
 
 
@@ -3058,9 +3102,9 @@ def backend_crash_remedy(model: str) -> str:
     return (
         f"Lemonade is running, but llama.cpp exited while loading '{model}'. "
         "On an AMD Radeon GPU with the Vulkan backend, a possible cause is "
-        "llama.cpp's cooperative-matrix crash: load the model with "
-        "llamacpp_backend=cpu, or start Lemonade with GGML_VK_DISABLE_COOPMAT=1 "
-        "(every model then runs slower). Otherwise, Lemonade's server log has "
+        "llama.cpp's cooperative-matrix crash: start Lemonade with "
+        "GGML_VK_DISABLE_COOPMAT=1 (every model then runs slower). Otherwise, "
+        "Lemonade's server log has "
         "llama-server's own output."
     )
 
@@ -3086,11 +3130,20 @@ def _chosen_backend_hint(backend: Optional[str]) -> str:
     """How to undo the user's backend choice, appended to a failed load."""
     if not backend:
         return ""
+    from gaia.config import GaiaConfig
+
+    if backend.lower() in GaiaConfig.TESTED_LLAMACPP_BACKENDS:
+        # Already the tested backend: sending the user back to it goes in a circle.
+        return (
+            f" GAIA ran llama.cpp on {backend}, the GPU backend it has tested, "
+            "and it couldn't load this model. Pick a smaller model in Settings → "
+            "Model, or update your graphics driver."
+        )
     return (
         f" GAIA asked for llama.cpp's {backend} backend, as set in Settings → "
         "Advanced → Model server (llamacpp_backend in ~/.gaia/config.json). "
-        "Choose Auto there, or run `gaia config set llamacpp_backend auto`, to "
-        "let Lemonade pick."
+        "Choose Vulkan there, the GPU backend GAIA has tested, or run "
+        "`gaia config set llamacpp_backend vulkan`."
     )
 
 

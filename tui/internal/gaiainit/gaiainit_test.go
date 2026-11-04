@@ -151,6 +151,9 @@ func TestRunArgsSkipTheBrowserUIBuild(t *testing.T) {
 		if !slices.Contains(args, "--skip-webui-build") {
 			t.Errorf("RunArgs(%v) = %v; missing --skip-webui-build", claude, args)
 		}
+		if !slices.Contains(args, "--skip-pip-extras") {
+			t.Errorf("RunArgs(%v) = %v; the TUI's setup must not pip-install", claude, args)
+		}
 	}
 }
 
