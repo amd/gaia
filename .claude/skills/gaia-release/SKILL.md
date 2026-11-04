@@ -481,7 +481,16 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
 
    The flow is: `validate → build (build-pypi + build-npm + build-desktop-installers + tui-installers → windows-setup) + ci-green → approve-publish (manual gate for a final; none for an RC) → publish (publish-pypi + publish-npm) → post-publish-smoke → github-release (attaches the Windows setup) → github-release-installers (the .pkg/.deb/.rpm) → release-assets-complete + redeploy-website`. The installer jobs run for a final too and take no environment, so `approve-publish` is the final's only approval in this run. Surface the run URL.
 
-   `ci-green` requires a passing run of `lint.yml`, `test_unit.yml` and `test_gaia_cli_linux.yml` on the tagged commit (`util/check_release_ci.py`). Most main commits have none (the next merge cancels their runs), so it dispatches the missing ones against the tag and waits up to ~80 min alongside the builds. A red one stops the release before anything publishes.
+   `ci-green` (`util/check_release_ci.py`) checks CI on the tagged commit. What it requires depends on the tag, and that file is the only list:
+
+   | | Required (blocks) | Advisory (job-summary warning only) |
+   |---|---|---|
+   | **RC** `vX.Y.Z-rcN` (`RC_CRITICAL`) | `lint.yml`; `test_unit.yml` jobs `Unit Tests (Linux, py3.12)` and `Import Every Module (Linux, py3.10)`; `release_train_dryrun.yml` | the macOS, Windows and offline-integration jobs of `test_unit.yml`; `test_gaia_cli_linux.yml` |
+   | **Final** `vX.Y.Z` (`FINAL_REQUIRED`) | every job of `lint.yml`, `test_unit.yml`, `test_gaia_cli_linux.yml`, plus `release_train_dryrun.yml` | none |
+
+   The candidate's own builds (`build-pypi`, `build-npm`, `build-desktop-installers` with its smoke jobs, `rc-flagship`, `tui-installers-complete`) are required too, by `approve-publish`. Evals never gate (`eval_flagship.yml` reports separately).
+
+   Most main commits have no runs of their own (the next merge cancels them), so a required check with none is dispatched once against the tag (the dry run with `-f rc_tag=<tag>`) and waited for, up to ~80 min alongside the builds. A final is never dispatched a dry run: tag it on the candidate's commit, which already passed one, or the gate fails and prints the command. Advisory failures don't stop an RC but the final requires them, so fix them before tagging the final.
 
 ---
 
