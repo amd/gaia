@@ -913,6 +913,23 @@ test('a browser never shows the install screen, even when the URL asks', async (
     await expect(page.locator('.sb')).toBeVisible();
 });
 
+/** The Windows desktop frame: the window controls are drawn over the app's top-right corner. */
+async function withWindowsControls(page: Page): Promise<void> {
+    await page.addInitScript(() => {
+        const calls: unknown[] = [];
+        Object.assign(window, {
+            __colors: calls,
+            gaiaWindow: {
+                titleBar: 'overlay',
+                setColors: async (colors: unknown) => {
+                    calls.push(colors);
+                    return true;
+                },
+            },
+        });
+    });
+}
+
 test('window controls take the color of the sidebar beneath them', async ({ page }) => {
     await page.addInitScript(() => {
         const calls: unknown[] = [];
@@ -942,6 +959,29 @@ test('window controls take the color of the sidebar beneath them', async ({ page
     await expect(page.locator('.settings-overlay')).toHaveCount(0);
     await expect.poll(() => lastColor(page)).toBe(sidebar);
 });
+
+/** The width Windows 11 gives minimize, maximize and close; a browser reports no controls. */
+const WINDOW_CONTROLS_W = 138;
+
+for (const locale of ['ar', 'en']) {
+    test(`the top notice keeps its action clear of the window controls (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withWindowsControls);
+        await page.evaluate((w) => document.documentElement.style.setProperty('--titlebar-controls-w', `${w}px`), WINDOW_CONTROLS_W);
+        const notice = page.locator('.app-notice').first();
+        await expect(notice.getByRole('button')).toBeVisible();
+        const controls = { left: 1400 - WINDOW_CONTROLS_W, bottom: 48 };
+        const boxes = await notice.evaluate((el) =>
+            [el, ...el.querySelectorAll('button, a')].map((n) => {
+                const box = n.getBoundingClientRect();
+                return { right: box.right, top: box.top };
+            }),
+        );
+        for (const box of boxes) {
+            expect(box.right > controls.left && box.top < controls.bottom, JSON.stringify(box)).toBe(false);
+        }
+        expect(await audit(page)).toEqual([]);
+    });
+}
 
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
     await open(page);
