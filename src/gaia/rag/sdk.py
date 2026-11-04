@@ -50,6 +50,7 @@ from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
+    VISION_OFF_ON_NPU,
     resident_vision_model,
     resolve_default_vision_model,
 )
@@ -691,7 +692,8 @@ class RAGConfig:
         False  # Enable LLM-based intelligent chunking (requires LLM client)
     )
     # VLM settings (enabled if available, errors out if model can't be loaded)
-    vlm_model: str = field(default_factory=resolve_default_vision_model)
+    # None while chat runs on the NPU: images are then not read.
+    vlm_model: Optional[str] = field(default_factory=resolve_default_vision_model)
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
     # Security settings
@@ -905,6 +907,12 @@ class RAGSDK:
             )
         else:
             self.log.error(message)
+
+    def _note_images_skipped(self) -> None:
+        """Say once per file that its images aren't read while chat is on the NPU."""
+        self.log.info(f"Images in this file are not read: {VISION_OFF_ON_NPU}")
+        if self.config.show_stats:
+            print(f"  ⚠️  Images not read: {VISION_OFF_ON_NPU}")
 
     def _safe_open(self, file_path: str, mode="rb"):
         """
@@ -1622,13 +1630,16 @@ class RAGSDK:
                     extract_images_from_page_pdfium,
                 )
 
-                vlm = VLMClient(
-                    vlm_model=resident_vision_model(
-                        self.config.vlm_model, self.config.base_url
-                    ),
-                    base_url=self.config.base_url,
-                )
-                vlm_available = self.config.use_vlm and vlm.check_availability()
+                if self.config.vlm_model is None:
+                    self._note_images_skipped()
+                else:
+                    vlm = VLMClient(
+                        vlm_model=resident_vision_model(
+                            self.config.vlm_model, self.config.base_url
+                        ),
+                        base_url=self.config.base_url,
+                    )
+                    vlm_available = self.config.use_vlm and vlm.check_availability()
 
                 if vlm_available and self.config.show_stats:
                     print("  🔍 VLM enabled: Will extract text from images")
@@ -2027,13 +2038,16 @@ class RAGSDK:
                     extract_images_from_slide,
                 )
 
-                vlm = VLMClient(
-                    vlm_model=resident_vision_model(
-                        self.config.vlm_model, self.config.base_url
-                    ),
-                    base_url=self.config.base_url,
-                )
-                vlm_available = self.config.use_vlm and vlm.check_availability()
+                if self.config.vlm_model is None:
+                    self._note_images_skipped()
+                else:
+                    vlm = VLMClient(
+                        vlm_model=resident_vision_model(
+                            self.config.vlm_model, self.config.base_url
+                        ),
+                        base_url=self.config.base_url,
+                    )
+                    vlm_available = self.config.use_vlm and vlm.check_availability()
 
                 if vlm_available and self.config.show_stats:
                     print("  🔍 VLM enabled: Will extract text from slide images")
@@ -2752,6 +2766,10 @@ These positions indicate where to split the text."""
         )
 
         file_name = Path(image_path).name
+        if self.config.vlm_model is None:
+            raise ImageExtractionError(
+                f"Cannot index image {file_name}: {VISION_OFF_ON_NPU}"
+            )
         model = (
             resident_vision_model(self.config.vlm_model, self.config.base_url)
             if self.config.use_vlm

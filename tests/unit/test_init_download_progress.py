@@ -154,3 +154,36 @@ def test_a_cancelled_stream_is_not_converted_to_a_failed_download(client):
     with pytest.raises(ModelDownloadCancelledError):
         client.ensure_model_downloaded("m", on_progress=seen.append)
     assert seen == [{"event": "progress", "percent": 10}]
+
+
+def test_a_progress_redraw_keeps_its_carriage_return_under_rich():
+    """Setup splits gaia init's output on \r; without it the redraws pile up."""
+    import io
+
+    from rich.console import Console
+
+    from gaia.installer.init_command import InitCommand
+
+    out = io.StringIO()
+    cmd = InitCommand(profile="gaia", yes=True)
+    cmd.console = Console(file=out, width=1000, force_terminal=False)
+    cmd._download_progress(1, 4)
+    cmd._download_progress(4, 4)
+
+    assert out.getvalue().count("\r") == 2
+    assert out.getvalue().endswith("100% (0.0 MB/0.0 MB)")
+
+
+def test_the_header_box_fits_its_text_at_setups_width():
+    import io
+
+    from rich.console import Console
+
+    from gaia.installer.init_command import InitCommand
+
+    out = io.StringIO()
+    cmd = InitCommand(profile="gaia", yes=True)
+    cmd.console = Console(file=out, width=1000, force_terminal=False)
+    cmd._print_header()
+
+    assert max(len(line) for line in out.getvalue().splitlines()) < 40

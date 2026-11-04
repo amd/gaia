@@ -253,6 +253,34 @@ describe("installSafetyNet", () => {
     exitSpy.mockRestore();
   });
 
+  test("a focused install screen does not reset the crash-loop counter", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+    const app = mockApp(false);
+    const gaiaDir = path.join(tmpDir, ".gaia");
+    const counterPath = path.join(gaiaDir, "electron-startup-failures.json");
+    fs.mkdirSync(gaiaDir, { recursive: true });
+    fs.writeFileSync(counterPath, JSON.stringify({ count: 2 }));
+    let installing = true;
+
+    installSafetyNet({
+      logPath,
+      dialogModule: mockDialog(),
+      appModule: app,
+      homedirFn: () => tmpDir,
+      holdCrashCount: () => installing,
+    });
+
+    app.emit("browser-window-focus");
+    expect(JSON.parse(fs.readFileSync(counterPath, "utf8")).count).toBe(2);
+
+    installing = false;
+    app.emit("browser-window-focus");
+    expect(JSON.parse(fs.readFileSync(counterPath, "utf8")).count).toBe(0);
+
+    exitSpy.mockRestore();
+  });
+
   // ── Test 8: render-process-gone handler installed ─────────────────────────
   // Renderer crashes don't fire uncaughtException; they fire
   // app.on('render-process-gone'). Must be routed through fatal handler.

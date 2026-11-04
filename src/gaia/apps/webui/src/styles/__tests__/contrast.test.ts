@@ -597,12 +597,6 @@ describe('the Electron windows mirror the dark theme rather than inventing one',
      * through.
      */
     const MIRRORED: Array<{ path: string; literal: string; token: string; why: string }> = [
-        {
-            path: '/services/backend-installer-progress-dialog.cjs',
-            literal: '#1A1917',
-            token: '--bg-primary',
-            why: 'BrowserWindow backgroundColor is a main-process option, not CSS -- there is no cascade to read a custom property from',
-        },
         { path: '/services/window-frame.cjs', literal: '#1A1917', token: '--bg-primary', why: 'titleBarOverlay colors are main-process options drawn by the OS, not CSS -- the window controls use these until the renderer sends the live tokens' },
         { path: '/services/window-frame.cjs', literal: '#EFECE6', token: '--text-primary', why: 'titleBarOverlay colors are main-process options drawn by the OS, not CSS -- the window controls use these until the renderer sends the live tokens' },
     ];

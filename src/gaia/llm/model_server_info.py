@@ -84,14 +84,16 @@ def embedder_avoids_rocm(
 
 
 def available_llamacpp_backends(system_info: Any) -> List[Dict[str, str]]:
-    """The llama.cpp backends a load may ask for on this machine.
+    """The llama.cpp backends a user may choose on this machine.
 
-    Only names ``/load`` accepts, and only in a state Lemonade can run: an
+    Only ones GAIA has tested, and only in a state Lemonade can run: an
     older Lemonade that reports no ``backends`` offers nothing to choose.
     """
     backends = _as_dict(llamacpp_recipe(system_info).get("backends"))
     usable = []
-    for name in LLAMACPP_BACKENDS:
+    from gaia.config import GaiaConfig
+
+    for name in GaiaConfig.TESTED_LLAMACPP_BACKENDS:
         state = _as_dict(backends.get(name)).get("state")
         if state in _USABLE_STATES:
             usable.append({"name": name, "state": state})
