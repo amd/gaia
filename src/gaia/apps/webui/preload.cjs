@@ -123,6 +123,9 @@ contextBridge.exposeInMainWorld("gaiaInstall", {
   // After a failed update, go back to the version before it; the app restarts into it.
   revert: () => ipcRenderer.invoke("install:revert"),
 
+  // After a 'locked' failure held only by GAIA processes: ends those and installs again.
+  closeLockingPrograms: () => ipcRenderer.invoke("install:close-lockers"),
+
   // Open the log file in the OS's default viewer.
   openLogFile: () => ipcRenderer.invoke("install:open-log-file"),
 });
