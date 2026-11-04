@@ -48,7 +48,10 @@ WATCH = [
 
 
 def sh(*cmd: str, **kw) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, check=True, text=True, capture_output=True, **kw)
+    # Downloads and unpacking an installer take minutes, never an hour.
+    return subprocess.run(
+        cmd, check=True, text=True, capture_output=True, timeout=3600, **kw
+    )
 
 
 def cmd_fetch(a) -> None:
@@ -143,8 +146,15 @@ def unpack(setup: Path, dest: Path) -> None:
                 if any(n.endswith("gaia-desktop.exe") for n in z.getnames()):
                     z.extractall(dest)
                     return
-        except Exception:  # noqa: BLE001 - most signature hits are not archive starts
-            continue
+        except (
+            py7zr.exceptions.Bad7zFile,
+            py7zr.exceptions.ArchiveError,
+            py7zr.exceptions.CrcError,
+            py7zr.exceptions.DecompressionError,
+            py7zr.exceptions.UnsupportedCompressionMethodError,
+            EOFError,
+        ):
+            continue  # most signature hits are not the start of an archive
     sys.exit(f"Found no app archive inside {setup.name}.")
 
 
@@ -335,6 +345,7 @@ def image_name(pid: int) -> str | None:
         ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
         capture_output=True,
         text=True,
+        timeout=30,
     ).stdout.strip()
     if not out.startswith('"'):
         return None
@@ -355,7 +366,9 @@ def cmd_stop(a) -> None:
     elif running:
         # /T takes the backend and agent children with it; only this run's tree.
         subprocess.run(
-            ["taskkill", "/PID", str(st["pid"]), "/T", "/F"], capture_output=True
+            ["taskkill", "/PID", str(st["pid"]), "/T", "/F"],
+            capture_output=True,
+            timeout=60,
         )
         print(f"stopped {st['pid']}")
     else:
@@ -363,7 +376,9 @@ def cmd_stop(a) -> None:
     # The daemon and its agent sidecars are detached by design and outlive the
     # window; stop the ones running from this home's own install, nothing else.
     for pid, exe in processes_under(home.resolve()):
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=60
+        )
         print(f"stopped {pid} ({exe})")
     cmd_isolation(a)
 
@@ -379,6 +394,7 @@ def processes_under(root: Path) -> list[tuple[int, str]]:
         ["powershell", "-NoProfile", "-Command", script],
         capture_output=True,
         text=True,
+        timeout=60,
     ).stdout
     found = []
     for line in out.splitlines():

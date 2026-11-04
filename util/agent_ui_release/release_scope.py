@@ -96,6 +96,7 @@ def run(*cmd: str) -> str:
         text=True,
         encoding="utf-8",
         errors="replace",
+        timeout=120,
     ).stdout
 
 

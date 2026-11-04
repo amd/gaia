@@ -54,7 +54,9 @@ def evals_dir(a) -> Path:
     return d
 
 
-def run(d: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+def run(
+    d: Path, *args: str, check: bool = True, timeout: float = 600
+) -> subprocess.CompletedProcess:
     env = dict(os.environ, PYTHONUTF8="1")
     return subprocess.run(
         [PYTHON, *args],
@@ -65,6 +67,7 @@ def run(d: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
         errors="replace",
         capture_output=True,
         check=check,
+        timeout=timeout,
     )
 
 
@@ -106,7 +109,7 @@ def cmd_prepare(a) -> None:
     args = ["-m", "kwengine", "prepare", "--suite", a.suite, "--leg", LEG, "--json"]
     if a.tasks:
         args += ["--tasks", a.tasks]
-    out = run(d, *args, check=False)
+    out = run(d, *args, check=False, timeout=3600)  # builds every task's inputs
     if out.returncode:
         sys.exit(f"kwengine prepare failed:\n{out.stderr or out.stdout}")
     prep = json.loads(out.stdout)
@@ -319,7 +322,15 @@ def cmd_grade(a) -> None:
     d = evals_dir(a)
     prep = json.loads((bench_dir(a.run) / "prepared.json").read_text(encoding="utf-8"))
     started = dt.datetime.now().timestamp()
-    out = run(d, "tools/run_eval.py", "--grade-only", prep["run_dir"], check=False)
+    # The judge grades every task in turn; a full suite takes hours, not a day.
+    out = run(
+        d,
+        "tools/run_eval.py",
+        "--grade-only",
+        prep["run_dir"],
+        check=False,
+        timeout=8 * 3600,
+    )
     print(out.stdout[-3000:])
     if out.returncode:
         msg = out.stderr or out.stdout

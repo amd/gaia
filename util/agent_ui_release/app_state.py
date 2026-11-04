@@ -44,7 +44,7 @@ def get(port: int, path: str, timeout: float = 10) -> dict:
         sys.exit(
             f"GET {path} -> HTTP {e.code}: {e.read()[:300].decode('utf-8', 'replace')}"
         )
-    except (urllib.error.URLError, TimeoutError) as e:
+    except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
         sys.exit(
             f"No Agent UI backend on 127.0.0.1:{port} ({e}). Is the app open? "
             "Check the port with `launch_isolated.py port --home ...`."
@@ -71,7 +71,7 @@ def listening() -> list[tuple[int, int]]:
     """(port, pid) for every loopback listener."""
     if sys.platform == "win32":
         out = subprocess.run(
-            ["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True
+            ["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True, timeout=30
         ).stdout
         rx = re.compile(
             r"^\s*TCP\s+(?:127\.0\.0\.1|0\.0\.0\.0):(\d+)\s+\S+\s+LISTENING\s+(\d+)",
@@ -79,7 +79,10 @@ def listening() -> list[tuple[int, int]]:
         )
     else:
         out = subprocess.run(
-            ["lsof", "-iTCP", "-sTCP:LISTEN", "-nP"], capture_output=True, text=True
+            ["lsof", "-iTCP", "-sTCP:LISTEN", "-nP"],
+            capture_output=True,
+            text=True,
+            timeout=30,
         ).stdout
         rx = re.compile(r"^\S+\s+(\d+)\s.*?(?:127\.0\.0\.1|\*):(\d+) \(LISTEN\)", re.M)
         return sorted({(int(port), int(pid)) for pid, port in rx.findall(out)})
