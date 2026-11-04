@@ -166,6 +166,31 @@ const audit = (page: Page): Promise<string[]> =>
             }
             return false;
         };
+        // The part of a button's text a person sees: each text node clipped by every box that hides
+        // its overflow up to the button, so an ellipsis-cut label isn't measured at full length.
+        const visibleTextBox = (button: Element) => {
+            let left = Infinity;
+            let right = -Infinity;
+            const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                if (!node.textContent?.trim()) continue;
+                const clips: DOMRect[] = [];
+                for (let at = node.parentElement; at; at = at.parentElement) {
+                    if (getComputedStyle(at).overflowX !== 'visible') clips.push(at.getBoundingClientRect());
+                    if (at === button) break;
+                }
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) {
+                    const l = Math.max(rect.left, ...clips.map((c) => c.left));
+                    const rr = Math.min(rect.right, ...clips.map((c) => c.right));
+                    if (rr <= l) continue;
+                    left = Math.min(left, l);
+                    right = Math.max(right, rr);
+                }
+            }
+            return right > left ? { left, right } : null;
+        };
         for (const button of document.querySelectorAll('button')) {
             if (!shown(button) || inScroller(button)) continue;
             const r = button.getBoundingClientRect();
@@ -173,10 +198,8 @@ const audit = (page: Page): Promise<string[]> =>
             if (button.scrollWidth > button.clientWidth + 1) problems.push(`label spills out of its button: ${label(button)}`);
             // A filled button whose words reach its edge reads as text spilling out of a pill.
             if (button.textContent?.trim() && rgb(getComputedStyle(button).backgroundColor)[3] > 0) {
-                const range = document.createRange();
-                range.selectNodeContents(button);
-                const text = range.getBoundingClientRect();
-                if (text.width > 0 && Math.min(text.left - r.left, r.right - text.right) < 3) problems.push(`label touches its button's edge: ${label(button)}`);
+                const text = visibleTextBox(button);
+                if (text && Math.min(text.left - r.left, r.right - text.right) < 3) problems.push(`label touches its button's edge: ${label(button)}`);
             }
         }
 
