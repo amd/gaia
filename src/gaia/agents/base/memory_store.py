@@ -3593,7 +3593,9 @@ class MemoryStore:
         enabled: bool = True,
         embedding: bytes | None = None,
         skill_id: str | None = None,
-    ) -> str:
+        *,
+        erase_count: int | None = None,
+    ) -> str | None:
         """Insert or update a procedure row (procedural memory).
 
         With ``skill_id`` None a new ``proc_<uuid>`` id is generated and a row
@@ -3617,9 +3619,13 @@ class MemoryStore:
             enabled: False disables recall without deleting the row.
             embedding: 768-float32 BLOB over ``when_to_use`` (its own FAISS index).
             skill_id: existing procedure id to update; None inserts a new row.
+            erase_count: :meth:`erase_count` when the work producing this
+                procedure began; if all memory was erased since, nothing is
+                written.
 
         Returns:
-            The procedure id (existing on update, new ``proc_<uuid>`` on insert).
+            The procedure id (existing on update, new ``proc_<uuid>`` on
+            insert), or None when an erase since ``erase_count`` dropped it.
 
         Raises:
             ValueError: if ``name``, ``when_to_use``, or ``markdown_body`` is
@@ -3638,6 +3644,12 @@ class MemoryStore:
         now = _now_iso()
 
         with self._locked():
+            if erase_count is not None and self._erase_count_locked() != erase_count:
+                logger.info(
+                    "[MemoryStore] procedure not stored: all memory was erased "
+                    "after it began"
+                )
+                return None
             try:
                 # existing_id is the str id only when skill_id was provided AND
                 # matches a row — keeping it a narrowed str (not str | None) so
@@ -4283,6 +4295,8 @@ class MemoryStore:
         outcome: str,
         goal: str | None = None,
         detail: str | None = None,
+        *,
+        erase_count: int | None = None,
     ) -> int:
         """Record that synthesis already handed these sessions to the distiller.
 
@@ -4298,9 +4312,12 @@ class MemoryStore:
                 ``"unusable"`` (SKIP / unparseable / truncated output).
             goal: The cluster goal, kept for the log trail.
             detail: Why, for the ``unusable`` case.
+            erase_count: :meth:`erase_count` when the pass began; if all memory
+                was erased since, nothing is written (``goal`` is the user's
+                own first message).
 
         Returns:
-            Number of sessions marked.
+            Number of sessions marked (0 when an erase dropped the write).
 
         Raises:
             ValueError: ``outcome`` is not one of ``SYNTHESIS_OUTCOMES`` —
@@ -4317,6 +4334,12 @@ class MemoryStore:
         now = _now_iso()
         rows = [(sid, outcome, goal, detail, now) for sid in ids]
         with self._locked():
+            if erase_count is not None and self._erase_count_locked() != erase_count:
+                logger.info(
+                    "[MemoryStore] synthesis marks not stored: all memory was "
+                    "erased after the pass began"
+                )
+                return 0
             try:
                 self._conn.executemany(
                     "INSERT INTO synthesis_marks "
