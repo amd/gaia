@@ -7585,6 +7585,7 @@ Do NOT wrap conversational replies in JSON.
             )
         if not answer.strip():
             raise _NotAnAnswer("the model's reply had no answer in it")
+        self._mark_errors_recovered()
         conversation.append({"role": "assistant", "content": parsed})
         return answer
 

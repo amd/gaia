@@ -276,8 +276,9 @@ def test_repeated_cut_offs_fail_the_turn_and_the_live_gate(agent):
     result = agent.process_query("Fix gfx90a PR testing", max_steps=20)
 
     assert result["model_failed"] is True
-    reason, _ = cli_agent._failed_response(result)
+    reason, remedy = cli_agent._failed_response(result)
     assert "cut off at the output-token limit" in reason
+    assert remedy == cli_agent._UNUSABLE_REMEDY
 
 
 def test_a_recovered_cut_off_passes_the_live_gate(agent):
@@ -307,6 +308,14 @@ def test_an_unparsable_reply_that_was_retried_passes_the_live_gate(agent):
 
     result = agent.process_query("test", max_steps=10)
 
+    assert cli_agent._failed_response(result) is None
+
+
+def test_a_parse_error_before_the_step_cap_answer_passes_the_live_gate(agent):
+    good = json.dumps({"thought": "Done.", "answer": "gfx90a is MI200."})
+    _stub_chat(agent, (BAD_TOOL_CALL, "stop"), (good, "stop"))
+    result = agent.process_query("test", max_steps=1)
+    assert result["max_steps_reached"] is True
     assert cli_agent._failed_response(result) is None
 
 
