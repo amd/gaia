@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,26 @@ _PHASE_MESSAGES = {
     "priming": "Finishing start-up: reading GAIA's instructions into the model",
 }
 _DEFAULT_PHASE_MESSAGE = "Finishing start-up"
+
+
+def new_chat_session() -> Dict[str, Any]:
+    """What ChatDatabase.create_session stores for a chat the user just opened."""
+    from gaia.ui.database import resolved_default_model
+
+    return {
+        "model": resolved_default_model(),
+        "agent_type": NEW_CHAT_AGENT,
+        "device": "gpu",
+    }
+
+
+def new_chat_model(db, registry) -> Tuple[Optional[str], Optional[int]]:
+    """``(model_id, device_ctx)`` the first turn of a chat opened now runs on."""
+    from gaia.ui import _chat_helpers as chat
+
+    return chat.resolve_session_model(
+        new_chat_session(), NEW_CHAT_AGENT, db.get_setting("custom_model"), registry
+    )
 
 
 class PrefixWarmer:
@@ -268,7 +288,6 @@ def _warm_new_chat_prefix(
     from gaia.chat.sdk import LLMCallCancelled
     from gaia.llm.lemonade_client import LemonadeClient
     from gaia.ui import _chat_helpers as chat
-    from gaia.ui.database import resolved_default_model
 
     low_memory = preload_skip_reason()
     if low_memory:
@@ -300,16 +319,9 @@ def _warm_new_chat_prefix(
             return "is not downloaded yet"
         return None
 
-    # What ChatDatabase.create_session stores for a chat the user just opened.
-    session = {
-        "model": resolved_default_model(),
-        "agent_type": NEW_CHAT_AGENT,
-        "device": "gpu",
-    }
+    session = new_chat_session()
     custom_model = db.get_setting("custom_model")
-    model_id, device_ctx = chat.resolve_session_model(
-        session, NEW_CHAT_AGENT, custom_model, registry
-    )
+    model_id, device_ctx = new_chat_model(db, registry)
     reason = skip_reason(model_id) if model_id else None
     if reason:
         logger.info("Warm-up skipped: %s %s", model_id, reason)

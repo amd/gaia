@@ -476,6 +476,15 @@ describe('SetupScreen: first run, local', () => {
         await waitFor(() => expect(onReady).toHaveBeenCalledExactlyOnceWith(undefined));
     });
 
+    // Setup tested a chat on this model; an older pick must not be what chat opens on (#6632).
+    it('opens chat on the model setup set up and tested, on the first run too', async () => {
+        mockedApi.selectModel.mockResolvedValue({ provider: 'local', model: QWEN.id, label: QWEN.name, remote: false, is_default: false });
+        const onReady = await startLocal();
+        fireEvent.click(await startChatting());
+        await waitFor(() => expect(onReady).toHaveBeenCalled());
+        expect(mockedApi.selectModel).toHaveBeenCalledExactlyOnceWith(QWEN.id);
+    });
+
     it('names the model that answers, lists vision and documents, and offers a first task', async () => {
         const done = (e: typeof QWEN) => ({ ...e, downloaded: true, size_gb: 0 });
         mockedApi.getSetupPlan.mockResolvedValueOnce(COLD_BIG()).mockResolvedValue(plan([done(QWEN), done(GEMMA), done(EMBED)]));

@@ -807,15 +807,15 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const finish = useCallback(async (first?: StartCard) => {
         setActionError(null);
         try {
-            // Setup leaves the active model alone, so a cloud user would stay on the cloud.
-            if (onClose && !cloud && answering) await selectModel(answering);
+            // Chat opens on the model setup set up and tested, not an older pick; a cloud setup keeps its model.
+            if (!cloud && answering) await selectModel(answering);
             await refreshModel();
         } catch (err) {
             setActionError(errorText(err));
             return;
         }
         onReady(first);
-    }, [answering, cloud, onClose, onReady, refreshModel, selectModel]);
+    }, [answering, cloud, onReady, refreshModel, selectModel]);
 
     useEffect(() => {
         if (!canFinish) return;

@@ -37,6 +37,10 @@ class UnknownModel(SetupPlanError):
     """The model can't be used that way: unknown, not downloaded, not planned."""
 
 
+class CantRunHere(SetupPlanError):
+    """Nothing on this PC can run the model (no usable NPU or backend); its text is for the user."""
+
+
 # Re-exported: the router and CLI answer a needed confirmation from here.
 NeedsAcknowledgement = model_choice.NeedsAcknowledgement
 
@@ -356,9 +360,13 @@ def _catalog(
     store_path: Optional[str],
     skipped: List[str],
     selected: List[str],
+    system_info: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Every model setup can pull or use: the plan, GAIA's chat models, and
-    each chat model already downloaded in this Lemonade (FLM included)."""
+    each chat model already downloaded in this Lemonade (FLM included).
+
+    *system_info* is Lemonade's ``/system-info``: a model whose backend can't
+    run on this PC doesn't fit. None when it couldn't be read."""
     from gaia.installer.init_command import (
         INIT_PROFILES,
         bytes_already_on_disk,
@@ -423,6 +431,10 @@ def _catalog(
         )
         is_planned = listed(model_id, planned)
         roles = model_choice.roles_for(model_id, chat_id)
+        # Lemonade lists no FLM model before its backend is in; GAIA knows it anyway.
+        recipe = (entry or {}).get("recipe") or (
+            "flm" if runs_on_npu(model_id) else None
+        )
         catalog.append(
             {
                 "id": model_id,
@@ -434,9 +446,7 @@ def _catalog(
                     if is_planned or set(roles) - {model_choice.ROLE_CHAT}
                     else None
                 ),
-                # Lemonade lists no FLM model before its backend is in; GAIA knows it anyway.
-                "recipe": (entry or {}).get("recipe")
-                or ("flm" if runs_on_npu(model_id) else None),
+                "recipe": recipe,
                 "size_gb": remaining,
                 "full_size_gb": float(full) if full is not None else None,
                 "partial": partial_gb > 0,
@@ -460,7 +470,11 @@ def _catalog(
                 "reads_images": model_choice.reads_images(model_id),
                 "feature_tier": model_choice.feature_tier(model_id),
                 "source": _model_source(entry),
-                **model_choice.memory_fit(model_id, full, capacity),
+                **model_choice.backend_fit(
+                    model_choice.memory_fit(model_id, full, capacity),
+                    recipe,
+                    system_info,
+                ),
             }
         )
     return catalog
@@ -545,6 +559,7 @@ def build_plan(
             disk["path"] if disk["source"] == "lemonade" else None,
             skipped,
             selected,
+            system_info,
         )
     except (GaiaConfigError, ModelFitError) as e:
         raise SetupPlanError(str(e)) from e
@@ -699,6 +714,12 @@ def choose_chat_model(
         )
     model_id = entry["id"]
     fits, reason = entry["fits"], entry["fit_reason"]
+    if entry["fit_code"] in (model_choice.FIT_NPU, model_choice.FIT_BACKEND):
+        # Not a memory estimate to accept: nothing on this PC can run it.
+        raise CantRunHere(
+            f"{_display_name(model_id)} can't run on this PC: {reason}. "
+            "Choose another chat model."
+        )
     if model_id in DEFAULT_MODEL_LADDER and model_id != DEFAULT_MODEL_LADDER[-1]:
         # The ladder also checks the server's version and the memory free now.
         option = next(o for o in _options(client, capacity) if o["id"] == model_id)

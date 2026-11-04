@@ -130,6 +130,18 @@ describe('Test step', () => {
         expect(screen.getByRole('button', { name: 'Test again' })).toBeInTheDocument();
     });
 
+    it('names the model the real chat ran on, and offers another when it got no answer', () => {
+        show([row('agent', 'failed', { subject: GEMMA.id, kind: 'agent', error: 'no answer' })], 'failed');
+        expect(rowOf(/A real chat with GAIA/)).toHaveTextContent(GEMMA.name);
+        expect(screen.getByRole('button', { name: 'Choose another model' })).toBeInTheDocument();
+    });
+
+    it('offers no other model when the assistant itself is missing', () => {
+        show([row('agent', 'failed', { subject: GEMMA.id, kind: 'missing', error: 'missing' })], 'failed');
+        expect(screen.queryByRole('button', { name: 'Choose another model' })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Test again' })).toBeInTheDocument();
+    });
+
     it("doesn't block on an optional extra that failed while the run goes on", () => {
         show([
             row('chat', 'passed', { subject: QWEN.id }),
