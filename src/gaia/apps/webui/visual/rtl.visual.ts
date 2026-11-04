@@ -906,6 +906,22 @@ const INSTALL_LOCKED = {
         ...INSTALL_FAILED.error,
         reason: 'locked',
         message: "GAIA couldn't replace its own files because another program has them open (gaia.exe).",
+        lockedBy: [{
+            pid: 32852, name: 'gaia.exe', isGaia: true,
+            path: 'C:\\Users\\kalin.ovtcharov\\Work\\demo-projects\\customer-showcase-home\\.gaia\\venv\\Scripts\\gaia.exe',
+            folder: 'C:\\Users\\kalin.ovtcharov\\Work\\demo-projects\\customer-showcase-home',
+        }],
+    },
+};
+const INSTALL_LOCKED_OTHER = {
+    ...INSTALL_LOCKED,
+    error: {
+        ...INSTALL_LOCKED.error,
+        lockedBy: [{
+            pid: 4100, name: 'Code.exe', isGaia: false,
+            path: 'C:\\Users\\kalin.ovtcharov\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe',
+            folder: 'C:\\Users\\kalin.ovtcharov\\AppData\\Local\\Programs\\Microsoft VS Code',
+        }],
     },
 };
 
@@ -932,11 +948,18 @@ for (const locale of ['ar', 'en']) {
             });
         }
 
-        test('failed on a file another program holds open', async ({ page }) => {
+        test('failed on a file another copy of GAIA holds open', async ({ page }) => {
             await open(page, '?engine=install', locale, (p) => withInstall(p, INSTALL_LOCKED));
-            await expect(page.locator('.engine-hint')).toBeVisible();
+            await expect(page.locator('.engine-retry')).toHaveCount(2);
             expect(await audit(page)).toEqual([]);
-            await shot(page, `engine-locked-${locale}`);
+            await shot(page, `engine-locked-gaia-${locale}`);
+        });
+
+        test('failed on a file another program holds open', async ({ page }) => {
+            await open(page, '?engine=install', locale, (p) => withInstall(p, INSTALL_LOCKED_OTHER));
+            await expect(page.locator('.engine-retry')).toHaveCount(1);
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `engine-locked-other-${locale}`);
         });
 
         test('narrow window: no sideways scroll', async ({ page }) => {

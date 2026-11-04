@@ -33,6 +33,7 @@ function mountBridge(initial: EngineInstallStatus) {
         retry: vi.fn(async () => true),
         continueWithoutAgentUpdate: vi.fn(async () => true),
         revert: vi.fn(async () => true),
+        closeLockingPrograms: vi.fn(async () => true),
         openLogFile: vi.fn(async () => ({ ok: true, message: null })),
     };
     window.gaiaInstall = bridge;
@@ -161,6 +162,73 @@ describe('EngineInstallScreen after a failure', () => {
         render(<EngineInstallScreen />);
 
         expect(await screen.findByRole('alert')).toHaveTextContent(hint);
+    });
+
+    describe('when another program holds GAIA’s files', () => {
+        const LOCKED: EngineInstallError = {
+            ...ERROR,
+            stage: 'install-package',
+            reason: 'locked',
+            message: 'GAIA couldn\'t replace its own files because another program has them open (gaia.exe).',
+        };
+        const GAIA_HOLDER = {
+            pid: 32852, name: 'gaia.exe', path: 'C:\\Users\\you\\demo-home\\.gaia\\venv\\Scripts\\gaia.exe',
+            folder: 'C:\\Users\\you\\demo-home', isGaia: true,
+        };
+        const OTHER_HOLDER = {
+            pid: 4100, name: 'Code.exe', path: 'C:\\Program Files\\VS Code\\Code.exe',
+            folder: 'C:\\Program Files\\VS Code', isGaia: false,
+        };
+
+        it('names another copy of GAIA and offers to close it', async () => {
+            const { bridge } = mountBridge({ ...FAILED, error: { ...LOCKED, lockedBy: [GAIA_HOLDER] } });
+            render(<EngineInstallScreen />);
+
+            expect(await screen.findByRole('alert')).toHaveTextContent(
+                'Another copy of GAIA (gaia.exe, started from C:\\Users\\you\\demo-home) has GAIA’s files open.'
+            );
+            const close = screen.getByRole('button', { name: 'Close it and continue' });
+            expect(close).toHaveFocus();
+            expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+            expect(bridge.closeLockingPrograms).not.toHaveBeenCalled();
+
+            fireEvent.click(close);
+            await waitFor(() => expect(bridge.closeLockingPrograms).toHaveBeenCalledTimes(1));
+            expect(bridge.retry).not.toHaveBeenCalled();
+        });
+
+        it('names a program that is not GAIA without offering to close it', async () => {
+            mountBridge({ ...FAILED, error: { ...LOCKED, lockedBy: [OTHER_HOLDER] } });
+            render(<EngineInstallScreen />);
+
+            const alert = await screen.findByRole('alert');
+            expect(alert).toHaveTextContent('Another program (Code.exe, in C:\\Program Files\\VS Code) has GAIA’s files open.');
+            expect(alert).toHaveTextContent('Close it, then try again.');
+            expect(screen.queryByRole('button', { name: /Close/ })).toBeNull();
+            expect(screen.getByRole('button', { name: 'Try again' })).toHaveFocus();
+        });
+
+        it('offers nothing to close when GAIA shares the file with another program', async () => {
+            mountBridge({ ...FAILED, error: { ...LOCKED, lockedBy: [GAIA_HOLDER, OTHER_HOLDER] } });
+            render(<EngineInstallScreen />);
+
+            const alert = await screen.findByRole('alert');
+            expect(alert).toHaveTextContent('Another copy of GAIA (gaia.exe');
+            expect(alert).toHaveTextContent('Another program (Code.exe');
+            expect(alert).toHaveTextContent('Close them, then try again.');
+            expect(screen.queryByRole('button', { name: /Close/ })).toBeNull();
+        });
+
+        it('a failed close shows why and leaves both choices', async () => {
+            const { bridge } = mountBridge({ ...FAILED, error: { ...LOCKED, lockedBy: [GAIA_HOLDER] } });
+            bridge.closeLockingPrograms = vi.fn(async () => { throw new Error('Could not end process 32852: Access is denied.'); });
+            render(<EngineInstallScreen />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Close it and continue' }));
+
+            expect(await screen.findByText('Could not end process 32852: Access is denied.')).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Close it and continue' })).toBeEnabled();
+        });
     });
 
     it('a failed agent refresh says so, and its error stays', async () => {
