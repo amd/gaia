@@ -222,3 +222,13 @@ def test_the_report_does_not_use_strict_yet():
     assert "release_promote.py locate" in run
     assert "release_promote.py compare" in run
     assert "--strict" not in run
+
+
+def test_a_hung_gh_call_fails_with_a_reason_not_forever(monkeypatch):
+    def hang(*args, **kwargs):
+        assert kwargs["timeout"] == rp.GH_TIMEOUT_S
+        raise rp.subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(rp.subprocess, "run", hang)
+    with pytest.raises(rp.PromoteError, match="did not finish"):
+        rp.published_digests("o/r", RC)

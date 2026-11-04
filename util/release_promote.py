@@ -45,10 +45,28 @@ class PromoteError(Exception):
     """No usable verified build; the message says what to do."""
 
 
+GH_TIMEOUT_S = 300
+
+
+def _gh(args: list[str]) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=GH_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise PromoteError(
+            f"`gh {' '.join(args)}` did not finish in {GH_TIMEOUT_S} s. GitHub's "
+            "API is slow or down; re-run this job."
+        ) from e
+
+
 def _gh_json(args: list[str]) -> object:
-    done = subprocess.run(
-        ["gh", *args], capture_output=True, text=True, encoding="utf-8", check=False
-    )
+    done = _gh(args)
     if done.returncode != 0:
         raise PromoteError(
             f"`gh {' '.join(args)}` failed: {done.stderr.strip()}. A rate limit "
@@ -71,7 +89,7 @@ def flavor_of(manifest: dict, tag: str) -> str:
 
 
 def check_manifest(manifest: dict, sha: str, tag: str) -> str:
-    """Why this manifest can't vouch for ``tag`` at ``sha``, or raise; returns its flavor."""
+    """Raise unless this manifest vouches for ``tag`` at ``sha``; return its flavor."""
     if manifest.get("schema") != MANIFEST_SCHEMA:
         raise PromoteError(
             f"manifest schema {manifest.get('schema')!r}, expected {MANIFEST_SCHEMA}. "
@@ -131,22 +149,9 @@ def _manifest_of(repo: str, run_id: int) -> dict | None:
     if not any(not a.get("expired") for a in (arts or {}).get("artifacts", [])):
         return None
     with tempfile.TemporaryDirectory() as tmp:
-        done = subprocess.run(
-            [
-                "gh",
-                "run",
-                "download",
-                str(run_id),
-                "-R",
-                repo,
-                "-n",
-                MANIFEST_ARTIFACT,
-                "-D",
-                tmp,
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
+        done = _gh(
+            ["run", "download", str(run_id), "-R", repo, "-n", MANIFEST_ARTIFACT]
+            + ["-D", tmp]
         )
         path = Path(tmp) / MANIFEST_FILE
         if done.returncode != 0 or not path.is_file():
