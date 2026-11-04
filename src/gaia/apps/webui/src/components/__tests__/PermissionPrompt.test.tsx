@@ -28,6 +28,17 @@ afterEach(() => {
 });
 
 describe('PermissionPrompt', () => {
+    it('shows a folder path with several spaces exactly as written', () => {
+        const path = 'C:\\gtest\\docs8\\OneDrive - AMD\\_drafts\\plan.md';
+        useNotificationStore.getState().addNotification(request({
+            tool: 'allow_path_access', title: 'Let GAIA use this file?',
+            message: `GAIA wants to use the file ${path}. Allow it for this chat?`,
+            toolArgs: { path },
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByRole('alertdialog').querySelector('.perm-card-detail code')?.textContent).toContain(path);
+    });
+
     it('shows short code whole, with no expand control', () => {
         useNotificationStore.getState().addNotification(request({
             tool: 'run_python', toolArgs: { code: 'print(1)\nprint(2)' },

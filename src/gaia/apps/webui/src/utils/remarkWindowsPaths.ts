@@ -24,11 +24,12 @@ interface MdNode {
  * `]`, a char Windows forbids, or a `)` that closes no `(` inside the path.
  * An escaped `\*` stays in, so a glob like `C:\logs\*.txt` keeps its backslash;
  * a bare `*` ends the path so emphasis around it still parses.
- * A space stays in only when the next word is a name or a `(x86)` group followed
- * by a `\`, so `C:\My Docs\_drafts` and `C:\Program Files (x86)\.gaia` are one
- * path while `C:\foo and more` and `C:\foo \*x\*` end at `foo`.
+ * Spaces stay in only when the words after them (names or `(x86)` groups) run
+ * straight to a `\`, so `C:\OneDrive - AMD\_drafts` and `C:\Program Files (x86)\.gaia`
+ * are one path while `C:\foo and more`, `C:\foo, see x\_y` and `C:\foo \*x\*` end at `foo`.
+ * Words can't hold a space, `\`, `(` or `)`, so each spaced run has one parse.
  */
-const RAW_WIN_PATH_RE = /(?:(?<![A-Za-z0-9])[A-Za-z]:\\|\\\\[A-Za-z0-9_.$-]+\\)(?:\\\*|[^\s"`()\]<>|*]| (?=(?:[^\s"`()\]<>|*\\]+(?: \([^\s"`()\]<>|*\\]*\))?|\([^\s"`()\]<>|*\\]*\))\\)|\((?:\\\*|[^\s"`()\]<>|*])*\))*/g;
+const RAW_WIN_PATH_RE = /(?:(?<![A-Za-z0-9])[A-Za-z]:\\|\\\\[A-Za-z0-9_.$-]+\\)(?:\\\*|[^\s"`()\]<>|*]|(?<![,;])(?: (?:[^\s"`()\]<>|*\\,;:]|\([^\s"`()\]<>|*\\,;:]*\))+)+(?=\\)|\((?:\\\*|[^\s"`()\]<>|*])*\))*/g;
 
 const ESCAPE_RE = /\\([!-/:-@[-`{-~])/g;
 
