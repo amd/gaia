@@ -32,6 +32,10 @@ on:
         description: 'FLM models, separated by spaces'
         required: false
         default: 'gemma4-it-e4b-FLM gemma3-4b-FLM'
+      holder_model:
+        description: 'FLM model a second Lemonade keeps on the NPU for the "NPU held" cells (empty: skip them)'
+        required: false
+        default: 'gemma3-4b-FLM'
       gaia_ref:
         description: 'Install GAIA from this ref instead of this one (the script still comes from this ref)'
         required: false
@@ -53,6 +57,7 @@ jobs:
     env:
       LEMONADE_EXTRA: ${{ inputs.lemonade }}
       MODELS: ${{ inputs.models }}
+      HOLDER_MODEL: ${{ inputs.holder_model }}
       GAIA_REF: ${{ inputs.gaia_ref }}
     steps:
       - uses: actions/checkout@v7
@@ -95,7 +100,8 @@ jobs:
           for model in $MODELS; do extra+=(--model "$model"); done
           "$VENV/bin/python" util/repro_npu_embedded.py \
             --workdir "$REPRO_WORKDIR" \
-            --output "$RUNNER_TEMP/gaia-npu-repro-linux.tar.gz" "${extra[@]}"
+            --output "$RUNNER_TEMP/gaia-npu-repro-linux.tar.gz" \
+            "--holder-model=$HOLDER_MODEL" "${extra[@]}"
           code=$?
           cat "$REPRO_WORKDIR/report/summary.md" >> "$GITHUB_STEP_SUMMARY" || true
           # Exit 1 is a cell that failed: the finding, not a broken run.
@@ -135,6 +141,7 @@ jobs:
     env:
       LEMONADE_EXTRA: ${{ inputs.lemonade }}
       MODELS: ${{ inputs.models }}
+      HOLDER_MODEL: ${{ inputs.holder_model }}
       GAIA_REF: ${{ inputs.gaia_ref }}
     steps:
       - uses: actions/checkout@v7
@@ -165,6 +172,8 @@ jobs:
           foreach ($spec in ($env:LEMONADE_EXTRA -split ' ' | Where-Object { $_ })) { $extra += @('--lemonade', $spec) }
           foreach ($model in ($env:MODELS -split ' ' | Where-Object { $_ })) { $extra += @('--model', $model) }
           $out = Join-Path $env:RUNNER_TEMP 'gaia-npu-repro-windows.tar.gz'
+          # One token: PowerShell 5.1 drops an empty argument, leaving --holder-model without a value.
+          $extra += "--holder-model=$($env:HOLDER_MODEL)"
           & "$env:VENV\Scripts\python.exe" util\repro_npu_embedded.py --workdir $env:REPRO_WORKDIR --output $out @extra
           $code = $LASTEXITCODE
           Get-Content (Join-Path $env:REPRO_WORKDIR 'report\summary.md') -ErrorAction SilentlyContinue | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

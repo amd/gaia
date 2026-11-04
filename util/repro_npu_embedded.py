@@ -353,6 +353,16 @@ def chat(lemonade: Lemonade, model: str, prompt: str) -> Dict[str, Any]:
     )
 
 
+def models_loaded(health: Any) -> Optional[List[str]]:
+    """Model names a Lemonade ``/health`` reports loaded; None if unreadable."""
+    if not isinstance(health, dict) or "all_models_loaded" not in health:
+        return None
+    return [
+        str(m.get("model_name") if isinstance(m, dict) else m)
+        for m in health.get("all_models_loaded") or []
+    ]
+
+
 def answer_of(response: Dict[str, Any]) -> Optional[str]:
     if response.get("status") != 200:
         return None
@@ -609,6 +619,28 @@ class VersionRun:
             held["pull"] = other.call(
                 "POST", "pull", {"model_name": model}, timeout=PULL_TIMEOUT_S
             )
+            # GAIA's Lemonade still holds the last model it loaded; free the NPU
+            # so a failed holder load is not GAIA's own clash.
+            held["gaia_unload"] = self.lemonade.call("POST", "unload", {}, timeout=120)
+            still = models_loaded(self.lemonade.get_json("health"))
+            held["gaia_loaded_after_unload"] = still
+            if still is None or still:
+                unload = held["gaia_unload"]
+                self.record["cells"].append(
+                    {
+                        "model": model,
+                        "request": "GAIA's Lemonade frees the NPU",
+                        "ok": False,
+                        "unload": unload,
+                        "error": "GAIA's Lemonade could not unload "
+                        f"(unload {unload.get('status')}, still loaded: "
+                        f"{still if still is not None else 'health unreadable'}) "
+                        "before the second Lemonade's load, so the NPU-held "
+                        "cells were not run",
+                    }
+                )
+                self.save()
+                return
             held["load"] = other.call(
                 "POST",
                 "load",
@@ -643,7 +675,20 @@ class VersionRun:
                     cell["request"] = f"{request}, NPU held by {model}"
                     self.record["cells"].append(cell)
                     self.save()
-            held["answer_after"] = answer_of(chat(other, model, PLAIN_PROMPT))
+            held["chat_after"] = chat(other, model, PLAIN_PROMPT)
+            held["answer_after"] = answer_of(held["chat_after"])
+            if held["answer_after"] is None:
+                self.record["cells"].append(
+                    {
+                        "model": model,
+                        "request": "second Lemonade still answers after GAIA's loads",
+                        "ok": False,
+                        "chat": held["chat_after"],
+                        "error": "the model the second Lemonade held stopped "
+                        "answering after GAIA loaded beside it",
+                    }
+                )
+                self.save()
         finally:
             try:
                 holder.stop()
