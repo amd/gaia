@@ -378,6 +378,17 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    ```
    **AppImage smoke jobs (`appimage-distro-matrix`, `appimage-userns-restricted`) are the most flaky** — `appimage-userns-restricted` has a 300s `state: ready` poll (raised from 90s to cover a first-run model download). On real failure, **stop** and fix root cause; on transient flake (timeout-only, no logic error), `gh run rerun $RUN_ID --failed` is acceptable.
 
+6. **Check the last RC's findings are fixed or deferred.** rc4 shipped rc3's bugs because their fix PRs (#6544–#6547, #6554) were still open when it was tagged. An open fix PR is not a fix. Skip the second query for `-rc1`.
+   ```bash
+   MS=$(gh api repos/amd/gaia/milestones --jq '.[] | select(.title | test("^v<version>( |$)")) | .title')
+   gh issue list --repo amd/gaia --milestone "$MS" --state open --limit 200
+   PREV=$(git tag --list 'v<version>-rc*' --sort=-v:refname | head -n 1)
+   # Bugs filed since the last RC without a milestone (#6540, #6551 slipped through this way)
+   gh issue list --repo amd/gaia --state open --label bug --limit 200 \
+     --search "no:milestone created:>=$(git log -1 --format=%cs "$PREV")"
+   ```
+   Each one is merged and closed, or moved to a later milestone with a comment giving the reason. Release-test findings carry the milestone because the testing skill's issue template files them with it.
+
 ### Gate 3 — green run on the merged commit
 
 Required before continuing:
@@ -385,6 +396,7 @@ Required before continuing:
 - `__version__` matches the target.
 - `validate_release_notes.py` passes.
 - For a final, `check_flagship_release.py` passes.
+- No open issue in the release milestone, and no unmilestoned bug since the last RC, unless deferred with a reason.
 - Build Installers run on the merged commit is **green** (not yellow, not "mostly green except smoke tests").
 
 Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the **merged SHA** (`$MERGED_SHA`). Ask: **"Pre-tag verification green on `<sha>` (release PR #N). Push tag `v<version>`?"** — the SHA and PR number being in the question text means Phase 4 can re-derive them even if the user resumes in a fresh shell.
