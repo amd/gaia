@@ -443,6 +443,46 @@ _MODEL = cli_agent._MODEL_REMEDY
         ),
         ({"model_failed": True}, ("the model call failed", _MODEL)),
         (
+            {
+                "model_failed": True,
+                "error_history": [{"error": "reply cut off at the output-token limit"}],
+            },
+            (
+                "the model call failed (reply cut off at the output-token limit)",
+                _MODEL,
+            ),
+        ),
+        (
+            {
+                "status": "failed",
+                "error_history": [
+                    {"type": "tool_call_parse_error", "error": "bad json"}
+                ],
+            },
+            ("the model never gave a usable reply (bad json)", _MODEL),
+        ),
+        (
+            {
+                "error_history": [
+                    {"type": "stream_cut_off", "error": "stream ended early"}
+                ]
+            },
+            ("the model never gave a usable reply (stream ended early)", _MODEL),
+        ),
+        (
+            {
+                "status": "failed",
+                "error_history": [
+                    {
+                        "type": "tool_call_parse_error",
+                        "error": "bad json",
+                        "recovered": True,
+                    }
+                ],
+            },
+            None,
+        ),
+        (
             {"status": "error", "error": "boom"},
             ("status 'error' (boom)", "Fix the agent"),
         ),

@@ -10854,6 +10854,7 @@ Do NOT wrap conversational replies in JSON.
                         steps_taken,
                         steps_limit,
                     )
+                    self._turn_model_retries["failed"] = True
                     final_answer = _CUT_OFF_FAILURE_ANSWER
                     break
                 cut_off_continuations += 1

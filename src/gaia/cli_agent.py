@@ -1275,11 +1275,33 @@ def _failed_response(result) -> Optional[Tuple[str, str]]:
     if result.get("model_unreachable"):
         return "the model was unreachable", _MODEL_REMEDY
     if result.get("model_failed"):
-        return "the model call failed", _MODEL_REMEDY
+        reason = "the model call failed"
+        detail = _last_error(result)
+        return (f"{reason} ({detail})" if detail else reason), _MODEL_REMEDY
+    unusable = _unrecovered_unusable_reply(result)
+    if unusable:
+        return f"the model never gave a usable reply ({unusable})", _MODEL_REMEDY
     if result.get("status") == "error":
         detail = result.get("error") or _last_error(result)
         reason = "status 'error'" + (f" ({detail})" if detail else "")
         return reason, "Fix the agent"
+    return None
+
+
+def _unrecovered_unusable_reply(result: dict) -> Optional[str]:
+    """The last unparsable or cut-off reply the turn never recovered from, else None."""
+    from gaia.agents.base.agent import _RECOVERABLE_ERROR_TYPES
+
+    errors = result.get("error_history")
+    if not isinstance(errors, list):
+        return None
+    for entry in reversed(errors):
+        if (
+            isinstance(entry, dict)
+            and entry.get("type") in _RECOVERABLE_ERROR_TYPES
+            and not entry.get("recovered")
+        ):
+            return str(entry.get("error") or entry["type"])
     return None
 
 

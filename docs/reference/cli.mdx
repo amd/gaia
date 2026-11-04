@@ -804,7 +804,7 @@ Use `--layout hub` when authoring a package for this repo's `hub/agents/` tree, 
 | Mode | LLM required? | Checks |
 |------|:-------------:|--------|
 | `--lint` (default) | No (CI-safe) | Manifest valid + complete, package structure, Python sources parse + imports resolve, `black` + `isort` clean (Python); manifest + structure (C++) |
-| `--live` | Yes (Lemonade Server) | Agent answers each declared `conversation_starter` within `--timeout` without crashing |
+| `--live` | Yes (Lemonade Server) | Agent answers each declared `conversation_starter` within `--timeout` without crashing, and the model gives a usable reply (a turn that ends on unparsable or cut-off model output fails the gate) |
 
 The publish workflow requires `--lint` to pass; `--live` is recommended but not enforced.
 
