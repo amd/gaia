@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useRef, useState, type ReactNode } from 'react';
+import { StrictMode, useRef, useState, type ReactNode } from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
@@ -208,5 +208,108 @@ describe('useDialogFocus', () => {
 
         expect(screen.queryByRole('button', { name: 'Open' })).toBeNull();
         expect(document.activeElement).toBe(document.body);
+    });
+
+    it('does not take focus back from an element the close moved it to', async () => {
+        // FileBrowser's "Ask agent" starts a chat, the composer takes focus, then the dialog closes.
+        const user = userEvent.setup();
+        function Handoff() {
+            const [open, setOpen] = useState(false);
+            const composer = useRef<HTMLTextAreaElement>(null);
+            return (
+                <>
+                    <button onClick={() => setOpen(true)}>Open</button>
+                    <textarea ref={composer} aria-label="Composer" />
+                    {open && (
+                        <Dialog>
+                            <button onClick={() => { composer.current?.focus(); setOpen(false); }}>
+                                Ask
+                            </button>
+                        </Dialog>
+                    )}
+                </>
+            );
+        }
+        render(<Handoff />);
+
+        await user.click(byName('Open'));
+        await user.click(byName('Ask'));
+
+        expect(screen.getByRole('textbox', { name: 'Composer' })).toHaveFocus();
+    });
+
+    it('returns focus to an opener inside another dialog when the inner one closes', async () => {
+        const user = userEvent.setup();
+        function Nested() {
+            const [inner, setInner] = useState(false);
+            return (
+                <Page
+                    dialog={() => (
+                        <Dialog>
+                            <button onClick={() => setInner(true)}>Open inner</button>
+                            {inner && (
+                                <Dialog>
+                                    <button onClick={() => setInner(false)}>Close inner</button>
+                                </Dialog>
+                            )}
+                        </Dialog>
+                    )}
+                />
+            );
+        }
+        render(<Nested />);
+
+        await user.click(byName('Open'));
+        await user.click(byName('Open inner'));
+        expect(byName('Close inner')).toHaveFocus();
+        await user.click(byName('Close inner'));
+
+        expect(byName('Open inner')).toHaveFocus();
+    });
+
+    it('opens and closes correctly under StrictMode double effects', async () => {
+        const user = userEvent.setup();
+        render(
+            <StrictMode>
+                <Page
+                    dialog={(close) => (
+                        <Dialog>
+                            <button onClick={close}>Close</button>
+                        </Dialog>
+                    )}
+                />
+            </StrictMode>,
+        );
+
+        await user.click(byName('Open'));
+        expect(byName('Close')).toHaveFocus();
+        await user.click(byName('Close'));
+
+        expect(byName('Open')).toHaveFocus();
+    });
+
+    it('re-records the opener each time the dialog reopens', async () => {
+        const user = userEvent.setup();
+        function Two() {
+            const [open, setOpen] = useState(false);
+            return (
+                <>
+                    <button onClick={() => setOpen(true)}>First</button>
+                    <button onClick={() => setOpen(true)}>Second</button>
+                    <Dialog isOpen={open}>
+                        <button onClick={() => setOpen(false)}>Close</button>
+                    </Dialog>
+                </>
+            );
+        }
+        render(<Two />);
+
+        await user.click(byName('First'));
+        await user.click(byName('Close'));
+        expect(byName('First')).toHaveFocus();
+        await user.click(byName('Second'));
+        await user.click(byName('Close'));
+
+        expect(byName('Second')).toHaveFocus();
     });
 });

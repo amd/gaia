@@ -11,7 +11,8 @@ import { tabbableIn } from './useFocusTrap';
  * element Tab would reach, otherwise to the container itself. Focus that is
  * already inside the container (an `autoFocus` field) is left where it is.
  * On close or unmount, focus returns to whatever had it before the modal
- * opened, if that element is still on the page.
+ * opened, if that element is still on the page and focus was still in the
+ * modal (or lost with it) rather than moved somewhere else on purpose.
  *
  * Pairs with `useFocusTrap`, which keeps Tab inside, and `useEscapeToClose`.
  */
@@ -51,7 +52,10 @@ export function useDialogFocus(
         }
         return () => {
             openedRef.current = false;
-            if (previous?.isConnected) previous.focus();
+            // Don't steal focus from something the close moved it to (e.g. the composer).
+            const active = document.activeElement;
+            const lost = !active || active === document.body || container?.contains(active);
+            if (lost && previous?.isConnected) previous.focus();
         };
     }, [containerRef, isOpen]);
 }
