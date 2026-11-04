@@ -7642,7 +7642,9 @@ class LemonadeClient:
                     ) from e
                 if not complete:
                     raise LemonadeClientError(
-                        f"Download did not complete for model '{model_name}'."
+                        f"Download did not complete for model '{model_name}': "
+                        "Lemonade ended the stream without reporting it done. "
+                        "Retry to resume from the partial file."
                     )
                 return True
 
@@ -7813,7 +7815,7 @@ class LemonadeClient:
 
         Raises:
             LemonadeClientError: If the download does not complete before the
-                timeout or a status check fails.
+                timeout. A failed status check is logged and polling continues.
             ModelDownloadCancelledError: If download is cancelled
         """
         poll_interval = 30  # Check every 30 seconds for large downloads

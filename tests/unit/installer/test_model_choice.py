@@ -15,6 +15,7 @@ from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MODEL_NAME,
     LemonadeClientError,
+    ModelDownloadCancelledError,
 )
 from gaia.llm.model_fit import MachineCapacity
 
@@ -281,6 +282,42 @@ def test_keep_trying_never_retries_a_full_disk():
     assert not mc.pull_model(
         client, QWEN, lambda e: None, keep_trying_s=120, sleep=pytest.fail
     )
+
+
+class _SilentRaiser:
+    """Raises without a progress error event first, like a polled pull."""
+
+    def __init__(self, exc):
+        self.exc = exc
+
+    def ensure_model_downloaded(self, model_id, on_progress=None, **kwargs):
+        raise self.exc
+
+
+def test_a_raise_without_an_error_event_is_reported_once():
+    seen = []
+    client = _SilentRaiser(LemonadeClientError("Download of 'q' did not finish"))
+    assert not mc.pull_model(client, QWEN, seen.append, sleep=pytest.fail)
+    assert seen == [{"event": "error", "error": "Download of 'q' did not finish"}]
+
+
+def test_a_streamed_error_is_not_reported_twice():
+    seen = []
+    assert not mc.pull_model(
+        _FlakyClient(["No space left on device"]), QWEN, seen.append
+    )
+    assert [e["event"] for e in seen] == ["error"]
+
+
+def test_cancel_is_never_turned_into_a_failed_download():
+    client = _SilentRaiser(ModelDownloadCancelledError("stopped"))
+    with pytest.raises(ModelDownloadCancelledError):
+        mc.pull_model(client, QWEN, lambda e: None, keep_trying_s=120)
+
+
+def test_a_bug_in_the_client_is_not_swallowed_as_a_failed_download():
+    with pytest.raises(TypeError):
+        mc.pull_model(_SilentRaiser(TypeError("boom")), QWEN, lambda e: None)
 
 
 def test_builtin_models_pull_by_name_only():
