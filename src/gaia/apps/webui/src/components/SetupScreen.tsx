@@ -256,15 +256,6 @@ function ServerProblem({ problem, onRetry, onUseGaia }: { problem: SetupProblem;
             {problem.use_gaia && (
                 <p className="setup-hint">{t('setup.server.useGaiaNote')}</p>
             )}
-            {problem.switch_hint && (
-                <>
-                    <p className="setup-hint">{t('setup.server.setOutside')}</p>
-                    <details className="dl-details">
-                        <summary>{t('setup.progress.details')}</summary>
-                        <pre dir="ltr">{problem.switch_hint}</pre>
-                    </details>
-                </>
-            )}
         </>
     );
 }

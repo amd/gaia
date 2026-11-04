@@ -77,10 +77,6 @@ class SetupBusy(SetupError):
     """Setup, or that model's download, is already running."""
 
 
-class LemonadeOverridden(SetupError):
-    """``LEMONADE_BASE_URL`` picks the server, so setup can't switch it."""
-
-
 def _marker():
     from gaia.config import gaia_home
 
@@ -512,7 +508,6 @@ def server_problem() -> Optional[Dict[str, Any]]:
 
     try:
         configured = configured_lemonade_url()
-        from_env = choice.configured_source() == "env"
     except (choice.LemonadeChoiceError, GaiaConfigError) as e:
         logger.warning("Setup failed; could not read which Lemonade it used: %s", e)
         return None
@@ -539,19 +534,23 @@ def server_problem() -> Optional[Dict[str, Any]]:
             # The hint is extra; losing it must not hide that the server isn't answering.
             logger.warning("Could not work out how to start Lemonade: %s", e)
             start = None
-    return {
-        "kind": kind,
-        "message": message,
-        "start": start,
-        # LEMONADE_BASE_URL outranks a saved choice, so only unsetting it switches.
-        "use_gaia": not from_env,
-        "switch_hint": (
-            "LEMONADE_BASE_URL points GAIA at this server. To use GAIA's own "
-            "instead, unset it and restart GAIA."
-            if from_env
-            else None
-        ),
-    }
+    # Choosing GAIA's own here also overrides LEMONADE_BASE_URL (start()).
+    return {"kind": kind, "message": message, "start": start, "use_gaia": True}
+
+
+def _override_env_server() -> None:
+    """GAIA's own, picked here, wins over the ``LEMONADE_BASE_URL`` it replaces.
+
+    Saved before ``gaia init`` runs: init, its check and the daemon inherit
+    that variable and would otherwise all go back to the server that failed.
+    """
+    from gaia.config import GaiaConfigError
+    from gaia.llm.lemonade_choice import ignore_env_url
+
+    try:
+        ignore_env_url()
+    except GaiaConfigError as e:
+        raise SetupError(f"Could not save the switch to GAIA's own: {e}") from e
 
 
 def _forget_previous_server() -> None:
@@ -1004,14 +1003,6 @@ class SetupRunner:
         re-running first-time model setup. *chat_model_for* names the model
         the app's chat will open on, the one setup's test chat runs on.
         """
-        if gaia_lemonade:
-            from gaia.llm.lemonade_choice import env_override_note
-
-            if env_override_note():
-                raise LemonadeOverridden(
-                    "LEMONADE_BASE_URL points GAIA at another server, so setup "
-                    "can't switch to GAIA's own. Unset it and restart GAIA."
-                )
         # A cancelled run's checks may still be finishing; they would land on the new run.
         # A stopped run's load check may still be ending; its results would land
         # on the new run. Cancel kills it, so this wait is short.
@@ -1040,6 +1031,8 @@ class SetupRunner:
                 chat_model_for=chat_model_for,
             )
             command = run_command(skip_chat_model, gaia_lemonade)
+            if gaia_lemonade:
+                _override_env_server()
             if self._run is not None and self._run.server_only:
                 self._check_log = list(self._run.stage_logs.get("check", []))
             try:

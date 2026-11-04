@@ -10433,6 +10433,12 @@ def handle_lemonade_choice_command(args):
             else:
                 print("GAIA uses its own Lemonade Server")
                 print("   to use one you run: gaia lemonade connect <url>")
+            if info["env_url_ignored"]:
+                print(
+                    f"   LEMONADE_BASE_URL={info['env_url_ignored']} is ignored: "
+                    "GAIA's own was chosen over it in the app. A different value "
+                    "applies again."
+                )
             return
 
         if action == "detect":

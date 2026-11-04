@@ -1062,7 +1062,6 @@ export const enMessages = {
     'setup.offer.checkFailed': "Couldn't check whether this PC already runs an AI engine. Check again, or carry on and GAIA installs its own.",
     'setup.offer.keyRejected': "That key wasn't accepted. Enter the key your AI engine was started with, or install GAIA's own.",
     'setup.server.howToStart': 'How to start it',
-    'setup.server.setOutside': "A setting outside the app points GAIA at this AI engine, so setup can't switch from here.",
     'setup.offer.noAnswer': "Couldn't check whether your Lemonade Server at {url} is running: it didn't answer in time.",
     'setup.offer.checkAgain': 'Check again',
     'setup.offer.looking': 'Looking for a Lemonade Server you already run…',

@@ -12,8 +12,12 @@ and two copies of every model. The choice lives in ``~/.gaia/config.json``:
 * ``lemonade_base_url``: the user's server, used only in ``external`` mode.
 * ``lemonade_api_key_stored``: the server's API key is in the OS credential
   store (never in the config file).
+* ``lemonade_env_url_ignored``: a ``LEMONADE_BASE_URL`` value the person chose
+  GAIA's own over in the app (see :func:`ignore_env_url`).
 
-``LEMONADE_BASE_URL`` / ``LEMONADE_API_KEY`` still win over all of this.
+``LEMONADE_BASE_URL`` / ``LEMONADE_API_KEY`` still win over all of this, except
+while ``LEMONADE_BASE_URL`` equals ``lemonade_env_url_ignored``. A different
+value applies again.
 
 In ``external`` mode GAIA never starts a Lemonade of any kind. A server that is
 down, too old, needs a key it does not have, or is not Lemonade at all is an
@@ -152,11 +156,44 @@ def external_mode_active() -> bool:
     return _config().lemonade_mode == MODE_EXTERNAL
 
 
-def _env_url() -> Optional[str]:
-    """``LEMONADE_BASE_URL`` when it is the user's choice (not GAIA's export)."""
+def _raw_env_url() -> Optional[str]:
+    """``LEMONADE_BASE_URL`` unless it is GAIA's own export."""
     if os.getenv("GAIA_LEMONADE_EMBEDDED", "").strip() == "1":
         return None
     return os.getenv("LEMONADE_BASE_URL", "").strip() or None
+
+
+def _same_env_value(a: Optional[str], b: Optional[str]) -> bool:
+    return bool(a and b) and a.strip().rstrip("/") == b.strip().rstrip("/")
+
+
+def env_url_ignored() -> Optional[str]:
+    """This process's ``LEMONADE_BASE_URL`` when the app chose GAIA's own over it."""
+    env = _raw_env_url()
+    if env and _same_env_value(env, _config().lemonade_env_url_ignored):
+        return env
+    return None
+
+
+def _env_url() -> Optional[str]:
+    """``LEMONADE_BASE_URL`` when it is the user's choice (not GAIA's export)."""
+    return None if env_url_ignored() else _raw_env_url()
+
+
+def ignore_env_url() -> Optional[str]:
+    """Let GAIA's own, chosen in the app, win over this ``LEMONADE_BASE_URL``.
+
+    Saves the value it overrides, so a later, different value applies again.
+    Returns that value, or None when no ``LEMONADE_BASE_URL`` picks a server.
+    """
+    from gaia.config import GaiaConfig
+
+    env = _raw_env_url()
+    if env is None:
+        return None
+    GaiaConfig.save_key("lemonade_env_url_ignored", env)
+    log.info("GAIA's own Lemonade chosen over LEMONADE_BASE_URL=%s", env)
+    return env
 
 
 def configured_source() -> Optional[str]:
@@ -748,6 +785,7 @@ def describe() -> dict:
         "base_url": resolve_lemonade_base_url(configured) if configured else None,
         "saved_base_url": cfg.lemonade_base_url,
         "api_key_stored": bool(cfg.lemonade_api_key_stored),
+        "env_url_ignored": env_url_ignored(),
     }
 
 

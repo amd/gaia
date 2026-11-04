@@ -1062,7 +1062,6 @@ const messages: Messages = {
     'setup.offer.checkFailed': 'تعذّر التحقق مما إذا كان هذا الجهاز يشغّل محرك ذكاء اصطناعي. تحقّق مجددًا، أو تابع وسيثبّت GAIA محركه الخاص.',
     'setup.offer.keyRejected': 'لم يُقبل هذا المفتاح. أدخل المفتاح الذي شُغّل به محرك الذكاء الاصطناعي، أو ثبّت محرك GAIA الخاص.',
     'setup.server.howToStart': 'كيفية تشغيله',
-    'setup.server.setOutside': 'يوجّه إعداد خارج التطبيق GAIA إلى محرك الذكاء الاصطناعي هذا، لذا لا يمكن للإعداد التبديل من هنا.',
     'setup.offer.noAnswer': 'تعذر التحقق من تشغيل خادم Lemonade في {url}: لم يستجب في الوقت المحدد.',
     'setup.offer.checkAgain': 'التحقق مرة أخرى',
     'setup.offer.looking': 'جارٍ البحث عن خادم Lemonade تشغّله…',

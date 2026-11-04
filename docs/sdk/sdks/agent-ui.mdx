@@ -2556,7 +2556,9 @@ plan and make one set of choices.
     false, "acknowledge_low_disk": false, "keep_trying": false,
     "extra_models": [], "server_only": false}`;
     `gaia_lemonade` runs `gaia init --gaia-lemonade`, which sets up and saves
-    GAIA's own server instead of the user's. `keep_trying` waits out a dropped
+    GAIA's own server instead of the user's. When `LEMONADE_BASE_URL` picks the
+    server, it first saves that value as `lemonade_env_url_ignored`, so GAIA
+    ignores the variable until it changes. `keep_trying` waits out a dropped
     connection for up to two minutes before a model fails. `extra_models`
     pulls models the user ticked beside the plan's (`--download-model`), and
     counts them in the disk check; a model nobody has is a **422**.
@@ -2564,8 +2566,7 @@ plan and make one set of choices.
     no load check), so a cold PC can choose its models against the server
     before anything downloads; it takes no `extra_models` and skips the disk
     check, and its status carries `server_only: true`. **409** when setup
-    is already running, or `gaia_lemonade` is asked while `LEMONADE_BASE_URL`
-    picks the server. **409** with `detail` `{"code": "low_disk", "message",
+    is already running. **409** with `detail` `{"code": "low_disk", "message",
     "need_gb", "free_gb", "free_up_gb", "path", "drop", "acknowledge":
     "acknowledge_low_disk"}` when the selected models need more disk than is
     free; `drop` names the one model whose skip makes it fit, when there is
@@ -2585,9 +2586,8 @@ plan and make one set of choices.
     user chose their own Lemonade Server, the first step is "Use your Lemonade
     Server" rather than an install. When that server isn't answering, `error`
     says so in one sentence and `problem` carries the next steps: `start` (how
-    to start it on this PC, or null), `use_gaia` (setup can switch to GAIA's
-    own), and `switch_hint` (set when `LEMONADE_BASE_URL` picks the server, so
-    only unsetting it switches). The raw error stays in the output lines.
+    to start it on this PC, or null) and `use_gaia` (setup can switch to GAIA's
+    own, also over a `LEMONADE_BASE_URL`). The raw error stays in the output lines.
     `gaia_lemonade` is true for a run switching to GAIA's own, so a retry
     keeps switching. `model_failed` is true when a model's download failed in
     this run: its row already says why, so the run's own `error` adds nothing.
@@ -2695,7 +2695,9 @@ All three routes need the `X-Gaia-UI: 1` header (**403** without it).
   <Accordion title="GET /api/lemonade/target">
     The server GAIA uses now and who chose it: `mode` (`gaia` or `external`),
     `saved_mode` (`null` until someone chooses), `source`, `base_url`,
-    `saved_base_url`, `api_key_stored`, `env_override` (a warning when
+    `saved_base_url`, `api_key_stored`, `env_url_ignored` (the
+    `LEMONADE_BASE_URL` value GAIA's own was chosen over in setup, while the
+    variable still holds it), `env_override` (a warning when
     `LEMONADE_BASE_URL` overrides the setting), `gaia_installed`, `offer` (no
     choice saved and the environment isn't choosing, so the UI should offer the
     switch), and `what_gaia_does`. **409** when the config is unreadable or the

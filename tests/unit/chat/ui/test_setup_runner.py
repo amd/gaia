@@ -786,7 +786,6 @@ _UNREACHABLE = {
     "message": "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
     "start": "Start Lemonade Server from the Lemonade tray icon.",
     "use_gaia": True,
-    "switch_hint": None,
 }
 _RAW_ERROR = (
     "Lemonade Server at http://127.0.0.1:9/api/v1 is not reachable: Request "
@@ -869,16 +868,37 @@ def test_a_switch_is_applied_even_when_the_check_then_fails(monkeypatch):
     assert forgot == [1]
 
 
-def test_use_gaias_own_is_refused_while_lemonade_base_url_picks_the_server(
-    monkeypatch,
-):
+def test_use_gaias_own_overrides_a_lemonade_base_url_from_the_app(monkeypatch):
+    """The env server isn't answering; the app's choice must not dead-end on it."""
+    from gaia.config import GaiaConfig
+
+    calls = []
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)), calls)
+    monkeypatch.setattr(sr, "check", lambda *_a, **_k: {"ready": True})
+    monkeypatch.setattr(sr, "_forget_previous_server", lambda: None)
     monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9")
     monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
-    monkeypatch.setattr(
-        sr.subprocess, "Popen", lambda *_a, **_k: pytest.fail("nothing starts")
-    )
-    with pytest.raises(sr.SetupError, match="Unset it and restart GAIA"):
-        sr.SetupRunner().start(False, gaia_lemonade=True, chat_model_for=_local_chat)
+    runner = sr.SetupRunner()
+    runner.start(False, gaia_lemonade=True, chat_model_for=_local_chat)
+    # Saved before init runs, so it and the daemon set up GAIA's own.
+    assert GaiaConfig.load().lemonade_env_url_ignored == "http://127.0.0.1:9"
+    assert lemonade_choice.configured_source() is None
+    assert _wait_done(runner)["state"] == "ready"
+    assert calls[0][0][-1] == "--gaia-lemonade"
+
+
+def test_a_plain_retry_does_not_override_lemonade_base_url(monkeypatch):
+    from gaia.config import GaiaConfig
+
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    monkeypatch.setattr(sr, "check", lambda *_a, **_k: {"ready": True})
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
+    runner = sr.SetupRunner()
+    runner.start(False, chat_model_for=_local_chat)
+    _wait_done(runner)
+    assert GaiaConfig.load().lemonade_env_url_ignored is None
+    assert lemonade_choice.configured_source() == "env"
 
 
 def test_verify_not_ready_fails_with_the_reasons(monkeypatch):
@@ -1013,9 +1033,10 @@ def test_an_env_server_that_does_not_answer_says_so_plainly(users_server):
     assert probed == ["http://127.0.0.1:9/api/v1"]
     assert problem["message"] == "Your Lemonade Server at 127.0.0.1:9 isn't answering."
     assert problem["start"] == "Start it from the tray."
-    # LEMONADE_BASE_URL outranks the saved choice: switching here can't work.
-    assert problem["use_gaia"] is False
-    assert "unset it and restart GAIA" in problem["switch_hint"]
+    # Choosing GAIA's own here overrides LEMONADE_BASE_URL: no env to edit.
+    assert problem["use_gaia"] is True
+    assert "switch_hint" not in problem
+    assert "LEMONADE_BASE_URL" not in str(problem)
     assert "lemonade-server serve" not in str(problem)
 
 
@@ -1023,7 +1044,7 @@ def test_a_saved_server_that_does_not_answer_offers_gaias_own(users_server):
     users_server("http://localhost:13305/api/v1", "config")
     problem = _REAL_SERVER_PROBLEM()
     assert problem["use_gaia"] is True
-    assert problem["switch_hint"] is None
+    assert "switch_hint" not in problem
 
 
 def test_a_saved_server_that_is_too_old_names_both_versions_and_offers_gaias_own(
@@ -1039,12 +1060,12 @@ def test_a_saved_server_that_is_too_old_names_both_versions_and_offers_gaias_own
     assert "gaia config" not in str(problem)
 
 
-def test_a_too_old_env_server_cannot_be_switched_from_setup(users_server):
+def test_a_too_old_env_server_offers_gaias_own(users_server):
     users_server("http://127.0.0.1:13305", "env", lemonade_choice.TOO_OLD)
     problem = _REAL_SERVER_PROBLEM()
     assert problem["kind"] == "server_too_old"
-    assert problem["use_gaia"] is False
-    assert "unset it and restart GAIA" in problem["switch_hint"]
+    assert problem["use_gaia"] is True
+    assert "LEMONADE_BASE_URL" not in str(problem)
 
 
 @pytest.mark.parametrize(
@@ -1542,7 +1563,6 @@ def test_the_run_bar_still_moves_when_init_reports_progress_as_json():
     "error, status, words",
     [
         (sr.SetupBusy("secret path C:/x"), 409, "already running"),
-        (sr.LemonadeOverridden("secret path C:/x"), 409, "LEMONADE_BASE_URL"),
         (sr.SetupError("Could not start: [WinError 2] C:/secret"), 500, "server log"),
     ],
 )

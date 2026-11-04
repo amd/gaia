@@ -226,6 +226,82 @@ class TestPrecedence:
             assert gaia_runs_lemonade() is True
 
 
+class TestEnvChosenAwayFrom:
+    """GAIA's own picked in the app over a LEMONADE_BASE_URL that wasn't answering."""
+
+    def test_the_env_value_it_overrode_is_ignored(self, monkeypatch):
+        from gaia.llm.lemonade_client import (
+            configured_lemonade_url,
+            resolve_lemonade_api_key,
+        )
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        monkeypatch.setenv("LEMONADE_API_KEY", "for-that-server")
+        assert choice.configured_source() == "env"
+
+        assert choice.ignore_env_url() == "http://127.0.0.1:59999/api/v1"
+        saved = GaiaConfig.load()
+        assert saved.lemonade_env_url_ignored == "http://127.0.0.1:59999/api/v1"
+        assert configured_lemonade_url() is None
+        assert choice.configured_source() is None
+        assert choice.env_override_note() is None
+        # Its key belonged to the server it named, never GAIA's own.
+        assert resolve_lemonade_api_key() is None
+        info = choice.describe()
+        assert info["source"] == "gaia"
+        assert info["env_url_ignored"] == "http://127.0.0.1:59999/api/v1"
+
+    def test_a_trailing_slash_is_the_same_value(self, monkeypatch):
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        choice.ignore_env_url()
+        monkeypatch.setenv("LEMONADE_BASE_URL", " http://127.0.0.1:59999/api/v1/ ")
+        assert choice.configured_source() is None
+
+    def test_a_changed_env_value_applies_again(self, monkeypatch):
+        from gaia.llm.lemonade_client import configured_lemonade_url
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        choice.ignore_env_url()
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://gpu-box:13305")
+        assert configured_lemonade_url() == "http://gpu-box:13305"
+        assert choice.configured_source() == "env"
+        assert choice.describe()["env_url_ignored"] is None
+        assert "gpu-box" in choice.env_override_note()
+
+    def test_the_saved_external_server_still_applies_over_an_ignored_env(
+        self, monkeypatch
+    ):
+        from gaia.llm.lemonade_client import configured_lemonade_url
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        choice.ignore_env_url()
+        _save(lemonade_mode="external", lemonade_base_url=USER_URL)
+        assert configured_lemonade_url() == USER_URL
+        assert choice.configured_source() == "config"
+
+    def test_gaia_lemonade_status_says_the_env_value_is_ignored(
+        self, monkeypatch, capsys
+    ):
+        from gaia.cli import handle_lemonade_choice_command
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        choice.ignore_env_url()
+        handle_lemonade_choice_command(
+            SimpleNamespace(lemonade_action="status", json=False)
+        )
+        out = capsys.readouterr().out
+        assert "GAIA uses its own Lemonade Server" in out
+        assert "LEMONADE_BASE_URL=http://127.0.0.1:59999/api/v1 is ignored" in out
+
+    def test_nothing_is_saved_without_an_env_value(self, monkeypatch):
+        assert choice.ignore_env_url() is None
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://localhost:50601/api/v1")
+        monkeypatch.setenv("GAIA_LEMONADE_EMBEDDED", "1")
+        # GAIA's own exported URL is not the user's choice to override.
+        assert choice.ignore_env_url() is None
+        assert GaiaConfig.load().lemonade_env_url_ignored is None
+
+
 # ---------------------------------------------------------------------------
 # API keys
 # ---------------------------------------------------------------------------
