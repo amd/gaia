@@ -98,6 +98,8 @@ describe('paths with spaces', () => {
         ['a sentence after a folder', 'Saved to C:\\out\\Q3 and then closed.', 'C:\\out\\Q3'],
         ['a sentence after a file', 'Saved C:\\out\\a.txt and b.txt here.', 'C:\\out\\a.txt'],
         ['a second path', 'Copied C:\\out\\x and D:\\y\\z.txt', 'C:\\out\\x'],
+        ['Arabic prose after a folder', 'احفظه في C:\\out\\Q3 ثم أغلق.', 'C:\\out\\Q3'],
+        ['an Arabic file name', 'افتح C:\\out\\Q3 تقرير.txt الآن', 'C:\\out\\Q3 تقرير.txt'],
     ])('stops at the right place after %s', (_label, content, first) => {
         renderAnswer(content);
         expect(links()[0].textContent).toBe(first);
