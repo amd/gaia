@@ -4,8 +4,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Pencil, Plus, Trash2, Undo2, Eye } from 'lucide-react';
 import * as memoryApi from '../services/memoryApi';
-import { DEFAULT_LOCALE, ref, type MessageKey, type MessageRef } from '../i18n/registry';
-import { tEn, useT, type Translate } from '../i18n/useT';
+import { ref, type MessageKey, type MessageRef } from '../i18n/registry';
+import { dateLocale, tEn, useT, type Translate } from '../i18n/useT';
 import { log } from '../utils/logger';
 
 /** One stored memory, as the knowledge endpoint returns it. */
@@ -43,11 +43,6 @@ const SOURCES: Record<string, MessageKey> = {
 /** Where a memory came from, in the user's words; an unknown source reads "Saved". */
 export function sourceKey(source: string): MessageKey {
     return SOURCES[source] ?? 'mem.source.other';
-}
-
-/** Dates in the interface language with Western digits; English follows the PC's own region. */
-export function dateLocale(t: Translate): string | undefined {
-    return t.locale === DEFAULT_LOCALE ? undefined : `${t.locale}-u-nu-latn`;
 }
 
 function relativeDay(iso: string, t: Translate): MessageRef | string | null {

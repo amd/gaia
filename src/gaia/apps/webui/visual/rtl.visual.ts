@@ -1441,6 +1441,28 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const REPEATED_PROMPTS = ['c1', 'c2', 'c3'].map((id) => ({
+    ...PYTHON_PROMPT[0], confirm_id: id, always_scope: 'Python snippets (run_python)', risk: 'execute',
+}));
+
+for (const locale of ['ar', 'en']) {
+    test(`the third identical prompt counts two earlier allows (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, REPEATED_PROMPTS);
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+            p.route('**/api/chat/confirm-tool', (route) => route.fulfill({ json: { status: 'ok', approved: true, granted: null } })));
+        await page.locator('textarea').first().fill('count the characters in my notes');
+        await page.keyboard.press('Enter');
+        for (const answered of [1, 2]) {
+            await page.getByRole('button', { name: /Allow once/ }).click();
+            await expect(page.locator('.perm-card-hint')).toBeVisible();
+            if (answered === 1) await expect(page.locator('.perm-card-hint')).toContainText(locale === 'ar' ? 'مرة واحدة' : 'once already');
+        }
+        await expect(page.locator('.perm-card-hint')).toContainText(locale === 'ar' ? 'من قبل: 2.' : 'allowed this 2 times');
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `permission-repeated-${locale}`);
+    });
+}
+
 /** A first message whose chat model isn't downloaded, on a disk too small for it. */
 async function withMissingModel(page: Page): Promise<void> {
     await page.route('**/api/setup/needs/chat', (route) =>
