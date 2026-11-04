@@ -158,7 +158,7 @@ function Start-AgentUi {
     # These rows install a published release; one before #5629 runs gaia init
     # (several GB of models) on first launch. Later apps ignore the variable.
     $env:GAIA_SKIP_GAIA_INIT = '1'
-    if ($env:SETUP_JOURNEY -eq '1') { $env:LEMONADE_BASE_URL = Start-Fake -Catalog }
+    if ($env:SETUP_JOURNEY -eq '1') { $env:LEMONADE_BASE_URL = Start-Fake -Catalog -PidFile 'app-fake.pid' }
     $p = Start-Process -FilePath "$dir\gaia-desktop.exe" -WindowStyle Hidden -PassThru
     Set-Content -Path "$work\app.pid" -Value $p.Id
     Start-Sleep -Seconds 10
@@ -216,7 +216,7 @@ function Setup-Journey {
         if ($LASTEXITCODE -ne 0) { Fail 'setup did not finish through the installed app; its Playwright report is above' }
     } finally {
         Pop-Location
-        Stop-Process -Id ([int](Get-Content "$work\fake.pid")) -Force -ErrorAction SilentlyContinue
+        Stop-Process -Id ([int](Get-Content "$work\app-fake.pid")) -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -228,8 +228,24 @@ function Stop-AgentUi {
     Start-Sleep -Seconds 3
 }
 
+# The daemon the backend started outlives the app by design, and keeps the
+# agent sidecar it supervises running, so stop it the way a user would.
+function Stop-Daemon {
+    $gaia = "$gaiaHome\venv\Scripts\gaia.exe"
+    if (-not (Test-Path $gaia)) { Write-Host "no ${gaia}: no backend was installed, so no daemon"; return }
+    & $gaia daemon stop
+    if ($LASTEXITCODE -ne 0) { Fail "``gaia daemon stop`` exited $LASTEXITCODE" }
+}
+
+# The daemon's Python is the base interpreter, not a path under ~\.gaia.
+function Daemon-Processes {
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match '-m gaia\.daemon' }
+}
+
 # ── The TUI checks ────────────────────────────────────────────────────────────
-function Start-Fake([switch]$Catalog) {
+# -PidFile: the app's fake (from launch) and the one-shot's run side by side,
+# and each must be stopped by its own id.
+function Start-Fake([switch]$Catalog, [string]$PidFile = 'fake.pid') {
     Remove-Item "$work\fake.port" -ErrorAction SilentlyContinue
     $fakeArgs = @("$here\fake_model_server.py", '--port-file', "$work\fake.port", '--log', "$logs\fake-requests.jsonl")
     # --catalog: nothing downloaded. Otherwise the flagship profile's models
@@ -239,7 +255,7 @@ function Start-Fake([switch]$Catalog) {
     else { $fakeArgs += @('--model', 'Gemma-4-E4B-it-GGUF', '--model', 'user.embeddinggemma-300m-GGUF', '--model', 'Qwen3.6-35B-A3B-GGUF') }
     $p = Start-Process -FilePath $python -ArgumentList $fakeArgs `
         -PassThru -RedirectStandardOutput "$logs\fake-server.out" -RedirectStandardError "$logs\fake-server.err"
-    Set-Content -Path "$work\fake.pid" -Value $p.Id
+    Set-Content -Path "$work\$PidFile" -Value $p.Id
     for ($i = 0; $i -lt 150 -and -not (Test-Path "$work\fake.port"); $i++) { Start-Sleep -Milliseconds 200 }
     if (-not (Test-Path "$work\fake.port")) { Get-Content "$logs\fake-server.err"; Fail 'the fake model server did not start' }
     return "http://127.0.0.1:$((Get-Content "$work\fake.port").Trim())/api/v1"
@@ -272,6 +288,9 @@ function One-Shot {
 # one that does not answer: LEMONADE_BASE_URL on a closed port. The
 # one-shot must refuse quickly and say how to fix it -- not hang, not exit 0.
 function Preflight-NoLemonade {
+    # A running daemon's sidecar keeps the Lemonade it started with, so the
+    # closed port below would never reach it.
+    Stop-Daemon
     Use-NewTerminalPath
     $env:LEMONADE_BASE_URL = 'http://127.0.0.1:9/api/v1'
     try {
@@ -454,6 +473,7 @@ switch ($Step) {
     # needs a click, so the app and its backend are stopped as a process tree.
     'quit' {
         Stop-AgentUi
+        Stop-Daemon
         $left = Get-Process -ErrorAction SilentlyContinue | Where-Object {
             $_.ProcessName -eq 'gaia-desktop' -or ($_.Path -and $_.Path -like "$gaiaHome\venv\*")
         }
@@ -510,6 +530,7 @@ switch ($Step) {
             $_.ProcessName -in @('gaia-desktop', 'gaia-tui', 'gaia-agent') -or ($_.Path -and $_.Path -like "$gaiaHome\venv\*")
         }
         foreach ($r in $running) { $problems += "still running: $($r.ProcessName) ($($r.Path))" }
+        foreach ($d in Daemon-Processes) { $problems += "still running: the daemon, pid $($d.ProcessId) ($($d.CommandLine))" }
         # Kept on purpose: user data in ~\.gaia, and any system Lemonade Server
         # (only `gaia uninstall --purge-lemonade` removes that).
         Write-Host '--- kept by design ---'
