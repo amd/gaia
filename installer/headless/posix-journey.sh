@@ -408,9 +408,13 @@ install)
       fi
       # Exactly the documented `curl ... | sh`, with the script from this checkout.
       sh <"${REPO}/installer/scripts/install.sh"
-      for f in "${GAIA_HOME}/venv/bin/gaia" "${GAIA_HOME}/bin/gaia-tui" "${GAIA_HOME}/bin/gaia-agent"; do
+      for f in "${GAIA_HOME}/venv/bin/gaia" "${GAIA_HOME}/bin/gaia" "${GAIA_HOME}/bin/gaia-mcp" "${GAIA_HOME}/bin/gaia-tui" "${GAIA_HOME}/bin/gaia-agent"; do
         [ -x "${f}" ] || die "install.sh finished but ${f} is not there"
       done
+      # #6603: the venv's python3 must not reach the user's PATH.
+      if grep -Fs "${GAIA_HOME}/venv/bin" "${HOME}/.bashrc" "${HOME}/.bash_profile" "${HOME}/.profile" "${HOME}/.zshrc"; then
+        die "install.sh put ${GAIA_HOME}/venv/bin on PATH in a shell startup file"
+      fi
       ;;
     *) die "no install for ${KIND}" ;;
   esac
@@ -444,7 +448,7 @@ launch)
 health)
   case "${KIND}" in
     agent-ui-dmg|agent-ui-deb|appimage) wait_agent_ui_health ;;
-    install-sh) PATH="${GAIA_HOME}/bin:${GAIA_HOME}/venv/bin:${PATH}" one_shot ;;
+    install-sh) PATH="${GAIA_HOME}/bin:${PATH}" one_shot ;;
     *) one_shot ;;
   esac
   ;;
