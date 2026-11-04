@@ -1695,6 +1695,7 @@ const messages: Messages = {
     'update.status.noChannel': 'لا يوجد بعد إصدار من GAIA ينشر تحديثًا لسطح المكتب على هذا النظام.',
     'update.status.disabled': 'التحديثات متوقفة في هذا التثبيت (GAIA_DISABLE_UPDATE=1).',
     'update.status.upToDate': 'GAIA محدّث.',
+    'update.status.readFailed': 'تعذّرت قراءة حالة التحديث: {reason}',
     'update.settings.title': 'التحديثات',
     'update.settings.running': 'الإصدار قيد التشغيل: \u2066GAIA {version}\u2069.',
     'update.settings.unknownVersion': 'غير معروف',

@@ -52,6 +52,13 @@ describe('UpdatesSection', () => {
         expect(container).toBeEmptyDOMElement();
     });
 
+    it('says it could not read the update status instead of claiming up to date', async () => {
+        bridge.getStatus.mockRejectedValueOnce(new Error('No handler registered'));
+        render(<UpdatesSection />);
+        await screen.findByText(/couldn't read the update status: no handler registered/i, { selector: '[role="status"]' });
+        expect(screen.queryByText(/up to date/i, { selector: '[role="status"]' })).not.toBeInTheDocument();
+    });
+
     it('shows auto-update off by default', async () => {
         render(<UpdatesSection />);
         await waitFor(() => expect(screen.getByText(/running gaia 0\.25\.0/i, { selector: '[role="status"]' })).toBeInTheDocument());

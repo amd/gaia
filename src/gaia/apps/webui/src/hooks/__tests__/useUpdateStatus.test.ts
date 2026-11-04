@@ -125,6 +125,23 @@ describe('useUpdateStatus — with bridge', () => {
         expect(result.current.status).toBe('available');
         expect(result.current.version).toBe('0.22.0');
     });
+
+    it('reports a rejected status read instead of keeping the default state', async () => {
+        const bridge = makeUpdaterBridge({
+            getStatus: vi.fn(async () => {
+                throw new Error("Error invoking remote method 'gaia-updater:get-status': Error: No handler registered");
+            }),
+        });
+        vi.stubGlobal('gaiaUpdater', bridge);
+
+        const { result } = renderHook(() => useUpdateStatus());
+
+        await act(async () => {
+            await new Promise((r) => setTimeout(r, 0));
+        });
+
+        expect(result.current.readError).toBe('No handler registered');
+    });
 });
 
 describe('INITIAL_STATE', () => {

@@ -21,6 +21,7 @@ export function isReleaseCandidate(version: string | null): boolean {
 /** One line saying where updates stand. */
 export function describeUpdateStatus(s: UpdateState, t: Translate): string {
     const version = s.version ?? '';
+    if (s.readError) return t('update.status.readFailed', { reason: s.readError });
     switch (s.status) {
         case 'checking':
             return t('update.status.checking');
@@ -77,7 +78,7 @@ export function UpdatesSection() {
 
     const line = `${t('update.settings.running', { version: update.currentVersion ?? t('update.settings.unknownVersion') })} ${describeUpdateStatus(update, t)}`;
     const needsYou = ['available', 'downloaded', 'error'].includes(update.status)
-        || !!update.pinnedVersion || !!update.installFailed || !!update.configError || !!error;
+        || !!update.pinnedVersion || !!update.installFailed || !!update.configError || !!update.readError || !!error;
 
     return (
         <SettingsDisclosure title={t('update.settings.title')} titleId="updates-label" hint={line} forceOpen={needsYou}>
