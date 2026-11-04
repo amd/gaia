@@ -40,7 +40,12 @@ describe('Windows paths in prose keep their backslashes', () => {
         expect(textOf(`Saved to ${path} just now.`)).toBe(`Saved to ${path} just now.`);
     });
 
-    it.each(['C:\\My Docs\\_drafts\\plan.md', 'C:\\Program Files\\.gaia', '\\\\nas\\team share\\_tmp'])(
+    it.each([
+        'C:\\My Docs\\_drafts\\plan.md',
+        'C:\\Program Files\\.gaia',
+        'C:\\Program Files (x86)\\.gaia\\x',
+        '\\\\nas\\team share\\_tmp',
+    ])(
         'keeps the spaced path %s',
         (path) => {
             expect(textOf(`Saved to ${path} just now.`)).toBe(`Saved to ${path} just now.`);
@@ -53,6 +58,10 @@ describe('Windows paths in prose keep their backslashes', () => {
 
     it('ends a path at a space before an escape, so the prose after it still unescapes', () => {
         expect(textOf('Saved to C:\\foo \\*not bold\\* or \\_x')).toBe('Saved to C:\\foo *not bold* or _x');
+    });
+
+    it('ends a path at a space before a bracketed aside', () => {
+        expect(textOf('Saved to C:\\foo (see docs) and \\_x')).toBe('Saved to C:\\foo (see docs) and _x');
     });
 
     it('keeps paths inside bold and list items', () => {
