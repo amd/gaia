@@ -51,6 +51,7 @@ from gaia.env import child_env, load_env
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
+    describe_upgrade_hint,
     gaia_runs_lemonade,
     get_installed_version,
     resolve_lemonade,
@@ -107,11 +108,6 @@ load_env()
 # =========================================================================
 # Default server host and port (can be overridden via LEMONADE_BASE_URL env var)
 DEFAULT_HOST = "localhost"
-# Lemonade v10.1.0 changed its default port from 8000 to 13305 as part of the
-# "spring cleaning" release. See:
-#   https://github.com/lemonade-sdk/lemonade/wiki/Migration#v10x---v101
-# Minimum supported Lemonade version is declared in INIT_PROFILES
-# (min_lemonade_version); keep both in lock-step when bumping.
 DEFAULT_PORT = 13305
 # API version supported by this client
 LEMONADE_API_VERSION = "v1"
@@ -1568,8 +1564,6 @@ class ModelRequirement:
     # Download size in GB, vision projector included, for the fit check and
     # memory sizing (gaia.llm.model_fit).
     size_gb: Optional[float] = None
-    # Oldest Lemonade whose bundled llama.cpp can load the model.
-    min_lemonade_version: Optional[str] = None
     # The model's native context. With ``kv_bytes_per_token`` and ``size_gb``
     # it makes the window grow from ``min_ctx_size`` toward this as memory
     # allows (``context_for_capacity``). None keeps the window at the floor.
@@ -1694,7 +1688,6 @@ MODELS = {
         thinking=True,
         # Three model shards plus the 0.9 GB vision projector, as Lemonade counts it.
         size_gb=82.86,
-        min_lemonade_version="2026.39.1",
         # 12 of 48 layers are Sparse Attention; the rest are Gated DeltaNet, whose
         # state does not grow: 2 KV heads x 256 dims x K+V x f16 = 24 KiB/token,
         # 1.6 GB at 64K. No max_ctx_size, so the window stays at the floor.
@@ -1712,8 +1705,6 @@ MODELS = {
         tool_calling=True,
         thinking=True,
         size_gb=23.3,
-        # First in Lemonade's built-in catalog in v11.7.0.
-        min_lemonade_version="11.7.0",
         # Native window. 30 of its 40 layers are Gated DeltaNet, whose state does
         # not grow; the other 10 carry 2 KV heads x 256 dims x K+V x f16 =
         # 20 KiB/token: 1.3 GB at 64K, 2.7 GB at 128K, 5.4 GB at 256K.
@@ -2291,14 +2282,11 @@ AGENT_PROFILES = {
 
 
 def lemonade_server_version(client: "LemonadeClient") -> Optional[str]:
-    """The version a running Lemonade reports on ``/health``, or None.
-
-    None means "cannot show support", which keeps the version-gated model out.
-    """
+    """The version a running Lemonade reports on ``/health``, or None."""
     try:
         health = client.health_check()
     except LemonadeClientError:
-        # The caller's reason then reads "this server's version is unknown".
+        # Setup then shows "version not reported" beside the server it found.
         return None
     version = health.get("version") if isinstance(health, dict) else None
     return str(version) if version else None
@@ -2449,7 +2437,6 @@ def recommend_default_chat_model(
         ModelFitError,
         capacity_from_system_info,
         check_fit,
-        check_server_supports,
         pick_default_model,
     )
 
@@ -2459,9 +2446,6 @@ def recommend_default_chat_model(
     except (ModelFitError, LemonadeClientError) as e:
         # An unanswered request is as unjudgeable as an unreadable answer.
         return floor, [(m, str(e)) for m in DEFAULT_MODEL_LADDER[:-1]], None
-    server_version = lemonade_server_version(client)
-    # Fit first, then version: "upgrade Lemonade" is only useful advice for a
-    # model this PC could actually hold.
     candidates, unsupported = [], []
     for model_id in DEFAULT_MODEL_LADDER:
         mr = find_model_requirement(model_id)
@@ -2484,12 +2468,6 @@ def recommend_default_chat_model(
             )
             continue
         if model_id != floor and check_fit(size, capacity, kv).fits:
-            verdict = check_server_supports(
-                mr.min_lemonade_version if mr else None, server_version
-            )
-            if not verdict.fits:
-                unsupported.append((model_id, verdict.reason))
-                continue
             reason = (
                 _free_memory_rules_out(client, mr, capacity)
                 if judge_free_memory
@@ -2874,10 +2852,7 @@ def catalog_context_window(entry: Dict[str, Any]) -> Optional[int]:
         return value if ok else None
 
     if entry.get("recipe") == CLOUD_RECIPE or entry.get("cloud_provider"):
-        # Older Lemonade lists only context_length, and there it is the real window.
-        return positive(entry.get("max_context_window")) or positive(
-            entry.get("context_length")
-        )
+        return positive(entry.get("max_context_window"))
     return positive(entry.get("context_length"))
 
 
@@ -3181,17 +3156,67 @@ class CloudModelUnavailableError(LemonadeClientError):
         self.status = 404
 
 
-class LemonadeVersionError(LemonadeClientError):
-    """Raised when Lemonade Server is older than the oldest version GAIA supports."""
+def describe_version_refusal(
+    found_version: Optional[str], min_version: str, url: Optional[str] = None
+) -> str:
+    """Why a Lemonade reporting *found_version* is refused, naming what it said."""
+    server = f"Lemonade Server at {url}" if url else "Lemonade Server"
+    if not found_version:
+        return (
+            f"{server} reports no version, so GAIA cannot confirm it is "
+            f"v{min_version} or newer."
+        )
+    if parse_version(found_version) is None:
+        return (
+            f"{server} reports version {found_version!r}, which GAIA cannot "
+            f"read, so it cannot confirm it is v{min_version} or newer."
+        )
+    return (
+        f"{server} is v{found_version}, older than v{min_version}, the oldest "
+        "version GAIA supports."
+    )
 
-    def __init__(self, found_version: str, min_version: str):
+
+class LemonadeVersionError(LemonadeClientError):
+    """Raised when Lemonade Server is older than GAIA supports, or reports no
+    version GAIA can read."""
+
+    def __init__(
+        self,
+        found_version: Optional[str],
+        min_version: str,
+        remedy: str,
+        url: Optional[str] = None,
+    ):
         self.found_version = found_version
         self.min_version = min_version
         super().__init__(
-            f"Lemonade Server {found_version} is older than {min_version}, the "
-            "oldest version GAIA supports. Run `gaia init --force-reinstall` to "
-            "install a supported version."
+            f"{describe_version_refusal(found_version, min_version, url)} {remedy}"
         )
+
+
+def check_lemonade_version(
+    found_version: Optional[str], base_url: Optional[str] = None
+) -> None:
+    """Refuse a server below ``LEMONADE_MIN_VERSION`` or one with no readable version.
+
+    Every supported Lemonade reports its version on ``/health``; CalVer
+    development builds (``2026.44.1~3.abc1234``) compare by their release.
+
+    Raises:
+        LemonadeVersionError: Named both versions, or what the server reported.
+    """
+    from gaia.version import LEMONADE_MIN_VERSION
+
+    found = parse_version(found_version)
+    if found is not None and found >= parse_version(LEMONADE_MIN_VERSION):
+        return
+    raise LemonadeVersionError(
+        found_version,
+        LEMONADE_MIN_VERSION,
+        describe_upgrade_hint(base_url),
+        url=base_url,
+    )
 
 
 class ModelDownloadCancelledError(LemonadeClientError):
@@ -4529,22 +4554,19 @@ class LemonadeClient:
         tooling = resolve_lemonade()
         if not tooling.found:
             raise LemonadeClientError(
-                "Lemonade Server not found (no modern install at its canonical "
-                "path, no lemonade-server in PATH). Run `gaia init` to install "
+                "Lemonade Server not found (no install at its canonical "
+                "path). Run `gaia init` to install "
                 "it, or set LEMONADE_SERVER_PATH to the server executable."
             )
 
-        spec = build_start_command(tooling, ctx_size)
+        spec = build_start_command(tooling)
         if ctx_size is not None:
             self.log.info(f"Context size set to: {ctx_size}")
         if log_level != "info":
-            if tooling.kind == "legacy":
-                spec.argv.extend(["--log-level", log_level])
-            else:
-                self.log.debug(
-                    f"log_level={log_level!r} is not supported by the modern "
-                    "Lemonade launcher; ignoring"
-                )
+            self.log.debug(
+                f"log_level={log_level!r} is not supported by the Lemonade "
+                "launcher; ignoring"
+            )
 
         # Merge — never replace — the parent environment; the child loses
         # PATH/LOCALAPPDATA otherwise and LemonadeServer.exe breaks.
@@ -9058,7 +9080,7 @@ class LemonadeClient:
         try:
             health = self.health_check()
 
-            # Lemonade 9.1.4+: context_size moved to all_models_loaded[N].recipe_options.ctx_size
+            # The window lives on all_models_loaded[N].recipe_options.ctx_size.
             all_models = health.get("all_models_loaded", [])
             reported_ctx = 0
             for m in all_models:
@@ -9068,9 +9090,6 @@ class LemonadeClient:
                 if ctx:
                     reported_ctx = ctx
                     break
-            if not reported_ctx:
-                # Fallback for older Lemonade versions
-                reported_ctx = health.get("context_size", 0)
 
             if reported_ctx >= required_tokens:
                 self.log.debug(
@@ -9114,7 +9133,7 @@ class LemonadeClient:
             status.health_data = health
             status.version = health.get("version")
 
-            # Lemonade 9.1.4+: context_size moved to all_models_loaded[N].recipe_options.ctx_size
+            # The window lives on all_models_loaded[N].recipe_options.ctx_size.
             # Only consider LLM entries — a co-loaded transcription or
             # embedding model's ctx_size is irrelevant and, if it sorts
             # first, would otherwise be misreported as the server's context.
@@ -9126,9 +9145,6 @@ class LemonadeClient:
                 if ctx:
                     status.context_size = ctx
                     break
-            if not status.context_size:
-                # Fallback for older Lemonade versions
-                status.context_size = health.get("context_size", 0)
 
             # Loaded models: ``/health.all_models_loaded`` should be used,
             # NOT ``/models`` (`/health.all_models_loaded`` gets what is in
@@ -9402,7 +9418,7 @@ class LemonadeClient:
 
     def get_lemonade_version(self) -> Optional[str]:
         """
-        Get the installed Lemonade version (modern or legacy tooling).
+        Get the installed Lemonade version.
 
         Returns:
             Version string (e.g., "10.7.0") or None if unable to determine
@@ -9430,42 +9446,30 @@ class LemonadeClient:
         Args:
             expected_version: The version GAIA installs (e.g. ``LEMONADE_VERSION``);
                 a supported version that differs only gets a note.
-            actual_version: The version to check. If None, detected from the
-                local Lemonade CLI.
+            actual_version: The version a running server reported. If None,
+                the installed Lemonade CLI is asked, before a start.
             quiet: Suppress console output (the log still records it).
 
         Returns:
-            True when the version meets the floor; None when it cannot be
-            determined, after a warning — an unknown version is never reported
-            as compatible.
+            True when the version meets the floor. None only when no server is
+            running and the CLI's version cannot be read: the server's own
+            report is checked once it answers.
 
         Raises:
-            LemonadeVersionError: The version is below the floor.
+            LemonadeVersionError: The version is below the floor, or a running
+                server reported none GAIA can read.
         """
-        from gaia.version import LEMONADE_MIN_VERSION
-
         if actual_version is None:
             actual_version = self.get_lemonade_version()
+            if parse_version(actual_version) is None:
+                self.log.info(
+                    "Installed Lemonade reports no readable version (%r); "
+                    "checking the server's once it answers",
+                    actual_version,
+                )
+                return None
 
-        found = parse_version(actual_version)
-        if found is None:
-            reported = (
-                f"an unrecognised version ({actual_version!r})"
-                if actual_version
-                else "no version"
-            )
-            message = (
-                f"Lemonade Server reported {reported}, so GAIA cannot confirm it "
-                f"is at least {LEMONADE_MIN_VERSION}. If requests fail, run "
-                "`gaia init --force-reinstall`."
-            )
-            self.log.warning(message)
-            if not quiet:
-                print(f"{_emoji('⚠️', '[WARN]')}  {message}")
-            return None
-
-        if found < parse_version(LEMONADE_MIN_VERSION):
-            raise LemonadeVersionError(actual_version, LEMONADE_MIN_VERSION)
+        check_lemonade_version(actual_version, self.base_url)
 
         if actual_version != expected_version and not quiet:
             print(
@@ -9641,6 +9645,10 @@ class LemonadeClient:
                             )
                         status = self.get_status()
                         status.running = True
+                        try:
+                            check_lemonade_version(status.version, self.base_url)
+                        except LemonadeVersionError as e:
+                            return self._version_error_status(status, e, quiet)
                         return status
                 except Exception as exc:
                     get_logger(__name__).debug(

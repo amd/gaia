@@ -2376,21 +2376,6 @@ def _probe_misses_only_another_model(
     return not _model_ids_match(probed, model_id)
 
 
-def _host_corrected_hint(hint: str | None) -> str | None:
-    """Replace a sidecar hint that names a command this host does not have.
-
-    An agent package ships its own copy of the "start Lemonade" advice, and an
-    older one still names ``lemonade-server serve`` — a CLI that Lemonade
-    10.7 removed. The host knows what is actually installed, so it substitutes
-    its own answer rather than relaying one the user cannot act on.
-    """
-    if not hint or "lemonade-server serve" not in hint:
-        return hint
-    from gaia.llm.lemonade_launcher import describe_start_hint
-
-    return describe_start_hint().instruction
-
-
 def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
     """Hand Lemonade the remembered key for a cloud model before a relayed turn.
 
@@ -2714,7 +2699,7 @@ def _dispatch_sidecar_query(
             model_id,
         )
     elif status_code != 200:
-        hint = _host_corrected_hint((init_body or {}).get("hint"))
+        hint = (init_body or {}).get("hint")
         if profile.readiness_is_blocking or not _probe_is_only_unreachable(init_body):
             msg = (
                 f"The {profile.display_name} agent isn't ready yet"

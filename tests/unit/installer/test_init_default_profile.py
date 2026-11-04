@@ -85,8 +85,6 @@ class TestBareInitTargetsTheFlagship:
             "user.embeddinggemma-300m-GGUF",
         ]
         assert profile["pip_extras"] == ["ui"]
-        # EmbeddingGemma only loads on 10.9.0+ (same floor as chat/rag).
-        assert profile["min_lemonade_version"] == "10.9.0"
 
     def test_ui_extras_cover_rag_and_the_daemon(self):
         """Swapping [rag] for [ui] must not drop a document dependency."""

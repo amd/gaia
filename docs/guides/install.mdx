@@ -205,8 +205,10 @@ gaia lemonade status
 In the Agent UI, use **Settings → Advanced → Model server**. `gaia lemonade connect`
 with no address uses the one `gaia lemonade detect` finds on this PC.
 
-- **Version:** your Lemonade must be v10.9.0 or newer. An older one is refused, and
-  the message names both versions.
+- **Version:** your Lemonade must be v2026.44.1 or newer. An older one is refused,
+  and the message names both versions, as is one that reports no version GAIA can
+  read. GAIA's own Lemonade Server is upgraded the next time GAIA's daemon starts it;
+  `gaia daemon restart` does that now.
 - **API key:** if your server was started with `LEMONADE_API_KEY`, GAIA asks for it
   (`--api-key-stdin` reads it from a pipe). It's kept in the OS credential store,
   never in GAIA's config file.

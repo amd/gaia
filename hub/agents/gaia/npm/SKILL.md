@@ -132,11 +132,11 @@ for the version you have.
 The agent thinks with a model hosted by **Lemonade Server**, which this package
 does not install. Required before any query succeeds:
 
-1. Lemonade **10.2.0 or newer**, running. GAIA's daemon starts and supervises
-   one, so `gaia daemon start` is normally all that is needed (`gaia init`
-   also installs and starts it on first run). Qwen3.8 Flash Next needs
-   **v2026.39.1 or newer**, the version `gaia init` installs; older servers
-   cannot load it.
+1. Lemonade **2026.44.1 or newer**, running. GAIA's daemon starts and
+   supervises one, so `gaia daemon start` is normally all that is needed
+   (`gaia init` also installs and starts it on first run). GAIA upgrades its
+   own Lemonade when it starts it; a Lemonade you run yourself is refused below
+   that version, and the `hint` says so.
 2. The machine's default chat model downloaded — run `gaia init`. It picks
    `Qwen3.6-35B-A3B-GGUF` where a GPU holds it (~27 GB for models,
    weights plus context cache — a 64 GB+ Strix Halo or a 32 GB GPU) and
@@ -165,7 +165,7 @@ alone:
 {
   "ready": false,
   "lemonade": { "reachable": false, "base_url": "…", "version": null,
-                "min_version": "10.2.0", "compatible": null },
+                "min_version": "2026.44.1", "compatible": null },
   "model":    { "id": "Gemma-4-E4B-it-GGUF", "present": false,
                 "loadable": null, "ctx_size": null },
   // The manual fallback ("Otherwise: …") is resolved for the host's Lemonade

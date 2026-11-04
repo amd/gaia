@@ -743,7 +743,7 @@ def test_connect_old_lemonade_409(client, lemonade, keys):
     lemonade.answers[("POST", "install")] = (404, {})
     resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
     assert resp.status_code == 409
-    assert "Update Lemonade" in resp.json()["detail"]
+    assert "oldest version GAIA supports" in resp.json()["detail"]
     assert "cloud/auth" not in lemonade.paths()
 
 
