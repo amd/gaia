@@ -379,6 +379,40 @@ test('session panel with Arabic names', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+test('a long hyphenated folder path wraps as one unit, below its Arabic label', async ({ page }) => {
+    const path = `C:\\gtest\\h-r6\\${'a-long-folder-name\\'.repeat(4)}.gaia\\documents`;
+    await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {
+        await p.route(`**/api/sessions/${ANSWER_SESSION}/environment`, (route) =>
+            route.fulfill({
+                json: {
+                    session_id: ANSWER_SESSION,
+                    folders: [{ path, kind: 'folder', source: 'gaia_documents', removable: false }],
+                    removed: [], internet: true, enforced: true,
+                },
+            }),
+        );
+    });
+    const el = page.locator('.sp-item-path', { hasText: 'h-r6' });
+    await expect(el).toBeVisible();
+    const layout = await el.evaluate((node) => {
+        const box = node.getBoundingClientRect();
+        const text = document.createRange();
+        text.selectNodeContents(node);
+        const label = document.createRange();
+        label.setStart(node.parentElement!, 0);
+        label.setEndBefore(node);
+        return {
+            lines: new Set([...text.getClientRects()].map((r) => Math.round(r.top))).size,
+            boxes: node.getClientRects().length,
+            labelInside: [...label.getClientRects()].some((r) => r.width > 0 && r.bottom > box.top + 1),
+        };
+    });
+    expect(layout.lines, 'the path should be long enough to wrap').toBeGreaterThan(1);
+    expect(layout.boxes, 'the path splits into pieces around the label').toBe(1);
+    expect(layout.labelInside, 'the label sits between the halves of the path').toBe(false);
+    expect(await audit(page)).toEqual([]);
+});
+
 test.describe('English', () => {
     test('new chat', async ({ page }) => {
         await open(page, '', 'en');
