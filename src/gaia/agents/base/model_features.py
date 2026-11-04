@@ -36,6 +36,14 @@ FEATURE_TOOLS: Dict[str, FrozenSet[str]] = {
             "search_email",
             "read_email",
             "list_mail_folders",
+            "list_drafts",
+            "create_draft",
+            "update_draft",
+            "discard_draft",
+            "send_draft",
+            "send_now",
+            "reply_to_message",
+            "forward_message",
         }
     ),
     "image_generation": frozenset(

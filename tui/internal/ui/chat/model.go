@@ -2489,6 +2489,7 @@ func (m *ChatModel) syncViewportHeight(chrome int) {
 
 	m.confirmRows = 0
 	if m.confirmation != nil {
+		m.confirmation.SetMaxRows(budget - 1)
 		m.confirmRows = lipgloss.Height(m.confirmation.View())
 		// The transcript keeps at least one row. Past that the modal is
 		// clipped rather than allowed to push the composer and status bar off

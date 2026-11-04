@@ -8,6 +8,23 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
+### Added
+
+- **The agent can draft, reply, forward and send mail.** Eight tools join the
+  flagship, for Gmail and Outlook: `list_drafts`, `create_draft`, `update_draft`,
+  `discard_draft`, `send_draft`, `send_now`, `reply_to_message` and
+  `forward_message`, taking the agent from 102 tools to 110. Each send shows the
+  recipients, subject and body exactly as they will go out, and needs a yes. A
+  decline or timeout sends nothing, and a failed send is reported, never retried:
+  `sent: false` means it didn't go, and `sent: "unknown"` means it may have, so
+  check Sent. A forward carries text only, and names the attachments it leaves out.
+  In the terminal, a long email must be scrolled to its end before `y` works.
+  Disguised subjects, addresses and display names are refused before the prompt.
+  Full access doesn't skip this: the prompt still appears where a person can
+  answer, and the send is refused where nobody can. Saving a new draft doesn't
+  ask, because nothing leaves the mailbox. Changing or deleting a saved draft
+  does, because it may be one the user wrote.
+
 ### Changed
 
 - **The query stream documents the `reconnecting` status phase.** It is sent
@@ -38,6 +55,11 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   run yourself is pointed at https://lemonade-server.ai. This hint needs the
   `gaia` CLI from the same release; the release that ships it raises the
   `amd-gaia` floor.
+- **New Google connections ask for `gmail.modify`, and Microsoft for `Mail.ReadWrite`
+  and `Mail.Send`.** A connection holding only `gmail.readonly` keeps reading;
+  drafting or sending on it returns an error that says to reconnect in
+  Settings -> Connectors. A host app forwarding a connection for `installed:gaia`
+  now needs `gmail.modify` in its consent.
 - **A project's `.env` can only supply the Claude API key.** The sidecar reads
   `ANTHROPIC_API_KEY` from a `.env` in its working directory, for its own
   Claude calls, and ignores every other name there with one warning. Settings

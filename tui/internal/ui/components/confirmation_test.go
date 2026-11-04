@@ -228,7 +228,7 @@ func TestRiskTierBadgeWords(t *testing.T) {
 func TestConfirmationViewShowsActionSummaryAndBadge(t *testing.T) {
 	m := NewConfirmationModel("run-1", "send_draft", `Send reply to alice@example.com — subject "Re: invoice"?`, "")
 	view := stripANSI(m.View())
-	for _, want := range []string{"send_draft", "alice@example.com", "WRITE"} {
+	for _, want := range []string{"Send this email?", "alice@example.com", "WRITE"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q:\n%s", want, view)
 		}
@@ -705,5 +705,149 @@ func TestATimerOnlyResolvesThePromptItWasArmedFor(t *testing.T) {
 	}
 	if msg := cmd().(ConfirmationDecidedMsg); msg.Seq != b.Seq() || msg.ConfirmID != "cid-B" {
 		t.Errorf("decision = %+v, want it to name B", msg)
+	}
+}
+
+// --- a prompt that must be read whole --------------------------------------
+
+func longMail(lines int) string {
+	rows := make([]string, 0, lines)
+	for i := 1; i <= lines; i++ {
+		rows = append(rows, "line-"+strconv.Itoa(i)+"-end")
+	}
+	return "To: a@b.co\n\n" + strings.Join(rows, "\n")
+}
+
+func pressKey(m ConfirmationModel, key string) ConfirmationModel {
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+	switch key {
+	case "down":
+		msg = tea.KeyMsg{Type: tea.KeyDown}
+	case "up":
+		msg = tea.KeyMsg{Type: tea.KeyUp}
+	case "pgdown":
+		msg = tea.KeyMsg{Type: tea.KeyPgDown}
+	}
+	updated, _ := m.Update(msg)
+	return updated
+}
+
+func TestLongEmailCannotBeApprovedUntilAllOfItWasShown(t *testing.T) {
+	m := NewConfirmationModel("r", "send_now", longMail(40), "").WithLiveChannel("c", "")
+	m.SetMaxRows(10)
+	shown := map[string]bool{}
+	collect := func() {
+		for _, line := range strings.Split(m.View(), "\n") {
+			shown[strings.TrimSpace(line)] = true
+		}
+	}
+	collect()
+	if m = pressKey(m, "y"); !m.Pending() {
+		t.Fatal("y approved a mail whose end was never on screen")
+	}
+	if strings.Contains(m.View(), "once") {
+		t.Error("the prompt offers y before it works")
+	}
+	for guard := 0; m.unread() && guard < 100; guard++ {
+		m = pressKey(m, "down")
+		if h := lipgloss.Height(m.View()); h > 10 {
+			t.Fatalf("view is %d rows, over the 10 it was given", h)
+		}
+		collect()
+		if m.unread() {
+			if m = pressKey(m, "y"); !m.Pending() {
+				t.Fatal("y approved before the last line was shown")
+			}
+		}
+	}
+	for i := 1; i <= 40; i++ {
+		if want := "line-" + strconv.Itoa(i) + "-end"; !shown[want] {
+			t.Errorf("%s was never on screen", want)
+		}
+	}
+	if !strings.Contains(m.View(), "once") {
+		t.Error("y is not offered once everything was read")
+	}
+	if m = pressKey(m, "y"); m.State() != ConfirmationApproved {
+		t.Fatalf("state = %v after reading it all, want Approved", m.State())
+	}
+}
+
+func TestPagingShowsEveryLineWithNoGap(t *testing.T) {
+	m := NewConfirmationModel("r", "forward_message", longMail(60), "")
+	m.SetMaxRows(9)
+	shown := strings.Builder{}
+	shown.WriteString(m.View())
+	for guard := 0; m.unread() && guard < 100; guard++ {
+		m = pressKey(m, "pgdown")
+		shown.WriteString(m.View())
+	}
+	for i := 1; i <= 60; i++ {
+		if want := "line-" + strconv.Itoa(i) + "-end"; !strings.Contains(shown.String(), want) {
+			t.Errorf("paging skipped %s", want)
+		}
+	}
+}
+
+func TestDenyWorksWhileUnread(t *testing.T) {
+	m := NewConfirmationModel("r", "send_now", longMail(40), "")
+	m.SetMaxRows(8)
+	if m = pressKey(m, "n"); m.State() != ConfirmationDenied {
+		t.Fatalf("state = %v, want Denied", m.State())
+	}
+}
+
+func TestMailThatFitsApprovesAtOnce(t *testing.T) {
+	m := NewConfirmationModel("r", "send_now", longMail(2), "")
+	m.SetMaxRows(30)
+	if m = pressKey(m, "y"); m.State() != ConfirmationApproved {
+		t.Fatalf("state = %v, want Approved", m.State())
+	}
+}
+
+func TestOtherToolsStillApproveWithoutScrolling(t *testing.T) {
+	m := NewConfirmationModel("r", "run_shell_command", longMail(40), "")
+	m.SetMaxRows(8)
+	if !strings.Contains(m.View(), "line-40-end") {
+		t.Error("a shell prompt should still render whole for the caller to clip")
+	}
+	if m = pressKey(m, "y"); m.State() != ConfirmationApproved {
+		t.Fatalf("state = %v, want Approved", m.State())
+	}
+}
+
+func TestResizingMakesTheMailBeReadAgain(t *testing.T) {
+	m := NewConfirmationModel("r", "send_now", longMail(40), "")
+	m.SetMaxRows(8)
+	for guard := 0; m.unread() && guard < 100; guard++ {
+		m = pressKey(m, "down")
+	}
+	m.SetWidth(50)
+	if !m.unread() {
+		t.Fatal("rewrapped text counted as already read")
+	}
+}
+
+func TestTerminalTooShortForAnyTextNeverApproves(t *testing.T) {
+	m := NewConfirmationModel("r", "send_now", longMail(40), "")
+	m.SetMaxRows(1)
+	if m = pressKey(m, "y"); !m.Pending() {
+		t.Fatal("y approved with no room to show any of the mail")
+	}
+	if !strings.Contains(m.View(), "deny") {
+		t.Error("the deny key is off screen")
+	}
+}
+
+func TestWindowFitsEverySize(t *testing.T) {
+	for width := 24; width <= 100; width += 19 {
+		for rows := 1; rows <= 20; rows++ {
+			m := NewConfirmationModel("r", "reply_to_message", longMail(50), "")
+			m.SetWidth(width)
+			m.SetMaxRows(rows)
+			if h := lipgloss.Height(m.View()); h > rows && rows >= 3 {
+				t.Errorf("width %d rows %d: view is %d rows", width, rows, h)
+			}
+		}
 	}
 }

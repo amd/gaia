@@ -49,12 +49,20 @@ WEB_TOOLS = frozenset(
 ONLINE_SERVICE_TOOLS = frozenset(
     {
         "check_mailbox_access",
+        "create_draft",
+        "discard_draft",
+        "forward_message",
         "get_thread",
+        "list_drafts",
         "list_inbox",
         "list_mail_folders",
         "list_waiting_on_you",
         "read_email",
+        "reply_to_message",
         "search_email",
+        "send_draft",
+        "send_now",
+        "update_draft",
         "search_skill_hub",
         "install_skill",
     }

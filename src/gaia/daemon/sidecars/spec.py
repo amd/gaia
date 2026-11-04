@@ -191,13 +191,21 @@ _EMAIL_REQUIRED_CONNECTIONS = (
 _GAIA_REQUIRED_CONNECTIONS = (
     ConnectorRequirement(
         connector_id="google",
-        scopes=("https://www.googleapis.com/auth/gmail.readonly",),
-        reason="Read and search your Gmail so the agent can triage your inbox.",
+        scopes=("https://www.googleapis.com/auth/gmail.modify",),
+        reason=(
+            "Read and search your Gmail, and draft and send mail when you approve it."
+        ),
     ),
     ConnectorRequirement(
         connector_id="microsoft",
-        scopes=("https://graph.microsoft.com/Mail.ReadWrite",),
-        reason="Read and search your Outlook mail so the agent can triage your inbox.",
+        scopes=(
+            "https://graph.microsoft.com/Mail.ReadWrite",
+            "https://graph.microsoft.com/Mail.Send",
+        ),
+        reason=(
+            "Read and search your Outlook mail, and draft and send mail when you "
+            "approve it."
+        ),
     ),
 )
 

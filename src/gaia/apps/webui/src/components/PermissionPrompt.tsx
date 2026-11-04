@@ -29,6 +29,9 @@ function summarize(n: GaiaNotification): string {
 /** Tools whose relayed summary is a command and its risk note (`COMMAND_SUMMARY_TOOLS` in sse_translation.py). */
 const COMMAND_SUMMARY_TOOLS = new Set(['run_shell_command', 'run_cli_command', 'wait_for_condition']);
 
+/** Tools whose relayed summary is the exact text being approved (`EXACT_TEXT_ARG` in call_risk.py). */
+const EXACT_SUMMARY_TOOLS = new Set(['send_now', 'send_draft', 'reply_to_message', 'forward_message', 'discard_draft', 'update_draft']);
+
 /**
  * A relayed command prompt with no args: `command[\n…]\nin <folder>[\n(extras)]\n<risk note>`
  * (`render_command_summary` in sse_translation.py). The command keeps its own lines.
@@ -133,6 +136,11 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const folder = riskNote && typeof args.working_directory === 'string' ? args.working_directory : '';
     // Code is approved as written, so all of it is one click away, never only a summary.
     const code = typeof args.code === 'string' && args.code.trim() ? args.code : '';
+    // An email is approved as it will be sent, so all of it shows, uncollapsed.
+    // Over the sidecar relay it arrives as the summary.
+    const exactText = typeof args._exact_text === 'string'
+        ? args._exact_text
+        : EXACT_SUMMARY_TOOLS.has(notification.tool ?? '') ? notification.summary ?? '' : '';
     const relayed = !hasArgs && COMMAND_SUMMARY_TOOLS.has(notification.tool ?? '')
         ? splitCommandSummary(notification.summary ?? '')
         : null;
@@ -203,18 +211,19 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{folder}</code></p>}
                     {riskNote && <p className="perm-card-risk" role="note"><bdi>{riskNote}</bdi></p>}
                     {code && <CodeBlock code={code} />}
+                    {exactText && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-exact-text">{exactText}</pre>}
                     {relayed && <pre dir="ltr" className="perm-card-pre perm-card-exact">{relayed.command}</pre>}
                     {relayed?.folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{relayed.folder}</code></p>}
                     {relayed?.extras && <p className="perm-card-detail"><bdi>{relayed.extras}</bdi></p>}
                     {relayed?.note && <p className="perm-card-risk" role="note"><bdi>{relayed.note}</bdi></p>}
-                    {!detail && !code && notification.summary && !relayed && <p className="perm-card-detail"><bdi>{notification.summary}</bdi></p>}
+                    {!detail && !code && !exactText && notification.summary && !relayed && <p className="perm-card-detail"><bdi>{notification.summary}</bdi></p>}
                     {freshConsent && notification.message && <p className="perm-card-detail"><bdi>{notification.message}</bdi></p>}
                 </div>
                 {remaining !== null && !expired && (
                     <span className="perm-card-timer" title={t('prompt.timer')}>{formatCountdown(remaining)}</span>
                 )}
             </div>
-            {hasArgs && (
+            {hasArgs && !exactText && (
                 <div className="perm-card-args">
                     <button
                         type="button"

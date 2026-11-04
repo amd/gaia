@@ -1668,6 +1668,45 @@ test('the library path row fits a phone', async ({ page }) => {
     expect(clipped).toBe(0);
 });
 
+test('each line of an email being approved takes its own direction', async ({ page }) => {
+    const text = 'To: dana@example.com\nSubject: Hello\n\nمرحبا، هذا اختبار.';
+    const event = { type: 'permission_request', tool: 'send_now', args: { _exact_text: text }, confirm_id: 'c1' };
+    // The prompt lasts only while its stream is open, which a routed response can't do.
+    await open(page, `#${ANSWER_SESSION}`, 'ar', (p) =>
+        p.addInitScript((line) => {
+            const realFetch = window.fetch;
+            window.fetch = (input, init) =>
+                String(input).endsWith('/chat/send')
+                    ? Promise.resolve(new Response(new ReadableStream({
+                        start: (controller) => controller.enqueue(new TextEncoder().encode(line)),
+                    }), { headers: { 'Content-Type': 'text/event-stream' } }))
+                    : realFetch(input, init);
+        }, `data: ${JSON.stringify(event)}\n\n`),
+    );
+    await page.locator('textarea').last().fill('send it');
+    await page.keyboard.press('Enter');
+    const pre = page.getByTestId('perm-exact-text');
+    await expect(pre).toBeVisible();
+    const gaps = await pre.evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        const node = el.firstChild as Text;
+        const rectOf = (start: number, end: number) => {
+            const range = document.createRange();
+            range.setStart(node, start);
+            range.setEnd(node, end);
+            return range.getBoundingClientRect();
+        };
+        const source = node.data;
+        const arabicAt = source.indexOf('مرحبا');
+        return {
+            english: rectOf(0, source.indexOf('\n')).left - box.left,
+            arabic: box.right - rectOf(arabicAt, source.length).right,
+        };
+    });
+    expect(gaps.english).toBeLessThan(40);
+    expect(gaps.arabic).toBeLessThan(40);
+});
+
 /** The desktop app's updater in a given state; the browser preview has none. */
 function withUpdater(update: Record<string, unknown>) {
     return async (page: Page) => {

@@ -461,7 +461,7 @@ class TestFlagshipSidecarGrantDerivation:
             )
         }
 
-    def test_grant_agent_installed_gaia_requests_gmail_readonly_only(self, monkeypatch):
+    def test_grant_agent_installed_gaia_requests_gmail_modify_only(self, monkeypatch):
         # A frozen binary has no wheel to discover, even where one is installed.
         monkeypatch.setattr(
             "gaia.agents.registry.AgentRegistry.discover", lambda self: None
@@ -490,7 +490,7 @@ class TestFlagshipSidecarGrantDerivation:
         )
         assert rc == 0, err
         assert captured["grant_agents"] == {
-            "installed:gaia": ["https://www.googleapis.com/auth/gmail.readonly"]
+            "installed:gaia": ["https://www.googleapis.com/auth/gmail.modify"]
         }
 
     def test_spec_scopes_match_declared_scopes(self):

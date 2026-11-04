@@ -67,7 +67,7 @@ from gaia.agents.base.skill_loader import (
     dynamic_skills_env_override,
 )
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
-from gaia.agents.tools.email_tools import EmailToolsMixin
+from gaia.agents.tools.email_tools import EMAIL_CONFIRMATION_TOOLS, EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
 from gaia.connectors.providers.base import ConnectorRequirement
@@ -412,8 +412,9 @@ class GaiaAgent(
     # into the system prompt — never without the human seeing the request.
     # remember_skill_lesson deliberately is not: it writes only to this agent's
     # own memory, applies at once, announces itself, and undoes in one command.
-    CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset(
-        {"install_skill", "capture_skill", "remove_skill"}
+    CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = (
+        frozenset({"install_skill", "capture_skill", "remove_skill"})
+        | EMAIL_CONFIRMATION_TOOLS
     )
 
     def __init__(self, config: Optional[GaiaAgentConfig] = None, **kwargs):
