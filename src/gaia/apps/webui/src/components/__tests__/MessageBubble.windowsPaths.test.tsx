@@ -51,6 +51,10 @@ describe('Windows paths in prose keep their backslashes', () => {
         expect(textOf('See C:\\me.gaia and \\_literal')).toBe('See C:\\me.gaia and _literal');
     });
 
+    it('ends a path at a space before an escape, so the prose after it still unescapes', () => {
+        expect(textOf('Saved to C:\\foo \\*not bold\\* or \\_x')).toBe('Saved to C:\\foo *not bold* or _x');
+    });
+
     it('keeps paths inside bold and list items', () => {
         expect(textOf('**C:\\Users\\me\\.gaia** is the home')).toBe('C:\\Users\\me\\.gaia is the home');
         expect(textOf('- C:\\x\\.cache\n- \\\\nas\\share\\_tmp')).toContain('C:\\x\\.cache');
