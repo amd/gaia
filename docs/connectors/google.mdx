@@ -259,12 +259,12 @@ Naming the agent is enough; GAIA rejects `--grant-agent` outright for an
 agent that declares no Google scopes, rather than silently granting
 nothing.
 
-**Chat agent — a narrower, read-only Gmail grant:** the chat agent
-declares no fixed Google requirement, so grant it explicit scopes
-instead:
+**Flagship — the same read-only scope, as a grant:** mail tools read
+the `installed:gaia` grant. Use this when Google is already connected
+and you only need the ledger entry:
 
 ```bash
-gaia connectors grants grant google builtin:chat \
+gaia connectors grants grant google installed:gaia \
   --scopes https://www.googleapis.com/auth/gmail.readonly
 ```
 

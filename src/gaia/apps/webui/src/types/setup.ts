@@ -16,7 +16,9 @@ export interface SetupModelProgress {
     speed_bps: number;
     eta_s: number | null;
     error: string | null;
-    error_kind: 'network' | 'disk_full' | 'path_too_long' | 'lemonade' | 'verify' | null;
+    /** `verify`: the file didn't load, so Retry deletes and downloads it again. A test kind
+     *  (`memory`, `stuck`, `answer`, `window`) leaves the file alone: Retry tests it again. */
+    error_kind: 'network' | 'disk_full' | 'path_too_long' | 'lemonade' | 'verify' | 'memory' | 'stuck' | 'answer' | 'window' | null;
     can_retry: boolean;
     /** Unix seconds while a keep-trying wait runs; the state stays `downloading`. */
     retrying_until: number | null;

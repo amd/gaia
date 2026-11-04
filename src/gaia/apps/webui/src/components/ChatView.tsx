@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, RotateCw, X } from 'lucide-react';
-import { MessageBubble, cleanToolCallContent, isErrorContent } from './MessageBubble';
+import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
+import { MessageBubble, cleanToolCallContent, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
 import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
@@ -1144,7 +1144,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             // Only cards a tool step persisted come back from the
                             // backend; keep the live ones (e.g. confirmations) by
                             // id, else role+content.
-                            // stopState isn't persisted either; carry it by id.
+                            // The server's saved stop wins over a stop it never confirmed.
                             const prevMsgs = useChatStore.getState().messages;
                             const prevWithCards = prevMsgs.filter((m) => m.cards && m.cards.length > 0);
                             const msgs: Message[] = fromApiMessages(data.messages).map((m) => {
@@ -1154,7 +1154,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 return {
                                     ...m,
                                     cards: prev?.cards ?? m.cards,
-                                    stopState: prevMsgs.find((p) => p.id === m.id)?.stopState,
+                                    stopState: m.stopState ?? prevMsgs.find((p) => p.id === m.id)?.stopState,
                                 };
                             });
                             setMessages(msgs);
@@ -1743,11 +1743,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         const notice = msg.role === 'assistant'
                             ? msg.historyNotice ?? historyNotices.get(msg.id)
                             : undefined;
-                        const canRetry = !busy && !comparison && !retiredAgent && !streamEnding
+                        const cutOff = msg.role === 'assistant' && turnEnding(msg.content, msg.stopState) === 'interrupted';
+                        const canTryAgain = (msg.failed === true || cutOff) && !busy && !retiredAgent && !streamEnding
+                            && idx === messages.length - 1;
+                        const canRetry = !canTryAgain && !busy && !comparison && !retiredAgent && !streamEnding
                             && msg.role === 'assistant' && idx === messages.length - 1
                             && !msg.stopState && !msg.failed && !isErrorContent(msg.content);
-                        const canTryAgain = msg.failed === true && !busy && !retiredAgent && !streamEnding
-                            && idx === messages.length - 1;
                         const latency = msg.stats?.seconds != null ? msg.stats.seconds * 1000 : latencyByMsgId.get(msg.id);
                         return (
                             <div
@@ -1767,16 +1768,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                             answeredBy={msg.stats?.model ?? session?.effective_model}
                                             onPick={(model) => handleRetryWith(msg, model)}
                                         />
-                                    ) : canTryAgain ? (
-                                        <button
-                                            className="msg-action-btn"
-                                            onClick={() => handleTryAgain(msg)}
-                                            title={t('msg.tryAgain')}
-                                            aria-label={t('msg.tryAgain')}
-                                        >
-                                            <RotateCw size={12} />
-                                        </button>
                                     ) : undefined}
+                                    onTryAgain={canTryAgain ? () => handleTryAgain(msg) : undefined}
                                     latencyMs={latency}
                                 />
                                 {comparison?.messageId === msg.id && (

@@ -431,13 +431,18 @@ def resolve_default_vision_model() -> Optional[str]:
     """
     from gaia.config import GaiaConfig
 
+    config = GaiaConfig.load()
     model = resolve_default_chat_model()
-    if runs_on_npu(model):
+    # The model chat reopens on, unless that runs in the cloud.
+    current = config.last_model
+    if not current or current.startswith("claude-") or cloud_model_provider(current):
+        current = model
+    if runs_on_npu(current):
         return None
-    chosen = GaiaConfig.load().vision_model
+    chosen = config.vision_model
     if chosen:
         return chosen
-    return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
+    return current if current in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
 
 
 def resident_vision_model(configured: str, base_url: Optional[str] = None) -> str:
@@ -579,6 +584,51 @@ def is_llm_model_entry(model: Dict[str, Any]) -> bool:
         return model.get("type") == "llm"
     labels = model.get("labels") or []
     return "image" not in labels and "embeddings" not in labels
+
+
+def is_cloud_model_entry(entry: Dict[str, Any]) -> bool:
+    """True when a loaded-model entry is gateway-routed rather than local.
+
+    Accepts a raw ``all_models_loaded`` entry or an enriched ``loaded_models``
+    one. Its ``ctx_size`` is a 4096 placeholder, never a local window.
+    """
+    raw = entry.get("_health") or {}
+    name = entry.get("model_name") or entry.get("id") or ""
+    provider, _, upstream = name.partition(".")
+    return (
+        CLOUD_RECIPE in (entry.get("recipe"), raw.get("recipe"))
+        or "cloud" in (entry.get("labels") or [])
+        or cloud_model_provider(name) is not None
+        or (
+            "none" in (entry.get("device"), raw.get("device"))
+            and bool(upstream)
+            and provider.lower() != "user"
+        )
+    )
+
+
+def loaded_ctx_size(
+    entries: Optional[List[Dict[str, Any]]], model: Optional[str] = None
+) -> Optional[int]:
+    """The ``ctx_size`` *model* is loaded at, read from its own entry.
+
+    With no *model*, the first local LLM entry that reports one. None when the
+    entry is missing or reports no window; a cloud entry never answers.
+    """
+    for entry in entries or []:
+        if not isinstance(entry, dict) or is_cloud_model_entry(entry):
+            continue
+        if model is not None:
+            if not _model_ids_match(entry.get("model_name") or entry.get("id"), model):
+                continue
+        elif not is_llm_model_entry(entry):
+            continue
+        ctx = (entry.get("recipe_options") or {}).get("ctx_size")
+        if isinstance(ctx, int) and not isinstance(ctx, bool) and ctx > 0:
+            return ctx
+        if model is not None:
+            return None
+    return None
 
 
 # Minimum context window (in tokens) that GAIA agents assume is loaded. The
@@ -2901,6 +2951,55 @@ def is_cloud_model(model_id: Optional[str]) -> bool:
     return bool(model_id) and model_id in _CLOUD_MODELS
 
 
+def pull_request_body(model_id: str) -> Dict[str, Any]:
+    """JSON body for Lemonade ``POST /pull``.
+
+    Built-ins are name only — a ``recipe`` makes Lemonade read the call as a
+    new registration and 400 (#1655). A ``user.`` model is not registered yet,
+    so the body carries its checkpoint and recipe, plus the labels Lemonade
+    cannot infer (``embedding``, ``mmproj``, ``vision``, ``reasoning``).
+    A gateway model has no weights and raises ``RuntimeError`` before any
+    request. An unknown ``user.`` id raises ``ValueError`` instead of a pull
+    Lemonade answers with HTTP 500.
+
+    Known gateway namespaces (``amd.``, ``fireworks.``) are refused even before
+    the catalog has been read. Any other gateway id is refused once
+    :func:`record_cloud_models` has seen it.
+    """
+    if is_cloud_model(model_id) or cloud_model_provider(model_id):
+        raise RuntimeError(
+            f"'{model_id}' is hosted on a gateway, so there is nothing to "
+            f"download. If it is unavailable, check the gateway connection "
+            f"with `gaia gateway status`."
+        )
+
+    requirement = find_model_requirement(model_id)
+    if requirement is not None and requirement.model_id.startswith("user."):
+        body: Dict[str, Any] = {"model_name": requirement.model_id}
+        body.update(
+            {k: v for k, v in requirement.pull_kwargs().items() if v is not None}
+        )
+        if not body.get("checkpoint") or not body.get("recipe"):
+            raise ValueError(_unknown_user_model_message(model_id))
+        return body
+    if requirement is not None:
+        return {"model_name": requirement.model_id}
+
+    if model_id.lower().startswith("user."):
+        raise ValueError(_unknown_user_model_message(model_id))
+    return {"model_name": model_id}
+
+
+def _unknown_user_model_message(model_id: str) -> str:
+    return (
+        f"Cannot download '{model_id}': GAIA doesn't know where to download "
+        "it from. Add it from its Hugging Face link, then download it: in the "
+        "Agent UI use Settings > Model > Add a model from Hugging Face; in the "
+        "terminal app use /provider, choose Local, then ctrl+a; or run "
+        "`gaia model add <link>`."
+    )
+
+
 def cloud_model_info(model_id: Optional[str]) -> Optional[Dict[str, Any]]:
     """Discovered capability metadata for a cloud model, or None."""
     if not model_id:
@@ -3111,8 +3210,7 @@ def _chosen_backend_hint(backend: Optional[str]) -> str:
     return (
         f" GAIA asked for llama.cpp's {backend} backend, as set in Settings → "
         "Advanced → Model server (llamacpp_backend in ~/.gaia/config.json). "
-        "Choose Vulkan there, the GPU backend GAIA has tested, or run "
-        "`gaia config set llamacpp_backend vulkan`."
+        "Choose Vulkan there, the GPU backend GAIA has tested."
     )
 
 
@@ -3229,6 +3327,10 @@ class InsufficientDiskSpaceError(LemonadeClientError):
 
 class InsufficientMemoryError(LemonadeClientError):
     """Raised instead of a load that would run this machine out of memory."""
+
+
+class LoadedModelMissingError(LemonadeClientError):
+    """A load returned, but ``/health`` does not list the model it loaded."""
 
 
 class UsersServerUnchangedError(LemonadeClientError):
@@ -9080,16 +9182,7 @@ class LemonadeClient:
         try:
             health = self.health_check()
 
-            # The window lives on all_models_loaded[N].recipe_options.ctx_size.
-            all_models = health.get("all_models_loaded", [])
-            reported_ctx = 0
-            for m in all_models:
-                if not is_llm_model_entry(m):
-                    continue
-                ctx = m.get("recipe_options", {}).get("ctx_size", 0)
-                if ctx:
-                    reported_ctx = ctx
-                    break
+            reported_ctx = loaded_ctx_size(health.get("all_models_loaded")) or 0
 
             if reported_ctx >= required_tokens:
                 self.log.debug(
@@ -9133,18 +9226,10 @@ class LemonadeClient:
             status.health_data = health
             status.version = health.get("version")
 
-            # The window lives on all_models_loaded[N].recipe_options.ctx_size.
-            # Only consider LLM entries — a co-loaded transcription or
-            # embedding model's ctx_size is irrelevant and, if it sorts
-            # first, would otherwise be misreported as the server's context.
-            all_models = health.get("all_models_loaded", [])
-            for m in all_models:
-                if not is_llm_model_entry(m):
-                    continue
-                ctx = m.get("recipe_options", {}).get("ctx_size", 0)
-                if ctx:
-                    status.context_size = ctx
-                    break
+            # The first local LLM's window: speech, embedding and cloud entries
+            # can sort first and carry a placeholder ctx_size.
+            all_models = health.get("all_models_loaded") or []
+            status.context_size = loaded_ctx_size(all_models) or 0
 
             # Loaded models: ``/health.all_models_loaded`` should be used,
             # NOT ``/models`` (`/health.all_models_loaded`` gets what is in
@@ -9183,7 +9268,8 @@ class LemonadeClient:
                         # Carried through so consumers can tell a gateway-routed
                         # model from a local one. Without it every ctx-size and
                         # slot decision downstream treats a cloud model as local.
-                        "recipe": catalog.get("recipe", ""),
+                        "recipe": catalog.get("recipe") or hm.get("recipe", ""),
+                        "device": hm.get("device"),
                         "recipe_options": hm.get("recipe_options", {}),
                         "checkpoint": hm.get("checkpoint", ""),
                         # Trained-context ceiling (#2992) — ``/health`` reports
