@@ -130,12 +130,12 @@ You can adjust or revoke grants at any time from the same tile's
 **Per-agent grants** section, or via the CLI:
 
 ```bash
-# Grant an agent read-only Outlook mail access (personal connector)
-gaia connectors grants grant microsoft builtin:chat \
+# Grant the flagship read-only Outlook mail access (personal connector)
+gaia connectors grants grant microsoft installed:gaia \
   --scopes https://graph.microsoft.com/Mail.Read
 
 # Same, for the work/school connector
-gaia connectors grants grant microsoft_work builtin:chat \
+gaia connectors grants grant microsoft_work installed:gaia \
   --scopes https://graph.microsoft.com/Mail.Read
 ```
 
