@@ -2306,7 +2306,7 @@ class TestStreamInferenceModel:
         assert '"type": "error"' not in resp.text
         assert resp.text.count('"type": "insight"') == 1
         assert "Uses Blender for 3D work" in resp.text
-        assert "cut off" in resp.text
+        assert "incomplete or malformed" in resp.text
         assert '"total": 1' in resp.text
 
 

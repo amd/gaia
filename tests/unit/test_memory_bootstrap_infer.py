@@ -32,7 +32,7 @@ CUT_OFF = WHOLE[:-2] + ',\n  {"content": "Plays strategy ga'
 def test_a_whole_array_parses():
     parsed = parse_inferred_insights(WHOLE)
     assert parsed.insights == [ONE, TWO]
-    assert parsed.truncated is False
+    assert parsed.incomplete is False
 
 
 def test_markdown_fences_are_stripped():
@@ -47,19 +47,27 @@ def test_a_cut_off_array_keeps_the_complete_insights():
     parsed = parse_inferred_insights(CUT_OFF)
 
     assert parsed.insights == [ONE, TWO]
-    assert parsed.truncated is True
+    assert parsed.incomplete is True
 
 
 def test_a_reply_cut_off_after_a_comma_keeps_the_complete_insights():
     parsed = parse_inferred_insights(WHOLE[:-2] + ",")
     assert parsed.insights == [ONE, TWO]
-    assert parsed.truncated is True
+    assert parsed.incomplete is True
+
+
+def test_a_malformed_item_keeps_the_insights_before_it():
+    # The bad value's end is unknown, so parsing cannot resume after it.
+    reply = '[{"content": "a"}, {"content": oops}, {"content": "b"}]'
+    parsed = parse_inferred_insights(reply)
+    assert parsed.insights == [{"content": "a"}]
+    assert parsed.incomplete is True
 
 
 def test_text_after_a_whole_array_is_not_reported_as_cut_off():
     parsed = parse_inferred_insights(WHOLE + "\n\nLet me know if you need more!")
     assert parsed.insights == [ONE, TWO]
-    assert parsed.truncated is False
+    assert parsed.incomplete is False
 
 
 def test_items_without_content_are_dropped():
@@ -167,7 +175,7 @@ def test_a_cut_off_reply_stores_the_complete_insights(run_infer, capsys):
 
     assert stored == [ONE["content"], TWO["content"]]
     out = capsys.readouterr().out
-    assert "cut off" in out
+    assert "incomplete or malformed" in out
     assert "Plays strategy" not in out, "the raw reply must not be printed"
 
 

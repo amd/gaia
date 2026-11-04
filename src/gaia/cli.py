@@ -8469,7 +8469,7 @@ def _bootstrap_infer():
 
     # --- Parse JSON array from response ---
     try:
-        insights, truncated = parse_inferred_insights(raw_response)
+        insights, incomplete = parse_inferred_insights(raw_response)
     except ValueError as e:
         # The reply itself stays out of the terminal: it is unreadable here and
         # can echo the scanned system data back.
@@ -8482,10 +8482,10 @@ def _bootstrap_infer():
             "stored. Re-run `gaia memory bootstrap --infer` to try again."
         ) from e
 
-    if truncated:
+    if incomplete:
         print(
-            f"\n  ⚠️  The LLM's reply was cut off; keeping the {len(insights)} "
-            "insight(s) that arrived complete."
+            f"\n  ⚠️  The LLM's reply was incomplete or malformed; keeping the "
+            f"{len(insights)} insight(s) that parsed."
         )
 
     if not insights:

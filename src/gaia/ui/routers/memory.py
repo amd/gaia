@@ -1589,7 +1589,7 @@ def stream_inference(include_browser: bool = Query(False)):
 
             yield _sse({"type": "log", "message": "Parsing insights..."})
             try:
-                insights, truncated = parse_inferred_insights(raw_response)
+                insights, incomplete = parse_inferred_insights(raw_response)
             except ValueError as e:
                 cid = _log_server_error("failed to parse LLM inference response", e)
                 yield _sse(
@@ -1603,13 +1603,13 @@ def stream_inference(include_browser: bool = Query(False)):
                 )
                 yield _sse({"type": "done", "total": 0})
                 return
-            if truncated:
+            if incomplete:
                 yield _sse(
                     {
                         "type": "log",
                         "message": (
-                            "The LLM's reply was cut off; keeping the "
-                            f"{len(insights)} insight(s) that arrived complete."
+                            "The LLM's reply was incomplete or malformed; "
+                            f"keeping the {len(insights)} insight(s) that parsed."
                         ),
                     }
                 )

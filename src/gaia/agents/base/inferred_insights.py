@@ -5,8 +5,9 @@ Parse the JSON array of profile insights the local LLM returns during
 ``gaia memory bootstrap --infer`` and the Memory dashboard's inference stream.
 
 Local models regularly stop mid-array, so a reply that does not parse whole
-still yields every insight object that arrived complete. Only a reply with no
-complete insight at all is an error.
+still yields every insight object before the point where it stops parsing:
+the end of a cut-off reply, or a malformed item, which cannot be skipped
+because its end is unknown. Only a reply with no usable insight is an error.
 """
 
 import json
@@ -14,10 +15,14 @@ from typing import Any, Dict, List, NamedTuple, Tuple
 
 
 class ParsedInsights(NamedTuple):
-    """The usable insights, and whether the reply was cut off before the end."""
+    """The usable insights, and whether part of the reply could not be read.
+
+    ``incomplete`` is ``True`` when the array stopped parsing before its
+    closing ``]``, whether the reply was cut off or an item was malformed.
+    """
 
     insights: List[Dict[str, Any]]
-    truncated: bool
+    incomplete: bool
 
 
 def _strip_fences(text: str) -> str:
@@ -75,18 +80,19 @@ def parse_inferred_insights(raw_response: str) -> ParsedInsights:
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError as e:
-        # Text around an otherwise whole array, or an array cut off mid-way.
+        # Text around an otherwise whole array, or an array that stops
+        # parsing part-way (cut off, or a malformed item).
         items, closed = _complete_objects(cleaned)
         salvaged = [i for i in items if _is_insight(i)]
         if not salvaged:
             raise ValueError(
                 f"the model's reply is not a valid JSON array of insights ({e})"
             ) from e
-        return ParsedInsights(salvaged, truncated=not closed)
+        return ParsedInsights(salvaged, incomplete=not closed)
 
     if not isinstance(parsed, list):
         raise ValueError(
             "the model's reply is JSON but not an array of insights "
             f"(got {type(parsed).__name__})"
         )
-    return ParsedInsights([i for i in parsed if _is_insight(i)], truncated=False)
+    return ParsedInsights([i for i in parsed if _is_insight(i)], incomplete=False)
