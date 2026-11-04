@@ -547,7 +547,13 @@ def catalog(
             ),
             (
                 f"{p}-macos-installer",
-                [f"{ui}-arm64.dmg", f"{ui}-arm64.dmg.blockmap", "latest-mac.yml"],
+                [
+                    f"{ui}-arm64.dmg",
+                    f"{ui}-arm64.dmg.blockmap",
+                    f"{ui}-arm64.zip",
+                    f"{ui}-arm64.zip.blockmap",
+                    "latest-mac.yml",
+                ],
             ),
             (
                 f"{p}-linux-installer",

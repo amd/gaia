@@ -1132,6 +1132,7 @@ jobs:
           expected=(
             "gaia-agent-ui-${v}-x64-setup.exe" "gaia-agent-ui-${v}-x64-setup.exe.blockmap" latest.yml
             "gaia-agent-ui-${v}-arm64.dmg" "gaia-agent-ui-${v}-arm64.dmg.blockmap" latest-mac.yml
+            "gaia-agent-ui-${v}-arm64.zip" "gaia-agent-ui-${v}-arm64.zip.blockmap"
             "gaia-agent-ui-${v}-amd64.deb" "gaia-agent-ui-${v}-x86_64.AppImage" latest-linux.yml
           )
           missing=()
@@ -1143,6 +1144,18 @@ jobs:
             exit 1
           fi
           ls -l "${expected[@]/#/release-assets/}"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # The desktop app updates from these manifests, so every file one names
+      # must be attached as built, or that platform cannot update (#5682).
+      - name: Check the update manifests name only attached files
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pyyaml
+          python util/check_release_assets.py --dir release-assets
 
       - name: Create GitHub Release
         if: needs.validate.outputs.is_rc != 'true'
@@ -1292,6 +1305,7 @@ jobs:
           if [ "${IS_RC}" = "true" ] && [ "${WINDOWS_SETUP_OK}" != "true" ]; then
             args+=(--skip-windows-setup)
           fi
+          python3 -m pip install --quiet pyyaml
           python3 util/check_release_assets.py --repo "${GITHUB_REPOSITORY}" --tag "${TAG_NAME}" "${args[@]}"
 
   # The website builds its download links and release entries from the GitHub
