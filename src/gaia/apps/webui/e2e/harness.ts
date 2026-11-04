@@ -21,6 +21,7 @@ import { translate, type MessageKey, type Params } from '../src/i18n/registry';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..', '..', '..', '..');
 const FAKE_SERVER = join(REPO, 'installer', 'headless', 'fake_model_server.py');
+const REAP = join(HERE, 'reap_journey.py');
 const PYTHON = process.env.GAIA_E2E_PYTHON || 'python';
 const UI_DIST = process.env.GAIA_E2E_UI_DIST || resolve(HERE, '..', 'dist');
 const SCREENS = process.env.GAIA_E2E_SCREENS || join(HERE, 'test-results', 'screens');
@@ -256,6 +257,10 @@ export class Journey {
         await this.backend?.stop();
         await this.fake?.stop();
         await Promise.all(this.listeners.map((s) => new Promise((done) => s.close(done))));
+        // The daemon and its sidecars start in their own session, so the backend's kill misses them.
+        const reap = spawnSync(PYTHON, [REAP, this.root], { encoding: 'utf-8', timeout: 60_000, windowsHide: true });
+        if (reap.status !== 0) throw new Error(`GAIA processes outlived the journey:\n${reap.error ?? ''}${reap.stdout}${reap.stderr}`);
+        if (reap.stdout.trim()) console.log(reap.stdout.trim());
         rmSync(this.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
     }
 }

@@ -6,12 +6,10 @@ import { FileDown, Loader2 } from 'lucide-react';
 import { useT } from '../i18n/useT';
 import * as api from '../services/api';
 import { formatBytes } from './setup/format';
-
-/** The id a failed answer names its saved problem report by (`RECORD_ID_RE` in failure_record.py). */
-const FAILURE_RECORD_RE = /\bGF-\d{8}-\d{6}-[0-9a-f]{4}\b/;
+import { failureRecordId } from '../utils/streamErrors';
 
 export function namesFailureRecord(text: string): boolean {
-    return FAILURE_RECORD_RE.test(text);
+    return failureRecordId(text) !== null;
 }
 
 function errorText(err: unknown): string {

@@ -213,6 +213,7 @@ export const enMessages = {
     'chatError.timeout': 'The request timed out. Try a shorter question, or a faster model in Settings → Model.',
     'chatError.resendFailed': 'Your message was not sent again',
     'chatError.resendStale': 'This chat changed since it was opened, so nothing was sent. Reopen the chat, then try again.',
+    'chatError.savedReport': 'GAIA saved a problem report for this on this PC as {id}; nothing was sent anywhere.',
     'chatError.unknown': 'Something went wrong while GAIA was answering. Try again; if it keeps happening, report it with the link below.',
     'chatError.gaiaStopped': 'GAIA stopped before it finished this answer. Once GAIA is running again, press Try again.',
     'chatError.liveViewLost': 'Lost the live view of this answer: the connection to GAIA dropped {n} times. The answer may still finish. Reopen this chat in a minute to see it.',

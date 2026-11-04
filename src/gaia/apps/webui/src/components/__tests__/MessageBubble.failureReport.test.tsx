@@ -9,6 +9,7 @@ import { MessageBubble } from '../MessageBubble';
 import { namesFailureRecord } from '../TroubleshootingReport';
 import * as api from '../../services/api';
 import type { Message } from '../../types';
+import { classifyChatError } from '../../utils/streamErrors';
 
 vi.mock('../../services/api', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../../services/api')>();
@@ -45,6 +46,19 @@ describe('failure report on a message', () => {
     it('offers no report on an ordinary answer', () => {
         render(<MessageBubble message={{ ...base, content: 'Ulaanbaatar.' }} />);
         expect(screen.queryByRole('button', { name: 'Save a troubleshooting report' })).toBeNull();
+    });
+
+    it('keeps the report on a live failure the chat put in its own words', () => {
+        const err = new Error(`Lemonade did not answer.\n\n${FAILED.split('\n\n')[1]}`);
+        const { text } = classifyChatError(err);
+        expect(text).toContain('GF-20261104-192233-3f2a');
+        render(<MessageBubble message={{ ...base, content: text, failed: true, failureText: err.message }} />);
+        expect(screen.getByRole('button', { name: 'Save a troubleshooting report' })).toBeInTheDocument();
+    });
+
+    it('offers the report when only the raw failure names it', () => {
+        render(<MessageBubble message={{ ...base, content: 'The model server did not answer.', failed: true, failureText: FAILED }} />);
+        expect(screen.getByRole('button', { name: 'Save a troubleshooting report' })).toBeInTheDocument();
     });
 
     it('saves the bundle from the failed message', async () => {

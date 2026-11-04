@@ -563,3 +563,35 @@ def test_a_load_made_by_another_gaia_process_reaches_the_record(home):
     assert other[-1]["ctx_choice"]["how"] == "NPU default"
     assert "flm exited" in other[-1]["error"]
     assert not fr.recent_records()[-1].name.startswith("recent-loads")
+
+
+def test_loads_finished_at_once_by_several_processes_all_kept(tmp_path):
+    """The UI backend and the agent can finish a load together; neither note is lost."""
+    import subprocess
+    import sys
+
+    from gaia.llm import call_ledger
+
+    script = (
+        "import sys, time\n"
+        "from gaia.llm import call_ledger\n"
+        "start = float(sys.argv[2])\n"
+        "while time.time() < start: time.sleep(0.001)\n"
+        "call_ledger._share_load({'kind': 'load', 'request': {'model_name': sys.argv[1]}})\n"
+    )
+    env = {**os.environ, "GAIA_HOME": str(tmp_path / ".gaia")}
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(Path(fr.__file__).resolve().parents[2]), env.get("PYTHONPATH", "")]
+    )
+    start = __import__("time").time() + 3
+    models = [f"model-{i}" for i in range(call_ledger.KEEP_SHARED_LOADS)]
+    procs = [
+        subprocess.Popen([sys.executable, "-c", script, m, str(start)], env=env)
+        for m in models
+    ]
+    assert [p.wait(timeout=60) for p in procs] == [0] * len(procs)
+
+    saved = json.loads(
+        (tmp_path / ".gaia" / "failures" / "recent-loads.json").read_text("utf-8")
+    )
+    assert sorted(load["request"]["model_name"] for load in saved) == models

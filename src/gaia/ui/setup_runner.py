@@ -367,6 +367,8 @@ NO_CLOUD_MODEL = (
 SETUP_REPORT = "setup-report.json"
 REPORT_NAME_RE = re.compile(r"diagnostics-\d{8}-\d{6}\.tgz")
 _REPORT_TIMEOUT_S = 120
+#: How long a report waits for a failed run's problem report to finish saving.
+_RECORD_WAIT_S = 30
 
 
 def write_report(record: Dict[str, Any]) -> Path:
@@ -882,6 +884,8 @@ class SetupRunner:
         self._run: Optional[SetupRun] = None
         self._proc: Optional[subprocess.Popen] = None
         self._thread: Optional[threading.Thread] = None
+        #: Saving a failed run's problem report, which the next report waits for.
+        self._recording: Optional[threading.Thread] = None
         self._check_proc: Optional[subprocess.Popen] = None
         # Clear while a load check runs: only it can write to the model rows.
         self._check_idle = threading.Event()
@@ -906,6 +910,10 @@ class SetupRunner:
     def report(self) -> Dict[str, Any]:
         """Everything setup knows about its last run, with every log line kept."""
         with self._lock:
+            recording = self._recording
+        if recording is not None:
+            recording.join(timeout=_RECORD_WAIT_S)
+        with self._lock:
             view = self._run.view() if self._run else {"state": "idle"}
             chat = self._run.chat_model if self._run else None
             view["models"] = [
@@ -914,6 +922,11 @@ class SetupRunner:
             view["log_tail"] = list(self._run.log) if self._run else []
             view["logs"] = self._logs(None)
             view["check_result"] = self._run.status if self._run else None
+            if recording is not None and recording.is_alive():
+                view["problem_report"] = (
+                    f"still being saved after {_RECORD_WAIT_S} s; it is in "
+                    "the failures folder once done"
+                )
             return view
 
     def status(self) -> Optional[Dict[str, Any]]:
@@ -1480,9 +1493,12 @@ class SetupRunner:
         if failed:
             # Its own thread: the record probes Lemonade for a second or two,
             # and the runner is free for a retry the moment the run ends.
-            threading.Thread(
+            recording = threading.Thread(
                 target=self._record_failure, args=(run, cause), daemon=True
-            ).start()
+            )
+            with self._lock:
+                self._recording = recording
+            recording.start()
 
     def _record_failure(self, run: SetupRun, cause: Optional[BaseException]) -> None:
         record_id = _record_setup_failure(run, cause)

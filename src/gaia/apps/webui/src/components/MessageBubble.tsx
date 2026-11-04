@@ -696,7 +696,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {t('msg.tryAgain')}
                         </button>
                     )}
-                    {message.role === 'assistant' && !isStreaming && namesFailureRecord(message.content) && (
+                    {message.role === 'assistant' && !isStreaming && (namesFailureRecord(message.content) || namesFailureRecord(message.failureText ?? '')) && (
                         <TroubleshootingReport classes={CHAT_REPORT_CLASSES} note={t('msg.reportNote')} />
                     )}
                     {message.role === 'assistant'

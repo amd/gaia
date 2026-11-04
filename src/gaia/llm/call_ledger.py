@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.logger import get_logger
+from gaia.utils.file_lock import file_lock, write_text_atomic
 
 log = get_logger(__name__)
 
@@ -39,6 +40,8 @@ _ctx_choices: Dict[str, Dict[str, Any]] = {}
 _memory_checks: Dict[str, Dict[str, Any]] = {}
 #: Loads kept on disk, across every GAIA process.
 KEEP_SHARED_LOADS = 6
+#: A load's note gives up on the shared file's lock after this, rather than stall the load.
+_SHARE_LOCK_TIMEOUT_S = 5
 
 
 def _now() -> str:
@@ -104,20 +107,23 @@ def _share_load(entry: Dict[str, Any]) -> None:
         }
     path = shared_loads_path()
     try:
-        loads = shared_loads()
-        loads = (loads + [shared])[-KEEP_SHARED_LOADS:]
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(loads, default=str), encoding="utf-8")
-        os.replace(tmp, path)
+        # Locked: the UI backend and the agent can finish a load at the same moment.
+        with file_lock(path, timeout=_SHARE_LOCK_TIMEOUT_S):
+            loads = (shared_loads() + [shared])[-KEEP_SHARED_LOADS:]
+            write_text_atomic(path, json.dumps(loads, default=str))
     except OSError as e:
         log.warning("Couldn't note the model load in %s: %s", path, e)
 
 
 def shared_loads() -> List[Dict[str, Any]]:
     """The last loads any GAIA process made, oldest first."""
+    path = shared_loads_path()
+    if not path.exists():
+        return []
     try:
-        loads = json.loads(shared_loads_path().read_text(encoding="utf-8"))
+        with file_lock(path, timeout=_SHARE_LOCK_TIMEOUT_S):
+            loads = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return []
     except (OSError, ValueError) as e:
