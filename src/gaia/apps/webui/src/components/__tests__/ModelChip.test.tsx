@@ -194,6 +194,19 @@ describe('ModelChip', () => {
         expect(screen.getByRole('button', { name: /kimi-k2 · Fireworks AI/ })).toBeInTheDocument();
     });
 
+    it('shows the cloud notice under the clicked row and scrolls it into view', async () => {
+        const scrolled = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
+        render(<ModelChip />);
+        const dialog = await openPicker();
+        const row = await within(dialog).findByRole('option', { name: /^kimi-k2/ });
+        fireEvent.click(row);
+
+        const notice = within(dialog).getByRole('alert');
+        expect(row.closest('.popover-row')?.nextElementSibling).toBe(notice);
+        expect(scrolled.mock.contexts).toContain(notice);
+        scrolled.mockRestore();
+    });
+
     it('switches between local models without a notice', async () => {
         mockedApi.listProviderModels.mockImplementation(async (id) => ({
             provider: id, models: id === 'local' ? [model('Gemma-4-E4B-it-GGUF'), model('Qwen3-8B-GGUF')] : [],

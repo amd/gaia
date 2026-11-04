@@ -333,6 +333,19 @@ plain `ChatAgent` stays off unless you set it. When the environment variable is 
 Settings toggle shows the effective value and disables itself. See the
 [Dynamic Tool Loader plan](/plans/tool-loader) for the design.
 
+The environment variable is read by the process that runs the agent. `gaia eval agent`
+drives the agent through the Agent UI backend, so for an eval run set it on the backend,
+started first, not on the eval command. See the eval guide's
+[Prerequisites](/guides/eval#prerequisites) for the rest of the setup.
+
+```bash
+# Terminal 1: start the Agent UI backend with the loader off, to compare to the default
+GAIA_DYNAMIC_TOOLS=0 gaia chat --ui
+
+# Terminal 2: run the eval against it
+gaia eval agent --category tool_selection
+```
+
 ## Next Steps
 
 <CardGroup cols={2}>

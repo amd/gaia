@@ -707,7 +707,8 @@ is removed only when it is the app's exact wrapper around this GAIA home's venv;
 
 <Note>
 `--purge` also undoes what the one-line installer set up. It stops a running GAIA daemon
-before deleting its state, removes `gaia-tui` and `gaia-agent` from `~/.gaia/bin`, and
+before deleting its state, removes `~/.gaia/bin` (`gaia-tui`, `gaia-agent`, and the `gaia`
+command links the Linux and macOS installer puts there), and
 removes the installer's PATH entries: the `# Added by GAIA installer` block in
 `~/.zshrc`, `~/.bashrc`, `~/.bash_profile` or `~/.profile`, or the `~\.gaia\venv\Scripts`
 and `~\.gaia\bin` entries on the Windows user PATH. The rest of each file and every
@@ -804,7 +805,7 @@ Use `--layout hub` when authoring a package for this repo's `hub/agents/` tree, 
 | Mode | LLM required? | Checks |
 |------|:-------------:|--------|
 | `--lint` (default) | No (CI-safe) | Manifest valid + complete, package structure, Python sources parse + imports resolve, `black` + `isort` clean (Python); manifest + structure (C++) |
-| `--live` | Yes (Lemonade Server) | Agent answers each declared `conversation_starter` within `--timeout` without crashing |
+| `--live` | Yes (Lemonade Server) | Agent answers each declared `conversation_starter` within `--timeout` without crashing, and the model gives a usable reply (a turn that ends on unparsable or cut-off model output fails the gate) |
 
 The publish workflow requires `--lint` to pass; `--live` is recommended but not enforced.
 

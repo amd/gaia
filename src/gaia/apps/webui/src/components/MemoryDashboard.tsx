@@ -15,8 +15,8 @@ import * as memoryApi from '../services/memoryApi';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
 import { ref, type MessageKey } from '../i18n/registry';
-import { useT, type Translate } from '../i18n/useT';
-import { MemoryDashboardAboutYou, dateLocale } from './MemoryDashboardAboutYou';
+import { dateLocale, useT, type Translate } from '../i18n/useT';
+import { MemoryDashboardAboutYou } from './MemoryDashboardAboutYou';
 import './MemoryDashboard.css';
 
 // ── Type definitions ─────────────────────────────────────────────────────

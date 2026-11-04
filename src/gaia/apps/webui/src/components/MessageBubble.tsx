@@ -795,7 +795,10 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 // exponential-backtracking ReDoS (js/redos) on adversarial non-matching input.
 // Exactly one separator between segments, so a last segment without an
 // extension (`C:\Users\me\notes`) is kept as well as `...\a.txt` or `...\dir\`.
-const WIN_PATH_RE = /\b[A-Z]:[\\/][^\s*?"<>|,;)}\]\\/]+(?:[\\/][^\s*?"<>|,;)}\]\\/]+)*[\\/]?/gi;
+// A space stays inside a folder name a `\` follows (`Program Files (x86)\`) and
+// inside a last name of at most three words ending in an extension (`Q3 report.txt`);
+// otherwise it ends the path, so "C:\out\docs and look at a.pdf" stops at `docs`.
+const WIN_PATH_RE = /\b[A-Z]:[\\/](?=[^\s*?"<>|,;)}\]\\/])(?:[^\s*?"<>|,;)}\]\\/]+(?:(?: (?:[^\s*?"<>|,;:)}\]\\/]+|\([^\s*?"<>|,;:)}\]\\/]+\)))+\\|[\\/]))*(?:(?:[^\s*?"<>|,;:.)}\]\\/]+ ){1,2}[^\s*?"<>|,;)}\]\\/]+\.[A-Za-z0-9]{1,5}\b|[^\s*?"<>|,;)}\]\\/]+)?/gi;
 /** Sentence punctuation the path regex swallows: "see C:\a\b." ends at `b`. */
 const PATH_TRAILING_PUNCT_RE = /[.:!']+$/;
 /** An inline-code span that is one absolute path and nothing else, e.g. "Saved to `C:\out\answer.md`". */

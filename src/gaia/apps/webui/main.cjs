@@ -92,6 +92,7 @@ const {
   fetchWorkInProgress,
   installQuitGuard,
   QUIT,
+  quitOnTermSignal,
   RESTART_FOR_UPDATE,
 } = require("./services/quit-guard.cjs");
 const AgentProcessManager = require("./services/agent-process-manager.cjs");
@@ -1186,7 +1187,7 @@ app.whenReady().then(async () => {
   if (showingInstallScreen) {
     const installed = await engineInstall.run();
     if (!installed) {
-      console.log("[main] Quit while the install waited on Try again");
+      console.log("[main] Quit during the backend install");
       return;
     }
     engineInstall.starting();
@@ -1338,11 +1339,13 @@ const quitGuard = installQuitGuard({
   },
 });
 
+quitOnTermSignal({ proc: process, app, guard: quitGuard });
+
 installQuitCleanup({ app, cleanup });
 
 async function cleanup() {
   shutdownStarted = true;
-  if (engineInstall) engineInstall.stop();
+  const installStopped = engineInstall ? engineInstall.stop() : null;
 
   // Phase F: tear down auto-updater timers and IPC handlers.
   try {
@@ -1365,9 +1368,9 @@ async function cleanup() {
     keepAwake = null;
   }
 
-  // The agents and the backend stop side by side: each waits out its own
-  // grace period, and in series they could overrun the quit's time limit.
-  await Promise.all([stopAgentsForQuit(), stopBackendForQuit()]);
+  // The install, the agents and the backend stop side by side: each waits out
+  // its own grace period, and in series they could overrun the quit's time limit.
+  await Promise.all([installStopped, stopAgentsForQuit(), stopBackendForQuit()]);
 
   // Destroy tray icon
   if (trayManager) {
