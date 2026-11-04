@@ -327,12 +327,25 @@ from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 agent = ChatAgent(ChatAgentConfig(prompt_profile="doc", dynamic_tools=True))
 ```
 
-```bash
-# Env override (applies wherever a doc-profile ChatAgent runs)
-GAIA_DYNAMIC_TOOLS=1 gaia eval agent --category tool_selection --agent-type doc
+The env var is read by the process that runs the agent. `gaia eval agent` drives
+the agent through the Agent UI backend, so for an eval run the override goes on
+the backend, started first, not on the eval command. Setting it in front of
+`gaia eval agent` changes nothing, and with no backend running the eval stops at
+pre-flight with `Agent UI not reachable at http://localhost:4200`. See the eval
+guide's [Prerequisites](/guides/eval#prerequisites) for the rest of the setup.
 
-# Optional tuning: match threshold (cosine, inclusive) and loaded-set cap
-GAIA_DYNAMIC_TOOLS_TAU=0.20 GAIA_DYNAMIC_TOOLS_MAX=14 GAIA_DYNAMIC_TOOLS=1 ...
+```bash
+# Terminal 1: start the Agent UI backend with the override
+GAIA_DYNAMIC_TOOLS=1 gaia chat --ui
+
+# Optional tuning, also on the backend: match threshold (cosine, inclusive)
+# and loaded-set cap
+GAIA_DYNAMIC_TOOLS_TAU=0.20 GAIA_DYNAMIC_TOOLS_MAX=14 GAIA_DYNAMIC_TOOLS=1 gaia chat --ui
+```
+
+```bash
+# Terminal 2: run the eval against it
+gaia eval agent --category tool_selection --agent-type doc
 ```
 
 It needs memory enabled (it reuses the memory embedder). If memory is off, the
