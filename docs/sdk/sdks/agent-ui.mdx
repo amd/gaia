@@ -523,9 +523,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       ],
       "default_backend": "vulkan",
       "available_backends": [
-        { "name": "vulkan", "state": "installed" },
-        { "name": "rocm", "state": "installable" },
-        { "name": "cpu", "state": "installed" }
+        { "name": "vulkan", "state": "installed" }
       ],
       "preferred_backend": null,
       "system_info_error": null
@@ -538,10 +536,10 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | `chat_model` / `embedding_model` | The selected loaded chat and embedding model, respectively; each has the loaded-model shape below or is `null` |
     | `loaded_models` | Other loaded models, excluding only the selected chat and embedding entries. This can include additional embedding models, vision, speech, transcription, reranking, image, or 3D models. |
     | `model_type` | Lemonade's type for a loaded model, such as `llm`, `embedding`, `vision`, `tts`, `transcription`, `reranking`, or `3d`; `null` when Lemonade did not report it |
-    | `backend` | `vulkan`, `rocm`, `metal`, `cpu`, `npu`, `remote` (a cloud model), or `null` when Lemonade did not say |
+    | `backend` | What a loaded model actually runs on: `vulkan`, `rocm`, `metal`, `cpu`, `npu`, `remote` (a cloud model), or `null` when Lemonade did not say |
     | `backend_source` | `requested` (named by the load), `launch` (read from the llama-server path), or `lemonade_default` |
-    | `available_backends` | llama.cpp backends Lemonade can run here; `unsupported` ones are never listed |
-    | `preferred_backend` | The saved choice; `null` means Auto |
+    | `available_backends` | llama.cpp backends GAIA has tested that Lemonade can run here (today only `vulkan`); `unsupported` ones are never listed |
+    | `preferred_backend` | The saved choice, which may be an untested one saved before GAIA stopped offering it; `null` means none was saved and Lemonade picks |
   </Accordion>
 
   <Accordion title="PUT /api/system/model-server/backend">
@@ -549,10 +547,10 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
 
     **Request:**
     ```json
-    { "backend": "rocm" }
+    { "backend": "vulkan" }
     ```
 
-    `backend` is `auto` or one of the names in `available_backends`. Returns the refreshed `GET /api/system/model-server` body. `400` when the backend is not available on this machine, `503` when Lemonade is not answering.
+    `backend` is one of the names in `available_backends`, or `auto` to clear the saved choice. Returns the refreshed `GET /api/system/model-server` body. `400` when the backend isn't one GAIA has tested or this machine can't run it, `503` when Lemonade is not answering.
   </Accordion>
 
   <Accordion title="POST /api/system/load-model">
@@ -2444,6 +2442,11 @@ plan and make one set of choices.
     nothing. **403** without `X-Gaia-UI: 1`; **503** when the plan can't be
     worked out.
 
+    Each `catalog` entry says `support` (`verified`, `untested`, or null for an
+    optional model), `reads_images`, `feature_tier` and `source`. `components`
+    lists what setup fetches besides the models, `backends` what Lemonade
+    reports for this PC, and `vision_model` the user's vision pick.
+
     The same plan also carries what the model picker needs: `catalog` (every
     model the user can pick, with `roles`, `purpose`, `if_skipped`, `size_gb`
     left to download, `downloaded`, `recommended`, `selected`, `skipped`,
@@ -2467,6 +2470,35 @@ plan and make one set of choices.
     this PC; send it again with that field set to use it anyway. **422** when
     the model isn't a chat model GAIA or the server knows; **503** when the
     model server isn't running yet.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/vision-model">
+    Pick the model that reads images. Body: `{"model_id": "..."}`, or `null` for
+    GAIA's choice: the chat model when it reads images, otherwise Gemma 4 E4B.
+    Saved as `vision_model`. Returns the new plan. **422** when the model can't
+    read images.
+  </Accordion>
+
+  <Accordion title="GET /api/setup/needs/{job}">
+    Whether a job needs a model that isn't on this PC. `job` is `chat`, `vision`,
+    `embedding`, `speech`, `voice` or `image_creation`. Returns `{"job",
+    "needed", "model": {"id", "name", "size_gb", "source"}, "disk_free_gb"}`.
+    `needed` is false when the model is here, chat runs in the cloud, or the
+    model server isn't answering. **422** for any other `job`.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/report">
+    Write a troubleshooting report for a bug report: setup's record (its last
+    run, the plan and every stage's full log) saved as `setup-report.json` in
+    GAIA's home, bundled with GAIA's logs and a system snapshot by `gaia
+    diagnostics`, with secret environment variables redacted; logs go in as they are. Returns `{"name", "path", "size_bytes"}`.
+    **500** naming the cause when the bundle can't be written.
+  </Accordion>
+
+  <Accordion title="GET /api/setup/report/{name}">
+    The report `POST /api/setup/report` wrote, as `application/gzip`. Only a
+    `diagnostics-<YYYYMMDD>-<HHMMSS>.tgz` in GAIA's home is served; anything
+    else is **404**.
   </Accordion>
 
   <Accordion title="POST /api/setup/models/skip">
@@ -2517,6 +2549,10 @@ plan and make one set of choices.
   </Accordion>
 
   <Accordion title="GET /api/setup/status">
+    `components` maps each piece besides the models to `active`, `done` or
+    `failed`. `tests` holds the Test step's rows: `job`, `subject`, `state`,
+    `error`, `kind` (`memory`, `stuck`, `broken`) and `seconds`.
+
     The running (or last) setup: `state` (`running`, `verifying`, `ready`,
     `failed`, `cancelled`, or `idle` when none has run), the three steps with
     their status, progress `text`, `percent` and `size` (e.g. `"1.20 GB of

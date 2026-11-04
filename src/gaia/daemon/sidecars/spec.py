@@ -552,6 +552,9 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             mode_env_var="GAIA_GAIA_AGENT_MODE",
             cache_dir_name="gaia",
             dev_src_dir=_default_gaia_src_dir(),
+            # A first start unpacks a ~170 MB binary while antivirus scans it;
+            # 30 s timed out on a cold Windows PC before it ever answered.
+            health_timeout=120.0,
             # No forward_providers: the flagship reaches external services through
             # MCP servers the user activates, not daemon-forwarded OAuth tokens.
             # Listing a provider here would hand it credentials it cannot use.

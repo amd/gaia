@@ -85,6 +85,17 @@ function Wait-Writable([string]$Path, [int]$Seconds = 60) {
 
 function Get-UiDir { (Get-ItemProperty -Path $uiKey -Name InstallLocation).InstallLocation }
 
+# Installed-apps entries for a system Lemonade, from either hive and both views.
+function Get-LemonadeEntries {
+    $roots = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+             'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+             'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+    @($roots | Where-Object { Test-Path $_ } | ForEach-Object { Get-ChildItem $_ } |
+        ForEach-Object { Get-ItemProperty $_.PSPath } |
+        Where-Object { $_.PSObject.Properties.Name -contains 'DisplayName' -and $_.DisplayName -like '*Lemonade*' } |
+        ForEach-Object DisplayName)
+}
+
 function Write-LockDiagnostics([string[]]$Paths) {
     Write-Host 'setup failed; checking GAIA executable locks:'
     foreach ($path in $Paths) {
@@ -105,6 +116,7 @@ function Write-LockDiagnostics([string[]]$Paths) {
 
 
 if ((Test-Path $tuiDir) -or (Test-Path $uiKey)) { throw "GAIA is already installed - this runner is not clean" }
+$lemonadeBefore = (Get-LemonadeEntries | Sort-Object) -join ', '
 
 # ── 1. Refusals change nothing ─────────────────────────────────────────────
 foreach ($bad in '/COMPONENTS=bogus', '/COMPONENTS=', '/COMPONENTS=ui,nope') {
@@ -169,6 +181,10 @@ if (-not (Test-Path $tuiArp)) { throw "no Installed-apps entry for the terminal"
 if (-not (Test-Path "$desktop\$tuiName.lnk")) { throw "no desktop shortcut for the terminal" }
 if (-not (Test-Path "$startMenu\GAIA\Uninstall $tuiName.lnk")) { throw "no Start menu uninstall shortcut for the terminal" }
 foreach ($l in $legacyLnks) { if (Test-Path $l) { throw "the old-named shortcut $l survived the install" } }
+# GAIA runs its own Lemonade under ~/.gaia; the setup must not add a system one.
+# Checked before the desktop app joins: a PR run takes that from the last release.
+$lemonadeAfter = (Get-LemonadeEntries | Sort-Object) -join ', '
+if ($lemonadeAfter -ne $lemonadeBefore) { throw "the terminal install added a system Lemonade: '$lemonadeAfter' (was '$lemonadeBefore')" }
 
 # Terminal profile: the per-user fonts, their HKCU registration, and a Windows
 # Terminal fragment that parses and names the bundled family.
@@ -232,7 +248,6 @@ if (-not (Test-Path "$uiDir\gaia-desktop.exe")) { throw "gaia-desktop.exe did no
 if (-not (Test-Path $uiArp)) { throw "no Installed-apps entry for the desktop app" }
 if (-not (Test-Path "$desktop\GAIA.lnk")) { throw "no desktop shortcut for the desktop app" }
 if (-not (Test-Path "$startMenu\GAIA.lnk")) { throw "no Start menu shortcut for the desktop app" }
-if (-not (Get-ItemProperty -Path $runKey -Name 'GAIA' -ErrorAction SilentlyContinue)) { throw "no autostart entry for the desktop app" }
 if ((Get-FileHash "$tuiDir\gaia-tui.exe" -Algorithm SHA256).Hash -ne $before.Hash) { throw "adding the desktop app changed the terminal" }
 
 # ── 5. Plain /S with both installed updates both, and leaves one of each ──

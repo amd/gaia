@@ -14,24 +14,11 @@ from unittest.mock import patch
 from gaia.installer.lemonade_installer import LemonadeInstaller
 from gaia.version import LEMONADE_VERSION
 
-# (platform.system(), platform.machine(), minimal, expected asset filename)
+# (platform.system(), platform.machine(), minimal, expected asset filename).
+# Only the Windows uninstall downloads an installer.
 SUPPORTED_TARGETS = [
     ("Windows", "AMD64", False, "lemonade.msi"),
     ("Windows", "AMD64", True, "lemonade-server-minimal.msi"),
-    (
-        "Linux",
-        "x86_64",
-        False,
-        f"lemonade-server_{LEMONADE_VERSION}-debian13_amd64.deb",
-    ),
-    (
-        "Linux",
-        "aarch64",
-        False,
-        f"lemonade-server_{LEMONADE_VERSION}-debian13_arm64.deb",
-    ),
-    # Apple Silicon only — the .pkg payload is arm64, with no Intel build upstream.
-    ("Darwin", "arm64", False, f"Lemonade-{LEMONADE_VERSION}-Darwin.pkg"),
 ]
 
 

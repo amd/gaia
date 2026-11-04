@@ -3,7 +3,7 @@
 
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { enMessages } from '../locales/en';
 import { LOCALES, getLocale, localeOptionLabel, ref, stripIsolates, translate, type MessageKey } from '../registry';
 import { PALETTES } from '../../utils/palette';
@@ -121,6 +121,22 @@ describe('useT and the language setting', () => {
         act(() => useChatStore.getState().setLocale('ar'));
         expect(localStorage.getItem('gaia-chat-locale')).toBe('ar');
         expect(readLocale()).toBe('ar');
+    });
+
+    it("starts a first run in the PC's own language when GAIA has it, else English", () => {
+        const languages = vi.spyOn(navigator, 'languages', 'get');
+        try {
+            languages.mockReturnValue(['ar-SA', 'en-US']);
+            expect(readLocale()).toBe('ar');
+            languages.mockReturnValue(['fr-FR', 'de-DE']);
+            expect(readLocale()).toBe('en');
+            // A saved choice always wins over the PC's.
+            localStorage.setItem('gaia-chat-locale', 'en');
+            languages.mockReturnValue(['ar-SA']);
+            expect(readLocale()).toBe('en');
+        } finally {
+            languages.mockRestore();
+        }
     });
 
     it('reads a saved code that is no longer registered as English', () => {

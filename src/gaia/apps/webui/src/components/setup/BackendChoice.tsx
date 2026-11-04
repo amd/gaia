@@ -1,0 +1,80 @@
+// Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+import { useT } from '../../i18n/useT';
+import * as api from '../../services/api';
+import type { SetupPlan } from '../../types';
+import { catalogOf, isNpu, pickChat, recommendedSelection, type Selection } from './selection';
+
+/**
+ * At the start of a local setup: make llama.cpp use Vulkan, the GPU backend GAIA has
+ * tested, where Lemonade's own pick or an earlier saved one is another and this PC
+ * can run Vulkan. A server that isn't answering is left to the download to report.
+ */
+export async function applyTestedBackend(): Promise<void> {
+    const server = await api.getModelServer();
+    if (!server.reachable) return;
+    const vulkan = (server.available_backends ?? []).some((b) => b.name === 'vulkan');
+    if (vulkan && (server.preferred_backend ?? server.default_backend) !== 'vulkan') {
+        await api.setModelServerBackend('vulkan');
+    }
+}
+
+interface Props {
+    plan: SetupPlan;
+    selection: Selection;
+    onSelection: (selection: Selection) => void;
+    disabled?: boolean;
+}
+
+/**
+ * Where the chat model runs, from the two backends GAIA has tested: llama.cpp
+ * on the GPU with Vulkan, or FastFlowLM on a Ryzen AI NPU. Picking one picks
+ * that backend's chat model.
+ */
+export function BackendChoice({ plan, selection, onSelection, disabled = false }: Props) {
+    const t = useT();
+    const catalog = catalogOf(plan);
+    // GAIA's own NPU model on a PC whose NPU holds it, else an NPU chat model already downloaded.
+    const npuModel = catalog.find((e) => isNpu(e) && e.gaia_model && e.chat_choice && e.fits !== false)
+        ?? catalog.find((e) => isNpu(e) && e.chat_choice && e.downloaded);
+    const onNpu = !!catalog.find((e) => e.id === selection.defaultChat && isNpu(e));
+    // Back to the GPU: setup's own pick, unless that is the NPU model itself.
+    const recommended = recommendedSelection(plan).defaultChat;
+    const gpuChat = recommended && !catalog.find((e) => e.id === recommended && isNpu(e))
+        ? recommended
+        : catalog.find((e) => e.chat_choice && e.gaia_model && e.support === 'verified' && !isNpu(e))?.id;
+
+    const choose = (id: 'gpu' | 'npu') => {
+        if (id === 'npu' && npuModel && !onNpu) onSelection(pickChat(selection, catalog, npuModel.id));
+        if (id === 'gpu' && onNpu && gpuChat) onSelection(pickChat(selection, catalog, gpuChat));
+    };
+
+    const choices: Array<{ id: 'gpu' | 'npu'; label: string }> = [
+        { id: 'gpu', label: t('setup.backend.gpu') },
+        ...(npuModel ? [{ id: 'npu' as const, label: t('setup.backend.npu') }] : []),
+    ];
+    const selected = onNpu ? 'npu' : 'gpu';
+
+    return (
+        <section className="setup-backend" aria-labelledby="setup-backend-title">
+            <h3 className="mc-job-title" id="setup-backend-title">{t('setup.backend.title')}</h3>
+            <div className="segmented" role="radiogroup" aria-labelledby="setup-backend-title">
+                {choices.map((c) => (
+                    <button
+                        key={c.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected === c.id}
+                        className={selected === c.id ? 'is-active' : ''}
+                        disabled={disabled}
+                        onClick={() => choose(c.id)}
+                    >
+                        <bdi>{c.label}</bdi>
+                    </button>
+                ))}
+            </div>
+            <p className="setup-hint">{t(npuModel ? 'setup.backend.hint' : 'setup.backend.hintNoNpu')}</p>
+        </section>
+    );
+}

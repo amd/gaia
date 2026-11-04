@@ -8,6 +8,7 @@ import { useT } from '../../i18n/useT';
 import type { Say } from '../../i18n/registry';
 import type { GpuMemoryPreset, GpuMemoryStatus } from '../../types';
 import { ConfirmSheet } from './ConfirmSheet';
+import { SetupFooter } from './SetupFooter';
 import { formatSize } from './format';
 
 type Outcome = { kind: 'applied' } | { kind: 'denied' } | { kind: 'error'; message: string } | null;
@@ -100,11 +101,13 @@ interface PresetPickerProps {
     presets: GpuMemoryPreset[];
     value: number | null;
     onChange: (settingGb: number) => void;
+    recommended: number | null;
+    max: number | null;
     disabled?: boolean;
 }
 
 /** A radiogroup of safe sizes; arrow keys move between them. */
-function PresetPicker({ presets, value, onChange, disabled }: PresetPickerProps) {
+function PresetPicker({ presets, value, onChange, recommended, max, disabled }: PresetPickerProps) {
     const t = useT();
     const refs = useRef<Array<HTMLButtonElement | null>>([]);
     const at = Math.max(0, presets.findIndex((p) => p.setting_gb === value));
@@ -134,6 +137,8 @@ function PresetPicker({ presets, value, onChange, disabled }: PresetPickerProps)
                     onClick={() => onChange(p.setting_gb)}
                 >
                     <bdi>{t('gpu.presets.gpu', { gb: formatSize(p.gpu_gb) })}</bdi>
+                    {p.setting_gb === recommended && <>{' '}<span className="gpu-tag is-recommended">{t('gpu.presets.recommended')}</span></>}
+                    {p.setting_gb === max && <>{' '}<span className="gpu-tag is-max">{t('gpu.presets.max')}</span></>}
                 </button>
             ))}
         </div>
@@ -182,6 +187,12 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
     const [copied, setCopied] = useState<string | null>(null);
 
     const preset = presets.find((p) => p.setting_gb === target) ?? null;
+    const recommended = status.recommended_setting_gb ?? null;
+    // The top preset is the most GAIA allows: the CPU keeps only its floor there.
+    const max = presets.length > 0 && presets[presets.length - 1].setting_gb === status.setting?.max_gb ? presets[presets.length - 1].setting_gb : null;
+    const cpuLeft = preset && status.total_gb != null ? Math.max(0, status.total_gb - preset.gpu_gb) : null;
+    // No raise unlocks a default model: the split already runs the best one GAIA picks.
+    const fitsNow = recommended == null ? (status.models ?? []).find((m) => m.default && m.fits_now) : undefined;
     const unlocks = (preset?.unlocks ?? []).slice(0, 2).map((id) => names[id] ?? id);
     const pending = status.pending ?? null;
     const canApply = status.method === 'apply';
@@ -316,7 +327,12 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
 
             {!restartPending && !guided && presets.length > 0 && (
                 <>
-                    <PresetPicker presets={presets} value={target} onChange={setTarget} disabled={busy !== null} />
+                    {fitsNow && (
+                        <p className="gpu-unlock is-keep">
+                            <Check size={13} aria-hidden="true" /> {t('gpu.keepRecommended', { model: names[fitsNow.id] ?? fitsNow.id })}
+                        </p>
+                    )}
+                    <PresetPicker presets={presets} value={target} onChange={setTarget} recommended={recommended} max={max} disabled={busy !== null} />
                     {preset && (
                         <p className="gpu-unlock">
                             {unlocks.length > 0
@@ -324,10 +340,15 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                                 : t('gpu.unlock.none', { gb: formatSize(preset.gpu_gb) })}
                         </p>
                     )}
+                    {preset && preset.setting_gb === max && cpuLeft != null && (
+                        <p className="gpu-unlock is-warn" role="note">
+                            <AlertTriangle size={13} aria-hidden="true" /> {t('gpu.maxWarn', { cpu: formatSize(cpuLeft), os: osName(status.os) })}
+                        </p>
+                    )}
                     <p className="setup-hint">
                         {t.compose((say) => `${say('gpu.reserve', { gb: formatSize(status.reserve_gb ?? 16), os: osName(status.os) })} ${say('gpu.needs')}`)}
                     </p>
-                    {!canApply && status.method_reason && <p className="setup-hint">{status.method_reason}</p>}
+                    {!canApply && status.method_reason && <p className="setup-hint"><bdi dir="ltr">{status.method_reason}</bdi></p>}
                 </>
             )}
             {!restartPending && !guided && presets.length === 0 && (
@@ -359,14 +380,14 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                             })}
                         </ol>
                     )}
-                    <div className="setup-row">
+                    <SetupFooter>
+                        <button type="button" className="btn-secondary" onClick={() => setGuided(false)} disabled={busy !== null}>{t('gpu.guided.back')}</button>
                         {!canApply && guidedValue !== null && (
                             <button type="button" className="btn-primary" onClick={() => void doneByHand()} disabled={busy !== null || target == null}>
                                 {busy === 'done' && <Loader2 size={13} className="spin" aria-hidden="true" />} {t('gpu.guided.done')}
                             </button>
                         )}
-                        <button type="button" className="btn-secondary" onClick={() => setGuided(false)} disabled={busy !== null}>{t('gpu.guided.back')}</button>
-                    </div>
+                    </SetupFooter>
                 </div>
             )}
 
@@ -381,31 +402,43 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
             )}
             {outcome?.kind === 'error' && <p className="setup-error" role="alert">{outcome.message}</p>}
 
-            {!guided && (
-                <div className="setup-row gpu-actions">
-                    {mode === 'setup' && onBack && <button type="button" className="btn-secondary" onClick={onBack}>{t('setup.back')}</button>}
-                    {!restartPending && canApply && presets.length > 0 && (
-                        <button type="button" className="btn-primary" onClick={() => setSheet('apply')} disabled={busy !== null || target == null}>
-                            {outcome?.kind === 'denied' || pending?.state === 'not_applied' ? t('gpu.tryAgain') : t('gpu.apply')}
-                        </button>
-                    )}
-                    {!restartPending && presets.length > 0 && canGuide && (
-                        <button type="button" className={canApply ? 'btn-secondary' : 'btn-primary'} onClick={() => void showSteps()} disabled={busy !== null}>
-                            {t('gpu.showMe')}
-                        </button>
-                    )}
-                    {mode === 'settings' && status.revert?.available && (
-                        <button type="button" className="btn-secondary" onClick={() => setSheet('revert')} disabled={busy !== null}>
-                            <RotateCcw size={13} aria-hidden="true" /> {t('gpu.undo')}
-                        </button>
-                    )}
-                    {mode === 'setup' && (restartPending ? (
-                        onContinue && <button type="button" className="btn-primary" onClick={onContinue} autoFocus>{t('setup.continue')}</button>
-                    ) : (
-                        onSkip && <button type="button" className="btn-secondary" onClick={onSkip} disabled={busy !== null}>{t('gpu.skip')}</button>
-                    ))}
-                </div>
-            )}
+            {!guided && (() => {
+                const apply = !restartPending && canApply && presets.length > 0 && (
+                    <button type="button" className="btn-primary" onClick={() => setSheet('apply')} disabled={busy !== null || target == null}>
+                        {outcome?.kind === 'denied' || pending?.state === 'not_applied' ? t('gpu.tryAgain') : t('gpu.apply')}
+                    </button>
+                );
+                const showMe = !restartPending && presets.length > 0 && canGuide && (
+                    <button type="button" className={canApply ? 'btn-secondary' : 'btn-primary'} onClick={() => void showSteps()} disabled={busy !== null}>
+                        {t('gpu.showMe')}
+                    </button>
+                );
+                if (mode === 'setup') {
+                    // Back first, then the ways on, the main one last.
+                    return (
+                        <SetupFooter>
+                            {onBack && <button type="button" className="btn-secondary" onClick={onBack}>{t('setup.back')}</button>}
+                            {restartPending
+                                ? onContinue && <button type="button" className="btn-primary" onClick={onContinue} autoFocus>{t('setup.continue')}</button>
+                                : <>
+                                    {onSkip && <button type="button" className="btn-secondary" onClick={onSkip} disabled={busy !== null}>{t('gpu.skip')}</button>}
+                                    {canApply ? <>{showMe}{apply}</> : showMe}
+                                </>}
+                        </SetupFooter>
+                    );
+                }
+                return (
+                    <div className="setup-row gpu-actions">
+                        {apply}
+                        {showMe}
+                        {status.revert?.available && (
+                            <button type="button" className="btn-secondary" onClick={() => setSheet('revert')} disabled={busy !== null}>
+                                <RotateCcw size={13} aria-hidden="true" /> {t('gpu.undo')}
+                            </button>
+                        )}
+                    </div>
+                );
+            })()}
 
             {sheet === 'apply' && target != null && (
                 <ConfirmSheet

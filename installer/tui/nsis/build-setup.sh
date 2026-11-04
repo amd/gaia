@@ -11,7 +11,6 @@
 #   build-setup.sh --version 0.23.0 \
 #                  --payload dist/payload \
 #                  --out dist \
-#                  --lemonade-msi installer/lemonade-server-minimal.msi \
 #                  --fonts dist/fonts \
 #                  --agent-ui-setup dist/gaia-agent-ui-0.23.0-x64-setup.exe
 #
@@ -25,12 +24,11 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: build-setup.sh --version <x.y.z[-rc.N]> --payload <dir> --out <dir> --lemonade-msi <path> --fonts <dir> --agent-ui-setup <path>
+usage: build-setup.sh --version <x.y.z[-rc.N]> --payload <dir> --out <dir> --fonts <dir> --agent-ui-setup <path>
 
   --version       version to stamp into the installer and its filename (x.y.z, or x.y.z-rc.N)
   --payload       directory holding gaia-tui.exe, gaia-agent.exe and LICENSE.md
   --out           directory the setup .exe is written to
-  --lemonade-msi  the pinned lemonade-server-minimal.msi to bundle
   --fonts         IBM Plex Mono faces staged by installer/tui/fetch_fonts.py
   --agent-ui-setup  gaia-agent-ui-<x.y.z>-x64-setup.exe, the desktop app component
   --icon          .ico to use (default: <repo>/src/gaia/img/gaia.ico)
@@ -45,7 +43,7 @@ die() {
   exit 1
 }
 
-VERSION="" PAYLOAD="" OUT="" LEMONADE_MSI="" ICON="" FONTS="" AGENT_UI_SETUP=""
+VERSION="" PAYLOAD="" OUT="" ICON="" FONTS="" AGENT_UI_SETUP=""
 
 # Each flag guards its own `shift 2`: without the guard a trailing --version
 # makes shift fail, which under `set -e` aborts with no message at all.
@@ -54,7 +52,6 @@ while [ $# -gt 0 ]; do
     --version)      [ $# -ge 2 ] || die "--version requires a value." "Example: --version 0.23.0";                                 VERSION="$2";      shift 2 ;;
     --payload)      [ $# -ge 2 ] || die "--payload requires a value." "Example: --payload dist/payload";                           PAYLOAD="$2";      shift 2 ;;
     --out)          [ $# -ge 2 ] || die "--out requires a value." "Example: --out dist";                                           OUT="$2";          shift 2 ;;
-    --lemonade-msi) [ $# -ge 2 ] || die "--lemonade-msi requires a value." "Example: --lemonade-msi installer/lemonade-server-minimal.msi"; LEMONADE_MSI="$2"; shift 2 ;;
     --fonts)        [ $# -ge 2 ] || die "--fonts requires a value." "Example: --fonts dist/fonts";                               FONTS="$2";        shift 2 ;;
     --agent-ui-setup) [ $# -ge 2 ] || die "--agent-ui-setup requires a value." "Example: --agent-ui-setup dist/gaia-agent-ui-0.23.0-x64-setup.exe"; AGENT_UI_SETUP="$2"; shift 2 ;;
     --icon)         [ $# -ge 2 ] || die "--icon requires a value." "Example: --icon src/gaia/img/gaia.ico";                        ICON="$2";         shift 2 ;;
@@ -67,7 +64,6 @@ missing=""
 [ -n "${VERSION}" ]      || missing="${missing} --version"
 [ -n "${PAYLOAD}" ]      || missing="${missing} --payload"
 [ -n "${OUT}" ]          || missing="${missing} --out"
-[ -n "${LEMONADE_MSI}" ] || missing="${missing} --lemonade-msi"
 [ -n "${FONTS}" ]        || missing="${missing} --fonts"
 [ -n "${AGENT_UI_SETUP}" ] || missing="${missing} --agent-ui-setup"
 if [ -n "${missing}" ]; then
@@ -100,13 +96,6 @@ for f in "${PAYLOAD}/gaia-tui.exe" "${PAYLOAD}/gaia-agent.exe" "${PAYLOAD}/LICEN
     exit 1
   }
 done
-[ -f "${LEMONADE_MSI}" ] || {
-  echo "build-setup.sh: --lemonade-msi '${LEMONADE_MSI}' does not exist. This installer is" >&2
-  echo "  offline by contract, so the MSI must be downloaded and size-checked by the build" >&2
-  echo "  first -- see the 'Download the pinned Lemonade MSI' step in" >&2
-  echo "  .github/workflows/windows_setup.yml." >&2
-  exit 1
-}
 [ -f "${ICON}" ] || { echo "build-setup.sh: icon '${ICON}' does not exist" >&2; exit 1; }
 # Every file the committed pin names, faces and licence -- not a directory
 # listing, which would accept a staging dir missing one.
@@ -133,13 +122,6 @@ fi
 AGENT_UI_VERSION="${BASH_REMATCH[1]}"
 [ -f "${AGENT_UI_SETUP}" ] || die "--agent-ui-setup '${AGENT_UI_SETUP}' does not exist."
 [ "$(head -c 2 "${AGENT_UI_SETUP}")" = "MZ" ] || die "--agent-ui-setup '${AGENT_UI_SETUP}' is not a Windows executable."
-
-LEMONADE_VERSION="$(grep -oE 'LEMONADE_VERSION = "[^"]+"' "${REPO}/src/gaia/version.py" | cut -d'"' -f2)"
-[ -n "${LEMONADE_VERSION}" ] || {
-  echo "build-setup.sh: could not parse LEMONADE_VERSION from ${REPO}/src/gaia/version.py." >&2
-  echo "  It is the single source of truth for the pinned Lemonade version shown during install." >&2
-  exit 1
-}
 
 # GitHub's windows-latest ships NSIS at the first path; the second covers a
 # local winget/choco install. Not found is an error, not a skip.
@@ -171,8 +153,6 @@ winpath() {
   "-DVERSION=${VERSION}" \
   "-DVERSION_QUAD=${VERSION_QUAD}" \
   "-DPAYLOAD_DIR=$(winpath "$(cd "${PAYLOAD}" && pwd)")" \
-  "-DLEMONADE_MSI=$(winpath "$(cd "$(dirname "${LEMONADE_MSI}")" && pwd)/$(basename "${LEMONADE_MSI}")")" \
-  "-DLEMONADE_VERSION=${LEMONADE_VERSION}" \
   "-DICON=$(winpath "${ICON}")" \
   "-DFONTS_DIR=$(winpath "$(cd "${FONTS}" && pwd)")" \
   "-DAGENT_UI_SETUP=$(winpath "$(cd "$(dirname "${AGENT_UI_SETUP}")" && pwd)/${UI_NAME}")" \

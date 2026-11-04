@@ -399,8 +399,7 @@ def _relay_scheduled_prompt(
     the in-process run is. Its events are read back off *console*: the answer
     is returned, and an error the relay reported is raised.
     """
-    from gaia.ui._chat_helpers import _dispatch_sidecar_query, _memory_mode
-    from gaia.ui.models import ChatRequest
+    from gaia.ui._chat_helpers import _memory_mode, relay_one_prompt
     from gaia.ui.sse_handler import SSEOutputHandler
 
     handler = console if console is not None else SSEOutputHandler(background_mode=True)
@@ -414,29 +413,14 @@ def _relay_scheduled_prompt(
     ) or handler.cancelled.is_set():
         raise RuntimeError("Scheduled run was stopped before it started.")
 
-    _dispatch_sidecar_query(
+    answer = relay_one_prompt(
         handler,
-        ChatRequest(session_id="", message=prompt, agent_type=_SCHEDULED_AGENT),
-        history_pairs=[],
-        model_id=_scheduled_model(db),
+        prompt,
         agent_type=_SCHEDULED_AGENT,
+        model_id=_scheduled_model(db),
         memory=_memory_mode({}, db),
         max_steps=_SCHEDULED_MAX_STEPS,
     )
-
-    # Drained only after the turn ends: safe because event_queue is unbounded.
-    answer = None
-    failure = None
-    while not handler.event_queue.empty():
-        event = handler.event_queue.get_nowait()
-        if not event:
-            continue
-        if event.get("type") == "agent_error":
-            failure = str(event.get("content") or "The GAIA agent reported an error.")
-        elif event.get("type") == "answer":
-            answer = event
-    if failure:
-        raise RuntimeError(failure)
     if handler.cancelled.is_set():
         raise RuntimeError("Scheduled run was stopped before it finished.")
     if answer is None:
@@ -444,10 +428,7 @@ def _relay_scheduled_prompt(
             "The GAIA agent ended the scheduled run without an answer. Check "
             "the agent log under ~/.gaia/logs/ and re-run the scheduled task."
         )
-    content = str(answer.get("content") or "")
-    if answer.get("failed"):
-        raise RuntimeError(content or "The GAIA agent's run failed.")
-    return content
+    return answer
 
 
 class _ScheduledRuns:

@@ -72,6 +72,13 @@ extraResources:
     to: vendor/uv
     filter:
       - "**/*"
+  # Pinned embeddable Lemonade archive for this platform, fetched and verified
+  # by installer/scripts/fetch_lemonade_embeddable.py. main.cjs points the
+  # backend at it, so first-run setup unpacks it instead of downloading it.
+  - from: build/vendor/lemonade
+    to: vendor/lemonade
+    filter:
+      - "**/*"
   # Third-party licence notices for the libraries the app bundles.
   - from: ../../../../THIRD_PARTY_NOTICES.md
     to: THIRD_PARTY_NOTICES.md

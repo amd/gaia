@@ -14,13 +14,21 @@ The server starts without a context size; the verify step loads each model at
 the profile's min_context_size, which is where that requirement is enforced.
 """
 
+import base64
 import importlib.util
 import json
+import math
 import os
+import queue
 import shutil
+import struct
 import subprocess
 import sys
+import tempfile
+import threading
 import time
+import wave
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -343,6 +351,13 @@ class ChatModelChoice:
     skipped: list
     #: What the machine was judged against; None when the user chose.
     capacity: Optional[MachineCapacity] = None
+    #: The pick on capacity alone; differs from ``model_id`` when free memory decided.
+    capacity_pick: Optional[str] = None
+
+    @property
+    def forced_by_free_memory(self) -> bool:
+        """Saved as ``default_model``, or a later check expects the larger model."""
+        return bool(self.capacity_pick) and self.capacity_pick != self.model_id
 
 
 def resolve_init_chat_model(
@@ -390,8 +405,17 @@ def resolve_init_chat_model(
         return ChatModelChoice(model_id=configured, user_set=True, skipped=[])
     recommend = recommend_npu_chat_model if on_npu else recommend_default_chat_model
     model_id, skipped, capacity = recommend(client)
+    capacity_pick = (
+        recommend_default_chat_model(client, judge_free_memory=False)[0]
+        if capacity is not None and not on_npu
+        else None
+    )
     return ChatModelChoice(
-        model_id=model_id, user_set=False, skipped=skipped, capacity=capacity
+        model_id=model_id,
+        user_set=False,
+        skipped=skipped,
+        capacity=capacity,
+        capacity_pick=capacity_pick,
     )
 
 
@@ -571,7 +595,7 @@ def with_chat_model(profile: str, model_ids, resolve_chat) -> list:
     if profile == "sd":
         return ids
     if profile == "npu":
-        # Both NPU models see images, so the pick replaces the floor model.
+        # The pick replaces the floor model; GAIA reads no images on the NPU.
         chat = resolve_chat().model_id
         ids = [m for m in ids if not _model_ids_match(m, NPU_DEFAULT_MODEL_NAME)]
         return [chat, *(m for m in ids if not _model_ids_match(m, chat))]
@@ -905,6 +929,68 @@ class MemoryShortfall(str):
     """A verification failure from too little free memory, not a broken model."""
 
 
+#: ``--agent-only`` kept the installed agent because the hub couldn't be reached.
+AGENT_KEPT_EXIT = 5
+
+
+class CheckTimedOut(str):
+    """A verification that never finished, such as a server stuck reloading."""
+
+
+class WrongAnswer(str):
+    """The model loaded but its answer was empty or wrong: not a damaged file."""
+
+
+class WindowTooSmall(str):
+    """The model loaded with a smaller context window than GAIA needs: not a damaged file."""
+
+
+#: A model gets this long to load and answer, plus _TEST_S_PER_GB per GB of size.
+_TEST_MIN_S = 300
+_TEST_S_PER_GB = 15
+
+#: Asked of the vision test's solid red image.
+_VISION_PROMPT = "What color is this image? Answer with one word."
+
+
+def _test_limit_s(model_id: str) -> int:
+    from gaia.llm.lemonade_client import find_model_requirement
+
+    requirement = find_model_requirement(model_id)
+    size_gb = requirement.size_gb if requirement and requirement.size_gb else 0
+    return max(_TEST_MIN_S, int(size_gb * _TEST_S_PER_GB))
+
+
+def _solid_red_png(size: int = 64) -> bytes:
+    """A PNG with one known answer, built here so the test needs no image library."""
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+    header = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
+    row = b"\x00" + b"\xdc\x14\x14" * size
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(row * size))
+        + chunk(b"IEND", b"")
+    )
+
+
+def _tone_wav(path: str, seconds: float = 1.0, rate: int = 16000) -> None:
+    """A 16 kHz mono tone: a valid request for the speech-to-text test."""
+    frames = b"".join(
+        struct.pack("<h", int(8000 * math.sin(2 * math.pi * 440 * i / rate)))
+        for i in range(int(rate * seconds))
+    )
+    with wave.Wave_write(path) as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(rate)
+        out.writeframes(frames)
+
+
 def _hf_hub_cache() -> str:
     """Where Lemonade keeps downloaded models: the Hugging Face hub cache."""
     if os.environ.get("HF_HUB_CACHE"):
@@ -1107,6 +1193,7 @@ class InitCommand:
         verbose: bool = False,
         remote: bool = False,
         skip_webui_build: bool = False,
+        skip_pip_extras: bool = False,
         skip_chat_model: bool = False,
         progress_callback: Optional[Callable[[InitProgress], None]] = None,
         lemonade_url: Optional[str] = None,
@@ -1115,6 +1202,7 @@ class InitCommand:
         allow_low_disk: bool = False,
         keep_trying: bool = False,
         extra_models: Optional[list] = None,
+        server_only: bool = False,
     ):
         """
         Initialize the init command.
@@ -1131,6 +1219,8 @@ class InitCommand:
             skip_webui_build: Skip the Agent UI frontend build step entirely
                 (same-day escape hatch if the Node preflight ever false-positives;
                 same effect as setting GAIA_SKIP_WEBUI_BUILD)
+            skip_pip_extras: Install no Python packages; the desktop app ships
+                its own, and the Agent UI's setup never pip-installs
             skip_chat_model: Skip the profile's chat LLM (e.g. Gemma-4-E4B-it-GGUF)
                 while still downloading any embedding model it declares. For a
                 session whose inference runs on Anthropic's Claude API instead of
@@ -1150,6 +1240,8 @@ class InitCommand:
                 to two minutes before failing.
             extra_models: Models to download beside the profile's, e.g. the
                 vision model when ``default_model`` replaced it.
+            server_only: Start the model server and stop, fetching nothing
+                else, so the user can choose before anything downloads.
         """
         if lemonade_url and gaia_lemonade:
             raise ValueError(
@@ -1171,6 +1263,7 @@ class InitCommand:
         self._setup_verified = True
         self.skip_models = skip_models
         self.skip_webui_build = skip_webui_build
+        self.skip_pip_extras = skip_pip_extras
         self.force_reinstall = force_reinstall
         self.force_models = force_models
         self.yes = yes
@@ -1180,6 +1273,7 @@ class InitCommand:
         self.allow_low_disk = allow_low_disk
         self.keep_trying = keep_trying
         self.extra_models = list(extra_models or [])
+        self.server_only = server_only
         # Models in skipped_models that this run left out.
         self._skipped_now: list = []
         self.progress_callback = progress_callback
@@ -1224,12 +1318,18 @@ class InitCommand:
         self._no_hub_build_for_machine = False
         # Set when a runtime step failed and the agent installs on the way out.
         self._runtime_failed = False
+        # Why the agent could not be checked or installed, for refresh_agent().
+        self._agent_problem: Optional[str] = None
+        # The working agent stayed because the hub couldn't be asked about it.
+        self._agent_kept = False
 
     def _print(self, message: str, end: str = "\n"):
         """Print message to stdout."""
         if RICH_AVAILABLE and self.console:
             if end == "":
-                self.console.print(message, end="")
+                # Rich drops the \r a progress redraw starts with, so the redraws pile up.
+                self.console.file.write(message)
+                self.console.file.flush()
             else:
                 self.console.print(message)
         else:
@@ -1244,6 +1344,8 @@ class InitCommand:
                     "[bold cyan]GAIA Initialization[/bold cyan]",
                     border_style="cyan",
                     padding=(0, 2),
+                    # Setup runs this unwrapped at 1000 columns; size the box to its text.
+                    expand=False,
                 )
             )
             self.console.print()
@@ -1443,7 +1545,9 @@ class InitCommand:
         self._print_header()
 
         profile_config = INIT_PROFILES[self.profile]
-        has_pip_extras = bool(profile_config.get("pip_extras"))
+        has_pip_extras = (
+            bool(profile_config.get("pip_extras")) and not self.skip_pip_extras
+        )
         # Data-driven scope (#2358): keyed off the declared agent, not a
         # hardcoded profile-name literal, so it never touches profiles for
         # agents outside the catalog (chat/sd/vlm/email/...), each of which
@@ -1474,8 +1578,13 @@ class InitCommand:
             if not self._choose_lemonade():
                 return self._fail_before_agent(has_hub_agent_check)
             self._print_step(step_num, total_steps, "Starting Lemonade Server...")
+            self._component("server", "active")
             if not self._ensure_lemonade_ready():
+                self._component("server", "failed")
                 return self._fail_before_agent(has_hub_agent_check)
+            self._component("server", "done")
+            if self.server_only:
+                return 0
 
             # NPU-specific: Detect hardware
             if has_device_check:
@@ -1502,6 +1611,11 @@ class InitCommand:
             # the model pickers without a separate profile.
             if not has_backend_install and self.profile in HARDWARE_CHAT_PROFILES:
                 self._enable_npu_if_present()
+            self._component("backend", "active")
+            if not self._ensure_llamacpp_backend():
+                self._component("backend", "failed")
+                return self._fail_before_agent(has_hub_agent_check)
+            self._component("backend", "done")
 
             # Step 3+: Download models (unless skipped)
             if not self.skip_models:
@@ -1522,8 +1636,11 @@ class InitCommand:
                 self._print_step(
                     step_num, total_steps, "Installing Python dependencies..."
                 )
+                self._component("packages", "active")
                 if not self._install_pip_extras():
+                    self._component("packages", "failed")
                     return self._fail_before_agent(has_hub_agent_check)
+                self._component("packages", "done")
 
             # Ensure the profile's hub agent (chat's standalone wheel) is
             # installed (#2358). Independent of the pip-extras step above:
@@ -1543,7 +1660,9 @@ class InitCommand:
                     total_steps,
                     f"Checking {profile_config['agent']} agent installation...",
                 )
+                self._component("agent", "active")
                 self._ensure_hub_agent_installed()
+                self._component("agent", "failed" if self._agent_problem else "done")
 
             # Build Agent UI frontend (dev/source installs only). No
             # try/except here: ensure_webui_built() never raises for an
@@ -1643,7 +1762,7 @@ class InitCommand:
         Lemonade or model failure must not also leave the agent missing. An agent
         install failure here is reported as a second error, after the first.
         """
-        if installs_agent:
+        if installs_agent and not self.server_only:
             from gaia.hub.installer import InstallError
 
             agent_id = INIT_PROFILES[self.profile]["agent"]
@@ -2068,6 +2187,40 @@ class InitCommand:
                 "installs. Re-run `gaia init` to retry."
             )
 
+    def _component(self, component: str, state: str) -> None:
+        """Report one piece setup fetches: ``active``, ``done`` or ``failed``."""
+        self.events.emit("component", component=component, state=state)
+
+    def _ensure_llamacpp_backend(self) -> bool:
+        """Fetch the llama.cpp backend now, not unannounced inside the first load.
+
+        Skipped on a server the user runs: GAIA changes nothing there.
+        """
+        from gaia.config import GaiaConfig
+        from gaia.llm.lemonade_client import LemonadeClient
+        from gaia.llm.model_server_info import available_llamacpp_backends
+
+        if self.skip_models or self._uses_saved_server() or self._lemonade_base_url:
+            return True
+        client = LemonadeClient(verbose=self.verbose)
+        # Vulkan is the GPU backend GAIA has tested: fetch it, and make it GAIA's choice.
+        tested = [
+            b["name"] for b in available_llamacpp_backends(client.get_system_info())
+        ]
+        if tested:
+            backend = tested[0]
+            if GaiaConfig.load().llamacpp_backend != backend:
+                GaiaConfig.save_key("llamacpp_backend", backend)
+            return self._install_backend(f"llamacpp:{backend}", "llamacpp")
+        backend = client._default_llamacpp_backend()
+        if not backend:
+            return True
+        self._print_warning(
+            f"Lemonade offers no backend GAIA has tested on this PC, so models run on "
+            f"its '{backend}' backend."
+        )
+        return self._install_backend(f"llamacpp:{backend}", "llamacpp")
+
     def _install_backend(
         self, backend_spec: Optional[str] = None, recipe: Optional[str] = None
     ) -> bool:
@@ -2124,8 +2277,8 @@ class InitCommand:
         replaces a local ``default_model`` and ``last_model``, the one the Agent
         UI and TUI start on. A Claude or cloud model is left as it is.
         Records nothing when the pick is the floor model every agent already
-        defaults to or when setup did not download it (declined, or
-        ``--skip-models``) or could not verify it.
+        defaults to (unless free memory forced it) or when setup did not
+        download it (declined, or ``--skip-models``) or could not verify it.
         """
         from gaia.llm.lemonade_client import (
             DEFAULT_MODEL_NAME,
@@ -2154,7 +2307,7 @@ class InitCommand:
             return
         if choice.user_set or config.default_model:
             return
-        if choice.model_id != DEFAULT_MODEL_NAME:
+        if choice.model_id != DEFAULT_MODEL_NAME or choice.forced_by_free_memory:
             config.default_model = choice.model_id
 
     def _chat_model_choice(self, client) -> "ChatModelChoice":
@@ -2221,13 +2374,16 @@ class InitCommand:
         if self.skip_chat_model:
             model_ids = [m for m in model_ids if is_embedding_model_id(m)]
 
-        for model_id in self.extra_models:
-            if not any(model_choice.ids_match(model_id, m) for m in model_ids):
-                model_ids.append(model_id)
-
         model_ids, self._skipped_now = model_choice.split_skipped(
             model_ids, self._skip_list()
         )
+        # Asked for by name in this run: the skip list doesn't apply to it.
+        for model_id in self.extra_models:
+            if not any(model_choice.ids_match(model_id, m) for m in model_ids):
+                model_ids.append(model_id)
+            self._skipped_now = [
+                m for m in self._skipped_now if not model_choice.ids_match(m, model_id)
+            ]
         chat = self._chat_choice.model_id if self._chat_choice else None
         for model_id in self._skipped_now:
             caveat = model_choice.if_skipped(
@@ -2533,8 +2689,10 @@ class InitCommand:
             min_ctx = profile_config.get("min_context_size")
 
             # Load the model (with context size if required)
+            optional = model_choice.optional_role(model_id)
             is_llm = not (
                 "embed" in model_id.lower()
+                or optional
                 or any(sd in model_id.upper() for sd in ["SDXL", "SD-", "SD1", "SD2"])
             )
 
@@ -2580,7 +2738,7 @@ class InitCommand:
                         (
                             m
                             for m in models_list.get("data", [])
-                            if m.get("id") == model_id
+                            if model_choice.ids_match(m.get("id"), model_id)
                         ),
                         None,
                     )
@@ -2600,7 +2758,12 @@ class InitCommand:
                             )
                     elif actual_ctx:
                         # Context was set but is too small
-                        return (False, f"Context {actual_ctx} < {min_ctx} required")
+                        return (
+                            False,
+                            WindowTooSmall(
+                                f"Context {actual_ctx} < {min_ctx} required"
+                            ),
+                        )
                     else:
                         # Inference still runs, so warn rather than fail.
                         log.warning(
@@ -2622,6 +2785,10 @@ class InitCommand:
                 sd in model_id.upper() for sd in ["SDXL", "SD-", "SD1", "SD2"]
             )
 
+            if optional == model_choice.ROLE_SPEECH:
+                return self._test_speech(client, model_id)
+            if optional == model_choice.ROLE_VOICE:
+                return self._test_voice(client, model_id)
             if is_sd_model:
                 # Test SD model with image generation
                 response = client.generate_image(
@@ -2636,7 +2803,7 @@ class InitCommand:
                 if problem is None:
                     problem = image_problem(image_bytes)
                 if problem is not None:
-                    return (False, f"No usable image: {problem}")
+                    return (False, WrongAnswer(f"No usable image: {problem}"))
                 return (True, None)
             elif is_embedding_model:
                 # Test embedding model with a simple text
@@ -2649,8 +2816,8 @@ class InitCommand:
                     embedding = response["data"][0].get("embedding", [])
                     if embedding and len(embedding) > 0:
                         return (True, None)
-                    return (False, "Empty embedding")
-                return (False, "Invalid response format")
+                    return (False, WrongAnswer("Empty embedding"))
+                return (False, WrongAnswer("Invalid response format"))
             else:
                 # Test LLM with a minimal chat request
                 response = client.chat_completions(
@@ -2665,8 +2832,8 @@ class InitCommand:
                     message = response["choices"][0].get("message", {})
                     if message.get("content") or message.get("reasoning_content"):
                         return (True, None)
-                    return (False, "Empty response")
-                return (False, "Invalid response format")
+                    return (False, WrongAnswer("Empty response"))
+                return (False, WrongAnswer("Invalid response format"))
 
         except InsufficientMemoryError as e:
             # Kept whole: the remedy (close apps, or another model) is in it.
@@ -2677,6 +2844,161 @@ class InitCommand:
             if len(error_msg) > 100:
                 error_msg = error_msg[:100] + "..."
             return (False, error_msg)
+
+    def _test_speech(self, client, model_id: str) -> tuple:
+        """Transcribe a short tone: the request is accepted and a transcript returns."""
+        from gaia.audio.lemonade_asr import LemonadeASRClient
+        from gaia.llm.lemonade_client import resolve_lemonade_api_key
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = str(Path(folder) / "tone.wav")
+            _tone_wav(path)
+            LemonadeASRClient(
+                base_url=client.base_url,
+                model=model_id,
+                api_key=resolve_lemonade_api_key(base_url=client.base_url),
+            ).transcribe(path, require_timestamps=False)
+        return (True, None)
+
+    def _test_voice(self, client, model_id: str) -> tuple:
+        """Speak one short sentence and check real audio came back."""
+        from gaia.audio.lemonade_tts import LemonadeTTSClient
+        from gaia.llm.lemonade_client import resolve_lemonade_api_key
+
+        samples, _ = LemonadeTTSClient(
+            base_url=client.base_url,
+            model=model_id,
+            api_key=resolve_lemonade_api_key(base_url=client.base_url),
+        ).synthesize("GAIA is ready.")
+        return (True, None) if len(samples) else (False, "No audio came back")
+
+    def _test_vision(self, client, model_id: str) -> tuple:
+        """Show the model a red image and ask its colour: text alone proves no vision."""
+        from gaia.llm.lemonade_client import InsufficientMemoryError
+
+        image = base64.b64encode(_solid_red_png()).decode("ascii")
+        try:
+            response = client.chat_completions(
+                model=model_id,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": _VISION_PROMPT},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/png;base64,{image}"},
+                            },
+                        ],
+                    }
+                ],
+                max_tokens=256,
+                temperature=0,
+                auto_download=False,
+            )
+        except InsufficientMemoryError as e:
+            return (False, MemoryShortfall(str(e)))
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            return (False, str(e)[:200])
+        choices = (response or {}).get("choices") or [{}]
+        message = choices[0].get("message", {})
+        said = (
+            f"{message.get('content') or ''} {message.get('reasoning_content') or ''}"
+        )
+        if "red" in said.lower():
+            return (True, None)
+        return (
+            False,
+            WrongAnswer(
+                f"Couldn't read a test image: it answered {said.strip()[:80]!r}"
+            ),
+        )
+
+    def _within_limit(self, model_id: str, test, *args) -> tuple:
+        """Run one test on a daemon thread, so a stuck server can't hold setup open."""
+        limit = _test_limit_s(model_id)
+        results: "queue.Queue[tuple]" = queue.Queue(maxsize=1)
+
+        def attempt() -> None:
+            try:
+                results.put(test(*args))
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                results.put((False, str(e)[:200]))
+            except BaseException as e:  # pylint: disable=broad-exception-caught
+                results.put(e)
+
+        threading.Thread(target=attempt, daemon=True).start()
+        try:
+            outcome = results.get(timeout=limit)
+        except queue.Empty:
+            return (
+                False,
+                CheckTimedOut(f"It didn't finish within {limit // 60} minutes"),
+            )
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    def _emit_test(
+        self,
+        job: str,
+        subject: Optional[str],
+        state: str,
+        error: Optional[str] = None,
+        seconds: Optional[float] = None,
+    ) -> None:
+        """One row of the Test step: ``running``, ``passed``, ``failed`` or ``skipped``."""
+        # Only "broken" means the file didn't load, so only it offers a fresh download.
+        kinds = (
+            (MemoryShortfall, "memory"),
+            (CheckTimedOut, "stuck"),
+            (WrongAnswer, "answer"),
+            (WindowTooSmall, "window"),
+        )
+        kind = None
+        if error is not None:
+            kind = next((k for cls, k in kinds if isinstance(error, cls)), "broken")
+        self.events.emit(
+            "test",
+            job=job,
+            subject=subject,
+            state=state,
+            error=str(error) if error is not None else None,
+            kind=kind,
+            seconds=round(seconds, 1) if seconds is not None else None,
+        )
+
+    def _run_test(self, job: str, model_id: str, test, *args) -> tuple:
+        self._emit_test(job, model_id, "running")
+        started = time.monotonic()
+        success, error = self._within_limit(model_id, test, *args)
+        self._emit_test(
+            job,
+            model_id,
+            "passed" if success else "failed",
+            error,
+            time.monotonic() - started,
+        )
+        return success, error
+
+    def _test_job(self, model_id: str, chat_id: Optional[str]) -> str:
+        roles = model_choice.roles_for(model_id, chat_id)
+        return roles[0]
+
+    def _vision_test_model(self, client) -> Optional[str]:
+        """The model setup leaves reading images; None on a cloud or NPU chat setup."""
+        from gaia.config import GaiaConfig
+        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, runs_on_npu
+
+        if self.skip_chat_model:
+            return None
+        chat = self._chat_model(client)
+        if runs_on_npu(chat):
+            return None
+        chosen = GaiaConfig.load().vision_model
+        if chosen:
+            return chosen
+        return chat if model_choice.reads_images(chat) else DEFAULT_MODEL_NAME
 
     def _verify_setup(self) -> bool:
         """
@@ -2691,15 +3013,19 @@ class InitCommand:
             client = LemonadeClient(verbose=self.verbose)
 
             # Check server health
+            self._emit_test("server", None, "running")
             try:
                 health = client.health_check()
                 if health:
                     self._print_success("Server health: OK")
+                    self._emit_test("server", None, "passed")
                 else:
                     self._print_error("Server not responding")
+                    self._emit_test("server", None, "failed", "Server not responding")
                     return False
             except Exception:
                 self._print_error("Server not responding")
+                self._emit_test("server", None, "failed", "Server not responding")
                 return False
 
             # Ensure proper context size for this profile
@@ -2769,6 +3095,15 @@ class InitCommand:
             if self.skip_chat_model:
                 model_ids = [m for m in model_ids if is_embedding_model_id(m)]
             model_ids, _ = model_choice.split_skipped(model_ids, self._skip_list())
+            # What the user ticked beside the plan is tested too: downloaded isn't working.
+            model_ids = [
+                *model_ids,
+                *(
+                    m
+                    for m in self.extra_models
+                    if not any(model_choice.ids_match(m, k) for k in model_ids)
+                ),
+            ]
 
             if not model_ids or self.skip_models:
                 return True
@@ -2793,15 +3128,19 @@ class InitCommand:
 
             models_passed = 0
             models_failed = []
+            extras_failed = []
             models_ctx_unverified = []
+            chat_id = None if self.skip_chat_model else self._chat_model(client)
 
             try:
                 for model_id in model_ids:
+                    job = self._test_job(model_id, chat_id)
                     # Check if model is available first
                     if not client.check_model_available(model_id):
                         self.console.print(
                             f"   [yellow]⏭️[/yellow]  [cyan]{model_id}[/cyan] [dim]- not downloaded[/dim]"
                         )
+                        self._emit_test(job, model_id, "skipped")
                         continue
 
                     # Reset per-model context state. _test_model_inference
@@ -2814,7 +3153,9 @@ class InitCommand:
                     self._ctx_warning = None
 
                     # Test the model
-                    success, error = self._test_model_inference(client, model_id)
+                    success, error = self._run_test(
+                        job, model_id, self._test_model_inference, client, model_id
+                    )
                     if success:
                         # Show context only when verification was attempted
                         # (LLM models with a min_ctx requirement).
@@ -2841,7 +3182,34 @@ class InitCommand:
                         self.console.print(
                             f"   [red]❌[/red] [cyan]{model_id}[/cyan] [dim]- {error}[/dim]"
                         )
-                        models_failed.append((model_id, error))
+                        # An optional extra failing is reported, but chat still works.
+                        if model_choice.optional_role(model_id):
+                            extras_failed.append((model_id, error))
+                        else:
+                            models_failed.append((model_id, error))
+
+                vision = self._vision_test_model(client)
+                # A vision-only model already failed its load test on this row.
+                load_failed = vision and any(
+                    model_choice.ids_match(m, vision) for m, _ in models_failed
+                )
+                if load_failed:
+                    pass
+                elif vision and client.check_model_available(vision):
+                    success, error = self._run_test(
+                        model_choice.ROLE_VISION,
+                        vision,
+                        self._test_vision,
+                        client,
+                        vision,
+                    )
+                    if not success:
+                        self.console.print(
+                            f"   [red]❌[/red] [cyan]{vision}[/cyan] [dim]- {error}[/dim]"
+                        )
+                        models_failed.append((vision, error))
+                elif vision:
+                    self._emit_test(model_choice.ROLE_VISION, vision, "skipped")
 
             except KeyboardInterrupt:
                 self.console.print()
@@ -2856,8 +3224,11 @@ class InitCommand:
             short_of_memory = [
                 (m, e) for m, e in models_failed if isinstance(e, MemoryShortfall)
             ]
+            stuck = [(m, e) for m, e in models_failed if isinstance(e, CheckTimedOut)]
             broken = [
-                (m, e) for m, e in models_failed if not isinstance(e, MemoryShortfall)
+                (m, e)
+                for m, e in models_failed
+                if not isinstance(e, (MemoryShortfall, CheckTimedOut))
             ]
             if models_failed:
                 self._print_warning(f"Models verified: {models_passed}/{total} passed")
@@ -2872,6 +3243,17 @@ class InitCommand:
                     "   [dim]Close memory-heavy apps and re-run, or choose a cloud "
                     "model or a smaller local model in the Agent UI (Settings > "
                     "Model).[/dim]"
+                )
+            if stuck:
+                names = ", ".join(m for m, _ in stuck)
+                self.console.print()
+                self.console.print(
+                    f"   [bold]Not tested ({names}): the model server stopped "
+                    "answering before the test finished.[/bold]"
+                )
+                self.console.print(
+                    "   [dim]The download itself is fine. Restart the model server "
+                    "or the PC and run setup again.[/dim]"
                 )
             if broken:
                 self.console.print()
@@ -2928,6 +3310,9 @@ class InitCommand:
                 self.console.print(
                     f"     [dim]Then re-download:[/dim] [cyan]gaia init --profile {self.profile} --yes[/cyan]"
                 )
+            if extras_failed:
+                names = ", ".join(m for m, _ in extras_failed)
+                self._print_warning(f"Optional models that failed their test: {names}")
             if not models_failed:
                 self._print_success(f"All {models_passed} model(s) verified")
 
@@ -2960,6 +3345,14 @@ class InitCommand:
                     "model; nothing needs re-downloading."
                 )
                 return False
+            if stuck:
+                self.console.print()
+                self._print_error(
+                    "The model server stopped answering while testing "
+                    f"{', '.join(m for m, _ in stuck)}. Restart it, or the PC, "
+                    "and re-run `gaia init`; nothing needs re-downloading."
+                )
+                return False
 
             return True
 
@@ -2980,10 +3373,15 @@ class InitCommand:
         BINARY, which no import can ever see, so its install sentinel under
         ``~/.gaia/agents`` is the only evidence it is there. Probing the
         module alone would re-download it from the hub on every run and
-        report a finished setup as "incomplete".
+        report a finished setup as "incomplete". The flagship counts only as
+        its binary: the apps run it that way, so an importable package from a
+        checkout must not stand in for it.
         """
         module = _AGENT_IMPORT_NAMES.get(agent_id, f"gaia_agent_{agent_id}")
-        if importlib.util.find_spec(module) is not None:
+        if (
+            agent_id != FLAGSHIP_AGENT_ID
+            and importlib.util.find_spec(module) is not None
+        ):
             return True
 
         # Function-local: gaia.hub.installer imports gaia.agents.registry at
@@ -3048,15 +3446,33 @@ class InitCommand:
         """
         agent_id = INIT_PROFILES[self.profile]["agent"]
 
-        from gaia.hub import catalog as hub_catalog
-        from gaia.hub import prerelease
-
         # A release candidate's flagship comes from its own pre-release. A
         # broken pre-release raises here: init must not finish "successfully"
         # with an agent that predates the candidate.
-        rc_source = prerelease.flagship_source(
-            agent_id, fetcher=hub_catalog.fetch_bytes
-        )
+        import requests
+
+        from gaia.hub import catalog as hub_catalog
+        from gaia.hub import prerelease
+
+        try:
+            rc_source = prerelease.flagship_source(
+                agent_id, fetcher=hub_catalog.fetch_bytes
+            )
+        except prerelease.PrereleaseFlagshipError as exc:
+            # Offline is not a broken candidate: an installed agent stays, as
+            # it does when the hub can't be reached on a final release.
+            offline = isinstance(
+                exc.__cause__, (requests.ConnectionError, requests.Timeout)
+            )
+            if not offline or not self._is_hub_agent_available(agent_id):
+                raise
+            self._agent_problem = str(exc)
+            self._agent_kept = True
+            self._print_warning(
+                f"Could not reach the release candidate's download server "
+                f"({exc.__cause__}); keeping the installed '{agent_id}' agent."
+            )
+            return
         if rc_source is not None:
             self._ensure_release_candidate_flagship(agent_id, rc_source)
             return
@@ -3081,6 +3497,7 @@ class InitCommand:
             catalog_result = hub_catalog.load_index()
         except Exception as exc:  # noqa: BLE001 - reported below, never swallowed
             log.debug("Agent Hub catalog fetch failed", exc_info=True)
+            self._agent_problem = f"Could not reach {hub_url}: {exc}"
             self._print_error(
                 hub_unreachable_message(
                     agent_id, hub_url, exc, retry=self._flagship_install_command()
@@ -3089,6 +3506,7 @@ class InitCommand:
             return
 
         if not any(agent.get("id") == agent_id for agent in catalog_result.agents):
+            self._agent_problem = f"{hub_url} does not list the '{agent_id}' agent"
             self._print_error(
                 f"The download server at {hub_url} does not list the "
                 f"'{agent_id}' agent, so it was not installed. Check GAIA_HUB_URL, "
@@ -3151,6 +3569,24 @@ class InitCommand:
                     sys.path.append(sp)
                     importlib.invalidate_caches()
 
+    def refresh_agent(self) -> int:
+        """Bring the flagship up to this release, with no Lemonade or model step.
+
+        The desktop app runs this after an update. Returns 1 with the cause as
+        the last line of stderr when the agent could not be checked or replaced,
+        and :data:`AGENT_KEPT_EXIT` when the hub couldn't be reached and the
+        installed agent stays, so the app can carry on and try again later.
+        """
+        try:
+            self._ensure_hub_agent_installed()
+        except Exception as e:  # noqa: BLE001 - reported below, exits non-zero
+            self._agent_problem = str(e)
+            self._agent_kept = False
+        if self._agent_problem:
+            print(f"Error: {self._agent_problem}", file=sys.stderr)
+            return AGENT_KEPT_EXIT if self._agent_kept else 1
+        return 0
+
     def _installed_agent_is_stale(self, agent_id: str, installed) -> bool:
         """True when the installed build isn't the one the hub publishes now.
 
@@ -3175,11 +3611,16 @@ class InitCommand:
             requests.RequestException,
             ValueError,
         ) as exc:
+            self._agent_problem = (
+                f"Could not compare the '{agent_id}' agent with the download "
+                f"server: {exc}"
+            )
             self._print_warning(
                 f"Could not compare the installed '{agent_id}' agent with the "
                 f"download server ({exc}); keeping it ({installed.version}). Run "
                 f"`{self._flagship_install_command()}` again to retry."
             )
+            self._agent_kept = True
             return False
         return bool(want) and want.lower() != installed.artifact_sha256.lower()
 
@@ -3432,6 +3873,11 @@ class InitCommand:
         return not setup_incomplete
 
 
+def run_agent_refresh() -> int:
+    """Entry point for `gaia init --agent-only`."""
+    return InitCommand(profile=DEFAULT_INIT_PROFILE, skip_models=True).refresh_agent()
+
+
 def run_init(
     profile: str = DEFAULT_INIT_PROFILE,
     skip_models: bool = False,
@@ -3441,6 +3887,7 @@ def run_init(
     verbose: bool = False,
     remote: bool = False,
     skip_webui_build: bool = False,
+    skip_pip_extras: bool = False,
     skip_chat_model: bool = False,
     lemonade_url: Optional[str] = None,
     gaia_lemonade: bool = False,
@@ -3448,6 +3895,7 @@ def run_init(
     allow_low_disk: bool = False,
     keep_trying: bool = False,
     extra_models: Optional[list] = None,
+    server_only: bool = False,
 ) -> int:
     """
     Entry point for `gaia init` command.
@@ -3461,6 +3909,7 @@ def run_init(
         verbose: Enable verbose output
         remote: Use the Lemonade Server LEMONADE_BASE_URL names
         skip_webui_build: Skip the Agent UI frontend build step entirely
+        skip_pip_extras: Install no Python packages; the desktop app ships its own
         skip_chat_model: Skip the profile's chat LLM, keep any embedding model
             (see InitCommand's docstring — for a Claude-backed session)
         lemonade_url: Use (and save) the Lemonade Server the user runs here
@@ -3469,6 +3918,7 @@ def run_init(
         allow_low_disk: Download even when the model store looks too small
         keep_trying: Retry a dropped download for up to two minutes
         extra_models: Models to download beside the profile's
+        server_only: Start the model server and stop
 
     Returns:
         Exit code (0 for success, non-zero for failure)
@@ -3483,6 +3933,7 @@ def run_init(
             verbose=verbose,
             remote=remote,
             skip_webui_build=skip_webui_build,
+            skip_pip_extras=skip_pip_extras,
             skip_chat_model=skip_chat_model,
             lemonade_url=lemonade_url,
             gaia_lemonade=gaia_lemonade,
@@ -3490,6 +3941,7 @@ def run_init(
             allow_low_disk=allow_low_disk,
             keep_trying=keep_trying,
             extra_models=extra_models,
+            server_only=server_only,
         )
         return cmd.run()
     except ValueError as e:
