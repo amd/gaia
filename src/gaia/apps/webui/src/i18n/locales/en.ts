@@ -1776,12 +1776,18 @@ export const enMessages = {
     'resources.memory': 'Memory',
     'resources.gpu': 'GPU',
     'resources.npu': 'NPU',
+    'resources.ethernet': 'Ethernet',
+    'resources.wifi': 'Wi-Fi',
+    'resources.network': 'Network',
+    'resources.sendRecv': 'S: {send} R: {recv}',
+    'resources.send': 'Send {rate}',
+    'resources.receive': 'Receive {rate}',
     'resources.numbered': '{label} {n}',
     'resources.inUse': '{size} in use',
     'resources.reading': 'Reading…',
     'resources.error': "Can't read this PC's usage. Trying again…",
     'resources.settings': 'Show resource usage in chats',
-    'resources.settingsHint': 'CPU, memory, GPU and NPU load on this PC, updated every second.',
+    'resources.settingsHint': 'CPU, memory, GPU, NPU and network use on this PC, updated every second.',
 } as const;
 
 export const en: Locale = {

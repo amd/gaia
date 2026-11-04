@@ -2969,6 +2969,71 @@
     "title": "ModelStatus",
     "type": "object"
   },
+  "NetworkUsage": {
+    "properties": {
+      "description": {
+        "description": "The adapter's hardware name.",
+        "title": "Description",
+        "type": "string"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "ethernet",
+          "wifi",
+          "network"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "name": {
+        "description": "The connection's name, such as \"Ethernet 3\".",
+        "title": "Name",
+        "type": "string"
+      },
+      "recv_bps": {
+        "description": "Bits per second received.",
+        "title": "Recv Bps",
+        "type": "integer"
+      },
+      "recv_history": {
+        "description": "Bits per second, oldest first.",
+        "items": {
+          "type": "integer"
+        },
+        "title": "Recv History",
+        "type": "array"
+      },
+      "send_bps": {
+        "description": "Bits per second sent.",
+        "title": "Send Bps",
+        "type": "integer"
+      },
+      "send_history": {
+        "description": "Bits per second, oldest first.",
+        "items": {
+          "type": "integer"
+        },
+        "title": "Send History",
+        "type": "array"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "description",
+      "kind",
+      "send_bps",
+      "recv_bps",
+      "send_history",
+      "recv_history"
+    ],
+    "title": "NetworkUsage",
+    "type": "object"
+  },
   "OpenFileRequest": {
     "description": "Request to open a file or folder in the system file explorer.",
     "properties": {
@@ -3369,6 +3434,13 @@
             "type": "null"
           }
         ]
+      },
+      "networks": {
+        "items": {
+          "$ref": "#/components/schemas/NetworkUsage"
+        },
+        "title": "Networks",
+        "type": "array"
       },
       "ready": {
         "description": "False until the first sample is in.",

@@ -108,15 +108,25 @@ const DOCUMENTS = {
 
 /** A Strix Halo mid-answer: the GPU busy with the model, the NPU idle. */
 const GIB = 1024 ** 3;
-const ramp = (from: number, to: number) => Array.from({ length: 60 }, (_, i) => Math.round((from + ((to - from) * i) / 59 + 6 * Math.sin(i / 3)) * 10) / 10);
+/** A minute of jagged, seeded readings around `base`, like a real counter. */
+const noisy = (base: number, jitter: number, seed: number) => {
+    let x = seed;
+    return Array.from({ length: 60 }, () => {
+        x = (x * 1103515245 + 12345) % 2 ** 31;
+        return Math.max(0, Math.round((base + ((x / 2 ** 31) * 2 - 1) * jitter) * 10) / 10);
+    });
+};
 export const RESOURCES = {
     interval_ms: 1000,
     ready: true,
-    cpu: { percent: 20.4, ghz: 4.7, history: ramp(8, 20) },
-    memory: { used_bytes: 45 * GIB, total_bytes: 63.6 * GIB, percent: 70.8, history: ramp(66, 71) },
+    cpu: { percent: 20.4, ghz: 4.7, history: noisy(16, 9, 7) },
+    memory: { used_bytes: 45 * GIB, total_bytes: 63.6 * GIB, percent: 70.8, history: noisy(70.6, 0.4, 3) },
     devices: [
-        { id: '0x00000000_0x0000d938', name: 'AMD Radeon(TM) 8060S Graphics', kind: 'gpu', percent: 14, memory_used_bytes: 30 * GIB, history: ramp(4, 14) },
-        { id: '0x00000000_0x0000f994', name: 'NPU Compute Accelerator Device', kind: 'npu', percent: 0, memory_used_bytes: null, history: ramp(0, 0).map(() => 0) },
+        { id: '0x00000000_0x0000d938', name: 'AMD Radeon(TM) 8060S Graphics', kind: 'gpu', percent: 14, memory_used_bytes: 30 * GIB, history: noisy(12, 8, 11) },
+        { id: '0x00000000_0x0000f994', name: 'NPU Compute Accelerator Device', kind: 'npu', percent: 0, memory_used_bytes: null, history: noisy(0, 0, 1) },
+    ],
+    networks: [
+        { id: 'net_0006008007000000', name: 'Ethernet 3', description: 'Realtek Gaming 2.5GbE Family Controller', kind: 'ethernet', send_bps: 0, recv_bps: 8000, send_history: noisy(20e3, 20e3, 5), recv_history: noisy(60e3, 55e3, 9) },
     ],
 };
 

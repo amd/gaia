@@ -7,6 +7,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import psutil
 import pytest
@@ -234,6 +235,15 @@ def test_a_repeating_failure_logs_its_traceback_once(caplog):
 # ── Linux sysfs ──────────────────────────────────────────────────────────────
 
 
+def test_posix_probe_without_a_clock_reading_leaves_the_speed_blank(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delattr(psutil, "cpu_freq", raising=False)  # as on Apple silicon
+    s = rm.PosixProbe(drm_root=tmp_path).sample()
+    assert s.cpu_ghz is None
+    assert 0 <= s.cpu_percent <= 100
+
+
 def test_posix_probe_reads_amd_gpus_from_sysfs(tmp_path):
     dev = tmp_path / "card1" / "device"
     dev.mkdir(parents=True)
@@ -368,3 +378,119 @@ def test_windows_probe_reads_real_counters():
     assert abs(s.memory_used_bytes - (vm.total - vm.available)) < 2 * 2**30
     assert [d.key for d in s.devices] == [a.key for a in adapters]
     assert all(0 <= d.percent <= 100 for d in s.devices)
+    assert s.networks == [] or all(n.kind and n.name for n in s.networks)
+
+
+# ── Network ──────────────────────────────────────────────────────────────────
+
+
+class _Counters:
+    def __init__(self, *reads):
+        self._reads = list(reads)
+
+    def __call__(self):
+        return self._reads.pop(0)
+
+
+def _nic(sent: int, recv: int, name: str = "Ethernet 3"):
+    return {"net_a": (name, "Realtek 2.5GbE", "ethernet", sent, recv)}
+
+
+def test_network_rate_is_bits_per_second_between_reads():
+    clock = iter([0.0, 2.0])
+    rates = rm.NetworkRates(
+        _Counters(_nic(1000, 5000), _nic(1250, 6000)), clock=lambda: next(clock)
+    )
+    [net] = rates.sample()
+    assert (net.name, net.kind, net.send_bps, net.recv_bps) == (
+        "Ethernet 3",
+        "ethernet",
+        1000.0,  # 250 bytes in 2 s
+        4000.0,
+    )
+
+
+def test_a_newly_connected_adapter_starts_at_zero():
+    clock = iter([0.0, 1.0])
+    rates = rm.NetworkRates(
+        _Counters({}, _nic(10**9, 10**9)), clock=lambda: next(clock)
+    )
+    [net] = rates.sample()
+    assert (net.send_bps, net.recv_bps) == (0.0, 0.0)
+
+
+def test_a_counter_reset_does_not_go_negative():
+    clock = iter([0.0, 1.0])
+    rates = rm.NetworkRates(
+        _Counters(_nic(5000, 5000), _nic(100, 100)), clock=lambda: next(clock)
+    )
+    [net] = rates.sample()
+    assert (net.send_bps, net.recv_bps) == (0.0, 0.0)
+
+
+def test_payload_carries_network_history_by_adapter():
+    def at(send: float, recv: float, present: bool = True) -> rm.Sample:
+        s = sample(1.0)
+        if present:
+            s.networks = [
+                rm.NetworkSample("net_a", "Wi-Fi", "Intel", "wifi", send, recv)
+            ]
+        return s
+
+    out = rm.to_payload([at(0, 0, present=False), at(10.4, 20.6), at(30, 40)], 1.0)
+    assert out["networks"] == [
+        {
+            "id": "net_a",
+            "name": "Wi-Fi",
+            "description": "Intel",
+            "kind": "wifi",
+            "send_bps": 30,
+            "recv_bps": 40,
+            "send_history": [0, 10, 30],
+            "recv_history": [0, 21, 40],
+        }
+    ]
+    assert resources_router.ResourceUsage(**out).networks[0].kind == "wifi"
+
+
+def test_posix_networks_keeps_hardware_interfaces_that_are_up(tmp_path, monkeypatch):
+    for name in ("eth0", "wlan0", "eth1"):
+        (tmp_path / name / "device").mkdir(parents=True)
+    (tmp_path / "wlan0" / "wireless").mkdir()
+    (tmp_path / "docker0").mkdir()  # virtual: no device link
+    stat = lambda up: SimpleNamespace(isup=up)  # noqa: E731
+    io = lambda s, r: SimpleNamespace(bytes_sent=s, bytes_recv=r)  # noqa: E731
+    monkeypatch.setattr(
+        psutil,
+        "net_if_stats",
+        lambda: {
+            "eth0": stat(True),
+            "wlan0": stat(True),
+            "eth1": stat(False),
+            "docker0": stat(True),
+            "lo": stat(True),
+        },
+    )
+    monkeypatch.setattr(
+        psutil,
+        "net_io_counters",
+        lambda pernic: {
+            n: io(1, 2) for n in ("eth0", "wlan0", "eth1", "docker0", "lo")
+        },
+    )
+    assert rm.posix_networks(tmp_path) == {
+        "net_eth0": ("eth0", "eth0", "ethernet", 1, 2),
+        "net_wlan0": ("wlan0", "wlan0", "wifi", 1, 2),
+    }
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows IP Helper")
+def test_windows_networks_lists_connected_hardware_adapters_only():
+    nets = rm.windows_networks()
+    names = [name for name, *_ in nets.values()]
+    assert not any(n.startswith(("vEthernet", "Loopback")) for n in names)
+    assert all(
+        kind in ("ethernet", "wifi", "network") for _, _, kind, _, _ in nets.values()
+    )
+    up = {n for n, s in psutil.net_if_stats().items() if s.isup}
+    assert set(names) <= up

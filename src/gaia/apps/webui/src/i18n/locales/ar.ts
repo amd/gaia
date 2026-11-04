@@ -1776,12 +1776,18 @@ const messages: Messages = {
     'resources.memory': 'الذاكرة',
     'resources.gpu': 'GPU',
     'resources.npu': 'NPU',
+    'resources.ethernet': 'إيثرنت',
+    'resources.wifi': 'Wi-Fi',
+    'resources.network': 'الشبكة',
+    'resources.sendRecv': '↑ {send} ↓ {recv}',
+    'resources.send': 'إرسال {rate}',
+    'resources.receive': 'استلام {rate}',
     'resources.numbered': '{label} {n}',
     'resources.inUse': 'قيد الاستخدام: {size}',
     'resources.reading': 'جارٍ القراءة…',
     'resources.error': 'تعذّرت قراءة استخدام هذا الجهاز. جارٍ إعادة المحاولة…',
     'resources.settings': 'إظهار استخدام الموارد في المحادثات',
-    'resources.settingsHint': 'حمل المعالج والذاكرة وGPU وNPU على هذا الجهاز، يُحدَّث كل ثانية.',
+    'resources.settingsHint': 'حمل المعالج والذاكرة وGPU وNPU والشبكة على هذا الجهاز، يُحدَّث كل ثانية.',
 };
 
 export const ar: Locale = {

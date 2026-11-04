@@ -1442,7 +1442,7 @@ export interface SkillInfo {
 
 // ── Resource usage (GET /api/system/resources) ────────────────────────────
 
-/** One CPU, memory, GPU or NPU reading; `history` is oldest first, one per interval. */
+/** One CPU, memory, GPU, NPU or network reading; histories are oldest first, one per interval. */
 export interface CpuUsage {
     percent: number;
     ghz: number | null;
@@ -1465,6 +1465,19 @@ export interface DeviceUsage {
     history: number[];
 }
 
+export interface NetworkUsage {
+    id: string;
+    /** The connection's name, such as "Ethernet 3". */
+    name: string;
+    /** The adapter's hardware name. */
+    description: string;
+    kind: 'ethernet' | 'wifi' | 'network';
+    send_bps: number;
+    recv_bps: number;
+    send_history: number[];
+    recv_history: number[];
+}
+
 export interface ResourceUsage {
     interval_ms: number;
     /** False until the first sample is in. */
@@ -1472,4 +1485,5 @@ export interface ResourceUsage {
     cpu?: CpuUsage | null;
     memory?: MemoryUsage | null;
     devices?: DeviceUsage[];
+    networks?: NetworkUsage[];
 }

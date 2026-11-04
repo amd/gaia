@@ -5,7 +5,7 @@
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GRAPH_SLOTS, ResourceMonitor, Sparkline } from '../ResourceMonitor';
+import { GRAPH_SLOTS, ResourceMonitor, Sparkline, formatRate, rateScale, rateUnit } from '../ResourceMonitor';
 import { RETRY_MS } from '../../hooks/useResourceUsage';
 import type { ResourceUsage } from '../../types';
 
@@ -19,6 +19,9 @@ const USAGE: ResourceUsage = {
     devices: [
         { id: 'gpu', name: 'AMD Radeon(TM) 8060S Graphics', kind: 'gpu', percent: 14, memory_used_bytes: 30 * GIB, history: [12, 14] },
         { id: 'npu', name: 'NPU Compute Accelerator Device', kind: 'npu', percent: 0, memory_used_bytes: null, history: [0, 0] },
+    ],
+    networks: [
+        { id: 'net_a', name: 'Ethernet 3', description: 'Realtek Gaming 2.5GbE', kind: 'ethernet', send_bps: 0, recv_bps: 8000, send_history: [0, 0], recv_history: [4000, 8000] },
     ],
 };
 
@@ -54,13 +57,23 @@ describe('ResourceMonitor', () => {
     it('shows CPU, memory, GPU and NPU the way Task Manager words them', async () => {
         render(<ResourceMonitor onClose={() => {}} />);
         const region = await screen.findByRole('region', { name: 'Resource usage on this PC' });
-        await waitFor(() => expect(region.querySelectorAll('li')).toHaveLength(4));
+        await waitFor(() => expect(region.querySelectorAll('li')).toHaveLength(5));
 
         expect(tile('CPU')).toHaveTextContent('20%4.70 GHz');
         expect(tile('Memory')).toHaveTextContent('71%45.0/63.6 GB');
         expect(tile('GPU')).toHaveTextContent('14%30.0 GB');
         expect(tile('NPU')).toHaveTextContent(/^NPU \(NPU Compute Accelerator Device\)0%$/);
         expect(tile('GPU')).toHaveAttribute('title', 'AMD Radeon(TM) 8060S Graphics · 14% · 30.0 GB in use');
+        expect(tile('Ethernet')).toHaveTextContent(/^Ethernet \(Ethernet 3\)S: 0 R: 8\.0 Kbps$/);
+        expect(tile('Ethernet')).toHaveAttribute('title', 'Ethernet 3 · Realtek Gaming 2.5GbE · Send 0 Kbps · Receive 8.0 Kbps');
+    });
+
+    it('draws network receive as the filled line and send dashed', async () => {
+        render(<ResourceMonitor onClose={() => {}} />);
+        await screen.findByText('S: 0 R: 8.0 Kbps');
+        const spark = tile('Ethernet').querySelector('svg')!;
+        expect(spark.querySelectorAll('.resource-spark-line')).toHaveLength(2);
+        expect(spark.querySelector('.resource-spark-line.is-dashed')).not.toBeNull();
     });
 
     it('names each GPU and NPU for screen readers, not only in a hover tooltip', async () => {
@@ -159,19 +172,46 @@ describe('ResourceMonitor', () => {
     });
 });
 
+describe('network rates', () => {
+    it('words a rate the way Task Manager does', () => {
+        expect(formatRate(0, rateUnit(0))).toBe('0');
+        expect(formatRate(8000, rateUnit(8000))).toBe('8.0');
+        expect(formatRate(160e3, rateUnit(160e3))).toBe('160');
+        expect(rateUnit(1.2e6)[1]).toBe('Mbps');
+        expect(formatRate(1.2e6, rateUnit(1.2e6))).toBe('1.2');
+        expect(rateUnit(2.5e9)[1]).toBe('Gbps');
+        // Both rates share the larger one's unit: "S: 0.1 R: 2.0 Mbps".
+        expect(formatRate(96e3, rateUnit(2e6))).toBe('0.1');
+    });
+
+    it("scales the graph to the minute's peak in 1-2-5 steps, never below 100 Kbps", () => {
+        expect(rateScale([0, 0])).toBe(100e3);
+        expect(rateScale([120e3])).toBe(200e3);
+        expect(rateScale([3.1e6, 10])).toBe(5e6);
+        expect(rateScale([9e6])).toBe(10e6);
+    });
+});
+
 describe('Sparkline', () => {
     it('draws newest on the right and keeps values inside the box', () => {
         const { container } = render(<Sparkline values={[-5, 50, 150]} />);
         const line = container.querySelector('.resource-spark-line')!.getAttribute('d')!;
         const points = line.split(/[ML]/).filter(Boolean).map((p) => p.trim().split(' ').map(Number));
-        expect(points[points.length - 1]).toEqual([100, 4]); // 150% clamps to the top, at the right edge
-        expect(points[0][1]).toBe(96); // -5% clamps to the bottom, still inside the border
+        expect(points[points.length - 1]).toEqual([100, 2]); // 150% clamps to the top, at the right edge
+        expect(points[0][1]).toBe(98); // -5% clamps to the bottom, still inside the border
         expect(points[0][0]).toBeCloseTo(((GRAPH_SLOTS - 3) / (GRAPH_SLOTS - 1)) * 100, 2);
         expect(container.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
     });
 
-    it('draws nothing from a single sample', () => {
+    it('scales to a given top instead of 100', () => {
+        const { container } = render(<Sparkline values={[0, 50e3]} max={100e3} />);
+        const line = container.querySelector('.resource-spark-line')!.getAttribute('d')!;
+        expect(line.endsWith('L100.00 50.00')).toBe(true);
+    });
+
+    it('draws only the grid from a single sample', () => {
         const { container } = render(<Sparkline values={[40]} />);
-        expect(container.querySelector('path')).toBeNull();
+        expect(container.querySelector('.resource-spark-line, .resource-spark-area')).toBeNull();
+        expect(container.querySelector('.resource-spark-grid')).not.toBeNull();
     });
 });

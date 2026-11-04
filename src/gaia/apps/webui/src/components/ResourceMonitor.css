@@ -14,10 +14,11 @@
     flex-shrink: 0;
 }
 
+/* One row of tiles at their content's width, spread across the strip. */
 .resource-tiles {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 6px 16px;
+    display: flex;
+    justify-content: space-between;
+    gap: 6px 12px;
     flex: 1;
     min-width: 0;
     margin: 0;
@@ -27,6 +28,7 @@
 .resource-tiles.is-stale { opacity: 0.55; }
 
 .resource-tile {
+    flex: 0 1 auto;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -37,18 +39,22 @@
 .tone-memory .resource-spark { color: var(--accent-purple); }
 .tone-gpu .resource-spark { color: var(--accent-cyan); }
 .tone-npu .resource-spark { color: var(--accent-green); }
+.tone-network .resource-spark { color: var(--accent-yellow); }
 
+/* Task Manager's thumbnail: a square box in the tile's colour, a faint grid,
+ * and a thin line over a light fill. */
 .resource-spark {
     flex-shrink: 0;
-    width: 52px;
-    height: 30px;
+    width: 56px;
+    height: 34px;
     border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
     background: var(--bg-input);
     overflow: hidden;
 }
-.resource-spark-area { fill: currentColor; fill-opacity: 0.16; }
-.resource-spark-line { fill: none; stroke: currentColor; stroke-width: 1.5; }
+.resource-spark-grid { fill: none; stroke: currentColor; stroke-opacity: 0.14; stroke-width: 1; }
+.resource-spark-area { fill: currentColor; fill-opacity: 0.18; }
+.resource-spark-line { fill: none; stroke: currentColor; stroke-width: 1; }
+.resource-spark-line.is-dashed { stroke-dasharray: 3 2; }
 
 .resource-text {
     display: flex;
@@ -98,6 +104,12 @@
 }
 
 .resource-close { flex-shrink: 0; align-self: flex-start; }
+
+/* Too narrow for one row (it needs about 820px with long readings): an even
+ * grid, never one tile left alone on a row. */
+@container (max-width: 860px) {
+    .resource-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 
 /* A narrow chat keeps the numbers and drops the graphs. */
 @container (max-width: 520px) {

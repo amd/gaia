@@ -214,8 +214,9 @@ async function expectClearOfPanel(page: Page): Promise<void> {
 test('resource usage strip', async ({ page }) => {
     await open(page, `#${ANSWER_SESSION}`);
     const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
-    await expect(strip.locator('li')).toHaveCount(4);
+    await expect(strip.locator('li')).toHaveCount(5);
     await expect(strip.getByText('45.0/63.6 GB')).toBeVisible();
+    await expect(strip.locator('li').last()).toContainText(/↑.*0.*↓.*8\.0.*Kbps/);
     // The close button sits at the row's end, which is the left in rtl.
     const closeBox = (await strip.getByRole('button').boundingBox())!;
     const firstTile = (await strip.locator('li').first().boundingBox())!;
@@ -229,7 +230,7 @@ test('resource usage strip at phone width', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await open(page, `#${ANSWER_SESSION}`);
     const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
-    await expect(strip.locator('li')).toHaveCount(4);
+    await expect(strip.locator('li')).toHaveCount(5);
     await expect(strip.locator('.resource-spark').first()).toBeHidden();
     // The closed sidebar drawer waits off screen at this width; judge the strip.
     const problems = (await audit(page)).filter((p) => p.includes('resource') || p.includes('scrolls sideways'));
@@ -325,7 +326,8 @@ test.describe('English', () => {
     test('resource usage strip', async ({ page }) => {
         await open(page, `#${ANSWER_SESSION}`, 'en');
         const strip = page.getByRole('region', { name: 'Resource usage on this PC' });
-        await expect(strip.locator('li')).toHaveCount(4);
+        await expect(strip.getByText('S: 0 R: 8.0 Kbps')).toBeVisible();
+        await expect(strip.locator('li')).toHaveCount(5);
         const closeBox = (await strip.getByRole('button', { name: 'Hide resource usage' }).boundingBox())!;
         const firstTile = (await strip.locator('li').first().boundingBox())!;
         expect(closeBox.x).toBeGreaterThan(firstTile.x);
@@ -334,9 +336,21 @@ test.describe('English', () => {
         await page.screenshot({ path: 'visual/test-results/resource-strip-en.png' });
     });
 
+    test('resource usage strip on a wide window is one row', async ({ page }) => {
+        await page.setViewportSize({ width: 1920, height: 1000 });
+        await open(page, `#${ANSWER_SESSION}`, 'en');
+        const tiles = page.getByRole('region', { name: 'Resource usage on this PC' }).locator('li');
+        await expect(tiles).toHaveCount(5);
+        const tops = await tiles.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
+        expect(new Set(tops).size).toBe(1);
+        await expectClearOfPanel(page);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: 'visual/test-results/resource-strip-en-wide.png' });
+    });
+
     test('resource usage strip in the dark theme', async ({ page }) => {
         await open(page, `#${ANSWER_SESSION}`, 'en', undefined, 'dark');
-        await expect(page.getByRole('region', { name: 'Resource usage on this PC' }).locator('li')).toHaveCount(4);
+        await expect(page.getByRole('region', { name: 'Resource usage on this PC' }).locator('li')).toHaveCount(5);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: 'visual/test-results/resource-strip-en-dark.png' });
     });

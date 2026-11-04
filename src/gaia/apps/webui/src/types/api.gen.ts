@@ -81,6 +81,7 @@ export interface ApiSchemas {
   ModelServerBackendRequest: ModelServerBackendRequest;
   ModelServerInfo: ModelServerInfo;
   ModelStatus: ModelStatus;
+  NetworkUsage: NetworkUsage;
   OpenFileRequest: OpenFileRequest;
   ParseScheduleRequest: ParseScheduleRequest;
   ParseScheduleResponse: ParseScheduleResponse;
@@ -934,6 +935,34 @@ export interface ModelStatus {
   found?: boolean;
   loaded?: boolean;
 }
+export interface NetworkUsage {
+  /**
+   * The adapter's hardware name.
+   */
+  description: string;
+  id: string;
+  kind: "ethernet" | "wifi" | "network";
+  /**
+   * The connection's name, such as "Ethernet 3".
+   */
+  name: string;
+  /**
+   * Bits per second received.
+   */
+  recv_bps: number;
+  /**
+   * Bits per second, oldest first.
+   */
+  recv_history: number[];
+  /**
+   * Bits per second sent.
+   */
+  send_bps: number;
+  /**
+   * Bits per second, oldest first.
+   */
+  send_history: number[];
+}
 /**
  * Request to open a file or folder in the system file explorer.
  */
@@ -1014,6 +1043,7 @@ export interface ResourceUsage {
   devices?: DeviceUsage[];
   interval_ms: number;
   memory?: MemoryUsage | null;
+  networks?: NetworkUsage[];
   /**
    * False until the first sample is in.
    */

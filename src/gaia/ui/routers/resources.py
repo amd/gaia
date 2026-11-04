@@ -1,7 +1,7 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Live CPU, memory, GPU and NPU usage for the chat's resource strip."""
+"""Live CPU, memory, GPU, NPU and network usage for the chat's resource strip."""
 
 from __future__ import annotations
 
@@ -44,12 +44,24 @@ class DeviceUsage(BaseModel):
     history: List[float] = Field(description=_HISTORY)
 
 
+class NetworkUsage(BaseModel):
+    id: str
+    name: str = Field(description='The connection\'s name, such as "Ethernet 3".')
+    description: str = Field(description="The adapter's hardware name.")
+    kind: Literal["ethernet", "wifi", "network"]
+    send_bps: int = Field(description="Bits per second sent.")
+    recv_bps: int = Field(description="Bits per second received.")
+    send_history: List[int] = Field(description="Bits per second, oldest first.")
+    recv_history: List[int] = Field(description="Bits per second, oldest first.")
+
+
 class ResourceUsage(BaseModel):
     interval_ms: int
     ready: bool = Field(description="False until the first sample is in.")
     cpu: Optional[CpuUsage] = None
     memory: Optional[MemoryUsage] = None
     devices: List[DeviceUsage] = Field(default_factory=list)
+    networks: List[NetworkUsage] = Field(default_factory=list)
 
 
 # Reads this PC's hardware load, so a cross-site GET must not reach it.
