@@ -8,7 +8,7 @@ import { useScheduleStore } from '../stores/scheduleStore';
 import { log } from '../utils/logger';
 import type { Schedule, ScheduleResult, ParsedSchedule } from '../types';
 import { parseScheduleInput } from '../services/api';
-import type { MessageKey, Say } from '../i18n/registry';
+import { pluralKey, type MessageKey, type Say } from '../i18n/registry';
 import { dateLocale, tEn, useT } from '../i18n/useT';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
@@ -88,8 +88,61 @@ function formatDays(days: number[], say: Say): string {
     return days.map((d) => say(`schedules.day.${d}` as MessageKey)).join(say('schedules.days.join'));
 }
 
+const MINUTE = 60;
+const HOUR = 3600;
+const DAY = 86400;
+const WEEK = 604800;
+
+/** The fields a schedule's description is built from, as the parse response and `schedule_config` carry them. */
+type ScheduleFields = Pick<ParsedSchedule, 'interval_seconds' | 'time_of_day' | 'start_hour' | 'end_hour' | 'days_of_week'>;
+
+/** "Every 30 minutes", "Every hour", "Every 90 minutes" — never rounded. */
+function formatEvery(seconds: number, say: Say): string {
+    const unit = ([[WEEK, 'week'], [DAY, 'day'], [HOUR, 'hour']] as const).find(([size]) => seconds >= size && seconds % size === 0)
+        ?? (seconds % MINUTE === 0 ? [MINUTE, 'minute'] as const : [1, 'second'] as const);
+    const n = seconds / unit[0];
+    return say(pluralKey(`schedules.every.${unit[1]}`, n), { n });
+}
+
+/** When a schedule runs, in the UI language; mirrors `_build_description` in `ui/scheduler.py`. */
+export function formatScheduleDescription(fields: ScheduleFields, say: Say): string {
+    const days = fields.days_of_week?.length ? [...fields.days_of_week].sort((a, b) => a - b) : null;
+    if (fields.start_hour != null) {
+        const window = {
+            every: formatEvery(fields.interval_seconds, say),
+            start: formatTimeOfDay(`${fields.start_hour}:00`, say),
+            end: formatTimeOfDay(`${fields.end_hour ?? 0}:00`, say),
+        };
+        return days ? say('schedules.desc.windowDays', { ...window, days: formatDays(days, say) }) : say('schedules.desc.window', window);
+    }
+
+    let text: string;
+    if (days && (fields.interval_seconds === DAY || fields.interval_seconds === WEEK)) {
+        text = days.length === 7 ? say('schedules.desc.daily')
+            : isWeekdaysOrWeekends(days) ? formatDays(days, say)
+            : say('schedules.desc.everyDays', { days: formatDays(days, say) });
+    } else if (fields.time_of_day) {
+        text = say('schedules.desc.daily');
+    } else {
+        text = formatEvery(fields.interval_seconds, say);
+        if (days) text = say('schedules.desc.on', { every: text, days: formatDays(days, say) });
+    }
+    return fields.time_of_day ? say('schedules.desc.at', { when: text, time: formatTimeOfDay(fields.time_of_day, say) }) : text;
+}
+
+function isWeekdaysOrWeekends(sorted: number[]): boolean {
+    return sorted.join() === '0,1,2,3,4' || sorted.join() === '5,6';
+}
+
+/** A saved schedule's fields: its parsed config, or a bare interval when it has none. */
+function scheduleFields(schedule: Schedule): ScheduleFields {
+    if (schedule.schedule_config) return JSON.parse(schedule.schedule_config) as ScheduleFields;
+    return { interval_seconds: schedule.interval_seconds, time_of_day: null, start_hour: null, end_hour: null, days_of_week: null };
+}
+
 function ScheduleCard({ schedule }: { schedule: Schedule }) {
     const t = useT();
+    const description = t.compose((say) => formatScheduleDescription(scheduleFields(schedule), say));
     const { selectedSchedule, selectSchedule, updateScheduleStatus, runScheduleNow, deleteSchedule, results, resultsLoading, loadSchedules, loadResults } = useScheduleStore();
     const { setCurrentSession, setShowSchedules } = useChatStore();
     const isSelected = selectedSchedule === schedule.name;
@@ -189,7 +242,7 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
             </div>
             <div className="schedule-card-prompt" dir="auto">{schedule.prompt}</div>
             <div className="schedule-card-meta">
-                <span title={schedule.description}><Clock size={11} /> <bdi>{schedule.description}</bdi></span>
+                <span title={description}><Clock size={11} /> {description}</span>
                 <span>{t('schedules.card.runs', { n: schedule.run_count })}</span>
                 {schedule.error_count > 0 && <span>{t('schedules.card.errors', { n: schedule.error_count })}</span>}
                 <span>{t.compose((say) => say('schedules.card.last', { when: formatTime(schedule.last_run_at, say, undefined, dateLocale(t)) }))}</span>
@@ -382,7 +435,7 @@ export function ScheduleManager() {
                                         ) : parsed ? (
                                             <>
                                                 {parsed.valid ? (
-                                                    <div className="schedule-parsed-description"><bdi>{parsed.description}</bdi></div>
+                                                    <div className="schedule-parsed-description">{t.compose((say) => formatScheduleDescription(parsed, say))}</div>
                                                 ) : (
                                                     <div id={scheduleErrorId}>
                                                         <div className="schedule-parsed-description">{t('schedules.notUnderstood')}</div>

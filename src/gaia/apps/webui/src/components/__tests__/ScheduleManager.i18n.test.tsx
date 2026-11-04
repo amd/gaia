@@ -3,12 +3,12 @@
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ScheduleManager, formatNextRun } from '../ScheduleManager';
+import { ScheduleManager, formatNextRun, formatScheduleDescription } from '../ScheduleManager';
 import { useChatStore } from '../../stores/chatStore';
 import { useScheduleStore } from '../../stores/scheduleStore';
 import { parseScheduleInput } from '../../services/api';
 import { stripIsolates } from '../../i18n/registry';
-import { dateLocale, translator } from '../../i18n/useT';
+import { dateLocale, tEn, translator } from '../../i18n/useT';
 import { readsAs } from '../../test/readsAs';
 import type { Schedule } from '../../types';
 
@@ -91,6 +91,43 @@ describe('Scheduled tasks in Arabic', () => {
         expect(screen.getByText(readsAs('آخر تشغيل: لا يوجد (Last: never)'))).toBeInTheDocument();
         expect(leftoverEnglish(container)).toEqual([]);
         for (const a of attrs(container)) expect(a, a).toMatch(/[؀-ۿ]/);
+    });
+});
+
+const fields = (f: Partial<Parameters<typeof formatScheduleDescription>[0]>) => ({
+    interval_seconds: 86400, time_of_day: null, start_hour: null, end_hour: null, days_of_week: null, ...f,
+});
+
+describe('schedule descriptions follow the interface language', () => {
+    it('reads the same as the backend in English', () => {
+        const en = (f: Parameters<typeof fields>[0]) => formatScheduleDescription(fields(f), tEn.bare);
+        expect(en({ interval_seconds: 120 })).toBe('Every 2 minutes');
+        expect(en({ interval_seconds: 90 })).toBe('Every 90 seconds');
+        expect(en({ interval_seconds: 3600 })).toBe('Every hour');
+        expect(en({ time_of_day: '21:00' })).toBe('Daily at 9:00 PM');
+        expect(en({ days_of_week: [4, 0, 1, 2, 3], time_of_day: '08:00' })).toBe('Weekdays at 8:00 AM');
+        expect(en({ interval_seconds: 7200, start_hour: 8, end_hour: 18 })).toBe('Every 2 hours, 8:00 AM - 6:00 PM');
+    });
+
+    it('shows the preview in Arabic', async () => {
+        vi.mocked(parseScheduleInput).mockResolvedValue({
+            interval_seconds: 120, time_of_day: null, start_hour: null, end_hour: null, days_of_week: null,
+            description: 'Every 2 minutes', next_run_at: null, valid: true,
+        });
+        const { container } = render(<ScheduleManager />);
+        fireEvent.click(screen.getByRole('button', { name: /مهمة مجدولة جديدة/ }));
+        fireEvent.change(screen.getByLabelText(readsAs('موعد التشغيل (When to run)')), { target: { value: 'every 2m' } });
+        expect(await screen.findByText(readsAs('كل 2 د (Every 2 minutes)'), {}, { timeout: 3000 })).toBeInTheDocument();
+        expect(leftoverEnglish(container)).toEqual([]);
+    });
+
+    it('shows a saved schedule in Arabic, weekday names included', () => {
+        const config = { ...fields({ days_of_week: [0, 2], time_of_day: '09:00' }), description: 'Every Monday, Wednesday at 9:00 AM', raw_input: 'every mon and wed at 9am', timezone: null };
+        useScheduleStore.setState({ schedules: [{ ...schedule, schedule_config: JSON.stringify(config), description: config.description }] });
+        const { container } = render(<ScheduleManager />);
+        expect(screen.getByText(readsAs('أيام الاثنين، الأربعاء الساعة 9:00 ص (Every Mon, Wed at 9:00 AM)'))).toBeInTheDocument();
+        expect(leftoverEnglish(container)).toEqual([]);
+        expect(stripIsolates(formatScheduleDescription(fields({ interval_seconds: 120 }), translator('ar').bare))).toBe('كل 2 د');
     });
 });
 

@@ -83,7 +83,11 @@ describe('New schedule form', () => {
 describe('Schedule card', () => {
     it('says when a weekday schedule runs instead of its raw interval', () => {
         useScheduleStore.setState({
-            schedules: [{ ...schedule, description: 'Weekdays at 8:00 AM' }],
+            schedules: [{
+                ...schedule,
+                schedule_config: JSON.stringify({ interval_seconds: 86400, time_of_day: '08:00', start_hour: null, end_hour: null, days_of_week: [0, 1, 2, 3, 4] }),
+                description: 'Weekdays at 8:00 AM',
+            }],
         });
         render(<ScheduleManager />);
         expect(screen.getByTitle('Weekdays at 8:00 AM')).toHaveTextContent('Weekdays at 8:00 AM');
