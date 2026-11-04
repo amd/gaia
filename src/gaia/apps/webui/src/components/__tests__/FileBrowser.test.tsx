@@ -57,6 +57,26 @@ it('closes on Escape', async () => {
     expect(useChatStore.getState().showFileBrowser).toBe(false);
 });
 
+/** A focused button outside the dialog, standing in for the control that opened it. */
+function focusTrigger(): HTMLButtonElement {
+    const trigger = document.createElement('button');
+    trigger.textContent = 'Open';
+    document.body.appendChild(trigger);
+    trigger.focus();
+    return trigger;
+}
+
+it('takes focus when it opens and gives it back when it closes', async () => {
+    const trigger = focusTrigger();
+    const { unmount } = render(<FileBrowser onStartChat={vi.fn()} />);
+    await screen.findByText('report.pdf');
+
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+    unmount();
+    expect(trigger).toHaveFocus();
+    trigger.remove();
+});
+
 describe('FileBrowser row selection', () => {
     it('clicking a file row selects it and enables Index Selected and Ask Agent', async () => {
         render(<FileBrowser onStartChat={vi.fn()} />);
