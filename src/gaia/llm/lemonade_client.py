@@ -431,13 +431,18 @@ def resolve_default_vision_model() -> Optional[str]:
     """
     from gaia.config import GaiaConfig
 
+    config = GaiaConfig.load()
     model = resolve_default_chat_model()
-    if runs_on_npu(model):
+    # The model chat reopens on, unless that runs in the cloud.
+    current = config.last_model
+    if not current or current.startswith("claude-") or cloud_model_provider(current):
+        current = model
+    if runs_on_npu(current):
         return None
-    chosen = GaiaConfig.load().vision_model
+    chosen = config.vision_model
     if chosen:
         return chosen
-    return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
+    return current if current in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
 
 
 def resident_vision_model(configured: str, base_url: Optional[str] = None) -> str:
@@ -3160,8 +3165,7 @@ def _chosen_backend_hint(backend: Optional[str]) -> str:
     return (
         f" GAIA asked for llama.cpp's {backend} backend, as set in Settings → "
         "Advanced → Model server (llamacpp_backend in ~/.gaia/config.json). "
-        "Choose Vulkan there, the GPU backend GAIA has tested, or run "
-        "`gaia config set llamacpp_backend vulkan`."
+        "Choose Vulkan there, the GPU backend GAIA has tested."
     )
 
 

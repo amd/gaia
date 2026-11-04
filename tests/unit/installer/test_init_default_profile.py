@@ -259,6 +259,8 @@ class TestGoTuiContract:
             "loaded": False,
             "error": "boom",
             "downloaded": None,
+            # verify.go reads it to word the row; only "broken" is a bad file.
+            "kind": None,
         }
 
     def test_load_failed_exit_code_is_three(self):
