@@ -36,7 +36,8 @@
     "Gemma-4-E4B-it-GGUF": "tests/fixtures/eval_baselines/gaia-flagship",
     "K2-Horizon-MoVA-36B-A4B-GGUF": "tests/fixtures/eval_baselines/gaia-flagship-k2-mova-36b",
     "K2-Horizon-7B-GGUF": "tests/fixtures/eval_baselines/gaia-flagship-k2-7b",
-    "K2-Horizon-3.7B-GGUF": "tests/fixtures/eval_baselines/gaia-flagship-k2-3.7b"
+    "K2-Horizon-3.7B-GGUF": "tests/fixtures/eval_baselines/gaia-flagship-k2-3.7b",
+    "Flint-GGUF": "tests/fixtures/eval_baselines/gaia-flagship-flint"
   },
   "tiers": {
     "smoke": {
