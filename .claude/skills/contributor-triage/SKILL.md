@@ -201,8 +201,9 @@ RC failed to publish, or (3) the shortlist is empty: this one is the final's can
 2. **Wait for CI to finish and go green on that exact commit** (`gh run list --commit <sha>`).
    Tagging while main's CI still runs is the mistake that burned an RC before.
 3. **Dry-run the release train** on it. It runs nightly on `main` as the next unused RC, so
-   first look for a passing run of that SHA: `gh run list --workflow release_train_dryrun.yml
-   --commit <sha> --status success`. If there is none, dispatch it: `gh workflow run
+   first look for a verified run of that SHA: `python util/release_train.py verified-run
+   --repo amd/gaia --sha <sha>` (empty output: none is still downloadable). If there is
+   none, dispatch it: `gh workflow run
    release_train_dryrun.yml --ref main -f rc_tag=vX.Y.Z-rcN`. Fix forward on `main` until it
    passes. A nightly built as another RC number still proves the commit, but its digests are
    that number's; dispatch with the exact tag when you need digests that match the release.
