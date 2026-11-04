@@ -65,6 +65,26 @@ it('closes on Escape', async () => {
     expect(useChatStore.getState().showDocLibrary).toBe(false);
 });
 
+/** A focused button outside the dialog, standing in for the control that opened it. */
+function focusTrigger(): HTMLButtonElement {
+    const trigger = document.createElement('button');
+    trigger.textContent = 'Open';
+    document.body.appendChild(trigger);
+    trigger.focus();
+    return trigger;
+}
+
+it('takes focus when it opens and gives it back when it closes', async () => {
+    const trigger = focusTrigger();
+    const { unmount } = render(<DocumentLibrary />);
+    await screen.findByText('broken.pdf');
+
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+    unmount();
+    expect(trigger).toHaveFocus();
+    trigger.remove();
+});
+
 describe('DocumentLibrary with no chat open', () => {
     it('holds a newly indexed document for the next chat instead of dropping it', async () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
