@@ -851,7 +851,8 @@ class ChatAgent(
         process. Any other startup failure is left unset and tried again on
         the next access, and document tools report that failure instead of
         "not installed". Never raises — a profile that only checks ``self.rag``
-        must keep working.
+        must keep working. A failed build reruns on every read, so
+        ``RAGSDK.__init__`` must stay cheap (no network or model loads).
         """
         if self._rag is _UNSET:
             built = self._build_rag()

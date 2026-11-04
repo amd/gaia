@@ -158,3 +158,115 @@ def test_config_import_error_is_not_retried(caplog):
     messages = [record.getMessage() for record in _warnings(caplog, "no faiss")]
     assert len(messages) == 1
     assert "install with" in messages[0]
+
+
+def test_error_chained_from_an_import_error_is_not_a_missing_extra(caplog):
+    """Only the raised type counts: a RuntimeError caused by an ImportError is
+    a startup failure with its own cause, not a missing extra."""
+    agent = _bare_agent()
+    agent._rag_config = MagicMock()
+    caplog.set_level(logging.WARNING, logger="gaia_agent.chat_agent")
+
+    def factory(*_args, **_kwargs):
+        try:
+            raise ImportError("libomp missing")
+        except ImportError as inner:
+            raise RuntimeError("embedder backend failed") from inner
+
+    with patch("gaia_agent.chat_agent.RAGSDK", side_effect=factory) as sdk:
+        assert agent.rag is None
+        assert agent.rag is None
+
+    assert sdk.call_count == 2
+    assert agent._rag is _UNSET
+    assert agent._rag_missing is False
+    assert isinstance(agent._rag_init_error, RuntimeError)
+    assert not _warnings(caplog, "install with")
+
+
+def test_module_not_found_counts_as_a_missing_extra():
+    agent = _bare_agent()
+    agent._rag_config = MagicMock()
+
+    with patch(
+        "gaia_agent.chat_agent.RAGSDK",
+        side_effect=ModuleNotFoundError("No module named 'faiss'"),
+    ) as sdk:
+        assert agent.rag is None
+        assert agent.rag is None
+
+    assert sdk.call_count == 1
+    assert agent._rag_missing is True
+
+
+@pytest.mark.parametrize("exc_type", [KeyboardInterrupt, SystemExit])
+def test_interrupts_propagate_and_are_not_recorded(exc_type):
+    agent = _bare_agent()
+    agent._rag_config = MagicMock()
+
+    with patch("gaia_agent.chat_agent.RAGSDK", side_effect=exc_type()):
+        with pytest.raises(exc_type):
+            _ = agent.rag
+
+    assert agent._rag is _UNSET
+    assert agent._rag_init_error is None
+    assert agent._rag_missing is False
+
+
+def test_a_different_failure_warns_again(caplog):
+    agent = _bare_agent()
+    agent._rag_config = MagicMock()
+    caplog.set_level(logging.WARNING, logger="gaia_agent.chat_agent")
+    errors = iter([OSError("disk full"), OSError("disk full"), ValueError("bad")])
+
+    def factory(*_args, **_kwargs):
+        raise next(errors)
+
+    with patch("gaia_agent.chat_agent.RAGSDK", side_effect=factory):
+        for _ in range(3):
+            assert agent.rag is None
+
+    assert len(_warnings(caplog, "disk full")) == 1
+    assert len(_warnings(caplog, "bad")) == 1
+    assert isinstance(agent._rag_init_error, ValueError)
+
+
+def test_import_error_after_a_transient_failure_is_then_cached():
+    agent = _bare_agent()
+    agent._rag_config = MagicMock()
+    errors = iter([OSError("disk full"), ImportError("no faiss")])
+
+    def factory(*_args, **_kwargs):
+        raise next(errors)
+
+    with patch("gaia_agent.chat_agent.RAGSDK", side_effect=factory) as sdk:
+        for _ in range(4):
+            assert agent.rag is None
+
+    assert sdk.call_count == 2
+    assert agent._rag is None
+    assert agent._rag_missing is True
+
+
+def test_tool_message_follows_recovery():
+    """Once a retry succeeds the stale startup error must not linger."""
+    from gaia.agents.tools.rag_tools import _rag_unavailable_message
+
+    agent = _bare_agent()
+    agent._rag_config = MagicMock()
+    built = MagicMock(name="sdk")
+    outcomes = iter([RuntimeError("embedder down"), built])
+
+    def factory(*_args, **_kwargs):
+        outcome = next(outcomes)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    with patch("gaia_agent.chat_agent.RAGSDK", side_effect=factory):
+        assert agent.rag is None
+        assert "embedder down" in _rag_unavailable_message(agent)
+        assert agent.rag is built
+
+    assert agent._rag_init_error is None
+    assert agent.rag is built

@@ -98,6 +98,12 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **Document Q&A says why it couldn't start.** Any startup failure, such as
+  an unwritable cache folder or a bad embedder setting, was reported as "RAG not
+  installed" and never retried for the session. Only a missing `[rag]` extra
+  now says to install it; any other failure names its cause and is tried again
+  on the next document request. `list_indexed_documents` returns an error when
+  document Q&A is down, like the other document tools, instead of an empty list.
 - **"Forget everything" forgets everything.** It deleted each memory a plain
   `recall` listed, but that listing holds back sensitive ones, so a saved PIN
   survived while the agent said memory was empty. The next session then rebuilt
