@@ -1546,6 +1546,21 @@ class TestCheckSetupStatus(unittest.TestCase):
 
         self._assert_unreadable_hub_names_its_url(status, url)
 
+    def test_a_malformed_manifest_is_not_a_crash(self):
+        """Valid JSON of the wrong shape (artifacts as a dict) used to crash."""
+        import os
+
+        os.environ["GAIA_HUB_URL"] = "https://hub.example.test"
+        self._remove_flagship()
+        entry = self.hub_manifest["versions"]["0.3.2"]
+        entry["artifacts"] = {a["filename"]: a for a in entry["artifacts"]}
+        status, _ = self._check_with_models()
+
+        self._assert_unreadable_hub_names_its_url(
+            status, "https://hub.example.test/agents/gaia/manifest.json"
+        )
+        self.assertIn("artifacts is dict, not a list", status.reasons[0])
+
     def test_a_full_disk_is_reported_not_read_as_no_build(self):
         from gaia.hub import installer as hub_installer
 
