@@ -276,15 +276,16 @@ class TestDownloadIntegrity:
         from gaia.installer.lemonade_installer import (
             INSTALLER_SHA256,
             LEGACY_MSI_SHA256,
+            OLDEST_REMOVABLE_LEMONADE,
         )
-        from gaia.version import LEMONADE_MIN_VERSION, parse_version
+        from gaia.version import parse_version
 
         for key, digest in {**INSTALLER_SHA256, **LEGACY_MSI_SHA256}.items():
             assert re.fullmatch(r"[0-9a-f]{64}", digest), f"{key}: {digest!r}"
         for key in LEGACY_MSI_SHA256:
             tag, name = key.split("/", 1)
             version = parse_version(tag.lstrip("v"))
-            assert parse_version(LEMONADE_MIN_VERSION) <= version
+            assert parse_version(OLDEST_REMOVABLE_LEMONADE) <= version
             assert version < parse_version(LEMONADE_VERSION), key
             assert name in ("lemonade.msi", "lemonade-server-minimal.msi"), key
 
@@ -323,14 +324,15 @@ class TestEveryReleaseIsPinned:
     """Every supported release can be verified, judged against a checked-in tag list."""
 
     def test_tag_list_spans_the_supported_range(self):
-        from gaia.version import LEMONADE_MIN_VERSION, parse_version
+        from gaia.installer.lemonade_installer import OLDEST_REMOVABLE_LEMONADE
+        from gaia.version import parse_version
 
         tags = _release_tags()
         versions = [parse_version(tag.removeprefix("v")) for tag in tags]
         assert versions == sorted(
             set(versions)
         ), f"{_RELEASE_TAGS} must list each tag once, oldest first"
-        assert tags[0] == f"v{LEMONADE_MIN_VERSION}", tags[0]
+        assert tags[0] == f"v{OLDEST_REMOVABLE_LEMONADE}", tags[0]
         assert (
             tags[-1] == f"v{LEMONADE_VERSION}"
         ), f"{_RELEASE_TAGS} ends at {tags[-1]}; append v{LEMONADE_VERSION}"

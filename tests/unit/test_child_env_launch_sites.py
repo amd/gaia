@@ -302,7 +302,7 @@ def test_client_launched_lemonade_is_trimmed(monkeypatch):
     monkeypatch.setattr(
         lemonade_client,
         "build_start_command",
-        lambda _t, _c: StartSpec(argv=["lemond"], env={"GAIA_SPEC_VAR": "1"}),
+        lambda _t: StartSpec(argv=["lemond"], env={"GAIA_SPEC_VAR": "1"}),
     )
     monkeypatch.setattr(lemonade_client.subprocess, "Popen", popen)
 

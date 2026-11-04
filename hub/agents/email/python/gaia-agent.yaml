@@ -43,7 +43,7 @@ requirements:
   # gaia_agent_email.version.MIN_LEMONADE_VERSION (the runtime source of truth
   # for the GET /v1/email/init readiness check); a test keeps the two in
   # lock-step.
-  min_lemonade_version: "10.2.0"
+  min_lemonade_version: "2026.44.1"
   platforms: [win-x64, linux-x64, darwin-arm64, darwin-x64]
 
 interfaces:

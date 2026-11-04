@@ -24,7 +24,7 @@ const FLASH: ModelPrice = {
     input_per_million: 0.15, cached_input_per_million: 0.03, output_per_million: 0.5, source: 'Fireworks AI list price',
 };
 const REPORT: SpendingReport = {
-    month: '2026-10', total_usd: 1.25, turns: 12, unpriced_turns: 0, limit_usd: null, state: 'no_limit',
+    month: '2026-10', total_usd: 1.25, turns: 12, unpriced_turns: 0, unreported_turns: 0, limit_usd: null, state: 'no_limit',
     by_model: [], price_source: 'Fireworks AI list price',
 };
 const LOCAL_ACTIVE: ActiveModel = {
@@ -97,6 +97,13 @@ describe('SpendingLimit', () => {
         mockedApi.getSpending.mockResolvedValue({ ...REPORT, unpriced_turns: 3 });
         render(<SpendingLimit />);
         expect(await screen.findByText(/Plus 3 turns on models with an unknown price/)).toBeInTheDocument();
+    });
+
+    it('counts stopped turns with no reported usage apart, not as an unknown price (#6541)', async () => {
+        mockedApi.getSpending.mockResolvedValue({ ...REPORT, unreported_turns: 1 });
+        render(<SpendingLimit />);
+        expect(await screen.findByText(/Plus 1 turn whose usage wasn’t reported, such as a stopped answer/)).toBeInTheDocument();
+        expect(screen.queryByText(/on models with an unknown price/)).not.toBeInTheDocument();
     });
 
     it('sets and removes a monthly limit', async () => {

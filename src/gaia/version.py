@@ -15,15 +15,10 @@ __version__ = "0.25.4"
 # Lemonade version used across CI and installer
 LEMONADE_VERSION = "2026.44.1"
 
-# Oldest Lemonade Server GAIA runs against. LEMONADE_VERSION is what we install;
-# this is the floor below which we refuse. Profiles may require newer
-# (INIT_PROFILES[...]["min_lemonade_version"]).
-LEMONADE_MIN_VERSION = "10.2.0"
-
-# Cloud offload (`lemonade cloud install`, /api/v1/cloud/auth) landed in 11.8.0.
-# Only the LLM-gateway path requires it, so it is checked there rather than
-# raising LEMONADE_MIN_VERSION for every user.
-LEMONADE_GATEWAY_MIN_VERSION = "11.8.0"
+# Oldest Lemonade Server GAIA runs against. Anything older is refused, and
+# GAIA's own embedded server is upgraded on start. Raised by hand, never by a
+# LEMONADE_VERSION bump.
+LEMONADE_MIN_VERSION = "2026.44.1"
 
 
 def parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:

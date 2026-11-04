@@ -927,12 +927,12 @@ func TestAServerThatStopsAnsweringIsAFaultNotAStep(t *testing.T) {
 // A system Lemonade the TUI cannot start itself must not get GAIA's private one
 // started beside it.
 func TestAutoStartLeavesASystemInstallAlone(t *testing.T) {
-	// A legacy CLI install: found, but with no form the TUI may spawn.
-	legacy := fakeHostFor("linux", []string{"lemonade-server"}, nil, map[string]string{})
-	if l := resolveLemonadeWith(legacy); !l.Found || canAutoStart(l) {
+	// A macOS app bundle: found, but with no form the TUI may spawn.
+	appOnly := fakeHostFor("darwin", nil, []string{"/Applications/lemonade-app.app"}, map[string]string{})
+	if l := resolveLemonadeWith(appOnly); !l.Found || canAutoStart(l) {
 		t.Fatalf("fixture is not a found-but-human-only install: %+v", l)
 	}
-	downLemonadeOn(t, legacy)
+	downLemonadeOn(t, appOnly)
 	installEmbedded(t)
 	restore := tryAutoStartLemonade
 	t.Cleanup(func() { tryAutoStartLemonade = restore })

@@ -192,6 +192,7 @@ function TurnStats({ turn }: { turn: TurnPerformance }) {
 function Cost({ cost }: { cost: TurnPerformance['cost'] }) {
     const t = useT();
     if (cost.kind === 'local') return <span title={t('ctx.costLocalTitle')}>{t('ctx.costLocal')}</span>;
+    if (cost.kind === 'unreported') return <span className="cp-unknown">{t('ctx.costUnreported')}</span>;
     if (cost.kind === 'estimate' && cost.usd != null) {
         return (
             <span title={t('ctx.listPriceTitle', { usd: cost.usd })}>

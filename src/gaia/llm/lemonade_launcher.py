@@ -3,23 +3,22 @@
 
 """Lemonade Server tooling resolution and start-command construction.
 
-Modern Lemonade Server (10.7/10.8) removed the ``lemonade-server`` CLI:
+How Lemonade Server installs on each platform:
 
-* Windows ships ``LemonadeServer.exe`` (server, started with ``--silent``)
+* Windows: ``LemonadeServer.exe`` (server, started with ``--silent``)
   plus ``lemonade.exe`` (client) under
   ``%LOCALAPPDATA%\\lemonade_server\\bin``.
-* Linux ships ``/usr/bin/lemonade`` (client) and ``/usr/bin/lemond``
+* Linux: ``/usr/bin/lemonade`` (client) and ``/usr/bin/lemond``
   (daemon) managed by the ``lemond`` systemd unit.
-* macOS ships ``lemond`` (daemon) + ``lemonade`` (client) under
+* macOS: ``lemond`` (daemon) + ``lemonade`` (client) under
   ``/usr/local/bin``, installed by the Lemonade app. There is no systemd
   unit, so the daemon is started directly (or from the app).
-* Modern Lemonade takes no context size at launch: there is no
-  ``--ctx-size`` flag and no environment variable for it. GAIA sends the
-  window with every ``/load`` instead.
+* Lemonade takes no context size at launch: there is no ``--ctx-size``
+  flag and no environment variable for it. GAIA sends the window with every
+  ``/load`` instead.
 
-Legacy Lemonade still uses ``lemonade-server serve --ctx-size N`` (plus
-``--no-tray`` on Windows). This module is the single shared primitive for
-detecting which tooling is installed and how to launch it; the installer
+This module is the single shared primitive for detecting which tooling is
+installed and how to launch it; the installer
 (`gaia.installer`) and the runtime client (`gaia.llm.lemonade_client`)
 both consume it instead of hard-coding ``lemonade-server``.
 
@@ -39,9 +38,6 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 log = logging.getLogger(__name__)
-
-# Legacy CLI names, in probe order. lemonade-server-dev is the pip/CI variant.
-_LEGACY_BINARIES = ("lemonade-server", "lemonade-server-dev")
 
 # macOS: the Lemonade app installs the daemon + client into a standard bin
 # dir. /usr/local/bin is where the official installer puts them; the
@@ -65,7 +61,7 @@ class LemonadeTooling:
     """Resolved Lemonade tooling on this machine."""
 
     found: bool
-    kind: str  # "modern" | "legacy" | "none"
+    kind: str  # "modern" | "none"
     client_path: Optional[str] = None
     server_launcher: Optional[str] = None
     # "env" when resolved from LEMONADE_SERVER_PATH — an explicit override
@@ -105,20 +101,6 @@ class StartHint:
     foreground: bool = False
 
 
-def _classify_kind_from_name(path_str: str) -> str:
-    """Infer modern/legacy from a binary's basename (for env overrides)."""
-    name = Path(path_str).name.lower()
-    if name.startswith("lemonade-server"):
-        return "legacy"
-    if name.startswith("lemonadeserver") or name in (
-        "lemond",
-        "lemonade",
-        "lemonade.exe",
-    ):
-        return "modern"
-    return "legacy"
-
-
 def resolve_lemonade() -> LemonadeTooling:
     """Resolve installed Lemonade tooling.
 
@@ -126,21 +108,17 @@ def resolve_lemonade() -> LemonadeTooling:
 
     1. ``LEMONADE_SERVER_PATH`` env var (CI override) — used verbatim;
        ``shutil.which`` is never consulted.
-    2. Modern tooling by CANONICAL path probe (not PATH order):
+    2. Tooling by CANONICAL path probe (not PATH order):
        Windows ``%LOCALAPPDATA%\\lemonade_server\\bin\\LemonadeServer.exe``,
        Linux ``/usr/bin/lemonade``, macOS ``/usr/local/bin/lemond``
        (falling back to ``lemond`` on PATH for a non-standard prefix).
-       Modern wins even when a stale legacy ``lemonade-server`` binary is
-       also on PATH.
-    3. Legacy ``shutil.which("lemonade-server")`` (also tolerates the
-       pip/CI ``lemonade-server-dev`` variant).
     """
     env_path = os.environ.get("LEMONADE_SERVER_PATH")
     if env_path:
         log.debug("Using LEMONADE_SERVER_PATH override: %s", env_path)
         return LemonadeTooling(
             found=True,
-            kind=_classify_kind_from_name(env_path),
+            kind="modern",
             client_path=env_path,
             server_launcher=env_path,
             source="env",
@@ -197,25 +175,13 @@ def resolve_lemonade() -> LemonadeTooling:
                 server_launcher=daemon_on_path,
             )
 
-    for name in _LEGACY_BINARIES:
-        legacy_path = shutil.which(name)
-        if legacy_path:
-            log.debug("Found legacy Lemonade CLI: %s", legacy_path)
-            return LemonadeTooling(
-                found=True,
-                kind="legacy",
-                client_path=legacy_path,
-                server_launcher=legacy_path,
-            )
-
     return LemonadeTooling(found=False, kind="none")
 
 
 def get_installed_version(tooling: LemonadeTooling) -> Optional[str]:
     """Return the installed Lemonade version ("X.Y.Z"), or None.
 
-    Modern: ``lemonade --version`` (real output: ``lemonade version 10.7.0``).
-    Legacy: ``lemonade-server --version``.
+    Runs ``lemonade --version`` (real output: ``lemonade version 2026.44.1``).
     """
     if not tooling.found or not tooling.client_path:
         return None
@@ -243,21 +209,18 @@ def get_installed_version(tooling: LemonadeTooling) -> Optional[str]:
     return match.group(1)
 
 
-def build_start_command(tooling: LemonadeTooling, ctx_size: Optional[int]) -> StartSpec:
+def build_start_command(tooling: LemonadeTooling) -> StartSpec:
     """Build the argv + extra-env needed to start the resolved server.
 
-    Modern Windows -> ``LemonadeServer.exe --silent``. Modern Linux -> best-effort
+    Windows -> ``LemonadeServer.exe --silent``. Linux -> best-effort
     ``systemctl --user start lemond`` (the daemon is normally already up).
-    Modern macOS -> the ``lemond`` daemon directly; macOS has no systemd, so
-    the Linux form must never leak there.
-    Legacy -> ``lemonade-server serve --ctx-size N`` (+ ``--no-tray`` on
-    Windows), byte-identical to the historical argv.
+    macOS -> the ``lemond`` daemon directly; macOS has no systemd, so the
+    Linux form must never leak there.
 
-    Only the legacy form carries *ctx_size*. Modern Lemonade reads no
-    context-size flag or environment variable, so a modern spec has an empty
-    ``env``.
+    Lemonade reads no context-size flag or environment variable, so the
+    window goes with every ``/load`` instead and the spec's ``env`` is empty.
 
-    Modern-vs-Windows dispatch keys off the tooling's ``server_launcher``
+    Windows dispatch keys off the tooling's ``server_launcher``
     (an ``.exe`` means the Windows server binary) rather than the host
     platform, so a resolved tooling object is self-describing.
     """
@@ -268,38 +231,24 @@ def build_start_command(tooling: LemonadeTooling, ctx_size: Optional[int]) -> St
             "LEMONADE_SERVER_PATH to an existing binary."
         )
 
-    if tooling.kind == "modern":
-        launcher = tooling.server_launcher or ""
-        if launcher.lower().endswith(".exe"):
-            return StartSpec(argv=[launcher, "--silent"])
-        if tooling.source == "env":
-            # Explicit LEMONADE_SERVER_PATH override — run the named binary
-            # verbatim rather than silently rerouting to systemctl.
-            return StartSpec(argv=[launcher])
-        if platform.system() == "Darwin":
-            # No systemd on macOS — start the daemon directly.
-            if not launcher:
-                raise ValueError(
-                    "Modern macOS Lemonade tooling has no server_launcher; "
-                    f"expected the {_MACOS_DAEMON_NAME!r} daemon path."
-                )
-            return StartSpec(argv=[launcher])
-        # Linux daemon — best-effort user-unit start; the server is
-        # normally already running under systemd.
-        return StartSpec(argv=["systemctl", "--user", "start", "lemond"])
-
-    if tooling.kind == "legacy":
-        argv = [tooling.server_launcher or "lemonade-server", "serve"]
-        if platform.system() == "Windows":
-            argv.append("--no-tray")
-        if ctx_size is not None:
-            argv.extend(["--ctx-size", str(ctx_size)])
-        return StartSpec(argv=argv, env={})
-
-    raise ValueError(
-        f"Unknown Lemonade tooling kind {tooling.kind!r} "
-        "(expected 'modern' or 'legacy')."
-    )
+    launcher = tooling.server_launcher or ""
+    if launcher.lower().endswith(".exe"):
+        return StartSpec(argv=[launcher, "--silent"])
+    if tooling.source == "env":
+        # Explicit LEMONADE_SERVER_PATH override — run the named binary
+        # verbatim rather than silently rerouting to systemctl.
+        return StartSpec(argv=[launcher])
+    if platform.system() == "Darwin":
+        # No systemd on macOS — start the daemon directly.
+        if not launcher:
+            raise ValueError(
+                "macOS Lemonade tooling has no server_launcher; "
+                f"expected the {_MACOS_DAEMON_NAME!r} daemon path."
+            )
+        return StartSpec(argv=[launcher])
+    # Linux daemon — best-effort user-unit start; the server is
+    # normally already running under systemd.
+    return StartSpec(argv=["systemctl", "--user", "start", "lemond"])
 
 
 def _macos_app_installed() -> bool:
@@ -364,7 +313,8 @@ def gaia_runs_lemonade(base_url: Optional[str] = None) -> bool:
     """Whether the server to start for *base_url* is GAIA's own, not a system install.
 
     The one decision every start path makes before launching anything: True
-    when ``gaia init`` installed GAIA's embedded server, ``LEMONADE_BASE_URL``
+    when ``gaia init`` installed GAIA's embedded server (this version, or an
+    older one the daemon upgrades when it starts it), ``LEMONADE_BASE_URL``
     names no other, and *base_url* is unset or is the address GAIA resolves on
     its own. That server is started through the daemon, never by
     :func:`resolve_lemonade` / :func:`build_start_command`, and binds a port
@@ -377,7 +327,10 @@ def gaia_runs_lemonade(base_url: Optional[str] = None) -> bool:
     )
     from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
-    if configured_lemonade_url() or not EmbeddedLemonade().is_installed():
+    if configured_lemonade_url():
+        return False
+    embedded = EmbeddedLemonade()
+    if not (embedded.is_installed() or embedded.replaces_older_install()):
         return False
     if base_url is None:
         return True
@@ -391,9 +344,7 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     never names a command that does not exist on the host: on platforms
     started from a GUI (Windows tray, macOS app) it returns prose with
     ``command=None`` rather than guessing a shell command. Service-managed
-    context changes also return manual configuration steps. The legacy
-    ``lemonade-server serve`` CLI is only ever named when a legacy install
-    was actually resolved.
+    context changes also return manual configuration steps.
     """
     if gaia_runs_lemonade():
         return StartHint(
@@ -409,7 +360,7 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
 
     if tooling.found:
         launcher = (tooling.server_launcher or "").lower()
-        if tooling.kind == "modern" and launcher.endswith(".exe"):
+        if launcher.endswith(".exe"):
             # LemonadeServer.exe --silent is what GAIA's auto-start runs; a
             # user starts it from the tray instead.
             return StartHint(
@@ -418,7 +369,7 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
                     "search for 'Lemonade' in the Start menu."
                 )
             )
-        spec = build_start_command(tooling, ctx_size)
+        spec = build_start_command(tooling)
         if spec.argv[0] == "systemctl" and ctx_size is not None:
             return StartHint(
                 instruction=(
@@ -463,6 +414,22 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     )
 
 
+def describe_upgrade_hint(base_url: Optional[str] = None) -> str:
+    """How the Lemonade Server at *base_url* gets to ``LEMONADE_MIN_VERSION``.
+
+    GAIA upgrades its own server when it next starts it, so that case asks
+    nothing of the user. A server the user runs is theirs to update; the
+    remedy points at Lemonade's download page rather than a command, since how
+    it updates depends on how it was installed.
+    """
+    if gaia_runs_lemonade(base_url):
+        return (
+            "GAIA updates its own Lemonade Server the next time its daemon "
+            "starts it; run `gaia daemon restart` to do that now."
+        )
+    return f"Update it from {_DOWNLOAD_URL}, then retry."
+
+
 # Lemonade client sub-commands GAIA points users at, mapped to the verb used
 # in the prose. `gaia download` is NOT an alternative: it takes no positional
 # model argument, so `gaia download <model>` is rejected by argparse.
@@ -472,8 +439,8 @@ _CLIENT_ACTIONS = {"pull": "downloaded", "load": "loaded"}
 def describe_client_hint(action: str, model: str) -> StartHint:
     """Describe how to pull/load *model* with the resolved Lemonade client.
 
-    Modern ships ``lemonade`` and legacy ships ``lemonade-server``; both take
-    ``<client> pull|load <model>``. Returns prose with ``command=None`` when
+    Lemonade ships a ``lemonade`` client that takes
+    ``lemonade pull|load <model>``. Returns prose with ``command=None`` when
     no client binary resolved, rather than naming one that isn't there.
     """
     if action not in _CLIENT_ACTIONS:

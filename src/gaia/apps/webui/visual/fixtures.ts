@@ -277,7 +277,7 @@ export async function withModelPage(page: Page, models: unknown[], plan: unknown
             ],
         },
         'GET /providers/fireworks/models': { provider: 'fireworks', models: FIREWORKS_MODELS },
-        'GET /spending': { month: '2026-10', total_usd: 1.25, turns: 12, unpriced_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price' },
+        'GET /spending': { month: '2026-10', total_usd: 1.25, turns: 12, unpriced_turns: 0, unreported_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price' },
     };
     await page.route('**/api/**', async (route: Route) => {
         const url = new URL(route.request().url());
