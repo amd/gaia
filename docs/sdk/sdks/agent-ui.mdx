@@ -2718,7 +2718,11 @@ All three routes need the `X-Gaia-UI: 1` header (**403** without it).
     Switch servers. Body: `{"mode": "gaia" | "external", "base_url": "...",
     "api_key": "..."}`; the URL and key are only for `external`. Nothing is
     saved unless the user's server checks out. A running daemon is told to
-    stop (or start) GAIA's own server, and cached agents are dropped. Returns
+    stop (or start) GAIA's own server, and cached agents are dropped. When
+    `LEMONADE_BASE_URL` picks the server, `gaia` also saves that value as
+    `lemonade_env_url_ignored`; if GAIA's own isn't installed yet nothing
+    starts and `gaia_installed` is false, so the Agent UI opens setup to
+    install it. Returns
     the `GET` shape plus `daemon`. **422** when the server can't be used
     (`detail.message`, `detail.status`), including `status: "not_installed"`
     when switching from the user's server to GAIA's own before it is

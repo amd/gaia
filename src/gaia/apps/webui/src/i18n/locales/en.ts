@@ -1692,7 +1692,7 @@ export const enMessages = {
     'settings.server.usesEnv': 'GAIA uses the Lemonade Server at {url}, set by LEMONADE_BASE_URL.',
     'settings.server.usesYours': 'GAIA uses your Lemonade Server at {url}.',
     'settings.server.usesOwn': 'GAIA uses its own Lemonade Server.',
-    'settings.server.unsetEnv': 'Unset LEMONADE_BASE_URL and restart GAIA to change this here.',
+    'settings.server.envUseOwn': "You can use GAIA's own Lemonade Server instead. GAIA keeps using it until the address set outside the app changes.",
     'settings.server.useYours': 'Already run Lemonade? Use it, so this PC keeps one server and one copy of each model.',
     'settings.server.address': 'Lemonade Server address',
     'settings.server.key': 'Lemonade API key',

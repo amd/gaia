@@ -747,6 +747,40 @@ def apply_gaia_switch(previous_mode: Optional[str]) -> Optional[dict]:
     return applied
 
 
+def switch_to_gaia_over_env() -> Optional[dict]:
+    """Use GAIA's own instead of the server ``LEMONADE_BASE_URL`` names.
+
+    Saved together with the value it overrides. When GAIA's own is installed
+    the daemon must have it answering, else both are put back; when it isn't,
+    nothing starts and setup installs it next.
+
+    Raises:
+        DaemonError: The daemon did not switch, or GAIA's server did not start.
+    """
+    from gaia.config import GaiaConfig
+    from gaia.daemon.client import ensure_lemonade
+    from gaia.daemon.errors import DaemonError
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+    cfg = GaiaConfig.load()
+    previous = {
+        "lemonade_mode": cfg.lemonade_mode,
+        "lemonade_env_url_ignored": cfg.lemonade_env_url_ignored,
+    }
+    ignore_env_url()
+    use_gaia()
+    if not EmbeddedLemonade().is_installed():
+        return None
+    try:
+        applied = apply_to_daemon()
+        if applied is not None:
+            applied = {**applied, "lemonade": ensure_lemonade()}
+    except DaemonError:
+        GaiaConfig.save_keys(previous)
+        raise
+    return applied
+
+
 def saved_target() -> dict:
     """The server the saved setting picks, ignoring ``LEMONADE_BASE_URL``.
 

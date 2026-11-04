@@ -1692,7 +1692,7 @@ const messages: Messages = {
     'settings.server.usesEnv': 'يستخدم GAIA خادم Lemonade في {url}، المحدد عبر LEMONADE_BASE_URL.',
     'settings.server.usesYours': 'يستخدم GAIA خادم Lemonade الخاص بك في {url}.',
     'settings.server.usesOwn': 'يستخدم GAIA خادم Lemonade الخاص به.',
-    'settings.server.unsetEnv': 'أزل LEMONADE_BASE_URL وأعد تشغيل GAIA لتغيير هذا هنا.',
+    'settings.server.envUseOwn': 'يمكنك استخدام خادم Lemonade الخاص بـ GAIA بدلاً منه. يواصل GAIA استخدامه حتى يتغيّر العنوان المحدد خارج التطبيق.',
     'settings.server.useYours': 'هل تشغّل Lemonade بالفعل؟ استخدمه ليبقى على هذا الجهاز خادم واحد ونسخة واحدة من كل نموذج.',
     'settings.server.address': 'عنوان خادم Lemonade',
     'settings.server.key': 'مفتاح API لـ Lemonade',

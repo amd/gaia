@@ -293,6 +293,17 @@ class TestEnvChosenAwayFrom:
         assert "GAIA uses its own Lemonade Server" in out
         assert "LEMONADE_BASE_URL=http://127.0.0.1:59999/api/v1 is ignored" in out
 
+    def test_an_unreadable_config_is_an_error_with_the_env_value_set(self, monkeypatch):
+        from gaia.config import GaiaConfigError
+        from gaia.llm.lemonade_client import configured_lemonade_url
+
+        GaiaConfig.config_path().parent.mkdir(parents=True, exist_ok=True)
+        GaiaConfig.config_path().write_text('{"lemonade_mode":', encoding="utf-8")
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://gpu-box:13305")
+        # It can't say whether that value is ignored, so it can't be guessed.
+        with pytest.raises(GaiaConfigError, match="not valid JSON"):
+            configured_lemonade_url()
+
     def test_nothing_is_saved_without_an_env_value(self, monkeypatch):
         assert choice.ignore_env_url() is None
         monkeypatch.setenv("LEMONADE_BASE_URL", "http://localhost:50601/api/v1")

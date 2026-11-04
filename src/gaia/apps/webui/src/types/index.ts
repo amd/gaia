@@ -1198,11 +1198,13 @@ export interface LemonadeTarget {
     mode: LemonadeMode;
     /** null until the user (or `gaia init`) has chosen. */
     saved_mode: LemonadeMode | null;
-    /** `env` means LEMONADE_BASE_URL chose it, so the UI cannot change it. */
+    /** `env` means LEMONADE_BASE_URL chose it; switching to GAIA's own overrides it. */
     source: 'env' | 'config' | 'gaia';
     base_url: string | null;
     saved_base_url: string | null;
     api_key_stored: boolean;
+    /** The LEMONADE_BASE_URL value GAIA's own was chosen over, while it still holds. */
+    env_url_ignored?: string | null;
     gaia_installed: boolean;
     /** Nobody has chosen yet: offer a Lemonade found running. */
     offer: boolean;
