@@ -114,7 +114,7 @@ Dependabot can't see these pins because they are string literals in Python, so r
 3. **Compare tool names against what GAIA references.** Grep `docs/connectors/`, `hub/skills/`, and `src/` for the old names and update every hit in the same PR.
 4. **Bump the pin** in `mcp_servers.py` and run `python -m pytest tests/unit/connectors/ -q`.
 
-Existing users get a new pin without reconnecting: when GAIA loads `~/.gaia/mcp_servers.json`, each catalog connector's command, args and env names come from the current catalog, and the user's own settings in the file (the on/off toggle, a `timeout`, a plain env value they added) are kept. A renamed env var still reads the secret saved under the old name, as long as exactly one key changed. Tool renames still reach every user at once, so call them out in the release notes.
+Existing users get a new pin without reconnecting: when GAIA loads `~/.gaia/mcp_servers.json`, each catalog connector's command, args and env names come from the current catalog, and the user's own settings in the file (the on/off toggle, a `timeout`, a plain env value they added) are kept. A hand edit to a catalog connector's command or args is replaced; to run a different command, add the server under its own name. A renamed env var still reads the secret saved under the old name, as long as exactly one key changed. Tool renames still reach every user at once, so call them out in the release notes.
 
 ## See also
 

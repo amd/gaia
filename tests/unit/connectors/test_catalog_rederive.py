@@ -203,3 +203,141 @@ def test_ref_outside_the_connector_namespace_is_never_followed():
             "$keyring": f"{SERVICE_NAME}:{_GITHUB.id}:GITHUB_PERSONAL_ACCESS_TOKEN"
         }
     }
+
+
+@pytest.fixture
+def catalog(monkeypatch):
+    """Swap in a registry holding only the given specs, as a future catalog might."""
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import ConnectorRegistry
+
+    def _install(*specs):
+        fresh = ConnectorRegistry()
+        for spec in specs:
+            fresh.register(spec)
+        monkeypatch.setattr("gaia.connectors.registry.REGISTRY", fresh)
+
+    return _install
+
+
+def test_entry_the_catalog_dropped_is_left_as_written(gaia_home, catalog):
+    saved = {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-memory@0.0.1"],
+        "env": {},
+    }
+    _write(gaia_home / "mcp_servers.json", {_MEMORY.id: saved})
+    catalog(_GITHUB)
+
+    assert MCPConfig().get_server(_MEMORY.id) == saved
+
+
+def test_catalog_switching_the_command_replaces_command_and_args(gaia_home, catalog):
+    moved = dataclasses.replace(
+        _MEMORY, mcp_command="uvx", mcp_args=("mcp-server-memory==9.9.9",)
+    )
+    catalog(moved)
+    _write(
+        gaia_home / "mcp_servers.json",
+        {
+            _MEMORY.id: {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-memory@0.0.1", "--x"],
+                "env": {},
+                "disabled": True,
+                "timeout": 45,
+                "cwd": "/srv/memory",
+            }
+        },
+    )
+
+    entry = MCPConfig().get_server(_MEMORY.id)
+
+    assert entry["command"] == "uvx"
+    assert entry["args"] == ["mcp-server-memory==9.9.9"]
+    assert (entry["disabled"], entry["timeout"], entry["cwd"]) == (
+        True,
+        45,
+        "/srv/memory",
+    )
+
+
+def test_hand_added_plain_env_survives_and_stale_refs_do_not(gaia_home):
+    keyring.set_password(
+        SERVICE_NAME, f"{_GITHUB.id}:GITHUB_PERSONAL_ACCESS_TOKEN", "ghp_current"
+    )
+    _write(
+        gaia_home / "mcp_servers.json",
+        {
+            _GITHUB.id: {
+                "command": "npx",
+                "args": [],
+                "env": {
+                    "GITHUB_PERSONAL_ACCESS_TOKEN": {
+                        "$keyring": f"{SERVICE_NAME}:{_GITHUB.id}:"
+                        "GITHUB_PERSONAL_ACCESS_TOKEN"
+                    },
+                    "GITHUB_HOST": "https://github.example.com",
+                    "OTHER_SECRET": {"$keyring": f"{SERVICE_NAME}:mcp-slack:TOKEN"},
+                },
+            }
+        },
+    )
+
+    env = MCPConfig().get_server(_GITHUB.id)["env"]
+
+    assert _resolve_keyring_refs(env) == {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_current",
+        "GITHUB_HOST": "https://github.example.com",
+    }
+
+
+def test_plain_value_under_a_catalog_key_yields_to_the_keyring_ref(gaia_home):
+    _write(
+        gaia_home / "mcp_servers.json",
+        {
+            _GITHUB.id: {
+                "command": "npx",
+                "args": [],
+                "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_hand_written"},
+            }
+        },
+    )
+
+    env = MCPConfig().get_server(_GITHUB.id)["env"]
+
+    assert env == {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": {
+            "$keyring": f"{SERVICE_NAME}:{_GITHUB.id}:GITHUB_PERSONAL_ACCESS_TOKEN"
+        }
+    }
+
+
+def test_prefix_sharing_connector_ids_never_cross_namespaces():
+    # "mcp-git" is a prefix of "mcp-github"; its refs must not count as git's own.
+    git = dataclasses.replace(_GITHUB, id="mcp-git", mcp_env_keys=("GIT_TOKEN",))
+    entry = {
+        "env": {
+            "OLD": {
+                "$keyring": f"{SERVICE_NAME}:mcp-github:GITHUB_PERSONAL_ACCESS_TOKEN"
+            }
+        }
+    }
+
+    assert _rederived_env(git, entry) == {
+        "GIT_TOKEN": {"$keyring": f"{SERVICE_NAME}:mcp-git:GIT_TOKEN"}
+    }
+
+
+@pytest.mark.parametrize(
+    "entry", [["not", "a", "dict"], {"env": "oops"}, {"env": None}, {}]
+)
+def test_malformed_entries_do_not_crash_the_load(gaia_home, entry):
+    _write(gaia_home / "mcp_servers.json", {_MEMORY.id: entry})
+
+    loaded = MCPConfig().get_server(_MEMORY.id)
+
+    if isinstance(entry, dict):
+        assert loaded["command"] == _MEMORY.mcp_command
+    else:
+        assert loaded == entry
