@@ -11,8 +11,10 @@ has a successful run on the tagged commit.
 What is required depends on the tag. This file is the one place that says so:
 
 - a release candidate (vX.Y.Z-rcN) needs only RC_CRITICAL. RC_ADVISORY is
-  reported in the job summary as warnings and never blocks, so one flaky macOS
-  test cannot hold a candidate back;
+  reported in the job summary as warnings and is never waited for or
+  dispatched, so one flaky macOS test cannot hold a candidate back. publish.yml
+  builds and smoke-tests the candidate's artifacts itself (RC_IN_RUN_CRITICAL),
+  so the hour-long dry run is advisory too;
 - a final (vX.Y.Z) needs FINAL_REQUIRED: every job of every workflow, plus the
   dry run.
 
@@ -48,9 +50,10 @@ class Check:
     workflow: str
     # The jobs that must pass, by their display name. Empty: the whole run.
     jobs: tuple[str, ...] = ()
-    # The workflow_dispatch input that receives the tag. "" dispatches with no
-    # inputs; None means the gate never dispatches it and names the command.
-    tag_input: str | None = ""
+    # False: the gate never starts it, and a missing run fails with `remedy`.
+    dispatch: bool = True
+    # Appended to the `gh workflow run` command the report prints.
+    remedy_args: str = ""
     why: str = ""
 
     @property
@@ -79,7 +82,6 @@ RC_CRITICAL = (
             "module imports on the oldest Python the wheel declares"
         ),
     ),
-    Check("release_train_dryrun.yml", tag_input="rc_tag", why=_DRY_RUN_WHY),
 )
 
 # Shown on an RC, never waited for or dispatched.
@@ -93,15 +95,21 @@ RC_ADVISORY = (
         ),
     ),
     Check("test_gaia_cli_linux.yml"),
+    Check("release_train_dryrun.yml", why=_DRY_RUN_WHY),
 )
 
-# The dry run takes an RC name, so a final is never dispatched one: it is
-# tagged on its candidate's commit, which already passed it.
+# The dry run takes an RC name, so the gate never starts one for a final: run
+# it on the candidate's commit before tagging the final there.
 FINAL_REQUIRED = (
     Check("lint.yml"),
     Check("test_unit.yml"),
     Check("test_gaia_cli_linux.yml"),
-    Check("release_train_dryrun.yml", tag_input=None, why=_DRY_RUN_WHY),
+    Check(
+        "release_train_dryrun.yml",
+        dispatch=False,
+        remedy_args="-f rc_tag=<the candidate tagged on this commit>",
+        why=_DRY_RUN_WHY,
+    ),
 )
 
 # Jobs in publish.yml itself that approve-publish requires on a candidate.
@@ -134,11 +142,7 @@ class Verdict:
 
 def _dispatch_command(check: Check, repo: str, tag: str) -> str:
     cmd = f"gh workflow run {check.workflow} --repo {repo} --ref {tag}"
-    if check.tag_input:
-        cmd += f" -f {check.tag_input}={tag}"
-    elif check.tag_input is None:
-        cmd += " -f rc_tag=<the candidate tagged on this commit>"
-    return cmd
+    return f"{cmd} {check.remedy_args}" if check.remedy_args else cmd
 
 
 def _missing(check: Check, repo: str, tag: str) -> Verdict:
@@ -250,10 +254,7 @@ def dispatch(repo: str, check: Check, tag: str, token: str) -> None:
         f"https://api.github.com/repos/{repo}/actions/workflows/"
         f"{check.workflow}/dispatches"
     )
-    body: dict = {"ref": tag}
-    if check.tag_input:
-        body["inputs"] = {check.tag_input: tag}
-    _api(url, token, body)
+    _api(url, token, {"ref": tag})
 
 
 def _created(run: dict) -> datetime:
@@ -301,7 +302,7 @@ def check(
             # A red run on main is dispatched once too: a flake gets one re-check.
             if (
                 v.state in ("failed", "missing")
-                and c.tag_input is not None
+                and c.dispatch
                 and c.workflow not in dispatched
             ):
                 print(f"{c.label}: {v.detail}; dispatching it on {tag}", flush=True)

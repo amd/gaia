@@ -485,12 +485,12 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
 
    | | Required (blocks) | Advisory (job-summary warning only) |
    |---|---|---|
-   | **RC** `vX.Y.Z-rcN` (`RC_CRITICAL`) | `lint.yml`; `test_unit.yml` jobs `Unit Tests (Linux, py3.12)` and `Import Every Module (Linux, py3.10)`; `release_train_dryrun.yml` | the macOS, Windows and offline-integration jobs of `test_unit.yml`; `test_gaia_cli_linux.yml` |
+   | **RC** `vX.Y.Z-rcN` (`RC_CRITICAL`) | `lint.yml`; `test_unit.yml` jobs `Unit Tests (Linux, py3.12)` and `Import Every Module (Linux, py3.10)` | the macOS, Windows and offline-integration jobs of `test_unit.yml`; `test_gaia_cli_linux.yml`; `release_train_dryrun.yml` |
    | **Final** `vX.Y.Z` (`FINAL_REQUIRED`) | every job of `lint.yml`, `test_unit.yml`, `test_gaia_cli_linux.yml`, plus `release_train_dryrun.yml` | none |
 
-   The candidate's own builds (`build-pypi`, `build-npm`, `build-desktop-installers` with its smoke jobs, `rc-flagship`, `tui-installers-complete`) are required too, by `approve-publish`. Evals never gate (`eval_flagship.yml` reports separately).
+   The candidate's own builds (`build-pypi`, `build-npm`, `build-desktop-installers` with its smoke jobs, `rc-flagship`, `tui-installers-complete`) are required too, by `approve-publish`; they build and smoke-test the same artifacts the dry run does, so an RC never waits on the hour-long dry run. Evals never gate (`eval_flagship.yml` reports separately).
 
-   Most main commits have no runs of their own (the next merge cancels them), so a required check with none is dispatched once against the tag (the dry run with `-f rc_tag=<tag>`) and waited for, up to ~80 min alongside the builds. A final is never dispatched a dry run: tag it on the candidate's commit, which already passed one, or the gate fails and prints the command. Advisory failures don't stop an RC but the final requires them, so fix them before tagging the final.
+   Most main commits have no runs of their own (the next merge cancels them), so a required check with none is dispatched once against the tag and waited for, up to ~80 min alongside the builds. Advisory checks are read once and never dispatched or waited for. The gate never starts a dry run: before tagging a final, run it on the candidate's commit (`gh workflow run release_train_dryrun.yml --repo amd/gaia --ref v<version>-rcN -f rc_tag=v<version>-rcN`) and let it pass, or the final fails and prints the command. Advisory failures don't stop an RC but the final requires them, so fix them before tagging the final.
 
 ---
 

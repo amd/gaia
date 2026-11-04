@@ -488,10 +488,10 @@ approval, and keeps the result off every stable channel:
   numeric-only version.
 
 A candidate is held only by CI that would make it ship broken: lint, the Linux
-unit tests, the import check on the oldest supported Python, and the release
-dry run (builds, clean-runner smoke installs, twin-diff, manifest), plus its own
-builds. The macOS and Windows unit tests and the integration lanes show as
-warnings on the run and don't block it. A final requires all of it.
+unit tests, the import check on the oldest supported Python, and its own builds
+and their smoke tests. The macOS and Windows unit tests, the integration lanes
+and the release dry run show as warnings on the run and don't block it. A final
+requires all of it, including a passing dry run on its commit.
 `RC_CRITICAL` and `FINAL_REQUIRED` in `util/check_release_ci.py` are the lists.
 
 The candidate reuses the final's release notes (`docs/releases/vX.Y.Z.mdx`), and

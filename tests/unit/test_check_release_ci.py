@@ -72,8 +72,8 @@ class Clock:
         self.t += timedelta(seconds=seconds)
 
 
-def C(workflow, jobs=(), tag_input=""):
-    return crc.Check(workflow, jobs, tag_input)
+def C(workflow, jobs=(), dispatch=True):
+    return crc.Check(workflow, jobs, dispatch)
 
 
 def _workflow(name: str) -> dict:
@@ -101,16 +101,12 @@ def test_every_check_names_real_jobs_and_inputs(check):
             f"{check.workflow} has no job named {name!r}; the gate would hold "
             "every release on a job that never runs"
         )
-    if check.tag_input:
-        inputs = (on["workflow_dispatch"] or {}).get("inputs", {})
-        assert check.tag_input in inputs, check.workflow
 
 
 def test_the_rc_set_is_exactly_the_agreed_critical_list():
     assert [(c.workflow, c.jobs) for c in crc.RC_CRITICAL] == [
         ("lint.yml", ()),
         ("test_unit.yml", (LINUX, FLOOR)),
-        ("release_train_dryrun.yml", ()),
     ]
     assert all(c.why for c in crc.RC_CRITICAL)
 
@@ -140,13 +136,29 @@ def test_in_run_critical_jobs_gate_approve_publish():
         assert f"needs.{jid}.result == 'success'" in approve["if"], jid
 
 
-def test_the_rc_dry_run_is_dispatched_with_its_tag_and_a_final_is_never():
-    rc = next(c for c in crc.RC_CRITICAL if c.workflow == "release_train_dryrun.yml")
+def test_the_dry_run_never_holds_or_slows_an_rc_but_holds_a_final():
+    # publish.yml builds and smoke-tests the candidate in-run; the hour-long dry
+    # run is only reported on an RC, and never started for one.
+    assert "release_train_dryrun.yml" not in {c.workflow for c in crc.RC_CRITICAL}
+    assert "release_train_dryrun.yml" in {c.workflow for c in crc.RC_ADVISORY}
     final = next(
         c for c in crc.FINAL_REQUIRED if c.workflow == "release_train_dryrun.yml"
     )
-    assert rc.tag_input == "rc_tag"
-    assert final.tag_input is None
+    assert final.dispatch is False
+    assert "-f rc_tag=" in final.remedy_args
+
+
+def test_an_rc_never_dispatches_or_waits_for_an_advisory_check():
+    # The gate only ever polls RC_CRITICAL; advise() reads once.
+    calls: list[str] = []
+
+    def get_runs(w):
+        calls.append(w)
+        return []
+
+    advisory = crc.advise("amd/gaia", "v1.0.0-rc1", crc.RC_ADVISORY, get_runs)
+    assert calls == [c.workflow for c in crc.RC_ADVISORY]
+    assert {v.state for v in advisory} == {"missing"}
 
 
 # ── judge(): whole-run checks ───────────────────────────────────────────
@@ -458,14 +470,18 @@ def test_advisory_checks_are_reported_but_never_block():
 # ── the API layer ───────────────────────────────────────────────────────
 
 
-def test_dispatch_passes_the_tag_to_the_named_input(monkeypatch):
+def test_dispatch_runs_the_workflow_on_the_tag(monkeypatch):
     calls = []
-    monkeypatch.setattr(crc, "_api", lambda url, tok, body=None: calls.append(body))
-    crc.dispatch("amd/gaia", C("d.yml", tag_input="rc_tag"), "v1.0.0-rc2", "tok")
+    monkeypatch.setattr(
+        crc, "_api", lambda url, tok, body=None: calls.append((url, body))
+    )
     crc.dispatch("amd/gaia", C("lint.yml"), "v1.0.0-rc2", "tok")
     assert calls == [
-        {"ref": "v1.0.0-rc2", "inputs": {"rc_tag": "v1.0.0-rc2"}},
-        {"ref": "v1.0.0-rc2"},
+        (
+            "https://api.github.com/repos/amd/gaia/actions/workflows/"
+            "lint.yml/dispatches",
+            {"ref": "v1.0.0-rc2"},
+        )
     ]
 
 
