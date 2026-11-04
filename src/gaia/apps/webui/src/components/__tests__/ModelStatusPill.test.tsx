@@ -78,6 +78,20 @@ describe('ModelStatusPill', () => {
         expect(screen.getByRole('button', { name: 'Local · Gemma 4 E4B NPU, model loaded' })).toBeInTheDocument();
     });
 
+    it('does not show loaded when Lemonade runs with nothing loaded', () => {
+        useChatStore.setState({ systemStatus: { lemonade_running: true, model_loaded: null } as SystemStatus });
+        render(<ModelStatusPill />);
+        const pill = screen.getByRole('button', { name: 'Local · Gemma 4 E4B, model not loaded' });
+        expect(pill.querySelector('.sb-location-dot')).not.toHaveClass('is-loaded');
+    });
+
+    it('does not show loaded before the chat has an active model', () => {
+        useModelStore.setState({ active: null });
+        render(<ModelStatusPill />);
+        const pill = screen.getByRole('button', { name: /model not loaded$/ });
+        expect(pill.querySelector('.sb-location-dot')).not.toHaveClass('is-loaded');
+    });
+
     it('shows the place and the model on separate lines and keeps the full name in the tooltip', () => {
         render(<ModelStatusPill />);
         const pill = screen.getByRole('button', { name: /Local · Gemma 4 E4B/ });
