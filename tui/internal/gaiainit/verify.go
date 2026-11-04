@@ -41,6 +41,9 @@ type Model struct {
 	// Downloaded is whether the server already has it; nil from a gaia too old
 	// to say.
 	Downloaded *bool `json:"downloaded"`
+	// Kind is why a load failed: "memory", "stuck", "answer", "window", or
+	// "broken" (the file itself). Empty from a gaia too old to say.
+	Kind string `json:"kind"`
 }
 
 // Missing is the models the server does not have yet. A model whose state was

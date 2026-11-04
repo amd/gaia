@@ -288,7 +288,25 @@ const (
 	ErrVerify   = "verify"
 	// ErrPathTooLong is Windows' path limit; retrying can't get past it.
 	ErrPathTooLong = "path_too_long"
+	// A test that failed with nothing wrong with the file: retrying tests it
+	// again, and never deletes or downloads it.
+	ErrTestMemory = "memory"
+	ErrTestStuck  = "stuck"
+	ErrTestAnswer = "answer"
+	ErrTestWindow = "window"
 )
+
+// IsTestKind reports whether kind is a failed test of a file that is fine.
+func IsTestKind(kind *string) bool {
+	if kind == nil {
+		return false
+	}
+	switch *kind {
+	case ErrTestMemory, ErrTestStuck, ErrTestAnswer, ErrTestWindow:
+		return true
+	}
+	return false
+}
 
 // Overall is the bytes-weighted total across the models being set up.
 type Overall struct {

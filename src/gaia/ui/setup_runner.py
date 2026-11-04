@@ -24,7 +24,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.logger import get_logger
 from gaia.utils.terminal import windows_hidden_popen_kwargs
@@ -121,7 +121,7 @@ def desktop_setup_error() -> Optional[str]:
         return None
     reason = str(state.get("initError") or "").strip()
     return reason or (
-        f"`{run_command(False)}` did not finish. Its output is in "
+        "The desktop app's setup did not finish. Its output is in "
         f"{path.parent / 'electron-install.log'}."
     )
 
@@ -228,35 +228,49 @@ def parse_status(stdout: str) -> Dict[str, Any]:
     )
 
 
-def check(skip_chat_model: bool = False, load: bool = False) -> Dict[str, Any]:
+def check(
+    skip_chat_model: bool = False,
+    load: bool = False,
+    on_start: Optional[Callable[[subprocess.Popen], None]] = None,
+    mark: bool = True,
+) -> Dict[str, Any]:
     """Is the flagship profile set up (and, with *load*, do its models load)?
 
+    *on_start* receives the running check, so a caller can stop it (Cancel).
+    *mark* False leaves setup unmarked, for a caller with tests still to run.
     Raises :class:`SetupError` when the question could not be answered — that
     is not the same as "not set up" and must never be shown as it.
     """
+    proc = subprocess.Popen(
+        _gaia_argv(*check_args(skip_chat_model, load)),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=_child_env(),
+        **windows_hidden_popen_kwargs(),
+    )
+    if on_start is not None:
+        on_start(proc)
     try:
-        proc = subprocess.run(
-            _gaia_argv(*check_args(skip_chat_model, load)),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=VERIFY_TIMEOUT_S if load else CHECK_TIMEOUT_S,
-            check=False,
-            env=_child_env(),
-            **windows_hidden_popen_kwargs(),
+        stdout, stderr = proc.communicate(
+            timeout=VERIFY_TIMEOUT_S if load else CHECK_TIMEOUT_S
         )
     except subprocess.TimeoutExpired as e:
+        proc.kill()
+        proc.communicate()
         raise SetupError(
             "Checking setup took too long. Try again; its log shows where it stopped."
         ) from e
     if proc.returncode not in (0, _NOT_READY_EXIT, _LOAD_FAILED_EXIT):
         raise SetupError(
             f"Setup could not be checked (exit {proc.returncode}). GAIA said: "
-            f"{_last_line(proc.stderr + chr(10) + proc.stdout)}"
+            f"{_last_line(stderr + chr(10) + stdout)}"
         )
-    status = parse_status(proc.stdout)
-    if status.get("ready"):
+    status = parse_status(stdout)
+    if mark and status.get("ready"):
         mark_initialized()
     return status
 
@@ -587,6 +601,8 @@ class ModelProgress:
     error: Optional[str] = None
     error_kind: Optional[str] = None
     retrying_until: Optional[int] = None
+    #: The Test step's row that failed this model, so Retry repeats that test.
+    test_job: Optional[str] = None
     #: Bytes already on disk when this pull started (a resumed download).
     bytes_before: Optional[int] = None
     #: What the download printed and reported, this model's lines only.
@@ -684,6 +700,41 @@ def _failure_text(model_id: str, kind: Optional[str]) -> str:
         f"Lemonade couldn't download {model_id}. Its download log has "
         "Lemonade's message; press Retry to try again."
     )
+
+
+#: Test failures that say nothing is wrong with the file: Retry tests again,
+#: and never deletes or re-downloads the model. A "broken" one is ``verify``.
+TEST_KINDS = ("memory", "stuck", "answer", "window")
+
+
+def _test_failure(
+    model_id: str, kind: Optional[str], error: Optional[str]
+) -> Tuple[str, str]:
+    """A failed test's row: its ``error_kind`` and what Details says."""
+    why = f" ({error})" if error else ""
+    if kind == "memory":
+        return kind, (
+            f"{model_id} is downloaded, but this PC didn't have enough free memory "
+            "to test it. Close some apps, then press Retry to test it again; "
+            "nothing is downloaded again."
+        )
+    if kind == "stuck":
+        return kind, (
+            f"{model_id} is downloaded, but the model server didn't answer before "
+            "its test finished. Press Retry to test it again; nothing is "
+            "downloaded again."
+        )
+    if kind == "answer":
+        return kind, (
+            f"{model_id} loaded, but its test got nothing usable back{why}. "
+            "Press Retry to test it again; nothing is downloaded again."
+        )
+    if kind == "window":
+        return kind, (
+            f"{model_id} loaded with a smaller context window than GAIA needs{why}. "
+            "Press Retry to test it again; nothing is downloaded again."
+        )
+    return "verify", f"{model_id} is downloaded but would not load: {error}"
 
 
 @dataclass
@@ -813,6 +864,10 @@ class SetupRunner:
         self._run: Optional[SetupRun] = None
         self._proc: Optional[subprocess.Popen] = None
         self._thread: Optional[threading.Thread] = None
+        self._check_proc: Optional[subprocess.Popen] = None
+        # Clear while a load check runs: only it can write to the model rows.
+        self._check_idle = threading.Event()
+        self._check_idle.set()
         self._models: Dict[str, ModelProgress] = {}
         #: model id -> Stop flag of an in-process pull.
         self._pulls: Dict[str, threading.Event] = {}
@@ -865,8 +920,10 @@ class SetupRunner:
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
                 return True
+            # "verifying" outside a run is Retry testing it again.
             return any(
-                ids_match(entry.id, model_id) and entry.state == "downloading"
+                ids_match(entry.id, model_id)
+                and entry.state in ("downloading", "verifying")
                 for entry in self._models.values()
             )
 
@@ -896,14 +953,15 @@ class SetupRunner:
                     "can't switch to GAIA's own. Unset it and restart GAIA."
                 )
         # A cancelled run's checks may still be finishing; they would land on the new run.
-        ending = self._thread
+        # A stopped run's load check may still be ending; its results would land
+        # on the new run. Cancel kills it, so this wait is short.
         over = self._run is None or self._run.state not in ("running", "verifying")
-        if over and ending is not None and ending.is_alive():
-            ending.join(timeout=_STOPPING_WAIT_S)
+        if over:
+            self._check_idle.wait(timeout=_STOPPING_WAIT_S)
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
                 raise SetupBusy("Setup is already running.")
-            if self._thread is not None and self._thread.is_alive():
+            if not self._check_idle.is_set():
                 raise SetupBusy("The last setup is still stopping.")
             if self._pulls:
                 raise SetupBusy(
@@ -969,7 +1027,13 @@ class SetupRunner:
         self, client, model_id: str, keep_trying: bool = False
     ) -> Dict[str, Any]:
         """Pull one model now, in this process: Retry, Resume, or a model the
-        user skipped at setup and now wants. Lemonade resumes a partial file."""
+        user skipped at setup and now wants. Lemonade resumes a partial file.
+
+        A model that downloaded but failed its test for a reason that leaves
+        the file fine (see :data:`TEST_KINDS`) is tested again instead."""
+        retested = self._retest(client, model_id)
+        if retested is not None:
+            return retested
         on_disk = _bytes_on_disk(client, model_id)
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
@@ -1014,10 +1078,14 @@ class SetupRunner:
             if model_id is not None:
                 return stopped
             if self._run is not None and self._run.state == "verifying":
-                # The checks stop at their next step and their results are dropped.
+                # Stop the load check; whatever it already found is dropped.
+                if self._check_proc is not None and self._check_proc.poll() is None:
+                    self._check_proc.kill()
                 self._run.state = "cancelled"
                 self._run.text = "Setup stopped"
                 self._run.note("Stopped by the user while checking the models")
+                # No check will finish them now: kept, as "unchecked".
+                self._settle_models(None, {}, run_failed=True)
                 self._end_rows(self._run, cancelled=True)
                 return True
             if self._proc is None or self._run is None or self._run.state != "running":
@@ -1032,6 +1100,95 @@ class SetupRunner:
             self._end_rows(self._run, cancelled=True)
             self._proc.kill()
             return True
+
+    def _retest(self, client, model_id: str) -> Optional[Dict[str, Any]]:
+        """Test one downloaded model again, on its own thread; nothing is
+        deleted. None when its last failure was not a test of a fine file."""
+        from gaia.installer.init_command import LOAD_CHECK_JOB
+
+        with self._lock:
+            entry = self._models.get(model_id)
+            if (
+                entry is None
+                or entry.state not in ("failed", "cancelled")
+                or entry.error_kind not in TEST_KINDS
+            ):
+                return None
+            if self._run is not None and self._run.state in ("running", "verifying"):
+                raise SetupBusy(
+                    "Setup is running and tests its models itself. Retry this "
+                    "model once it finishes."
+                )
+            if model_id in self._pulls:
+                raise SetupBusy(f"{model_id} is already being tested.")
+            stop = threading.Event()
+            self._pulls[model_id] = stop
+            entry.state, entry.error, entry.speed_bps = "verifying", None, 0
+            entry.add_log(f"Testing {model_id} again")
+            if self._run is not None and entry.test_job != LOAD_CHECK_JOB:
+                self._record_test(
+                    self._run,
+                    {"job": entry.test_job, "subject": model_id, "state": "running"},
+                )
+        threading.Thread(
+            target=self._retest_one, args=(client, model_id, stop), daemon=True
+        ).start()
+        return self.status() or {"state": "idle"}
+
+    def _retest_one(self, client, model_id: str, stop: threading.Event) -> None:
+        from gaia.installer.init_command import LOAD_CHECK_JOB, retest_model
+
+        with self._lock:
+            job = self._models[model_id].test_job
+        started = time.monotonic()
+        crashed = None
+        try:
+            passed, error, kind = retest_model(client, model_id, job)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            # Never leave the row "verifying": it fails, and Retry tests again.
+            logger.exception(
+                "Testing %s again stopped on an unexpected error", model_id
+            )
+            passed, error, kind = False, f"{type(e).__name__}: {e}", "stuck"
+            crashed = (
+                f"GAIA couldn't test {model_id} again ({error}). Its server log "
+                "has the details; press Retry to test it again."
+            )
+        with self._lock:
+            self._pulls.pop(model_id, None)
+            entry = self._models.setdefault(model_id, ModelProgress(id=model_id))
+            row = {"job": entry.test_job, "subject": model_id}
+            if stop.is_set():
+                # The test can't be interrupted; its result no longer counts.
+                entry.state = "cancelled"
+                entry.add_log("Cancelled")
+                if self._run is not None and entry.test_job != LOAD_CHECK_JOB:
+                    self._record_test(self._run, {**row, "state": "skipped"})
+                return
+            if passed:
+                entry.state, entry.error, entry.error_kind = "ready", None, None
+                entry.add_log("Test passed")
+            else:
+                entry.state = "failed"
+                entry.error_kind, entry.error = _test_failure(model_id, kind, error)
+                entry.error = crashed or entry.error
+                said = (
+                    "Failed to load"
+                    if entry.error_kind == "verify"
+                    else "Failed its test"
+                )
+                entry.add_log(f"{said}: {error}")
+            if self._run is not None and entry.test_job != LOAD_CHECK_JOB:
+                self._record_test(
+                    self._run,
+                    {
+                        **row,
+                        "state": "passed" if passed else "failed",
+                        "error": None if passed else error,
+                        "kind": None if passed else kind,
+                        "seconds": round(time.monotonic() - started, 1),
+                    },
+                )
 
     def _pull_one(
         self, client, model_id: str, keep_trying: bool, stop: threading.Event
@@ -1227,18 +1384,26 @@ class SetupRunner:
         run.size = f"{totals['bytes_done'] / 1e9:.2f} GB of {totals['bytes_total'] / 1e9:.2f} GB"
 
     def _settle_models(
-        self, ready: Optional[set], failed: Dict[str, str], run_failed: bool = False
+        self,
+        ready: Optional[set],
+        failed: Dict[str, str],
+        run_failed: bool = False,
+        kinds: Optional[Dict[str, str]] = None,
     ) -> None:
         """After a run: downloaded models become ready, or failed when their
         load check failed. When the run stopped before checking, they stay
         downloaded as "unchecked": nothing is wrong with them, so nothing may
-        delete or re-download them. Caller holds the lock."""
+        delete or re-download them. *kinds* gives a failed model's
+        ``error_kind``; only ``verify`` (the default) offers a fresh download.
+        Caller holds the lock."""
         for entry in self._models.values():
             if entry.id in failed:
-                entry.state, entry.error_kind = "failed", "verify"
+                kind = (kinds or {}).get(entry.id, "verify")
+                entry.state, entry.error_kind = "failed", kind
                 entry.error = failed[entry.id]
                 # Details shows the row's log, so the reason must be in it.
-                entry.add_log(f"Failed to load: {failed[entry.id]}")
+                said = "Failed to load" if kind == "verify" else "Failed its test"
+                entry.add_log(f"{said}: {failed[entry.id]}")
             elif entry.state != "verifying":
                 continue
             elif run_failed:
@@ -1337,8 +1502,7 @@ class SetupRunner:
                     run.note(f"Setup failed: {run.error}")
                     return
                 run.error = (
-                    f"`{run_command(run.skip_chat_model, run.gaia_lemonade)}` "
-                    f"failed (exit {code}): "
+                    f"Setup stopped (exit {code}): "
                     f"{run.error or _last_line(chr(10).join(run.log))}"
                 )
                 run.note(f"Setup failed: {run.error}")
@@ -1358,42 +1522,85 @@ class SetupRunner:
             run.percent = run.size = None
         self._verify(run)
 
-    def _verify(self, run: SetupRun) -> None:
+    def _load_check(self, run: SetupRun) -> bool:
+        """Load every model and record the results; True when setup is ready."""
+
+        def started(proc: subprocess.Popen) -> None:
+            with self._lock:
+                self._check_proc = proc
+                if run.state == "cancelled":
+                    proc.kill()
+
         try:
-            status = check(run.skip_chat_model, load=True)
+            status = check(run.skip_chat_model, load=True, on_start=started, mark=False)
         except SetupError as e:
             with self._lock:
                 if run.state == "cancelled":
-                    return
+                    return False
                 run.state, run.error = "failed", str(e)
                 run.note(f"Load check failed: {e}")
                 self._settle_models(None, {}, run_failed=True)
-            return
+            return False
+        from gaia.installer.init_command import LOAD_CHECK_JOB
+
         loads = status.get("models") or []
-        failed = {
-            m["id"]: f"{m['id']} is downloaded but would not load: {m.get('error')}"
-            for m in loads
-            if not m.get("loaded")
-        }
+        failed: Dict[str, str] = {}
+        kinds: Dict[str, str] = {}
+        for m in loads:
+            if not m.get("loaded"):
+                # Only a broken file is offered a fresh download.
+                kinds[m["id"]], failed[m["id"]] = _test_failure(
+                    m["id"], m.get("kind"), m.get("error")
+                )
         with self._lock:
             # Cancelled during the check: its results belong to no run any more.
             if run.state == "cancelled":
-                return
+                return False
             run.status = status
             for m in loads:
                 outcome = (
-                    "loads" if m.get("loaded") else f"would not load: {m.get('error')}"
+                    "loads"
+                    if m.get("loaded")
+                    else f"failed ({m.get('kind') or 'broken'}): {m.get('error')}"
                 )
                 run.note(f"Load check {m['id']}: {outcome}")
+                entry = self._models.get(m["id"])
+                if entry is not None and not m.get("loaded"):
+                    # Retry repeats this load; the friendly line may drop its words.
+                    entry.test_job = LOAD_CHECK_JOB
+                    entry.add_log(f"Load check: {m.get('error')}")
             loaded = {m["id"] for m in loads if m.get("loaded")}
             # gaia init's Test step ran what the user ticked; this check only
             # covers the plan. Any other model it skipped stays unverified.
             checked = {m["id"] for m in loads}
-            loaded |= {i for i in run.extra_models if i not in checked}
+            # An extra's own test result stands; only an untested one counts as loaded.
+            tested_failed = {
+                t["subject"]: t
+                for t in run.tests.values()
+                if t.get("state") == "failed" and t.get("subject") in run.extra_models
+            }
+            for i, test in tested_failed.items():
+                if i in checked:
+                    continue
+                kinds[i], failed[i] = _test_failure(
+                    i, test.get("kind"), test.get("error")
+                )
+                if i in self._models:
+                    self._models[i].test_job = test.get("job")
+                    # The friendly line may leave out the test's own words.
+                    self._models[i].add_log(
+                        f"Test {test.get('job')}: {test.get('error')}"
+                    )
+            loaded |= {
+                i
+                for i in run.extra_models
+                if i not in checked and i not in tested_failed
+            }
             self._settle_models(
                 loaded if loads else None,
                 failed,
                 run_failed=not status.get("ready") and not loads,
+                kinds=kinds,
             )
             ready = bool(status.get("ready"))
             if not ready:
@@ -1402,6 +1609,14 @@ class SetupRunner:
                     "Setup finished but GAIA is still not ready."
                 )
                 run.note(f"Not ready: {run.error}")
+        return ready
+
+    def _verify(self, run: SetupRun) -> None:
+        self._check_idle.clear()
+        try:
+            ready = self._load_check(run)
+        finally:
+            self._check_idle.set()
         if not ready:
             return
         problem = self._test_agent(run)
@@ -1412,6 +1627,7 @@ class SetupRunner:
                 run.state, run.error = "failed", problem
             else:
                 run.state, run.text = "ready", "GAIA is ready"
+                mark_initialized()
             run.note(run.error if problem else run.text)
 
     def _test_agent(self, run: SetupRun) -> Optional[str]:
@@ -1424,7 +1640,11 @@ class SetupRunner:
 
         started = time.monotonic()
         # A cloud setup chats on the cloud model connecting saved, as chat will.
+        from gaia.llm.lemonade_client import cloud_model_provider
+
         cloud = GaiaConfig.load().last_model if run.skip_chat_model else None
+        if cloud and not (cloud.startswith("claude-") or cloud_model_provider(cloud)):
+            cloud = None
         if run.skip_chat_model and not cloud:
             problem = NO_CLOUD_MODEL
         else:

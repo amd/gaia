@@ -933,16 +933,33 @@ func (l localRunner) loadFailedRow(st gaiainit.Status) Row {
 		chatFailed = true
 	}
 	row.Line = failed[0].ID + " will not load"
+	why := "the model server could not start it"
+	switch failed[0].Kind {
+	case "memory":
+		row.Line = failed[0].ID + " needs more free memory"
+		why = "this PC didn't have enough free memory to load it"
+	case "stuck":
+		row.Line = failed[0].ID + " got no answer from the model server"
+		why = "the model server didn't answer while loading it"
+	case "answer":
+		row.Line = failed[0].ID + " answered with nothing usable"
+		why = "it loaded but returned nothing usable"
+	case "window":
+		row.Line = failed[0].ID + " loaded with too small a context window"
+		why = "it loaded with a smaller context window than GAIA needs"
+	}
 	if chatFailed {
-		row.Detail = "It is downloaded, but the model server could not start it, so GAIA " +
-			"cannot answer."
+		row.Detail = "It is downloaded, but " + why + ", so GAIA cannot answer."
 	} else {
 		// Chat still works, so the launch may go ahead — but never quietly.
 		row.Optional = true
-		row.Detail = "It is downloaded, but the model server could not start it, so document " +
-			"search and memory will not work. Chat still does."
+		row.Detail = "It is downloaded, but " + why + ", so document search and memory " +
+			"will not work. Chat still does."
 	}
-	if readEmbeddedLemonade() != nil {
+	if failed[0].Kind == "memory" {
+		// The file is fine: freeing memory is the fix, not a restart or a download.
+		row.Remedy = Remedy{Action: "Close some apps to free memory, then press r to check again."}
+	} else if readEmbeddedLemonade() != nil {
 		row.Remedy = Remedy{
 			Action: "Stop GAIA's model server, then press r — it starts again with current settings. " +
 				"If it still fails, attach the output of `gaia diagnostics` to a bug report.",

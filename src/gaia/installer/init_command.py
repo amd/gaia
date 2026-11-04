@@ -95,20 +95,23 @@ def _model_role(model_id: str) -> str:
     return "chat"
 
 
-def _speak_once(base_url: str, model_id: str) -> None:
+def _speak_once(base_url: str, model_id: str) -> Optional["WrongAnswer"]:
     """Synthesize one word, the request the text-to-speech tool makes.
+
+    Returns:
+        None when audio came back; a :class:`WrongAnswer` when it was silent,
+        which says nothing is wrong with the model's file.
 
     Raises:
         ConnectionError: Lemonade Server is not reachable.
-        LemonadeTTSError: The server refused the request or returned no audio.
+        LemonadeTTSError: The server refused the request.
     """
-    from gaia.audio.lemonade_tts import LemonadeTTSClient, LemonadeTTSError
+    from gaia.audio.lemonade_tts import LemonadeTTSClient
 
     samples, _rate = LemonadeTTSClient(base_url=base_url, model=model_id).synthesize(
         "ok"
     )
-    if not len(samples):
-        raise LemonadeTTSError(f"{model_id} returned no audio")
+    return None if len(samples) else WrongAnswer(f"{model_id} returned no audio")
 
 
 _TROUBLESHOOTING_URL = "https://amd-gaia.ai/docs/reference/troubleshooting"
@@ -328,6 +331,9 @@ class ModelLoad:
     error: Optional[str] = None
     #: Whether the server already has it; None when not checked.
     downloaded: Optional[bool] = None
+    #: Why it failed, as :func:`kind_of_test_failure` names it; only
+    #: ``broken`` says the file itself is bad.
+    kind: Optional[str] = None
 
 
 @dataclass
@@ -848,10 +854,7 @@ def check_setup_status(
     if failed:
         return SetupStatus(
             ready=False,
-            reasons=[
-                f"Model '{m.id}' is downloaded but would not load: {m.error}"
-                for m in failed
-            ],
+            reasons=[_load_failure_reason(m) for m in failed],
             stage="load",
             models=models,
             warnings=warnings,
@@ -934,31 +937,63 @@ def _describe_model(
     return ModelLoad(model_id, role, size_gb, False, downloaded=downloaded)
 
 
+def _load_failure_reason(m: "ModelLoad") -> str:
+    """One failed load, worded for its kind: only ``broken`` is "would not load"."""
+    if m.kind == "memory":
+        return (
+            f"Model '{m.id}' is downloaded, but this PC didn't have enough free "
+            f"memory to load it: {m.error}"
+        )
+    if m.kind == "stuck":
+        return (
+            f"Model '{m.id}' is downloaded, but the model server didn't answer "
+            f"while loading it: {m.error}"
+        )
+    if m.kind == "answer":
+        return f"Model '{m.id}' loaded but returned nothing usable: {m.error}"
+    if m.kind == "window":
+        return (
+            f"Model '{m.id}' loaded with a smaller context window than GAIA "
+            f"needs: {m.error}"
+        )
+    return f"Model '{m.id}' is downloaded but would not load: {m.error}"
+
+
 def _load_model_once(client, model_id: str) -> "ModelLoad":
     """Load one model through the same call the agent's first turn makes."""
-    from gaia.llm.lemonade_client import LemonadeClientError
+    from gaia.llm.lemonade_client import InsufficientMemoryError, LemonadeClientError
 
     role = _model_role(model_id)
     size_gb = None
+
+    def failed(error) -> "ModelLoad":
+        kind = kind_of_test_failure(error)
+        return ModelLoad(model_id, role, size_gb, False, str(error), kind=kind)
+
     try:
         size_gb = client.get_model_info(model_id)["size_gb"]
         if role == "speech":
-            _speak_once(client.base_url, model_id)
+            silent = _speak_once(client.base_url, model_id)
+            if silent is not None:
+                return failed(silent)
         elif role == "embedding":
             response = client.embeddings(["ok"], model=model_id, timeout=120)
             data = response.get("data") if isinstance(response, dict) else None
             if not data or not data[0].get("embedding"):
-                return ModelLoad(
-                    model_id, role, size_gb, False, "it returned no embedding"
-                )
+                return failed(WrongAnswer("it returned no embedding"))
         else:
             client._ensure_model_loaded(model_id)  # pylint: disable=protected-access
-    except LemonadeClientError as e:
-        return ModelLoad(model_id, role, size_gb, False, str(e))
+    except InsufficientMemoryError as e:
+        return failed(MemoryShortfall(str(e)))
     except Exception as e:  # pylint: disable=broad-exception-caught
         # Reported as this model's failure, so the caller names it — never a
         # bare traceback that leaves the check unanswered.
-        return ModelLoad(model_id, role, size_gb, False, f"{type(e).__name__}: {e}")
+        said = (
+            str(e) if isinstance(e, LemonadeClientError) else f"{type(e).__name__}: {e}"
+        )
+        if isinstance(_test_error(e), CheckTimedOut):
+            return failed(CheckTimedOut(said))
+        return failed(said)
     return ModelLoad(model_id, role, size_gb, True)
 
 
@@ -980,6 +1015,51 @@ class WrongAnswer(str):
 
 class WindowTooSmall(str):
     """The model loaded with a smaller context window than GAIA needs: not a damaged file."""
+
+
+#: A failed test's kind, by its error's class. Anything else is "broken": the
+#: file itself didn't load, and only that is worth a fresh download.
+_TEST_FAILURE_KINDS = (
+    (MemoryShortfall, "memory"),
+    (CheckTimedOut, "stuck"),
+    (WrongAnswer, "answer"),
+    (WindowTooSmall, "window"),
+)
+
+
+def kind_of_test_failure(error) -> Optional[str]:
+    """``memory``, ``stuck``, ``answer``, ``window`` or ``broken``; None for no error."""
+    if error is None:
+        return None
+    return next(
+        (k for cls, k in _TEST_FAILURE_KINDS if isinstance(error, cls)), "broken"
+    )
+
+
+def _test_error(e: Exception, limit: int = 200) -> str:
+    """A failed test's reason; a server that stopped answering is not a broken model."""
+    import requests
+
+    from gaia.llm.lemonade_client import (
+        GaiaLemonadeNotAnsweringError,
+        LemonadeUnresponsiveError,
+    )
+
+    unanswered = (
+        GaiaLemonadeNotAnsweringError,
+        LemonadeUnresponsiveError,
+        requests.ConnectionError,
+        requests.Timeout,
+        ConnectionError,
+        TimeoutError,
+    )
+    cause: Optional[BaseException] = e
+    while cause is not None:
+        if isinstance(cause, unanswered):
+            return CheckTimedOut(f"The model server didn't answer: {str(e)[:limit]}")
+        cause = cause.__cause__ or cause.__context__
+    text = str(e)
+    return text if len(text) <= limit else text[:limit] + "..."
 
 
 #: A model gets this long to load and answer, plus _TEST_S_PER_GB per GB of size.
@@ -1699,7 +1779,7 @@ class InitCommand:
                 )
                 self._component("agent", "active")
                 self._ensure_hub_agent_installed()
-                self._component("agent", "failed" if self._agent_problem else "done")
+                self._component("agent", self._agent_component_state())
 
             # Build Agent UI frontend (dev/source installs only). No
             # try/except here: ensure_webui_built() never raises for an
@@ -2715,8 +2795,8 @@ class InitCommand:
         try:
             if is_tts_model_id(model_id):
                 # A speech model takes no chat request; the speech call loads it.
-                _speak_once(client.base_url, model_id)
-                return (True, None)
+                silent = _speak_once(client.base_url, model_id)
+                return (True, None) if silent is None else (False, silent)
 
             # Check if profile requires specific context size for this model
             profile_config = INIT_PROFILES.get(self.profile, {})
@@ -2872,12 +2952,8 @@ class InitCommand:
         except InsufficientMemoryError as e:
             # Kept whole: the remedy (close apps, or another model) is in it.
             return (False, MemoryShortfall(str(e)))
-        except Exception as e:
-            error_msg = str(e)
-            # Truncate long error messages
-            if len(error_msg) > 100:
-                error_msg = error_msg[:100] + "..."
-            return (False, error_msg)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            return (False, _test_error(e, limit=100))
 
     def _test_speech(self, client, model_id: str) -> tuple:
         """Transcribe a short tone: the request is accepted and a transcript returns."""
@@ -2904,7 +2980,9 @@ class InitCommand:
             model=model_id,
             api_key=resolve_lemonade_api_key(base_url=client.base_url),
         ).synthesize("GAIA is ready.")
-        return (True, None) if len(samples) else (False, "No audio came back")
+        return (
+            (True, None) if len(samples) else (False, WrongAnswer("No audio came back"))
+        )
 
     def _test_vision(self, client, model_id: str) -> tuple:
         """Show the model a red image and ask its colour: text alone proves no vision."""
@@ -2933,7 +3011,7 @@ class InitCommand:
         except InsufficientMemoryError as e:
             return (False, MemoryShortfall(str(e)))
         except Exception as e:  # pylint: disable=broad-exception-caught
-            return (False, str(e)[:200])
+            return (False, _test_error(e))
         choices = (response or {}).get("choices") or [{}]
         message = choices[0].get("message", {})
         said = (
@@ -2957,7 +3035,7 @@ class InitCommand:
             try:
                 results.put(test(*args))
             except Exception as e:  # pylint: disable=broad-exception-caught
-                results.put((False, str(e)[:200]))
+                results.put((False, _test_error(e)))
             except BaseException as e:  # pylint: disable=broad-exception-caught
                 results.put(e)
 
@@ -2982,16 +3060,7 @@ class InitCommand:
         seconds: Optional[float] = None,
     ) -> None:
         """One row of the Test step: ``running``, ``passed``, ``failed`` or ``skipped``."""
-        # Only "broken" means the file didn't load, so only it offers a fresh download.
-        kinds = (
-            (MemoryShortfall, "memory"),
-            (CheckTimedOut, "stuck"),
-            (WrongAnswer, "answer"),
-            (WindowTooSmall, "window"),
-        )
-        kind = None
-        if error is not None:
-            kind = next((k for cls, k in kinds if isinstance(error, cls)), "broken")
+        kind = kind_of_test_failure(error)
         self.events.emit(
             "test",
             job=job,
@@ -3384,7 +3453,7 @@ class InitCommand:
                 self._print_error(
                     "The model server stopped answering while testing "
                     f"{', '.join(m for m, _ in stuck)}. Restart it, or the PC, "
-                    "and re-run `gaia init`; nothing needs re-downloading."
+                    "then run setup again; nothing needs re-downloading."
                 )
                 return False
 
@@ -3424,6 +3493,10 @@ class InitCommand:
         from gaia.hub import installer as hub_installer
 
         return hub_installer.read_sentinel(agent_id) is not None
+
+    def _agent_component_state(self) -> str:
+        """The agent row after its step: a kept agent still answers, so it is done."""
+        return "failed" if self._agent_problem and not self._agent_kept else "done"
 
     def _profile_installs_flagship(self) -> bool:
         """Whether this profile installs the flagship agent itself."""
@@ -3910,6 +3983,42 @@ class InitCommand:
 def run_agent_refresh() -> int:
     """Entry point for `gaia init --agent-only`."""
     return InitCommand(profile=DEFAULT_INIT_PROFILE, skip_models=True).refresh_agent()
+
+
+#: The job a failed ``--check --load`` gives a model, so Retry repeats that load.
+LOAD_CHECK_JOB = "load"
+
+#: A failed load's kind, back as the error class the Test step uses.
+_KIND_ERRORS = {kind: cls for cls, kind in _TEST_FAILURE_KINDS}
+
+
+def _load_check_test(client, model_id: str) -> tuple:
+    """The load check's own probe of one model, as a Test-step result."""
+    load = _load_model_once(client, model_id)
+    if load.loaded:
+        return (True, None)
+    return (False, _KIND_ERRORS.get(load.kind, str)(load.error or ""))
+
+
+def retest_model(client, model_id: str, job: Optional[str] = None) -> tuple:
+    """Run one downloaded model's setup test again, as the Test step ran it.
+
+    *job* is the Test step's row, so a vision test repeats as a vision test.
+    Returns ``(passed, error, kind)``; *kind* is :func:`kind_of_test_failure`'s.
+    """
+    cmd = InitCommand(profile=DEFAULT_INIT_PROFILE, skip_models=True, yes=True)
+    if job == LOAD_CHECK_JOB:
+        test = _load_check_test
+    elif job == model_choice.ROLE_VISION:
+        test = cmd._test_vision
+    else:
+        test = cmd._test_model_inference
+    passed, error = cmd._within_limit(model_id, test, client, model_id)
+    return (
+        passed,
+        None if error is None else str(error),
+        None if passed else kind_of_test_failure(error),
+    )
 
 
 def run_init(
