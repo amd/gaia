@@ -7498,12 +7498,14 @@ def handle_gateway_command(args):
     from gaia.llm.gateway import (
         DEFAULT_GATEWAY_BASE_URL,
         GATEWAY_ENV_VAR,
+        STORED_TOKEN_SOURCE,
         GatewayError,
         GatewayManager,
         GatewayState,
         describe_unavailable,
         forget_token,
         gateway_claude_upstream_id,
+        lemonade_token_with_source,
         recall_token,
         remember_token,
     )
@@ -7586,6 +7588,7 @@ def handle_gateway_command(args):
             auth = result.get("auth_state") or {}
             restored = False
             remembered = None
+            restored_from = None
             # The stored token was issued for the previously registered URL and
             # is not bound to it, so a new URL must drop it: every later
             # ensure_authenticated() would otherwise hand it to the new gateway.
@@ -7599,6 +7602,11 @@ def handle_gateway_command(args):
                 if remembered:
                     # A fresh install must also restore a token saved by `gateway auth`.
                     restored = manager.ensure_authenticated(recall=lambda: remembered)
+                    found = lemonade_token_with_source(
+                        recall=lambda: remembered, warn=False
+                    )
+                    restored_from = found[1] if found else None
+                    del found
                     if restored:
                         status = manager.status()
                         needs_token = not (status.env_var_set or status.runtime_key_set)
@@ -7606,9 +7614,21 @@ def handle_gateway_command(args):
             print(
                 f"✅ Registered. Models discovered: {result.get('models_discovered', 0)}"
             )
-            if restored:
+            from_env = restored_from not in (None, STORED_TOKEN_SOURCE)
+            if restored and from_env:
+                print(
+                    f"   Restored the gateway token from {restored_from} in "
+                    "GAIA's environment."
+                )
+            elif restored:
                 print(
                     "   Restored the remembered gateway token from the OS credential store."
+                )
+            elif remembered and from_env:
+                print(
+                    f"\n  The gateway token in {restored_from} (GAIA's environment) "
+                    "was not accepted — set it to a current token, or unset it and "
+                    "run `gaia gateway auth` with one."
                 )
             elif remembered:
                 print(

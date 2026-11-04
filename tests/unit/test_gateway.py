@@ -1344,14 +1344,17 @@ def test_gateway_install_with_env_token_does_not_touch_the_credential_store(
 # --------------------------------------------------------------------------
 
 
-def _lemonade_without_a_key(sent):
+AMD_GATEWAY = "https://llm-api.amd.com/Unified/v1"
+
+
+def _lemonade_without_a_key(sent, gateway_url=AMD_GATEWAY):
     """Lemonade with the gateway registered and no key, recording the auth POST."""
 
     def fake_request(method, url, **kwargs):
         if url.endswith("/system-info"):
             installed = {
                 "name": GATEWAY_PROVIDER,
-                "base_url": "https://gw/v1",
+                "base_url": gateway_url,
                 "env_var_set": False,
                 "runtime_key_set": bool(sent),
                 "models_discovered": 76 if sent else 0,
@@ -1388,6 +1391,118 @@ def test_lemonade_gets_the_stored_token_when_gaia_s_env_has_none(manager):
     ):
         assert manager.ensure_authenticated(recall=lambda: "stored-token") is True
     assert sent[0]["api_key"] == "stored-token"
+
+
+OTHER_GATEWAYS = [
+    "https://gateway.example/v1",
+    "https://llm-api.amd.com.evil.example/v1",
+    "https://evil.example/llm-api.amd.com/v1",
+    "https://llm-api.amd.co/v1",
+]
+
+
+@pytest.mark.parametrize("env_var", [GATEWAY_ENV_VAR, "GAIA_GATEWAY_TOKEN"])
+@pytest.mark.parametrize("registered", OTHER_GATEWAYS)
+def test_a_non_amd_gateway_never_receives_gaia_s_env_token(
+    manager, monkeypatch, caplog, env_var, registered
+):
+    """The env token is AMD's; another gateway gets only the token stored for it."""
+    GatewayState(base_url=registered).save()
+    monkeypatch.setenv(env_var, "env-token")
+    sent = []
+    with patch(
+        "gaia.llm.gateway.requests.request",
+        side_effect=_lemonade_without_a_key(sent, gateway_url=registered),
+    ):
+        assert manager.ensure_authenticated(recall=lambda: "stored-token") is True
+
+    assert [body["api_key"] for body in sent] == ["stored-token"]
+    assert "did not give it to Lemonade" in caplog.text
+    assert "env-token" not in caplog.text
+
+
+def test_with_no_stored_token_a_non_amd_gateway_gets_nothing(manager, monkeypatch):
+    GatewayState(base_url="https://gateway.example/v1").save()
+    monkeypatch.setenv(GATEWAY_ENV_VAR, "env-token")
+    sent = []
+    with patch(
+        "gaia.llm.gateway.requests.request",
+        side_effect=_lemonade_without_a_key(
+            sent, gateway_url="https://gateway.example/v1"
+        ),
+    ):
+        assert manager.ensure_authenticated(recall=lambda: None) is False
+
+    assert sent == []
+
+
+def test_the_env_token_follows_the_gateway_lemonade_reports(manager, monkeypatch):
+    """GAIA's record says AMD, but Lemonade was pointed elsewhere: no env token."""
+    GatewayState(base_url=AMD_GATEWAY).save()
+    monkeypatch.setenv(GATEWAY_ENV_VAR, "env-token")
+    sent = []
+    with patch(
+        "gaia.llm.gateway.requests.request",
+        side_effect=_lemonade_without_a_key(
+            sent, gateway_url="https://gateway.example/v1"
+        ),
+    ):
+        assert manager.ensure_authenticated(recall=lambda: "stored-token") is True
+
+    assert [body["api_key"] for body in sent] == ["stored-token"]
+
+
+def test_gateway_install_names_the_env_variable_it_restored_from(monkeypatch, capsys):
+    """An env token restored at install must not be called the stored one."""
+    from types import SimpleNamespace
+
+    import gaia.cli as cli
+    from gaia.llm import gateway as gateway_module
+
+    monkeypatch.setenv(GATEWAY_ENV_VAR, "env-token")
+    state = SimpleNamespace(base_url=AMD_GATEWAY, enabled_models=[], active_model=None)
+
+    class Status:
+        env_var_set = False
+        runtime_key_set = True
+        models_discovered = 2
+
+    class Manager:
+        def install(self, *args, **kwargs):
+            return {
+                "models_discovered": 0,
+                "auth_state": {"env_var_set": False, "runtime_key_set": False},
+            }
+
+        def ensure_authenticated(self, recall=None):
+            return True
+
+        def status(self):
+            return Status()
+
+    monkeypatch.setattr(
+        gateway_module, "GatewayState", SimpleNamespace(load=lambda: state)
+    )
+    monkeypatch.setattr(gateway_module, "GatewayManager", Manager)
+    monkeypatch.setattr(gateway_module, "recall_token", lambda: "stored-token")
+    cli.handle_gateway_command(
+        SimpleNamespace(
+            gateway_action="install",
+            base_url=None,
+            skip_probe=True,
+            auth_header_name="Authorization",
+            auth_header_prefix="Bearer ",
+            allow_insecure_http=False,
+        )
+    )
+
+    output = capsys.readouterr().out
+    assert (
+        f"Restored the gateway token from {GATEWAY_ENV_VAR} in GAIA's environment"
+        in output
+    )
+    assert "OS credential store" not in output
+    assert "env-token" not in output
 
 
 class _AuthManager:

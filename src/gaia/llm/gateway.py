@@ -547,6 +547,15 @@ def gateway_claude_upstream_id(model_id: Optional[str]) -> Optional[str]:
     return upstream if upstream.startswith("claude-") else None
 
 
+def is_amd_gateway(base_url: Optional[str]) -> bool:
+    """True when *base_url* is on AMD's gateway host."""
+    if not base_url:
+        return False
+    return (
+        urlparse(base_url).hostname == urlparse(AMD_GATEWAY_ANTHROPIC_BASE_URL).hostname
+    )
+
+
 def gateway_anthropic_base_url(state: Optional[GatewayState] = None) -> str:
     """Base URL of the gateway's Anthropic Messages route.
 
@@ -563,10 +572,7 @@ def gateway_anthropic_base_url(state: Optional[GatewayState] = None) -> str:
             )
         return override.rstrip("/")
     registered = (state or GatewayState.load()).base_url
-    if (
-        urlparse(registered).hostname
-        == urlparse(AMD_GATEWAY_ANTHROPIC_BASE_URL).hostname
-    ):
+    if is_amd_gateway(registered):
         return AMD_GATEWAY_ANTHROPIC_BASE_URL
     raise GatewayError(
         f"Claude gateway models are sent to the gateway's Anthropic Messages "
@@ -627,6 +633,39 @@ def resolve_gateway_token() -> str:
     """The gateway token GAIA itself sends, for routes Lemonade doesn't carry."""
     token, _source = resolve_gateway_token_with_source()
     return token
+
+
+def lemonade_token_with_source(
+    recall: Optional[Callable[[], Optional[str]]] = None,
+    lemonade_url: Optional[str] = None,
+    *,
+    warn: bool = True,
+) -> Optional[tuple[str, str]]:
+    """The token to hand Lemonade, and the non-secret name of where it came from.
+
+    GAIA's environment token is the one for AMD's gateway, so, as on the Claude
+    route, it goes to Lemonade only while the registered gateway is AMD's (and
+    *lemonade_url*, the gateway Lemonade reports, when given). Any other
+    gateway gets only the stored token, which ``gaia gateway install`` drops
+    when the gateway URL changes. *recall* replaces :func:`recall_token`;
+    *warn* False skips the warning about an environment token left unused.
+    """
+    from_env = _env_gateway_token()
+    if from_env:
+        registered = GatewayState.load().base_url
+        if is_amd_gateway(registered) and (
+            lemonade_url is None or is_amd_gateway(lemonade_url)
+        ):
+            return from_env
+        if warn:
+            log.warning(
+                f"{from_env[1]} in GAIA's environment is used only with AMD's "
+                f"gateway, and the registered one is {lemonade_url or registered}, "
+                f"so GAIA did not give it to Lemonade. Run `gaia gateway auth` "
+                f"with a token for that gateway."
+            )
+    token = (recall or recall_token)()
+    return (token, STORED_TOKEN_SOURCE) if token else None
 
 
 def lemonade_key_conflict(source: str, status: GatewayStatus) -> Optional[str]:
@@ -1043,7 +1082,9 @@ class GatewayManager:
         means re-entering it. Returns True when the gateway is usable.
 
         The token is the one the Claude route sends: GAIA's environment first,
-        then the remembered one, so both routes authenticate with one key.
+        then the remembered one, so both routes authenticate with one key. The
+        environment token goes only to AMD's gateway
+        (:func:`lemonade_token_with_source`).
 
         "Usable" means models were discovered, not merely that Lemonade holds a
         key: it stores one without validating it, so a revoked token reports
@@ -1081,10 +1122,11 @@ class GatewayManager:
                 f"auth`, or unset {GATEWAY_ENV_VAR} if it is stale."
             )
             return False
-        from_env = _env_gateway_token()
-        token = from_env[0] if from_env else (recall or recall_token)()
-        if not token:
+        found = lemonade_token_with_source(recall, status.base_url)
+        if not found:
             return False
+        token = found[0]
+        del found
         try:
             result = self.set_token(token)
         except GatewayError as e:

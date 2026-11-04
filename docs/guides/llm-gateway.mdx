@@ -26,7 +26,9 @@ It is never written to a GAIA file. `~/.gaia/gateway.json` records the base URL,
 which models you enabled, and what GAIA learned about them, and has no field a secret could occupy.
 
 Lemonade itself holds the token in memory only and forgets it on restart. GAIA notices
-and restores it from the credential store, which is why you are not asked again.
+and restores it from the credential store, or from `LEMONADE_AMD_API_KEY` /
+`GAIA_GATEWAY_TOKEN` in GAIA's environment when the gateway is AMD's, which is why you
+are not asked again.
 `gaia gateway install` restores it too. Installing with a different `--base-url` deletes
 the remembered token instead, so a token for one gateway is never sent to another; run
 `gaia gateway auth` for the new one.
@@ -160,6 +162,11 @@ What that means in practice:
   `gaia gateway auth` writes to. When Lemonade forgets its token, GAIA gives it back
   this same one, so Claude and DeepSeek can't end up on different keys. GAIA never
   sends an Anthropic API key there.
+- **Lemonade gets the token in GAIA's environment only for AMD's gateway.** If you
+  registered a different gateway, GAIA gives Lemonade only the token `gaia gateway auth`
+  stored for it, and logs a warning that the environment token was left out.
+  Installing with a different `--base-url` deletes the stored token, so run
+  `gaia gateway auth` for the new gateway.
 - **Lemonade's own `LEMONADE_AMD_API_KEY` should be in GAIA's environment too.**
   When Lemonade was started with that variable, it ignores tokens sent at runtime, and
   GAIA can't read the key back. Claude models then send GAIA's other copy
