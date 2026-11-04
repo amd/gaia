@@ -365,6 +365,29 @@ def test_an_unreadable_release_fails_instead_of_passing(monkeypatch):
         cra.main(["--repo", "amd/gaia", "--tag", "v0.25.3"])
 
 
+def test_a_manifest_download_that_hangs_fails_with_a_clear_error(monkeypatch):
+    seen = {}
+
+    def hang(cmd, **kw):
+        seen.update(kw)
+        raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+
+    monkeypatch.setattr(cra.subprocess, "run", hang)
+    with pytest.raises(SystemExit, match="did not finish within 120s") as exc:
+        cra.fetch_manifests("amd/gaia", "v0.25.3", ["latest.yml"])
+    assert seen["timeout"] == cra.GH_TIMEOUT == 120
+    assert "latest.yml" in str(exc.value) and "v0.25.3" in str(exc.value)
+
+
+def test_a_release_read_that_hangs_fails_with_a_clear_error(monkeypatch):
+    def hang(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+
+    monkeypatch.setattr(cra.subprocess, "run", hang)
+    with pytest.raises(SystemExit, match="v0.25.3 of amd/gaia did not finish"):
+        cra.main(["--repo", "amd/gaia", "--tag", "v0.25.3"])
+
+
 # ── publish.yml wires it in ──────────────────────────────────────────────────
 
 

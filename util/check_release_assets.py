@@ -176,6 +176,9 @@ def check_dir(directory: Path) -> list[str]:
     return manifest_problems(manifests, sizes, lambda n: _sha512(directory / n))
 
 
+GH_TIMEOUT = 120
+
+
 def fetch_manifests(repo: str, tag: str, feeds: list[str]) -> dict[str, str]:
     if not feeds:
         return {}
@@ -183,7 +186,20 @@ def fetch_manifests(repo: str, tag: str, feeds: list[str]) -> dict[str, str]:
         cmd = ["gh", "release", "download", tag, "--repo", repo, "--dir", tmp]
         for feed in feeds:
             cmd += ["--pattern", feed]
-        done = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        try:
+            done = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=GH_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise SystemExit(
+                f"::error::downloading {' '.join(feeds)} from release {tag} of "
+                f"{repo} did not finish within {GH_TIMEOUT}s. GitHub "
+                "may be slow or down: re-run this job."
+            ) from e
         if done.returncode != 0:
             raise SystemExit(
                 f"::error::could not download {' '.join(feeds)} from release {tag} "
@@ -194,12 +210,19 @@ def fetch_manifests(repo: str, tag: str, feeds: list[str]) -> dict[str, str]:
 
 
 def fetch_assets(repo: str, tag: str) -> list[dict]:
-    done = subprocess.run(
-        ["gh", "release", "view", tag, "--repo", repo, "--json", "assets"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        done = subprocess.run(
+            ["gh", "release", "view", tag, "--repo", repo, "--json", "assets"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=GH_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise SystemExit(
+            f"::error::reading release {tag} of {repo} did not finish within "
+            f"{GH_TIMEOUT}s. GitHub may be slow or down: re-run this job."
+        ) from e
     if done.returncode != 0:
         raise SystemExit(
             f"::error::could not read release {tag} of {repo}: {done.stderr.strip()}. "
