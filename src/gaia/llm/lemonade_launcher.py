@@ -313,7 +313,8 @@ def gaia_runs_lemonade(base_url: Optional[str] = None) -> bool:
     """Whether the server to start for *base_url* is GAIA's own, not a system install.
 
     The one decision every start path makes before launching anything: True
-    when ``gaia init`` installed GAIA's embedded server, ``LEMONADE_BASE_URL``
+    when ``gaia init`` installed GAIA's embedded server (this version, or an
+    older one the daemon upgrades when it starts it), ``LEMONADE_BASE_URL``
     names no other, and *base_url* is unset or is the address GAIA resolves on
     its own. That server is started through the daemon, never by
     :func:`resolve_lemonade` / :func:`build_start_command`, and binds a port
@@ -326,7 +327,10 @@ def gaia_runs_lemonade(base_url: Optional[str] = None) -> bool:
     )
     from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
-    if configured_lemonade_url() or not EmbeddedLemonade().is_installed():
+    if configured_lemonade_url():
+        return False
+    embedded = EmbeddedLemonade()
+    if not (embedded.is_installed() or embedded.replaces_older_install()):
         return False
     if base_url is None:
         return True

@@ -309,7 +309,7 @@ The PR / commit message is where multi-paragraph context lives. The code carries
 - **GHA `continue-on-error: true` on specific steps** where the step is known to emit non-fatal permission warnings (e.g., `claude-code-action@beta` on fork PRs). This tolerates the warning without substituting different behavior — the step still runs its intended logic. It's *step-level tolerance*, not silent degradation.
 
 **Actionable errors name three things:**
-1. *What failed* — `"Lemonade Server not reachable at http://localhost:8000"`
+1. *What failed* — `"Lemonade Server not reachable at http://localhost:13305"`
 2. *What the caller should do* — `"Run `gaia init` to install it, or set LEMONADE_BASE_URL to a running server"`
 3. *Where to look next* — file path, docs link, issue tracker
 
@@ -551,7 +551,7 @@ gaia -p "Review this" --attempts 2  # Two independent attempts, then a combining
 **Never tell anyone to run `lemonade-server serve`** — Lemonade 10.7/10.8 removed that
 CLI, so the binary does not exist on a current install. There is no portable command to
 substitute: how the server starts depends on the install (Windows tray, macOS app, Linux
-`systemctl --user start lemond`, legacy CLI). The daemon starts and supervises the
+`systemctl --user start lemond`). The daemon starts and supervises the
 server, and `LemonadeManager.ensure_ready` auto-starts it through that supervisor, so
 the runtime path no longer errors out on a stopped server. A start instruction is still
 needed whenever GAIA cannot own the process — a non-default port or a remote
