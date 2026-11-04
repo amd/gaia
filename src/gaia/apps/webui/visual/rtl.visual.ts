@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MODEL_LIST, NOW, SYSTEM_STATUS, mockApi, useLocale, useTheme, withConnectors, withDesktopBridges, withModelPage, withSettingsPanes } from './fixtures';
+import { ANSWER_SESSION, MODEL_LIST, NOW, SYSTEM_STATUS, mockApi, useLocale, useTheme, withConnectors, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -171,6 +171,29 @@ const audit = (page: Page): Promise<string[]> =>
             const r = button.getBoundingClientRect();
             if (r.left < -1 || r.right > window.innerWidth + 1) problems.push(`button runs off the window: ${label(button)}`);
             if (button.scrollWidth > button.clientWidth + 1) problems.push(`label spills out of its button: ${label(button)}`);
+            // A filled button whose words reach its edge reads as text spilling out of a pill.
+            if (button.textContent?.trim() && rgb(getComputedStyle(button).backgroundColor)[3] > 0) {
+                const range = document.createRange();
+                range.selectNodeContents(button);
+                const text = range.getBoundingClientRect();
+                if (text.width > 0 && Math.min(text.left - r.left, r.right - text.right) < 3) problems.push(`label touches its button's edge: ${label(button)}`);
+            }
+        }
+
+        // An icon drawn over a field must sit in its padding, not on the text, in either direction.
+        for (const input of document.querySelectorAll('input:not([type="checkbox"]):not([type="radio"])')) {
+            if (!shown(input)) continue;
+            const box = input.getBoundingClientRect();
+            const s = getComputedStyle(input);
+            const textLeft = box.left + parseFloat(s.borderLeftWidth) + parseFloat(s.paddingLeft);
+            const textRight = box.right - parseFloat(s.borderRightWidth) - parseFloat(s.paddingRight);
+            for (const icon of input.parentElement?.querySelectorAll(':scope > svg, :scope > .search-icon') ?? []) {
+                const r = icon.getBoundingClientRect();
+                if (getComputedStyle(icon).position !== 'absolute' || !shown(icon)) continue;
+                if (r.right > textLeft + 1 && r.left < textRight - 1 && r.bottom > box.top && r.top < box.bottom) {
+                    problems.push(`icon sits on a field's text: ${label(input)}`);
+                }
+            }
         }
 
         // An icon and its label need space between them, in either direction.
@@ -1177,6 +1200,161 @@ for (const locale of ['ar', 'en']) {
             await expect(error).not.toContainText('gaia-update-error');
             expect(await audit(page)).toEqual([]);
             await page.screenshot({ path: info.outputPath('settings-refused.png') });
+        });
+    });
+}
+
+/** Visible text on the Memory dashboard left in English; memories, names and codes sit in <bdi>. */
+const memoryLeftovers = (page: Page): Promise<string[]> =>
+    page.locator('.memory-dashboard-page').evaluate((root) => {
+        const left = new Set<string>();
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+            const text = n.textContent?.trim() ?? '';
+            const el = n.parentElement as Element;
+            if (!/[A-Za-z]{3}/.test(text) || /[\u0600-\u06ff]/.test(text) || !el.checkVisibility()) continue;
+            if (el.closest('.i18n-gloss, bdi, code, select, textarea')) continue;
+            left.add(text.slice(0, 60));
+        }
+        for (const el of root.querySelectorAll('input[placeholder], textarea[placeholder]')) {
+            const hint = el.getAttribute('placeholder') ?? '';
+            // "global" is the default context's literal value, offered as the example to type.
+            if (hint !== 'global' && /[A-Za-z]{3}/.test(hint) && !/[\u0600-\u06ff]/.test(hint)) left.add(`placeholder: ${hint}`);
+        }
+        return [...left];
+    });
+
+async function openMemory(page: Page, locale: string, state: MemoryState = {}, theme: 'light' | 'dark' = 'light'): Promise<void> {
+    await open(page, '', locale, (p) => withMemory(p, state), theme);
+    const sidebar = page.getByRole('button', { name: /Open sidebar/ });
+    if (await sidebar.isVisible()) await sidebar.click();
+    await page.locator('.sb').getByRole('button', { name: /Memory/ }).first().click();
+    await expect(page.locator('.memory-dashboard-page')).toBeVisible();
+}
+
+const memoryTab = (page: Page, name: RegExp) => page.getByRole('tab', { name }).click();
+
+/** The audit, plus no English left on an Arabic screen. */
+async function checkMemory(page: Page, locale: string, name: string): Promise<void> {
+    await shot(page, `memory-${locale}-${name}`);
+    expect(await audit(page)).toEqual([]);
+    if (locale === 'ar') expect(await memoryLeftovers(page)).toEqual([]);
+}
+
+for (const locale of ['ar', 'en']) {
+    test.describe(`memory dashboard (${locale})`, () => {
+        test('about you, with memories', async ({ page }) => {
+            await openMemory(page, locale);
+            await expect(page.getByText('Lives in Calgary and works at a hospital')).toBeVisible();
+            await checkMemory(page, locale, 'about');
+        });
+
+        test('about you, editing a memory', async ({ page }) => {
+            await openMemory(page, locale);
+            const item = page.locator('.mem-about-item', { hasText: 'Lives in Calgary' });
+            await item.locator('.mem-about-btn').first().click();
+            await expect(item.locator('textarea')).toBeVisible();
+            await checkMemory(page, locale, 'about-editing');
+        });
+
+        test('about you, empty', async ({ page }) => {
+            await openMemory(page, locale, { empty: true });
+            await expect(page.locator('.mem-about-empty')).toBeVisible();
+            await checkMemory(page, locale, 'about-empty');
+        });
+
+        test('about you, memory off', async ({ page }) => {
+            await openMemory(page, locale, { enabled: false });
+            await expect(page.locator('.mem-about-empty .btn-secondary')).toBeVisible();
+            await checkMemory(page, locale, 'about-off');
+        });
+
+        test('about you, failed to load', async ({ page }) => {
+            await openMemory(page, locale, { failed: true });
+            await expect(page.getByText('Memory store is locked', { exact: false })).toBeVisible();
+            await checkMemory(page, locale, 'about-failed');
+        });
+
+        test('goals, suggested and one open with its tasks', async ({ page }) => {
+            await openMemory(page, locale);
+            await memoryTab(page, /Goals/);
+            await page.locator('.mem-goal-header', { hasText: 'Ship the Q3 report' }).click();
+            await expect(page.locator('.mem-task-row')).toHaveCount(2);
+            await page.locator('.mem-goals-toolbar .btn-primary').click();
+            await expect(page.locator('.mem-goals-add-form')).toBeVisible();
+            await checkMemory(page, locale, 'goals');
+        });
+
+        test('goals, empty', async ({ page }) => {
+            await openMemory(page, locale, { empty: true });
+            await memoryTab(page, /Goals/);
+            await expect(page.locator('.mem-goals-tab .mem-empty')).toBeVisible();
+            await checkMemory(page, locale, 'goals-empty');
+        });
+
+        test('profile setup, before and after a discovery run', async ({ page }) => {
+            await openMemory(page, locale);
+            await memoryTab(page, /Profile setup/);
+            await expect(page.locator('.mem-profile-card')).toHaveCount(2);
+            await checkMemory(page, locale, 'profile');
+            await page.locator('.mem-profile-run-btn').first().click();
+            await expect(page.locator('.mem-review-item')).toHaveCount(2);
+            await checkMemory(page, locale, 'profile-review');
+        });
+
+        test('advanced, with stats, tables and settings', async ({ page }) => {
+            await openMemory(page, locale);
+            await memoryTab(page, /Advanced/);
+            await expect(page.getByText('run_shell')).toBeVisible();
+            // Unisolated, a percentage reads "%100" in a right-to-left line.
+            if (locale === 'ar') await expect(page.locator('.mem-embedding-label')).toContainText('\u2068100%\u2069');
+            await checkMemory(page, locale, 'advanced');
+            await page.locator('.memory-dashboard-body').evaluate((el) => { el.scrollTop = el.scrollHeight; });
+            await checkMemory(page, locale, 'advanced-end');
+        });
+
+        test('advanced, a row open and the add form', async ({ page }) => {
+            await openMemory(page, locale);
+            await memoryTab(page, /Advanced/);
+            await page.locator('.mem-knowledge-table tbody tr', { hasText: 'Lives in Calgary' }).locator('td').first().click();
+            await expect(page.locator('.mem-detail-panel')).toBeVisible();
+            await page.locator('.mem-section-add-btn').click();
+            await expect(page.locator('.mem-inline-form')).toBeVisible();
+            await checkMemory(page, locale, 'advanced-open');
+        });
+
+        test('advanced, empty', async ({ page }) => {
+            await openMemory(page, locale, { empty: true });
+            await memoryTab(page, /Advanced/);
+            await expect(page.locator('.mem-stat-cards')).toBeVisible();
+            await checkMemory(page, locale, 'advanced-empty');
+        });
+
+        test('advanced, memory off with the enable dialog open', async ({ page }) => {
+            await openMemory(page, locale, { enabled: false });
+            await memoryTab(page, /Advanced/);
+            await page.locator('.mem-toggle').first().click();
+            await expect(page.getByRole('dialog')).toBeVisible();
+            await checkMemory(page, locale, 'advanced-dialog');
+        });
+
+        test('advanced in the dark theme', async ({ page }) => {
+            await openMemory(page, locale, {}, 'dark');
+            await memoryTab(page, /Advanced/);
+            await expect(page.getByText('run_shell')).toBeVisible();
+            await checkMemory(page, locale, 'advanced-dark');
+        });
+
+        test('phone width', async ({ page }) => {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await openMemory(page, locale);
+            // The closed drawer waits off screen by design; this test is about the dashboard.
+            await page.addStyleTag({ content: '.sb:not(.is-open) { display: none; }' });
+            await expect(page.getByText('Lives in Calgary and works at a hospital')).toBeVisible();
+            await checkMemory(page, locale, 'about-phone');
+            await memoryTab(page, /Advanced/);
+            await expect(page.getByText('run_shell')).toBeVisible();
+            await checkMemory(page, locale, 'advanced-phone');
         });
     });
 }
