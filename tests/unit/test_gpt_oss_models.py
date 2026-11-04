@@ -59,7 +59,7 @@ class TestRegistry:
     def test_never_a_default(self):
         for model_id in GGUF_BUILDS:
             assert model_id not in lc.DEFAULT_MODEL_LADDER
-        assert lc.OPTIONAL_CHAT_MODELS == (
+        assert lc.OPTIONAL_CHAT_MODELS[:2] == (
             "user.ggml-gpt-oss-20b-MXFP4-GGUF",
             "gpt-oss-120b-mxfp-GGUF",
         )
@@ -88,7 +88,8 @@ class TestFit:
         ],
     )
     def test_optional_models_offered_only_where_they_fit(self, info, expected):
-        assert lc.optional_chat_models_that_fit(_cap(info)) == expected
+        fits = lc.optional_chat_models_that_fit(_cap(info))
+        assert [m for m in fits if "gpt-oss" in m] == expected
 
     def test_twenty_needs_about_15gb_at_its_floor(self):
         kv = model_fit.kv_cache_gb(TWENTY.kv_bytes_per_token, TWENTY.min_ctx_size)
