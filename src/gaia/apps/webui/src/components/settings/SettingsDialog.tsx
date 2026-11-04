@@ -1,11 +1,12 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { lazy, Suspense, useEffect, useRef } from 'react';
+import { lazy, Suspense, useRef } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { useChatStore, type SettingsSection } from '../../stores/chatStore';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useDialogFocus } from '../../hooks/useDialogFocus';
 import { GeneralSettings } from './GeneralSettings';
 import { ModelSettings } from './ModelSettings';
 import { PermissionsSettings } from './PermissionsSettings';
@@ -34,23 +35,14 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
     const open = useChatStore((s) => s.openSettings);
     const close = useChatStore((s) => s.closeSettings);
     const panel = useRef<HTMLDivElement>(null);
-    const returnFocus = useRef<Element | null>(null);
 
     const isOpen = section !== null;
     useEscapeToClose(isOpen, close);
     useFocusTrap(panel, isOpen);
-    useEffect(() => {
-        if (!isOpen) return;
-        returnFocus.current = document.activeElement;
-        return () => {
-            (returnFocus.current as HTMLElement | null)?.focus?.();
-        };
-    }, [isOpen, close]);
-
-    // Focus moves into the dialog once, when it opens.
-    useEffect(() => {
-        if (isOpen) panel.current?.querySelector<HTMLElement>('.settings-nav-item.is-active')?.focus();
-    }, [isOpen]);
+    // Focus starts on the active section's nav item and returns on close.
+    useDialogFocus(panel, isOpen, () =>
+        panel.current?.querySelector<HTMLElement>('.settings-nav-item.is-active'),
+    );
 
     if (!section) return null;
 

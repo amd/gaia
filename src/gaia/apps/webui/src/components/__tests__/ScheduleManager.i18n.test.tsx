@@ -8,7 +8,7 @@ import { useChatStore } from '../../stores/chatStore';
 import { useScheduleStore } from '../../stores/scheduleStore';
 import { parseScheduleInput } from '../../services/api';
 import { stripIsolates } from '../../i18n/registry';
-import { translator } from '../../i18n/useT';
+import { dateLocale, translator } from '../../i18n/useT';
 import { readsAs } from '../../test/readsAs';
 import type { Schedule } from '../../types';
 
@@ -99,5 +99,26 @@ describe('formatNextRun', () => {
         const now = new Date('2026-10-15T09:16:00Z');
         const text = formatNextRun('2026-10-15T09:16:30Z', now, translator('ar').bare);
         expect(stripIsolates(text)).toContain('بعد 30 ث');
+    });
+});
+
+const ARABIC_WEEKDAY = /الأحد|الاثنين|الثلاثاء|الأربعاء|الخميس|الجمعة|السبت/;
+const ENGLISH_CLOCK = /(Mon|Tue|Wed|Thu|Fri|Sat|Sun|AM|PM)/;
+
+describe('schedule dates follow the interface language, not the PC', () => {
+    it('names the next-run day and time in Arabic', () => {
+        const now = new Date('2026-10-14T09:00:00Z');
+        const text = stripIsolates(formatNextRun('2026-10-16T09:00:00Z', now, translator('ar').bare, dateLocale(translator('ar'))));
+        expect(text).toMatch(ARABIC_WEEKDAY);
+        expect(text).not.toMatch(ENGLISH_CLOCK);
+        expect(text).toContain('بعد 2 ي');
+    });
+
+    it('shows an Arabic next run on the card in an Arabic UI', () => {
+        useScheduleStore.setState({ schedules: [{ ...schedule, status: 'active', next_run_at: new Date(Date.now() + 3 * 86_400_000).toISOString() }] });
+        render(<ScheduleManager />);
+        const next = stripIsolates(screen.getByText(/التشغيل التالي/).textContent ?? '');
+        expect(next).toMatch(ARABIC_WEEKDAY);
+        expect(next).not.toMatch(ENGLISH_CLOCK);
     });
 });

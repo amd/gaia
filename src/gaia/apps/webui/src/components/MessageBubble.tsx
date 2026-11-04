@@ -23,7 +23,7 @@ import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { ReadAloudButton, ReadAloudError } from './ReadAloudButton';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
-import { useT, type Translate } from '../i18n/useT';
+import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
 import {
@@ -429,9 +429,9 @@ export function escapeBareNumberLines(text: string): string {
 }
 
 /** Format a full absolute timestamp for the stats tooltip. */
-function formatFullTimestamp(iso: string): string {
+function formatFullTimestamp(iso: string, t: Translate): string {
     if (!iso) return '';
-    return new Date(iso).toLocaleString(undefined, {
+    return new Date(iso).toLocaleString(dateLocale(t), {
         month: 'short', day: 'numeric', year: 'numeric',
         hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
     });
@@ -569,7 +569,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     // bubbles get one; previously only the assistant had a visible
     // timestamp readout via msg-stats-ts.
     const hoverTimestamp = message.created_at
-        ? t(message.role === 'user' ? 'msg.sent' : 'msg.replied', { time: formatFullTimestamp(message.created_at) })
+        ? t(message.role === 'user' ? 'msg.sent' : 'msg.replied', { time: formatFullTimestamp(message.created_at, t) })
         : undefined;
 
     return (
@@ -702,7 +702,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         <div className="msg-stats" aria-label={t('msg.about')}>
                             {message.created_at && (
                                 <span className="msg-stats-ts" title={t('msg.timestamp')}>
-                                    {formatFullTimestamp(message.created_at)}
+                                    {formatFullTimestamp(message.created_at, t)}
                                 </span>
                             )}
                             {message.stats?.retried && message.stats.model && (
@@ -801,7 +801,10 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 // exponential-backtracking ReDoS (js/redos) on adversarial non-matching input.
 // Exactly one separator between segments, so a last segment without an
 // extension (`C:\Users\me\notes`) is kept as well as `...\a.txt` or `...\dir\`.
-const WIN_PATH_RE = /\b[A-Z]:[\\/][^\s*?"<>|,;)}\]\\/]+(?:[\\/][^\s*?"<>|,;)}\]\\/]+)*[\\/]?/gi;
+// A space stays inside a folder name a `\` follows (`Program Files (x86)\`) and
+// inside a last name of at most three words ending in an extension (`Q3 report.txt`);
+// otherwise it ends the path, so "C:\out\docs and look at a.pdf" stops at `docs`.
+const WIN_PATH_RE = /\b[A-Z]:[\\/](?=[^\s*?"<>|,;)}\]\\/])(?:[^\s*?"<>|,;)}\]\\/]+(?:(?: (?:[^\s*?"<>|,;:)}\]\\/]+|\([^\s*?"<>|,;:)}\]\\/]+\)))+\\|[\\/]))*(?:(?:[^\s*?"<>|,;:.)}\]\\/]+ ){1,2}[^\s*?"<>|,;)}\]\\/]+\.[A-Za-z0-9]{1,5}\b|[^\s*?"<>|,;)}\]\\/]+)?/gi;
 /** Sentence punctuation the path regex swallows: "see C:\a\b." ends at `b`. */
 const PATH_TRAILING_PUNCT_RE = /[.:!']+$/;
 /** An inline-code span that is one absolute path and nothing else, e.g. "Saved to `C:\out\answer.md`". */

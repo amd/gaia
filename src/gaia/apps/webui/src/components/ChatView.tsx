@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
+import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Clock } from 'lucide-react';
 import { MessageBubble, cleanToolCallContent, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
@@ -325,14 +325,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const mountedRef = useRef(true);
     // Left pendingPrompt, not yet sent.
     const openingRef = useRef(false);
+    const initializing = systemStatus?.init_state === 'initializing';
     useEffect(() => {
         mountedRef.current = true;
         return () => { mountedRef.current = false; };
     }, []);
     useEffect(() => {
         const pending = pendingPrompt?.text;
-        // Wait for the history load, or it would replace the message just sent.
-        if (!pending || useChatStore.getState().isLoadingMessages) return;
+        // Wait for the history load, or it would replace the message just sent;
+        // and for GAIA to start, or the send would refuse a message already taken.
+        if (!pending || useChatStore.getState().isLoadingMessages || initializing) return;
         useChatStore.getState().setPendingPrompt(null);
         openingRef.current = true;
         // A timer, not rAF: rAF never fires while the window is hidden, and
@@ -341,7 +343,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             openingRef.current = false;
             if (mountedRef.current) sendMessageRef.current(pending, { opening: true });
         }, 0);
-    }, [pendingPrompt, isLoadingMessages]);
+    }, [pendingPrompt, isLoadingMessages, initializing]);
 
     // Auto-scroll (throttled) — scrolls at most once per 100ms while
     // streaming, and also schedules a trailing scroll so the final chunk
@@ -1865,6 +1867,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <PermissionPrompt sessionId={sessionId} />
                     <ContextWarning usage={contextUsage} />
                     <OfflineNotice sessionId={sessionId} />
+                    {pendingPrompt && initializing && (
+                        <ul className="queued-messages" aria-label="Message waiting to send" aria-live="polite">
+                            <li className="queued-message is-queued">
+                                <Clock size={12} aria-hidden="true" />
+                                <span className="queued-message-text" title={pendingPrompt.text}>{pendingPrompt.text}</span>
+                                <span className="queued-message-state">Sends once GAIA has started.</span>
+                            </li>
+                        </ul>
+                    )}
                     <QueuedMessages
                         items={queue}
                         onRemove={(id) => setQueue((q) => messageQueue.remove(q, id))}

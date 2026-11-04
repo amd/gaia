@@ -284,6 +284,33 @@ test('finished answer', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+/** A question and an answer that each name a Windows path with spaces. */
+const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
+const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';
+
+async function withSpacedPaths(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: `Summarize ${SPACED_PATH} for me`, created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: `Done. I saved the summary to ${SPACED_ANSWER_PATH}.`, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a path with spaces is one chip in the question and the answer (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withSpacedPaths);
+        const chips = page.locator('.file-path-link');
+        await expect(chips).toHaveText([SPACED_PATH, SPACED_ANSWER_PATH]);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath('spaced-paths.png') });
+    });
+}
+
 /** POST /api/chat/send answers with one "Reading your request" status, then holds the turn open. */
 function holdOnReading(): void {
     const realFetch = window.fetch.bind(window);
@@ -351,6 +378,74 @@ test('document being indexed', async ({ page }) => {
     await expect(page.locator('.btn-cancel')).toBeVisible();
     expect(await audit(page)).toEqual([]);
 });
+
+const OLD_FILE = { name: 'q1-plan.pdf', path: 'C:\\Users\\me\\Documents\\q1-plan.pdf', size: 2_048_000, at: '2026-03-14T10:00:00Z' };
+const ARABIC_MONTH = /يناير|فبراير|مارس|أبريل|مايو|يونيو|يوليو|أغسطس|سبتمبر|أكتوبر|نوفمبر|ديسمبر/;
+
+/** A document and a file from March, old enough to show a date rather than "2h ago". */
+async function withOldFile(page: Page): Promise<void> {
+    await page.route('**/api/documents', (route) => route.fulfill({
+        json: {
+            documents: [{
+                id: 'd1', filename: OLD_FILE.name, filepath: OLD_FILE.path, file_size: OLD_FILE.size, chunk_count: 40,
+                indexed_at: OLD_FILE.at, last_accessed_at: null, sessions_using: 0, indexing_status: 'complete',
+            }],
+            total: 1, total_size_bytes: OLD_FILE.size, total_chunks: 40,
+        },
+    }));
+    await page.route('**/api/files/browse**', (route) => route.fulfill({
+        json: {
+            current_path: 'C:\\Users\\me\\Documents', parent_path: 'C:\\Users\\me', quick_links: [],
+            entries: [{ name: OLD_FILE.name, path: OLD_FILE.path, type: 'file', size: OLD_FILE.size, extension: '.pdf', modified: OLD_FILE.at }],
+        },
+    }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`dates read in the interface language, not the PC's (${locale})`, async ({ page }) => {
+        const month = locale === 'ar' ? ARABIC_MONTH : /Mar/;
+        await open(page, '', locale, withOldFile);
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-timestamp')).toHaveText(month);
+        await shot(page, `dates-${locale}-documents`);
+        expect(await audit(page)).toEqual([]);
+
+        await page.getByRole('button', { name: /Browse files/ }).click();
+        await expect(page.locator('.fb-entry-date')).toHaveText(month);
+        await shot(page, `dates-${locale}-files`);
+        // No audit yet: the file browser's names and sizes still break the RTL rules, tracked separately.
+    });
+
+    test(`an answer's timestamp and outputs read in the interface language (${locale})`, async ({ page }) => {
+        const month = locale === 'ar' ? ARABIC_MONTH : /Mar/;
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({
+                json: {
+                    messages: [
+                        { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Summarize the Q1 plan.', created_at: OLD_FILE.at, rag_sources: null },
+                        { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'The plan has three goals.', created_at: OLD_FILE.at, rag_sources: null },
+                    ],
+                    total: 2,
+                },
+            }));
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/outputs`, (route) => route.fulfill({
+                json: {
+                    session_id: ANSWER_SESSION,
+                    items: [{
+                        id: 'o1', kind: 'export', name: 'q1-summary.csv', path: 'C:\\Users\\me\\Documents\\q1-summary.csv', detail: null,
+                        message_id: 2, created_at: '2026-03-14 10:00:00', change: 'created', state: 'present', openable: true, revealable: true,
+                    }],
+                },
+            }));
+        });
+        await expect(page.locator('.msg-stats-ts')).toHaveText(month);
+        await expect(page.getByText('q1-summary.csv')).toBeVisible();
+        await expect(page.locator('.sp-list[aria-label]')).toContainText(month);
+        await page.getByText('The plan has three goals.').hover();
+        await shot(page, `dates-${locale}-answer`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
 
 test('settings', async ({ page }) => {
     await open(page);
@@ -829,8 +924,28 @@ for (const section of ['general', 'permissions', 'skills', 'memory', 'notificati
         await page.locator('.settings-disclosure:not([open]) > summary, .settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
         await page.waitForTimeout(100);
         expect(await untranslated(page)).toEqual([]);
+        expect(await barePaths(page)).toEqual([]);
     });
 }
+
+/**
+ * Paths starting `~/` or `.dir/` on an Arabic screen outside an LTR isolate or `<bdi dir="ltr">`,
+ * where bidi moves the leading punctuation to the far end ("gaia/skills./~").
+ */
+const barePaths = (page: Page): Promise<string[]> =>
+    page.evaluate(() => {
+        const root = document.querySelector('.settings-scroll') as Element;
+        const bare: string[] = [];
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+            const text = n.textContent ?? '';
+            const path = /(?:^|[\s(])(?:~\/|\.[A-Za-z][\w-]*\/)/;
+            if (!path.test(text) || n.parentElement?.closest('bdi[dir="ltr"]')) continue;
+            const stripped = text.replace(/[⁦⁨][^⁦-⁩]*⁩/g, '');
+            if (path.test(stripped)) bare.push(text.trim().slice(0, 60));
+        }
+        return bare;
+    });
 
 /** Schedules with a failed run, a chat to open and a run history; and a "when" GAIA can't read. */
 async function withSchedules(page: Page, schedules: unknown[] = SCHEDULE_ROWS): Promise<void> {
@@ -1241,6 +1356,15 @@ const INSTALL_LOCKED_OTHER = {
         }],
     },
 };
+const INSTALL_DAEMON = {
+    ...INSTALL_FAILED,
+    error: {
+        ...INSTALL_FAILED.error,
+        stage: 'create-venv',
+        reason: 'daemon',
+        message: "GAIA's background service (the GAIA daemon) did not stop within 120 seconds, so its files can't be updated.",
+    },
+};
 
 for (const locale of ['ar', 'en']) {
     test.describe(`engine install (${locale})`, () => {
@@ -1277,6 +1401,13 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('.engine-retry')).toHaveCount(1);
             expect(await audit(page)).toEqual([]);
             await shot(page, `engine-locked-other-${locale}`);
+        });
+
+        test('failed because the GAIA daemon would not stop', async ({ page }) => {
+            await open(page, '?engine=install', locale, (p) => withInstall(p, INSTALL_DAEMON));
+            await expect(page.locator('.engine-retry')).toHaveCount(1);
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `engine-daemon-${locale}`);
         });
 
         test('narrow window: no sideways scroll', async ({ page }) => {
@@ -1428,6 +1559,28 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const REPEATED_PROMPTS = ['c1', 'c2', 'c3'].map((id) => ({
+    ...PYTHON_PROMPT[0], confirm_id: id, always_scope: 'Python snippets (run_python)', risk: 'execute',
+}));
+
+for (const locale of ['ar', 'en']) {
+    test(`the third identical prompt counts two earlier allows (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, REPEATED_PROMPTS);
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+            p.route('**/api/chat/confirm-tool', (route) => route.fulfill({ json: { status: 'ok', approved: true, granted: null } })));
+        await page.locator('textarea').first().fill('count the characters in my notes');
+        await page.keyboard.press('Enter');
+        for (const answered of [1, 2]) {
+            await page.getByRole('button', { name: /Allow once/ }).click();
+            await expect(page.locator('.perm-card-hint')).toBeVisible();
+            if (answered === 1) await expect(page.locator('.perm-card-hint')).toContainText(locale === 'ar' ? 'مرة واحدة' : 'once already');
+        }
+        await expect(page.locator('.perm-card-hint')).toContainText(locale === 'ar' ? 'من قبل: 2.' : 'allowed this 2 times');
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `permission-repeated-${locale}`);
+    });
+}
+
 /** A first message whose chat model isn't downloaded, on a disk too small for it. */
 async function withMissingModel(page: Page): Promise<void> {
     await page.route('**/api/setup/needs/chat', (route) =>
@@ -1472,6 +1625,49 @@ for (const locale of ['ar', 'en']) {
         await expect(dialog.getByRole('button')).toHaveCount(2);
         expect(await audit(page)).toEqual([]);
         await shot(page, `npu-image-notice-${locale}`);
+    });
+}
+
+/** A measured context two turns from overflowing, so the meter, its popover and the warning all show. */
+const MEASURED_CONTEXT = {
+    available: true, window: 65536, reply_reserve: 4096, system: 3900, tools: 2600, documents: 4000, history: 11350,
+    query: 0, used: 21850, history_budget: 20000, history_used: 11350, turns_in_view: 4, turns_hidden: 2,
+    at_risk: ['لخّص تقرير الربع الثالث', 'من تأخر من الموردين؟'], at_risk_tokens: 3000,
+    tokenizer: { exact: true, model: 'Gemma-4-E4B-it-GGUF' }, model: 'Gemma-4-E4B-it-GGUF',
+};
+
+async function withMeasuredContext(page: Page): Promise<void> {
+    await page.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({ json: MEASURED_CONTEXT }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the context meter, its popover and its warning (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withMeasuredContext);
+        const meter = page.locator('button.context-meter');
+        await expect(meter).toBeVisible();
+        await expect(page.locator('.context-warning')).toBeVisible();
+        await meter.click();
+        await expect(page.locator('.context-meter-panel')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') {
+            expect(await untranslated(page, '.context-meter-panel')).toEqual([]);
+            expect(await untranslated(page, '.context-warning')).toEqual([]);
+        }
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the context meter names GAIA's window on a cloud model (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({ json: { ...MEASURED_CONTEXT, model_window: 1048576 } }));
+        });
+        await page.locator('button.context-meter').click();
+        const cap = page.locator('.context-meter-cap');
+        await expect(cap).toBeVisible();
+        await expect(cap).toContainText(locale === 'ar' ? 'من أصل نافذة النموذج البالغة' : "of the model's");
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.context-meter-panel')).toEqual([]);
+        await page.screenshot({ path: info.outputPath('context-meter-cloud.png') });
     });
 }
 

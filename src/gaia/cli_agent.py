@@ -1259,6 +1259,10 @@ def _nonempty_response(result) -> bool:
 
 
 _MODEL_REMEDY = "Check that Lemonade Server is running and the model is loaded"
+_UNUSABLE_REMEDY = (
+    "The model replied but its output could not be used: try a larger or "
+    "tool-calling model, or raise max_tokens if replies were cut off"
+)
 
 
 def _failed_response(result) -> Optional[Tuple[str, str]]:
@@ -1275,11 +1279,38 @@ def _failed_response(result) -> Optional[Tuple[str, str]]:
     if result.get("model_unreachable"):
         return "the model was unreachable", _MODEL_REMEDY
     if result.get("model_failed"):
-        return "the model call failed", _MODEL_REMEDY
+        reason = "the model call failed"
+        detail = _last_error(result)
+        remedy = (
+            _UNUSABLE_REMEDY
+            if _last_error_type(result) == "output_truncated"
+            else _MODEL_REMEDY
+        )
+        return (f"{reason} ({detail})" if detail else reason), remedy
+    unusable = _unrecovered_unusable_reply(result)
+    if unusable:
+        return f"the model never gave a usable reply ({unusable})", _UNUSABLE_REMEDY
     if result.get("status") == "error":
         detail = result.get("error") or _last_error(result)
         reason = "status 'error'" + (f" ({detail})" if detail else "")
         return reason, "Fix the agent"
+    return None
+
+
+def _unrecovered_unusable_reply(result: dict) -> Optional[str]:
+    """The last unparsable or cut-off reply the turn never recovered from, else None."""
+    from gaia.agents.base.agent import _RECOVERABLE_ERROR_TYPES
+
+    errors = result.get("error_history")
+    if not isinstance(errors, list):
+        return None
+    for entry in reversed(errors):
+        if (
+            isinstance(entry, dict)
+            and entry.get("type") in _RECOVERABLE_ERROR_TYPES
+            and not entry.get("recovered")
+        ):
+            return str(entry.get("error") or entry["type"])
     return None
 
 
@@ -1288,6 +1319,12 @@ def _failed_turn_note(result) -> Optional[str]:
     if not isinstance(result, dict) or result.get("status") != "failed":
         return None
     return _last_error(result) or "no error recorded"
+
+
+def _last_error_type(result: dict) -> Optional[str]:
+    errors = result.get("error_history")
+    last = errors[-1] if isinstance(errors, list) and errors else None
+    return last.get("type") if isinstance(last, dict) else None
 
 
 def _last_error(result: dict) -> Optional[str]:

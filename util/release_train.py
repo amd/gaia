@@ -10,6 +10,12 @@ it reads the artifacts a build left on disk and writes a manifest.
 
 Subcommands::
 
+    # the next unused RC of the tree's version, from the repo's tags on stdin
+    git ls-remote --tags --refs origin | release_train.py next-tag --target target
+
+    # a passing dry run of <sha> whose artifacts are all still downloadable, or ""
+    release_train.py verified-run --repo amd/gaia --sha <sha>
+
     # resolve an RC tag against the tree it builds; KEY=VALUE for $GITHUB_OUTPUT
     release_train.py plan --tag v0.25.1-rc2 --target target
 
@@ -37,6 +43,7 @@ import io
 import json
 import lzma
 import re
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -188,6 +195,127 @@ def flavors(rc_tag: str, target: Path) -> tuple[Flavor, Flavor]:
             f"whose version.py says {rc.base_version}."
         )
     return Flavor("rc", rc), Flavor("final", parse_tag(f"v{rc.base_version}"))
+
+
+def next_rc_tag(base_version: str, tags: list[str]) -> str:
+    """The first RC of ``base_version`` that no tag in ``tags`` has used yet.
+
+    ``tags`` may be bare names or ``git ls-remote`` lines. A released final
+    means version.py was never bumped past it, which no RC can fix.
+    """
+    highest = 0
+    for raw in tags:
+        name = raw.split()[-1] if raw.split() else ""
+        name = name.removeprefix("refs/tags/")
+        try:
+            rel = parse_tag(name)
+        except ValueError:
+            continue
+        if rel.base_version != base_version:
+            continue
+        if not rel.is_rc:
+            raise VerifyError(
+                f"v{base_version} is already released, but src/gaia/version.py "
+                f"still says {base_version}. Land the next version bump on main "
+                "(src/gaia/version.py), then re-run."
+            )
+        highest = max(highest, rel.rc_number or 0)
+    return f"v{base_version}-rc{highest + 1}"
+
+
+DRYRUN_WORKFLOW = "release_train_dryrun.yml"
+MANIFEST_ARTIFACT = "release-train-manifest"
+# The dry run's shortest-lived artifacts (7-day retention). GitHub drops an
+# expired artifact from the run's list instead of flagging it, so a run is
+# whole only while every one of these is still listed.
+SHORT_LIVED_ARTIFACTS = (
+    "rc-core-dist",
+    "final-core-dist",
+    "rc-tui-binaries",
+    "final-tui-binaries",
+    "rc-windows-setup",
+    "final-windows-setup",
+    "flagship-npm",
+)
+GH_TIMEOUT_S = 300
+
+
+def _gh_lines(args: list[str]) -> list[dict]:
+    """``gh api --paginate ... --jq`` output, one JSON object per line."""
+    try:
+        done = subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=GH_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise VerifyError(
+            f"`gh {' '.join(args)}` did not finish in {GH_TIMEOUT_S} s; re-run the job."
+        ) from e
+    if done.returncode != 0:
+        raise VerifyError(
+            f"`gh {' '.join(args)}` failed: {done.stderr.strip()}. A rate limit "
+            "clears within the hour; otherwise check the token has actions: read."
+        )
+    try:
+        return [json.loads(line) for line in done.stdout.splitlines() if line.strip()]
+    except ValueError as e:
+        raise VerifyError(f"GitHub returned something that is not JSON: {e}") from e
+
+
+def _passing_runs(repo: str, sha: str) -> list[dict]:
+    return _gh_lines(
+        [
+            "api",
+            "--paginate",
+            f"repos/{repo}/actions/workflows/{DRYRUN_WORKFLOW}/runs"
+            f"?head_sha={sha}&status=success&per_page=100",
+            "--jq",
+            ".workflow_runs[] | {id, url: .html_url, created_at}",
+        ]
+    )
+
+
+def _run_artifacts(repo: str, run_id: int) -> list[dict]:
+    return _gh_lines(
+        [
+            "api",
+            "--paginate",
+            f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100",
+            "--jq",
+            ".artifacts[] | {name, expired}",
+        ]
+    )
+
+
+def verified_run(
+    repo: str, sha: str, runs=_passing_runs, artifacts=_run_artifacts
+) -> str:
+    """URL of the newest passing dry run of ``sha`` that is still whole, or "".
+
+    Whole means it built (a skipped nightly passes with no manifest) and its
+    shortest-lived artifacts are still there. Past retention a commit keeps its
+    pass but loses the bytes a promotion would ship, so the nightly must build
+    it again.
+    """
+    for run in sorted(runs(repo, sha), key=lambda r: r["created_at"], reverse=True):
+        live = {a["name"] for a in artifacts(repo, run["id"]) if not a["expired"]}
+        if {MANIFEST_ARTIFACT, *SHORT_LIVED_ARTIFACTS} <= live:
+            return run["url"]
+    return ""
+
+
+def cmd_verified_run(args: argparse.Namespace) -> int:
+    print(verified_run(args.repo, args.sha))
+    return 0
+
+
+def cmd_next_tag(args: argparse.Namespace) -> int:
+    print(next_rc_tag(core_version(args.target), sys.stdin.read().splitlines()))
+    return 0
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
@@ -547,7 +675,13 @@ def catalog(
             ),
             (
                 f"{p}-macos-installer",
-                [f"{ui}-arm64.dmg", f"{ui}-arm64.dmg.blockmap", "latest-mac.yml"],
+                [
+                    f"{ui}-arm64.dmg",
+                    f"{ui}-arm64.dmg.blockmap",
+                    f"{ui}-arm64.zip",
+                    f"{ui}-arm64.zip.blockmap",
+                    "latest-mac.yml",
+                ],
             ),
             (
                 f"{p}-linux-installer",
@@ -1013,6 +1147,21 @@ def cmd_verify(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    nxt = sub.add_parser(
+        "next-tag",
+        help="print the next unused RC of the tree's version; tags on stdin",
+    )
+    nxt.add_argument("--target", type=Path, required=True)
+    nxt.set_defaults(func=cmd_next_tag)
+
+    vr = sub.add_parser(
+        "verified-run",
+        help="print a passing dry run of a commit whose artifacts are all live",
+    )
+    vr.add_argument("--repo", required=True)
+    vr.add_argument("--sha", required=True)
+    vr.set_defaults(func=cmd_verified_run)
 
     plan = sub.add_parser("plan", help="resolve an RC tag against the tree")
     plan.add_argument("--tag", required=True)

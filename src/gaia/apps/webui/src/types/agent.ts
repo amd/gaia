@@ -138,7 +138,7 @@ export interface GaiaWindowFrame {
 }
 
 /** FAILURE_REASONS in services/backend-installer.cjs. */
-export type EngineInstallReason = 'disk' | 'network' | 'tls' | 'locked';
+export type EngineInstallReason = 'disk' | 'network' | 'tls' | 'locked' | 'daemon';
 
 export interface EngineInstallError {
   stage: string | null;

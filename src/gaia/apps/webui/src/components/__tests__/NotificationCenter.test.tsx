@@ -12,10 +12,12 @@
  */
 
 import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NotificationCenter } from '../NotificationCenter';
 import { useNotificationStore } from '../../stores/notificationStore';
 import type { GaiaNotification } from '../../types/agent';
+import { stripIsolates } from '../../i18n/registry';
+import { ARABIC_MONTH, ENGLISH_MONTH, resetUiLocale, setUiLocale } from '../../test/dates';
 
 const notif = (id: string, message: string): GaiaNotification => ({
     id,
@@ -59,5 +61,29 @@ describe('NotificationCenter', () => {
         render(<NotificationCenter onClose={vi.fn()} />);
         expect(screen.getByText('Still here')).toBeTruthy();
         expect(screen.queryByText('Gone')).toBeNull();
+    });
+});
+
+describe('NotificationCenter dates follow the interface language', () => {
+    afterEach(resetUiLocale);
+
+    it('shows a week-old notification date in Arabic in an Arabic UI', () => {
+        setUiLocale('ar');
+        useNotificationStore.setState({
+            notifications: [{ ...notif('n-1', 'Old news'), timestamp: Date.now() - 30 * 86_400_000 }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        const time = stripIsolates(container.querySelector('.notification-time')!.textContent ?? '');
+        expect(time).toMatch(ARABIC_MONTH);
+        expect(time).not.toMatch(ENGLISH_MONTH);
+    });
+
+    it('says how long ago in Arabic for a recent one', () => {
+        setUiLocale('ar');
+        useNotificationStore.setState({
+            notifications: [{ ...notif('n-1', 'Fresh'), timestamp: Date.now() - 5 * 60_000 }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(stripIsolates(container.querySelector('.notification-time')!.textContent ?? '')).toContain('قبل 5 د');
     });
 });

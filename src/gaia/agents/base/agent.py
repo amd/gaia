@@ -7585,6 +7585,7 @@ Do NOT wrap conversational replies in JSON.
             )
         if not answer.strip():
             raise _NotAnAnswer("the model's reply had no answer in it")
+        self._mark_errors_recovered()
         conversation.append({"role": "assistant", "content": parsed})
         return answer
 
@@ -10854,6 +10855,7 @@ Do NOT wrap conversational replies in JSON.
                         steps_taken,
                         steps_limit,
                     )
+                    self._turn_model_retries["failed"] = True
                     final_answer = _CUT_OFF_FAILURE_ANSWER
                     break
                 cut_off_continuations += 1
