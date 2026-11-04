@@ -66,7 +66,7 @@ export function CodeBlock({ code, previewLines = CODE_PREVIEW_LINES, testId = 'p
     const shown = (long && !expanded ? lines.slice(0, previewLines) : lines).join('\n');
     return (
         <>
-            <pre className={`perm-card-pre perm-card-code${expanded ? ' is-expanded' : ''}`} data-testid={testId}>{shown}</pre>
+            <pre dir="ltr" className={`perm-card-pre perm-card-code${expanded ? ' is-expanded' : ''}`} data-testid={testId}>{shown}</pre>
             {long && (
                 <button
                     type="button"
@@ -118,7 +118,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const scope = freshConsent ? undefined : notification.alwaysScope;
     // Shell scopes are already the command itself, so only file and skill grants carry a label.
     const scopeText = notification.alwaysLabel ?? scope;
-    const scopeNode = notification.alwaysLabel ?? <code>{scope}</code>;
+    const scopeNode = notification.alwaysLabel ?? <code dir="ltr">{scope}</code>;
     const repeats = useNotificationStore((s) => repeatedAllowCount(s.notifications, notification));
     const suggestAlways = !!scope && repeats > 0;
     const detail = summarize(notification);
@@ -185,24 +185,27 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
             <div className="perm-card-head">
                 <ShieldQuestion size={16} className="perm-card-icon" aria-hidden="true" />
                 <div className="perm-card-text">
+                    {/* The card's text is English; <bdi> keeps its punctuation at the end in a right-to-left UI. */}
                     <h2 id={`perm-${notification.id}`} className="perm-card-title">
-                        {notification.tool === PATH_ACCESS_TOOL
-                            ? notification.title
-                            : notification.toolLabel
-                                ? <>Allow {notification.toolLabel}?</>
-                                : <>Allow GAIA to use <code>{notification.tool}</code>?</>}
+                        <bdi>
+                            {notification.tool === PATH_ACCESS_TOOL
+                                ? notification.title
+                                : notification.toolLabel
+                                    ? <>Allow {notification.toolLabel}?</>
+                                    : <>Allow GAIA to use <code dir="ltr">{notification.tool}</code>?</>}
+                        </bdi>
                     </h2>
-                    {detail && riskNote && <pre className="perm-card-pre perm-card-exact">{detail}</pre>}
-                    {detail && !riskNote && <p className="perm-card-detail"><code>{detail}</code></p>}
-                    {folder && <p className="perm-card-detail">in <code>{folder}</code></p>}
-                    {riskNote && <p className="perm-card-risk" role="note">{riskNote}</p>}
+                    {detail && riskNote && <pre dir="ltr" className="perm-card-pre perm-card-exact">{detail}</pre>}
+                    {detail && !riskNote && <p className="perm-card-detail"><code dir="ltr">{detail}</code></p>}
+                    {folder && <p className="perm-card-detail"><bdi>in <code dir="ltr">{folder}</code></bdi></p>}
+                    {riskNote && <p className="perm-card-risk" role="note"><bdi>{riskNote}</bdi></p>}
                     {code && <CodeBlock code={code} />}
-                    {relayed && <pre className="perm-card-pre perm-card-exact">{relayed.command}</pre>}
-                    {relayed?.folder && <p className="perm-card-detail">in <code>{relayed.folder}</code></p>}
-                    {relayed?.extras && <p className="perm-card-detail">{relayed.extras}</p>}
-                    {relayed?.note && <p className="perm-card-risk" role="note">{relayed.note}</p>}
-                    {!detail && !code && notification.summary && !relayed && <p className="perm-card-detail">{notification.summary}</p>}
-                    {freshConsent && notification.message && <p className="perm-card-detail">{notification.message}</p>}
+                    {relayed && <pre dir="ltr" className="perm-card-pre perm-card-exact">{relayed.command}</pre>}
+                    {relayed?.folder && <p className="perm-card-detail"><bdi>in <code dir="ltr">{relayed.folder}</code></bdi></p>}
+                    {relayed?.extras && <p className="perm-card-detail"><bdi>{relayed.extras}</bdi></p>}
+                    {relayed?.note && <p className="perm-card-risk" role="note"><bdi>{relayed.note}</bdi></p>}
+                    {!detail && !code && notification.summary && !relayed && <p className="perm-card-detail"><bdi>{notification.summary}</bdi></p>}
+                    {freshConsent && notification.message && <p className="perm-card-detail"><bdi>{notification.message}</bdi></p>}
                 </div>
                 {remaining !== null && !expired && (
                     <span className="perm-card-timer" title="Denied automatically when the time runs out">{formatCountdown(remaining)}</span>
@@ -219,17 +222,19 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                         <ChevronRight size={13} className={showArgs ? 'is-open' : ''} aria-hidden="true" />
                         Details
                     </button>
-                    {showArgs && <pre className="perm-card-pre">{JSON.stringify(args, null, 2)}</pre>}
+                    {showArgs && <pre dir="ltr" className="perm-card-pre">{JSON.stringify(args, null, 2)}</pre>}
                 </div>
             )}
             {suggestAlways && !expired && (
                 <p className="perm-card-hint">
-                    You've allowed this {repeats === 1 ? 'once' : `${repeats} times`} already.
-                    {' '}Always allow stops asking about {scopeNode} in this chat.
+                    <bdi>
+                        You've allowed this {repeats === 1 ? 'once' : `${repeats} times`} already.
+                        {' '}Always allow stops asking about {scopeNode} in this chat.
+                    </bdi>
                 </p>
             )}
             {expired ? (
-                <p className="perm-card-detail">No answer in time, so GAIA was told no.</p>
+                <p className="perm-card-detail"><bdi>No answer in time, so GAIA was told no.</bdi></p>
             ) : (
                 <div className="perm-card-actions">
                     <button type="button" className="perm-btn is-primary" onClick={() => answer('allow')} disabled={busy}>
