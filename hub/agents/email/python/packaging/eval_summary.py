@@ -39,7 +39,7 @@ from typing import Any, Iterator
 
 DEFAULT_EVAL_DIR = Path("eval-out")
 
-# The gates this workflow's four eval steps are expected to produce, in pipeline
+# The gates this workflow's eval steps are expected to produce, in pipeline
 # order. Doubles as the EXPECTED SET: a key here with no verdict is reported as
 # missing. A gate NOT in this map is still reported, under its raw JSON key, so a
 # newly-added gate is never dropped.
@@ -49,6 +49,8 @@ GATE_LABELS = {
     "drafting_gate": "Voice-drafting approval",
     "extraction_gate": "Action-item extraction",
     "briefing_gate": "Daily-briefing quality",
+    # #2040: the follow-up detection suite's report script (#1950 bars).
+    "followup_gate": "Follow-up detection",
 }
 
 

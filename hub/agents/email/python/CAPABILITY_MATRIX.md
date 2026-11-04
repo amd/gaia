@@ -77,7 +77,7 @@ python hub/agents/email/python/packaging/capability_matrix.py
   - `action_items`: enforce=False, acceptance_enforce=None, wired=True
   - `briefing`: enforce=False, acceptance_enforce=None, wired=True
   - `drafting`: enforce=False, acceptance_enforce=None, wired=True
-  - `followups`: enforce=False, acceptance_enforce=None, wired=False
+  - `followups`: enforce=False, acceptance_enforce=None, wired=True
   - `perf`: enforce=False, acceptance_enforce=None, wired=True
   - `quality`: enforce=False, acceptance_enforce=True, wired=True
 - Additionally served but **out of the frozen contract** (footnote context, not guarded machinery): `agent_routes.py` 12 session routes (includes the autonomy control surface, #2529), `connector_routes.py` 4 OAuth routes, `server.py` 2 inline probes -- ~43 total routes served by the sidecar.
@@ -102,9 +102,9 @@ Judge-scored summary-quality gate for the scheduled daily briefing (approval / r
 
 Judge-scored draft-approval gate (#1269 metric, approval_min 0.70) run by release_agent_email.yml. Follow-up: establish and maintain a passing hardware baseline, and raise approval_min once a larger judged corpus is available.
 
-### `followups` (enforce=False, wired=False)
+### `followups` (enforce=False, wired=True)
 
-Detection-quality bars, CI-unwired: no eval_followup_report.py exists, unlike the other five suites. Follow-up: #2040 tracks wiring an eval_followup_report.py plus a workflow step and, separately, establishing a judged baseline (the #1950 eval's documented follow-up) before flipping enforce to true.
+Detection-quality bars for the deterministic awaits_reply detector (#1606 feature), scored offline over the committed labeled corpus with no Lemonade and no judge. Follow-up: #1950 tracks establishing a real baseline before flipping enforce to true -- the bars are provisional placeholders and the detector has a known false-positive gap on courtesy/FYI notes, so the first report is the measurement, not a pass/fail.
 
 ### `perf` (enforce=False, wired=True)
 
@@ -113,6 +113,4 @@ Strix Halo perf bars (ttft / throughput / pipeline / memory) run by release_agen
 ### `quality` (enforce=False, wired=True)
 
 Triage FP/FN bars that only become meaningful once 4-way categorization accuracy improves (see the #1266 history), per the fixture's own _comment; a separate acceptance_enforce release gate runs on the within-one-bucket metric. Follow-up: flip enforce to true in the fixture once accuracy stabilizes above the gate's bars.
-
-Wiring `followups` into CI (report script + workflow step) is tracked in #2040.
 

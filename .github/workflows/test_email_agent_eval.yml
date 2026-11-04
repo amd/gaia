@@ -18,8 +18,9 @@
 #   - tests/fixtures/email/drafting_gate_thresholds.json     (draft-approval >=70%, #1269)
 #   - tests/fixtures/email/briefing_gate_thresholds.json     (briefing quality, #1951)
 #   - tests/fixtures/email/action_items_gate_thresholds.json (P/R/F1, #1949)
+#   - tests/fixtures/email/followups_gate_thresholds.json    (P/R/F1, #1950)
 #
-# ALL FIVE CURRENTLY SHIP `enforce: false` — every gate is in REPORT MODE. #2038
+# ALL SIX CURRENTLY SHIP `enforce: false` — every gate is in REPORT MODE. #2038
 # ("unblock v0.4.0 — calibrate perf bars, report-mode unvalidated judge gates")
 # flipped perf, drafting and briefing to false and this header was not updated
 # with it; the paragraphs below used to claim they were ENFORCING and were wrong
@@ -519,7 +520,33 @@ jobs:
           & $env:VENV_PY hub/agents/email/python/packaging/eval_briefing_report.py
           if ($LASTEXITCODE -ne 0) { throw "briefing eval failed" }
       # =================================================================
-      # END daily-briefing summary-quality eval
+      # BEGIN follow-up detection eval (#1606 feature / #1950 metric /
+      # #2040 wiring) — ADDITIVE, self-contained block. Report mode.
+      #
+      # Precision / recall / F1 of the agent's `awaits_reply` flag vs a
+      # hand-labeled corpus of sent threads
+      # (tests/fixtures/email/followups_ground_truth.json, courtesy/FYI hard
+      # negatives included). Generation replays each thread into a
+      # FakeGmailBackend and runs the REAL check_followups_impl detector —
+      # fully OFFLINE: no Lemonade, and NO judge credential (the detector is
+      # deterministic, so unlike the drafting/action-item/briefing steps this
+      # one has no credential requirement and is not gated on the preflight).
+      # The aggregate is scored against the committed manifest
+      #   tests/fixtures/email/followups_gate_thresholds.json  (enforce:false)
+      # via gaia.eval.followup_quality — same single-source rule as the gates
+      # above: no thresholds inlined in this YAML; flip `enforce` in the
+      # manifest (data, not code) to make this gate block once a real baseline
+      # confirms the bars (the #1950 follow-up: no baseline exists yet, and the
+      # detector has a known false-positive gap on courtesy/FYI notes).
+      #
+      # Kept self-contained so concurrent edits to this workflow merge cleanly.
+      # =================================================================
+      - name: Follow-up detection eval (report mode)
+        run: |
+          & $env:VENV_PY hub/agents/email/python/packaging/eval_followup_report.py
+          if ($LASTEXITCODE -ne 0) { throw "follow-up eval failed" }
+      # =================================================================
+      # END follow-up detection eval
       # =================================================================
 
       - name: Upload eval scorecard + gate report
