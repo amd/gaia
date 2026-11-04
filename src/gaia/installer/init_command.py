@@ -791,21 +791,24 @@ def check_setup_status(
         if not available:
             reasons.append(f"Model '{model_id}' is not downloaded")
 
+    agent_id = profile_config.get("agent")
+    if agent_id in HUB_INSTALL_AGENTS and not InitCommand._is_hub_agent_available(
+        agent_id
+    ):
+        # Same sentinel run() installs; models on the server do not imply the agent.
+        command = (
+            "gaia init"
+            if profile == DEFAULT_INIT_PROFILE
+            else f"gaia init --profile {profile}"
+        )
+        reasons.append(f"The GAIA agent is not installed -- run: {command}")
+
     if reasons:
         # Sizes let a caller say what the download will cost before it starts;
         # ``downloaded`` lets it leave out models the server already has.
         models = _describe_models(client, model_ids, downloaded) if load else []
         return SetupStatus(ready=False, reasons=reasons, stage="setup", models=models)
     if not load:
-        if (
-            profile_config.get("agent") in HUB_INSTALL_AGENTS
-            and not InitCommand._is_hub_agent_available(profile_config["agent"])
-        ):
-            return SetupStatus(
-                ready=False,
-                reasons=["The GAIA agent is not installed"],
-                stage="setup",
-            )
         return SetupStatus(ready=True, reasons=[])
 
     if chat_model and not skip_chat_model and not is_embedding_model_id(chat_model):

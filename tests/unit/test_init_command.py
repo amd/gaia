@@ -1042,6 +1042,38 @@ class TestCheckSetupStatus(unittest.TestCase):
         )
         self.start_embedded = start.start()
         self.addCleanup(start.stop)
+        # An installed flagship, recorded where `gaia init` records it; the
+        # agent-missing tests delete it.
+        import tempfile
+
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        os.environ["GAIA_HOME"] = home.name
+        os.environ.pop("GAIA_CONFIG_DIR", None)
+        self._install_flagship()
+
+    @staticmethod
+    def _install_flagship():
+        from gaia.hub import installer as hub_installer
+
+        install_dir = hub_installer.agent_install_dir("gaia")
+        install_dir.mkdir(parents=True, exist_ok=True)
+        hub_installer._write_sentinel(
+            "gaia",
+            "0.3.2",
+            "python",
+            "ab" * 32,
+            install_dir,
+            artifact_kind=hub_installer.ARTIFACT_KIND_BINARY,
+            executable="gaia-agent.exe",
+        )
+        return install_dir / hub_installer.SENTINEL_NAME
+
+    @staticmethod
+    def _remove_flagship():
+        from gaia.hub import installer as hub_installer
+
+        hub_installer._sentinel_path("gaia").unlink()
 
     def test_stopped_server_is_started_through_the_daemon_first(self):
         from gaia.installer.init_command import check_setup_status
@@ -1208,20 +1240,153 @@ class TestCheckSetupStatus(unittest.TestCase):
             "http://localhost:51234/api/v1",
         )
 
-    def test_flagship_models_present_but_agent_missing_is_not_ready(self):
-        from gaia.installer.init_command import InitCommand, check_setup_status
+    AGENT_MISSING = "The GAIA agent is not installed -- run: gaia init"
+
+    def _check_with_models(self, profile="gaia", have=True, **kwargs):
+        from gaia.installer.init_command import check_setup_status
 
         with (
             self._embedded(self._running()),
             patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class,
-            patch.object(InitCommand, "_is_hub_agent_available", return_value=False),
         ):
-            mock_client_class.return_value.check_model_available.return_value = True
-            status = check_setup_status(profile="gaia")
+            client = self._loading_client(mock_client_class)
+            client.check_model_available.return_value = have
+            status = check_setup_status(profile=profile, **kwargs)
+        return status, client
+
+    def test_flagship_models_present_but_agent_missing_is_not_ready(self):
+        """#6571: an existing Lemonade with the models skipped setup, so the
+        agent was never installed and every chat failed."""
+        self._remove_flagship()
+        status, _ = self._check_with_models()
 
         self.assertFalse(status.ready)
         self.assertEqual(status.stage, "setup")
-        self.assertEqual(status.reasons, ["The GAIA agent is not installed"])
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    def test_installed_flagship_with_models_present_is_ready(self):
+        """An existing user who has the agent is never sent back into setup."""
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.ready)
+        self.assertEqual(status.reasons, [])
+
+    def test_load_check_reports_the_missing_agent_before_loading_anything(self):
+        """The apps verify with --load; a missing agent must not pass there, and
+        setup is still owed, so minutes of model loads are skipped."""
+        self._remove_flagship()
+        status, client = self._check_with_models(load=True)
+
+        self.assertFalse(status.ready)
+        self.assertEqual(status.stage, "setup")
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+        self.assertTrue(all(m.downloaded for m in status.models))
+        client._ensure_model_loaded.assert_not_called()
+        client.embeddings.assert_not_called()
+
+    def test_skip_chat_model_still_needs_the_agent(self):
+        """A Claude or cloud chat still runs through the flagship agent."""
+        self._remove_flagship()
+        status, _ = self._check_with_models(skip_chat_model=True)
+
+        self.assertEqual(status.stage, "setup")
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    def test_missing_models_and_agent_are_both_reasons(self):
+        self._remove_flagship()
+        status, _ = self._check_with_models(have=False)
+
+        self.assertEqual(status.stage, "setup")
+        self.assertIn(self.AGENT_MISSING, status.reasons)
+        self.assertTrue(any("is not downloaded" in r for r in status.reasons))
+
+    def test_npu_profile_names_its_own_init_command(self):
+        """A bare `gaia init` would switch an npu machine to the default models."""
+        self._remove_flagship()
+        status, _ = self._check_with_models(profile="npu")
+
+        self.assertEqual(
+            status.reasons,
+            ["The GAIA agent is not installed -- run: gaia init --profile npu"],
+        )
+
+    def test_profiles_without_the_flagship_ignore_it(self):
+        self._remove_flagship()
+        for profile in ("chat", "minimal", "rag"):
+            with self.subTest(profile=profile):
+                status, _ = self._check_with_models(profile=profile)
+                self.assertTrue(status.ready, status.reasons)
+
+    def test_an_importable_checkout_package_is_not_an_installed_agent(self):
+        """The apps run the flagship binary; a source checkout's importable
+        gaia_agent package must not stand in for it."""
+        import importlib.util
+
+        self._remove_flagship()
+        real_find_spec = importlib.util.find_spec
+        with patch(
+            "importlib.util.find_spec",
+            side_effect=lambda name, *a: (
+                MagicMock() if name == "gaia_agent" else real_find_spec(name, *a)
+            ),
+        ):
+            status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    def test_a_corrupt_sentinel_is_not_an_installed_agent(self):
+        sentinel = self._install_flagship()
+        sentinel.write_text("{not json", encoding="utf-8")
+
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    def test_a_sentinel_with_an_unsafe_executable_is_not_an_installed_agent(self):
+        import json
+
+        sentinel = self._install_flagship()
+        data = json.loads(sentinel.read_text(encoding="utf-8"))
+        data["executable"] = "..\\..\\evil.exe"
+        sentinel.write_text(json.dumps(data), encoding="utf-8")
+
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    def test_sentinel_is_read_from_gaia_home_not_the_profile_home(self):
+        """The check and `gaia init` resolve one agents dir, honouring GAIA_HOME."""
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as elsewhere:
+            os.environ["GAIA_HOME"] = elsewhere
+            status, _ = self._check_with_models()
+            self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+            self._install_flagship()
+            status, _ = self._check_with_models()
+            self.assertTrue(status.ready, status.reasons)
+
+    def test_an_older_server_is_an_upgrade_even_with_no_agent(self):
+        """#6477: an update is not first-run setup, whatever else is missing."""
+        from gaia.installer.init_command import check_setup_status
+
+        self._remove_flagship()
+        older = self._status(running=True, version="10.0.0", port=51234, pid=42)
+        with self._embedded(older):
+            status = check_setup_status(profile="gaia")
+
+        self.assertEqual(status.stage, "upgrade")
+
+    def test_a_server_that_will_not_answer_outranks_a_missing_agent(self):
+        from gaia.installer.init_command import check_setup_status
+
+        self._remove_flagship()
+        with self._embedded(self._status()):
+            status = check_setup_status(profile="gaia")
+
+        self.assertEqual(status.stage, "server")
 
     def test_configured_url_is_checked_instead_of_the_embedded_server(self):
         import os

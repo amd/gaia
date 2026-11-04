@@ -182,6 +182,14 @@ export class Journey {
         this.listeners.push(server);
     }
 
+    /** Install the GAIA agent the way setup does, so the home counts as set up. */
+    installAgent(): void {
+        const run = spawnSync(PYTHON, ['-m', 'gaia.cli', 'init', '--agent-only'], {
+            env: this.env(), cwd: this.root, encoding: 'utf-8', timeout: 5 * 60_000, windowsHide: true,
+        });
+        expect(run.status, `gaia init --agent-only:\n${run.error ?? ''}${run.stdout}${run.stderr}`).toBe(0);
+    }
+
     async startFake({ port, models = [], env = {} }: FakeOptions = {}): Promise<void> {
         this.lemonadePort = port ?? (await freePort());
         const argv = [PYTHON, FAKE_SERVER, '--catalog', '--port', String(this.lemonadePort), '--log', this.requestLog];
