@@ -1,14 +1,43 @@
 #!/bin/sh
 # GAIA Agent UI — Debian pre-remove script.
 #
-# Stops ONLY the GAIA Agent UI Electron process. Per plan §5.1 we
-# deliberately do NOT touch the user-launched `gaia chat --ui` backend
-# — the user may want to keep that running independently of the
-# desktop app.
+# Stops the GAIA Agent UI Electron process and each user's GAIA daemon
+# (with the agents it runs), which has no window and would otherwise run
+# until reboot. Per plan §5.1 we deliberately do NOT touch the
+# user-launched `gaia chat --ui` backend — the user may want to keep that
+# running independently of the desktop app.
 #
 # See docs/plans/desktop-installer.mdx §5.1 and §7 Phase E.
 
 set -e
+
+# A failure is reported, never fatal: removal must still go ahead.
+stop_gaia_daemons() {
+    for uid in $(ps -eo uid=,args= 2>/dev/null |
+        awk '$NF == "gaia.daemon" && $(NF-1) == "-m" { print $1 }' | sort -u); do
+        if ! entry=$(getent passwd "$uid"); then
+            echo "A GAIA daemon runs as uid $uid, which has no account; it was not stopped." >&2
+            continue
+        fi
+        user=$(echo "$entry" | cut -d: -f1)
+        home=$(echo "$entry" | cut -d: -f6)
+        gaia="$home/.gaia/venv/bin/gaia"
+        if [ ! -x "$gaia" ]; then
+            echo "$user's GAIA daemon was not stopped: $gaia is missing." >&2
+            continue
+        fi
+        echo "Stopping $user's GAIA daemon"
+        rc=0
+        runuser -u "$user" -- env HOME="$home" PYTHONIOENCODING=utf-8 \
+            timeout 120 "$gaia" daemon stop || rc=$?
+        # 3: the daemon stopped; only GAIA's Lemonade Server did not.
+        if [ "$rc" -eq 3 ]; then
+            echo "$user's GAIA daemon stopped, but GAIA's Lemonade Server did not; the lines above say how to stop it." >&2
+        elif [ "$rc" -ne 0 ]; then
+            echo "Could not stop $user's GAIA daemon (exit $rc); it keeps running until the PC restarts." >&2
+        fi
+    done
+}
 
 case "$1" in
     remove|upgrade|deconfigure)
@@ -24,6 +53,7 @@ case "$1" in
             # pre-rename install.
             pkill -x "gaia-agent-ui" 2>/dev/null || true
         fi
+        stop_gaia_daemons
         ;;
     failed-upgrade)
         ;;

@@ -410,7 +410,7 @@ def _installer_posix_path_dirs(home: Optional[Path] = None) -> set:
 
 
 def _is_installer_export(line: str, allowed_dirs: set) -> bool:
-    """Current (venv/bin + bin) and pre-0.23 (venv/bin only) export shapes."""
+    """Current (bin only), 0.23+ (venv/bin + bin) and pre-0.23 (venv/bin only) shapes."""
     if not (line.startswith(_RC_EXPORT_PREFIX) and line.endswith('"')):
         return False
     dirs = line[len(_RC_EXPORT_PREFIX) : -1].split(":")
@@ -1174,10 +1174,10 @@ def _stop_daemon(printer: Callable[[str], None] = print) -> bool:
 
     inst = instance.read_instance()
     if inst is None:
-        return True
+        return _stop_orphaned_sidecars(printer)
     try:
         if not instance.pid_alive(inst.pid):
-            return True
+            return _stop_orphaned_sidecars(printer)
         try:
             client.request_shutdown(inst)
         except DaemonError:
@@ -1201,6 +1201,28 @@ def _stop_daemon(printer: Callable[[str], None] = print) -> bool:
         )
         return False
     _print(f"  [daemon] stopped the GAIA daemon (pid {inst.pid})", printer=printer)
+    return _stop_orphaned_sidecars(printer)
+
+
+def _stop_orphaned_sidecars(printer: Callable[[str], None] = print) -> bool:
+    """Stop the agents a dead daemon left running. False when one survives."""
+    from gaia.daemon.sidecars import ledger
+
+    killed, survivors = ledger.reap_after_stop()
+    for pid in killed:
+        if pid not in survivors:
+            _print(
+                f"  [daemon] stopped an agent the daemon left running (pid {pid})",
+                printer=printer,
+            )
+    if survivors:
+        pids = ", ".join(str(pid) for pid in survivors)
+        _print(
+            f"error: GAIA agent process(es) {pids} are still running. End them "
+            "(Task Manager on Windows, `kill -9` elsewhere), then re-run.",
+            printer=printer,
+        )
+        return False
     return True
 
 

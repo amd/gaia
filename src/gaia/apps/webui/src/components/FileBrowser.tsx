@@ -11,9 +11,11 @@ import {
 import { useChatStore } from '../stores/chatStore';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
+import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { UploadErrorToast, isExtensionSupported, getUnsupportedCategory } from './UnsupportedFeature';
 import type { FileEntry, BrowseResponse, QuickLink } from '../types';
 import './FileBrowser.css';
@@ -30,17 +32,17 @@ function getFileIcon(entry: FileEntry) {
 }
 
 // Format date
-function formatDate(iso: string | null): string {
+function formatDate(iso: string | null, t: Translate): string {
     if (!iso) return '';
     const d = new Date(iso);
     const now = new Date();
     const diff = now.getTime() - d.getTime();
     const hours = Math.floor(diff / 3600000);
-    if (hours < 1) return 'Just now';
-    if (hours < 24) return `${hours}h ago`;
+    if (hours < 1) return t('time.justNow');
+    if (hours < 24) return t('time.hoursAgo', { n: hours });
     const days = Math.floor(hours / 24);
-    if (days < 7) return `${days}d ago`;
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+    if (days < 7) return t('time.daysAgo', { n: days });
+    return d.toLocaleDateString(dateLocale(t), { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
 }
 
 function formatSearchScope(locations: string[]): string {
@@ -184,11 +186,13 @@ interface FileBrowserProps {
 }
 
 export function FileBrowser({ onStartChat }: FileBrowserProps) {
+    const t = useT();
     const { setShowFileBrowser, currentSessionId, updateSessionInList, setPendingPrompt } = useChatStore();
     const closeBrowser = useCallback(() => setShowFileBrowser(false), [setShowFileBrowser]);
     useEscapeToClose(true, closeBrowser);
     const dialogRef = useRef<HTMLDivElement>(null);
     useFocusTrap(dialogRef, true);
+    useDialogFocus(dialogRef, true);
 
     // Browse state
     const [currentPath, setCurrentPath] = useState<string>('');
@@ -656,7 +660,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                         </button>
                                     )}
                                     <span className="fb-entry-size">{entry.type === 'file' ? formatSize(entry.size) : ''}</span>
-                                    <span className="fb-entry-date">{formatDate(entry.modified)}</span>
+                                    <span className="fb-entry-date">{formatDate(entry.modified, t)}</span>
                                 </div>
                                 );
                             })}

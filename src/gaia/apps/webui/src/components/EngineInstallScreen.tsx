@@ -25,6 +25,7 @@ const REASON_HINTS: Readonly<Record<EngineInstallReason, MessageKey>> = {
     network: 'engine.hint.network',
     tls: 'engine.hint.tls',
     locked: 'engine.hint.locked',
+    daemon: 'engine.hint.daemon',
 };
 
 function stageLabel(stage: string | null, t: Translate): string {
