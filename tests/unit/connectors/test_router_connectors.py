@@ -359,9 +359,10 @@ class TestAuthorizeColdPath:
             assert urlparse(params["redirect_uri"][0]).hostname == "127.0.0.1"
         finally:
             # Close the flow's loopback listener; nothing completes it here.
-            ui_api_client.delete(
+            cancel = ui_api_client.delete(
                 f"/api/connectors/_flows/{info['flow_id']}", headers=UI_HEADER
             )
+            assert cancel.status_code == 204, cancel.text
 
         assert list_connections() == [], "starting a flow must not store anything"
 

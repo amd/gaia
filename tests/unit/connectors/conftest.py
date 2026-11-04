@@ -147,6 +147,8 @@ def google_provider(monkeypatch):
     from gaia.connectors.providers import get as get_provider
 
     monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
+    # A secret exported on the developer's machine would change the provider.
+    monkeypatch.delenv("GAIA_GOOGLE_CLIENT_SECRET", raising=False)
     _registry.clear()
     return get_provider("google")
 
