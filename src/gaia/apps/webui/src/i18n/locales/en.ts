@@ -173,6 +173,8 @@ export const enMessages = {
     'composer.privateOnTitle': "Turn on private chat. It won't be saved to memory.",
     'composer.privateOff': 'Turn off private chat',
     'composer.privateOffTitle': "Turn off private chat. This chat won't be saved to memory.",
+    'composer.heldLabel': 'Message waiting to send',
+    'composer.heldUntilStarted': 'Sends once GAIA has started.',
 
     // Notice when the GAIA agent is missing
     'agentNotice.missing': "The GAIA agent isn't installed, so new chats can't start yet.",

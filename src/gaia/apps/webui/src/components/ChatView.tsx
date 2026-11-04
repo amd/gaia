@@ -1872,11 +1872,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <ContextWarning usage={contextUsage} />
                     <OfflineNotice sessionId={sessionId} />
                     {pendingPrompt && initializing && (
-                        <ul className="queued-messages" aria-label="Message waiting to send" aria-live="polite">
+                        <ul className="queued-messages" aria-label={t('composer.heldLabel')} aria-live="polite">
                             <li className="queued-message is-queued">
                                 <Clock size={12} aria-hidden="true" />
                                 <span className="queued-message-text" title={pendingPrompt.text}>{pendingPrompt.text}</span>
-                                <span className="queued-message-state">Sends once GAIA has started.</span>
+                                <span className="queued-message-state">{t('composer.heldUntilStarted')}</span>
                             </li>
                         </ul>
                     )}
