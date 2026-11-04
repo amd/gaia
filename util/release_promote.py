@@ -186,9 +186,10 @@ def locate(
     tried = "".join(f"\n  - {s}" for s in skipped) or " none."
     raise PromoteError(
         f"no passing {DRYRUN_WORKFLOW} run of {sha} verified {tag}. Runs tried:{tried}\n"
-        f"Dispatch one on the branch whose head is {sha[:12]}: gh workflow run "
-        f"{DRYRUN_WORKFLOW} --ref main -f rc_tag={rc_hint}, wait for it to pass, "
-        "then re-run this job."
+        f"The dry run builds its branch's head, so dispatch it on a branch at "
+        f"{sha[:12]} (main, if it still is): gh workflow run {DRYRUN_WORKFLOW} "
+        f"--ref <branch> -f rc_tag={rc_hint}. Wait for it to pass, then re-run "
+        "this job."
     )
 
 
@@ -260,6 +261,13 @@ def render(c: Comparison, tag: str, run_url: str) -> str:
     return "\n".join(lines)
 
 
+def annotate(level: str, msg: str) -> None:
+    """A GitHub annotation on stderr: stdout is for KEY=VALUE outputs and the summary."""
+    # A raw newline ends a workflow command; %0A keeps the whole message in it.
+    escaped = msg.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(f"::{level}::{escaped}", file=sys.stderr, flush=True)
+
+
 def cmd_locate(args: argparse.Namespace) -> int:
     try:
         found = locate(args.repo, args.sha, args.tag)
@@ -267,7 +275,7 @@ def cmd_locate(args: argparse.Namespace) -> int:
         if not args.missing_ok:
             raise
         # Report mode only: nothing depends on the verified build yet.
-        print(f"::warning::{e}", flush=True)
+        annotate("warning", str(e))
         print("found=false")
         return 0
     args.out.mkdir(parents=True, exist_ok=True)
@@ -291,17 +299,19 @@ def cmd_compare(args: argparse.Namespace) -> int:
     print(render(c, args.tag, args.run_url or "(not given)"))
     bad = len(c.differ) + len(c.missing)
     if bad and args.strict:
-        print(
-            f"::error::{bad} asset(s) of {args.tag} are not the bytes the dry run "
+        annotate(
+            "error",
+            f"{bad} asset(s) of {args.tag} are not the bytes the dry run "
             "verified. Publish only what it built: re-run with the promote path, "
-            "never a rebuild."
+            "never a rebuild.",
         )
         return 1
     if bad:
-        print(
-            f"::warning::{len(c.identical)} of {len(expected)} verified assets of "
+        annotate(
+            "warning",
+            f"{len(c.identical)} of {len(expected)} verified assets of "
             f"{args.tag} were published byte-identical; {bad} were rebuilt. "
-            "Expected until publish.yml promotes (#6611)."
+            "Expected until publish.yml promotes (#6611).",
         )
     return 0
 
@@ -334,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except (PromoteError, ValueError) as e:
-        print(f"::error::{e}", flush=True)
+        annotate("error", str(e))
         return 1
 
 

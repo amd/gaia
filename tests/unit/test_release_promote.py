@@ -115,10 +115,10 @@ def test_locate_refuses_a_manifest_that_cannot_vouch(bad, reason):
 def test_locate_with_no_runs_at_all_says_what_to_dispatch():
     with pytest.raises(rp.PromoteError, match="no passing.*verified v0.30.0-rc3") as e:
         rp.locate("o/r", SHA, RC, _runs(), lambda r, i: manifest())
-    assert "-f rc_tag=v0.30.0-rc3," in str(e.value)
+    assert "-f rc_tag=v0.30.0-rc3." in str(e.value)
     with pytest.raises(rp.PromoteError) as e:
         rp.locate("o/r", SHA, FINAL, _runs(), lambda r, i: manifest())
-    assert "-f rc_tag=v0.30.0-rcN," in str(e.value)
+    assert "-f rc_tag=v0.30.0-rcN." in str(e.value)
 
 
 def test_locate_refuses_a_malformed_tag():
@@ -160,10 +160,13 @@ def _run_compare(tmp_path, monkeypatch, published, strict):
 
 def test_compare_reports_a_rebuild_without_failing(tmp_path, monkeypatch, capsys):
     rc = _run_compare(tmp_path, monkeypatch, {"setup-rc.exe": "f" * 64}, False)
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
+    out = captured.out
     assert rc == 0
-    assert "::warning::0 of 2 verified assets" in out
     assert "**1** differ" in out and "**1** verified but not on the release" in out
+    # The summary is stdout; the annotation goes to stderr, not into the summary.
+    assert "::warning::" not in out
+    assert "::warning::0 of 2 verified assets" in captured.err
 
 
 def test_strict_compare_fails_on_any_byte_that_was_not_verified(
@@ -171,7 +174,7 @@ def test_strict_compare_fails_on_any_byte_that_was_not_verified(
 ):
     rc = _run_compare(tmp_path, monkeypatch, {"setup-rc.exe": "f" * 64}, True)
     assert rc == 1
-    assert "::error::2 asset(s)" in capsys.readouterr().out
+    assert "::error::2 asset(s)" in capsys.readouterr().err
 
 
 def test_strict_compare_passes_a_fully_promoted_release(tmp_path, monkeypatch):
@@ -232,3 +235,65 @@ def test_a_hung_gh_call_fails_with_a_reason_not_forever(monkeypatch):
     monkeypatch.setattr(rp.subprocess, "run", hang)
     with pytest.raises(rp.PromoteError, match="did not finish"):
         rp.published_digests("o/r", RC)
+
+
+def test_missing_ok_writes_only_github_outputs_to_stdout(monkeypatch, capsys, tmp_path):
+    """publish.yml tees stdout into $GITHUB_OUTPUT; any other line fails the step."""
+
+    def nothing(*a, **k):
+        raise rp.PromoteError("no passing run.\nRuns tried:\n  - x: y\nDispatch one")
+
+    monkeypatch.setattr(rp, "locate", nothing)
+    argv = ["locate", "--repo", "o/r", "--sha", SHA, "--tag", RC]
+    assert rp.main(argv + ["--out", str(tmp_path), "--missing-ok"]) == 0
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert lines == ["found=false"]
+    # One annotation, the whole message in it.
+    (warning,) = captured.err.splitlines()
+    assert warning.startswith("::warning::") and "%0ARuns tried:%0A" in warning
+
+
+def test_without_missing_ok_a_missing_run_fails(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(
+        rp, "locate", lambda *a, **k: (_ for _ in ()).throw(rp.PromoteError("none"))
+    )
+    argv = [
+        "locate",
+        "--repo",
+        "o/r",
+        "--sha",
+        SHA,
+        "--tag",
+        RC,
+        "--out",
+        str(tmp_path),
+    ]
+    assert rp.main(argv) == 1
+    captured = capsys.readouterr()
+    assert captured.out == "" and "::error::none" in captured.err
+
+
+def test_a_found_run_writes_only_github_outputs_to_stdout(
+    monkeypatch, capsys, tmp_path
+):
+    found = rp.Located(
+        7, "https://x/runs/7", manifest(), "rc", ["https://x/runs/8: no"]
+    )
+    monkeypatch.setattr(rp, "locate", lambda *a, **k: found)
+    argv = [
+        "locate",
+        "--repo",
+        "o/r",
+        "--sha",
+        SHA,
+        "--tag",
+        RC,
+        "--out",
+        str(tmp_path),
+    ]
+    assert rp.main(argv) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert all("=" in line and " " not in line.split("=")[0] for line in lines), lines
+    assert "found=true" in lines and "run_id=7" in lines
+    assert json.loads((tmp_path / "release-manifest.json").read_text())["commit"] == SHA
