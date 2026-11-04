@@ -254,6 +254,13 @@
     white-space: nowrap;
 }
 
+/* One box, so a long path drops to its own line instead of wrapping around an rtl label. */
+.sp-item-path {
+    display: inline-block;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+}
+
 .sp-item-remove { flex-shrink: 0; }
 
 .sp-tools {
