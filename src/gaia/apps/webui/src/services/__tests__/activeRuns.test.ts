@@ -88,7 +88,9 @@ describe('active-runs poll', () => {
         mockedApi.getActiveRuns.mockRejectedValueOnce(new TypeError('Failed to fetch'));
         await refreshActiveRuns();
         expect(useChatStore.getState().runningSessionIds).toEqual([]);
-        expect(useChatStore.getState().queuedSessionIds).toEqual([]);
+        // Only a later answer from GAIA can say a chat is idle.
+        expect(useChatStore.getState().activeRunsAt).toBe(0);
+        expect(useChatStore.getState().queuedSessionIds).toEqual(['b']);
     });
 
     it('keeps the running chats when GAIA answered with an error', async () => {

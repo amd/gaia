@@ -32,10 +32,7 @@ export function refreshActiveRuns(): Promise<void> {
         .then((runs) => useChatStore.getState().setActiveRuns(runs, requestedAt))
         .catch((err) => {
             log.api.warn('Could not read which chats are running', err);
-            // GAIA is gone, so none of its chats is still running.
-            if (isNetworkError(err)) {
-                useChatStore.getState().setActiveRuns({ session_ids: [], queued: [], awaiting_user: {} }, requestedAt);
-            }
+            if (isNetworkError(err)) useChatStore.getState().loseActiveRuns();
         })
         .finally(() => { inFlight = null; });
     return inFlight;
