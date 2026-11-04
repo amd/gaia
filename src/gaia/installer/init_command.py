@@ -729,6 +729,21 @@ def check_setup_status(
                 ],
                 stage="server",
             )
+        # A new pinned version is an update, not first-run setup: the models stay.
+        older = (
+            status.version
+            if status.running and status.version != embedded.version
+            else None if status.installed else embedded.older_installed_version()
+        )
+        if older:
+            return SetupStatus(
+                ready=False,
+                reasons=[
+                    f"GAIA's Lemonade Server is v{older}; this GAIA "
+                    f"needs v{embedded.version}"
+                ],
+                stage="upgrade",
+            )
         if not status.installed:
             return SetupStatus(
                 ready=False,
@@ -740,17 +755,6 @@ def check_setup_status(
                 ready=False,
                 reasons=["GAIA's Lemonade Server is installed but not running"],
                 stage="server",
-            )
-        if status.version != embedded.version:
-            return SetupStatus(
-                ready=False,
-                reasons=[
-                    f"GAIA's Lemonade Server is v{status.version}; this GAIA "
-                    f"needs v{embedded.version}"
-                ],
-                # The embedded artifact is an application upgrade, not first-run
-                # setup: its existing models remain in the shared cache.
-                stage="upgrade",
             )
         base_url = status.base_url
 
