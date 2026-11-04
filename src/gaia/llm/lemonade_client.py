@@ -426,8 +426,9 @@ def resolve_default_vision_model() -> Optional[str]:
     None while the chat model runs on the NPU: reading images is off there, so
     no second model is loaded next to it (:data:`VISION_OFF_ON_NPU` says why).
     Otherwise ``vision_model`` from setup when the user chose one; else the
-    PC's chat model when it reads images, because that one is already
-    downloaded and resident; else :data:`DEFAULT_MODEL_NAME`.
+    model chat reopens on, then the default chat model, whichever reads
+    images first, because those are already downloaded; else
+    :data:`DEFAULT_MODEL_NAME`.
     """
     from gaia.config import GaiaConfig
 
@@ -442,7 +443,9 @@ def resolve_default_vision_model() -> Optional[str]:
     chosen = config.vision_model
     if chosen:
         return chosen
-    return current if current in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
+    if current in VISION_CHAT_MODELS:
+        return current
+    return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
 
 
 def resident_vision_model(configured: str, base_url: Optional[str] = None) -> str:
