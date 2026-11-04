@@ -16,7 +16,7 @@ import (
 
 // Entry is one row of the model picker: a catalog model, or a local
 // recommendation the catalog does not list yet (a custom model before its
-// first pull, or a built-in an older Lemonade lacks).
+// first pull).
 type Entry struct {
 	Model       Model
 	Recommended *Recommended
@@ -28,8 +28,6 @@ type Entry struct {
 	// FitUnknown is set when the PC or the model's size could not be read,
 	// so the row is blocked without having been judged too big.
 	FitUnknown bool
-	// NeedsUpgrade is set when this Lemonade is too old to load the model.
-	NeedsUpgrade bool
 }
 
 // SizeGB is the download size, from the catalog or the recommendation.
@@ -166,12 +164,6 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 			pool = npu
 		}
 		e.Fits, e.Reason = pool.Fit(size, kv)
-		// Version after fit: "upgrade Lemonade" only helps a model that fits.
-		if e.Fits && e.Recommended != nil {
-			if ok, why := capacity.SupportsModel(e.Recommended.MinLemonade); !ok {
-				e.Fits, e.NeedsUpgrade, e.Reason = false, true, why
-			}
-		}
 	}
 
 	used := make([]bool, len(models))
