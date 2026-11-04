@@ -300,3 +300,39 @@ def test_a_deliberate_crlf_to_lf_edit_is_kept(agent, tmp_path):
 
     assert result["status"] == "success"
     assert target.read_bytes() == b"a\nb\n"
+
+
+MIXED_SOURCE = "header\r\ndef f():\n    a = 1\n    return a\n"
+
+
+@pytest.mark.parametrize(
+    "old_content, new_content, expected",
+    [
+        (
+            "    a = 1\n    return a",
+            "    a = 2\n    return a",
+            "header\r\ndef f():\n    a = 2\n    return a\n",
+        ),
+        (
+            "    return a",
+            "    b = 2\n    return b",
+            "header\r\ndef f():\n    a = 1\n    b = 2\n    return b\n",
+        ),
+    ],
+    ids=["multi-line", "single-line"],
+)
+def test_an_lf_edit_in_a_mostly_lf_file_stays_lf(
+    agent, tmp_path, old_content, new_content, expected
+):
+    """One stray CRLF line must not turn edits to the LF lines into CRLF: the
+    replacement follows the matched region's endings, not the whole file's."""
+    target = tmp_path / "mixed.py"
+    _write(target, MIXED_SOURCE)
+    _tool("read_file")(file_path=str(target))
+
+    result = _tool("edit_file")(
+        file_path=str(target), old_content=old_content, new_content=new_content
+    )
+
+    assert result["status"] == "success"
+    assert target.read_bytes() == expected.encode("utf-8")

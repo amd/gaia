@@ -1005,6 +1005,10 @@ class FileIOToolsMixin:
                 new_content: New content to compare
                 context_lines: Number of context lines in diff
 
+            Both sides are compared with LF line endings, so a change that
+            only converts CRLF to LF (or back) reports ``has_changes: False``
+            even though writing ``new_content`` would change the file's bytes.
+
             Returns:
                 Dictionary with diff information
             """
