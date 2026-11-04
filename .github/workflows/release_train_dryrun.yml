@@ -28,7 +28,8 @@
 # version.py's version, and skips a commit that already has a passing run.
 #
 # Run it:  gh workflow run release_train_dryrun.yml --ref main [-f rc_tag=v0.25.1-rc3]
-# Find the verified build of a commit, and its digests:
+# Find the verified build of a commit, and its digests. Take the oldest passing
+# run: a later nightly on the same commit skipped the build and has no manifest.
 #   gh run list --workflow release_train_dryrun.yml --commit <sha> --status success
 #   gh run download <run-id> -n release-train-manifest   # release-manifest.json
 
