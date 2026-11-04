@@ -75,7 +75,7 @@ class FakeLemonade(LemonadeClient):
         self.deleted = []
 
     def health_check(self):
-        return {"status": "ok", "version": "11.8.0"}
+        return {"status": "ok", "version": "2026.44.1"}
 
     def get_system_info(self, timeout=None):
         devices = {"amd_igpu": {"available": True, "vram_gb": self.vram_gb}}
@@ -145,6 +145,9 @@ def home(tmp_path, monkeypatch):
 @pytest.fixture
 def lemonade(monkeypatch, tmp_path):
     """Point init and the setup plan at a :class:`FakeLemonade`."""
+    # These tests exercise model selection; keep the independent flagship
+    # installation prerequisite satisfied unless a readiness test opts into it.
+    monkeypatch.setattr(InitCommand, "_is_hub_agent_available", lambda *_: True)
     store = tmp_path / "hub"
     store.mkdir()
 
@@ -355,6 +358,36 @@ def test_a_model_too_big_for_this_pc_needs_confirming(lemonade, home):
     assert "default_model" not in _config(home)
     sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME, acknowledge_no_fit=True)
     assert _config(home)["default_model"] == LARGE_DEFAULT_MODEL_NAME
+
+
+def test_large_model_chosen_on_a_busy_pc_is_kept_and_downloaded(
+    lemonade, home, monkeypatch
+):
+    """Capacity picks Qwen, free memory picks Gemma; the user's Qwen must stick."""
+    from gaia.installer.init_command import resolve_init_chat_model
+    from gaia.llm.model_fit import FreeMemory
+
+    monkeypatch.setattr(
+        lemonade_client, "_free_memory_snapshot", lambda url: (FreeMemory(10, 10), {})
+    )
+    fake = lemonade(vram_gb=48)
+    # Free memory is only judged on a local server; the snapshot itself is faked.
+    fake.base_url = "http://127.0.0.1:9/api/v1"
+    assert (
+        lemonade_client.recommend_default_chat_model(fake, judge_free_memory=False)[0]
+        == LARGE_DEFAULT_MODEL_NAME
+    )
+    assert lemonade_client.recommend_default_chat_model(fake)[0] == DEFAULT_MODEL_NAME
+    with pytest.raises(sp.NeedsAcknowledgement, match="free memory"):
+        sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
+
+    sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME, acknowledge_no_fit=True)
+    assert _config(home)["default_model"] == LARGE_DEFAULT_MODEL_NAME
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=True)
+    assert (choice.model_id, choice.user_set) == (LARGE_DEFAULT_MODEL_NAME, True)
+    assert _download(InitCommand(profile="gaia", yes=True))
+    assert LARGE_DEFAULT_MODEL_NAME in _pulled(fake)
+    assert DEFAULT_MODEL_NAME not in _pulled(fake)
 
 
 def test_skipping_a_model_setup_does_not_download_is_refused(lemonade, home):

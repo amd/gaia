@@ -54,6 +54,7 @@ README for the per-platform builders and payload-staging steps.
 | `build-gaia-installer.ps1` | Package the two GAIA binaries into a single shareable Windows `.exe` |
 | `build-ui-installer.ps1` / `.sh` | Build the Electron Agent UI installer locally |
 | `start-agent-ui.ps1` / `.sh` | Launch the Agent UI (backend + frontend) during development |
+| `fetch_lemonade_embeddable.py` | Download the pinned embeddable Lemonade archive for the desktop app's `extraResources`, verified against `EMBEDDABLE_SHA256`, so first-run setup can unpack it instead of downloading it |
 | `start-lemonade.ps1` | Launch a local Lemonade Server for development and CI (Windows). On Linux, build the argv with `gaia.llm.lemonade_launcher.build_start_command` — see `test_gaia_cli_linux.yml` |
 
 ### What the one-line installers download
@@ -104,6 +105,14 @@ npm run package:win      # or :mac / :linux
 
 `npm run make` is kept as an alias for `npm run package`.
 
+A local build ships no Lemonade archive unless you fetch one first; without it,
+first-run setup downloads the archive instead:
+
+```bash
+python installer/scripts/fetch_lemonade_embeddable.py --platform win-x64 \
+  --out src/gaia/apps/webui/build/vendor/lemonade
+```
+
 > **Note:** the `build-ui-installer.ps1` / `.sh` scripts in `scripts/` still shell out
 > to `npx electron-forge package` / `make`, which no longer matches this tree —
 > `electron-forge` isn't a dependency any more. Use the `package:*` npm scripts above
@@ -149,7 +158,7 @@ PRs that touch installers, install scripts or the download page, and on demand
 | `posix-journey.sh`, `windows-journey.ps1` | One phase of one row. They refuse to run outside GitHub Actions: they install and remove system packages |
 | `fake_model_server.py` | A stand-in Lemonade, so the terminal can complete one real turn through the installed `gaia-agent` without a model |
 | `resolve_release.py` | Picks the release under test and waits for its assets |
-| `known_failures.json` | Filed installer bugs the journeys hit; each shows as `known #N` instead of failing, and fails again once it stops reproducing |
+| `known_failures.json` | Filed installer bugs the journeys hit; each shows as `known #N` instead of failing, and fails again once it stops reproducing or its issue's release milestone ships |
 | `propose_thresholds.py` | Re-measures install times from recent runs and proposes new thresholds |
 
 ### Install-time thresholds

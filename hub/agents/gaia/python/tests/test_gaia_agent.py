@@ -542,12 +542,20 @@ def test_fast_mode_meets_the_conversational_prefill_budget(monkeypatch):
 
     The budget was set against the Linux environment block. Windows renders a
     ~170-token larger one (PowerShell recipes), which fast mode does not own, so
-    the OS is pinned to keep the measurement the same on every dev box.
+    the OS is pinned to keep the measurement the same on every dev box. The
+    home folder and working directory are pinned too: the ceiling was measured
+    without a working-directory line, and temp paths that differ between runs
+    moved the count by a few tokens against a ceiling with no slack.
     """
+    from pathlib import Path
     from types import SimpleNamespace
 
+    from gaia.agents.base import project_map
     from gaia_agent import chat_agent
 
+    home = Path("/home/user")
+    monkeypatch.setattr(project_map, "working_directory_line", lambda *_: "")
+    monkeypatch.delenv("GAIA_PROJECT_ROOT", raising=False)
     monkeypatch.setattr(
         chat_agent,
         "platform",
@@ -559,7 +567,10 @@ def test_fast_mode_meets_the_conversational_prefill_budget(monkeypatch):
         ),
     )
     with _agent(fast=True) as agent:
-        prefill = _fixed_prefill(agent)
+        # Only around the render: construction writes under the real home.
+        with monkeypatch.context() as mp:
+            mp.setattr(Path, "home", classmethod(lambda cls: home))
+            prefill = _fixed_prefill(agent)
     assert prefill <= FAST_PREFILL_CEILING, (
         f"fast mode costs {prefill} tiktoken tokens of fixed prefill, over the "
         f"{FAST_PREFILL_CEILING} budget from #4103. Something gave it a tool "

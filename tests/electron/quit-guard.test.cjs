@@ -13,6 +13,7 @@ const {
   confirmQuit,
   installQuitGuard,
   attachWindowGuards,
+  quitOnTermSignal,
   RESTART_FOR_UPDATE,
   CHECK_TIMEOUT_MS,
   QUIT_ANYWAY_MS,
@@ -270,6 +271,39 @@ describe("installQuitGuard", () => {
     app.emit("before-quit", again);
     expect(again.preventDefault).not.toHaveBeenCalled();
     expect(deps.onQuitting).toHaveBeenCalled();
+  });
+});
+
+describe("quitOnTermSignal", () => {
+  const { EventEmitter } = require("events");
+
+  // A SIGTERM with setup running used to open "Quit GAIA?" with nobody to answer it (#6579).
+  test("SIGTERM quits at once, without the question, even while work is running", async () => {
+    const app = new EventEmitter();
+    const deps = {
+      app,
+      updater: new EventEmitter(),
+      shouldAsk: jest.fn(() => true),
+      confirm: jest.fn(async () => false),
+      onQuitting: jest.fn(),
+      onError: jest.fn(),
+    };
+    const events = [];
+    app.quit = jest.fn(() => {
+      const ev = { preventDefault: jest.fn() };
+      events.push(ev);
+      app.emit("before-quit", ev);
+    });
+    const guard = installQuitGuard(deps);
+    const proc = new EventEmitter();
+    quitOnTermSignal({ proc, app, guard, logger: { log: jest.fn() } });
+
+    proc.emit("SIGTERM");
+
+    expect(app.quit).toHaveBeenCalledTimes(1);
+    expect(events[0].preventDefault).not.toHaveBeenCalled();
+    expect(deps.confirm).not.toHaveBeenCalled();
+    expect(deps.onQuitting).toHaveBeenCalledTimes(1);
   });
 });
 

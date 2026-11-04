@@ -91,7 +91,6 @@ from gaia.agents.base.denied_effects import (
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.extraction import MAX_SECONDS as EXTRACTION_MAX_SECONDS
 from gaia.agents.base.extraction import MAX_TOKENS as EXTRACTION_MAX_TOKENS
-from gaia.agents.base.extraction import REASONING as EXTRACTION_REASONING
 from gaia.agents.base.extraction import (
     ExtractionLedger,
     extraction_response_format,
@@ -166,8 +165,8 @@ from gaia.agents.base.verification import (
 )
 
 # First-party imports
-from gaia.chat.sdk import AgentConfig, AgentSDK
-from gaia.daemon.broker_client import LeaseWaitCancelled
+from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
+from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
     budget_for_ctx,
@@ -697,6 +696,8 @@ TOOLS_REQUIRING_CONFIRMATION = {
     # tool name, not host, and a platform-conditional entry would silently stop
     # applying the day a non-Windows backend (plyer) becomes reachable.
     "notify_desktop",
+    # Erases all memory and past conversations; nothing brings them back.
+    "forget_everything",
 }
 
 #: Put on a call the user declined, so the model stops instead of rerouting.
@@ -3520,20 +3521,24 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     raise ValueError("Extraction cancelled or superseded")
 
-            from gaia.llm.lemonade_client import cloud_model_provider
+            from gaia.llm.lemonade_client import (
+                cloud_lowest_reasoning_effort,
+                cloud_model_provider,
+            )
 
-            # A cloud reasoning model can spend its whole budget thinking about
-            # one dense page; copying quotes out of it needs little reasoning.
-            # Local anti-repetition penalties fight verbatim quote copying.
-            sampling = (
-                {"reasoning_effort": EXTRACTION_REASONING}
-                if cloud_model_provider(getattr(self, "model_id", None))
-                else {
+            model_id = getattr(self, "model_id", None)
+            if cloud_model_provider(model_id):
+                # A cloud reasoning model can spend its whole budget thinking
+                # about one dense page; copying quotes needs little reasoning.
+                effort = cloud_lowest_reasoning_effort(model_id)
+                sampling = {"reasoning_effort": effort} if effort else {}
+            else:
+                # Local anti-repetition penalties fight verbatim quote copying.
+                sampling = {
                     "frequency_penalty": 0.0,
                     "presence_penalty": 0.0,
                     "repeat_penalty": 1.0,
                 }
-            )
 
             def send(system, prompt, options):
                 check()
@@ -3561,16 +3566,6 @@ Do NOT wrap conversational replies in JSON.
 
             def ask(system, prompt):
                 response, exhausted = send(system, prompt, sampling)
-                if exhausted and sampling.get("reasoning_effort") not in (None, "none"):
-                    # Copying quotes needs no reasoning; retry this page without it.
-                    logger.warning(
-                        "Extraction page used its %d-token budget reasoning; "
-                        "retrying the page with reasoning_effort=none",
-                        EXTRACTION_MAX_TOKENS,
-                    )
-                    response, exhausted = send(
-                        system, prompt, {**sampling, "reasoning_effort": "none"}
-                    )
                 if exhausted:
                     raise ValueError(
                         f"Extraction reply used its whole {EXTRACTION_MAX_TOKENS}-token "
@@ -7597,6 +7592,7 @@ Do NOT wrap conversational replies in JSON.
             )
         if not answer.strip():
             raise _NotAnAnswer("the model's reply had no answer in it")
+        self._mark_errors_recovered()
         conversation.append({"role": "assistant", "content": parsed})
         return answer
 
@@ -9450,7 +9446,9 @@ Do NOT wrap conversational replies in JSON.
     WARM_UP_PROMPT = "Reply with OK."
 
     def warm_up(
-        self, progress: Optional[Callable[[str], None]] = None
+        self,
+        progress: Optional[Callable[[str], None]] = None,
+        cancel: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
         """Do the first turn's one-time work now, before anyone is waiting on it.
 
@@ -9460,6 +9458,9 @@ Do NOT wrap conversational replies in JSON.
         context size and leaves the prompt prefix in the server's cache, so the
         first real question starts answering instead of reading ~10K tokens of
         instructions. Only worth it for a local model; the caller decides.
+
+        Setting *cancel* abandons the warm-up, even mid-prompt, and raises
+        ``LLMCallCancelled``: a turn on another model must not wait behind it.
 
         Raises whatever the embedder or LLM client raises: a warm-up that failed
         must say so, or the slow first turn it was meant to prevent looks
@@ -9478,12 +9479,15 @@ Do NOT wrap conversational replies in JSON.
             if core:
                 self._apply_tool_filter(core)
         say(f"Loading {self.model_id} and reading its instructions")
-        self.chat.send_messages(
-            [{"role": "user", "content": self.WARM_UP_PROMPT}],
-            system_prompt=self.system_prompt,
-            tools=self._openai_tools,
-            max_tokens=1,
-        )
+        if cancel is None:
+            self.chat.send_messages(
+                [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                system_prompt=self.system_prompt,
+                tools=self._openai_tools,
+                max_tokens=1,
+            )
+        else:
+            self._send_warm_up_cancellable(cancel)
         result: Dict[str, Any] = {"seconds": round(time.perf_counter() - started, 1)}
         client = getattr(self.chat, "llm_client", None)
         usage_of = getattr(client, "get_last_usage", None)
@@ -9492,6 +9496,33 @@ Do NOT wrap conversational replies in JSON.
             result["prompt_tokens"] = usage.get("prompt_tokens")
             result["cached_tokens"] = usage.get("cached_tokens")
         return result
+
+    def _send_warm_up_cancellable(self, cancel: threading.Event) -> None:
+        """The warm-up request, abandoned the moment *cancel* is set.
+
+        Streamed, with *cancel* as the Stop hook, so it also ends during the
+        silent prompt read and while queued for the model slot.
+        """
+        if cancel.is_set():
+            raise LLMCallCancelled("warm-up stopped before the model was reached")
+        try:
+            with (
+                model_retry_notices(lambda _notice: None, cancel.is_set),
+                lease_cancel_scope(cancel),
+            ):
+                self.chat.send_messages(
+                    [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                    system_prompt=self.system_prompt,
+                    tools=self._openai_tools,
+                    max_tokens=1,
+                    cancel=cancel,
+                )
+        except LLMCallCancelled:
+            raise
+        except Exception as e:
+            if cancel.is_set():
+                raise LLMCallCancelled(f"warm-up stopped: {e}") from e
+            raise
 
     def process_query(
         self,
@@ -10831,6 +10862,7 @@ Do NOT wrap conversational replies in JSON.
                         steps_taken,
                         steps_limit,
                     )
+                    self._turn_model_retries["failed"] = True
                     final_answer = _CUT_OFF_FAILURE_ANSWER
                     break
                 cut_off_continuations += 1

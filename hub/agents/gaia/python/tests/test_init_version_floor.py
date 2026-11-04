@@ -48,11 +48,11 @@ def test_too_old_lemonade_is_not_ready_and_names_the_fix(monkeypatch):
     assert body["lemonade"]["min_version"] == LEMONADE_MIN_VERSION
     assert "9.1.4" in body["hint"]
     assert LEMONADE_MIN_VERSION in body["hint"]
-    assert "gaia init --force-reinstall" in body["hint"]
+    assert "gaia init" not in body["hint"]
 
 
 def test_calver_dev_build_clears_the_floor(monkeypatch):
-    body = _init(monkeypatch, "2026.39.0~12.abc1234").json()
+    body = _init(monkeypatch, "2026.44.1~12.abc1234").json()
 
     assert body["ready"] is True
     assert body["lemonade"]["compatible"] is True

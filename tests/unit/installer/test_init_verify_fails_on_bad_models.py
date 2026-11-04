@@ -39,10 +39,12 @@ def _run_init(inference, config_cls=None):
     """Run `gaia init --profile minimal --yes` with every step but verification stubbed."""
     cmd = InitCommand(profile="minimal", yes=True)
     config_cls = config_cls or MagicMock()
+    config_cls.load.return_value.vision_model = None
     with (
         patch.object(cmd, "_ensure_lemonade_ready", return_value=True),
         patch.object(cmd, "_download_models", return_value=True),
         patch.object(cmd, "_test_model_inference", side_effect=inference),
+        patch.object(cmd, "_test_vision", return_value=(True, None)),
         patch(
             "gaia.ui.build.ensure_webui_built",
             return_value=WebuiBuildResult(status=WebuiBuildStatus.SKIPPED),
@@ -108,6 +110,7 @@ def _verify(profile, inference):
             return_value=True,
         ),
         patch.object(cmd, "_test_model_inference", side_effect=_fake),
+        patch.object(cmd, "_test_vision", return_value=(True, None)),
     ):
         result = cmd._verify_setup()
     printed = "\n".join(
@@ -132,8 +135,10 @@ def test_unreported_ctx_size_is_logged(caplog):
     cmd = InitCommand(profile="chat", yes=True)
     client = MagicMock()
     client.check_model_loaded.return_value = False
-    client.list_models.return_value = {
-        "data": [{"id": "Gemma-4-E4B-it-GGUF", "recipe_options": {}}]
+    client.health_check.return_value = {
+        "all_models_loaded": [
+            {"model_name": "Gemma-4-E4B-it-GGUF", "type": "llm", "recipe_options": {}}
+        ]
     }
     client.chat_completions.return_value = {"choices": [{"message": {"content": "ok"}}]}
 

@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, RotateCw, X } from 'lucide-react';
-import { MessageBubble, isErrorContent } from './MessageBubble';
+import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Clock } from 'lucide-react';
+import { MessageBubble, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
 import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
+import { ensureModel, modelKnownReady } from '../stores/modelNeededStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
@@ -41,6 +42,7 @@ import { useAttachments } from '../hooks/useAttachments';
 import { useAnswerComparison } from '../hooks/useAnswerComparison';
 import { useContextUsage } from '../hooks/useContextUsage';
 import { useJumpToMessage } from '../hooks/useJumpToMessage';
+import { useFollowScroll } from '../hooks/useFollowScroll';
 import { useChatExport } from '../hooks/useChatExport';
 import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { usePolicyToast } from '../hooks/usePolicyToast';
@@ -183,6 +185,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     /** The agent's own step number for the live turn, from its `step` events. */
     const toolOccurredRef = useRef(false);
     const sendMessageRef = useRef<(text?: string, options?: SendOptions) => void>(() => {});
+    const checkingModelRef = useRef(false);
     // Messages typed while a reply runs, kept per chat in the store, and whether the user stopped that reply.
     const queue = useChatStore((s) => s.messageQueues[sessionId] ?? NO_QUEUE);
     const setQueue = useCallback(
@@ -215,6 +218,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
      *  Auto-scroll only fires when this is true, so scrolling up to read
      *  earlier messages won't be interrupted by new streaming content. */
     const isNearBottomRef = useRef(true);
+    const { userScrolling, clearUserScroll, listProps: followListProps } =
+        useFollowScroll(messagesScrollRef, isNearBottomRef, (dist) => setShowScrollBtn(dist > 200));
 
     // True once the user has navigated to another session. The store's
     // currentSessionId flips synchronously on switch (the displayed view lags
@@ -306,14 +311,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const mountedRef = useRef(true);
     // Left pendingPrompt, not yet sent.
     const openingRef = useRef(false);
+    const initializing = systemStatus?.init_state === 'initializing';
     useEffect(() => {
         mountedRef.current = true;
         return () => { mountedRef.current = false; };
     }, []);
     useEffect(() => {
         const pending = pendingPrompt?.text;
-        // Wait for the history load, or it would replace the message just sent.
-        if (!pending || useChatStore.getState().isLoadingMessages) return;
+        // Wait for the history load, or it would replace the message just sent;
+        // and for GAIA to start, or the send would refuse a message already taken.
+        if (!pending || useChatStore.getState().isLoadingMessages || initializing) return;
         useChatStore.getState().setPendingPrompt(null);
         openingRef.current = true;
         // A timer, not rAF: rAF never fires while the window is hidden, and
@@ -322,7 +329,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             openingRef.current = false;
             if (mountedRef.current) sendMessageRef.current(pending, { opening: true });
         }, 0);
-    }, [pendingPrompt, isLoadingMessages]);
+    }, [pendingPrompt, isLoadingMessages, initializing]);
 
     // Auto-scroll (throttled) — scrolls at most once per 100ms while
     // streaming, and also schedules a trailing scroll so the final chunk
@@ -335,8 +342,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const THROTTLE_MS = 100;
 
         const doScroll = () => {
+            // Re-check: the user may have scrolled up since this was scheduled.
+            if (!isNearBottomRef.current || userScrolling()) return;
             lastScrollRef.current = Date.now();
-            messagesEndRef.current?.scrollIntoView({ behavior: scrollBehavior() });
+            // Instant: a smooth follow still in flight would override the reader's wheel.
+            messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
         };
 
         if (elapsed >= THROTTLE_MS) {
@@ -405,16 +415,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setPendingReceiptScroll(null);
     }, [pendingReceiptScroll, notificationPanelVisible]);
 
-    // Track scroll position — drives both the scroll-to-bottom button and
-    // the isNearBottom flag that gates auto-scroll during streaming.
-    const handleScroll = useCallback(() => {
-        const el = messagesScrollRef.current;
-        if (!el) return;
-        const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-        isNearBottomRef.current = distFromBottom <= 80;
-        setShowScrollBtn(distFromBottom > 200);
-    }, []);
-
     const panelWidth = useSessionPanelStore((s) => s.width);
     const revealPanelSection = useSessionPanelStore((s) => s.reveal);
 
@@ -422,8 +422,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const scrollToBottom = useCallback(() => {
         isNearBottomRef.current = true;
+        clearUserScroll();
         messagesEndRef.current?.scrollIntoView({ behavior: scrollBehavior() });
-    }, []);
+    }, [clearUserScroll]);
 
     // Stop: ask the server to cancel, but keep reading the stream. The run
     // outlives the connection (#1580) and closes with a `done` carrying the
@@ -512,6 +513,17 @@ export function ChatView({ sessionId }: ChatViewProps) {
             if (isStreaming) log.chat.debug('Send blocked: already streaming');
             if (isInitializing) log.chat.debug('Send blocked: system initializing');
             return;
+        }
+
+        // Asked here so a send that was going to be queued or refused asks nothing.
+        if (!reattach && !fromQueue && !(modelKnownReady('chat') && (!attach.hasImage || modelKnownReady('vision')))) {
+            if (checkingModelRef.current) return;
+            checkingModelRef.current = true;
+            try {
+                if (!(await ensureModel('chat')) || (attach.hasImage && !(await ensureModel('vision')))) return;
+            } finally {
+                checkingModelRef.current = false;
+            }
         }
 
         // Build message text with attachment references
@@ -1116,7 +1128,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             // Only cards a tool step persisted come back from the
                             // backend; keep the live ones (e.g. confirmations) by
                             // id, else role+content.
-                            // stopState isn't persisted either; carry it by id.
+                            // The server's saved stop wins over a stop it never confirmed.
                             const prevMsgs = useChatStore.getState().messages;
                             const prevWithCards = prevMsgs.filter((m) => m.cards && m.cards.length > 0);
                             const msgs: Message[] = fromApiMessages(data.messages).map((m) => {
@@ -1126,7 +1138,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 return {
                                     ...m,
                                     cards: prev?.cards ?? m.cards,
-                                    stopState: prevMsgs.find((p) => p.id === m.id)?.stopState,
+                                    stopState: m.stopState ?? prevMsgs.find((p) => p.id === m.id)?.stopState,
                                 };
                             });
                             setMessages(msgs);
@@ -1533,6 +1545,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setIsDragOver(false);
         if (e.dataTransfer.files.length === 0) return;
 
+        if (!(await ensureModel('embedding'))) return;
         for (const file of Array.from(e.dataTransfer.files)) {
             log.doc.info(`Dropped on chat view: ${file.name}`);
             try {
@@ -1689,7 +1702,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 );
             })()}
 
-            <div className="messages-scroll" ref={messagesScrollRef} onScroll={handleScroll}>
+            <div className="messages-scroll" ref={messagesScrollRef} {...followListProps}>
                 <div className="messages-column">
                     {isLoadingMessages && (
                         <div className="skeleton-messages" aria-label="Loading messages">
@@ -1714,11 +1727,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         const notice = msg.role === 'assistant'
                             ? msg.historyNotice ?? historyNotices.get(msg.id)
                             : undefined;
-                        const canRetry = !busy && !comparison && !retiredAgent && !streamEnding
+                        const cutOff = msg.role === 'assistant' && turnEnding(msg.content, msg.stopState) === 'interrupted';
+                        const canTryAgain = (msg.failed === true || cutOff) && !busy && !retiredAgent && !streamEnding
+                            && idx === messages.length - 1;
+                        const canRetry = !canTryAgain && !busy && !comparison && !retiredAgent && !streamEnding
                             && msg.role === 'assistant' && idx === messages.length - 1
                             && !msg.stopState && !msg.failed && !isErrorContent(msg.content);
-                        const canTryAgain = msg.failed === true && !busy && !retiredAgent && !streamEnding
-                            && idx === messages.length - 1;
                         const latency = msg.stats?.seconds != null ? msg.stats.seconds * 1000 : latencyByMsgId.get(msg.id);
                         return (
                             <div
@@ -1738,16 +1752,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                             answeredBy={msg.stats?.model ?? session?.effective_model}
                                             onPick={(model) => handleRetryWith(msg, model)}
                                         />
-                                    ) : canTryAgain ? (
-                                        <button
-                                            className="msg-action-btn"
-                                            onClick={() => handleTryAgain(msg)}
-                                            title={t('msg.tryAgain')}
-                                            aria-label={t('msg.tryAgain')}
-                                        >
-                                            <RotateCw size={12} />
-                                        </button>
                                     ) : undefined}
+                                    onTryAgain={canTryAgain ? () => handleTryAgain(msg) : undefined}
                                     latencyMs={latency}
                                 />
                                 {comparison?.messageId === msg.id && (
@@ -1843,6 +1849,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <PermissionPrompt sessionId={sessionId} />
                     <ContextWarning usage={contextUsage} />
                     <OfflineNotice sessionId={sessionId} />
+                    {pendingPrompt && initializing && (
+                        <ul className="queued-messages" aria-label="Message waiting to send" aria-live="polite">
+                            <li className="queued-message is-queued">
+                                <Clock size={12} aria-hidden="true" />
+                                <span className="queued-message-text" title={pendingPrompt.text}>{pendingPrompt.text}</span>
+                                <span className="queued-message-state">Sends once GAIA has started.</span>
+                            </li>
+                        </ul>
+                    )}
                     <QueuedMessages
                         items={queue}
                         onRemove={(id) => setQueue((q) => messageQueue.remove(q, id))}

@@ -48,10 +48,10 @@ import (
 // answering rather than answering slowly.
 const lemonadeProbeTimeout = 3 * time.Second
 
-// lemonadePorts are the ports a local Lemonade listens on, newest first.
-// Mirrors client.detectLemonadeURL — a probe that looked elsewhere would report
-// a running server as down.
-var lemonadePorts = []string{"13305", "8000"}
+// lemonadePorts are the ports a local Lemonade listens on. Mirrors
+// client.detectLemonadeURL — a probe that looked elsewhere would report a
+// running server as down.
+var lemonadePorts = []string{"13305"}
 
 // lemonadeBaseURLEnv points the agent at a specific server, possibly on another
 // machine. When it is set it is the ONLY thing probed: finding a local server
@@ -499,7 +499,7 @@ type embeddedLemonade = lemonade.EmbeddedState
 //
 // Both fields matter and neither was used here. The port is picked when the
 // server starts — 63207 on the machine this was found on — so probing the
-// fixed 13305/8000 could never reach it; and the key means an unauthenticated
+// fixed 13305 could never reach it; and the key means an unauthenticated
 // probe gets 401 from a server that is healthy and serving. Together they made
 // this screen report "Lemonade not running" for GAIA's own model server, then
 // offer to install a second one.
@@ -762,6 +762,28 @@ func (l localRunner) verifyModelsStatus(ctx context.Context, _ Config) (Row, str
 }
 
 func (l localRunner) verifyModelsWith(ctx context.Context) (Row, string, string, gaiainit.Status) {
+	row, chat, chatID, st := l.verifyModelsRow(ctx)
+	if st.Ready && st.NoAgentBuild {
+		row = noAgentBuildRow(row, st)
+	}
+	return row, chat, chatID, st
+}
+
+// noAgentBuildRow keeps a ready model row from reading as a clean pass when
+// there is no GAIA agent build for this PC: setup cannot help, so it notifies.
+func noAgentBuildRow(row Row, st gaiainit.Status) Row {
+	row.State = StateUnknown
+	row.Disposition = status.DispositionNotify
+	row.Line = "no GAIA agent build for this PC yet"
+	row.Detail = strings.Join(st.Warnings, "\n")
+	if row.Detail == "" {
+		row.Detail = "There is no GAIA agent build for this PC yet, so chat isn't available here."
+	}
+	row.Fix = FixNone
+	return row
+}
+
+func (l localRunner) verifyModelsRow(ctx context.Context) (Row, string, string, gaiainit.Status) {
 	row := Row{Key: KeyModel}
 
 	st, err := gaiainit.Verify(ctx, l.verifySkipsChatModel(), l.localChatModel())
@@ -851,6 +873,10 @@ func (l localRunner) verifyModelsWith(ctx context.Context) (Row, string, string,
 		}
 	}
 
+	if st.AgentOnly() {
+		return l.agentMissingRow(st), "", "", st
+	}
+
 	// Not downloaded yet: the normal state of a first run.
 	row.State = StateFailed
 	row.FirstRun = true
@@ -890,6 +916,37 @@ func (l localRunner) verifyModelsWith(ctx context.Context) (Row, string, string,
 	return row, "", "", st
 }
 
+// agentMissingRow is a first run whose models are all on the server already:
+// setup installs only the GAIA agent, so offering a model download would lie.
+func (l localRunner) agentMissingRow(st gaiainit.Status) Row {
+	return Row{
+		Key:         KeyModel,
+		State:       StateFailed,
+		FirstRun:    true,
+		Disposition: status.DispositionHalt,
+		Line:        "models downloaded — the GAIA agent needs installing",
+		Step:        "install the GAIA agent",
+		Detail:      agentMissingDetail(st),
+		Fix:         FixRunSetup,
+		Remedy: Remedy{
+			Action:  "Setup installs the GAIA agent.",
+			Command: gaiainit.RunCommand(l.skipChatModel()),
+			Where:   installDocs,
+		},
+		Raw: strings.Join(st.Reasons, "\n"),
+	}
+}
+
+// agentMissingDetail says setup only installs the agent, and keeps any other
+// reason the check gave, such as a skipped chat model, in view.
+func agentMissingDetail(st gaiainit.Status) string {
+	detail := "Your models are already on the model server. Setup installs the GAIA agent and downloads no models."
+	if others := st.OtherReasons(); len(others) > 0 {
+		detail += "\nAlso: " + strings.Join(others, "\nAlso: ")
+	}
+	return detail
+}
+
 // loadFailedRow is a model that is downloaded and will not load — a real
 // failure, which running setup again cannot fix.
 func (l localRunner) loadFailedRow(st gaiainit.Status) Row {
@@ -908,16 +965,33 @@ func (l localRunner) loadFailedRow(st gaiainit.Status) Row {
 		chatFailed = true
 	}
 	row.Line = failed[0].ID + " will not load"
+	why := "the model server could not start it"
+	switch failed[0].Kind {
+	case "memory":
+		row.Line = failed[0].ID + " needs more free memory"
+		why = "this PC didn't have enough free memory to load it"
+	case "stuck":
+		row.Line = failed[0].ID + " got no answer from the model server"
+		why = "the model server didn't answer while loading it"
+	case "answer":
+		row.Line = failed[0].ID + " answered with nothing usable"
+		why = "it loaded but returned nothing usable"
+	case "window":
+		row.Line = failed[0].ID + " loaded with too small a context window"
+		why = "it loaded with a smaller context window than GAIA needs"
+	}
 	if chatFailed {
-		row.Detail = "It is downloaded, but the model server could not start it, so GAIA " +
-			"cannot answer."
+		row.Detail = "It is downloaded, but " + why + ", so GAIA cannot answer."
 	} else {
 		// Chat still works, so the launch may go ahead — but never quietly.
 		row.Optional = true
-		row.Detail = "It is downloaded, but the model server could not start it, so document " +
-			"search and memory will not work. Chat still does."
+		row.Detail = "It is downloaded, but " + why + ", so document search and memory " +
+			"will not work. Chat still does."
 	}
-	if readEmbeddedLemonade() != nil {
+	if failed[0].Kind == "memory" {
+		// The file is fine: freeing memory is the fix, not a restart or a download.
+		row.Remedy = Remedy{Action: "Close some apps to free memory, then press r to check again."}
+	} else if readEmbeddedLemonade() != nil {
 		row.Remedy = Remedy{
 			Action: "Stop GAIA's model server, then press r — it starts again with current settings. " +
 				"If it still fails, attach the output of `gaia diagnostics` to a bug report.",
@@ -1039,6 +1113,15 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress
 	}
 
 	ch, cancel, err := start()
+	if errors.Is(err, gaiainit.ErrNoCLI) {
+		return FixResult{Err: err, Diagnosis: Diagnosis{
+			Cause:      "The GAIA CLI isn't installed, and setup needs it.",
+			Remedy:     "Install GAIA with the command below, then open a new terminal and start GAIA again.",
+			Command:    gaiainit.InstallCommand,
+			PowerShell: gaiainit.InstallPowerShellCommand,
+			Where:      installDocs,
+		}}
+	}
 	if err != nil {
 		return FixResult{Err: err, Diagnosis: Diagnosis{
 			Cause:   err.Error(),

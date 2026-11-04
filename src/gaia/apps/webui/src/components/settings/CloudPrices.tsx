@@ -34,8 +34,8 @@ export function CloudPrices({ provider, limit }: { provider: string; limit?: num
                 {shown.map((m) => (
                     <li key={m.model}>
                         <span className="cloud-prices-name">
-                            {m.name}
-                            {m.note && <span className="cloud-prices-note"> · {m.note}</span>}
+                            <bdi>{m.name}</bdi>
+                            {m.note && <span className="cloud-prices-note"> · <bdi>{m.note}</bdi></span>}
                         </span>
                         <span className="cloud-prices-price">{formatPrice(m.price, t)}</span>
                     </li>

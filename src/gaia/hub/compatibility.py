@@ -290,7 +290,8 @@ def check_compatibility(
     # detected_gpu_vram_gb), turn the requirement into a concrete pass or
     # warning instead of the blanket "cannot verify". Absent a scan we fall
     # back to the conservative message — never silently passing (#1727).
-    if reqs.npu:
+    # No Mac has a Ryzen AI NPU, so the requirement doesn't apply there.
+    if reqs.npu and not (detected or "").startswith("darwin"):
         if detected_npu is True:
             pass  # requirement met — no warning
         elif detected_npu is False:

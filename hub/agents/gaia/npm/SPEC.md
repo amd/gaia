@@ -297,6 +297,10 @@ UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 `documents`, `allowed_paths`, `working_directory`, `memory`, `internet_off`,
 `changes_turn_id`, `surface`) is optional.
 
+`max_steps` (≥ 1) caps agent-loop steps for this turn. Omit it and the default
+is **150** (`FLAGSHIP_MAX_STEPS`). A value in this body, or
+`GAIA_AGENT_MAX_STEPS` in the sidecar's launch environment, still wins.
+
 `context` is the transcript you push. It replaces the agent's history for the
 turn. If it doesn't fit beside the agent's prompt and tools in the model's
 window, the agent drops the oldest whole turns until it does, and streams a
@@ -318,8 +322,9 @@ caller computed it, so the agent works in the folders the caller's UI shows. A
 new session is built with exactly that scope; a retained session gains any
 entry it lacks and drops none until the session ends — neither what the user
 granted mid-chat nor an entry the caller has since stopped sending. `GAIA_ALLOWED_PATHS`
-still narrows it. In the normal permission mode, a path outside the supplied
-scope is asked about before it is granted. If the session has full access
+still narrows it, and a bad entry stops the sidecar at startup (§5.4). In the
+normal permission mode, a path outside the supplied scope is asked about before
+it is granted. If the session has full access
 (enabled through the session bypass route) and the caller can answer for the
 session, that path is granted without a separate path prompt; this is the same
 full-access behavior as in-process. Full access does not override
@@ -636,6 +641,18 @@ the `.env` at or above GAIA's install (the repo's `.env`) in full, as before;
 the packaged binary has no install `.env`.
 `GAIA_NO_DOTENV=1` in the sidecar's launch environment stops it loading `.env`
 files; a `.env` file cannot set that switch itself.
+
+**`GAIA_ALLOWED_PATHS` confines a run to the folders you name.** Set it in the
+environment the sidecar starts in — absolute folders joined with `;` on
+Windows and `:` elsewhere. The scope becomes the overlap with the agent's own scope;
+an entry outside it is ignored with a warning and never widens it. Out-of-scope
+paths are refused without a prompt in every mode, including full access. The
+scratch directory stays writable. An empty, relative or missing entry stops
+the sidecar at startup, before it binds a port. It confines the agent's tools
+— every file tool, search, index and shell path check — not code they run: a
+`run_python` script or shell command can still read anything the OS user can,
+so isolating a run from files it must not see needs a separate OS user,
+container or VM.
 
 ### 5.5 Other transports
 

@@ -458,6 +458,10 @@ in, and about 11 GB free when GAIA starts gets it the full window.
 
 What GAIA does on a small PC:
 
+- **Setup picks a model that fits the memory free now.** Before it downloads
+  the larger default (Qwen3.6), `gaia init` and the Agent UI's setup screen
+  check free memory, not just the PC's total. When it won't fit, they pick
+  Gemma-4-E4B and say how much Qwen3.6 needs and how much is free.
 - **The context window shrinks to fit.** Gemma-4-E4B loads with a 65,536-token
   window when there is room, and otherwise steps down in 8,192-token steps to no
   less than 32,768. The log says so. Restart GAIA after freeing memory to get the
@@ -672,7 +676,7 @@ error. To run the chat model in the cloud instead, see
   <Accordion title="GPU stuck at 100% on ROCm with two models loaded" icon="microchip">
     With llama.cpp's ROCm backend, the chat model and the embedding model both resident on the GPU can hold it at 100% even while idle. It is an amdgpu kernel driver issue, reported fixed in Linux kernel 7.4.
 
-    GAIA avoids it by loading the embedding model on the CPU whenever llama.cpp uses ROCm, either as Lemonade's default backend or as the backend you chose for chat models in **Settings → Advanced → Model server**. That panel then reads:
+    GAIA avoids it by loading the embedding model on the CPU whenever llama.cpp uses ROCm, either as Lemonade's default backend or as one saved before GAIA offered only Vulkan in **Settings → Advanced → Model server**. That panel then reads:
 
     ```
     Embedding model runs on the CPU with ROCm to avoid a known GPU driver issue.

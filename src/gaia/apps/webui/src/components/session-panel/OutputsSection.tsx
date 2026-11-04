@@ -9,13 +9,14 @@ import {
 } from 'lucide-react';
 import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
+import { requestErrorParam } from '../../utils/requestErrors';
 import { log } from '../../utils/logger';
 import { useTurnEnd } from '../../hooks/useTurnEnd';
 import { useUndoEvents } from '../../utils/undoEvents';
 import { PanelSection } from './PanelSection';
 import type { OutputItem, OutputKind } from '../../types/sessionPanel';
-import { ref, type MessageKey, type Params } from '../../i18n/registry';
-import { tEn, useT, type Translate } from '../../i18n/useT';
+import { ref, type MessageKey, type Param, type Params } from '../../i18n/registry';
+import { dateLocale, tEn, useT, type Translate } from '../../i18n/useT';
 
 /** Rows shown before "Show more". */
 export const OUTPUTS_SHOWN = 5;
@@ -31,19 +32,14 @@ const KIND: Record<OutputKind, { label: MessageKey; Icon: typeof FileText }> = {
 
 const CHANGE_LABEL = { created: 'out.change.created', edited: 'out.change.edited', deleted: 'out.change.deleted' } as const;
 
-function errorText(err: unknown): string {
-    if (err instanceof api.ApiError) return err.detail || err.message;
-    return err instanceof Error ? err.message : String(err);
-}
-
 /** "3 min ago", from a UTC `YYYY-MM-DD HH:MM:SS`. */
 export function whenText(utc: string | null, now = Date.now(), t: Translate = tEn): string {
-    const when = whenMessage(utc, now);
+    const when = whenMessage(utc, now, dateLocale(t));
     return when == null ? '' : typeof when === 'string' ? when : t(when.key, when.params);
 }
 
 /** "3 min ago" as a message, a plain date once older than a day, or null. */
-function whenMessage(utc: string | null, now: number): { key: MessageKey; params?: Params } | string | null {
+function whenMessage(utc: string | null, now: number, locale: string | undefined): { key: MessageKey; params?: Params } | string | null {
     if (!utc) return null;
     const at = Date.parse(`${utc.replace(' ', 'T')}Z`);
     if (Number.isNaN(at)) return null;
@@ -51,7 +47,7 @@ function whenMessage(utc: string | null, now: number): { key: MessageKey; params
     if (s < 60) return { key: 'out.justNow' };
     if (s < 3600) return { key: 'out.minAgo', params: { n: Math.floor(s / 60) } };
     if (s < 86400) return { key: 'out.hAgo', params: { n: Math.floor(s / 3600) } };
-    return new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    return new Date(at).toLocaleDateString(locale, { month: 'short', day: 'numeric' });
 }
 
 function stateKey(item: OutputItem): MessageKey | null {
@@ -78,7 +74,7 @@ export function OutputsSection({ sessionId, busy, onJumpToMessage }: OutputsSect
 function OutputsList({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) {
     const t = useT();
     const [items, setItems] = useState<OutputItem[] | null>(null);
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<Param | null>(null);
     const [actionError, setActionError] = useState<string | null>(null);
     const [all, setAll] = useState(false);
 
@@ -94,7 +90,7 @@ function OutputsList({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) 
             .catch((err) => {
                 if (!live) return;
                 log.ui.warn(`Could not list what session=${sessionId} produced`, err);
-                setError(errorText(err));
+                setError(requestErrorParam(err));
             });
         return () => { live = false; };
     }, [sessionId]);
@@ -105,7 +101,7 @@ function OutputsList({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) 
 
     const act = (op: Promise<unknown>, name: string) => {
         setActionError(null);
-        op.catch((err) => setActionError(t('sp.couldntOpen', { name, error: errorText(err) })));
+        op.catch((err) => setActionError(t('sp.couldntOpen', { name, error: requestErrorParam(err) })));
     };
 
     if (error) return <p className="sp-error">{t('out.listError', { error })}</p>;
@@ -120,7 +116,7 @@ function OutputsList({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) 
                     const { label, Icon } = KIND[item.kind];
                     const state = stateKey(item);
                     const changed = item.change && item.kind !== 'document' ? CHANGE_LABEL[item.change] : undefined;
-                    const when = whenMessage(item.created_at, Date.now());
+                    const when = whenMessage(item.created_at, Date.now(), dateLocale(t));
                     // One line per language, bracketed once: kind, time, state.
                     const meta = t.compose((say) => [
                         changed ? say('out.kindChanged', { kind: ref(label), change: ref(changed) }) : say(label),

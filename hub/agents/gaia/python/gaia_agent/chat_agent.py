@@ -11,6 +11,7 @@ import platform
 import re
 import shutil
 import sqlite3
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, FrozenSet, List, Optional
@@ -99,6 +100,7 @@ from gaia.llm.lemonade_client import (
     _endpoint_label,
     configured_lemonade_url,
     resolve_default_chat_model,
+    resolve_default_vision_model,
     resolve_lemonade_base_url,
 )
 from gaia.mcp.mixin import MCPClientMixin
@@ -116,10 +118,9 @@ from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.utils.user_folders import documents_dir
 from gaia.vlm.mixin import VLMToolsMixin
 
-# Sentinel for not-yet-built lazy attributes (``rag``, ``session_manager`` —
-# #2323 Increment 3). Distinct from ``None`` so a degraded/failed build
-# (which legitimately caches ``None``) is never mistaken for "not attempted
-# yet" and rebuilt on every access.
+# Sentinel for not-yet-built lazy attributes (``rag``, ``session_manager``).
+# Distinct from ``None``. A missing RAG extra caches ``None``; any other RAG
+# startup failure leaves ``rag`` unset so the next access tries again.
 _UNSET = object()
 
 #: Longest request_user_input waits for an answer, in seconds.
@@ -559,28 +560,25 @@ class ChatAgent(
         # actual ``RAGSDK`` construction — which does the real dependency and
         # model work — is deferred to first ``self.rag`` access (the `rag`
         # property below), so the lean "chat" profile (and file/data/web)
-        # never pays for it. Degrade-to-``None``-on-failure semantics are
-        # unchanged; only the timing of the attempt (and its warning log)
-        # moves from "always at construction" to "first access, if any".
-        try:
-            self._rag_config = RAGConfig(
-                model=effective_model_id,
-                embedding_model=effective_embedding_model,
-                chunk_size=config.chunk_size,
-                chunk_overlap=config.chunk_overlap,  # Configurable overlap for context preservation
-                max_chunks=config.max_chunks,
-                show_stats=config.show_stats,
-                use_local_llm=not config.use_claude,
-                use_llm_chunking=config.use_llm_chunking,  # Enable semantic chunking
-                base_url=effective_base_url,  # Pass base_url to RAG for VLM client
-                allowed_paths=config.allowed_paths,  # Pass allowed paths to RAG SDK
-            )
-        except Exception as e:
-            logger.warning(
-                "RAG not available (install with: uv pip install -e '.[rag]'): %s", e
-            )
-            logger.debug("RAG init traceback:", exc_info=True)
-            self._rag_config = None
+        # never pays for it. A missing extra stays unavailable; any other
+        # startup failure is retried on the next access.
+        self._rag_config_kwargs = {
+            "model": effective_model_id,
+            "embedding_model": effective_embedding_model,
+            "chunk_size": config.chunk_size,
+            "chunk_overlap": config.chunk_overlap,
+            "max_chunks": config.max_chunks,
+            "show_stats": config.show_stats,
+            "use_local_llm": not config.use_claude,
+            "use_llm_chunking": config.use_llm_chunking,
+            "base_url": effective_base_url,
+            "allowed_paths": config.allowed_paths,
+        }
+        self._rag_config = _UNSET
+        self._rag_missing = False
+        self._rag_init_error: Optional[BaseException] = None
+        self._rag_failure_logged = None
+        self._ensure_rag_config()
         self._rag = _UNSET
 
         # File system monitoring
@@ -727,14 +725,23 @@ class ChatAgent(
             # A prompt cached during init predates the scratch line.
             self.__dict__.pop("_system_prompt_cache", None)
 
-        # Index initial documents (only if RAG is available)
-        if self.rag_documents and self.rag:
-            self._index_documents(self.rag_documents)
-        elif self.rag_documents and not self.rag:
-            logger.warning(
-                "RAG dependencies not installed. Cannot index documents. "
-                'Install with: uv pip install -e ".[rag]"'
-            )
+        # Index initial documents (only if RAG is available). Read once: a
+        # non-import failure is not cached, so a second ``self.rag`` would
+        # rebuild immediately.
+        if self.rag_documents:
+            rag = self.rag
+            if rag:
+                self._index_documents(self.rag_documents)
+            elif self._rag_missing:
+                logger.warning(
+                    "RAG dependencies not installed. Cannot index documents. "
+                    'Install with: uv pip install -e ".[rag]"'
+                )
+            else:
+                logger.warning(
+                    "Cannot index documents; RAG failed to start: %s",
+                    self._rag_init_error,
+                )
 
         # Restore agent-indexed documents from prior turns using UI session ID.
         # When the agent indexes a document during a turn (via its index_document
@@ -839,23 +846,66 @@ class ChatAgent(
 
     @property
     def rag(self) -> Optional[RAGSDK]:
-        """Lazily-built ``RAGSDK`` — constructed transparently on ANY first
-        access (not just tool dispatch — ~15 sites across ``interactive.py`` and the
-        Agent UI's ``_chat_helpers.py`` read ``agent.rag`` directly).
+        """Lazily-built ``RAGSDK``, or None when document Q&A cannot start.
 
-        Degrades to ``None`` on failure and never raises — the lean "chat"
-        profile still reads ``self.rag`` every turn via ``_indexed_documents_line``
-        (gated so it never reaches this for chat/file/data/web, but a raise
-        here would crash any profile that does). Cached after the first
-        build attempt (success or failure) — never retried.
+        A missing extra (``ImportError``) is cached: installing it needs a new
+        process. Any other startup failure is left unset and tried again on
+        the next access, and document tools report that failure instead of
+        "not installed". Never raises — a profile that only checks ``self.rag``
+        must keep working. A failed build reruns on every read, so
+        ``RAGSDK.__init__`` must stay cheap (no network or model loads).
         """
         if self._rag is _UNSET:
-            self._rag = self._build_rag()
+            built = self._build_rag()
+            if built is not None or self._rag_missing:
+                self._rag = built
+            return built
         return self._rag
 
     @rag.setter
     def rag(self, value: Optional[RAGSDK]) -> None:
         self._rag = value
+
+    def _ensure_rag_config(self) -> Optional[RAGConfig]:
+        """Return the eager ``RAGConfig``, retrying a non-import failure.
+
+        A missing extra is remembered (``_rag_missing``) so later accesses do
+        not rebuild. Any other error stays unset and is tried again.
+        """
+        if self._rag_config is not _UNSET:
+            return self._rag_config
+        if self._rag_missing:
+            return None
+        try:
+            built = RAGConfig(**self._rag_config_kwargs)
+        except ImportError as e:
+            self._record_rag_failure(e, missing=True)
+            return None
+        except Exception as e:  # pylint: disable=broad-except
+            # RAG is optional: chat still runs. The cause is kept for tools.
+            self._record_rag_failure(e, missing=False)
+            return None
+        self._rag_config = built
+        return built
+
+    def _record_rag_failure(self, exc: BaseException, *, missing: bool) -> None:
+        """Remember *exc*. Only a missing extra is described as not installed."""
+        self._rag_init_error = exc
+        if missing:
+            self._rag_missing = True
+        signature = (missing, type(exc), str(exc))
+        if signature == getattr(self, "_rag_failure_logged", None):
+            logger.debug("RAG init failed again: %s", exc)
+            return
+        self._rag_failure_logged = signature
+        if missing:
+            logger.warning(
+                "RAG not available (install with: uv pip install -e '.[rag]'): %s",
+                exc,
+            )
+        else:
+            logger.warning("RAG failed to start: %s", exc)
+        logger.debug("RAG init traceback:", exc_info=True)
 
     def _build_rag(self) -> Optional[RAGSDK]:
         """Build the ``RAGSDK`` from the ``RAGConfig`` frozen in ``__init__``.
@@ -864,19 +914,26 @@ class ChatAgent(
         confinement stays inspectable regardless of profile; only the actual
         SDK construction — the real dependency/model work — is deferred here.
         """
-        if self._rag_config is None:
-            # RAGConfig construction itself already failed in __init__ (and
-            # was already logged there) — nothing to retry.
+        config = (
+            self._rag_config
+            if self._rag_config is not _UNSET
+            else self._ensure_rag_config()
+        )
+        if config is None:
             return None
         try:
             # Shared, so access the user grants mid-chat reaches indexing too.
-            return RAGSDK(self._rag_config, path_validator=self.path_validator)
-        except Exception as e:
-            logger.warning(
-                "RAG not available (install with: uv pip install -e '.[rag]'): %s", e
-            )
-            logger.debug("RAG init traceback:", exc_info=True)
+            sdk = RAGSDK(config, path_validator=self.path_validator)
+        except ImportError as e:
+            self._record_rag_failure(e, missing=True)
             return None
+        except Exception as e:  # pylint: disable=broad-except
+            # Same as config: keep chat up, but do not pretend the extra is missing.
+            self._record_rag_failure(e, missing=False)
+            return None
+        self._rag_init_error = None
+        self._rag_failure_logged = None
+        return sdk
 
     @property
     def session_manager(self) -> SessionManager:
@@ -1447,7 +1504,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
 1. **FACTUAL ACCURACY RULE — always retrieve before answering.** Any factual question about indexed documents (numbers, dates, names, policies, sections) → call `query_specific_file` or `query_documents` first, then answer from the retrieved chunks. Don't answer from training knowledge, even if you "know" the topic. This applies on every turn — "indexed" means stored in the RAG index, NOT in your context window.
 
-2. **Never invent content.** Quote numbers / dates / section refs verbatim from the retrieved chunks. Don't round, don't extrapolate, don't cite a section number you didn't see in a chunk. If the answer is not in the retrieved chunks, say "That's not in the document" and STOP — never supplement with "but approximately X" or "typically Y".
+2. **Never invent content.** Quote numbers / dates / section refs verbatim from the chunks. Don't round, don't extrapolate, don't cite a section number no chunk shows. If no chunk answers it, search once more in other words; if that misses too, say "That's not in the document" and STOP — never supplement with "but approximately X" or "typically Y".
 
 3. **Multi-fact requests → one query per fact.** If asked for 3 things, issue at least 3 targeted queries. Don't combine into one fuzzy query.
 
@@ -2326,7 +2383,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             # getattr: tools can register from super().__init__(), before
             # _base_url is assigned. None then falls through to the resolver.
             self.init_vlm(
-                base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None))
+                model=resolve_default_vision_model(),
+                base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None)),
             )
             logger.debug(
                 "VLM tools registered (analyze_image, answer_question_about_image)"
@@ -2846,23 +2904,25 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             """Turn text into one WAV audio file with an installed local TTS model.
 
             Use this when the user asks to hear, narrate, or save text as audio.
-            It never downloads a model. Empty output_path writes a WAV under
-            ~/.gaia/tts/. Use a listed Kokoro voice; unknown voices are refused
+            It never downloads a model. Empty output_path writes a WAV to GAIA's
+            audio folder. Use a listed Kokoro voice; unknown voices are refused
             before Lemonade can return a server error. Long text is split at
             sentence boundaries and joined into one file.
 
             Args:
                 text: Text to speak.
-                output_path: Optional WAV destination. Empty uses ~/.gaia/tts/.
+                output_path: Optional WAV destination. Empty uses GAIA's audio folder.
                 voice: Kokoro voice, such as af_bella, am_michael, bf_emma, or
                     bm_george.
                 speed: Speech rate from 0.5 to 2.0; 1.0 is normal.
 
             Returns:
-                status, output_path, duration_seconds, voice, model, chunks.
+                status, output_path, audio_path, duration_seconds, voice, model,
+                chunks.
             """
             import time
 
+            import gaia.config as gaia_config
             from gaia.audio.lemonade_tts import (
                 DEFAULT_TTS_MODEL,
                 KOKORO_VOICES,
@@ -2886,11 +2946,16 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             if not text or not text.strip():
                 return {"status": "error", "error": "text to speak must not be empty."}
             if not output_path:
-                # GAIA's own output folder, not the user's files.
-                tts_dir = Path.home() / ".gaia" / "tts"
+                # Where the Agent UI serves inline audio from (gaia.ui.generated_media).
+                tts_dir = (
+                    Path(gaia_config.GAIA_CONFIG_DIR)
+                    / "cache"
+                    / "audio"
+                    / "generations"
+                )
                 tts_dir.mkdir(parents=True, exist_ok=True)
                 ts = time.strftime("%Y%m%d_%H%M%S")
-                destination = tts_dir / f"speech_{ts}.wav"
+                destination = tts_dir / f"speech_{ts}_{uuid.uuid4().hex[:10]}.wav"
             else:
                 destination = _workspace_target(self, output_path)
                 denied = write_access_error(self, destination)
@@ -2926,6 +2991,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 "status": "success",
                 "output_path": str(destination),
                 "file_path": str(destination),
+                "audio_path": str(destination),
                 "duration_seconds": round(duration, 2),
                 "voice": voice,
                 "model": model,

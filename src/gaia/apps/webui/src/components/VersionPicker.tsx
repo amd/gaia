@@ -6,7 +6,7 @@ import type { ReleaseInfo } from '../hooks/useUpdateStatus';
 import { updateErrorReason } from '../hooks/updateError';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
-import { useT } from '../i18n/useT';
+import { dateLocale, useT } from '../i18n/useT';
 import './VersionPicker.css';
 
 interface VersionPickerProps {
@@ -130,7 +130,7 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
     function formatDate(dateStr: string | null): string {
         if (!dateStr) return '';
         try {
-            return new Date(dateStr).toLocaleDateString(undefined, {
+            return new Date(dateStr).toLocaleDateString(dateLocale(t), {
                 year: 'numeric',
                 month: 'short',
                 day: 'numeric',

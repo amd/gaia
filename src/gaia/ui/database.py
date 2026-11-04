@@ -272,6 +272,7 @@ _CHAT_SCHEMA_COLUMNS = {
         "inference_stats",
         "model_messages",
         "search_text",
+        "stopped",
         "turn_summary",
     },
     "scheduled_tasks": {"last_error"},
@@ -469,6 +470,8 @@ class ChatDatabase:
         self._add_column("messages", "agent_steps", "TEXT")
         self._add_column("messages", "inference_stats", "TEXT")
         self._add_column("messages", "turn_summary", "TEXT")
+        # 1 when the user's Stop ended this reply, so a reload still says so.
+        self._add_column("messages", "stopped", "INTEGER NOT NULL DEFAULT 0")
         self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
         self._add_column("documents", "file_mtime", "REAL")
         self._add_column("documents", "last_error", "TEXT")
@@ -953,6 +956,7 @@ class ChatDatabase:
         model_messages: List[Dict] | None = None,
         turn_summary: Dict | None = None,
         ends_turn: bool = False,
+        stopped: bool = False,
     ) -> int:
         """Add a message to a session. Returns message ID.
 
@@ -970,8 +974,8 @@ class ChatDatabase:
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
                     agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
-                    turn_summary)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    turn_summary, stopped)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -984,6 +988,7 @@ class ChatDatabase:
                     stats_json,
                     model_json,
                     summary_json,
+                    int(stopped),
                 ),
             )
 
@@ -1012,6 +1017,7 @@ class ChatDatabase:
         model_messages: List[Dict] | None = None,
         turn_summary: Dict | None = None,
         ends_turn: bool = False,
+        stopped: bool = False,
     ) -> int:
         """Atomically replace a message with a fresh row. Returns the new ID.
 
@@ -1041,8 +1047,8 @@ class ChatDatabase:
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
                     agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
-                    turn_summary)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    turn_summary, stopped)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -1055,6 +1061,7 @@ class ChatDatabase:
                     stats_json,
                     model_json,
                     summary_json,
+                    int(stopped),
                 ),
             )
 

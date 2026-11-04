@@ -16,10 +16,13 @@
  *   - ensureUv()                     → Promise<void>
  *   - installBackend(opts)           → Promise<void>
  *   - ensureBackend(opts)            → Promise<string>  (returns gaia bin path)
+ *   - isBackendCurrent()             → boolean  (nothing to install or refresh)
+ *   - stopRunningDaemon(opts)        → Promise<void>  (before the venv is touched)
  *   - getInstalledVersion(gaiaBin)   → string | null
  *   - findGaiaBin()                  → string | null
  *   - getState() / setState()        → state machine helpers
  *   - getLogPath() / getStatePath()  → path helpers
+ *   - readLogTail(maxLines)          → string[]
  *   - runPreChecks(opts)             → Promise<PreCheckResult>
  *   - STATES                         → state name constants
  *
@@ -54,10 +57,16 @@ const GAIA_PYTHON_BIN = IS_WINDOWS
 
 const STATE_FILE = path.join(GAIA_HOME, "electron-install-state.json");
 const LOG_FILE = path.join(GAIA_HOME, "electron-install.log");
+// hub/installer.py writes this once the flagship is installed; first-run setup installs it.
+const FLAGSHIP_SENTINEL = path.join(GAIA_HOME, "agents", "gaia", ".installed");
+/** `gaia init --agent-only` kept the installed agent: the hub couldn't be reached. */
+const AGENT_KEPT_EXIT = 5;
 
-// Floor for uv, Python and the GAIA package only. The models, often 30 GB,
-// are checked by `gaia init` against Lemonade's model store, which it sizes.
-const MIN_DISK_SPACE_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
+// Room for what this installer writes: Python 3.12, uv's wheel cache and the
+// `amd-gaia[ui]` venv (0.3 GB on macOS arm64 for 0.25.1rc5, under 1 GB in
+// all). Models are not installed here; first-run setup checks the disk for
+// the download the user picks.
+const MIN_DISK_SPACE_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
 const NETWORK_CHECK_HOSTS = Object.freeze([
   "https://pypi.org/simple/",
   "https://astral.sh",
@@ -131,24 +140,38 @@ const STAGES = Object.freeze({
   ENSURE_UV: "ensure-uv",
   CREATE_VENV: "create-venv",
   INSTALL_PACKAGE: "install-package",
-  GAIA_INIT: "gaia-init",
   VERIFY: "verify",
+  // After the package, and outside the weighted bar: it has no percent to report.
+  AGENT_REFRESH: "agent-refresh",
 });
 
-const GAIA_INIT_MESSAGE =
-  "Setting up Lemonade Server and downloading models (this can take several minutes)";
-const WAITING_FOR_LEMONADE_CHOICE_MESSAGE =
-  "Waiting for your answer: GAIA found a Lemonade Server already running " +
-  "and is asking whether to use it. Setup continues once you choose.";
+// Why an install failed, for what the app tells the user to do about it.
+const FAILURE_REASONS = Object.freeze({
+  DISK: "disk",
+  NETWORK: "network",
+  TLS: "tls",
+  LOCKED: "locked",
+  DAEMON: "daemon",
+});
+
+// `gaia daemon stop` can take about 90 s: up to 45 s for a graceful exit, then
+// terminating the daemon and its agents, then up to 20 s for GAIA's Lemonade Server.
+const DAEMON_STOP_TIMEOUT_MS = 120 * 1000;
+/** `gaia daemon stop` exit code: the daemon stopped, GAIA's Lemonade Server did not. */
+const DAEMON_STOP_LEMONADE_EXIT = 3;
+const DAEMON_INSTANCE_FILE = path.join(GAIA_HOME, "host", "instance.json");
+
+// Stage an older installer recorded while it ran `gaia init`; the package was
+// already in place by then.
+const LEGACY_SETUP_STAGE = "gaia-init";
 
 // Weight each stage contributes to the overall 0-100 progress.
 // Sum must equal 100.
 const STAGE_WEIGHTS = {
   [STAGES.PRE_CHECKS]: 2,
   [STAGES.ENSURE_UV]: 8,
-  [STAGES.CREATE_VENV]: 10,
-  [STAGES.INSTALL_PACKAGE]: 50,
-  [STAGES.GAIA_INIT]: 28,
+  [STAGES.CREATE_VENV]: 15,
+  [STAGES.INSTALL_PACKAGE]: 73,
   [STAGES.VERIFY]: 2,
 };
 
@@ -157,7 +180,6 @@ const STAGE_ORDER = [
   STAGES.ENSURE_UV,
   STAGES.CREATE_VENV,
   STAGES.INSTALL_PACKAGE,
-  STAGES.GAIA_INIT,
   STAGES.VERIFY,
 ];
 
@@ -174,10 +196,6 @@ let logStream = null;
  * calls turn into plain appends.
  */
 let logRotatedThisSession = false;
-
-function isTruthyEnv(value) {
-  return /^(1|true|yes|on)$/i.test(String(value || ""));
-}
 
 function ensureGaiaHome() {
   try {
@@ -321,6 +339,16 @@ function getStatePath() {
   return STATE_FILE;
 }
 
+/** The end of the install log, or nothing when no install has written one. */
+function readLogTail(maxLines = 40) {
+  try {
+    return fs.readFileSync(LOG_FILE, "utf8").split(/\r?\n/).filter(Boolean).slice(-maxLines);
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+}
+
 // ── State machine ────────────────────────────────────────────────────────────
 
 /**
@@ -396,155 +424,14 @@ function computeOverallPercent(stage, withinStagePercent) {
 function makeProgressReporter(onProgress) {
   const safe = typeof onProgress === "function" ? onProgress : () => {};
   return function report(stage, withinStagePercent, message) {
-    const percent = computeOverallPercent(stage, withinStagePercent);
+    const percent =
+      withinStagePercent === null ? null : computeOverallPercent(stage, withinStagePercent);
     try {
       safe(stage, percent, message || "");
     } catch (err) {
       logError(`onProgress callback threw: ${err.message}`);
     }
   };
-}
-
-// ── gaia init progress (`gaia init --progress-json`) ─────────────────────────
-
-// Where the plan and the end of the downloads land in the GAIA_INIT slice; the
-// rest of the slice is Lemonade setup before and verification after.
-const INIT_PLAN_PERCENT = 5;
-const INIT_DOWNLOADED_PERCENT = 95;
-
-/**
- * Read one line of `gaia init --progress-json` output. Returns `{ event }` for
- * a progress event, `{ error }` for a line that looks like one but is not, and
- * null for human output.
- */
-function parseInitEventLine(line) {
-  const text = String(line || "").trim();
-  if (!text.startsWith("{")) return null;
-  let value;
-  try {
-    value = JSON.parse(text);
-  } catch (err) {
-    return { error: err.message };
-  }
-  if (!value || typeof value !== "object" || typeof value.event !== "string") {
-    return { error: 'no "event" field' };
-  }
-  return { event: value };
-}
-
-function formatGB(bytes) {
-  return `${(Math.max(0, bytes || 0) / 1e9).toFixed(1)} GB`;
-}
-
-function formatSpeed(bytesPerSecond) {
-  return `${(bytesPerSecond / 1e6).toFixed(1)} MB/s`;
-}
-
-function formatTimeLeft(seconds) {
-  if (seconds < 60) return "less than a minute left";
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `about ${minutes} min left`;
-  return `about ${Math.floor(minutes / 60)} h ${minutes % 60} min left`;
-}
-
-/**
- * Map `gaia init --progress-json` events onto the GAIA_INIT slice of the bar.
- * `report(withinStagePercent, message)` receives a percent that never goes
- * back. `onLine` returns true for the lines too frequent to log.
- */
-function createInitProgress(report, logFn = log) {
-  const models = new Map();
-  let percent = 0;
-
-  const advance = (within, message) => {
-    percent = Math.max(percent, Math.round(within));
-    report(percent, message);
-  };
-  const totals = () => {
-    let done = 0;
-    let total = 0;
-    for (const m of models.values()) {
-      total += m.total;
-      done += Math.min(m.done, m.total);
-    }
-    return { done, total };
-  };
-  const downloadPercent = () => {
-    const { done, total } = totals();
-    const share = total > 0 ? done / total : 0;
-    return INIT_PLAN_PERCENT + (INIT_DOWNLOADED_PERCENT - INIT_PLAN_PERCENT) * share;
-  };
-  const model = (id) => {
-    if (!models.has(id)) models.set(id, { done: 0, total: 0 });
-    return models.get(id);
-  };
-
-  function handle(event) {
-    switch (event.event) {
-      case "step":
-        advance(percent, `Step ${event.step} of ${event.total}: ${event.message}`);
-        return true;
-      case "plan":
-        for (const m of event.models || []) {
-          if (!m.downloaded) model(m.id).total = m.bytes_total || 0;
-        }
-        advance(
-          INIT_PLAN_PERCENT,
-          event.bytes_total > 0
-            ? `Downloading ${formatGB(event.bytes_total)} of models`
-            : "Models already downloaded"
-        );
-        return true;
-      case "progress": {
-        const m = model(event.model);
-        m.done = event.bytes_done || 0;
-        m.total = Math.max(event.bytes_total || 0, m.done);
-        const parts = [
-          `Downloading ${event.model} (${event.index} of ${event.count}): ` +
-            `${formatGB(m.done)} of ${formatGB(m.total)}`,
-        ];
-        if (event.speed_bps > 0) {
-          const { done, total } = totals();
-          parts.push(
-            `at ${formatSpeed(event.speed_bps)}, ` +
-              formatTimeLeft((total - done) / event.speed_bps)
-          );
-        }
-        advance(downloadPercent(), parts.join(" "));
-        return true;
-      }
-      case "model_done": {
-        const m = model(event.model);
-        m.done = m.total;
-        advance(downloadPercent(), `${event.model} ready`);
-        return true;
-      }
-      case "done":
-        advance(
-          event.ok ? INIT_DOWNLOADED_PERCENT : percent,
-          event.ok ? "Models downloaded, finishing setup" : "Model download did not finish"
-        );
-        return true;
-      case "error":
-        advance(percent, String(event.message || "gaia init reported an error").trim());
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  function onLine(line) {
-    const parsed = parseInitEventLine(line);
-    if (!parsed) return false;
-    if (parsed.error) {
-      logFn(`Malformed gaia init progress line (${parsed.error}): ${line}`);
-      return false;
-    }
-    handle(parsed.event);
-    return parsed.event.event === "progress";
-  }
-
-  return { onLine, handle };
 }
 
 // ── Command helpers ──────────────────────────────────────────────────────────
@@ -581,9 +468,13 @@ function findGaiaBin() {
  *
  * `onLine(line)` sees each whole stdout line as it arrives; a line it returns
  * true for is left out of the log.
+ *
+ * When `signal` aborts, the child and everything it started are stopped and
+ * the Promise rejects with InstallCancelled once they are gone.
  */
-function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
-  return new Promise((resolve) => {
+function runCommand(cmd, args, { env, stageLabel, onLine, signal, timeoutMs } = {}) {
+  if (signal && signal.aborted) return Promise.reject(new InstallCancelled());
+  return new Promise((resolve, reject) => {
     log(`$ ${cmd} ${args.join(" ")}`);
     let proc;
     try {
@@ -599,6 +490,21 @@ function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
       resolve({ code: -1, stdout: "", stderr: String(err.message || err), error: err });
       return;
     }
+
+    let stopping = false;
+    const onAbort = () => {
+      stopping = true;
+      stopTimer();
+      log(`Stopping ${cmd}: GAIA is quitting`);
+      require("./process-tree.cjs")
+        .killProcessTree(proc, { label: stageLabel || cmd, log, logError })
+        .then(() => reject(new InstallCancelled()), reject);
+    };
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    const finish = (result) => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      if (!stopping) resolve(result);
+    };
 
     let stdout = "";
     let stderr = "";
@@ -647,16 +553,121 @@ function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
       });
     });
 
+    // From `timers`, not the globals: the installer tests run this file in a bare vm context.
+    let timer = null;
+    if (timeoutMs) {
+      timer = require("timers").setTimeout(() => {
+        logError(`${cmd} ${args.join(" ")} did not finish within ${Math.round(timeoutMs / 1000)}s — ending it`);
+        killTree(proc);
+        finish({ code: null, stdout, stderr, timedOut: true });
+      }, timeoutMs);
+    }
+    const stopTimer = () => {
+      if (timer) require("timers").clearTimeout(timer);
+    };
+
     proc.on("error", (err) => {
+      stopTimer();
       logError(`${cmd} error: ${err.message}`);
-      resolve({ code: -1, stdout, stderr, error: err });
+      finish({ code: -1, stdout, stderr, error: err });
     });
 
     proc.on("exit", (code) => {
+      stopTimer();
       log(`  exit code: ${code}`);
-      resolve({ code, stdout, stderr });
+      finish({ code, stdout, stderr });
     });
   });
+}
+
+/** End `proc` and what it started: a Windows venv launcher runs Python as a child. */
+function killTree(proc) {
+  if (IS_WINDOWS) {
+    const r = spawnSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
+      windowsHide: true,
+      timeout: 30 * 1000,
+    });
+    if (r.error || r.status !== 0) {
+      logError(`taskkill /PID ${proc.pid} /T /F failed: ${r.error ? r.error.message : `exit ${r.status}`}`);
+    }
+    return;
+  }
+  try {
+    proc.kill("SIGKILL");
+  } catch (err) {
+    logError(`Could not end pid ${proc.pid}: ${err.message}`);
+  }
+}
+
+/** The pid of the GAIA daemon ~/.gaia/host/instance.json records, when that process is alive. */
+function liveDaemonPid() {
+  let pid;
+  try {
+    pid = Number(JSON.parse(fs.readFileSync(DAEMON_INSTANCE_FILE, "utf8")).pid);
+  } catch (err) {
+    if (err.code !== "ENOENT") log(`Could not read ${DAEMON_INSTANCE_FILE}: ${err.message}`);
+    return null;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    process.kill(pid, 0);
+    return pid;
+  } catch (err) {
+    // EPERM: the process exists but belongs to someone else.
+    return err.code === "EPERM" ? pid : null;
+  }
+}
+
+/**
+ * Stop the GAIA daemon (and the agents it runs) that the existing venv may be
+ * running, so the install doesn't trip over its open files. Throws an
+ * InstallError naming the daemon only when one is still alive afterwards: a
+ * stop that fails with no daemon running (a broken venv, say) must not block
+ * the reinstall that repairs it.
+ */
+async function stopRunningDaemon({ timeoutMs = DAEMON_STOP_TIMEOUT_MS, signal } = {}) {
+  if (!fs.existsSync(GAIA_BIN) || !fs.existsSync(GAIA_PYTHON_BIN)) return;
+  const result = await runCommand(GAIA_BIN, ["daemon", "stop"], {
+    stageLabel: "daemon",
+    timeoutMs,
+    signal,
+    // gaia prints emoji, which a Windows pipe's code page can't encode.
+    env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+  });
+  if (result.code === 0) return;
+  const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+  if (result.code === 2 && /invalid choice: '?daemon'?/.test(output)) {
+    log("The installed GAIA predates the daemon — nothing to stop");
+    return;
+  }
+  const pid = liveDaemonPid();
+  if (pid === null) {
+    if (result.code === DAEMON_STOP_LEMONADE_EXIT) {
+      log(
+        "The GAIA daemon stopped, but GAIA's Lemonade Server did not (see the lines above). " +
+          "It lives outside the backend's files, so the install goes on."
+      );
+    } else {
+      log(
+        `gaia daemon stop ${result.timedOut ? "timed out" : `exited ${result.code}`}, ` +
+          "but no GAIA daemon is running — continuing"
+      );
+    }
+    return;
+  }
+  const why = result.timedOut
+    ? `did not stop within ${Math.round(timeoutMs / 1000)} seconds`
+    : `could not be stopped (gaia daemon stop exit ${result.code})`;
+  log(`To stop it by hand: ${GAIA_BIN} daemon stop`);
+  throw new InstallError(
+    `GAIA's background service (the GAIA daemon, pid ${pid}) ${why}, so its files can't be updated.`,
+    {
+      stage: STAGES.CREATE_VENV,
+      code: result.code,
+      reason: FAILURE_REASONS.DAEMON,
+      suggestion: `It has no window to close. Restart your PC, then try again. The log at ${LOG_FILE} has the details.`,
+    }
+  );
 }
 
 /**
@@ -667,6 +678,91 @@ function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
 function isFileLockedError(output) {
   if (!output) return false;
   return /os error 32/i.test(output) || /being used by another process/i.test(output);
+}
+
+/** The files uv could not replace, as absolute paths, in the order it named them. */
+function lockedFiles(output) {
+  const files = [];
+  for (const m of String(output || "").matchAll(/failed to \w+ (?:file|directory) `([^`]+)`/gi)) {
+    const file = path.resolve(m[1]);
+    if (!files.includes(file)) files.push(file);
+  }
+  return files;
+}
+
+const MOVED_ASIDE_SUFFIX = /\.old-\d+$/i;
+
+function sameFile(a, b) {
+  return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+}
+
+/**
+ * Rename each locked launcher in the venv's Scripts folder to <name>.old-<ts>
+ * so uv can write a fresh one (#6570). A launcher something is running can't
+ * be renamed; it is left alone. Returns [{ file, aside }] for those moved.
+ */
+function moveLockedAside(files) {
+  const scripts = path.join(GAIA_VENV, "Scripts");
+  const stamp = Date.now();
+  const moved = [];
+  for (const file of files) {
+    if (!/\.exe$/i.test(file) || !sameFile(path.dirname(file), scripts)) continue;
+    const aside = `${file}.old-${stamp}`;
+    try {
+      fs.renameSync(file, aside);
+      moved.push({ file, aside });
+      log(`Moved locked ${file} aside to ${path.basename(aside)}`);
+    } catch (err) {
+      log(`Could not move locked ${file} aside (${err.code || err.message}); it stays where it is`);
+    }
+  }
+  return moved;
+}
+
+/** Put back every moved launcher uv did not replace, so a failed upgrade leaves the venv whole. */
+function putBackUnreplaced(moved) {
+  for (const { file, aside } of moved) {
+    if (fs.existsSync(file)) {
+      log(`${path.basename(file)} was reinstalled; ${path.basename(aside)} is deleted on a later install`);
+      continue;
+    }
+    try {
+      fs.renameSync(aside, file);
+    } catch (err) {
+      throw new Error(`Could not put ${aside} back at ${file}: ${err.message}`);
+    }
+    log(`Put ${path.basename(file)} back from ${path.basename(aside)}`);
+  }
+}
+
+/**
+ * Tidy what an earlier upgrade moved aside. A .old file whose original was
+ * reinstalled is deleted unless still in use; one whose original is missing
+ * is put back, newest first.
+ */
+function removeMovedLaunchers() {
+  const dir = path.join(GAIA_VENV, "Scripts");
+  const stampOf = (name) => Number(/\.old-(\d+)$/i.exec(name)[1]);
+  const leftovers = listDir(dir)
+    .filter((name) => MOVED_ASIDE_SUFFIX.test(name))
+    .sort((a, b) => stampOf(b) - stampOf(a));
+  for (const name of leftovers) {
+    const aside = path.join(dir, name);
+    const file = aside.replace(MOVED_ASIDE_SUFFIX, "");
+    if (!fs.existsSync(file)) {
+      fs.renameSync(aside, file);
+      log(`Put ${path.basename(file)} back from ${name}: no newer copy was installed`);
+      continue;
+    }
+    try {
+      fs.unlinkSync(aside);
+      log(`Removed ${aside}, moved aside by an earlier upgrade`);
+    } catch (err) {
+      // Windows refuses to delete a program that is running (EPERM) or open (EBUSY).
+      if (err.code !== "EBUSY" && err.code !== "EPERM") throw err;
+      log(`Left ${aside} in place: it is still in use (${err.code})`);
+    }
+  }
 }
 
 /**
@@ -1078,13 +1174,32 @@ async function runPreChecks(opts = {}) {
 // ── uv install ───────────────────────────────────────────────────────────────
 
 class InstallError extends Error {
-  constructor(message, { stage, code, suggestion } = {}) {
+  constructor(message, { stage, code, suggestion, reason, lockedFiles } = {}) {
     super(message);
     this.name = "InstallError";
     this.stage = stage || null;
     this.code = code || null;
     this.suggestion = suggestion || null;
+    this.reason = reason || null;
+    // The files another program held open, for main to find who holds them.
+    this.lockedFiles = lockedFiles || null;
   }
+}
+
+/** The caller's signal stopped the install: the app is quitting, nothing failed. */
+class InstallCancelled extends Error {
+  constructor() {
+    super("The install stopped because GAIA is quitting; it continues on the next launch.");
+    this.name = "InstallCancelled";
+  }
+}
+
+/** Which FAILURE_REASONS a uv failure's output shows, or null. */
+function failureReason(output) {
+  if (isFileLockedError(output)) return FAILURE_REASONS.LOCKED;
+  if (isTlsCertError(output)) return FAILURE_REASONS.TLS;
+  if (isTransientNetworkError(output)) return FAILURE_REASONS.NETWORK;
+  return null;
 }
 
 /**
@@ -1303,7 +1418,7 @@ function addManagedBinToPath() {
  *
  * Throws InstallError on failure.
  */
-async function ensureUv({ onProgress, isPackaged } = {}) {
+async function ensureUv({ onProgress, isPackaged, signal } = {}) {
   const report = makeProgressReporter(onProgress);
   report(STAGES.ENSURE_UV, 0, "Checking uv (Python package manager)");
 
@@ -1402,13 +1517,13 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
           "-Command",
           "irm https://astral.sh/uv/install.ps1 | iex",
         ],
-        { stageLabel: "uv-install-dev" }
+        { stageLabel: "uv-install-dev", signal }
       );
     } else {
       result = await runCommand(
         "bash",
         ["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
-        { stageLabel: "uv-install-dev" }
+        { stageLabel: "uv-install-dev", signal }
       );
     }
 
@@ -1469,7 +1584,7 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
           "-Command",
           "irm https://astral.sh/uv/install.ps1 | iex",
         ],
-        { stageLabel: "uv-install-packaged-rescue" }
+        { stageLabel: "uv-install-packaged-rescue", signal }
       );
       if (rescue.code === 0) {
         // Ensure common install locations are present on PATH for this
@@ -1495,6 +1610,7 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
         log(`Packaged Windows: automated uv installer exited ${rescue.code}`);
       }
     } catch (rescueErr) {
+      if (rescueErr instanceof InstallCancelled) throw rescueErr;
       log(`Packaged Windows: rescue installer threw: ${rescueErr.message}`);
     }
   }
@@ -1545,6 +1661,11 @@ function resolveBackendVersion(opts = {}) {
   }
 }
 
+/** The version the app ships with, whatever backend this run was asked to install. */
+function appVersion() {
+  return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version;
+}
+
 /**
  * The PEP 440 spelling of the app's npm version: `0.25.0-rc.1` -> `0.25.0rc1`.
  * pip pins and `gaia --version` use this form; a final version is unchanged.
@@ -1554,142 +1675,16 @@ function toPep440(version) {
   return version.replace(/^(\d+\.\d+\.\d+)-rc\.(\d+)$/, "$1rc$2");
 }
 
-function shouldSkipGaiaInit(opts) {
-  return Boolean(opts.skipGaiaInit) || isTruthyEnv(process.env.GAIA_SKIP_GAIA_INIT);
-}
-
-/**
- * Run `gaia init` for the profile the app's own setup check asks about
- * (setup_runner.PROFILE), so the first launch finds setup done instead of
- * running it a second time.
- *
- * `chooseLemonade` is asked about a Lemonade Server already running here; see
- * lemonadeInitArgs.
- *
- * Returns `{ init }`, "done", "failed" or "skipped", plus `initError` when it
- * failed. The state file records both: a backend whose setup never finished is
- * not installed, so the next launch runs it, and the app shows the error.
- */
-async function runGaiaInit(gaiaBin, report, version, skipGaiaInit, chooseLemonade) {
-  if (skipGaiaInit) {
-    log("Skipping gaia init (skipGaiaInit=true or GAIA_SKIP_GAIA_INIT set)");
-    return { init: "skipped" };
-  }
-  setState(STATES.INSTALLING, { stage: STAGES.GAIA_INIT, version });
-  report(STAGES.GAIA_INIT, 0, GAIA_INIT_MESSAGE);
-  const lemonadeArgs = await lemonadeInitArgs(gaiaBin, chooseLemonade, runCommand, report);
-  const progress = createInitProgress((within, message) =>
-    report(STAGES.GAIA_INIT, within, message)
-  );
-  const initResult = await runCommand(
-    gaiaBin,
-    ["init", "--profile", "gaia", "--yes", "--skip-webui-build", "--progress-json", ...lemonadeArgs],
-    // Unwrapped, so an error line reaches initFailureReason whole.
-    { stageLabel: "gaia-init", env: { ...process.env, COLUMNS: "1000" }, onLine: progress.onLine }
-  );
-  if (initResult.code !== 0) {
-    // Non-fatal: the app opens and its start screen shows initError, and the
-    // next launch runs setup again, because the state file records the failure.
-    log(
-      `Warning: gaia init exited with code ${initResult.code}. Continuing; setup runs again next launch.`
-    );
-    report(STAGES.GAIA_INIT, 100, "Lemonade Server setup did not finish");
-    return { init: "failed", initError: initFailureReason(initResult) };
-  }
-  report(STAGES.GAIA_INIT, 100, "Lemonade Server setup complete");
-  return { init: "done" };
-}
-
-/** Why `gaia init` failed, in its own words: its last ❌ line, else its last line. */
-function initFailureReason({ code, stdout, stderr }) {
-  const lines = `${stdout || ""}\n${stderr || ""}`
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    // --progress-json event lines are for the progress bar, not the user.
-    .filter((line) => line && !line.startsWith('{"event"'));
-  const marked = lines.filter((line) => line.startsWith("❌"));
-  const reason = marked.length
-    ? marked[marked.length - 1].replace(/^❌\s*/, "")
-    : lines[lines.length - 1];
-  return reason || `gaia init exited with code ${code} and printed nothing.`;
-}
-
-/**
- * Run a `gaia ... --json` command and parse what it printed.
- * Returns undefined after logging a warning that names the failure.
- */
-async function readGaiaJson(run, gaiaBin, args) {
-  const shown = `gaia ${args.join(" ")}`;
-  const result = await run(gaiaBin, args, { stageLabel: "lemonade" });
-  if (result.code !== 0) {
-    log(`Warning: ${shown} exited with code ${result.code}: ${(result.stderr || result.stdout || "").trim().slice(-400)}`);
-    return undefined;
-  }
-  const lines = (result.stdout || "").trim().split(/\r?\n/);
-  try {
-    return JSON.parse(lines[lines.length - 1]);
-  } catch (err) {
-    log(`Warning: ${shown} printed no JSON (${err.message}): ${(result.stdout || "").trim().slice(-400)}`);
-    return undefined;
-  }
-}
-
-/**
- * Extra `gaia init` args for a Lemonade Server the user already runs.
- *
- * Asks `chooseLemonade(found)` only on a first setup (nothing saved, no
- * LEMONADE_BASE_URL) when a usable server answers. "external" adds
- * `--lemonade-url <url>`, "gaia" adds `--gaia-lemonade`, null adds nothing:
- * init then sets up GAIA's own and prints how to switch, as it always has.
- * A server that needs a key or is too old is left to the app's setup screen.
- *
- * `report` is the progress reporter: while the question is open the progress
- * window says setup is waiting on the user, then goes back to GAIA_INIT_MESSAGE.
- */
-async function lemonadeInitArgs(gaiaBin, chooseLemonade, run = runCommand, report = () => {}) {
-  if (typeof chooseLemonade !== "function") return [];
-  const unchanged = "gaia init will set up GAIA's own Lemonade Server; to use yours later run `gaia lemonade connect <url>`.";
-  const status = await readGaiaJson(run, gaiaBin, ["lemonade", "status", "--json"]);
-  if (status === undefined || status === null) {
-    log(`Warning: could not read which Lemonade Server GAIA uses; ${unchanged}`);
-    return [];
-  }
-  if (status.saved_mode != null || status.source === "env") return [];
-  const found = await readGaiaJson(run, gaiaBin, ["lemonade", "detect", "--json"]);
-  if (found === undefined) {
-    log(`Warning: could not look for a Lemonade Server already running; ${unchanged}`);
-    return [];
-  }
-  if (!found) return [];
-  if (found.status !== "ok") {
-    log(`Found a Lemonade Server at ${found.url} (${found.status}); the app's setup screen offers it.`);
-    return [];
-  }
-  let answer;
-  report(STAGES.GAIA_INIT, 0, WAITING_FOR_LEMONADE_CHOICE_MESSAGE);
-  try {
-    answer = await chooseLemonade(found);
-  } catch (err) {
-    log(`Warning: could not ask whether to use the Lemonade Server at ${found.url}: ${err.message}; ${unchanged}`);
-    return [];
-  } finally {
-    report(STAGES.GAIA_INIT, 0, GAIA_INIT_MESSAGE);
-  }
-  log(`Lemonade Server at ${found.url}: user chose ${answer || "not to answer"}`);
-  if (answer === "external") return ["--lemonade-url", found.url];
-  if (answer === "gaia") return ["--gaia-lemonade"];
-  return [];
-}
-
 /**
  * Install the GAIA Python backend from scratch.
+ *
+ * Installs no model and runs no `gaia init`: the Lemonade Server and the models
+ * are set up by the app's first-run setup, where the user chooses cloud or
+ * local and sees what downloads.
  *
  * opts:
  *   - onProgress(stage, percent, message)
  *   - version: string — override the pinned version
- *   - skipGaiaInit: boolean — skip `gaia init` (for testing)
- *   - chooseLemonade(found): Promise<"external"|"gaia"|null> — asked when a
- *     Lemonade Server already runs here; see lemonadeInitArgs
  *
  * Throws InstallError on failure. The state file is updated to reflect
  * the current stage so a subsequent launch can recover.
@@ -1707,7 +1702,6 @@ async function installBackend(opts = {}) {
   const pipPackage = localWheel
     ? `${localWheel}[ui]`
     : `amd-gaia[ui]==${toPep440(version)}`;
-  const skipGaiaInit = shouldSkipGaiaInit(opts);
 
   log("================================================");
   log("  Installing GAIA backend");
@@ -1718,13 +1712,14 @@ async function installBackend(opts = {}) {
   setState(STATES.INSTALLING, { stage: STAGES.ENSURE_UV, version });
 
   // Stage 1: ensure uv
-  await ensureUv({ onProgress: opts.onProgress, isPackaged: opts.isPackaged });
+  await ensureUv({ onProgress: opts.onProgress, isPackaged: opts.isPackaged, signal: opts.signal });
 
   // Stage 2: create venv
   setState(STATES.INSTALLING, { stage: STAGES.CREATE_VENV, version });
   report(STAGES.CREATE_VENV, 0, "Creating Python 3.12 environment");
 
   ensureGaiaHome();
+  await stopRunningDaemon({ signal: opts.signal });
 
   // If the venv exists but the python binary is missing, treat as partial.
   const venvLooksValid =
@@ -1741,7 +1736,7 @@ async function installBackend(opts = {}) {
     }
 
     const venvArgs = ["venv", GAIA_VENV, "--python", "3.12"];
-    let venvResult = await runCommand("uv", venvArgs, { stageLabel: "venv" });
+    let venvResult = await runCommand("uv", venvArgs, { stageLabel: "venv", signal: opts.signal });
     // uv downloads Python 3.12 when none is installed; behind a corporate
     // proxy that fails on uv's bundled roots exactly like the pip step below.
     let venvNativeTls = false;
@@ -1764,6 +1759,7 @@ async function installBackend(opts = {}) {
       }
       venvResult = await runCommand("uv", [...venvArgs, "--native-tls"], {
         stageLabel: "venv",
+        signal: opts.signal,
       });
     }
     if (venvResult.code !== 0) {
@@ -1775,6 +1771,7 @@ async function installBackend(opts = {}) {
         {
           stage: STAGES.CREATE_VENV,
           code: venvResult.code,
+          reason: failureReason(`${venvResult.stdout || ""}\n${venvResult.stderr || ""}`),
           suggestion: `Try creating it manually:\n  ${manual}\nThen restart GAIA.`,
         }
       );
@@ -1787,6 +1784,7 @@ async function installBackend(opts = {}) {
   // Stage 3: pip install
   setState(STATES.INSTALLING, { stage: STAGES.INSTALL_PACKAGE, version });
   report(STAGES.INSTALL_PACKAGE, 0, `Installing ${pipPackage}`);
+  if (IS_WINDOWS) removeMovedLaunchers();
 
   const pipArgs = [
     "pip",
@@ -1802,14 +1800,14 @@ async function installBackend(opts = {}) {
   // deps (numpy, faiss, pypdfium2, …) are fetched live from PyPI even
   // when the gaia wheel itself is local, so a single broken-pipe mid-download
   // would otherwise fail the whole bootstrap (and block a release). File-lock
-  // failures (Windows os-error-32) are NOT retried — they need user action.
+  // failures (Windows os-error-32) get their own single retry after this loop.
   let installResult;
   if (!localWheel && isBackendPrefetched(version)) {
     report(STAGES.INSTALL_PACKAGE, 0, `Installing ${pipPackage} from the downloaded update`);
     const offline = await runCommand(
       "uv",
       ["pip", "install", pipPackage, "--offline", "--compile-bytecode", "--python", GAIA_PYTHON_BIN],
-      { stageLabel: "pip" }
+      { stageLabel: "pip", signal: opts.signal }
     );
     fs.rmSync(_prefetchMarker(toPep440(version)), { force: true });
     if (offline.code === 0) {
@@ -1831,7 +1829,7 @@ async function installBackend(opts = {}) {
   ) {
     const attemptArgs = useNativeTls ? [...pipArgs, "--native-tls"] : pipArgs;
     if (useNativeTls) nativeTlsAttempted = true;
-    installResult = await runCommand("uv", attemptArgs, { stageLabel: "pip" });
+    installResult = await runCommand("uv", attemptArgs, { stageLabel: "pip", signal: opts.signal });
     if (installResult.code === 0) break;
     const attemptOutput = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
     // A corporate proxy's custom root CA isn't in uv's bundled webpki roots, so
@@ -1868,16 +1866,41 @@ async function installBackend(opts = {}) {
     );
     await sleep(backoffMs);
   }
+  // A launcher that is only open, not running, can be renamed out of uv's way (#6570).
+  const firstOutput = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
+  if (IS_WINDOWS && installResult.code !== 0 && isFileLockedError(firstOutput)) {
+    const moved = moveLockedAside(lockedFiles(firstOutput));
+    if (moved.length > 0) {
+      report(STAGES.INSTALL_PACKAGE, 0, "Another program has GAIA's files open — retrying the install");
+      try {
+        installResult = await runCommand("uv", useNativeTls ? [...pipArgs, "--native-tls"] : pipArgs, {
+          stageLabel: "pip",
+          signal: opts.signal,
+        });
+      } finally {
+        putBackUnreplaced(moved);
+      }
+    }
+  }
   if (installResult.code !== 0) {
-    // Windows: an upgrade can't replace gaia.exe while a previous GAIA
-    // process still holds it open (issue #1388). The orphan cleanup in
-    // main.cjs should have killed it first; if the lock persists, point the
-    // user at the live process rather than the generic manual-install hint.
     const output = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
     let suggestion;
     if (isFileLockedError(output)) {
-      suggestion =
-        "A running GAIA process is locking the install. Close GAIA completely (including any leftover gaia.exe in Task Manager), then relaunch.";
+      // pip's own line is already in the log, which the setup screen's details show.
+      const files = lockedFiles(output);
+      const names = files.map((file) => path.basename(file)).join(", ");
+      throw new InstallError(
+        `GAIA couldn't replace its own files because another program has them open${names ? ` (${names})` : ""}.`,
+        {
+          stage: STAGES.INSTALL_PACKAGE,
+          code: installResult.code,
+          reason: FAILURE_REASONS.LOCKED,
+          lockedFiles: files,
+          suggestion:
+            "Close other GAIA apps and any terminal running gaia, or restart your PC, then try again. " +
+            `The log at ${LOG_FILE} names the file.`,
+        }
+      );
     } else if (isTlsCertError(output)) {
       suggestion =
         "PyPI's certificate isn't trusted on this network — usually a corporate proxy presenting its own root CA. " +
@@ -1914,6 +1937,7 @@ async function installBackend(opts = {}) {
       {
         stage: STAGES.INSTALL_PACKAGE,
         code: installResult.code,
+        reason: failureReason(output),
         suggestion,
       }
     );
@@ -1930,16 +1954,7 @@ async function installBackend(opts = {}) {
   }
   report(STAGES.INSTALL_PACKAGE, 100, "GAIA package installed");
 
-  // Stage 4: gaia init
-  const setup = await runGaiaInit(
-    GAIA_BIN,
-    report,
-    version,
-    skipGaiaInit,
-    opts.chooseLemonade
-  );
-
-  // Stage 5: verify
+  // Stage 4: verify
   setState(STATES.INSTALLING, { stage: STAGES.VERIFY, version });
   report(STAGES.VERIFY, 0, "Verifying installation");
 
@@ -1997,8 +2012,49 @@ async function installBackend(opts = {}) {
     log(`Shim creation check failed: ${err.message}`);
   }
 
-  setState(STATES.READY, { stage: null, version, installedVersion, ...setup });
+  setState(STATES.READY, { stage: null, version, installedVersion });
   log("Backend install complete");
+}
+
+// ── Agent refresh ────────────────────────────────────────────────────────────
+
+/**
+ * Update the flagship to this release, without Lemonade or models. A PC with
+ * no flagship is skipped: first-run setup installs it.
+ *
+ * The stage stays recorded until this succeeds, so an update that failed or was
+ * quit part way through refreshes again on the next launch.
+ */
+async function refreshAgent(gaiaBin, opts = {}) {
+  const version = resolveBackendVersion(opts);
+  if (!fs.existsSync(FLAGSHIP_SENTINEL)) {
+    log("No GAIA agent installed yet — first-run setup installs it");
+    // Nothing to refresh: a refresh recorded earlier is done, not pending forever.
+    setState(STATES.READY, { version, installedVersion: getInstalledVersion(gaiaBin) });
+    return;
+  }
+  setState(STATES.INSTALLING, { stage: STAGES.AGENT_REFRESH, version });
+  makeProgressReporter(opts.onProgress)(STAGES.AGENT_REFRESH, null, "Updating the GAIA agent");
+
+  const result = await runCommand(gaiaBin, ["init", "--agent-only"], {
+    stageLabel: "agent",
+    env: { ...process.env, COLUMNS: "1000" },
+    signal: opts.signal,
+  });
+  const lastLine = `${result.stderr || ""}`.trim().split(/\r?\n/).pop();
+  if (result.code === AGENT_KEPT_EXIT) {
+    // Offline: the working agent stays, and the next launch tries the update again.
+    log(`Kept the installed GAIA agent; the update runs again next launch: ${lastLine}`);
+    setState(STATES.PARTIAL, { stage: STAGES.AGENT_REFRESH, version, message: lastLine });
+    return;
+  }
+  if (result.code !== 0) {
+    throw new InstallError(
+      lastLine ? lastLine.replace(/^Error:\s*/, "") : `The GAIA agent update exited ${result.code}.`,
+      { stage: STAGES.AGENT_REFRESH, code: result.code }
+    );
+  }
+  setState(STATES.READY, { version, installedVersion: getInstalledVersion(gaiaBin) });
 }
 
 // ── Backend prefetch for an app update ──────────────────────────────────────
@@ -2079,6 +2135,20 @@ function _lastLines({ stdout, stderr }) {
 // ── Version-aware ensure ─────────────────────────────────────────────────────
 
 /**
+ * Whether the backend is finished at the app's version. A recorded failure or
+ * unfinished stage says no, so it reaches ensureBackend and the user.
+ */
+function isBackendCurrent() {
+  // A local wheel is reinstalled on every launch, as ensureBackend says.
+  if (process.env.GAIA_LOCAL_WHEEL) return false;
+  const bin = findGaiaBin();
+  if (!bin) return false;
+  const prev = getState();
+  if (prev && prev.state !== STATES.READY) return false;
+  return getInstalledVersion(bin) === toPep440(appVersion());
+}
+
+/**
  * The installed backend version, or null when it is not installed.
  * For the app's own venv this reads the package record instead of running
  * `gaia --version`, which starts Python and can take 20 s+ on a busy PC.
@@ -2147,12 +2217,13 @@ function venvPackageVersion() {
  * opts:
  *   - onProgress(stage, percent, message)
  *   - version: override the pinned version
- *   - skipGaiaInit: bool
- *   - chooseLemonade: see installBackend
  *   - allowPartialRestart: bool (default true) — restart from scratch if
  *     the state file indicates a `partial` install.
+ *   - signal: AbortSignal — stops the running step (the app is quitting)
  *
- * Throws InstallError on failure and updates the state file.
+ * Throws InstallError on failure and updates the state file. Throws
+ * InstallCancelled when `signal` stopped it; the state file then still says
+ * installing, so the next launch runs the install again.
  */
 async function ensureBackend(opts = {}) {
   openLog({ truncate: true });
@@ -2195,6 +2266,7 @@ async function ensureBackend(opts = {}) {
         }.`,
         {
           stage: STAGES.PRE_CHECKS,
+          reason: FAILURE_REASONS.DISK,
           suggestion: `Free at least ${requiredMb} MB at ${path.dirname(
             GAIA_HOME
           )} and try again.`,
@@ -2230,47 +2302,28 @@ async function ensureBackend(opts = {}) {
     // reinstall from the local wheel so CI gets a fresh install each run.
     const expectedVersion = resolveBackendVersion(opts);
     const existingBin = findGaiaBin();
-    // Installed means setup finished too, not just that the package is there.
-    // No state file at all is an install from before it existed.
+    // Installed means the package finished installing. No state file at all
+    // is an install from before it existed.
     const prev = preChecks.previousState;
-    const setupFinished =
-      !prev || (prev.state === STATES.READY && prev.init !== "failed");
     const packageFinished =
-      setupFinished ||
-      (prev &&
-        (prev.state === STATES.READY ||
-          prev.stage === STAGES.GAIA_INIT ||
-          prev.stage === STAGES.VERIFY));
+      !prev ||
+      prev.state === STATES.READY ||
+      prev.stage === LEGACY_SETUP_STAGE ||
+      prev.stage === STAGES.VERIFY ||
+      prev.stage === STAGES.AGENT_REFRESH;
     if (existingBin) {
       const installedVersion = getInstalledVersion(existingBin);
       const versionMatches =
         expectedVersion !== null && installedVersion === toPep440(expectedVersion);
-      if (versionMatches && !setupFinished && packageFinished) {
-        log(
-          `GAIA ${installedVersion} is installed but its setup did not finish ` +
-            `(state=${prev.state}, stage=${prev.stage || "-"}) — running gaia init`
-        );
-        const report = makeProgressReporter(opts.onProgress);
-        const setup = await runGaiaInit(
-          existingBin,
-          report,
-          expectedVersion,
-          shouldSkipGaiaInit(opts),
-          opts.chooseLemonade
-        );
-        setState(STATES.READY, { version: expectedVersion, installedVersion, ...setup });
-        report(STAGES.VERIFY, 100, `GAIA ${installedVersion} ready`);
+      if (versionMatches && packageFinished && prev && prev.stage === STAGES.AGENT_REFRESH) {
+        await refreshAgent(existingBin, opts);
         return existingBin;
       }
-      if (versionMatches && setupFinished) {
+      if (versionMatches && packageFinished) {
         log(
           `GAIA backend already installed at version ${installedVersion} — nothing to do`
         );
-        setState(STATES.READY, {
-          version: expectedVersion,
-          installedVersion,
-          init: prev ? prev.init : undefined,
-        });
+        setState(STATES.READY, { version: expectedVersion, installedVersion });
         // Tell the UI we are instantly ready.
         const report = makeProgressReporter(opts.onProgress);
         report(STAGES.VERIFY, 100, `GAIA ${installedVersion} ready`);
@@ -2303,8 +2356,13 @@ async function ensureBackend(opts = {}) {
       throw err;
     }
 
+    await refreshAgent(verified, opts);
     return verified;
   } catch (err) {
+    if (err instanceof InstallCancelled) {
+      log(err.message);
+      throw err;
+    }
     if (err instanceof InstallError) {
       setState(STATES.FAILED, {
         stage: err.stage || null,
@@ -2330,13 +2388,13 @@ module.exports = {
   ensureUv,
   installBackend,
   ensureBackend,
+  isBackendCurrent,
   prefetchBackend,
   isBackendPrefetched,
   getInstalledVersion,
   findGaiaBin,
   toPep440,
-  lemonadeInitArgs,
-  initFailureReason,
+  stopRunningDaemon,
 
   // Pre-checks
   runPreChecks,
@@ -2355,9 +2413,6 @@ module.exports = {
   setState,
   clearState,
 
-  // gaia init progress
-  parseInitEventLine,
-  createInitProgress,
   computeOverallPercent,
 
   // Logging
@@ -2367,12 +2422,14 @@ module.exports = {
   logError,
   getLogPath,
   getStatePath,
+  readLogTail,
 
   // Constants
   STATES,
   STAGES,
-  GAIA_INIT_MESSAGE,
-  WAITING_FOR_LEMONADE_CHOICE_MESSAGE,
+  FAILURE_REASONS,
+  DAEMON_STOP_TIMEOUT_MS,
+  DAEMON_STOP_LEMONADE_EXIT,
   GAIA_HOME,
   GAIA_VENV,
   GAIA_BIN,
@@ -2380,4 +2437,5 @@ module.exports = {
 
   // Error
   InstallError,
+  InstallCancelled,
 };

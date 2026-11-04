@@ -760,6 +760,10 @@ class MemoryStoreClosedError(RuntimeError):
     """A store call arrived after ``close()``."""
 
 
+class MemoryScrubError(RuntimeError):
+    """Memory was erased, but the deleted text may still be readable in the file."""
+
+
 class MemoryStore:
     """Pure SQLite storage for agent memory. No agent dependencies."""
 
@@ -1066,6 +1070,7 @@ class MemoryStore:
         context: str = "global",
         *,
         preserve_full: bool = False,
+        erase_count: int | None = None,
     ) -> None:
         """Store one conversation turn.
 
@@ -1076,6 +1081,9 @@ class MemoryStore:
         turn up to 256000 characters, or fail explicitly above that bound.
         Empty or whitespace-only turns are silently skipped — they add no
         signal to conversation history and pollute FTS5 with empty entries.
+        A turn that began before all of memory was erased (``erase_count`` as
+        read then, see :meth:`erase_count`) is dropped, so a turn still
+        finishing does not refill the log.
         """
         if not content or not content.strip():
             return  # Skip empty turns
@@ -1087,6 +1095,12 @@ class MemoryStore:
             content = content[:MAX_TURN_LENGTH]
         now = _now_iso()
         with self._locked():
+            if self._erased_since_for_write_locked(erase_count):
+                logger.info(
+                    "[MemoryStore] turn not stored: all memory was erased after "
+                    "it began"
+                )
+                return
             try:
                 self._conn.execute(
                     "INSERT INTO conversations (session_id, role, content, context, timestamp) "
@@ -2761,8 +2775,13 @@ class MemoryStore:
         error: str | None = None,
         duration_ms: int | None = None,
         executed: bool = True,
+        erase_count: int | None = None,
     ) -> None:
-        """Log a tool call to tool_history."""
+        """Log a tool call to tool_history.
+
+        Dropped when all of memory was erased after its turn began
+        (``erase_count`` as read then).
+        """
         now = _now_iso()
         args_json = _bounded_args_json(args)
         # Truncate the text columns to MAX_FTS_QUERY_LENGTH chars. Tool args,
@@ -2774,6 +2793,13 @@ class MemoryStore:
             error = error[:MAX_FTS_QUERY_LENGTH]
 
         with self._locked():
+            if self._erased_since_for_write_locked(erase_count):
+                logger.info(
+                    "[MemoryStore] %s call not logged: all memory was erased "
+                    "after its turn began",
+                    tool_name,
+                )
+                return
             try:
                 self._conn.execute(
                     """
@@ -3567,7 +3593,9 @@ class MemoryStore:
         enabled: bool = True,
         embedding: bytes | None = None,
         skill_id: str | None = None,
-    ) -> str:
+        *,
+        erase_count: int | None = None,
+    ) -> str | None:
         """Insert or update a procedure row (procedural memory).
 
         With ``skill_id`` None a new ``proc_<uuid>`` id is generated and a row
@@ -3591,9 +3619,13 @@ class MemoryStore:
             enabled: False disables recall without deleting the row.
             embedding: 768-float32 BLOB over ``when_to_use`` (its own FAISS index).
             skill_id: existing procedure id to update; None inserts a new row.
+            erase_count: :meth:`erase_count` when the work producing this
+                procedure began; if all memory was erased since, nothing is
+                written.
 
         Returns:
-            The procedure id (existing on update, new ``proc_<uuid>`` on insert).
+            The procedure id (existing on update, new ``proc_<uuid>`` on
+            insert), or None when an erase since ``erase_count`` dropped it.
 
         Raises:
             ValueError: if ``name``, ``when_to_use``, or ``markdown_body`` is
@@ -3612,6 +3644,12 @@ class MemoryStore:
         now = _now_iso()
 
         with self._locked():
+            if self._erased_since_for_write_locked(erase_count):
+                logger.info(
+                    "[MemoryStore] procedure not stored: all memory was erased "
+                    "after it began"
+                )
+                return None
             try:
                 # existing_id is the str id only when skill_id was provided AND
                 # matches a row — keeping it a narrowed str (not str | None) so
@@ -4257,6 +4295,8 @@ class MemoryStore:
         outcome: str,
         goal: str | None = None,
         detail: str | None = None,
+        *,
+        erase_count: int | None = None,
     ) -> int:
         """Record that synthesis already handed these sessions to the distiller.
 
@@ -4272,9 +4312,12 @@ class MemoryStore:
                 ``"unusable"`` (SKIP / unparseable / truncated output).
             goal: The cluster goal, kept for the log trail.
             detail: Why, for the ``unusable`` case.
+            erase_count: :meth:`erase_count` when the pass began; if all memory
+                was erased since, nothing is written (``goal`` is the user's
+                own first message).
 
         Returns:
-            Number of sessions marked.
+            Number of sessions marked (0 when an erase dropped the write).
 
         Raises:
             ValueError: ``outcome`` is not one of ``SYNTHESIS_OUTCOMES`` —
@@ -4291,6 +4334,12 @@ class MemoryStore:
         now = _now_iso()
         rows = [(sid, outcome, goal, detail, now) for sid in ids]
         with self._locked():
+            if self._erased_since_for_write_locked(erase_count):
+                logger.info(
+                    "[MemoryStore] synthesis marks not stored: all memory was "
+                    "erased after the pass began"
+                )
+                return 0
             try:
                 self._conn.executemany(
                     "INSERT INTO synthesis_marks "
@@ -4555,30 +4604,121 @@ class MemoryStore:
                 raise
         logger.info("[MemoryStore] FTS5 indexes rebuilt")
 
+    _ERASE_COUNT_KEY = "erase_count"
+
+    def erase_count(self) -> int:
+        """How many times all of memory has been erased.
+
+        Work that started before an erase holds the count it saw and drops its
+        writes once the count moves. A counter, not a time, so a clock set
+        ahead or back cannot drop or let through every later write.
+        """
+        with self._locked():
+            return self._erase_count_locked()
+
+    def _erase_count_locked(self) -> int:
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (self._ERASE_COUNT_KEY,)
+        ).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def _erased_since_for_write_locked(self, erase_count: Optional[int]) -> bool:
+        """Check *erase_count* under SQLite's write lock, ahead of a write.
+
+        The process lock alone misses an erase still uncommitted on another
+        connection. ``BEGIN IMMEDIATE`` waits for it, so the count read here is
+        final until this write commits. On True the transaction it began is
+        rolled back.
+        """
+        if erase_count is None:
+            return False
+        began = not self._conn.in_transaction
+        if began:
+            self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            erased = self._erase_count_locked() != erase_count
+        except Exception:
+            if began:
+                self._conn.rollback()
+            raise
+        if erased and began:
+            self._conn.rollback()
+        return erased
+
+    def erased_since(self, erase_count: Optional[int]) -> bool:
+        """Whether memory was erased after *erase_count* was read (None: no)."""
+        if erase_count is None:
+            return False
+        with self._locked():
+            return self._erase_count_locked() != erase_count
+
     def clear_all(self) -> Dict:
         """Permanently delete all knowledge, tool history, and conversation data.
 
         Wipes every knowledge entry, tool call log, and conversation turn
         from the database.  FTS5 indexes are reset to empty in the same
-        transaction so search stays consistent.
+        transaction so search stays consistent, then the file is vacuumed and
+        its WAL truncated so the deleted text can't be read back from disk.
+
+        Raises:
+            RuntimeError: the rows were deleted but another connection kept the
+                file from being scrubbed.
 
         Returns:
             Dict with counts of deleted rows per table:
             ``{knowledge: int, tool_history: int, conversations: int}``
         """
         with self._locked():
+            # Deleted rows otherwise stay readable in free pages, the WAL and
+            # the FTS index segments of the database file.
+            secure_delete = self._conn.execute("PRAGMA secure_delete").fetchone()[0]
+            self._conn.execute("PRAGMA secure_delete=ON")
             try:
                 knowledge_deleted = self._conn.execute("DELETE FROM knowledge").rowcount
                 self._rebuild_knowledge_fts_locked()
                 tool_deleted = self._conn.execute("DELETE FROM tool_history").rowcount
                 conv_deleted = self._conn.execute("DELETE FROM conversations").rowcount
                 self._rebuild_conversations_fts_locked()
+                # A plain FTS5 delete only tombstones; merging drops the old tokens.
+                for fts in ("knowledge_fts", "conversations_fts"):
+                    self._conn.execute(f"INSERT INTO {fts}({fts}) VALUES('optimize')")
                 # No conversation is left to relearn from.
                 self._conn.execute("DELETE FROM forgotten")
+                # Session goals are the user's own first message; the marks
+                # stay so learned procedures are not distilled again.
+                self._conn.execute(
+                    "UPDATE synthesis_marks SET goal = NULL, detail = NULL"
+                )
+                # Work begun before this must not refill memory.
+                self._conn.execute(
+                    "INSERT INTO meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (self._ERASE_COUNT_KEY, str(self._erase_count_locked() + 1)),
+                )
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
+                self._conn.execute(f"PRAGMA secure_delete={secure_delete}")
                 raise
+            try:
+                self._conn.execute("VACUUM")
+                busy = self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[
+                    0
+                ]
+            except sqlite3.OperationalError as e:
+                raise MemoryScrubError(
+                    f"Memory at {self._db_path} was erased, but the deleted text "
+                    f"could not be scrubbed from the file ({e}). Close other GAIA "
+                    "windows and erase again."
+                ) from e
+            finally:
+                self._conn.execute(f"PRAGMA secure_delete={secure_delete}")
+            if busy:
+                raise MemoryScrubError(
+                    f"Memory at {self._db_path} was erased, but another connection "
+                    "kept its write-ahead log from being cleared, so deleted text "
+                    "may remain there. Close other GAIA windows and erase again."
+                )
         logger.info(
             "[MemoryStore] cleared all: knowledge=%d tool_history=%d conversations=%d",
             knowledge_deleted,

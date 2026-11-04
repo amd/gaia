@@ -70,15 +70,18 @@ const RESTART_FOR_UPDATE = Object.freeze({
 /**
  * The warning for this work, or null when nothing would be lost.
  *
- * @param {{answers: Array<{title: string|null}>, indexing: Array<{filename: string|null}>}} work
+ * @param {{answers: Array<{title: string|null}>, indexing: Array<{filename: string|null}>, setup?: boolean}} work
  * @param {string} [verb] "Quitting" or "Restarting".
  */
 function describeWork(work, verb = QUIT.verb) {
   const answers = work.answers.map((a) => a.title || "a chat");
   const files = work.indexing.map((d) => d.filename || "a document");
-  if (answers.length === 0 && files.length === 0) return null;
+  if (answers.length === 0 && files.length === 0 && !work.setup) return null;
 
   const lines = [];
+  if (work.setup) {
+    lines.push(`${verb} pauses setup. What has downloaded is kept, and setup offers to resume next time.`);
+  }
   if (answers.length === 1) {
     lines.push(`${verb} stops the answer in ${quoteList(answers)}, and that answer will be lost.`);
   } else if (answers.length > 1) {
@@ -88,7 +91,11 @@ function describeWork(work, verb = QUIT.verb) {
     lines.push(`Indexing ${quoteList(files)} stops too; add ${files.length === 1 ? "it" : "them"} again later.`);
   }
   let message;
-  if (files.length === 0) {
+  if (work.setup && answers.length === 0 && files.length === 0) {
+    message = "GAIA is still setting up.";
+  } else if (work.setup) {
+    message = "GAIA is still working.";
+  } else if (files.length === 0) {
     message = answers.length === 1 ? "GAIA is still writing an answer." : `GAIA is still writing ${answers.length} answers.`;
   } else if (answers.length === 0) {
     message = "GAIA is still indexing documents.";
@@ -228,9 +235,26 @@ function attachWindowGuards(win, { app, guard, getTray, isQuitting, platform, re
   win.on("session-end", () => guard.allow());
 }
 
+/**
+ * SIGTERM (logout, shutdown, `kill`) quits without the question: nobody is
+ * there to answer it, so the dialog would hold the app until it is SIGKILLed.
+ * Electron's own SIGTERM handling quits through the guard, which asks.
+ *
+ * @param {{proc: NodeJS.Process, app: Electron.App,
+ *   guard: ReturnType<typeof installQuitGuard>, logger?: {log: Function}}} deps
+ */
+function quitOnTermSignal({ proc, app, guard, logger = console }) {
+  proc.on("SIGTERM", () => {
+    logger.log("[main] SIGTERM: quitting without asking about running work");
+    guard.allow();
+    app.quit();
+  });
+}
+
 module.exports = {
   QUIT_ANYWAY_MS,
   attachWindowGuards,
+  quitOnTermSignal,
   backendJson,
   fetchWorkInProgress,
   describeWork,
