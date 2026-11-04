@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from urllib.parse import parse_qs
 
 import httpx
 import keyring
@@ -40,16 +41,6 @@ from gaia.connectors.store import (
     save_connection,
 )
 from gaia.connectors.tokens import _cache, get_or_refresh, get_token_with_expiry
-
-
-@pytest.fixture
-def google_provider(monkeypatch):
-    """Build a known Google provider in the registry for refresh tests."""
-    monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
-    _registry.clear()
-    from gaia.connectors.providers import get as get_provider
-
-    return get_provider("google")
 
 
 @pytest.fixture
@@ -618,3 +609,57 @@ class TestSplitLanguageFailureTaxonomy:
             await get_or_refresh("microsoft")
         assert "microsoft_work" not in str(exc.value)
         assert "split" not in str(exc.value).lower()
+
+
+class TestRefreshWireEncoding:
+    """#3326: the refresh body must reach the token endpoint form-encoded.
+
+    The provider body builders are tested in test_providers.py and
+    test_microsoft_provider.py, but nothing checked how the body is sent:
+    switching ``client.post(url, data=body)`` to ``json=body`` broke every
+    real Google and Microsoft refresh and left the suite green. These tests
+    read the request respx actually received.
+    """
+
+    @pytest.mark.parametrize(
+        "provider_id, token_url, seeded_fixture, refresh_token, client_id",
+        [
+            (
+                "google",
+                "https://oauth2.googleapis.com/token",
+                "seeded_connection",
+                "seed-refresh-token",
+                "test.apps.example",
+            ),
+            (
+                "microsoft",
+                MS_TOKEN_URL,
+                "seeded_microsoft_connection",
+                "seed-ms-refresh-token",
+                "test-ms-client",
+            ),
+        ],
+        ids=["google", "microsoft"],
+    )
+    @respx.mock
+    async def test_refresh_body_is_form_encoded(
+        self, request, provider_id, token_url, seeded_fixture, refresh_token, client_id
+    ):
+        request.getfixturevalue(seeded_fixture)
+        captured = []
+
+        def _capture(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
+            return _ok_token_response(access="fresh")
+
+        respx.post(token_url).mock(side_effect=_capture)
+
+        assert await get_or_refresh(provider_id) == "fresh"
+
+        (sent,) = captured
+        assert sent.headers["content-type"] == "application/x-www-form-urlencoded"
+        form = parse_qs(sent.content.decode(), strict_parsing=True)
+        assert form["grant_type"] == ["refresh_token"]
+        assert form["refresh_token"] == [refresh_token]
+        assert form["client_id"] == [client_id]
+        assert "client_secret" not in form

@@ -132,3 +132,26 @@ def _autouse_isolate_home(tmp_path, monkeypatch):
     monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
     monkeypatch.setattr("gaia.connectors.activations.Path.home", lambda: tmp_path)
     monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)
+
+
+@pytest.fixture
+def google_provider(monkeypatch):
+    """A Google provider with a test client id, built fresh in the registry.
+
+    Shared by the flow, token and route tests that drive the real OAuth code
+    against it. Files that need extra provider setup (a client secret, a
+    redirected home) still define their own ``google_provider``, which takes
+    precedence over this one.
+    """
+    from gaia.connectors.providers import _registry
+    from gaia.connectors.providers import get as get_provider
+
+    monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
+    _registry.clear()
+    return get_provider("google")
+
+
+@pytest.fixture
+def no_browser(monkeypatch):
+    """Stop a real authorization flow from launching the system browser."""
+    monkeypatch.setattr("webbrowser.open", lambda *_, **__: True)
