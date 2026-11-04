@@ -11,6 +11,7 @@ import platform
 import re
 import shutil
 import sqlite3
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, FrozenSet, List, Optional
@@ -2953,7 +2954,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 )
                 tts_dir.mkdir(parents=True, exist_ok=True)
                 ts = time.strftime("%Y%m%d_%H%M%S")
-                destination = tts_dir / f"speech_{ts}.wav"
+                destination = tts_dir / f"speech_{ts}_{uuid.uuid4().hex[:10]}.wav"
             else:
                 destination = _workspace_target(self, output_path)
                 denied = write_access_error(self, destination)

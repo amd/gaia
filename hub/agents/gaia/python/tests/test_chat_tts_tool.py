@@ -90,3 +90,48 @@ def test_tts_default_output_gets_an_inline_player(tts_tool, tmp_path, monkeypatc
     assert card is not None
     assert card["render"] == "audio"
     assert card["data"]["src"].startswith("/api/media/audio/speech_")
+
+
+def test_tts_default_outputs_never_overwrite_each_other(
+    tts_tool, tmp_path, monkeypatch
+):
+    import gaia.config
+    from gaia.ui.generated_media import media_card
+
+    monkeypatch.setattr(gaia.config, "GAIA_CONFIG_DIR", tmp_path / "config")
+    tool, _allowed = tts_tool
+
+    with patch("gaia.audio.lemonade_tts.LemonadeTTSClient") as client:
+
+        def synthesize(text, destination, **_kwargs):
+            Path(destination).write_bytes(text.encode())
+            return 0.5, 1
+
+        client.return_value.synthesize_to_wav_long.side_effect = synthesize
+        first = tool("First clip.")
+        second = tool("Second clip.")
+
+    assert first["audio_path"] != second["audio_path"]
+    assert Path(first["audio_path"]).read_bytes() == b"First clip."
+    for result in (first, second):
+        card = media_card({"type": "tool_result", "success": True, "data": result})
+        assert card is not None and card["render"] == "audio"
+
+
+def test_tts_failed_synthesis_gets_no_player(tts_tool, tmp_path, monkeypatch):
+    import gaia.config
+    from gaia.ui.generated_media import media_card
+
+    monkeypatch.setattr(gaia.config, "GAIA_CONFIG_DIR", tmp_path / "config")
+    tool, _allowed = tts_tool
+
+    with patch("gaia.audio.lemonade_tts.LemonadeTTSClient") as client:
+        client.return_value.synthesize_to_wav_long.side_effect = LemonadeTTSError(
+            "Lemonade returned 500 for /audio/speech"
+        )
+        result = tool("Read this aloud.")
+
+    assert result["status"] == "error"
+    assert "500" in result["error"]
+    assert "audio_path" not in result
+    assert media_card({"type": "tool_result", "success": True, "data": result}) is None

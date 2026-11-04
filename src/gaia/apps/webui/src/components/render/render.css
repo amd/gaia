@@ -202,6 +202,10 @@
     padding-top: 4px;
 }
 
+.render-audio__error {
+    color: var(--danger);
+}
+
 .render-image__caption {
     color: var(--text-secondary);
     font-size: 12px;
