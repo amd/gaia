@@ -760,9 +760,7 @@ class AudioToolsMixin:
         from gaia.agents.base.tools import _TOOL_REGISTRY
 
         registry_getter = getattr(self, "_execution_tool_registry", None)
-        registry = (
-            registry_getter() if callable(registry_getter) else _TOOL_REGISTRY
-        )
+        registry = registry_getter() if callable(registry_getter) else _TOOL_REGISTRY
         entry = registry.get("index_document") or {}
         fn = entry.get("function") or entry.get("func")
         if not callable(fn):
