@@ -24,7 +24,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from gaia.logger import get_logger
 from gaia.utils.terminal import windows_hidden_popen_kwargs
@@ -121,7 +121,7 @@ def desktop_setup_error() -> Optional[str]:
         return None
     reason = str(state.get("initError") or "").strip()
     return reason or (
-        f"`{run_command(False)}` did not finish. Its output is in "
+        "The desktop app's setup did not finish. Its output is in "
         f"{path.parent / 'electron-install.log'}."
     )
 
@@ -227,35 +227,49 @@ def parse_status(stdout: str) -> Dict[str, Any]:
     )
 
 
-def check(skip_chat_model: bool = False, load: bool = False) -> Dict[str, Any]:
+def check(
+    skip_chat_model: bool = False,
+    load: bool = False,
+    on_start: Optional[Callable[[subprocess.Popen], None]] = None,
+    mark: bool = True,
+) -> Dict[str, Any]:
     """Is the flagship profile set up (and, with *load*, do its models load)?
 
+    *on_start* receives the running check, so a caller can stop it (Cancel).
+    *mark* False leaves setup unmarked, for a caller with tests still to run.
     Raises :class:`SetupError` when the question could not be answered — that
     is not the same as "not set up" and must never be shown as it.
     """
+    proc = subprocess.Popen(
+        _gaia_argv(*check_args(skip_chat_model, load)),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=_child_env(),
+        **windows_hidden_popen_kwargs(),
+    )
+    if on_start is not None:
+        on_start(proc)
     try:
-        proc = subprocess.run(
-            _gaia_argv(*check_args(skip_chat_model, load)),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=VERIFY_TIMEOUT_S if load else CHECK_TIMEOUT_S,
-            check=False,
-            env=_child_env(),
-            **windows_hidden_popen_kwargs(),
+        stdout, stderr = proc.communicate(
+            timeout=VERIFY_TIMEOUT_S if load else CHECK_TIMEOUT_S
         )
     except subprocess.TimeoutExpired as e:
+        proc.kill()
+        proc.communicate()
         raise SetupError(
             "Checking setup took too long. Try again; its log shows where it stopped."
         ) from e
     if proc.returncode not in (0, _NOT_READY_EXIT, _LOAD_FAILED_EXIT):
         raise SetupError(
             f"Setup could not be checked (exit {proc.returncode}). GAIA said: "
-            f"{_last_line(proc.stderr + chr(10) + proc.stdout)}"
+            f"{_last_line(stderr + chr(10) + stdout)}"
         )
-    status = parse_status(proc.stdout)
-    if status.get("ready"):
+    status = parse_status(stdout)
+    if mark and status.get("ready"):
         mark_initialized()
     return status
 
@@ -796,6 +810,10 @@ class SetupRunner:
         self._run: Optional[SetupRun] = None
         self._proc: Optional[subprocess.Popen] = None
         self._thread: Optional[threading.Thread] = None
+        self._check_proc: Optional[subprocess.Popen] = None
+        # Clear while a load check runs: only it can write to the model rows.
+        self._check_idle = threading.Event()
+        self._check_idle.set()
         self._models: Dict[str, ModelProgress] = {}
         #: model id -> Stop flag of an in-process pull.
         self._pulls: Dict[str, threading.Event] = {}
@@ -876,14 +894,15 @@ class SetupRunner:
                     "can't switch to GAIA's own. Unset it and restart GAIA."
                 )
         # A cancelled run's checks may still be finishing; they would land on the new run.
-        ending = self._thread
+        # A stopped run's load check may still be ending; its results would land
+        # on the new run. Cancel kills it, so this wait is short.
         over = self._run is None or self._run.state not in ("running", "verifying")
-        if over and ending is not None and ending.is_alive():
-            ending.join(timeout=_STOPPING_WAIT_S)
+        if over:
+            self._check_idle.wait(timeout=_STOPPING_WAIT_S)
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
                 raise SetupBusy("Setup is already running.")
-            if self._thread is not None and self._thread.is_alive():
+            if not self._check_idle.is_set():
                 raise SetupBusy("The last setup is still stopping.")
             if self._pulls:
                 raise SetupBusy(
@@ -992,7 +1011,9 @@ class SetupRunner:
             if model_id is not None:
                 return stopped
             if self._run is not None and self._run.state == "verifying":
-                # The checks stop at their next step and their results are dropped.
+                # Stop the load check; whatever it already found is dropped.
+                if self._check_proc is not None and self._check_proc.poll() is None:
+                    self._check_proc.kill()
                 self._run.state = "cancelled"
                 self._run.text = "Setup stopped"
                 self._run.note("Stopped by the user while checking the models")
@@ -1315,8 +1336,7 @@ class SetupRunner:
                     run.note(f"Setup failed: {run.error}")
                     return
                 run.error = (
-                    f"`{run_command(run.skip_chat_model, run.gaia_lemonade)}` "
-                    f"failed (exit {code}): "
+                    f"Setup stopped (exit {code}): "
                     f"{run.error or _last_line(chr(10).join(run.log))}"
                 )
                 run.note(f"Setup failed: {run.error}")
@@ -1332,17 +1352,25 @@ class SetupRunner:
             run.percent = run.size = None
         self._verify(run)
 
-    def _verify(self, run: SetupRun) -> None:
+    def _load_check(self, run: SetupRun) -> bool:
+        """Load every model and record the results; True when setup is ready."""
+
+        def started(proc: subprocess.Popen) -> None:
+            with self._lock:
+                self._check_proc = proc
+                if run.state == "cancelled":
+                    proc.kill()
+
         try:
-            status = check(run.skip_chat_model, load=True)
+            status = check(run.skip_chat_model, load=True, on_start=started, mark=False)
         except SetupError as e:
             with self._lock:
                 if run.state == "cancelled":
-                    return
+                    return False
                 run.state, run.error = "failed", str(e)
                 run.note(f"Load check failed: {e}")
                 self._settle_models(None, {}, run_failed=True)
-            return
+            return False
         loads = status.get("models") or []
         failed = {
             m["id"]: f"{m['id']} is downloaded but would not load: {m.get('error')}"
@@ -1352,7 +1380,7 @@ class SetupRunner:
         with self._lock:
             # Cancelled during the check: its results belong to no run any more.
             if run.state == "cancelled":
-                return
+                return False
             run.status = status
             for m in loads:
                 outcome = (
@@ -1363,7 +1391,24 @@ class SetupRunner:
             # gaia init's Test step ran what the user ticked; this check only
             # covers the plan. Any other model it skipped stays unverified.
             checked = {m["id"] for m in loads}
-            loaded |= {i for i in run.extra_models if i not in checked}
+            # An extra's own test result stands; only an untested one counts as loaded.
+            tested_failed = {
+                t["subject"]: t.get("error")
+                for t in run.tests.values()
+                if t.get("state") == "failed" and t.get("subject") in run.extra_models
+            }
+            failed.update(
+                {
+                    i: f"{i} failed its test: {err}"
+                    for i, err in tested_failed.items()
+                    if i not in checked
+                }
+            )
+            loaded |= {
+                i
+                for i in run.extra_models
+                if i not in checked and i not in tested_failed
+            }
             self._settle_models(
                 loaded if loads else None,
                 failed,
@@ -1376,6 +1421,14 @@ class SetupRunner:
                     "Setup finished but GAIA is still not ready."
                 )
                 run.note(f"Not ready: {run.error}")
+        return ready
+
+    def _verify(self, run: SetupRun) -> None:
+        self._check_idle.clear()
+        try:
+            ready = self._load_check(run)
+        finally:
+            self._check_idle.set()
         if not ready:
             return
         problem = self._test_agent(run)
@@ -1386,6 +1439,7 @@ class SetupRunner:
                 run.state, run.error = "failed", problem
             else:
                 run.state, run.text = "ready", "GAIA is ready"
+                mark_initialized()
             run.note(run.error if problem else run.text)
 
     def _test_agent(self, run: SetupRun) -> Optional[str]:
@@ -1398,7 +1452,11 @@ class SetupRunner:
 
         started = time.monotonic()
         # A cloud setup chats on the cloud model connecting saved, as chat will.
+        from gaia.llm.lemonade_client import cloud_model_provider
+
         cloud = GaiaConfig.load().last_model if run.skip_chat_model else None
+        if cloud and not (cloud.startswith("claude-") or cloud_model_provider(cloud)):
+            cloud = None
         if run.skip_chat_model and not cloud:
             problem = NO_CLOUD_MODEL
         else:

@@ -120,13 +120,36 @@ def test_parse_status_no_json_names_the_last_line():
 # ── check ──────────────────────────────────────────────────────────────────
 
 
-def _fake_run(monkeypatch, returncode, stdout="", stderr="", calls=None):
-    def run(argv, **kwargs):
+class _CheckProc:
+    """A ``gaia init --check`` child: answers once, records its wait in *kwargs*."""
+
+    def __init__(self, kwargs, returncode, stdout, stderr, times_out=False):
+        self._kwargs, self.returncode = kwargs, returncode
+        self._out, self._times_out, self.killed = (stdout, stderr), times_out, False
+
+    def communicate(self, timeout=None):
+        if timeout is not None:
+            self._kwargs["timeout"] = timeout
+        if self._times_out and not self.killed:
+            raise subprocess.TimeoutExpired("gaia", timeout)
+        return self._out
+
+    def kill(self):
+        self.killed = True
+
+    def poll(self):
+        return None if not self.killed else -9
+
+
+def _fake_run(
+    monkeypatch, returncode, stdout="", stderr="", calls=None, times_out=False
+):
+    def popen(argv, **kwargs):
         if calls is not None:
             calls.append((argv, kwargs))
-        return subprocess.CompletedProcess(argv, returncode, stdout, stderr)
+        return _CheckProc(kwargs, returncode, stdout, stderr, times_out)
 
-    monkeypatch.setattr(sr.subprocess, "run", run)
+    monkeypatch.setattr(sr.subprocess, "Popen", popen)
 
 
 def test_check_ready_marks_initialized(monkeypatch):
@@ -165,13 +188,20 @@ def test_check_unexpected_exit_is_an_error_not_not_ready(monkeypatch):
         sr.check()
 
 
-def test_check_timeout_is_an_error(monkeypatch):
-    def run(argv, **kwargs):
-        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
-
-    monkeypatch.setattr(sr.subprocess, "run", run)
+def test_check_timeout_is_an_error_and_stops_the_check(monkeypatch):
+    calls = []
+    _fake_run(monkeypatch, 0, calls=calls, times_out=True)
+    procs = []
     with pytest.raises(sr.SetupError, match="took too long"):
-        sr.check()
+        sr.check(on_start=procs.append)
+    assert procs[0].killed
+
+
+def test_check_hands_its_process_to_the_caller(monkeypatch):
+    _fake_run(monkeypatch, 0, '{"ready": true}')
+    procs = []
+    sr.check(on_start=procs.append)
+    assert len(procs) == 1
 
 
 # ── marker ─────────────────────────────────────────────────────────────────
@@ -204,7 +234,7 @@ def test_desktop_setup_error_is_the_reason_init_gave(gaia_home):
 def test_desktop_setup_error_without_a_reason_points_at_the_log(gaia_home):
     _desktop_state(gaia_home, json.dumps({"state": "ready", "init": "failed"}))
     error = sr.desktop_setup_error()
-    assert "gaia init --profile gaia" in error
+    assert "setup did not finish" in error and "gaia init" not in error
     assert "electron-install.log" in error
 
 
@@ -481,7 +511,7 @@ def test_a_clean_run_is_verified_then_ready(monkeypatch):
     calls, checks = [], []
     _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)), calls)
 
-    def check(skip_chat_model, load):
+    def check(skip_chat_model, load, **_k):
         checks.append((skip_chat_model, load))
         return {"ready": True}
 
@@ -1053,7 +1083,7 @@ def test_check_route_adds_the_steps(client, monkeypatch):
     test_client, _ = client
     seen = {}
 
-    def check(skip_chat_model, load):
+    def check(skip_chat_model, load, **_k):
         seen.update(skip_chat_model=skip_chat_model, load=load)
         return {"ready": False, "stage": "models", "reasons": ["x"]}
 
@@ -2026,3 +2056,25 @@ def test_try_again_waits_for_a_cancelled_check_to_finish(monkeypatch):
     runner.start(False)
     assert not old.is_alive()
     assert _wait_done(runner)["state"] == "ready"
+
+
+def test_cancel_stops_the_running_load_check(monkeypatch):
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    check_proc = _CheckProc({}, 0, "", "")
+    entered, release = threading.Event(), threading.Event()
+
+    def check(*_a, on_start=None, **_k):
+        on_start(check_proc)
+        entered.set()
+        release.wait(5)
+        raise sr.SetupError("Setup could not be checked (exit -9).")
+
+    monkeypatch.setattr(sr, "check", check)
+    runner = sr.SetupRunner()
+    runner.start(False)
+    assert entered.wait(5)
+    runner.cancel()
+    assert check_proc.killed
+    release.set()
+    runner._thread.join(5)
+    assert runner.status()["state"] == "cancelled"

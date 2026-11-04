@@ -112,12 +112,12 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
                 onFound?.(found);
                 setNeedsKey(found.status === 'needs_key');
                 if (found.status === 'too_old') onNothingToOffer?.();
-            } else {
+            } else if (missed.length === 0) {
                 onNothingToOffer?.();
             }
+            // Unanswered or failed: the user decides, so GAIA's own isn't installed beside theirs.
         } catch (err) {
             if (live.current) setCheckError(err instanceof Error ? err.message : String(err));
-            onNothingToOffer?.();
         } finally {
             if (live.current) setChecking(false);
         }
@@ -164,6 +164,11 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
                     <button type="button" className="btn-secondary" disabled={checking} onClick={() => void detect()}>
                         {checking && <Loader2 size={13} className="spin" />} {t('setup.offer.checkAgain')}
                     </button>
+                    {onNothingToOffer && (
+                        <button type="button" className="btn-primary" disabled={checking} onClick={onNothingToOffer}>
+                            {t('setup.offer.useOwn')}
+                        </button>
+                    )}
                 </SetupFooter>
             </>
         );
@@ -467,7 +472,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             })
             .catch((err) => setStartError(errorText(err)))
             .finally(() => setStatusRead(true));
-    }, [loadHardware, loadPlan, again, t]);
+    }, [loadHardware, loadPlan, again]);
 
     // The plan seeds the selection once, from what is planned and on disk.
     useEffect(() => {
@@ -1009,6 +1014,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 </>
                             )}
                             {startError && <SetupAlert text={startError} />}
+                            {/* The server start was refused before any run existed: nothing else offers a retry. */}
+                            {startError && !serverRun && plan && !plan.lemonade.reachable && (
+                                <SetupFooter>
+                                    <button type="button" className="btn-primary" onClick={() => void start(false, { serverOnly: true })}>{t('setup.tryAgain')}</button>
+                                </SetupFooter>
+                            )}
                             {/* Before GAIA starts its own server, and after, so the user can still switch to theirs. */}
                             {statusRead && plan && ((!plan.lemonade.reachable && !serverRun) || (checksDone && viewing == null && plan.lemonade.mode !== 'external')) && (
                                 <ExistingLemonadeOffer
@@ -1295,7 +1306,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 names={names}
                                 catalog={catalog}
                                 onRetry={retryRun}
-                                onChooseAnother={customize}
+                                onChooseAnother={cloud ? undefined : customize}
                                 onCancel={() => void cancel()}
                                 // GAIA never deletes a model on the user's own server.
                                 onDownloadAgain={plan?.lemonade.mode === 'external' ? undefined : (id) => void retryModel(id, 'verify')}

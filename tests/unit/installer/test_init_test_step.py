@@ -582,3 +582,19 @@ def test_the_summary_says_nothing_it_could_not_find(monkeypatch):
     assert found["lemonade_version"] is None
     assert found["agent_version"] is None
     assert found["devices"] == []
+
+
+@pytest.mark.parametrize(
+    "problem, kept, state",
+    [
+        (None, False, "done"),
+        ("Could not reach the hub", True, "done"),
+        ("Install failed", False, "failed"),
+    ],
+)
+def test_the_agent_row_is_failed_only_when_no_agent_answers(problem, kept, state):
+    from gaia.installer.init_command import InitCommand
+
+    cmd = InitCommand(profile="gaia", yes=True)
+    cmd._agent_problem, cmd._agent_kept = problem, kept
+    assert cmd._agent_component_state() == state

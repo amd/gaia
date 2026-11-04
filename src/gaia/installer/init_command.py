@@ -1662,7 +1662,7 @@ class InitCommand:
                 )
                 self._component("agent", "active")
                 self._ensure_hub_agent_installed()
-                self._component("agent", "failed" if self._agent_problem else "done")
+                self._component("agent", self._agent_component_state())
 
             # Build Agent UI frontend (dev/source installs only). No
             # try/except here: ensure_webui_built() never raises for an
@@ -2870,7 +2870,9 @@ class InitCommand:
             model=model_id,
             api_key=resolve_lemonade_api_key(base_url=client.base_url),
         ).synthesize("GAIA is ready.")
-        return (True, None) if len(samples) else (False, "No audio came back")
+        return (
+            (True, None) if len(samples) else (False, WrongAnswer("No audio came back"))
+        )
 
     def _test_vision(self, client, model_id: str) -> tuple:
         """Show the model a red image and ask its colour: text alone proves no vision."""
@@ -3350,7 +3352,7 @@ class InitCommand:
                 self._print_error(
                     "The model server stopped answering while testing "
                     f"{', '.join(m for m, _ in stuck)}. Restart it, or the PC, "
-                    "and re-run `gaia init`; nothing needs re-downloading."
+                    "then run setup again; nothing needs re-downloading."
                 )
                 return False
 
@@ -3390,6 +3392,10 @@ class InitCommand:
         from gaia.hub import installer as hub_installer
 
         return hub_installer.read_sentinel(agent_id) is not None
+
+    def _agent_component_state(self) -> str:
+        """The agent row after its step: a kept agent still answers, so it is done."""
+        return "failed" if self._agent_problem and not self._agent_kept else "done"
 
     def _profile_installs_flagship(self) -> bool:
         """Whether this profile installs the flagship agent itself."""

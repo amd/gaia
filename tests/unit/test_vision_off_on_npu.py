@@ -22,11 +22,15 @@ NPU = "gemma4-it-e4b-FLM"
 
 @pytest.fixture
 def chat_model(monkeypatch):
-    def use(model, vision_model=None):
+    def use(model, vision_model=None, last_model=None):
         monkeypatch.setattr(lc, "resolve_default_chat_model", lambda: model)
         monkeypatch.setattr(
             "gaia.config.GaiaConfig.load",
-            classmethod(lambda cls: types.SimpleNamespace(vision_model=vision_model)),
+            classmethod(
+                lambda cls: types.SimpleNamespace(
+                    vision_model=vision_model, last_model=last_model
+                )
+            ),
         )
 
     return use
@@ -45,6 +49,18 @@ def test_a_saved_vision_model_does_not_turn_it_back_on(chat_model):
 def test_the_gpu_keeps_its_vision_model(chat_model):
     chat_model(lc.LARGE_DEFAULT_MODEL_NAME)
     assert lc.resolve_default_vision_model() == lc.LARGE_DEFAULT_MODEL_NAME
+
+
+def test_it_follows_the_model_chat_reopens_on(chat_model):
+    chat_model(NPU, last_model=lc.DEFAULT_MODEL_NAME)
+    assert lc.resolve_default_vision_model() == lc.DEFAULT_MODEL_NAME
+    chat_model(lc.DEFAULT_MODEL_NAME, last_model=NPU)
+    assert lc.resolve_default_vision_model() is None
+
+
+def test_a_cloud_chat_falls_back_to_the_local_default(chat_model):
+    chat_model(NPU, last_model="fireworks.deepseek-v4p1-flash")
+    assert lc.resolve_default_vision_model() is None
 
 
 def test_chat_is_told_it_is_off_and_offered_no_download(chat_model, monkeypatch):
@@ -93,3 +109,11 @@ def test_init_does_not_test_reading_images_on_the_npu(monkeypatch):
     cmd = InitCommand(profile="gaia", yes=True)
     monkeypatch.setattr(cmd, "_chat_model", lambda client: NPU)
     assert cmd._vision_test_model(client=None) is None
+
+
+def test_an_empty_scan_on_the_npu_names_no_model_to_download():
+    sdk = RAGSDK.__new__(RAGSDK)
+    sdk.config = types.SimpleNamespace(vlm_model=None)
+    remedy = sdk._read_images_remedy("  2. ")
+    assert "None" not in remedy
+    assert "while it runs on the NPU" in remedy
