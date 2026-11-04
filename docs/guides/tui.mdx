@@ -59,6 +59,11 @@ it runs) — so there is nothing to unzip and nothing to `chmod`.
 | Linux x64 (Debian/Ubuntu) | `gaia_<version>_amd64.deb` | `sudo dpkg -i gaia_<version>_amd64.deb` | `/usr/bin` |
 | Linux x64 (Fedora/RHEL) | `gaia-<version>.x86_64.rpm` | `sudo dnf install ./gaia-<version>.x86_64.rpm` | `/usr/bin` |
 
+On macOS and Linux the package carries only those two binaries. The first time you
+open GAIA, setup installs the rest of GAIA (its Python part, the `gaia` command) into
+`~/.gaia`. That takes about two minutes and needs internet. The one-line installer
+(`curl -fsSL https://amd-gaia.ai/install.sh | sh`) installs it up front instead.
+
 On Windows this is the one GAIA installer: on **Choose Components**, tick
 **Terminal** — and the desktop app too, if you want both. [Install GAIA](/guides/install)
 covers the choice and silent installs (`/S /COMPONENTS=tui`).
