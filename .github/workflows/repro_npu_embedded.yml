@@ -32,10 +32,19 @@ on:
         description: 'FLM models, separated by spaces'
         required: false
         default: 'gemma4-it-e4b-FLM gemma3-4b-FLM'
+      holder_model:
+        description: 'FLM model a second Lemonade keeps on the NPU for the "NPU held" cells (empty: skip them)'
+        required: false
+        default: 'gemma3-4b-FLM'
       gaia_ref:
         description: 'Install GAIA from this ref instead of this one (the script still comes from this ref)'
         required: false
         default: ''
+      memlock:
+        description: 'Linux locked-memory limit for the run: as-is (a fresh desktop session) or unlimited (a PC with the NPU fix applied; needs passwordless sudo on the runner)'
+        type: choice
+        options: [as-is, unlimited]
+        default: as-is
 
 permissions:
   contents: read
@@ -53,8 +62,17 @@ jobs:
     env:
       LEMONADE_EXTRA: ${{ inputs.lemonade }}
       MODELS: ${{ inputs.models }}
+      HOLDER_MODEL: ${{ inputs.holder_model }}
       GAIA_REF: ${{ inputs.gaia_ref }}
+      MEMLOCK: ${{ inputs.memlock }}
     steps:
+      - name: Paths for this run
+        run: |
+          {
+            echo "REPRO_WORKDIR=$RUNNER_TEMP/npu-repro"
+            echo "VENV=$RUNNER_TEMP/npu-repro-venv"
+          } >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v7
 
       - name: Check out the GAIA under test
@@ -63,13 +81,6 @@ jobs:
         with:
           ref: ${{ inputs.gaia_ref }}
           path: gaia-under-test
-
-      - name: Paths for this run
-        run: |
-          {
-            echo "REPRO_WORKDIR=$RUNNER_TEMP/npu-repro"
-            echo "VENV=$RUNNER_TEMP/npu-repro-venv"
-          } >> "$GITHUB_ENV"
 
       - name: Install GAIA and the flagship agent into a fresh venv
         run: |
@@ -90,12 +101,23 @@ jobs:
       - name: Run the repro
         run: |
           set -uo pipefail
+          # #6632: FastFlowLM needs locked memory far above a desktop session's
+          # 8 MB. "unlimited" lifts this shell's limit, which GAIA's Lemonade
+          # and its FLM child inherit, as on a PC with the NPU fix applied.
+          if [ "$MEMLOCK" = "unlimited" ]; then
+            if ! sudo -n prlimit --pid $$ --memlock=unlimited:unlimited; then
+              echo "::error::memlock=unlimited needs passwordless sudo for prlimit on this runner, or the runner service started with LimitMEMLOCK=infinity (systemctl edit actions.runner.*.service)."
+              exit 2
+            fi
+          fi
+          echo "memlock for this run: soft $(ulimit -Sl), hard $(ulimit -Hl)"
           extra=()
           for spec in $LEMONADE_EXTRA; do extra+=(--lemonade "$spec"); done
           for model in $MODELS; do extra+=(--model "$model"); done
           "$VENV/bin/python" util/repro_npu_embedded.py \
             --workdir "$REPRO_WORKDIR" \
-            --output "$RUNNER_TEMP/gaia-npu-repro-linux.tar.gz" "${extra[@]}"
+            --output "$RUNNER_TEMP/gaia-npu-repro-linux.tar.gz" \
+            "--holder-model=$HOLDER_MODEL" "${extra[@]}"
           code=$?
           cat "$REPRO_WORKDIR/report/summary.md" >> "$GITHUB_STEP_SUMMARY" || true
           # Exit 1 is a cell that failed: the finding, not a broken run.
@@ -113,6 +135,8 @@ jobs:
       - name: Leave the machine clean
         if: always()
         run: |
+          # An empty pattern would match (and kill) every process the runner owns.
+          [ -n "${REPRO_WORKDIR:-}" ] || exit 0
           leftovers=$(pgrep -f "$REPRO_WORKDIR" || true)
           if [ -n "$leftovers" ]; then
             echo "::warning::Stopping processes the repro left behind: $leftovers"
@@ -135,6 +159,7 @@ jobs:
     env:
       LEMONADE_EXTRA: ${{ inputs.lemonade }}
       MODELS: ${{ inputs.models }}
+      HOLDER_MODEL: ${{ inputs.holder_model }}
       GAIA_REF: ${{ inputs.gaia_ref }}
     steps:
       - uses: actions/checkout@v7
@@ -165,6 +190,8 @@ jobs:
           foreach ($spec in ($env:LEMONADE_EXTRA -split ' ' | Where-Object { $_ })) { $extra += @('--lemonade', $spec) }
           foreach ($model in ($env:MODELS -split ' ' | Where-Object { $_ })) { $extra += @('--model', $model) }
           $out = Join-Path $env:RUNNER_TEMP 'gaia-npu-repro-windows.tar.gz'
+          # One token: PowerShell 5.1 drops an empty argument, leaving --holder-model without a value.
+          $extra += "--holder-model=$($env:HOLDER_MODEL)"
           & "$env:VENV\Scripts\python.exe" util\repro_npu_embedded.py --workdir $env:REPRO_WORKDIR --output $out @extra
           $code = $LASTEXITCODE
           Get-Content (Join-Path $env:REPRO_WORKDIR 'report\summary.md') -ErrorAction SilentlyContinue | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

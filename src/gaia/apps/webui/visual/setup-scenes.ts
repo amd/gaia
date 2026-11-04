@@ -84,6 +84,9 @@ const PLAN_TOO_BIG = {
     chat_model: { id: QWEN_ID, user_set: true, size_gb: 23.3, downloaded: false },
     catalog: CATALOG.map((e) => (e.id === QWEN_ID ? { ...e, planned: true, selected: true } : e)),
 };
+// Lemonade sees the NPU, but FastFlowLM can't run on this PC (#6632).
+const NPU_UNUSABLE = { fits: false, fit_code: 'npu', fit_reason: 'needs an AMD Ryzen AI NPU and its driver' };
+const PLAN_NPU_UNUSABLE = { ...PLAN, catalog: CATALOG.map((e) => (e.recipe === 'flm' ? { ...e, ...NPU_UNUSABLE } : e)) };
 const PLAN_LONG = {
     ...PLAN,
     chat_model: { id: QWEN_ID, user_set: true, size_gb: 23.3, downloaded: false },
@@ -165,6 +168,15 @@ const RUN_OPTIONAL_FAILED = {
         test('chat', 'passed', { subject: GEMMA_ID, seconds: 14 }),
         test('speech', 'failed', { subject: SPEECH.id, kind: 'broken', error: 'The test sound came back empty.' }),
         test('agent', 'running'),
+    ],
+};
+const NPU_CHAT_FAILED = "Gemma 4 E4B NPU loads on this PC's NPU, but GAIA's test chat on it got no answer. Test again, or choose another chat model. The setup report has the details.";
+const RUN_AGENT_FAILED = {
+    ...RUN, state: 'failed', error: NPU_CHAT_FAILED, models: DONE_ROWS,
+    tests: [
+        test('server', 'passed', { seconds: 1 }),
+        test('chat', 'passed', { subject: NPU.id, seconds: 9 }),
+        test('agent', 'failed', { subject: NPU.id, kind: 'agent', error: NPU_CHAT_FAILED, seconds: 31 }),
     ],
 };
 const RUN_READY = { ...RUN, state: 'ready', text: 'GAIA is ready', models: DONE_ROWS.map((m) => ({ ...m, state: 'ready' })) };
@@ -365,6 +377,15 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
+        name: 'models-npu-unusable',
+        answers: { plan: PLAN_NPU_UNUSABLE },
+        reach: async (page) => {
+            await toModels(page);
+            await expect(page.locator('.setup-backend [role="radio"]')).toHaveCount(1);
+            await expect(page.locator('.setup-backend .setup-hint')).toBeVisible();
+        },
+    },
+    {
         name: 'models',
         reach: async (page) => {
             await toModels(page);
@@ -467,6 +488,12 @@ export const SETUP_SCENES: SetupScene[] = [
         answers: { status: failedTests('broken', 'The model file looks damaged.') },
         // A damaged file: Download it again is the bar's main action.
         reach: (page) => expect(page.locator('.setup-footer .btn-primary.setup-wrap-btn')).toBeVisible(),
+    },
+    {
+        // The real chat ran on the chosen NPU model and got no answer: the row names it.
+        name: 'test-failed-agent',
+        answers: { status: RUN_AGENT_FAILED },
+        reach: (page) => expect(page.locator('.setup-result.is-failed .setup-result-model')).toBeVisible(),
     },
     {
         name: 'test-long',

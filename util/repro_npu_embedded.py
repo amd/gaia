@@ -57,6 +57,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 DEFAULT_MODELS = ["gemma4-it-e4b-FLM", "gemma3-4b-FLM"]
+#: What the other Lemonade holds on the NPU in the "NPU held" cells: the model
+#: the reporter had loaded in the Lemonade app while GAIA's load failed.
+HOLDER_MODEL = "gemma3-4b-FLM"
 REQUESTS = ["plain", "large", "agent"]
 FLM_DEFAULT_CTX = 32768
 PLAIN_PROMPT = "Reply with one short sentence: what is 2 + 2?"
@@ -157,6 +160,11 @@ _LINUX_FACTS = {
     "/etc/security/limits.d/*",
     "systemd_user_memlock": "systemctl show user@$(id -u).service -p LimitMEMLOCK",
     "ulimit_l": "ulimit -Sl; ulimit -Hl",
+    # Whether an unprivileged user-manager scope can lift memlock past 8 MB.
+    "user_manager_memlock": "systemctl --user show -p DefaultLimitMEMLOCK 2>&1",
+    "systemd_run_user_memlock": "timeout 20 systemd-run --user --scope --quiet "
+    "-p LimitMEMLOCK=infinity bash -c 'ulimit -Sl; ulimit -Hl' 2>&1",
+    "sudo_noninteractive": "sudo -n true 2>&1 && echo yes",
     "free": "free -g",
 }
 
@@ -289,6 +297,47 @@ def find_flm(cache_dir: Path) -> Optional[Path]:
     return None
 
 
+_FLM_VERSIONS: Dict[str, Dict[str, Any]] = {}
+
+
+def flm_origin(binary: Path, cache_dir: Path) -> str:
+    """Where an flm binary came from: this Lemonade's download, or the system."""
+    try:
+        binary.resolve().relative_to(cache_dir.resolve())
+        return "bundled: this Lemonade's own download"
+    except ValueError:
+        pass
+    if binary.as_posix().startswith(("/usr/", "/opt/")):
+        return f"system package: {binary}"
+    return f"elsewhere (PATH?): {binary}"
+
+
+def flm_in_use(procs: List[Dict[str, Any]], cache_dir: Path) -> List[Dict[str, Any]]:
+    """Each FastFlowLM process in *procs*: binary, version, origin, command line."""
+    found = []
+    for proc in procs:
+        exe = Path(proc.get("exe") or "")
+        if not exe.name.lower().startswith("flm"):
+            continue
+        # The portable Linux build's `flm` script execs `flm-real` beside it.
+        launcher = exe.with_name("flm.exe" if exe.suffix == ".exe" else "flm")
+        binary = launcher if launcher.is_file() else exe
+        key = str(binary)
+        if key not in _FLM_VERSIONS:
+            _FLM_VERSIONS[key] = run([key, "version"])
+        said = _FLM_VERSIONS[key]
+        found.append(
+            {
+                "pid": proc.get("pid"),
+                "exe": str(exe),
+                "cmdline": proc.get("cmdline"),
+                "origin": flm_origin(binary, cache_dir),
+                "version": (said.get("stdout") or said.get("error") or "").strip(),
+            }
+        )
+    return found
+
+
 def large_prompt() -> str:
     line = "This line only fills the context to the size of a first agent turn. "
     # About 16 tokens a line.
@@ -307,6 +356,16 @@ def chat(lemonade: Lemonade, model: str, prompt: str) -> Dict[str, Any]:
         },
         timeout=CHAT_TIMEOUT_S,
     )
+
+
+def models_loaded(health: Any) -> Optional[List[str]]:
+    """Model names a Lemonade ``/health`` reports loaded; None if unreadable."""
+    if not isinstance(health, dict) or "all_models_loaded" not in health:
+        return None
+    return [
+        str(m.get("model_name") if isinstance(m, dict) else m)
+        for m in health.get("all_models_loaded") or []
+    ]
 
 
 def answer_of(response: Dict[str, Any]) -> Optional[str]:
@@ -352,6 +411,7 @@ class VersionRun:
         self.lemonade: Optional[Lemonade] = None
         self.pid: Optional[int] = None
         self.base_url = ""
+        self.cache_dir = Path()
 
     def save(self) -> None:
         text = json.dumps(self.record, indent=2, default=str)
@@ -374,10 +434,13 @@ class VersionRun:
                 )
             GaiaConfig.save_key("lemonade_mode", MODE_GAIA)
             emb = le.EmbeddedLemonade(version=self.args.one_version)
+            self.cache_dir = emb.cache_dir
             self._start(emb)
             self._install_flm(emb)
             for model in self.args.model:
                 self._model(model)
+            if self.args.holder_model:
+                self._held_cells(le)
         except Exception:  # pylint: disable=broad-except
             record["fatal"] = traceback.format_exc()
         finally:
@@ -419,8 +482,11 @@ class VersionRun:
         install["seconds"] = round(time.time() - started, 1)
         self.record["flm_install"] = install
         self.record["system_info_after_install"] = self.lemonade.get_json("system-info")
+        self.record["lemond_config"] = read(str(emb.config_dir / "config.json"))
         flm = find_flm(emb.cache_dir)
         self.record["flm_binary"] = str(flm) if flm else None
+        if flm:
+            self.record["flm_origin"] = flm_origin(flm, emb.cache_dir)
         if flm:
             self.record["flm_version"] = run([str(flm), "version"])
             self.record["flm_validate"] = run([str(flm), "validate", "--json"])
@@ -485,6 +551,7 @@ class VersionRun:
         )
         cell["health_after_load"] = lemonade.get_json("health")
         cell["processes_after_load"] = processes(self.pid)
+        cell["flm"] = flm_in_use(cell["processes_after_load"], self.cache_dir)
         if cell["load"].get("status") == 200:
             prompt = large_prompt() if request == "large" else PLAIN_PROMPT
             cell["chat"] = chat(lemonade, model, prompt)
@@ -527,9 +594,113 @@ class VersionRun:
         cell["errors_5xx"] = re.findall(r"Request failed with status 5\d\d:.*", said)
         cell["health_after"] = self.lemonade.get_json("health")
         cell["processes_after"] = processes(self.pid)
+        cell["flm"] = flm_in_use(cell["processes_after"], self.cache_dir)
         if not cell["ok"]:
             cell["dmesg"] = dmesg_tail()
         return cell
+
+    def _held_cells(self, le: Any) -> None:
+        """The same loads while a second Lemonade already has an FLM model on the NPU.
+
+        The reporter's Lemonade app had ``gemma3-4b-FLM`` loaded when GAIA's
+        load failed: two lemond instances, two flm processes, one NPU.
+        """
+        model = self.args.holder_model
+        home = Path(os.environ["GAIA_HOME"]) / "npu-holder"
+        holder = le.EmbeddedLemonade(version=self.args.one_version, home=home)
+        held: Dict[str, Any] = {"model": model}
+        self.record["npu_holder"] = held
+        try:
+            status = holder.start()
+            key = holder.current_api_key()
+            self.secrets.append(key or "")
+            other = Lemonade(holder.base_url_for(status.port), key)
+            held["install"] = other.call(
+                "POST",
+                "install",
+                {"recipe": "flm", "backend": "npu"},
+                timeout=BACKEND_TIMEOUT_S,
+            )
+            held["pull"] = other.call(
+                "POST", "pull", {"model_name": model}, timeout=PULL_TIMEOUT_S
+            )
+            # GAIA's Lemonade still holds the last model it loaded; free the NPU
+            # so a failed holder load is not GAIA's own clash.
+            held["gaia_unload"] = self.lemonade.call("POST", "unload", {}, timeout=120)
+            still = models_loaded(self.lemonade.get_json("health"))
+            held["gaia_loaded_after_unload"] = still
+            if still is None or still:
+                unload = held["gaia_unload"]
+                self.record["cells"].append(
+                    {
+                        "model": model,
+                        "request": "GAIA's Lemonade frees the NPU",
+                        "ok": False,
+                        "unload": unload,
+                        "error": "GAIA's Lemonade could not unload "
+                        f"(unload {unload.get('status')}, still loaded: "
+                        f"{still if still is not None else 'health unreadable'}) "
+                        "before the second Lemonade's load, so the NPU-held "
+                        "cells were not run",
+                    }
+                )
+                self.save()
+                return
+            held["load"] = other.call(
+                "POST",
+                "load",
+                {"model_name": model, "ctx_size": FLM_DEFAULT_CTX},
+                timeout=LOAD_TIMEOUT_S,
+            )
+            held["answer"] = answer_of(chat(other, model, PLAIN_PROMPT))
+            held["flm"] = flm_in_use(processes(status.pid), holder.cache_dir)
+            self.save()
+            if held["answer"] is None:
+                self.record["cells"].append(
+                    {
+                        "model": model,
+                        "request": "second Lemonade loads the NPU",
+                        "ok": False,
+                        "load": held["load"],
+                        "error": "the second Lemonade could not load and answer, "
+                        "so the NPU-held cells were not run",
+                    }
+                )
+                return
+            for target in self.args.model:
+                for request in ("plain", "agent"):
+                    if request not in self.args.request:
+                        continue
+                    if request == "agent":
+                        cell = self._agent_cell(target, "flm-default", FLM_DEFAULT_CTX)
+                    else:
+                        cell = self._direct_cell(
+                            target, "flm-default", FLM_DEFAULT_CTX, request
+                        )
+                    cell["request"] = f"{request}, NPU held by {model}"
+                    self.record["cells"].append(cell)
+                    self.save()
+            held["chat_after"] = chat(other, model, PLAIN_PROMPT)
+            held["answer_after"] = answer_of(held["chat_after"])
+            if held["answer_after"] is None:
+                self.record["cells"].append(
+                    {
+                        "model": model,
+                        "request": "second Lemonade still answers after GAIA's loads",
+                        "ok": False,
+                        "chat": held["chat_after"],
+                        "error": "the model the second Lemonade held stopped "
+                        "answering after GAIA loaded beside it",
+                    }
+                )
+                self.save()
+        finally:
+            try:
+                holder.stop()
+            except Exception as e:  # pylint: disable=broad-except
+                held["stop_error"] = str(e)
+            if holder.log_path.exists():
+                self._copy(holder.log_path, self.out / "npu-holder-lemond.log")
 
     def _collect(self, emb: Any) -> None:
         self.record["processes_at_end"] = processes(self.pid)
@@ -581,16 +752,30 @@ def _detail(cell: Dict[str, Any]) -> str:
     return ""
 
 
+def _first_line(text: str) -> str:
+    lines = (text or "").strip().splitlines()
+    return lines[0][:80] if lines else "?"
+
+
+def _cell_flm(cell: Dict[str, Any], installed: str) -> str:
+    """The FLM the cell ran, and where it came from; else the one installed."""
+    running = cell.get("flm") or []
+    if not running:
+        return f"{installed} (not running)"
+    origin = running[0]["origin"].split(":")[0]
+    return f"{_first_line(running[0]['version'])} ({origin})"
+
+
 def summarize(versions: List[Dict[str, Any]]) -> str:
     rows = [
-        "| Lemonade | Model | Window | Request | Result | Detail |",
-        "|---|---|---|---|---|---|",
+        "| Lemonade | FLM | Model | Window | Request | Result | Detail |",
+        "|---|---|---|---|---|---|---|",
     ]
     for v in versions:
-        flm = (v.get("flm_version") or {}).get("stdout", "").strip().splitlines()
+        installed = _first_line((v.get("flm_version") or {}).get("stdout", ""))
         if v.get("fatal"):
             rows.append(
-                f"| {v.get('lemonade')} | - | - | - | **run failed** | "
+                f"| {v.get('lemonade')} | - | - | - | - | **run failed** | "
                 f"{str(v['fatal']).strip().splitlines()[-1][:300]} |"
             )
         for c in v.get("cells", []):
@@ -598,7 +783,7 @@ def summarize(versions: List[Dict[str, Any]]) -> str:
             detail = _detail(c).replace("|", "/").replace("\n", " ")
             window = f"{c['window']} ({c['ctx']})" if c.get("window") else "-"
             rows.append(
-                f"| {v.get('lemonade')} (FLM {flm[0] if flm else '?'}) | "
+                f"| {v.get('lemonade')} | {_cell_flm(c, installed)} | "
                 f"{c.get('model')} | {window} | {c.get('request')} | {result} | {detail} |"
             )
     return "\n".join(rows) + "\n"
@@ -615,6 +800,7 @@ def _version_argv(
         argv += ["--model", model]
     for request in args.request:
         argv += ["--request", request]
+    argv += ["--holder-model", args.holder_model or ""]
     return argv
 
 
@@ -632,6 +818,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("--model", action="append", help="FLM models to try")
     parser.add_argument("--request", action="append", choices=REQUESTS)
+    parser.add_argument(
+        "--holder-model",
+        default=HOLDER_MODEL,
+        help="FLM model a second Lemonade keeps loaded on the NPU for the "
+        "'NPU held' cells; empty skips them (default: %(default)s)",
+    )
     parser.add_argument("--workdir", help="Where to run (default: a new temp dir)")
     parser.add_argument("--output", help="The .tar.gz to write")
     parser.add_argument("--one-version", help=argparse.SUPPRESS)
@@ -708,10 +900,9 @@ def run_all(args: argparse.Namespace, spawn: Callable[..., Dict] = run) -> int:
         tar.add(report, arcname="gaia-npu-repro")
     print(summary)
     print(f"Report: {output}")
-    failed = any(
-        v.get("fatal") or any(c.get("ok") is False for c in v.get("cells", []))
-        for v in results
-    )
+    if any(v.get("fatal") for v in results):
+        return 2
+    failed = any(c.get("ok") is False for v in results for c in v.get("cells", []))
     return 1 if failed else 0
 
 

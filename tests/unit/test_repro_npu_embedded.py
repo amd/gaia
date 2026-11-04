@@ -119,6 +119,7 @@ def test_each_lemonade_runs_in_its_own_home_and_the_report_is_packed(
         lemonade=["2026.46.0=candidate-v2026.46.0"],
         model=["gemma4-it-e4b-FLM"],
         request=["plain", "agent"],
+        holder_model="gemma3-4b-FLM",
         workdir=str(tmp_path),
         output=str(tmp_path / "out.tar.gz"),
     )
@@ -127,6 +128,7 @@ def test_each_lemonade_runs_in_its_own_home_and_the_report_is_packed(
     assert [s[0] for s in seen] == ["2026.44.1", "2026.46.0"]
     assert seen[0][1] != seen[1][1]
     assert seen[1][2][seen[1][2].index("--tag") + 1] == "candidate-v2026.46.0"
+    assert seen[0][2][seen[0][2].index("--holder-model") + 1] == "gemma3-4b-FLM"
     # The user's own Lemonade settings never reach the private instances.
     assert all("LEMONADE_API_KEY" not in s[3] for s in seen)
     with tarfile.open(tmp_path / "out.tar.gz") as tar:
@@ -145,3 +147,174 @@ def test_answer_needs_a_200_with_a_message():
 def test_large_prompt_is_about_a_first_agent_turn():
     words = len(repro.large_prompt().split())
     assert 15000 < words < 30000
+
+
+def test_each_cell_names_the_flm_it_ran_and_where_it_came_from(tmp_path, monkeypatch):
+    """FLM 1.0.8/1.0.9 broke Lemonade's launch of FLM on Linux; say which one ran."""
+    cache = tmp_path / "cache"
+    flm_dir = cache / "bin" / "flm" / "npu"
+    flm_dir.mkdir(parents=True)
+    (flm_dir / "flm").write_text("#!/bin/bash\n")
+    (flm_dir / "flm-real").write_text("")
+    calls = []
+
+    def fake_run(argv, timeout=60, **kwargs):
+        calls.append(argv)
+        return {"exit": 0, "stdout": "FLM v1.0.7\n"}
+
+    monkeypatch.setattr(repro, "run", fake_run)
+    monkeypatch.setattr(repro, "_FLM_VERSIONS", {})
+    procs = [
+        {"pid": 1, "exe": "/x/lemond", "cmdline": ["lemond"]},
+        {"pid": 2, "exe": str(flm_dir / "flm-real"), "cmdline": ["flm-real", "serve"]},
+        {"pid": 3, "exe": str(flm_dir / "flm-real"), "cmdline": ["flm-real", "serve"]},
+    ]
+    found = repro.flm_in_use(procs, cache)
+    assert [f["pid"] for f in found] == [2, 3]
+    assert found[0]["origin"].startswith("bundled")
+    assert found[0]["version"] == "FLM v1.0.7"
+    # The launcher script beside flm-real is asked, once.
+    assert calls == [[str(flm_dir / "flm"), "version"]]
+    assert repro.flm_origin(Path("/usr/bin/flm"), cache).startswith("system package")
+
+    record = version_record()
+    record["cells"][1]["flm"] = found
+    rows = repro.summarize([record]).splitlines()
+    assert "FLM v1.0.7 (bundled)" in rows[3]
+    assert "(not running)" in rows[2]
+
+
+class _Log:
+    """One shared record of every HTTP call, in order, across both Lemonades."""
+
+    def __init__(self, gaia_loaded_after_unload, holder_answers_after=True):
+        self.calls = []
+        self.gaia_loaded_after_unload = gaia_loaded_after_unload
+        self.holder_answers_after = holder_answers_after
+        self.holder_chats = 0
+
+
+class _FakeLemonade:
+    def __init__(self, name, log):
+        self.name = name
+        self.log = log
+
+    def call(self, method, path, body=None, timeout=60):
+        self.log.calls.append((self.name, method, path))
+        if path == "chat/completions" and self.name == "holder":
+            self.log.holder_chats += 1
+            if self.log.holder_chats > 1 and not self.log.holder_answers_after:
+                return {"status": 500, "body": "npu busy"}
+        reply = {"choices": [{"message": {"content": "4"}}]}
+        return {"status": 200, "body": json.dumps(reply)}
+
+    def get_json(self, path):
+        self.log.calls.append((self.name, "GET", path))
+        loaded = self.log.gaia_loaded_after_unload
+        return {"all_models_loaded": [{"model_name": m} for m in loaded]}
+
+
+def _held_run(tmp_path, monkeypatch, log):
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(
+        repro, "Lemonade", lambda url, key: _FakeLemonade("holder", log)
+    )
+    monkeypatch.setattr(repro, "processes", lambda pid: [])
+    monkeypatch.setattr(repro, "dmesg_tail", lambda: "")
+
+    class Holder:
+        cache_dir = tmp_path / "holder-cache"
+        log_path = tmp_path / "missing.log"
+
+        def __init__(self, version, home):
+            pass
+
+        def start(self):
+            return repro.argparse.Namespace(port=1, pid=2)
+
+        def current_api_key(self):
+            return "k"
+
+        def base_url_for(self, port):
+            return "http://holder"
+
+        def stop(self):
+            log.calls.append(("holder", "stop", ""))
+
+    args = repro.argparse.Namespace(
+        out_dir=str(tmp_path / "out"),
+        one_version="2026.44.1",
+        model=["gemma4-it-e4b-FLM"],
+        request=["plain"],
+        holder_model="gemma3-4b-FLM",
+    )
+    run = repro.VersionRun(args)
+    run.lemonade = _FakeLemonade("gaia", log)
+    run._held_cells(repro.argparse.Namespace(EmbeddedLemonade=Holder))
+    return run
+
+
+def test_gaia_frees_the_npu_before_the_holder_loads(tmp_path, monkeypatch):
+    """A holder load that fails must be the clash, not GAIA's leftover model."""
+    log = _Log(gaia_loaded_after_unload=[])
+    run = _held_run(tmp_path, monkeypatch, log)
+    unload = log.calls.index(("gaia", "POST", "unload"))
+    holder_load = log.calls.index(("holder", "POST", "load"))
+    assert unload < holder_load
+    # Nothing GAIA-side touches the NPU between its unload and the holder's load.
+    assert not [
+        c
+        for c in log.calls[unload + 1 : holder_load]
+        if c[0] == "gaia" and c[2] == "load"
+    ]
+    rows = run.record["cells"]
+    assert [r["request"] for r in rows] == ["plain, NPU held by gemma3-4b-FLM"]
+    assert rows[0]["ok"] is True
+
+
+def test_a_failed_unload_is_reported_and_the_holder_never_loads(tmp_path, monkeypatch):
+    log = _Log(gaia_loaded_after_unload=["gemma4-it-e4b-FLM"])
+    run = _held_run(tmp_path, monkeypatch, log)
+    assert ("holder", "POST", "load") not in log.calls
+    assert ("holder", "stop", "") in log.calls
+    (row,) = run.record["cells"]
+    assert row["ok"] is False and row["request"] == "GAIA's Lemonade frees the NPU"
+    assert "gemma4-it-e4b-FLM" in row["error"]
+    assert "could not unload" in repro.summarize([run.record])
+
+
+def test_a_holder_that_stops_answering_is_a_failing_row(tmp_path, monkeypatch):
+    log = _Log(gaia_loaded_after_unload=[], holder_answers_after=False)
+    run = _held_run(tmp_path, monkeypatch, log)
+    last = run.record["cells"][-1]
+    assert last["ok"] is False
+    assert last["request"] == "second Lemonade still answers after GAIA's loads"
+    assert "stopped answering" in repro.summarize([run.record])
+
+
+def test_a_lemonade_that_could_not_start_fails_the_job(tmp_path, monkeypatch):
+    monkeypatch.setattr(repro, "machine_facts", lambda: {"platform": "test"})
+    monkeypatch.setattr(repro, "users_own_lemonade", lambda: {})
+
+    def spawn(argv, timeout, env):
+        out = Path(argv[argv.index("--out-dir") + 1])
+        version = argv[argv.index("--one-version") + 1]
+        record = (
+            version_record()
+            if version == "2026.44.1"
+            else {"lemonade": version, "fatal": "RuntimeError: no sha256 asset"}
+        )
+        (out / "version.json").write_text(json.dumps(record), encoding="utf-8")
+        return {"exit": 1, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr("gaia.version.LEMONADE_VERSION", "2026.44.1")
+    args = repro.argparse.Namespace(
+        lemonade=["2026.46.0=typo-tag"],
+        model=["gemma4-it-e4b-FLM"],
+        request=["plain"],
+        holder_model="",
+        workdir=str(tmp_path),
+        output=str(tmp_path / "out.tar.gz"),
+    )
+    # Exit 2 means the run itself broke, so the workflow goes red.
+    assert repro.run_all(args, spawn=spawn) == 2

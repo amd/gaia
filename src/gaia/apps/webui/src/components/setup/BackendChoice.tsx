@@ -5,7 +5,7 @@ import { useT } from '../../i18n/useT';
 import * as api from '../../services/api';
 import type { SetupPlan } from '../../types';
 import { NpuNotReady } from './NpuNotReady';
-import { catalogOf, isNpu, pickChat, recommendedSelection, type Selection } from './selection';
+import { cantRunHere, catalogOf, isNpu, pickChat, recommendedSelection, type Selection } from './selection';
 
 /**
  * At the start of a local setup: make llama.cpp use Vulkan, the GPU backend GAIA has
@@ -43,7 +43,9 @@ export function BackendChoice({ plan, selection, onSelection, disabled = false, 
     // GAIA's own NPU model on a PC whose NPU holds it, else an NPU chat model already downloaded.
     const npuModel = npuProblems.length ? undefined
         : catalog.find((e) => isNpu(e) && e.gaia_model && e.chat_choice && e.fits !== false)
-        ?? catalog.find((e) => isNpu(e) && e.chat_choice && e.downloaded);
+        ?? catalog.find((e) => isNpu(e) && e.chat_choice && e.downloaded && !cantRunHere(e));
+    // Lemonade sees an NPU, but its NPU engine can't run here: say so rather than hide it silently.
+    const npuUnusable = !npuProblems.length && !npuModel && catalog.some((e) => isNpu(e) && e.fit_code === 'npu');
     const onNpu = !!catalog.find((e) => e.id === selection.defaultChat && isNpu(e));
     // Back to the GPU: setup's own pick, unless that is the NPU model itself.
     const recommended = recommendedSelection(plan).defaultChat;
@@ -85,7 +87,7 @@ export function BackendChoice({ plan, selection, onSelection, disabled = false, 
             {npuProblems.length > 0 ? (
                 <NpuNotReady problems={npuProblems} disabled={disabled} onRecheck={onRecheck} />
             ) : (
-                <p className="setup-hint">{t(npuModel ? 'setup.backend.hint' : 'setup.backend.hintNoNpu')}</p>
+                <p className="setup-hint">{t(npuModel ? 'setup.backend.hint' : npuUnusable ? 'setup.backend.hintNpuUnusable' : 'setup.backend.hintNoNpu')}</p>
             )}
         </section>
     );

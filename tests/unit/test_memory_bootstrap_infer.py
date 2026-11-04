@@ -18,7 +18,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from gaia import cli
-from gaia.agents.base.inferred_insights import parse_inferred_insights
+from gaia.agents.base.inferred_insights import (
+    normalize_confidence,
+    parse_inferred_insights,
+)
 
 ONE = {"content": "Primarily a Python developer", "confidence": 0.9, "domain": "work"}
 TWO = {"content": "Uses VS Code daily", "confidence": 0.8, "domain": "technical"}
@@ -307,3 +310,69 @@ def test_an_array_of_unusable_items_exits_1_and_stores_nothing(run_infer, capsys
         run_infer('[{"text": "wrong key"}]')
     assert exc.value.code == 1
     assert "Nothing was stored" in capsys.readouterr().out
+
+
+# ------------------------------------------------------------ confidence (#6637)
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (0.8, 0.8),
+        (1, 1.0),
+        (1.7, 1.0),
+        (-0.2, 0.0),
+        ("0.6", 0.6),
+        ("high", 0.9),
+        ("HIGH ", 0.9),
+        (" Medium", 0.7),
+        ("low", 0.4),
+    ],
+)
+def test_confidence_values_a_model_returns_are_normalised(value, expected):
+    assert normalize_confidence(value) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "very sure",
+        "",
+        None,
+        [0.9],
+        {"v": 1},
+        True,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        "Infinity",
+        "nan",
+    ],
+)
+def test_unusable_confidence_values_are_rejected(value):
+    assert normalize_confidence(value) is None
+
+
+def test_a_word_confidence_does_not_crash_the_review(run_infer, capsys):
+    reply = json.dumps(
+        [
+            ONE,
+            {"content": "Writes Rust on weekends", "confidence": "high"},
+            {"content": "Likes jazz", "confidence": "very sure"},
+            {"content": "Uses Linux", "confidence": None},
+            TWO,
+        ]
+    )
+    stored = run_infer(reply)
+
+    assert stored == [ONE["content"], "Writes Rust on weekends", TWO["content"]]
+    out = capsys.readouterr().out
+    assert "[90%] Writes Rust on weekends" in out
+    assert "'very sure' is not a number or low/medium/high: Likes jazz" in out
+    assert "None is not a number or low/medium/high: Uses Linux" in out
+
+
+def test_a_missing_confidence_still_defaults(run_infer, capsys):
+    stored = run_infer(json.dumps([{"content": "Uses Vim"}]))
+    assert stored == ["Uses Vim"]
+    assert "[70%] Uses Vim" in capsys.readouterr().out

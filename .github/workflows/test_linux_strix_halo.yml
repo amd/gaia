@@ -142,6 +142,8 @@ jobs:
       - name: Leave the machine clean
         if: always()
         run: |
+          # An empty pattern would match (and kill) every process the runner owns.
+          [ -n "${GAIA_HW_WORKDIR:-}" ] || exit 0
           leftovers=$(pgrep -f "$GAIA_HW_WORKDIR" || true)
           if [ -n "$leftovers" ]; then
             echo "::warning::Stopping processes the tests left behind: $leftovers"

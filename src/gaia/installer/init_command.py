@@ -821,10 +821,8 @@ def check_setup_status(
     no_agent_build = False
     warnings: list = []
     agent_id = profile_config.get("agent")
-    if agent_id in HUB_INSTALL_AGENTS and not InitCommand._is_hub_agent_available(
-        agent_id
-    ):
-        # Same sentinel run() installs; models on the server do not imply the agent.
+    if agent_id in HUB_INSTALL_AGENTS and not _agent_ready_for_check(agent_id):
+        # Models on the server do not imply the agent.
         command = (
             "gaia init"
             if profile == DEFAULT_INIT_PROFILE
@@ -884,6 +882,34 @@ def check_setup_status(
         warnings=warnings,
         no_agent_build=no_agent_build,
     )
+
+
+def _terminal_installer_agent() -> Optional[Path]:
+    """The flagship install.sh / install.ps1 put in GAIA's bin dir, else None.
+
+    Those installers ship it there, on PATH, with no hub sentinel; the TUI runs
+    it from PATH.
+    """
+    from gaia.home import gaia_home
+
+    name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
+    path = gaia_home() / "bin" / name
+    if not path.is_file():
+        return None
+    if sys.platform != "win32" and not os.access(path, os.X_OK):
+        return None
+    return path
+
+
+def _agent_ready_for_check(agent_id: str) -> bool:
+    """Whether the readiness check counts *agent_id* as installed.
+
+    The hub sentinel `gaia init` writes, or for the flagship the terminal
+    installer's copy. Never touches the network.
+    """
+    if InitCommand._is_hub_agent_available(agent_id):
+        return True
+    return agent_id == FLAGSHIP_AGENT_ID and _terminal_installer_agent() is not None
 
 
 def _agent_build_missing(agent_id: str) -> Tuple[Optional[str], Optional[str]]:

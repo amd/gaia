@@ -397,9 +397,14 @@ switch ($Step) {
                 $env:HOME = $userHome
                 & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -Raw '$script' | Invoke-Expression"
                 if ($LASTEXITCODE -ne 0) { Fail "install.ps1 failed (exit $LASTEXITCODE)" }
-                foreach ($f in "$gaiaHome\venv\Scripts\gaia.exe", "$gaiaHome\bin\gaia-tui.exe", "$gaiaHome\bin\gaia-agent.exe") {
+                foreach ($f in "$gaiaHome\venv\Scripts\gaia.exe", "$gaiaHome\bin\gaia.exe", "$gaiaHome\bin\gaia-cli.exe", "$gaiaHome\bin\gaia-mcp.exe", "$gaiaHome\bin\gaia-tui.exe", "$gaiaHome\bin\gaia-agent.exe") {
                     if (-not (Test-Path $f)) { Fail "install.ps1 finished but $f is not there" }
                 }
+                # The venv's python.exe must not reach the user's PATH.
+                $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path
+                $entries = @($regPath -split ';' | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') })
+                if ($entries -contains "$gaiaHome\venv\Scripts") { Fail "install.ps1 put $gaiaHome\venv\Scripts on the user PATH" }
+                if ($entries -notcontains "$gaiaHome\bin") { Fail "install.ps1 did not put $gaiaHome\bin on the user PATH" }
             }
         }
         if (Wants 'tui') {
@@ -436,7 +441,9 @@ switch ($Step) {
         if (Wants 'tui') {
             if ($env:KIND -eq 'install-ps1') { Check-TuiVersion @() } else { Check-TuiVersion @($tuiVersion, $version) }
             if ($env:KIND -eq 'install-ps1') {
-                & "$gaiaHome\venv\Scripts\gaia.exe" --version
+                # The copy on PATH, which is what `gaia` in a new terminal runs.
+                & "$gaiaHome\bin\gaia.exe" --version
+                if ($LASTEXITCODE -ne 0) { Fail "$gaiaHome\bin\gaia.exe --version exited $LASTEXITCODE" }
                 if (Select-String -Path "$repo\installer\scripts\install.ps1" -Pattern 'GAIA_RELEASE_TAG' -Quiet) {
                     Check-TuiVersion @($tuiVersion, $version)
                     $got = & "$gaiaHome\venv\Scripts\gaia.exe" --version 2>&1 | Out-String
@@ -488,21 +495,25 @@ switch ($Step) {
             $holders = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "$gaiaHome\*" -or $_.CommandLine -like "*$gaiaHome*" }
             Write-Host '--- processes using the GAIA home before uninstall ---'
             $holders | ForEach-Object { "  $($_.ProcessId) $($_.CommandLine)" }
-            & "$gaiaHome\venv\Scripts\gaia.exe" uninstall --purge --yes
+            # Through ~\.gaia\bin, as `gaia` on PATH runs it: purge must cope with
+            # its own launcher sitting in a folder it deletes.
+            & "$gaiaHome\bin\gaia.exe" uninstall --purge --yes
             $rc = $LASTEXITCODE
             if ($rc -ne 0) {
                 Write-Host '--- and after it ---'
                 Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "$gaiaHome\*" } | ForEach-Object { "  $($_.ProcessId) $($_.CommandLine)" }
                 Fail "gaia uninstall --purge exited $rc"
             }
-            # The venv is deleted by a helper that waits for gaia.exe to exit.
+            # The venv and bin are deleted by helpers that wait for gaia.exe to exit.
             $venvDeadline = (Get-Date).AddSeconds(120)
-            while ((Test-Path "$gaiaHome\venv") -and (Get-Date) -lt $venvDeadline) { Start-Sleep -Seconds 1 }
-            if (Test-Path "$gaiaHome\venv") {
-                Get-ChildItem "$env:TEMP\gaia-uninstall-venv-*.log" -ErrorAction SilentlyContinue | ForEach-Object {
-                    Write-Host "--- $($_.FullName) ---"; Get-Content $_.FullName
+            while (((Test-Path "$gaiaHome\venv") -or (Test-Path "$gaiaHome\bin")) -and (Get-Date) -lt $venvDeadline) { Start-Sleep -Seconds 1 }
+            foreach ($deferred in "$gaiaHome\venv", "$gaiaHome\bin") {
+                if (Test-Path $deferred) {
+                    Get-ChildItem "$env:TEMP\gaia-uninstall-*-*.log" -ErrorAction SilentlyContinue | ForEach-Object {
+                        Write-Host "--- $($_.FullName) ---"; Get-Content $_.FullName
+                    }
+                    Fail "$deferred was still there 120 s after gaia uninstall exited"
                 }
-                Fail "$gaiaHome\venv was still there 120 s after gaia uninstall exited"
             }
         } else {
             Uninstall-Tui

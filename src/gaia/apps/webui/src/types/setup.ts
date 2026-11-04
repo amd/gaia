@@ -108,6 +108,8 @@ export interface SetupCatalogEntry {
     need_gb: number | null;
     capacity_gb: number | null;
     fit_reason: string | null;
+    /** Why it doesn't fit: too little memory, no NPU that can run it, or no backend for its kind. */
+    fit_code?: 'memory' | 'npu' | 'backend' | null;
 }
 
 /** A 409 from a setup choice that asks to be confirmed, then sent again with `acknowledge` true. */

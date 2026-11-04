@@ -378,6 +378,17 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    ```
    **AppImage smoke jobs (`appimage-distro-matrix`, `appimage-userns-restricted`) are the most flaky** — `appimage-userns-restricted` has a 300s `state: ready` poll (raised from 90s to cover a first-run model download). On real failure, **stop** and fix root cause; on transient flake (timeout-only, no logic error), `gh run rerun $RUN_ID --failed` is acceptable.
 
+6. **Check the last RC's findings are fixed or deferred.** rc4 shipped rc3's bugs because their fix PRs (#6544–#6547, #6554) were still open when it was tagged. An open fix PR is not a fix. Skip the second query for `-rc1`.
+   ```bash
+   MS=$(gh api repos/amd/gaia/milestones --jq '.[] | select(.title | test("^v<version>( |$)")) | .title')
+   gh issue list --repo amd/gaia --milestone "$MS" --state open --limit 200
+   PREV=$(git tag --list 'v<version>-rc*' --sort=-v:refname | head -n 1)
+   # Bugs filed since the last RC without a milestone (#6540, #6551 slipped through this way)
+   gh issue list --repo amd/gaia --state open --label bug --limit 200 \
+     --search "no:milestone created:>=$(git log -1 --format=%cs "$PREV")"
+   ```
+   Each one is merged and closed, or moved to a later milestone with a comment giving the reason. Release-test findings carry the milestone because the testing skill's issue template files them with it.
+
 ### Gate 3 — green run on the merged commit
 
 Required before continuing:
@@ -385,6 +396,7 @@ Required before continuing:
 - `__version__` matches the target.
 - `validate_release_notes.py` passes.
 - For a final, `check_flagship_release.py` passes.
+- No open issue in the release milestone, and no unmilestoned bug since the last RC, unless deferred with a reason.
 - Build Installers run on the merged commit is **green** (not yellow, not "mostly green except smoke tests").
 
 Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the **merged SHA** (`$MERGED_SHA`). Ask: **"Pre-tag verification green on `<sha>` (release PR #N). Push tag `v<version>`?"** — the SHA and PR number being in the question text means Phase 4 can re-derive them even if the user resumes in a fresh shell.
@@ -485,8 +497,8 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
 
    | | Required (blocks) | Advisory (job-summary warning only) |
    |---|---|---|
-   | **RC** `vX.Y.Z-rcN` (`RC_CRITICAL`) | `lint.yml`; `test_unit.yml` jobs `Unit Tests (Linux, py3.12)` and `Import Every Module (Linux, py3.10)` | the macOS, Windows and offline-integration jobs of `test_unit.yml`; `test_gaia_cli_linux.yml`; `release_train_dryrun.yml` |
-   | **Final** `vX.Y.Z` (`FINAL_REQUIRED`) | every job of `lint.yml`, `test_unit.yml`, `test_gaia_cli_linux.yml`, plus `release_train_dryrun.yml` | none |
+   | **RC** `vX.Y.Z-rcN` (`RC_CRITICAL`) | `lint.yml`; `test_unit.yml` jobs `Unit Tests (Linux, py3.12)` and `Import Every Module (Linux, py3.10)` | the macOS, Windows and offline-integration jobs of `test_unit.yml`; `test_gaia_cli_linux.yml`; `release_train_dryrun.yml`; `test_npu_agent_chat.yml` |
+   | **Final** `vX.Y.Z` (`FINAL_REQUIRED`) | every job of `lint.yml`, `test_unit.yml`, `test_gaia_cli_linux.yml`, `test_npu_agent_chat.yml` (an agent turn on the NPU, Windows and Linux), plus `release_train_dryrun.yml` | none |
 
    The candidate's own builds (`build-pypi`, `build-npm`, `build-desktop-installers` with its smoke jobs, `rc-flagship`, `tui-installers-complete`) are required too, by `approve-publish`; they build and smoke-test the same artifacts the dry run does, so an RC never waits on the hour-long dry run. Evals never gate (`eval_flagship.yml` reports separately).
 

@@ -8,6 +8,11 @@ from gaia.hub import compatibility
 from gaia.hub.compatibility import check_compatibility
 
 
+@pytest.fixture
+def off_mac(monkeypatch):
+    monkeypatch.setattr(compatibility, "detect_platform", lambda: "linux-x64")
+
+
 def test_no_requirements_is_compatible():
     report = check_compatibility({"platforms": []})
     assert report.compatible is True
@@ -69,6 +74,7 @@ def test_disk_estimated_from_download_size(monkeypatch):
     assert report.compatible is False
 
 
+@pytest.mark.usefixtures("off_mac")
 def test_npu_and_gpu_emit_warnings(monkeypatch):
     monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
     report = check_compatibility({"platforms": [], "npu": True, "gpu_vram_gb": 8})
@@ -104,6 +110,7 @@ def test_detected_npu_present_suppresses_warning(monkeypatch):
     assert report.detected_npu is True
 
 
+@pytest.mark.usefixtures("off_mac")
 def test_detected_npu_absent_is_named_warning(monkeypatch):
     monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
     report = check_compatibility({"platforms": [], "npu": True}, detected_npu=False)
@@ -111,12 +118,14 @@ def test_detected_npu_absent_is_named_warning(monkeypatch):
     assert any("none was detected" in w for w in report.warnings)
 
 
+@pytest.mark.usefixtures("off_mac")
 def test_unprobed_npu_keeps_cannot_verify_warning(monkeypatch):
     monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
     report = check_compatibility({"platforms": [], "npu": True})
     assert any("cannot verify NPU" in w for w in report.warnings)
 
 
+@pytest.mark.usefixtures("off_mac")
 def test_failed_npu_probe_does_not_suggest_driver_remediation(monkeypatch):
     monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
     report = check_compatibility(
@@ -148,6 +157,7 @@ def test_detected_gpu_vram_meets_requirement_no_warning(monkeypatch):
 # its "This agent…" wording, but the onboarding preflight passes its own
 # subject and a capable GPU turns the NPU warning purely informational.
 # ---------------------------------------------------------------------------
+@pytest.mark.usefixtures("off_mac")
 def test_npu_absent_default_subject_keeps_agent_wording(monkeypatch):
     # Regression guard: the per-agent hub-install path is unchanged when no
     # capable GPU is present (acceptance criterion #3).
@@ -159,6 +169,7 @@ def test_npu_absent_default_subject_keeps_agent_wording(monkeypatch):
     )
 
 
+@pytest.mark.usefixtures("off_mac")
 def test_npu_absent_with_capable_gpu_is_informational(monkeypatch):
     monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
     report = check_compatibility(
@@ -175,6 +186,22 @@ def test_npu_absent_with_capable_gpu_is_informational(monkeypatch):
     assert "agent" not in joined.lower()
     assert "install" not in joined.lower()
     assert "optional" in joined.lower()
+
+
+@pytest.mark.parametrize(
+    "scan",
+    [
+        {"detected_npu": False, "detected_gpu_vram_gb": 24.0},
+        {"detected_npu": False},
+        {"npu_probe_error": "Lemonade system-info query failed"},
+        {},
+    ],
+)
+def test_mac_never_gets_an_npu_line(monkeypatch, scan):
+    monkeypatch.setattr(compatibility, "detect_platform", lambda: "darwin-arm64")
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+    report = check_compatibility({"platforms": [], "npu": True}, **scan)
+    assert not any("NPU" in w for w in report.warnings)
 
 
 def test_subject_flows_into_memory_and_vram_warnings(monkeypatch):
