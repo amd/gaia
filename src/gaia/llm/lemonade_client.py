@@ -34,6 +34,7 @@ from typing import (
     Callable,
     Dict,
     Generator,
+    Iterable,
     Iterator,
     List,
     Optional,
@@ -2951,7 +2952,7 @@ def is_cloud_model(model_id: Optional[str]) -> bool:
     return bool(model_id) and model_id in _CLOUD_MODELS
 
 
-def pull_request_body(model_id: str) -> Dict[str, Any]:
+def pull_request_body(model_id: str, registered: Iterable[str] = ()) -> Dict[str, Any]:
     """JSON body for Lemonade ``POST /pull``.
 
     Built-ins are name only — a ``recipe`` makes Lemonade read the call as a
@@ -2959,8 +2960,10 @@ def pull_request_body(model_id: str) -> Dict[str, Any]:
     so the body carries its checkpoint and recipe, plus the labels Lemonade
     cannot infer (``embedding``, ``mmproj``, ``vision``, ``reasoning``).
     A gateway model has no weights and raises ``RuntimeError`` before any
-    request. An unknown ``user.`` id raises ``ValueError`` instead of a pull
-    Lemonade answers with HTTP 500.
+    request. A ``user.`` id GAIA doesn't know goes out name only when it is in
+    *registered* (ids from Lemonade's ``/models?show_all=true``), since
+    Lemonade already holds its checkpoint; otherwise it raises ``ValueError``
+    instead of a pull Lemonade answers with HTTP 500.
 
     Known gateway namespaces (``amd.``, ``fireworks.``) are refused even before
     the catalog has been read. Any other gateway id is refused once
@@ -2986,6 +2989,9 @@ def pull_request_body(model_id: str) -> Dict[str, Any]:
         return {"model_name": requirement.model_id}
 
     if model_id.lower().startswith("user."):
+        for name in registered:
+            if name.lower() == model_id.lower():
+                return {"model_name": name}
         raise ValueError(_unknown_user_model_message(model_id))
     return {"model_name": model_id}
 

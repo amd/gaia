@@ -79,6 +79,19 @@ def test_unknown_user_model_raises_instead_of_a_name_only_pull(model_id):
         pull_request_body(model_id)
 
 
+def test_user_model_lemonade_already_registered_is_pulled_by_name_only():
+    """Registered in Lemonade directly, so Lemonade holds its checkpoint."""
+    body = pull_request_body(
+        "user.my-own-model", registered=["Gemma-4-E4B-it-GGUF", "user.My-Own-Model"]
+    )
+    assert body == {"model_name": "user.My-Own-Model"}
+
+
+def test_user_model_missing_from_registered_still_raises():
+    with pytest.raises(ValueError, match="Add a model from Hugging Face"):
+        pull_request_body("user.not-a-real-model", registered=["user.other"])
+
+
 def test_unknown_user_model_message_gives_user_facing_advice():
     """The 400 reaches the Agent UI as-is, so it must not send people to code."""
     with pytest.raises(ValueError) as exc:
@@ -123,8 +136,44 @@ def test_dotted_local_name_is_not_mistaken_for_a_gateway():
     }
 
 
+class _FakeAsyncClient:
+    """Stands in for ``httpx.AsyncClient``; records the ``/models`` request."""
+
+    calls: list = []
+    registered: list = []
+
+    def __init__(self, *a, **kw):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, url, params=None, headers=None):
+        import httpx
+
+        _FakeAsyncClient.calls.append((url, params))
+        return httpx.Response(
+            200,
+            json={"data": [{"id": i} for i in _FakeAsyncClient.registered]},
+            request=httpx.Request("GET", url),
+        )
+
+
+@pytest.fixture
+def lemonade_models(monkeypatch):
+    import httpx
+
+    _FakeAsyncClient.calls = []
+    _FakeAsyncClient.registered = []
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
+    return _FakeAsyncClient
+
+
 @pytest.mark.parametrize("model_id", ["amd.Claude-Opus-5", "user.not-a-real-model"])
-def test_download_endpoint_refuses_up_front(model_id, monkeypatch):
+def test_download_endpoint_refuses_up_front(model_id, monkeypatch, lemonade_models):
     """The button gets a 400 it can show, not a 202 for a pull that never runs."""
     started = []
     monkeypatch.setattr(system, "_stream_lemonade_pull", lambda *a: started.append(a))
@@ -133,3 +182,38 @@ def test_download_endpoint_refuses_up_front(model_id, monkeypatch):
         asyncio.run(system.download_model_endpoint(req))
     assert err.value.status_code == 400
     assert started == []
+
+
+def test_download_endpoint_accepts_a_user_model_lemonade_registered(
+    monkeypatch, lemonade_models
+):
+    """Registered in Lemonade directly: Download/Resume must start, not 400."""
+    lemonade_models.registered = ["user.My-Own-GGUF"]
+    started = []
+
+    async def _fake_pull(*a):
+        started.append(a)
+
+    monkeypatch.setattr(system, "_stream_lemonade_pull", _fake_pull)
+    req = system.DownloadModelRequest(model_name="user.My-Own-GGUF")
+
+    async def _run():
+        result = await system.download_model_endpoint(req)
+        await asyncio.sleep(0)
+        return result
+
+    assert asyncio.run(_run()) == {"status": "downloading", "model": "user.My-Own-GGUF"}
+    assert started == [("user.My-Own-GGUF", False)]
+    url, params = lemonade_models.calls[0]
+    assert url.endswith("/models") and params == {"show_all": "true"}
+
+
+def test_pull_body_names_the_registered_model_lemonade_listed(lemonade_models):
+    lemonade_models.registered = ["user.My-Own-GGUF"]
+    body = asyncio.run(system._pull_body("user.my-own-gguf"))
+    assert body == {"model_name": "user.My-Own-GGUF"}
+
+
+def test_pull_body_skips_the_listing_for_a_model_gaia_knows(lemonade_models):
+    asyncio.run(system._pull_body(lc.DEFAULT_MODEL_NAME))
+    assert lemonade_models.calls == []

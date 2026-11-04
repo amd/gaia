@@ -114,6 +114,38 @@ async def _lemonade_post(
         logger.warning("%s failed: %s", log_context, exc)
 
 
+async def _pull_body(model_name: str) -> Dict[str, Any]:
+    """``pull_request_body``, asking Lemonade about a ``user.`` id GAIA didn't add.
+
+    Raises ``RuntimeError`` when the model list can't be read, and whatever
+    ``pull_request_body`` raises when the model can't be pulled.
+    """
+    try:
+        return pull_request_body(model_name)
+    except ValueError:
+        if not model_name.lower().startswith("user."):
+            raise
+    import httpx  # pylint: disable=import-outside-toplevel
+
+    base_url = resolve_lemonade_base_url()
+    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/models", params={"show_all": "true"}, headers=headers
+            )
+            resp.raise_for_status()
+            data = resp.json().get("data", [])
+    except (httpx.HTTPError, ValueError) as exc:
+        raise RuntimeError(
+            f"Cannot download '{model_name}': the model list from Lemonade at "
+            f"{base_url} could not be read ({exc}). Check that Lemonade is "
+            "running, then try again."
+        ) from exc
+    registered = [m["id"] for m in data if isinstance(m.get("id"), str)]
+    return pull_request_body(model_name, registered=registered)
+
+
 # ── Download progress tracking ──────────────────────────────────────────────
 #
 # Lemonade's ``POST /v1/pull`` with ``stream=true`` emits SSE events:
@@ -284,7 +316,7 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
 
     try:
         try:
-            payload = pull_request_body(model_name)
+            payload = await _pull_body(model_name)
         except (RuntimeError, ValueError) as exc:
             _set_download_progress(
                 model_name,
@@ -1504,7 +1536,7 @@ async def download_model_endpoint(body: DownloadModelRequest):
     if not model_name:
         raise HTTPException(status_code=400, detail="model_name must not be empty")
     try:
-        pull_request_body(model_name)
+        await _pull_body(model_name)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

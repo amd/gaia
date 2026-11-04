@@ -23,9 +23,11 @@ from gaia.agents.base.readiness import provision_progress, pull_model
 BASE = "http://localhost:61901/api/v1"
 
 
-def _sent(model_id):
-    with patch("requests.post") as post:
+def _sent(model_id, registered=()):
+    with patch("requests.post") as post, patch("requests.get") as get:
         post.return_value.raise_for_status.return_value = None
+        get.return_value.raise_for_status.return_value = None
+        get.return_value.json.return_value = {"data": [{"id": i} for i in registered]}
         pull_model(BASE, model_id)
         assert post.call_count == 1
         return post.call_args.kwargs["json"]
@@ -90,6 +92,25 @@ def test_an_unknown_user_model_fails_loudly_rather_than_sending_a_bad_pull():
         _sent("user.not-a-real-model")
 
 
+def test_a_user_model_registered_in_lemonade_directly_is_pulled_by_name():
+    """Lemonade already holds its checkpoint, so name only is what it accepts."""
+    with patch("requests.post") as post, patch("requests.get") as get:
+        post.return_value.raise_for_status.return_value = None
+        get.return_value.raise_for_status.return_value = None
+        get.return_value.json.return_value = {"data": [{"id": "user.My-Own-GGUF"}]}
+        pull_model(BASE, "user.My-Own-GGUF")
+    assert get.call_args.args[0] == f"{BASE}/models"
+    assert get.call_args.kwargs["params"] == {"show_all": "true"}
+    assert post.call_args.kwargs["json"] == {"model_name": "user.My-Own-GGUF"}
+
+
+def test_a_known_user_model_does_not_list_models_first():
+    with patch("requests.post") as post, patch("requests.get") as get:
+        post.return_value.raise_for_status.return_value = None
+        pull_model(BASE, "user.embeddinggemma-300m-GGUF")
+    assert get.call_count == 0
+
+
 def test_an_unknown_user_model_yields_a_failure_line_instead_of_raising():
     """``provision_progress`` promises a ✗ line on every failure path.
 
@@ -97,7 +118,12 @@ def test_an_unknown_user_model_yields_a_failure_line_instead_of_raising():
     not ``RequestException``, so catching only the latter let it escape the
     generator and reach the caller as a crash.
     """
-    with patch("gaia.agents.base.readiness.probe_model_present", return_value=False):
+    with (
+        patch("gaia.agents.base.readiness.probe_model_present", return_value=False),
+        patch("requests.get") as get,
+    ):
+        get.return_value.raise_for_status.return_value = None
+        get.return_value.json.return_value = {"data": []}
         lines = list(provision_progress(BASE, "user.not-a-real-model"))
 
     assert lines[-1].startswith("✗")

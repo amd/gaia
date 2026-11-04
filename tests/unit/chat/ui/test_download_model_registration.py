@@ -31,9 +31,14 @@ class _Stream:
         return False
 
 
+# Ids the fake Lemonade lists from ``GET /models``.
+_REGISTERED = []
+
+
 @pytest.fixture
 def sent(monkeypatch):
     calls = []
+    _REGISTERED.clear()
 
     class _Client:
         def __init__(self, *a, **k):
@@ -48,6 +53,12 @@ def sent(monkeypatch):
         def stream(self, method, url, json=None, headers=None):
             calls.append(json)
             return _Stream()
+
+        async def get(self, url, params=None, headers=None):
+            data = [{"id": i} for i in _REGISTERED]
+            return httpx.Response(
+                200, json={"data": data}, request=httpx.Request("GET", url)
+            )
 
     monkeypatch.setattr(httpx, "AsyncClient", _Client)
     return calls
@@ -129,6 +140,13 @@ def test_unknown_user_model_is_not_posted(sent, monkeypatch):
     progress = system._get_download_progress("user.not-a-real-model")
     assert progress["state"] == "error"
     assert "Add a model from Hugging Face" in progress["message"]
+
+
+def test_user_model_registered_in_lemonade_directly_pulls_by_name(sent):
+    """Lemonade already holds its checkpoint, so Download and Resume send the name."""
+    _REGISTERED.append("user.My-Own-GGUF")
+    asyncio.run(system._stream_lemonade_pull("user.My-Own-GGUF", True))
+    assert sent == [{"model_name": "user.My-Own-GGUF", "stream": True, "force": True}]
 
 
 def test_listed_name_without_the_namespace_still_registers_under_it(sent):
