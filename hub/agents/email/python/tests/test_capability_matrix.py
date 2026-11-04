@@ -13,8 +13,8 @@ REST verbs, MCP tools, eval-gate coverage), renders a committed
 - AC3: every one of the 25 exposed ops (21 REST + 4 MCP) is annotated with an
   eval suite name or the "no quality eval" sentinel — closed-set, bidirectional.
 - AC4: the MCP-scope decision (4 tools + rationale) is pinned and current.
-- AC5: every eval suite has a non-trivial follow-up plan, and ``followups`` is
-  pinned as CI-unwired today.
+- AC5: every eval suite has a non-trivial follow-up plan, and every suite is
+  pinned as CI-wired (``followups`` was the last gap, closed by #2040).
 
 ``packaging/`` has no ``__init__.py`` (mirrors ``server.py``/``stamp_version.py``)
 so the module is loaded by file path, exactly like ``test_stamp_version.py`` and
@@ -427,7 +427,15 @@ def test_eval_followup_plan_current(matrix):
             len(text) > 10
         ), f"EVAL_FOLLOWUP_PLAN[{suite!r}] looks like a lazy placeholder: {text!r}"
 
-    assert matrix.eval_suites["followups"]["wired"] is False
+    # #2040 wired `followups` (packaging/eval_followup_report.py + a step in
+    # test_email_agent_eval.yml), so every suite now has a CI consumer. Pinned
+    # per-suite rather than as "all six are wired" so a regression names the
+    # suite that lost its report script instead of failing on a rolled-up bool.
+    for suite in sorted(_EXPECTED_EVAL_SUITE_NAMES):
+        assert matrix.eval_suites[suite]["wired"] is True, (
+            f"eval suite {suite!r} reports wired=False — its report script is "
+            "missing from packaging/, so CI has no consumer for its eval"
+        )
 
 
 # ---------------------------------------------------------------------------

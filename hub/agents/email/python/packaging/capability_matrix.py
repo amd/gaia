@@ -82,7 +82,7 @@ _SUITE_REPORT_FILENAMES: Dict[str, str] = {
     "action_items": "eval_action_item_report.py",
     "quality": "eval_gate_report.py",
     "perf": "eval_gate_report.py",
-    "followups": "eval_followup_report.py",  # confirmed absent -- #2013
+    "followups": "eval_followup_report.py",  # wired by #2040
 }
 
 # ---------------------------------------------------------------------------
@@ -225,11 +225,13 @@ EVAL_FOLLOWUP_PLAN: Dict[str, str] = {
         "it stabilizes."
     ),
     "followups": (
-        "Detection-quality bars, CI-unwired: no eval_followup_report.py "
-        "exists, unlike the other five suites. Follow-up: #2040 tracks "
-        "wiring an eval_followup_report.py plus a workflow step and, "
-        "separately, establishing a judged baseline (the #1950 eval's "
-        "documented follow-up) before flipping enforce to true."
+        "Detection-quality bars for the deterministic awaits_reply detector "
+        "(#1606 feature), scored offline over the committed labeled corpus "
+        "with no Lemonade and no judge. Follow-up: #1950 tracks establishing "
+        "a real baseline before flipping enforce to true -- the bars are "
+        "provisional placeholders and the detector has a known false-positive "
+        "gap on courtesy/FYI notes, so the first report is the measurement, "
+        "not a pass/fail."
     ),
 }
 
@@ -585,11 +587,6 @@ def render_markdown(matrix: CapabilityMatrix) -> str:
         lines.append("")
         lines.append(EVAL_FOLLOWUP_PLAN[suite])
         lines.append("")
-    lines.append(
-        "Wiring `followups` into CI (report script + workflow step) is "
-        "tracked in #2040."
-    )
-    lines.append("")
 
     return "\n".join(lines) + "\n"
 
