@@ -181,6 +181,32 @@ def test_a_turn_on_another_local_model_stops_the_warm_up(monkeypatch):
         warmer.wait(5)
 
 
+def test_a_turn_on_another_model_waits_out_a_load_under_way(monkeypatch):
+    """A load can't be stopped; starting the turn's own alongside it would find
+    the memory still held and shrink the turn's window or refuse it."""
+    warmer, release = _warming(monkeypatch, "Qwen3.6-35B-A3B-GGUF")
+    warmer.set_phase("loading")
+    try:
+        waited = _turn("Gemma-4-E4B-it-GGUF")
+        assert not waited.wait(0.3), "the turn raced the warm-up's model load"
+        assert warmer.cancel.is_set(), "the warm-up must still stop after the load"
+        warmer.set_phase("priming")
+        assert waited.wait(5)
+    finally:
+        release.set()
+        warmer.wait(5)
+
+
+def test_a_cloud_turn_does_not_wait_out_a_local_load(monkeypatch):
+    warmer, release = _warming(monkeypatch, "Qwen3.6-35B-A3B-GGUF")
+    warmer.set_phase("loading")
+    try:
+        assert _turn("fireworks.deepseek-v4p1-flash").wait(5)
+    finally:
+        release.set()
+        warmer.wait(5)
+
+
 def test_a_turn_before_the_warm_up_names_its_model_stops_once_it_does(monkeypatch):
     warmer, release = _warming(monkeypatch)
     try:
