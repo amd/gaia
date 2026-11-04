@@ -1058,6 +1058,9 @@ class TestCheckSetupStatus(unittest.TestCase):
         )
         self.hub_fetches = []
         self.host_key = "win32-x64"
+        from gaia.hub import catalog as hub_catalog
+
+        self.real_fetch_bytes = hub_catalog.fetch_bytes
         hub = patch("gaia.hub.catalog.fetch_bytes", side_effect=self._serve_hub)
         hub.start()
         self.addCleanup(hub.stop)
@@ -1104,6 +1107,10 @@ class TestCheckSetupStatus(unittest.TestCase):
         import json
 
         self.hub_fetches.append(url)
+        if url.startswith("file://"):
+            return self.real_fetch_bytes(url)
+        if isinstance(self.hub_manifest, bytes):
+            return self.hub_manifest
         if self.hub_manifest is None:
             from gaia.hub.catalog import CatalogError
 
@@ -1499,7 +1506,66 @@ class TestCheckSetupStatus(unittest.TestCase):
         status, _ = self._check_with_models()
 
         self.assertEqual(status.stage, "setup")
-        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+        self.assertTrue(status.agent_missing)
+        self.assertEqual(len(status.reasons), 1)
+        self.assertTrue(status.reasons[0].startswith(self.AGENT_MISSING))
+        self.assertIn("GAIA_HUB_URL", status.reasons[0])
+
+    def _assert_unreadable_hub_names_its_url(self, status, url):
+        self.assertFalse(status.ready)
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+        self.assertFalse(status.no_agent_build)
+        self.assertEqual(len(status.reasons), 1)
+        reason = status.reasons[0]
+        self.assertTrue(reason.startswith(self.AGENT_MISSING), reason)
+        self.assertIn(url, reason)
+        self.assertIn("GAIA_HUB_URL", reason)
+
+    def test_a_captive_portal_page_is_not_a_crash(self):
+        """A 200 that is HTML, not the manifest, must not crash the check."""
+        import os
+
+        os.environ["GAIA_HUB_URL"] = "https://hub.example.test"
+        self._remove_flagship()
+        self.hub_manifest = b"<html><body>Sign in to the Wi-Fi</body></html>"
+        status, _ = self._check_with_models()
+
+        self._assert_unreadable_hub_names_its_url(status, "https://hub.example.test")
+
+    def test_a_file_hub_that_is_not_there_is_not_a_crash(self):
+        import os
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as root:
+            url = (Path(root) / "no-such-hub").as_uri()
+            os.environ["GAIA_HUB_URL"] = url
+            self._remove_flagship()
+            status, _ = self._check_with_models()
+
+        self._assert_unreadable_hub_names_its_url(status, url)
+
+    def test_a_full_disk_is_reported_not_read_as_no_build(self):
+        from gaia.hub import installer as hub_installer
+
+        self._remove_flagship()
+        with patch.object(
+            hub_installer,
+            "no_build_reason",
+            side_effect=hub_installer.DiskSpaceError("Not enough disk space"),
+        ):
+            status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertIn("Not enough disk space", status.reasons[0])
+
+    def test_no_agent_build_is_flagged_for_the_apps(self):
+        self._on_a_pc_without_a_build()
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.no_agent_build)
+        self.assertTrue(status.to_json()["no_agent_build"])
 
     def test_no_agent_build_json_keeps_the_exit_code_ready(self):
         import json

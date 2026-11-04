@@ -143,6 +143,7 @@ export const enMessages = {
     'agentNotice.installing': 'Installing the GAIA agent… {percent}%',
     'agentNotice.failed': 'The GAIA agent could not be installed: {error}',
     'agentNotice.retry': 'Try again',
+    'agentNotice.noBuild': "No GAIA agent build for this PC yet, so chat isn't available here.",
 
     // A message and its actions
     'msg.sent': 'Sent {time}',
