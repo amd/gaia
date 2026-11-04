@@ -2231,10 +2231,10 @@ class TestPrivilegedAdminWriters:
 class TestStreamInferenceModel:
     """Profile inference runs on the machine's default local chat model."""
 
-    def _stream(self, client, tmp_path, default_model, custom_model=None):
+    def _stream(self, client, tmp_path, default_model, custom_model=None, reply="[]"):
         apps = [{"content": "Installed app: Blender"}]
         fake_llm = MagicMock()
-        fake_llm.chat.return_value = "[]"
+        fake_llm.chat.return_value = reply
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch("sys.platform", "darwin"))
             stack.enter_context(patch("pathlib.Path.home", return_value=tmp_path))
@@ -2289,6 +2289,25 @@ class TestStreamInferenceModel:
         create.assert_not_called()
         assert '"type": "error"' in resp.text
         assert "gaia config set default_model" in resp.text
+
+    def test_a_cut_off_reply_still_streams_its_complete_insights(
+        self, client, tmp_path
+    ):
+        # #3835: local models stop part-way through the array.
+        reply = (
+            '[{"content": "Uses Blender for 3D work", "confidence": 0.9, '
+            '"domain": "personal"}, {"content": "Renders anim'
+        )
+        resp, _create = self._stream(
+            client, tmp_path, default_model="Qwen3.6-35B-A3B-GGUF", reply=reply
+        )
+
+        assert resp.status_code == 200
+        assert '"type": "error"' not in resp.text
+        assert resp.text.count('"type": "insight"') == 1
+        assert "Uses Blender for 3D work" in resp.text
+        assert "cut off" in resp.text
+        assert '"total": 1' in resp.text
 
 
 # ===========================================================================

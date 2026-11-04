@@ -8298,6 +8298,7 @@ def _bootstrap_infer():
     reading it.
     """
     from gaia.agents.base.discovery import SystemDiscovery
+    from gaia.agents.base.inferred_insights import parse_inferred_insights
     from gaia.agents.base.memory_store import MemoryStore
 
     print("\n=== GAIA Memory — AI Profile Inference ===")
@@ -8458,39 +8459,34 @@ def _bootstrap_infer():
         if hasattr(raw_response, "__iter__") and not isinstance(raw_response, str):
             raw_response = "".join(raw_response)
     except Exception as e:
-        print(f"\n\n  ❌ LLM call failed: {e}")
-        print(
+        print()
+        raise RuntimeError(
+            f"LLM call failed: {e}\n"
             f"  Make sure Lemonade Server is running. {describe_start_hint().instruction}"
-        )
-        return
+        ) from e
 
     print(" done.")
 
     # --- Parse JSON array from response ---
-    insights: list[dict] = []
     try:
-        # Strip markdown fences if LLM wrapped output
-        cleaned = raw_response.strip()
-        if cleaned.startswith("```"):
-            cleaned = "\n".join(cleaned.split("\n")[1:])
-            if cleaned.endswith("```"):
-                cleaned = cleaned[: cleaned.rfind("```")]
+        insights, truncated = parse_inferred_insights(raw_response)
+    except ValueError as e:
+        # The reply itself stays out of the terminal: it is unreadable here and
+        # can echo the scanned system data back.
+        logging.getLogger("gaia.cli").debug(
+            "Unparseable inference reply: %r", raw_response
+        )
+        print()
+        raise RuntimeError(
+            f"Could not read any insights from the LLM: {e}. Nothing was "
+            "stored. Re-run `gaia memory bootstrap --infer` to try again."
+        ) from e
 
-        insights = json.loads(cleaned.strip())
-        if not isinstance(insights, list):
-            raise ValueError("Expected a JSON array")
-        # Validate each item
-        insights = [
-            i
-            for i in insights
-            if isinstance(i, dict)
-            and isinstance(i.get("content"), str)
-            and i["content"].strip()
-        ]
-    except Exception as e:
-        print(f"\n  ❌ Failed to parse LLM response: {e}")
-        print(f"  Raw response:\n{raw_response[:500]}")
-        return
+    if truncated:
+        print(
+            f"\n  ⚠️  The LLM's reply was cut off; keeping the {len(insights)} "
+            "insight(s) that arrived complete."
+        )
 
     if not insights:
         print("\n  No insights generated.")
