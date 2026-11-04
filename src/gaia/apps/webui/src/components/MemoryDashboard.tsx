@@ -1124,7 +1124,7 @@ export function MemoryDashboard() {
                         >
                             <ArrowLeft size={18} />
                         </button>
-                        <h1>{t('mem.title')} <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '2px 8px', borderRadius: 4, marginInlineStart: 8, verticalAlign: 'middle', letterSpacing: '0.5px', whiteSpace: 'nowrap' }}>{t('mem.beta')}</span></h1>
+                        <h1>{t('mem.title')} <span className="mem-beta" style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '2px 8px', borderRadius: 4, marginInlineStart: 8, verticalAlign: 'middle', whiteSpace: 'nowrap' }}>{t('mem.beta')}</span></h1>
                     </div>
                     <div className="memory-dashboard-header-actions">
                         {activeTab === 'advanced' && <>
@@ -2073,7 +2073,7 @@ export function MemoryDashboard() {
                             {/* ── Settings ─────────────────────── */}
                             <div className="mem-section">
                                 <div className="mem-section-title">
-                                    <Shield size={14} /> {t('mem.settings.title')} <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '1px 6px', borderRadius: 4, marginInlineStart: 6, verticalAlign: 'middle', letterSpacing: '0.5px' }}>{t('mem.beta')}</span>
+                                    <Shield size={14} /> {t('mem.settings.title')} <span className="mem-beta" style={{ fontSize: 10, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '1px 6px', borderRadius: 4, marginInlineStart: 6, verticalAlign: 'middle' }}>{t('mem.beta')}</span>
                                 </div>
                                 <div className="mem-setting-row">
                                     <div className="mem-setting-info">
@@ -2178,10 +2178,10 @@ export function MemoryDashboard() {
                                             }}
                                         >
                                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-                                                <span style={{
+                                                <span className="mem-beta" style={{
                                                     fontSize: 11, fontWeight: 700, color: 'var(--accent-yellow)',
                                                     background: 'var(--accent-yellow-dim)', padding: '3px 10px',
-                                                    borderRadius: 4, letterSpacing: '0.5px',
+                                                    borderRadius: 4,
                                                 }}>{t('mem.beta')}</span>
                                                 <h2 id="mem-beta-confirm-title" style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>
                                                     {t(cfg.title)}

@@ -116,6 +116,22 @@ const audit = (page: Page): Promise<string[]> =>
             }
         }
 
+        // Arabic letters join: a monospace face or added tracking pulls a word apart into
+        // separate letters. Only the stack's Arabic fallback matters; Latin may stay mono.
+        const ARABIC_FACE = /Segoe UI|Noto Sans Arabic|Noto Naskh Arabic|Tahoma|Arial|Helvetica|sans-serif|serif|system-ui|-apple-system/i;
+        const textWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        const seen = new Set<string>();
+        for (let node = textWalker.nextNode(); node; node = textWalker.nextNode()) {
+            const el = node.parentElement;
+            if (!el || !arabic.test(node.textContent ?? '') || !shown(el) || seen.has(label(el))) continue;
+            const style = getComputedStyle(el);
+            const families = style.fontFamily.split(',').map((f) => f.trim().replace(/^["']|["']$/g, ''));
+            const fallback = families.find((f) => f === 'monospace' || ARABIC_FACE.test(f));
+            if (fallback === 'monospace') problems.push(`Arabic in a monospace font: ${label(el)}`);
+            if (style.letterSpacing !== 'normal' && parseFloat(style.letterSpacing) !== 0) problems.push(`Arabic letter-spaced ${style.letterSpacing}: ${label(el)}`);
+            seen.add(label(el));
+        }
+
         // The English of a label is quieter than its translation, and still readable.
         const paint = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
         const rgb = (color: string): number[] => {

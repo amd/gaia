@@ -10,6 +10,7 @@
     background: var(--bg-primary);
     overflow: hidden;
 }
+.mem-beta { letter-spacing: 0.5px; }
 /* Headers and badges here run at 10 px; the gloss's 11 px floor would set the English above the Arabic. */
 .memory-dashboard-page .i18n-gloss.i18n-gloss {
     font-size: min(1em, max(0.8em, 11px));
