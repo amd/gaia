@@ -327,8 +327,10 @@ Pick the install path that fits you best:
     on the cloud model when you chose one.
     Setup says it's ready only when the required tests pass. A failed test
     shows the error with **Test again**, **Choose another model** and, for a
-    broken model, an option to download it again. A test that doesn't finish
-    in time stops with an error instead of hanging. Running `gaia init`
+    broken model, an option to download it again. An extra that failed for
+    any other reason, such as too little free memory or an empty answer,
+    keeps its file: its **Retry** tests it again without downloading it. A
+    test that doesn't finish in time stops with an error instead of hanging. Running `gaia init`
     yourself beforehand also works.
 
     Each step keeps a log, collapsed under it until you open it. **Save a

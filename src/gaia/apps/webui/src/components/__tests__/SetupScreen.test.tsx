@@ -921,6 +921,19 @@ describe('SetupScreen: downloading', () => {
         await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(QWEN.id, { keepTrying: false }));
     });
 
+    it('tests a model again without deleting it when its test failed for want of memory', async () => {
+        const failed = runStatus([
+            progress({ id: QWEN.id, state: 'failed', bytes_done: 23.3e9, bytes_total: 23.3e9, error_kind: 'memory', error: 'not enough memory', can_retry: true }),
+        ], { state: 'failed', error: 'A model failed its test' });
+        mockedApi.startSetup.mockResolvedValue(failed);
+        mockedApi.downloadSetupModel.mockResolvedValue(failed);
+        await startLocal();
+        fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(QWEN.id, { keepTrying: false }));
+        expect(mockedApi.removeSetupModel).not.toHaveBeenCalled();
+    });
+
     it('asks before retrying past a disk that is still too full', async () => {
         const failed = runStatus([
             progress({ id: QWEN.id, state: 'failed', bytes_done: 22.6e9, bytes_total: 23.3e9, error_kind: 'disk_full', error: 'No space left on device' }),

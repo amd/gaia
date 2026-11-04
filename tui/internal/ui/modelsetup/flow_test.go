@@ -1408,6 +1408,55 @@ func TestRetryNeverRemovesAModelWithoutConfirmation(t *testing.T) {
 	}
 }
 
+// A model whose test failed with nothing wrong with its file (short of memory,
+// a silent answer) is tested again on r: never deleted, and no delete prompt.
+func TestRetryTestsAFineFileAgainWithoutRemovingIt(t *testing.T) {
+	for _, kind := range []string{"memory", "answer"} {
+		t.Run(kind, func(t *testing.T) {
+			h := startedDownload(t)
+			msg := "raw test error"
+			h.api.SetRunState(setupapi.RunReady)
+			h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateFailed, ErrorKind: &kind, Error: &msg,
+				BytesDone: total(gemma), BytesTotal: total(gemma)})
+			h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateReady, BytesDone: total(qwen), BytesTotal: total(qwen)})
+			h.api.Progress(setupapi.ModelProgress{ID: emb, State: setupapi.StateReady, BytesDone: total(emb), BytesTotal: total(emb)})
+			h.poll()
+			h.poll()
+			for i, r := range h.m.shownRows() {
+				if r.ID == gemma {
+					h.m.focus = i
+				}
+			}
+			h.expect("Nothing is downloaded again.")
+			h.key("r")
+			if h.m.ask != askNone {
+				t.Fatalf("a fine file asked before retrying (ask %v)", h.m.ask)
+			}
+			for _, c := range h.api.CallList() {
+				if strings.HasPrefix(c, "remove") {
+					t.Fatalf("retrying a fine file removed it: %v", h.api.CallList())
+				}
+			}
+			if !h.api.Called("download " + gemma) {
+				t.Fatalf("r did not ask the backend to test it again: %v", h.api.CallList())
+			}
+			// The backend tests it: the row reads as being checked, not ready.
+			h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateVerifying, BytesDone: total(gemma), BytesTotal: total(gemma)})
+			h.poll()
+			row, _ := h.m.progressFor(gemma)
+			if got := h.m.shownState(row); got != setupapi.StateVerifying {
+				t.Fatalf("a model being tested again shows %q, want verifying", got)
+			}
+			h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateReady, BytesDone: total(gemma), BytesTotal: total(gemma)})
+			h.poll()
+			row, _ = h.m.progressFor(gemma)
+			if got := h.m.shownState(row); got != setupapi.StateReady {
+				t.Fatalf("a model that passed its test again shows %q, want ready", got)
+			}
+		})
+	}
+}
+
 // A run that failed before its load check keeps what it downloaded: those rows
 // read "downloaded", are no failure, offer no retry, and the run's own note
 // shows only when no download failed (its row would already say why).

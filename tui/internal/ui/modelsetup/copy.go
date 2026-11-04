@@ -336,6 +336,14 @@ func failureLine(kind, name, drive string, doneGB, leftGB float64) string {
 		return "The connection dropped while downloading " + name + ". Press r to continue from where it stopped."
 	case "verify":
 		return name + " downloaded but didn't load. Press r to delete it and download it again."
+	case "memory":
+		return name + " is downloaded, but this PC didn't have enough free memory to test it. Close some apps, then press r to test it again. Nothing is downloaded again."
+	case "stuck":
+		return name + " is downloaded, but the model server didn't answer before its test finished. Press r to test it again. Nothing is downloaded again."
+	case "answer":
+		return name + " loaded, but its test got nothing usable back. Press d for what it returned, r to test it again. Nothing is downloaded again."
+	case "window":
+		return name + " loaded with a smaller context window than GAIA needs. Press r to test it again. Nothing is downloaded again."
 	case "path_too_long":
 		return "Windows couldn't save " + name + ": the path to the models folder is too long. Turn on long file paths in Windows, or use a models folder with a shorter path, then press r."
 	}

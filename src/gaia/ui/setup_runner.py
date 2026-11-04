@@ -24,7 +24,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.logger import get_logger
 from gaia.utils.terminal import windows_hidden_popen_kwargs
@@ -591,6 +591,8 @@ class ModelProgress:
     error: Optional[str] = None
     error_kind: Optional[str] = None
     retrying_until: Optional[int] = None
+    #: The Test step's row that failed this model, so Retry repeats that test.
+    test_job: Optional[str] = None
     #: Bytes already on disk when this pull started (a resumed download).
     bytes_before: Optional[int] = None
     #: What the download printed and reported, this model's lines only.
@@ -688,6 +690,41 @@ def _failure_text(model_id: str, kind: Optional[str]) -> str:
         f"Lemonade couldn't download {model_id}. Its download log has "
         "Lemonade's message; press Retry to try again."
     )
+
+
+#: Test failures that say nothing is wrong with the file: Retry tests again,
+#: and never deletes or re-downloads the model. A "broken" one is ``verify``.
+TEST_KINDS = ("memory", "stuck", "answer", "window")
+
+
+def _test_failure(
+    model_id: str, kind: Optional[str], error: Optional[str]
+) -> Tuple[str, str]:
+    """A failed test's row: its ``error_kind`` and what Details says."""
+    why = f" ({error})" if error else ""
+    if kind == "memory":
+        return kind, (
+            f"{model_id} is downloaded, but this PC didn't have enough free memory "
+            "to test it. Close some apps, then press Retry to test it again; "
+            "nothing is downloaded again."
+        )
+    if kind == "stuck":
+        return kind, (
+            f"{model_id} is downloaded, but the model server didn't answer before "
+            "its test finished. Press Retry to test it again; nothing is "
+            "downloaded again."
+        )
+    if kind == "answer":
+        return kind, (
+            f"{model_id} loaded, but its test got nothing usable back{why}. "
+            "Press Retry to test it again; nothing is downloaded again."
+        )
+    if kind == "window":
+        return kind, (
+            f"{model_id} loaded with a smaller context window than GAIA needs{why}. "
+            "Press Retry to test it again; nothing is downloaded again."
+        )
+    return "verify", f"{model_id} is downloaded but would not load: {error}"
 
 
 @dataclass
@@ -866,8 +903,10 @@ class SetupRunner:
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
                 return True
+            # "verifying" outside a run is Retry testing it again.
             return any(
-                ids_match(entry.id, model_id) and entry.state == "downloading"
+                ids_match(entry.id, model_id)
+                and entry.state in ("downloading", "verifying")
                 for entry in self._models.values()
             )
 
@@ -966,7 +1005,13 @@ class SetupRunner:
         self, client, model_id: str, keep_trying: bool = False
     ) -> Dict[str, Any]:
         """Pull one model now, in this process: Retry, Resume, or a model the
-        user skipped at setup and now wants. Lemonade resumes a partial file."""
+        user skipped at setup and now wants. Lemonade resumes a partial file.
+
+        A model that downloaded but failed its test for a reason that leaves
+        the file fine (see :data:`TEST_KINDS`) is tested again instead."""
+        retested = self._retest(client, model_id)
+        if retested is not None:
+            return retested
         on_disk = _bytes_on_disk(client, model_id)
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
@@ -1017,6 +1062,8 @@ class SetupRunner:
                 self._run.state = "cancelled"
                 self._run.text = "Setup stopped"
                 self._run.note("Stopped by the user while checking the models")
+                # No check will finish them now: kept, as "unchecked".
+                self._settle_models(None, {}, run_failed=True)
                 self._end_rows(self._run, cancelled=True)
                 return True
             if self._proc is None or self._run is None or self._run.state != "running":
@@ -1031,6 +1078,93 @@ class SetupRunner:
             self._end_rows(self._run, cancelled=True)
             self._proc.kill()
             return True
+
+    def _retest(self, client, model_id: str) -> Optional[Dict[str, Any]]:
+        """Test one downloaded model again, on its own thread; nothing is
+        deleted. None when its last failure was not a test of a fine file."""
+        with self._lock:
+            entry = self._models.get(model_id)
+            if (
+                entry is None
+                or entry.state not in ("failed", "cancelled")
+                or entry.error_kind not in TEST_KINDS
+            ):
+                return None
+            if self._run is not None and self._run.state in ("running", "verifying"):
+                raise SetupBusy(
+                    "Setup is running and tests its models itself. Retry this "
+                    "model once it finishes."
+                )
+            if model_id in self._pulls:
+                raise SetupBusy(f"{model_id} is already being tested.")
+            stop = threading.Event()
+            self._pulls[model_id] = stop
+            entry.state, entry.error, entry.speed_bps = "verifying", None, 0
+            entry.add_log(f"Testing {model_id} again")
+            if self._run is not None:
+                self._record_test(
+                    self._run,
+                    {"job": entry.test_job, "subject": model_id, "state": "running"},
+                )
+        threading.Thread(
+            target=self._retest_one, args=(client, model_id, stop), daemon=True
+        ).start()
+        return self.status() or {"state": "idle"}
+
+    def _retest_one(self, client, model_id: str, stop: threading.Event) -> None:
+        from gaia.installer.init_command import retest_model
+
+        with self._lock:
+            job = self._models[model_id].test_job
+        started = time.monotonic()
+        crashed = None
+        try:
+            passed, error, kind = retest_model(client, model_id, job)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            # Never leave the row "verifying": it fails, and Retry tests again.
+            logger.exception(
+                "Testing %s again stopped on an unexpected error", model_id
+            )
+            passed, error, kind = False, f"{type(e).__name__}: {e}", "stuck"
+            crashed = (
+                f"GAIA couldn't test {model_id} again ({error}). Its server log "
+                "has the details; press Retry to test it again."
+            )
+        with self._lock:
+            self._pulls.pop(model_id, None)
+            entry = self._models.setdefault(model_id, ModelProgress(id=model_id))
+            row = {"job": entry.test_job, "subject": model_id}
+            if stop.is_set():
+                # The test can't be interrupted; its result no longer counts.
+                entry.state = "cancelled"
+                entry.add_log("Cancelled")
+                if self._run is not None:
+                    self._record_test(self._run, {**row, "state": "skipped"})
+                return
+            if passed:
+                entry.state, entry.error, entry.error_kind = "ready", None, None
+                entry.add_log("Test passed")
+            else:
+                entry.state = "failed"
+                entry.error_kind, entry.error = _test_failure(model_id, kind, error)
+                entry.error = crashed or entry.error
+                said = (
+                    "Failed to load"
+                    if entry.error_kind == "verify"
+                    else "Failed its test"
+                )
+                entry.add_log(f"{said}: {error}")
+            if self._run is not None:
+                self._record_test(
+                    self._run,
+                    {
+                        **row,
+                        "state": "passed" if passed else "failed",
+                        "error": None if passed else error,
+                        "kind": None if passed else kind,
+                        "seconds": round(time.monotonic() - started, 1),
+                    },
+                )
 
     def _pull_one(
         self, client, model_id: str, keep_trying: bool, stop: threading.Event
@@ -1226,18 +1360,26 @@ class SetupRunner:
         run.size = f"{totals['bytes_done'] / 1e9:.2f} GB of {totals['bytes_total'] / 1e9:.2f} GB"
 
     def _settle_models(
-        self, ready: Optional[set], failed: Dict[str, str], run_failed: bool = False
+        self,
+        ready: Optional[set],
+        failed: Dict[str, str],
+        run_failed: bool = False,
+        kinds: Optional[Dict[str, str]] = None,
     ) -> None:
         """After a run: downloaded models become ready, or failed when their
         load check failed. When the run stopped before checking, they stay
         downloaded as "unchecked": nothing is wrong with them, so nothing may
-        delete or re-download them. Caller holds the lock."""
+        delete or re-download them. *kinds* gives a failed model's
+        ``error_kind``; only ``verify`` (the default) offers a fresh download.
+        Caller holds the lock."""
         for entry in self._models.values():
             if entry.id in failed:
-                entry.state, entry.error_kind = "failed", "verify"
+                kind = (kinds or {}).get(entry.id, "verify")
+                entry.state, entry.error_kind = "failed", kind
                 entry.error = failed[entry.id]
                 # Details shows the row's log, so the reason must be in it.
-                entry.add_log(f"Failed to load: {failed[entry.id]}")
+                said = "Failed to load" if kind == "verify" else "Failed its test"
+                entry.add_log(f"{said}: {failed[entry.id]}")
             elif entry.state != "verifying":
                 continue
             elif run_failed:
@@ -1393,17 +1535,23 @@ class SetupRunner:
             checked = {m["id"] for m in loads}
             # An extra's own test result stands; only an untested one counts as loaded.
             tested_failed = {
-                t["subject"]: t.get("error")
+                t["subject"]: t
                 for t in run.tests.values()
                 if t.get("state") == "failed" and t.get("subject") in run.extra_models
             }
-            failed.update(
-                {
-                    i: f"{i} failed its test: {err}"
-                    for i, err in tested_failed.items()
-                    if i not in checked
-                }
-            )
+            kinds: Dict[str, str] = {}
+            for i, test in tested_failed.items():
+                if i in checked:
+                    continue
+                kinds[i], failed[i] = _test_failure(
+                    i, test.get("kind"), test.get("error")
+                )
+                if i in self._models:
+                    self._models[i].test_job = test.get("job")
+                    # The friendly line may leave out the test's own words.
+                    self._models[i].add_log(
+                        f"Test {test.get('job')}: {test.get('error')}"
+                    )
             loaded |= {
                 i
                 for i in run.extra_models
@@ -1413,6 +1561,7 @@ class SetupRunner:
                 loaded if loads else None,
                 failed,
                 run_failed=not status.get("ready") and not loads,
+                kinds=kinds,
             )
             ready = bool(status.get("ready"))
             if not ready:

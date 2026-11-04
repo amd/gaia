@@ -11,6 +11,7 @@ import zlib
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from gaia.installer import init_command, model_choice
 from gaia.installer.init_command import (
@@ -25,6 +26,7 @@ from gaia.installer.init_command import (
     _test_limit_s,
     _tone_wav,
 )
+from gaia.llm.lemonade_client import LemonadeClientError, LemonadeUnresponsiveError
 from gaia.ui import setup_plan, setup_runner
 
 
@@ -147,6 +149,53 @@ def test_a_failed_test_says_what_kind_of_failure(error, kind):
     event = cmd.events.seen[-1]
     assert event["kind"] == kind and event["error"] == str(error)
     assert event["seconds"] == 1.3
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [
+        requests.ConnectionError("connection refused"),
+        LemonadeUnresponsiveError("no answer"),
+    ],
+)
+def test_a_server_that_stops_answering_is_not_a_broken_model(raised):
+    client = MagicMock()
+    client.chat_completions.side_effect = raised
+    ok, error = _command()._test_vision(client, "m")
+    assert ok is False and isinstance(error, CheckTimedOut)
+    assert init_command.kind_of_test_failure(error) == "stuck"
+
+
+def test_a_wrapped_connection_error_is_not_a_broken_model():
+    def fail():
+        try:
+            raise requests.ConnectionError("reset")
+        except requests.ConnectionError:
+            raise LemonadeClientError("Request failed: reset")
+
+    ok, error = _command()._within_limit("m", fail)
+    assert ok is False and init_command.kind_of_test_failure(error) == "stuck"
+
+
+def test_an_unknown_test_error_is_still_a_broken_model():
+    ok, error = _command()._within_limit("m", lambda: 1 / 0)
+    assert ok is False and init_command.kind_of_test_failure(error) == "broken"
+
+
+@pytest.mark.parametrize(
+    "job, test",
+    [
+        ("vision", "_test_vision"),
+        ("voice", "_test_model_inference"),
+        (None, "_test_model_inference"),
+    ],
+)
+def test_a_retest_repeats_the_test_that_failed(job, test):
+    client = MagicMock()
+    with patch.object(InitCommand, test, return_value=(False, WrongAnswer("blank"))):
+        assert init_command.retest_model(client, "m", job) == (False, "blank", "answer")
+    with patch.object(InitCommand, test, return_value=(True, None)):
+        assert init_command.retest_model(client, "m", job) == (True, None, None)
 
 
 def _verify(cmd, client, inference, vision=(True, None)):

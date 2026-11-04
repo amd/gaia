@@ -945,6 +945,49 @@ class WindowTooSmall(str):
     """The model loaded with a smaller context window than GAIA needs: not a damaged file."""
 
 
+#: A failed test's kind, by its error's class. Anything else is "broken": the
+#: file itself didn't load, and only that is worth a fresh download.
+_TEST_FAILURE_KINDS = (
+    (MemoryShortfall, "memory"),
+    (CheckTimedOut, "stuck"),
+    (WrongAnswer, "answer"),
+    (WindowTooSmall, "window"),
+)
+
+
+def kind_of_test_failure(error) -> Optional[str]:
+    """``memory``, ``stuck``, ``answer``, ``window`` or ``broken``; None for no error."""
+    if error is None:
+        return None
+    return next(
+        (k for cls, k in _TEST_FAILURE_KINDS if isinstance(error, cls)), "broken"
+    )
+
+
+def _test_error(e: Exception, limit: int = 200) -> str:
+    """A failed test's reason; a server that stopped answering is not a broken model."""
+    import requests
+
+    from gaia.llm.lemonade_client import (
+        GaiaLemonadeNotAnsweringError,
+        LemonadeUnresponsiveError,
+    )
+
+    unanswered = (
+        GaiaLemonadeNotAnsweringError,
+        LemonadeUnresponsiveError,
+        requests.ConnectionError,
+        requests.Timeout,
+    )
+    cause: Optional[BaseException] = e
+    while cause is not None:
+        if isinstance(cause, unanswered):
+            return CheckTimedOut(f"The model server didn't answer: {str(e)[:limit]}")
+        cause = cause.__cause__ or cause.__context__
+    text = str(e)
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
 #: A model gets this long to load and answer, plus _TEST_S_PER_GB per GB of size.
 _TEST_MIN_S = 300
 _TEST_S_PER_GB = 15
@@ -2838,12 +2881,8 @@ class InitCommand:
         except InsufficientMemoryError as e:
             # Kept whole: the remedy (close apps, or another model) is in it.
             return (False, MemoryShortfall(str(e)))
-        except Exception as e:
-            error_msg = str(e)
-            # Truncate long error messages
-            if len(error_msg) > 100:
-                error_msg = error_msg[:100] + "..."
-            return (False, error_msg)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            return (False, _test_error(e, limit=100))
 
     def _test_speech(self, client, model_id: str) -> tuple:
         """Transcribe a short tone: the request is accepted and a transcript returns."""
@@ -2901,7 +2940,7 @@ class InitCommand:
         except InsufficientMemoryError as e:
             return (False, MemoryShortfall(str(e)))
         except Exception as e:  # pylint: disable=broad-exception-caught
-            return (False, str(e)[:200])
+            return (False, _test_error(e))
         choices = (response or {}).get("choices") or [{}]
         message = choices[0].get("message", {})
         said = (
@@ -2925,7 +2964,7 @@ class InitCommand:
             try:
                 results.put(test(*args))
             except Exception as e:  # pylint: disable=broad-exception-caught
-                results.put((False, str(e)[:200]))
+                results.put((False, _test_error(e)))
             except BaseException as e:  # pylint: disable=broad-exception-caught
                 results.put(e)
 
@@ -2950,16 +2989,7 @@ class InitCommand:
         seconds: Optional[float] = None,
     ) -> None:
         """One row of the Test step: ``running``, ``passed``, ``failed`` or ``skipped``."""
-        # Only "broken" means the file didn't load, so only it offers a fresh download.
-        kinds = (
-            (MemoryShortfall, "memory"),
-            (CheckTimedOut, "stuck"),
-            (WrongAnswer, "answer"),
-            (WindowTooSmall, "window"),
-        )
-        kind = None
-        if error is not None:
-            kind = next((k for cls, k in kinds if isinstance(error, cls)), "broken")
+        kind = kind_of_test_failure(error)
         self.events.emit(
             "test",
             job=job,
@@ -3882,6 +3912,26 @@ class InitCommand:
 def run_agent_refresh() -> int:
     """Entry point for `gaia init --agent-only`."""
     return InitCommand(profile=DEFAULT_INIT_PROFILE, skip_models=True).refresh_agent()
+
+
+def retest_model(client, model_id: str, job: Optional[str] = None) -> tuple:
+    """Run one downloaded model's setup test again, as the Test step ran it.
+
+    *job* is the Test step's row, so a vision test repeats as a vision test.
+    Returns ``(passed, error, kind)``; *kind* is :func:`kind_of_test_failure`'s.
+    """
+    cmd = InitCommand(profile=DEFAULT_INIT_PROFILE, skip_models=True, yes=True)
+    test = (
+        cmd._test_vision
+        if job == model_choice.ROLE_VISION
+        else cmd._test_model_inference
+    )
+    passed, error = cmd._within_limit(model_id, test, client, model_id)
+    return (
+        passed,
+        None if error is None else str(error),
+        None if passed else kind_of_test_failure(error),
+    )
 
 
 def run_init(
