@@ -298,6 +298,32 @@ describe('Try again on a failed turn', () => {
     });
 });
 
+describe('Try again the reply asks for (#6588)', () => {
+    const INTERRUPTED = 'This answer was interrupted when GAIA closed. Send again to retry.';
+
+    it('is a labelled button on the failed reply, not only an icon shown on hover', async () => {
+        await sendAndFail(new Error('Failed to fetch'));
+        const retry = screen.getByRole('button', { name: 'Try again' });
+        expect(retry).toHaveTextContent('Try again');
+        expect(retry.closest('.msg-actions')).toBeNull();
+    });
+
+    it('is offered on an answer GAIA cut off when it closed, and replaces it', async () => {
+        server = [row('user', 'write an essay'), row('assistant', `Coral reefs are old.\n\n${INTERRUPTED}`)];
+        render(<ChatView sessionId={SESSION.id} />);
+        const retry = await screen.findByRole('button', { name: 'Try again' });
+        expect(retry).toHaveTextContent('Try again');
+        expect(screen.queryByText(/Send again to retry/)).toBeNull();
+
+        await act(async () => {
+            fireEvent.click(retry);
+        });
+        await waitFor(() => expect(sends).toHaveLength(1));
+        expect(sends[0].text).toBe('write an essay');
+        expect(mockedApi.deleteMessagesFrom).toHaveBeenCalledWith(SESSION.id, 101);
+    });
+});
+
 describe('Try again never deletes an answer written since the failure', () => {
     const pollServer = async () => {
         await act(async () => {
