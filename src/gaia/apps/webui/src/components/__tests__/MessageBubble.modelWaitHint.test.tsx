@@ -6,10 +6,14 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageBubble } from '../MessageBubble';
-import { LOCAL_MODEL_WAIT_HINT, MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../../utils/modelWait';
+import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../../utils/modelWait';
+import { tEn } from '../../i18n/useT';
 import { useModelStore } from '../../stores/modelStore';
 import type { ActiveModel } from '../../types';
 import type { Message } from '../../types';
+
+const MODEL_WAIT_HINT = tEn('live.modelWaitHint');
+const LOCAL_MODEL_WAIT_HINT = tEn('live.localModelWaitHint');
 
 const streaming: Message = {
     id: -1,

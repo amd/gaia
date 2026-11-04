@@ -16,7 +16,8 @@ import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { AnswerStats, type TurnEnding } from './AnswerStats';
 import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
-import { LOCAL_MODEL_WAIT_HINT, MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
+import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
+import { localizeLiveStatus } from '../utils/liveStatus';
 import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
@@ -63,7 +64,7 @@ interface MessageBubbleProps {
  */
 function ThinkingIndicator({ active, label, awaitingUser = false }: { active: boolean; label?: string | null; awaitingUser?: boolean }) {
     const t = useT();
-    const text = awaitingUser ? t('activity.waiting') : (label || t('msg.thinking'));
+    const text = awaitingUser ? t('activity.waiting') : (label ? localizeLiveStatus(t, label) : t('msg.thinking'));
     const [reduceMotion] = useState(prefersReducedMotion);
     const [chars, setChars] = useState(0);
     const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>(reduceMotion ? 'idle' : 'typing');
@@ -118,11 +119,11 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
         <span className={`thinking-indicator${active && !awaitingUser ? ' is-live' : ''}`}>
             <span className="thinking-indicator-text">{phase === 'idle' ? text : text.slice(0, chars)}</span>
             {active && !awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
-                <span className="thinking-indicator-elapsed"> · {elapsed}s</span>
+                <span className="thinking-indicator-elapsed"> · <bdi dir="ltr">{elapsed}s</bdi></span>
             )}
             {active && <span className="cursor" />}
             {showModelWaitHint && (
-                <span className="thinking-indicator-hint" role="status">{place?.remote === false ? LOCAL_MODEL_WAIT_HINT : MODEL_WAIT_HINT}</span>
+                <span className="thinking-indicator-hint" role="status">{t(place?.remote === false ? 'live.localModelWaitHint' : 'live.modelWaitHint')}</span>
             )}
         </span>
     );
