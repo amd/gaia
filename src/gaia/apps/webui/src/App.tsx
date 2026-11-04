@@ -44,7 +44,7 @@ const DocumentLibrary = lazy(() => import('./components/DocumentLibrary').then((
 const FileBrowser = lazy(() => import('./components/FileBrowser').then((m) => ({ default: m.FileBrowser })));
 const MobileAccessModal = lazy(() => import('./components/MobileAccessModal').then((m) => ({ default: m.MobileAccessModal })));
 
-/** `checking` waits for readiness; `upgrading` quietly replaces an embedded server;
+/** `checking` waits for readiness; `upgrading` blocks while an embedded server is replaced;
  * `needed` is the actual first-run flow. */
 type SetupGate =
     | { state: 'checking' }
@@ -52,7 +52,8 @@ type SetupGate =
     | { state: 'ready' }
     | { state: 'needed'; check: SetupCheck }
     | { state: 'addingLocal' }
-    | { state: 'unknown'; error: string };
+    /** `upgradeFailed`: the check answered, but updating GAIA's own model server failed. */
+    | { state: 'unknown'; error: string; upgradeFailed?: boolean };
 
 const LEMONADE_FAIL_THRESHOLD = 3;
 /** A backend that has answered no status request for this long is treated as gone. */
@@ -66,16 +67,19 @@ const isRefused = (err: unknown) => err instanceof TypeError;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const UPGRADE_WAIT_MS = 5 * 60_000;
 
+/** The embedded server's update ended in failure, as opposed to still running. */
+class UpgradeFailed extends Error {}
+
 async function waitForEmbeddedUpgrade(): Promise<void> {
     const deadline = Date.now() + UPGRADE_WAIT_MS;
     for (;;) {
         const status = await api.getSetupStatus();
         if (status.state === 'ready') return;
         if (status.state === 'failed' || status.state === 'cancelled') {
-            throw new Error(status.error || 'Embedded Lemonade upgrade did not finish.');
+            throw new UpgradeFailed(status.error || 'The update stopped before it finished.');
         }
         if (Date.now() >= deadline) {
-            throw new Error('Embedded Lemonade upgrade took too long. Check the GAIA server log.');
+            throw new Error('Updating the local model server is taking longer than usual. Check again to keep waiting.');
         }
         await sleep(RETRY_INITIAL_MS);
     }
@@ -170,12 +174,13 @@ function App() {
                     waited += RETRY_INITIAL_MS;
                     continue;
                 }
-                // A pinned embedded-server change is an application upgrade,
-                // not first-run setup. Keep the existing chat visible while the
-                // server artifact is replaced; the model cache is untouched.
+                // A new pinned embedded server is an update, not first-run setup: the models stay.
                 if (!check.ready && check.stage === 'upgrade' && !active?.remote) {
                     setSetup({ state: 'upgrading' });
-                    await api.startSetup(false, false, { upgradeEmbedded: true });
+                    // A re-check after the wait timed out finds that update still going: follow it.
+                    const run = await api.getSetupStatus();
+                    const updating = run.upgrade_embedded && (run.state === 'running' || run.state === 'verifying');
+                    if (!updating) await api.startSetup(false, false, { upgradeEmbedded: true });
                     await waitForEmbeddedUpgrade();
                     check = await api.checkSetup(false);
                 }
@@ -187,6 +192,11 @@ function App() {
         } catch (err) {
             // Could not ask — not the same as "not set up"; the chat still works if it is.
             const error = err instanceof Error ? err.message : String(err);
+            if (err instanceof UpgradeFailed) {
+                log.system.warn('Updating the local model server failed', err);
+                setSetup({ state: 'unknown', error, upgradeFailed: true });
+                return;
+            }
             log.system.warn('Setup check could not be answered', err);
             setSetup({ state: 'unknown', error });
         }
@@ -247,7 +257,9 @@ function App() {
         startupLoads.current.forEach((l) => l.kick());
         useModelStore.getState().retryNow();
         void reloadSessions.current();
-        if (setupRef.current.state === 'unknown') void checkSetup(true);
+        // Not after a failed update: reconnecting must not start another one unasked.
+        const gate = setupRef.current;
+        if (gate.state === 'unknown' && !gate.upgradeFailed) void checkSetup(true);
     }, [checkSetup]);
     const onBackendBackRef = useRef(onBackendBack);
     onBackendBackRef.current = onBackendBack;
@@ -681,7 +693,7 @@ function App() {
         );
     }
 
-if (setup.state === 'upgrading') {
+    if (setup.state === 'upgrading') {
         return (
             <div className="app">
                 <main className="startup" role="status" aria-live="polite" aria-label={t('setup.upgrading.notice')}>
@@ -730,12 +742,17 @@ if (setup.state === 'upgrading') {
 
             <div className="main-content">
                 {setup.state === 'ready' && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
-                {setup.state === 'unknown' && (
+                {setup.state === 'unknown' && (setup.upgradeFailed ? (
+                    <div className="app-notice is-warning" role="status">
+                        <span>{t('setup.upgrading.failed', { error: setup.error })}</span>
+                        <button type="button" className="link-btn" onClick={() => void checkSetup()}>{t('setup.upgrading.retry')}</button>
+                    </div>
+                ) : (
                     <div className="app-notice is-warning" role="status">
                         <span>Could not check whether GAIA is set up: {setup.error}</span>
                         <button type="button" className="link-btn" onClick={() => void checkSetup()}>Check again</button>
                     </div>
-                )}
+                ))}
                 {/* Model downloads, here when the sidebar that usually shows them is closed or collapsed. */}
                 {(!sidebarOpen || sidebarCollapsed) && <DownloadChip placement="main" />}
                 {flagshipMissing && <FlagshipAgentNotice onInstalled={loadAgents} />}

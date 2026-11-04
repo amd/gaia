@@ -706,6 +706,8 @@ export const enMessages = {
     'setup.lede.running': 'Setting things up. Setup keeps going if you switch away.',
     'setup.lede.done': 'All set.',
     'setup.upgrading.notice': 'Updating the local model server…',
+    'setup.upgrading.failed': "GAIA couldn't update its local model server, so chats may not answer. Try again, or run `gaia init` in a terminal to see why. Details: {error}",
+    'setup.upgrading.retry': 'Try again',
     'setup.check.title': 'Check this PC',
     'setup.where.title': 'Choose where GAIA runs',
     'setup.where.local': 'On this PC',

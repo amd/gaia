@@ -706,6 +706,8 @@ const messages: Messages = {
     'setup.lede.running': 'جارٍ الإعداد. يستمر الإعداد حتى لو انتقلت إلى نافذة أخرى.',
     'setup.lede.done': 'كل شيء جاهز.',
     'setup.upgrading.notice': 'جارٍ تحديث خادم النماذج المحلي…',
+    'setup.upgrading.failed': 'تعذّر على GAIA تحديث خادم النماذج المحلي، لذا قد لا تستجيب المحادثات. حاول مرة أخرى، أو شغّل `gaia init` في الطرفية لمعرفة السبب. التفاصيل: {error}',
+    'setup.upgrading.retry': 'حاول مرة أخرى',
     'setup.check.title': 'فحص هذا الجهاز',
     'setup.where.title': 'اختر مكان تشغيل GAIA',
     'setup.where.local': 'على هذا الجهاز',

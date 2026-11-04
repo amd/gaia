@@ -381,18 +381,50 @@ describe('first-run setup', () => {
             .mockResolvedValueOnce({ ready: false, stage: 'upgrade', steps: [] })
             .mockResolvedValueOnce(READY);
         mocked.startSetup.mockResolvedValue({ state: 'running', upgrade_embedded: true } as never);
-        mocked.getSetupStatus.mockImplementation(
-            () => new Promise((resolve) => { finishUpgrade = resolve; }),
-        );
+        // Idle until the update starts; other screens read the status too.
+        mocked.getSetupStatus.mockImplementation(() => (mocked.startSetup.mock.calls.length
+            ? new Promise((resolve) => { finishUpgrade = resolve; })
+            : Promise.resolve({ state: 'idle' })));
         render(<App />);
 
         expect(await screen.findByText('Updating the local model server…')).toBeInTheDocument();
         expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
-        expect(mocked.startSetup).toHaveBeenCalledWith(false, false, { upgradeEmbedded: true });
+        await waitFor(() => expect(mocked.startSetup).toHaveBeenCalledWith(false, false, { upgradeEmbedded: true }));
 
         finishUpgrade({ state: 'ready' });
         expect(await screen.findByLabelText('Message')).toBeInTheDocument();
         expect(mocked.checkSetup).toHaveBeenCalledTimes(2);
+    });
+
+    it('a re-check during an update follows it instead of starting a second one', async () => {
+        mocked.checkSetup
+            .mockResolvedValueOnce({ ready: false, stage: 'upgrade', steps: [] })
+            .mockResolvedValueOnce(READY);
+        let done = false;
+        mocked.getSetupStatus.mockImplementation(async () => (done
+            ? { state: 'ready' }
+            : { state: 'running', upgrade_embedded: true } as never));
+        render(<App />);
+
+        expect(await screen.findByText('Updating the local model server…')).toBeInTheDocument();
+        done = true;
+        expect(await screen.findByLabelText('Message', {}, { timeout: 5000 })).toBeInTheDocument();
+        expect(mocked.startSetup).not.toHaveBeenCalled();
+    });
+
+    it('a failed update says so and offers to try again, not "could not check"', async () => {
+        mocked.checkSetup.mockResolvedValue({ ready: false, stage: 'upgrade', steps: [] });
+        mocked.startSetup.mockResolvedValue({ state: 'running', upgrade_embedded: true } as never);
+        mocked.getSetupStatus.mockImplementation(async () => (mocked.startSetup.mock.calls.length
+            ? { state: 'failed', error: 'download refused' } as never
+            : { state: 'idle' }));
+        render(<App />);
+
+        expect(await screen.findByText(/couldn't update its local model server.*Details: download refused/)).toBeInTheDocument();
+        expect(screen.queryByText(/Could not check whether GAIA is set up/)).not.toBeInTheDocument();
+
+        await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+        await waitFor(() => expect(mocked.startSetup).toHaveBeenCalledTimes(2));
     });
 
     /** Where GAIA runs, then setup's own model set (this suite has no plan to choose from). */
