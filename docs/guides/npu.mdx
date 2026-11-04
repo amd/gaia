@@ -48,10 +48,15 @@ once:
 
 All three write the same two files: `/etc/security/limits.d/90-gaia-npu.conf` (terminal
 logins) and `/etc/systemd/system/user@.service.d/90-gaia-npu-memlock.conf` (the desktop
-session). Both set memlock to unlimited, as the [Lemonade Linux FLM
+session). Both set memlock to unlimited for every user on the PC, as the [Lemonade Linux FLM
 guide](https://lemonade-server.ai/flm_npu_linux.html) does. The change applies after a
 restart. To undo it, delete the two files and restart. Purging the desktop app's package
-deletes them too.
+deletes them too, and upgrading it never writes them again.
+
+If the limit is still low after a restart, something else on the PC sets a lower one after
+GAIA's files. Setup says so. Check `DefaultLimitMEMLOCK` in `/etc/systemd/user.conf` and
+`/etc/systemd/system.conf`, and any file in `/etc/security/limits.d/` that sorts after
+`90-gaia-npu.conf`.
 
 ### What GAIA checks
 

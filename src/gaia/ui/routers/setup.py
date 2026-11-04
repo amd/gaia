@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from gaia.logger import get_logger
 
 from .. import setup_plan as plan_api
-from ..security import require_ui_header
+from ..security import require_local_pc, require_ui_header
 from ..setup_plan import (
     ServerNotRunning,
     SetupPlanError,
@@ -120,7 +120,11 @@ def setup_npu_recheck() -> Dict[str, Any]:
     return setup_plan()
 
 
-@router.post("/api/setup/npu/memlock-fix", dependencies=[Depends(require_ui_header)])
+# Starts a root step on this PC, so only someone at this PC may ask for it.
+@router.post(
+    "/api/setup/npu/memlock-fix",
+    dependencies=[Depends(require_ui_header), Depends(require_local_pc)],
+)
 def setup_npu_memlock_fix() -> Dict[str, Any]:
     """Raise the locked-memory limit FastFlowLM needs, behind the desktop's own
     administrator prompt; returns the plan. It applies after a restart."""
@@ -130,7 +134,13 @@ def setup_npu_memlock_fix() -> Dict[str, Any]:
         npu_linux.apply_memlock_fix()
     except npu_linux.MemlockFixError as e:
         logger.warning("NPU memlock fix not applied (%s): %s", e.code, e)
-        status = 409 if e.code in ("cancelled", "timeout") else 500
+        status = {
+            "cancelled": 409,
+            "timeout": 409,
+            "not_authorized": 409,
+            "not_linux": 422,
+            "no_pkexec": 422,
+        }.get(e.code, 500)
         raise HTTPException(
             status_code=status, detail={"code": e.code, "message": str(e)}
         ) from e

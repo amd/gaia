@@ -96,7 +96,7 @@ class MemlockFixError(RuntimeError):
     """The one-time locked-memory fix was not applied.
 
     ``code`` names why, for the UI's own words: ``not_linux``, ``no_pkexec``,
-    ``timeout``, ``cancelled`` or ``failed``.
+    ``timeout``, ``cancelled``, ``not_authorized`` or ``failed``.
     """
 
     def __init__(self, code: str, message: str):
@@ -165,18 +165,28 @@ def _access_problem(node: Path, group: Optional[str]) -> NpuProblem:
 
 
 def _memlock_problem(limit: str) -> NpuProblem:
-    """Too little locked memory: fixable from GAIA, or waiting for a restart."""
+    """Too little locked memory: fixable from GAIA, waiting for a restart, or
+    still low after one, which only the NPU guide's steps can untangle."""
     if memlock_fix_installed():
+        if restarted_since_fix():
+            return NpuProblem(
+                MEMLOCK,
+                f"The locked-memory limit is still {limit} after a restart.",
+                "Something on this PC sets a lower limit after GAIA's (often "
+                "DefaultLimitMEMLOCK in /etc/systemd/user.conf). GAIA's NPU guide "
+                "shows how to find it.",
+                (("limit", limit), ("fix", "stuck")),
+            )
         return NpuProblem(
             MEMLOCK,
             f"The locked-memory limit is still {limit}.",
-            "GAIA has raised it for your account. Restart the PC to finish.",
+            "GAIA has raised it for everyone on this PC. Restart the PC to finish.",
             (("limit", limit), ("fix", "restart")),
         )
     return NpuProblem(
         MEMLOCK,
         f"The locked-memory limit is {limit}, and the NPU needs it unlimited.",
-        "GAIA can raise it for your account once, with your administrator "
+        "GAIA can raise it for everyone on this PC, once, with an administrator "
         "password; then restart the PC.",
         (("limit", limit), ("fix", "apply")),
     )
@@ -487,9 +497,11 @@ def problems() -> List[NpuProblem]:
         cached = _CACHE.get("problems")
         if cached and time.monotonic() - cached[0] < PROBLEMS_TTL_S:
             return list(cached[1])
-        found = _probe()
+    # Outside the lock: flm validate can take seconds, and nothing else waits on it.
+    found = _probe()
+    with _CACHE_LOCK:
         _CACHE["problems"] = (time.monotonic(), found)
-        return list(found)
+    return list(found)
 
 
 def forget() -> None:
@@ -525,6 +537,32 @@ def memlock_fix_installed(root: Path = Path("/")) -> bool:
         except OSError:
             return False
     return True
+
+
+def _boot_time(root: Path = Path("/")) -> Optional[float]:
+    """When this PC started, from ``btime`` in ``/proc/stat``."""
+    try:
+        for line in (root / "proc/stat").read_text().splitlines():
+            if line.startswith("btime "):
+                return float(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def restarted_since_fix(root: Path = Path("/")) -> bool:
+    """The PC has started since GAIA's drop-ins were written, so they should
+    already apply."""
+    booted = _boot_time(root)
+    if booted is None:
+        return False
+    try:
+        written = max(
+            (root / path.lstrip("/")).stat().st_mtime for path in MEMLOCK_DROPINS
+        )
+    except OSError:
+        return False
+    return booted > written
 
 
 def memlock_fix_script() -> str:
@@ -576,11 +614,18 @@ def apply_memlock_fix() -> None:
             "timeout", "The administrator prompt wasn't answered in time. Try again."
         ) from e
     forget()
-    if result.returncode in (126, 127):
+    if result.returncode == 126:
         raise MemlockFixError(
             "cancelled",
-            "The administrator prompt was closed or refused, so nothing changed. "
-            "Try again and enter an administrator's password.",
+            "The administrator prompt was closed, so nothing changed. Try again "
+            "and enter an administrator's password.",
+        )
+    if result.returncode == 127:
+        raise MemlockFixError(
+            "not_authorized",
+            "No administrator prompt could be shown here (no desktop session), or "
+            "this account may not run it. Run GAIA from the desktop, or have an "
+            "administrator follow https://amd-gaia.ai/docs/guides/npu#linux.",
         )
     if result.returncode != 0 or not memlock_fix_installed():
         said = (result.stderr or result.stdout).strip()

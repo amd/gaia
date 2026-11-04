@@ -131,14 +131,25 @@ def annotate_local_models(
     from gaia.llm import npu_linux
 
     loaded = loaded_entries(health or {})
-    # Read once: every FLM model shares this PC's one NPU.
-    npu_problems = [p.as_dict() for p in npu_linux.check(system_info)]
+    # Read once: every FLM model shares this PC's one NPU. One that is loaded
+    # proves the NPU runs, and flm validate needn't touch it while it serves.
+    serving = any(
+        m.get("recipe") == "flm" and find_loaded(loaded, m["id"]) is not None
+        for m in models
+    )
+    npu_problems = (
+        [] if serving else [p.as_dict() for p in npu_linux.check(system_info)]
+    )
     out = []
     for m in models:
         entry = find_loaded(loaded, m["id"])
         size = _size_gb(m)
         fit_reason = _fit(m, size, capacity)
-        recipe_reason = recipe_unavailable_reason(m.get("recipe"), system_info)
+        recipe_reason = (
+            None
+            if entry is not None or (serving and m.get("recipe") == "flm")
+            else recipe_unavailable_reason(m.get("recipe"), system_info)
+        )
         # A model that is running proves it runs, whatever the estimate says.
         unavailable = (
             None if entry is not None else (recipe_reason or fit_reason or None)

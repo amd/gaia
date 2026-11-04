@@ -28,8 +28,10 @@ case "$1" in
         # memory; a desktop session's default 8 MB stops it (amd/gaia#6632).
         # Lift it for user sessions, as FastFlowLM's own Linux guide does.
         # The same files as gaia.llm.npu_linux.MEMLOCK_DROPINS; they apply
-        # after a restart. Only where the NPU driver is loaded.
-        if [ -d /sys/module/amdxdna ]; then
+        # after a restart. Only on a first install ($2 is the version being
+        # upgraded from), so an administrator who deleted them keeps that, and
+        # only where the NPU driver is loaded. They apply to every user.
+        if [ -z "$2" ] && [ -d /sys/module/amdxdna ]; then
             marker='# GAIA: FastFlowLM pins NPU models in locked memory (https://amd-gaia.ai/docs/guides/npu#linux).'
             mkdir -p /etc/security/limits.d /etc/systemd/system/user@.service.d
             printf '%s\n* soft memlock unlimited\n* hard memlock unlimited\n' "$marker" \

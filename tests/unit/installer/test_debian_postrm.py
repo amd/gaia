@@ -172,6 +172,29 @@ def test_postinst_lifts_memlock_for_the_npu_where_its_driver_is_loaded(tmp_path)
     assert memlock_fix_installed(root)
 
 
+def test_postinst_upgrade_never_writes_memlock_again(tmp_path):
+    """An administrator who deleted the drop-ins keeps that across upgrades."""
+    root = tmp_path / "root"
+    (root / "sys/module/amdxdna").mkdir(parents=True)
+    (root / "usr/bin").mkdir(parents=True)
+    text = POSTINST.read_text()
+    for path in ("/usr/bin/gaia-desktop", "/sys/module/amdxdna"):
+        text = text.replace(path, str(root) + path)
+    text = text.replace("/etc/", str(root / "etc") + "/")
+    script = tmp_path / "postinst"
+    script.write_text(text)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for name in ("update-desktop-database", "gtk-update-icon-cache", "systemctl"):
+        (fake_bin / name).write_text("#!/bin/sh\nexit 0\n")
+        (fake_bin / name).chmod(0o755)
+    env = {**os.environ, "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"]}
+    subprocess.run(
+        ["/bin/sh", str(script), "configure", "0.25.3"], env=env, check=True, timeout=5
+    )
+    assert not (root / "etc").exists()
+
+
 def test_postinst_leaves_memlock_alone_without_an_npu(tmp_path):
     _run_script(POSTINST, "configure", tmp_path)
     assert not (tmp_path / "root" / "etc").exists()

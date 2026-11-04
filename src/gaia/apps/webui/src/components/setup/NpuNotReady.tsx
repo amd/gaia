@@ -19,6 +19,7 @@ const NPU_PROBLEM_KEYS = {
 const MEMLOCK_FIX_ERRORS = {
     cancelled: 'setup.npu.fixError.cancelled',
     timeout: 'setup.npu.fixError.timeout',
+    not_authorized: 'setup.npu.fixError.notAuthorized',
     no_pkexec: 'setup.npu.fixError.noPkexec',
 } as const;
 
@@ -30,8 +31,15 @@ function NpuProblem({ problem }: { problem: SetupNpuProblem }) {
     const p = problem.params;
     let fix: Parameters<typeof t>[0] = keys[1];
     if (problem.code === 'access' && p.group) fix = 'setup.npu.fix.accessGroup';
-    if (problem.code === 'memlock' && p.fix === 'restart') fix = 'setup.npu.fix.memlockRestart';
-    const title = problem.code === 'memlock' && p.fix === 'restart' ? 'setup.npu.problem.memlockStill' : keys[0];
+    let title: Parameters<typeof t>[0] = keys[0];
+    if (problem.code === 'memlock' && p.fix === 'restart') {
+        title = 'setup.npu.problem.memlockStill';
+        fix = 'setup.npu.fix.memlockRestart';
+    }
+    if (problem.code === 'memlock' && p.fix === 'stuck') {
+        title = 'setup.npu.problem.memlockStuck';
+        fix = 'setup.npu.fix.memlockStuck';
+    }
     return (
         <li>
             <strong>{t(title, { device: p.device ?? '', limit: p.limit ?? '', version: p.version ?? '', detail: p.detail ?? '' })}</strong>{' '}

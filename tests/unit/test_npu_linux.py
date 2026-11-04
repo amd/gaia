@@ -574,9 +574,35 @@ class TestMemlockFix:
 
     def test_the_problem_says_restart_once_the_fix_is_in(self, monkeypatch):
         monkeypatch.setattr(npu_linux, "memlock_fix_installed", lambda root=None: True)
+        monkeypatch.setattr(npu_linux, "restarted_since_fix", lambda root=None: False)
         problem = npu_linux._memlock_problem("8 MB")
         assert dict(problem.params) == {"limit": "8 MB", "fix": "restart"}
         assert "Restart the PC" in problem.fix
+        assert "everyone on this PC" in problem.fix
+
+    def test_still_low_after_a_restart_never_asks_for_another(self, monkeypatch):
+        monkeypatch.setattr(npu_linux, "memlock_fix_installed", lambda root=None: True)
+        monkeypatch.setattr(npu_linux, "restarted_since_fix", lambda root=None: True)
+        problem = npu_linux._memlock_problem("8 MB")
+        assert dict(problem.params) == {"limit": "8 MB", "fix": "stuck"}
+        assert "DefaultLimitMEMLOCK" in problem.fix
+        assert "Restart" not in problem.fix
+
+    def test_restarted_since_is_boot_time_after_the_files(self, tmp_path):
+        import os as _os
+
+        for path, text in npu_linux.MEMLOCK_DROPINS.items():
+            target = tmp_path / path.lstrip("/")
+            target.parent.mkdir(parents=True)
+            target.write_text(text)
+            _os.utime(target, (1000, 1000))
+        (tmp_path / "proc").mkdir()
+        (tmp_path / "proc/stat").write_text("cpu 1 2 3\nbtime 900\n")
+        assert not npu_linux.restarted_since_fix(tmp_path)
+        (tmp_path / "proc/stat").write_text("cpu 1 2 3\nbtime 2000\n")
+        assert npu_linux.restarted_since_fix(tmp_path)
+        (tmp_path / "proc/stat").unlink()
+        assert not npu_linux.restarted_since_fix(tmp_path)
 
     def apply(self, monkeypatch, returncode=0, pkexec="/usr/bin/pkexec", after=True):
         monkeypatch.setattr(npu_linux, "_on_linux", lambda: True)
@@ -602,12 +628,16 @@ class TestMemlockFix:
         for path in npu_linux.MEMLOCK_DROPINS:
             assert path in argv[3]
 
-    @pytest.mark.parametrize("code", [126, 127])
-    def test_a_dismissed_prompt_changes_nothing_and_says_so(self, monkeypatch, code):
-        self.apply(monkeypatch, returncode=code)
+    @pytest.mark.parametrize(
+        "returncode,code", [(126, "cancelled"), (127, "not_authorized")]
+    )
+    def test_a_prompt_that_did_not_happen_changes_nothing_and_says_why(
+        self, monkeypatch, returncode, code
+    ):
+        self.apply(monkeypatch, returncode=returncode)
         with pytest.raises(npu_linux.MemlockFixError) as e:
             npu_linux.apply_memlock_fix()
-        assert e.value.code == "cancelled"
+        assert e.value.code == code
 
     def test_no_pkexec_says_what_to_do_instead(self, monkeypatch):
         self.apply(monkeypatch, pkexec=None)
@@ -640,7 +670,8 @@ class TestSetupEndpoints:
         monkeypatch.setattr(setup_router, "build_plan", lambda: {"npu": "plan"})
         app = FastAPI()
         app.include_router(setup_router.router)
-        return TestClient(app)
+        self.app = app
+        return TestClient(app, client=("127.0.0.1", 50000))
 
     UI = {"X-Gaia-UI": "1"}
 
@@ -663,6 +694,38 @@ class TestSetupEndpoints:
     def test_the_fix_needs_the_ui_header(self, client):
         r = client.post("/api/setup/npu/memlock-fix", headers={"X-Gaia-UI": ""})
         assert r.status_code == 403
+
+    def test_a_phone_or_another_pc_cannot_start_the_admin_step(
+        self, client, monkeypatch
+    ):
+        from fastapi.testclient import TestClient
+
+        applied = MagicMock()
+        monkeypatch.setattr(npu_linux, "apply_memlock_fix", applied)
+        remote = TestClient(self.app, client=("192.168.1.20", 50000))
+        assert (
+            remote.post("/api/setup/npu/memlock-fix", headers=self.UI).status_code
+            == 403
+        )
+        tunnel = client.post(
+            "/api/setup/npu/memlock-fix",
+            headers={**self.UI, "X-Forwarded-For": "203.0.113.9"},
+        )
+        assert tunnel.status_code == 403
+        applied.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "code,status",
+        [("not_authorized", 409), ("no_pkexec", 422), ("failed", 500)],
+    )
+    def test_each_refusal_has_its_status(self, client, monkeypatch, code, status):
+        def refuse():
+            raise npu_linux.MemlockFixError(code, "no")
+
+        monkeypatch.setattr(npu_linux, "apply_memlock_fix", refuse)
+        r = client.post("/api/setup/npu/memlock-fix", headers=self.UI)
+        assert r.status_code == status
+        assert r.json()["detail"]["code"] == code
 
     def test_recheck_reads_the_machine_afresh(self, client, monkeypatch):
         forget = MagicMock()
@@ -691,6 +754,26 @@ def test_settings_lists_the_problems_for_each_flm_model(not_set_up):
     assert [p["code"] for p in flm["npu_problems"]] == ["memlock"]
     assert flm["available"] is False
     assert gguf["npu_problems"] == []
+
+
+def test_settings_leaves_a_serving_npu_alone(linux, monkeypatch):
+    """A loaded FLM model proves the NPU runs; flm validate mustn't poke it."""
+    from gaia.ui.local_models import annotate_local_models
+
+    probe = MagicMock(return_value=list(MEMLOCK))
+    monkeypatch.setattr(npu_linux, "problems", probe)
+    models = [{"id": "gemma4-it-e4b-FLM", "recipe": "flm", "downloaded": True}]
+    health = {"all_models_loaded": [{"model_name": "gemma4-it-e4b-FLM"}]}
+    rows = annotate_local_models(
+        models,
+        health=health,
+        system_info=linux_system_info(),
+        capacity=None,
+        preferred_backend=None,
+        speeds={},
+    )
+    assert rows[0]["npu_problems"] == []
+    probe.assert_not_called()
 
 
 class TestInitOffersTheFix:

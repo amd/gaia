@@ -70,7 +70,7 @@ describe('choosing where the chat model runs', () => {
     });
 
     // #6632: a stock desktop leaves memlock at 8 MB; the NPU model must not be picked.
-    const notReady = (memlockFix: 'apply' | 'restart') => plan([QWEN, GEMMA, EMBED, NPU], {
+    const notReady = (memlockFix: 'apply' | 'restart' | 'stuck') => plan([QWEN, GEMMA, EMBED, NPU], {
         npu: {
             present: true,
             ready: false,
@@ -101,7 +101,7 @@ describe('choosing where the chat model runs', () => {
         expect(screen.getByTestId('chat')).toHaveTextContent(QWEN.id);
         const note = screen.getByRole('note');
         expect(note).toHaveTextContent('The locked-memory limit is 8 MB, and the NPU needs it unlimited.');
-        expect(note).toHaveTextContent('GAIA can raise it for your account once');
+        expect(note).toHaveTextContent('GAIA can raise it for everyone on this PC, once');
         expect(note).toHaveTextContent('Add your account to the render group, then sign out and back in.');
         expect(note).toHaveTextContent('Until then chat runs on the graphics (GPU).');
         fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
@@ -128,6 +128,14 @@ describe('choosing where the chat model runs', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Raise the limit' }));
         expect(await screen.findByRole('alert')).toHaveTextContent('The administrator prompt was closed, so nothing changed.');
         expect(onRecheck).not.toHaveBeenCalled();
+    });
+
+    it('points to the guide, not another restart, when the limit is still low after one', () => {
+        render(<WithRecheck setup={notReady('stuck')} onRecheck={vi.fn()} />);
+        const note = screen.getByRole('note');
+        expect(note).toHaveTextContent('The locked-memory limit is still 8 MB after a restart.');
+        expect(note).toHaveTextContent('DefaultLimitMEMLOCK');
+        expect(screen.queryByRole('button', { name: 'Raise the limit' })).toBeNull();
     });
 
     it('asks only for a restart once the limit is raised', () => {
