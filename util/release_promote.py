@@ -118,25 +118,31 @@ class Located:
 
 
 def _runs(repo: str, sha: str) -> list[dict]:
-    runs = _gh_json(
+    """Every passing dry run of ``sha``, paginated.
+
+    A commit that sits unchanged collects one skipped (manifest-less) nightly a
+    day, so a fixed page size would eventually hide the run that built it.
+    """
+    done = _gh(
         [
-            "run",
-            "list",
-            "-R",
-            repo,
-            "--workflow",
-            DRYRUN_WORKFLOW,
-            "--commit",
-            sha,
-            "--status",
-            "success",
-            "--limit",
-            "20",
-            "--json",
-            "databaseId,url,createdAt",
+            "api",
+            "--paginate",
+            f"repos/{repo}/actions/workflows/{DRYRUN_WORKFLOW}/runs"
+            f"?head_sha={sha}&status=success&per_page=100",
+            "--jq",
+            ".workflow_runs[] | {databaseId: .id, url: .html_url, createdAt: .created_at}",
         ]
     )
-    return list(runs or [])
+    if done.returncode != 0:
+        raise PromoteError(
+            f"could not list {DRYRUN_WORKFLOW} runs of {sha}: {done.stderr.strip()}. "
+            "A rate limit clears within the hour; otherwise check the token has "
+            "actions: read."
+        )
+    try:
+        return [json.loads(line) for line in done.stdout.splitlines() if line.strip()]
+    except ValueError as e:
+        raise PromoteError(f"GitHub returned runs that are not JSON: {e}") from e
 
 
 def _manifest_of(repo: str, run_id: int) -> dict | None:
@@ -186,10 +192,10 @@ def locate(
     tried = "".join(f"\n  - {s}" for s in skipped) or " none."
     raise PromoteError(
         f"no passing {DRYRUN_WORKFLOW} run of {sha} verified {tag}. Runs tried:{tried}\n"
-        f"The dry run builds its branch's head, so dispatch it on a branch at "
-        f"{sha[:12]} (main, if it still is): gh workflow run {DRYRUN_WORKFLOW} "
-        f"--ref <branch> -f rc_tag={rc_hint}. Wait for it to pass, then re-run "
-        "this job."
+        "The dry run builds its branch's head, so dispatch it on the branch "
+        f"(main or vX.Y.Z-release) whose head is still {sha[:12]}: gh workflow "
+        f"run {DRYRUN_WORKFLOW} --ref <branch> -f rc_tag={rc_hint}. Wait for it "
+        "to pass, then re-run this job."
     )
 
 
@@ -271,7 +277,8 @@ def annotate(level: str, msg: str) -> None:
 def cmd_locate(args: argparse.Namespace) -> int:
     try:
         found = locate(args.repo, args.sha, args.tag)
-    except PromoteError as e:
+    except (PromoteError, ValueError) as e:
+        # ValueError: malformed JSON from GitHub, or a malformed tag.
         if not args.missing_ok:
             raise
         # Report mode only: nothing depends on the verified build yet.

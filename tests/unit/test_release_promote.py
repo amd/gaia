@@ -297,3 +297,56 @@ def test_a_found_run_writes_only_github_outputs_to_stdout(
     assert all("=" in line and " " not in line.split("=")[0] for line in lines), lines
     assert "found=true" in lines and "run_id=7" in lines
     assert json.loads((tmp_path / "release-manifest.json").read_text())["commit"] == SHA
+
+
+def test_runs_reads_every_page_not_a_fixed_limit(monkeypatch):
+    seen = {}
+
+    def fake(args):
+        seen["args"] = args
+        lines = [
+            json.dumps({"databaseId": i, "url": f"u{i}", "createdAt": f"t{i}"})
+            for i in range(250)
+        ]
+        return rp.subprocess.CompletedProcess(args, 0, "\n".join(lines) + "\n", "")
+
+    monkeypatch.setattr(rp, "_gh", fake)
+    runs = rp._runs("o/r", SHA)
+    assert len(runs) == 250
+    assert "--paginate" in seen["args"] and "--limit" not in seen["args"]
+    assert any(f"head_sha={SHA}" in a and "status=success" in a for a in seen["args"])
+
+
+def test_runs_turns_garbage_from_github_into_a_reason(monkeypatch):
+    monkeypatch.setattr(
+        rp, "_gh", lambda a: rp.subprocess.CompletedProcess(a, 0, "<html>\n", "")
+    )
+    with pytest.raises(rp.PromoteError, match="not JSON"):
+        rp._runs("o/r", SHA)
+
+
+def test_missing_ok_also_reports_malformed_github_json(monkeypatch, capsys, tmp_path):
+    def bad(*a, **k):
+        raise json.JSONDecodeError("Expecting value", "<html>", 0)
+
+    monkeypatch.setattr(rp, "locate", bad)
+    argv = [
+        "locate",
+        "--repo",
+        "o/r",
+        "--sha",
+        SHA,
+        "--tag",
+        RC,
+        "--out",
+        str(tmp_path),
+    ]
+    assert rp.main(argv + ["--missing-ok"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.splitlines() == ["found=false"]
+    assert captured.err.startswith("::warning::")
+
+
+def test_the_report_job_cannot_fail_the_publish_run():
+    """A red job fails the Publish run, which holds a final's release notes."""
+    assert _publish_job()["continue-on-error"] is True

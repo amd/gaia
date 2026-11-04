@@ -16,9 +16,9 @@ the second half on every release from the first increment on.
 
 ## How it works
 
-1. **Build once.** `release_train_dryrun.yml` builds every artifact of a `main` commit
+1. **Build once.** `release_train_dryrun.yml` builds every artifact of a `main` (or `vX.Y.Z-release`) commit
    as the next RC plus its final-stamped twin, verifies them, and records each
-   artifact's SHA-256 in `release-manifest.json`. It runs nightly and on demand
+   artifact's SHA-256 in `release-manifest.json`. It runs nightly on `main` and on demand
    (#6612), so a passing run usually exists before anyone decides to tag.
 2. **Locate.** On a tag, `util/release_promote.py locate` finds the newest passing dry
    run of the tagged commit whose manifest names that tag (the RC build) or its twin
@@ -42,9 +42,9 @@ maintainer sets on purpose, and its summary says the release was not promoted.
 
 | Gap | Why it blocks promotion | Fix |
 |---|---|---|
-| Dry-run build artifacts expire after 7 days | A tag more than a week after its dry run has nothing to promote | 14-day retention on the artifacts a release publishes; the nightly keeps `main` fresh anyway |
+| Dry-run build artifacts expire after 7 days | A tag more than a week after its dry run has nothing to promote | 14-day retention on the artifacts a release publishes. The nightly skips a commit that already passed, so an unchanged commit keeps its manifest but loses its artifacts at retention: the skip must rebuild once the last passing run's artifacts have expired |
 | Asset names differ | The release ships `gaia-linux-amd64` from `publish.yml`'s separate `build-tui`, while the dry run catalogs `gaia-linux-x64`. The installer checksum file and the sigstore bundles exist only on the release | One TUI build feeds both; the manifest catalog becomes the source of truth for release asset names (#5172 Phase 5) |
-| Provenance isn't checked | Publish must trust only a dry run of `amd/gaia` on `main`, started by `schedule` or `workflow_dispatch` | `locate` checks the run's workflow path, repository, branch and event, not just the commit |
+| Provenance isn't checked | Publish must trust only a dry run of `amd/gaia` on a protected branch it releases from: `main`, or a `vX.Y.Z-release` branch (v0.25.4's dry runs were dispatched on `v0.25.4-release`), started by `schedule` or `workflow_dispatch` | `locate` checks the run's workflow path, repository, event, and that its branch is `main` or matches `v*-release`, not just the commit |
 | Signing happens inside the build | Once SignPath or Apple signing secrets exist, a signed installer can't match an unsigned dry-run digest. Today no build is signed with a secret: the dry run and publish both produce unsigned Windows and ad-hoc-signed macOS builds | Signing becomes a publish step over the verified bytes. The manifest keeps the unsigned digest, and publish records the signed one next to it |
 
 ## Increments
@@ -72,11 +72,11 @@ Each one leaves releases working.
 ## Risks
 
 - **Trusting another run's artifacts.** The dry run holds no secrets and a read-only
-  token, and builds only `main`'s own commit. Publish accepts a run only if its
+  token, and builds only its own branch's head commit. Publish accepts a run only if its
   provenance checks out and every byte matches that same run's manifest. A
   maintainer dispatching the dry run on another branch at the same SHA builds the
   same code.
-- **Shared caches.** The dry run restores `main`-scoped caches, and publish's own
+- **Shared caches.** The dry run restores its branch's caches, and publish's own
   builds already do too. Promotion adds no new cache path.
 - **An RC number collision.** If rc5 is tagged on a different commit than the
   nightly's rc5, `locate` refuses: a manifest of another commit can't vouch. The fix
