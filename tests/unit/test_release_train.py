@@ -187,7 +187,15 @@ def build_art(
         )
         for d, names in (
             (win, [f"{ui}-x64-setup.exe", f"{ui}-x64-setup.exe.blockmap"]),
-            (mac, [f"{ui}-arm64.dmg", f"{ui}-arm64.dmg.blockmap"]),
+            (
+                mac,
+                [
+                    f"{ui}-arm64.dmg",
+                    f"{ui}-arm64.dmg.blockmap",
+                    f"{ui}-arm64.zip",
+                    f"{ui}-arm64.zip.blockmap",
+                ],
+            ),
             (lin, [f"{ui}-x86_64.AppImage"]),
         ):
             for n in names:
@@ -494,3 +502,90 @@ def test_vite_hash_normalisation_keeps_names_apart():
     a = rt.normalise(b'import "./vendor-react-Ab3dE_g1.js"', [])
     assert a == b'import "./vendor-react-#.js"'
     assert rt.normalise(b"index-Rc0aB-1x.css", []) == b"index-#.css"
+
+
+# ── verified-run: skip only a commit whose verified build is still downloadable ──
+
+
+def _whole(extra=()):
+    names = [rt.MANIFEST_ARTIFACT, *rt.SHORT_LIVED_ARTIFACTS, *extra]
+    return [{"name": n, "expired": False} for n in names]
+
+
+def _runs(*ids):
+    return lambda repo, sha: [
+        {"id": i, "url": f"https://x/runs/{i}", "created_at": f"2026-11-0{i}"}
+        for i in ids
+    ]
+
+
+def test_verified_run_takes_the_newest_whole_run():
+    arts = {1: _whole(), 2: _whole()}
+    assert rt.verified_run("o/r", SHA, _runs(1, 2), lambda r, i: arts[i]).endswith("/2")
+
+
+def test_a_skipped_nightly_does_not_count_as_verified():
+    # It passed but built nothing, so it has no artifacts at all.
+    arts = {1: _whole(), 2: []}
+    assert rt.verified_run("o/r", SHA, _runs(1, 2), lambda r, i: arts[i]).endswith("/1")
+
+
+def test_a_run_past_retention_must_be_rebuilt():
+    # GitHub drops an expired artifact from the list; only long-lived ones remain.
+    old = [
+        {"name": rt.MANIFEST_ARTIFACT, "expired": False},
+        {"name": "gaia-agent-linux-x64", "expired": False},
+    ]
+    assert rt.verified_run("o/r", SHA, _runs(1), lambda r, i: old) == ""
+
+
+def test_an_artifact_flagged_expired_does_not_count():
+    arts = _whole()
+    arts[1]["expired"] = True
+    assert rt.verified_run("o/r", SHA, _runs(1), lambda r, i: arts) == ""
+
+
+def test_no_passing_run_means_build():
+    assert rt.verified_run("o/r", SHA, _runs(), lambda r, i: _whole()) == ""
+
+
+def test_gh_failures_fail_loudly(monkeypatch):
+    def run(args, **kw):
+        assert kw["timeout"] == rt.GH_TIMEOUT_S
+        return rt.subprocess.CompletedProcess(args, 1, "", "HTTP 502")
+
+    monkeypatch.setattr(rt.subprocess, "run", run)
+    with pytest.raises(rt.VerifyError, match="HTTP 502"):
+        rt.verified_run("o/r", SHA)
+
+
+def test_runs_are_read_from_every_page(monkeypatch):
+    seen = []
+
+    def run(args, **kw):
+        seen.append(args)
+        body = "\n".join(
+            json.dumps({"id": i, "url": f"u{i}", "created_at": f"t{i:03}"})
+            for i in range(150)
+        )
+        return rt.subprocess.CompletedProcess(args, 0, body, "")
+
+    monkeypatch.setattr(rt.subprocess, "run", run)
+    assert len(rt._passing_runs("o/r", SHA)) == 150
+    assert "--paginate" in seen[0]
+
+
+@pytest.mark.parametrize("name", rt.SHORT_LIVED_ARTIFACTS)
+def test_short_lived_names_are_uploaded_by_the_dry_run(name):
+    """Each sentinel must be a real 7-day upload, or every run reads as expired."""
+    suffix = name.removeprefix("rc-").removeprefix("final-")
+    wf = REPO_ROOT / ".github" / "workflows"
+    uploads = []
+    for f in ("release_train_dryrun.yml", "tui_installers.yml", "windows_setup.yml"):
+        lines = (wf / f).read_text(encoding="utf-8").splitlines()
+        for i, line in enumerate(lines):
+            if line.strip().startswith("name:") and line.rstrip().endswith(suffix):
+                block = "\n".join(lines[i : i + 8])
+                uploads.append((f, "retention-days: 7" in block))
+    assert uploads, f"no workflow uploads an artifact named *{suffix}"
+    assert any(seven for _, seven in uploads), f"*{suffix} is not a 7-day artifact"

@@ -41,6 +41,8 @@ PROMISED = [
     "latest.yml",
     f"gaia-agent-ui-{VERSION}-arm64.dmg",
     f"gaia-agent-ui-{VERSION}-arm64.dmg.blockmap",
+    f"gaia-agent-ui-{VERSION}-arm64.zip",
+    f"gaia-agent-ui-{VERSION}-arm64.zip.blockmap",
     "latest-mac.yml",
     f"gaia-agent-ui-{VERSION}-amd64.deb",
     f"gaia-agent-ui-{VERSION}-x86_64.AppImage",
@@ -90,6 +92,18 @@ def test_asset_check_is_unconditional(steps):
     assert "if" not in step
     assert step["env"]["NPM_VERSION"] == "${{ needs.validate.outputs.npm_version }}"
     assert "${{" not in step["run"]
+
+
+def test_manifest_check_runs_before_release(steps):
+    """A manifest naming an unattached file left every Mac unable to update (#5682)."""
+    names = [s.get("name") for s in steps]
+    step = next(s for s in steps if "check_release_assets.py --dir" in s.get("run", ""))
+    check = names.index(step["name"])
+    assert "if" not in step
+    assert check > _index(steps, CHECK_STEP)
+    for i, s in enumerate(steps):
+        if str(s.get("uses", "")).startswith("softprops/action-gh-release"):
+            assert i > check, f"{s.get('name')!r} runs before the manifest check"
 
 
 def test_build_tui_legs_all_report(workflow):
