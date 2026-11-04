@@ -135,9 +135,10 @@ def rederive_catalog_entries(servers: Dict[str, Any]) -> Dict[str, Any]:
 
     A saved entry holds what ``configure`` wrote at the time, so catalog fixes
     (a version pin, a new command, a renamed env var) never reached people who
-    had already connected. The catalog-owned fields (``command``, ``args``,
-    ``env``) are rebuilt; the user's own (``disabled``, ``timeout``) are kept,
-    and secrets stay in the keyring.
+    had already connected. The catalog-owned fields (``command``, ``args`` and
+    the ``env`` keys it defines) are rebuilt; the user's own (``disabled``,
+    ``timeout``, plain env values they added) are kept, and secrets stay in the
+    keyring.
 
     Ids the catalog doesn't know (hand-added servers) are returned unchanged.
     Nothing is written back: ``configure`` / ``disconnect`` stay the only writers.
@@ -153,11 +154,18 @@ def rederive_catalog_entries(servers: Dict[str, Any]) -> Dict[str, Any]:
         spec = REGISTRY.get(connector_id)
         if spec.type != "mcp_server":
             continue
+        saved_env = entry.get("env")
+        env = {
+            key: value
+            for key, value in (saved_env if isinstance(saved_env, dict) else {}).items()
+            if key not in spec.mcp_env_keys and isinstance(value, str)
+        }
+        env.update(_rederived_env(spec, entry))
         rebuilt[connector_id] = {
             **entry,
             "command": spec.mcp_command,
             "args": list(spec.mcp_args),
-            "env": _rederived_env(spec, entry),
+            "env": env,
         }
     return rebuilt
 

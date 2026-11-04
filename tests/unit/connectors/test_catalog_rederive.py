@@ -99,6 +99,31 @@ def _save_github_before_rename(gaia_home):
     )
 
 
+def test_hand_added_plain_env_value_is_kept(gaia_home):
+    _write(
+        gaia_home / "mcp_servers.json",
+        {
+            _GITHUB.id: {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-github"],
+                "env": {
+                    "GITHUB_TOKEN": {"$keyring": f"{SERVICE_NAME}:{OLD_GITHUB_SLOT}"},
+                    "GITHUB_HOST": "https://github.example.com",
+                },
+            }
+        },
+    )
+
+    env = MCPConfig().get_server(_GITHUB.id)["env"]
+
+    assert env == {
+        "GITHUB_HOST": "https://github.example.com",
+        "GITHUB_PERSONAL_ACCESS_TOKEN": {
+            "$keyring": f"{SERVICE_NAME}:{OLD_GITHUB_SLOT}"
+        },
+    }
+
+
 @pytest.mark.asyncio
 async def test_connector_test_passes_for_a_token_saved_before_rename(gaia_home):
     _save_github_before_rename(gaia_home)
