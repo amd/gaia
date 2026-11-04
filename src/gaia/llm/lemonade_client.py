@@ -2281,6 +2281,17 @@ AGENT_PROFILES = {
 }
 
 
+def lemonade_server_version(client: "LemonadeClient") -> Optional[str]:
+    """The version a running Lemonade reports on ``/health``, or None."""
+    try:
+        health = client.health_check()
+    except LemonadeClientError:
+        # Setup then shows "version not reported" beside the server it found.
+        return None
+    version = health.get("version") if isinstance(health, dict) else None
+    return str(version) if version else None
+
+
 #: Largest-first default chat models; the last is the floor every machine gets.
 DEFAULT_MODEL_LADDER = (LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME)
 
