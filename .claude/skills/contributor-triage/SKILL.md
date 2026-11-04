@@ -204,7 +204,8 @@ RC failed to publish, or (3) the shortlist is empty: this one is the final's can
    first look for a passing run of that SHA: `gh run list --workflow release_train_dryrun.yml
    --commit <sha> --status success`. If there is none, dispatch it: `gh workflow run
    release_train_dryrun.yml --ref main -f rc_tag=vX.Y.Z-rcN`. Fix forward on `main` until it
-   passes.
+   passes. A nightly built as another RC number still proves the commit, but its digests are
+   that number's; dispatch with the exact tag when you need digests that match the release.
 4. **Tag the RC** per [`gaia-release`](../gaia-release/SKILL.md) (ask first unless RC tags are pre-authorized). Watch the publish run to the end; an RC isn't done
    until its release, installers and website entry exist.
 5. **Report what is in it**: PRs since the previous RC, outside contributors first, so the user
