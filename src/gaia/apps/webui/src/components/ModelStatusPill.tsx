@@ -6,7 +6,7 @@ import { Cloud, Cpu, HelpCircle, Loader2, RotateCw, Settings } from 'lucide-reac
 import { Popover } from './Popover';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
-import { useModelStore, useInferencePlace, displayModelName, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
+import { useModelStore, useInferencePlace, displayModelName, sameModelId, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
 import { ctxLabel } from './modelMeta';
 import { useT, type Translate } from '../i18n/useT';
 import { ref, type MessageKey } from '../i18n/registry';
@@ -93,9 +93,12 @@ export function ModelStatusPill() {
     }, [load]);
 
     // At a glance, from the status the app already polls; the popover reads the full report.
+    // Green only for the model the pill names — another resident model means a load is due.
     const dot: Dot = !systemStatus
         ? 'idle'
-        : !systemStatus.lemonade_running ? 'stopped' : systemStatus.model_loaded ? 'loaded' : 'idle';
+        : !systemStatus.lemonade_running
+            ? 'stopped'
+            : sameModelId(systemStatus.model_loaded, active?.model) ? 'loaded' : 'idle';
     const Icon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
     const name = active?.model ? displayModelName(active.model) : null;
     const text = [place?.label, name].filter(Boolean).join(' · ') || t('modelStatus.fallbackName');

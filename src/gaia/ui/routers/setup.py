@@ -18,8 +18,11 @@ from pydantic import BaseModel
 from gaia.logger import get_logger
 
 from .. import setup_plan as plan_api
+from ..database import ChatDatabase
+from ..dependencies import get_db
 from ..security import require_ui_header
 from ..setup_plan import (
+    CantRunHere,
     ServerNotRunning,
     SetupPlanError,
     UnknownModel,
@@ -31,6 +34,7 @@ from ..setup_runner import (
     LemonadeOverridden,
     SetupBusy,
     SetupError,
+    agent_ui_chat_model,
     check,
     runner,
     step_labels,
@@ -71,6 +75,9 @@ def _plan_error(e: SetupPlanError, unknown_model: str) -> HTTPException:
         return HTTPException(status_code=503, detail=_SERVER_DOWN)
     if isinstance(e, UnknownModel):
         return HTTPException(status_code=422, detail=unknown_model)
+    if isinstance(e, CantRunHere):
+        # Our own sentence: the model and Lemonade's reason, nothing internal.
+        return HTTPException(status_code=409, detail=str(e))
     return HTTPException(status_code=503, detail=_PLAN_FAILED)
 
 
@@ -301,12 +308,19 @@ class SetupRunRequest(BaseModel):
 
 
 @router.post("/api/setup/run")
-def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
+def setup_run(
+    body: SetupRunRequest, db: ChatDatabase = Depends(get_db)
+) -> Dict[str, Any]:
     """Start ``gaia init --profile gaia --yes``; follow it with ``/api/setup/status``.
 
     When the selected models need more disk than is free, answers 409
     ``low_disk`` until ``acknowledge_low_disk`` confirms it.
     """
+    return start_run(body, lambda run: agent_ui_chat_model(db, run))
+
+
+def start_run(body: SetupRunRequest, chat_model_for) -> Dict[str, Any]:
+    """Start setup for an app whose chat opens on ``chat_model_for()``."""
     if body.server_only and body.upgrade_embedded:
         raise HTTPException(
             status_code=422,
@@ -332,15 +346,17 @@ def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
     except SetupPlanError as e:
         raise _plan_error(e, _PLAN_FAILED) from e
     try:
-        # Switching to GAIA's own server: the user's server's disk is moot.
+        # Switching to GAIA's own server: the user's server is moot.
         if (
             not body.gaia_lemonade
-            and not body.acknowledge_low_disk
             and not body.server_only
             and not body.upgrade_embedded
         ):
             warning = plan_api.run_disk_warning(
-                skip_chat_model=body.skip_chat_model, extra_models=extras
+                skip_chat_model=body.skip_chat_model,
+                extra_models=extras,
+                check_disk=not body.acknowledge_low_disk,
+                check_chat_model=True,
             )
             if warning:
                 raise _confirm(warning)
@@ -352,6 +368,7 @@ def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
             extra_models=extras,
             server_only=body.server_only,
             upgrade_embedded=body.upgrade_embedded,
+            chat_model_for=chat_model_for,
         )
     except SetupPlanError as e:
         raise _plan_error(e, _PLAN_FAILED) from e

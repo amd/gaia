@@ -369,6 +369,74 @@ test('document being indexed', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+const OLD_FILE = { name: 'q1-plan.pdf', path: 'C:\\Users\\me\\Documents\\q1-plan.pdf', size: 2_048_000, at: '2026-03-14T10:00:00Z' };
+const ARABIC_MONTH = /يناير|فبراير|مارس|أبريل|مايو|يونيو|يوليو|أغسطس|سبتمبر|أكتوبر|نوفمبر|ديسمبر/;
+
+/** A document and a file from March, old enough to show a date rather than "2h ago". */
+async function withOldFile(page: Page): Promise<void> {
+    await page.route('**/api/documents', (route) => route.fulfill({
+        json: {
+            documents: [{
+                id: 'd1', filename: OLD_FILE.name, filepath: OLD_FILE.path, file_size: OLD_FILE.size, chunk_count: 40,
+                indexed_at: OLD_FILE.at, last_accessed_at: null, sessions_using: 0, indexing_status: 'complete',
+            }],
+            total: 1, total_size_bytes: OLD_FILE.size, total_chunks: 40,
+        },
+    }));
+    await page.route('**/api/files/browse**', (route) => route.fulfill({
+        json: {
+            current_path: 'C:\\Users\\me\\Documents', parent_path: 'C:\\Users\\me', quick_links: [],
+            entries: [{ name: OLD_FILE.name, path: OLD_FILE.path, type: 'file', size: OLD_FILE.size, extension: '.pdf', modified: OLD_FILE.at }],
+        },
+    }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`dates read in the interface language, not the PC's (${locale})`, async ({ page }) => {
+        const month = locale === 'ar' ? ARABIC_MONTH : /Mar/;
+        await open(page, '', locale, withOldFile);
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-timestamp')).toHaveText(month);
+        await shot(page, `dates-${locale}-documents`);
+        expect(await audit(page)).toEqual([]);
+
+        await page.getByRole('button', { name: /Browse files/ }).click();
+        await expect(page.locator('.fb-entry-date')).toHaveText(month);
+        await shot(page, `dates-${locale}-files`);
+        // No audit yet: the file browser's names and sizes still break the RTL rules, tracked separately.
+    });
+
+    test(`an answer's timestamp and outputs read in the interface language (${locale})`, async ({ page }) => {
+        const month = locale === 'ar' ? ARABIC_MONTH : /Mar/;
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({
+                json: {
+                    messages: [
+                        { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Summarize the Q1 plan.', created_at: OLD_FILE.at, rag_sources: null },
+                        { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'The plan has three goals.', created_at: OLD_FILE.at, rag_sources: null },
+                    ],
+                    total: 2,
+                },
+            }));
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/outputs`, (route) => route.fulfill({
+                json: {
+                    session_id: ANSWER_SESSION,
+                    items: [{
+                        id: 'o1', kind: 'export', name: 'q1-summary.csv', path: 'C:\\Users\\me\\Documents\\q1-summary.csv', detail: null,
+                        message_id: 2, created_at: '2026-03-14 10:00:00', change: 'created', state: 'present', openable: true, revealable: true,
+                    }],
+                },
+            }));
+        });
+        await expect(page.locator('.msg-stats-ts')).toHaveText(month);
+        await expect(page.getByText('q1-summary.csv')).toBeVisible();
+        await expect(page.locator('.sp-list[aria-label]')).toContainText(month);
+        await page.getByText('The plan has three goals.').hover();
+        await shot(page, `dates-${locale}-answer`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 test('settings', async ({ page }) => {
     await open(page);
     await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -1284,6 +1352,15 @@ const INSTALL_LOCKED_OTHER = {
         }],
     },
 };
+const INSTALL_DAEMON = {
+    ...INSTALL_FAILED,
+    error: {
+        ...INSTALL_FAILED.error,
+        stage: 'create-venv',
+        reason: 'daemon',
+        message: "GAIA's background service (the GAIA daemon) did not stop within 120 seconds, so its files can't be updated.",
+    },
+};
 
 for (const locale of ['ar', 'en']) {
     test.describe(`engine install (${locale})`, () => {
@@ -1320,6 +1397,13 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('.engine-retry')).toHaveCount(1);
             expect(await audit(page)).toEqual([]);
             await shot(page, `engine-locked-other-${locale}`);
+        });
+
+        test('failed because the GAIA daemon would not stop', async ({ page }) => {
+            await open(page, '?engine=install', locale, (p) => withInstall(p, INSTALL_DAEMON));
+            await expect(page.locator('.engine-retry')).toHaveCount(1);
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `engine-daemon-${locale}`);
         });
 
         test('narrow window: no sideways scroll', async ({ page }) => {

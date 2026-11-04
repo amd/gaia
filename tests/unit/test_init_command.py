@@ -1453,6 +1453,98 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertTrue(status.ready)
         self.assertEqual(self.hub_fetches, [])
 
+    @staticmethod
+    def _terminal_agent_path():
+        from gaia.home import gaia_home
+
+        name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
+        return gaia_home() / "bin" / name
+
+    def _install_terminal_agent(self, mode=0o755):
+        """What install.sh / install.ps1 leave: the agent in GAIA's bin dir, no sentinel."""
+        path = self._terminal_agent_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\x7fELF")
+        path.chmod(mode)
+        return path
+
+    def test_terminal_installer_agent_is_ready(self):
+        """#6642: install.sh / install.ps1 put the agent in ~/.gaia/bin, not
+        under ~/.gaia/agents, and the TUI runs it from there."""
+        self._remove_flagship()
+        self._install_terminal_agent()
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.ready)
+        self.assertFalse(status.agent_missing)
+        self.assertEqual(status.reasons, [])
+        self.assertEqual(status.warnings, [])
+
+    def test_terminal_installer_agent_never_asks_the_hub(self):
+        self._remove_flagship()
+        self._install_terminal_agent()
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.ready)
+        self.assertEqual(self.hub_fetches, [])
+
+    def test_terminal_installer_agent_still_needs_the_models(self):
+        self._remove_flagship()
+        self._install_terminal_agent()
+        status, _ = self._check_with_models(have=False)
+
+        self.assertEqual(status.stage, "setup")
+        self.assertFalse(status.agent_missing)
+        self.assertNotIn(self.AGENT_MISSING, status.reasons)
+
+    def test_only_the_tui_in_bin_still_needs_the_agent(self):
+        """A terminal install whose agent download failed leaves gaia-tui alone."""
+        from gaia.home import gaia_home
+
+        self._remove_flagship()
+        bin_dir = gaia_home() / "bin"
+        bin_dir.mkdir(parents=True)
+        tui = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
+        (bin_dir / tui).write_bytes(b"x")
+        self.host_key = "darwin-arm64"
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+
+    def test_a_directory_named_like_the_agent_is_not_the_agent(self):
+        self._remove_flagship()
+        self._terminal_agent_path().mkdir(parents=True)
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+
+    @unittest.skipIf(sys.platform == "win32", "Windows has no exec bit")
+    def test_a_non_executable_terminal_agent_is_not_the_agent(self):
+        """A half-written download (no exec bit yet) must not pass as installed."""
+        self._remove_flagship()
+        self._install_terminal_agent(mode=0o644)
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+
+    def test_terminal_agent_outside_this_gaia_home_does_not_count(self):
+        """An isolated GAIA_HOME never borrows another home's agent."""
+        import os
+        import tempfile
+
+        self._remove_flagship()
+        self._install_terminal_agent()
+        other = tempfile.TemporaryDirectory()
+        self.addCleanup(other.cleanup)
+        os.environ["GAIA_HOME"] = other.name
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+
     def _on_a_pc_without_a_build(self):
         self._remove_flagship()
         self.host_key = "linux-arm64"

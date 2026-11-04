@@ -298,6 +298,82 @@ def test_a_failing_lookup_stops_the_run_before_it_can_push(run_step):
     assert result.returncode != 0
 
 
+def test_a_stalled_fix_is_handed_to_a_maintainer(job):
+    notify = step(job, "Notify on auto-fix failure")
+    assert notify["if"] == "failure() || steps.outcome.outputs.outcome == 'FAILED'"
+    assert step(job, "Check the auto-fix outcome")["id"] == "outcome"
+    assert job["permissions"]["issues"] == "write"
+
+
+@needs_bash
+def test_the_outcome_is_published_for_the_notice(run_step):
+    _, _, outputs = run_step("Check the auto-fix outcome", "Outcome: FAILED\nlint\n")
+    assert "outcome=FAILED" in outputs
+
+
+@pytest.fixture
+def run_notify(job, tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls"
+    (bin_dir / "gh").write_text(
+        '#!/bin/sh\necho "$*" >> "$CALLS"\n'
+        'case "$1 $2" in "label create"|"issue edit") exit "$LABEL_EXIT";; esac\n',
+        encoding="utf-8",
+    )
+    (bin_dir / "gh").chmod(0o755)
+
+    def run(exec_file, outcome, label_fails=False):
+        env = {
+            **os.environ,
+            "LABEL_EXIT": "1" if label_fails else "0",
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "CALLS": str(calls),
+            "ISSUE_NUMBER": "42",
+            "REPO": "amd/gaia",
+            "EXEC_FILE": exec_file,
+            "OUTCOME": outcome,
+        }
+        result = subprocess.run(
+            ["bash", "-e", "-c", step(job, "Notify on auto-fix failure")["run"]],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        return result, calls.read_text(encoding="utf-8") if calls.exists() else ""
+
+    return run
+
+
+@needs_bash
+@pytest.mark.parametrize("outcome, comments", [("", True), ("FAILED", False)])
+def test_a_stalled_fix_gets_needs_human(run_notify, outcome, comments):
+    result, calls = run_notify("/tmp/exec.json", outcome)
+    assert result.returncode == 0, result.stderr
+    assert "issue edit 42 --repo amd/gaia --add-label needs-human" in calls
+    assert ("issue comment 42" in calls) is comments
+
+
+@needs_bash
+@pytest.mark.parametrize("outcome, comments", [("", True), ("FAILED", False)])
+def test_a_failed_label_still_comments_and_fails_loudly(run_notify, outcome, comments):
+    result, calls = run_notify("/tmp/exec.json", outcome, label_fails=True)
+    assert result.returncode != 0
+    assert "::error title=needs-human label failed::" in result.stdout
+    assert ("issue comment 42" in calls) is comments
+    if comments:
+        assert "could not be added" in calls
+
+
+@needs_bash
+def test_an_abort_before_claude_ran_stays_silent(run_notify):
+    result, calls = run_notify("", "")
+    assert result.returncode == 0
+    assert calls == ""
+
+
 def test_a_second_start_queues_instead_of_cancelling(job):
     assert job["concurrency"]["cancel-in-progress"] is False
     # The template's own `labeled` event starts the run; `opened` would be a second one.

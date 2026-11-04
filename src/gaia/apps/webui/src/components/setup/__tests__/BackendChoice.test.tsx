@@ -57,6 +57,16 @@ describe('choosing where the chat model runs', () => {
         expect(screen.getByTestId('chat')).toHaveTextContent(theirs.id);
     });
 
+    // #6632: Lemonade saw the NPU, but FastFlowLM can't run here, so NPU isn't offered and the hint says why.
+    it("offers no NPU where its engine can't run, even for an NPU model already downloaded", () => {
+        const why = { fits: false as const, fit_reason: 'needs an AMD Ryzen AI NPU and its driver', fit_code: 'npu' as const };
+        const ours = { ...NPU, ...why };
+        const theirs = entry({ id: 'gemma4-it-e2b-FLM', name: 'Gemma 4 E2B (NPU)', recipe: 'flm', gaia_model: false, downloaded: true, size_gb: 0, ...why });
+        render(<Harness setup={plan([QWEN, GEMMA, EMBED, ours, theirs])} />);
+        expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['Graphics (GPU)']);
+        expect(screen.getByText("Chat runs on this PC's graphics (GPU). This PC's Ryzen AI NPU can't run GAIA's models.")).toBeInTheDocument();
+    });
+
     it('offers no NPU on a PC without one', () => {
         render(<Harness setup={plan([QWEN, GEMMA, EMBED])} />);
         expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['Graphics (GPU)']);

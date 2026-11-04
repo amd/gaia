@@ -12,6 +12,7 @@ import type { MessageKey, Say } from '../i18n/registry';
 import { dateLocale, tEn, useT } from '../i18n/useT';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import './ScheduleManager.css';
 
 /** How long the Delete button waits for its "Confirm?" click. */
@@ -256,6 +257,7 @@ export function ScheduleManager() {
     useEscapeToClose(true, close);
     const dialogRef = useRef<HTMLDivElement>(null);
     useFocusTrap(dialogRef, true);
+    useDialogFocus(dialogRef, true);
 
     // Create form state
     const [showCreate, setShowCreate] = useState(false);

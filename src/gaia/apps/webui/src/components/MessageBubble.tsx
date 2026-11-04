@@ -23,7 +23,7 @@ import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
-import { useT, type Translate } from '../i18n/useT';
+import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
 import {
@@ -436,9 +436,9 @@ export function escapeBareNumberLines(text: string): string {
 }
 
 /** Format a full absolute timestamp for the stats tooltip. */
-function formatFullTimestamp(iso: string): string {
+function formatFullTimestamp(iso: string, t: Translate): string {
     if (!iso) return '';
-    return new Date(iso).toLocaleString(undefined, {
+    return new Date(iso).toLocaleString(dateLocale(t), {
         month: 'short', day: 'numeric', year: 'numeric',
         hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
     });
@@ -575,7 +575,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     // bubbles get one; previously only the assistant had a visible
     // timestamp readout via msg-stats-ts.
     const hoverTimestamp = message.created_at
-        ? t(message.role === 'user' ? 'msg.sent' : 'msg.replied', { time: formatFullTimestamp(message.created_at) })
+        ? t(message.role === 'user' ? 'msg.sent' : 'msg.replied', { time: formatFullTimestamp(message.created_at, t) })
         : undefined;
 
     return (
@@ -708,7 +708,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         <div className="msg-stats" aria-label={t('msg.about')}>
                             {message.created_at && (
                                 <span className="msg-stats-ts" title={t('msg.timestamp')}>
-                                    {formatFullTimestamp(message.created_at)}
+                                    {formatFullTimestamp(message.created_at, t)}
                                 </span>
                             )}
                             {message.stats?.retried && message.stats.model && (

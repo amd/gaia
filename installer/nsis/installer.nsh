@@ -59,6 +59,26 @@
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
       "GAIA Agent UI"
 
+  ; The daemon and its agents have no window, so they outlive the app unless
+  ; stopped here. A failure is logged, not fatal: the uninstall still finishes.
+  Push $0
+  ${If} ${FileExists} "$PROFILE\.gaia\venv\Scripts\gaia.exe"
+    DetailPrint "Stopping the GAIA daemon and its agents"
+    ; gaia prints emoji, which the captured pipe's code page can't encode.
+    System::Call 'Kernel32::SetEnvironmentVariable(t "PYTHONIOENCODING", t "utf-8")i'
+    nsExec::ExecToLog /TIMEOUT=120000 '"$PROFILE\.gaia\venv\Scripts\gaia.exe" daemon stop'
+    Pop $0
+    ; 3: the daemon stopped; only GAIA's Lemonade Server did not.
+    ${If} $0 == 3
+      DetailPrint "The GAIA daemon stopped, but GAIA's Lemonade Server did not. The lines above say how to stop it."
+    ${ElseIf} $0 != 0
+      DetailPrint "Could not stop the GAIA daemon (gaia daemon stop returned $0). It keeps running until you restart your PC."
+    ${EndIf}
+  ${Else}
+    DetailPrint "No GAIA backend at $PROFILE\.gaia\venv, so no GAIA daemon to stop"
+  ${EndIf}
+  Pop $0
+
   ; Optional cleanup deletes the entire shared GAIA home, including other
   ; installations' runtimes. Interactive and silent defaults preserve it.
   ;
