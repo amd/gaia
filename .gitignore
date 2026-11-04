@@ -204,18 +204,16 @@ atlassian_config.json
 
 # version files
 version.txt
-installer/version.nsh
 
 # Installer files
 installer/**.exe
 release_info.json
 
-# Lemonade MSI downloaded at build time (issue #774)
-installer/lemonade-server-minimal.msi
+# Binaries the desktop build fetches into its extraResources
+src/gaia/apps/webui/build/vendor/
 
 # version
 version.txt
-**/version.nsh
 **/.gaia_servers.json
 **/agent_output_*.json
 

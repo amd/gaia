@@ -14,7 +14,7 @@ Workflow:
 1. mcp_windows_Shell - Execute PowerShell to get system metrics
 2. LLM analyzes results and creates a nicely formatted plain text report
 3. mcp_windows_Shell - Copy report to clipboard (Set-Clipboard)
-4. mcp_windows_Shell - Open Notepad (Start-Process notepad)
+4. mcp_windows_Shell - Open Notepad on a new empty temp file (Start-Process notepad)
 5. mcp_windows_Wait - Wait for Notepad to open
 6. mcp_windows_Shortcut - Paste with Ctrl+V
 
@@ -74,7 +74,11 @@ class WindowsSystemHealthAgent(Agent, MCPClientMixin):
                 print(f"  Available MCP tools: {[t.name for t in tools]}")
         else:
             print("  [ERROR] Failed to connect to Windows MCP server")
-            print("  Ensure 'uvx' is installed: pip install uv")
+            print("  1. Check 'uvx --version' works in this terminal.")
+            print("     If not, install uv: https://docs.astral.sh/uv/")
+            print("  2. Run 'uvx windows-mcp' on its own to see the server's error.")
+            print("  3. If it reports a Python version mismatch, retry with")
+            print("     'uvx --python <version the error names> windows-mcp'.")
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the agent."""
@@ -89,7 +93,7 @@ DO NOT give a final answer until you have completed ALL of these steps:
 [ ] Step 2: Get disk info with mcp_windows_Shell
 [ ] Step 3: Get CPU info with mcp_windows_Shell
 [ ] Step 4: Copy formatted report to clipboard with mcp_windows_Shell (Set-Clipboard)
-[ ] Step 5: Open Notepad with mcp_windows_Shell (Start-Process notepad)
+[ ] Step 5: Open a NEW empty Notepad file with mcp_windows_Shell (New-Item + Start-Process notepad)
 [ ] Step 6: Paste with mcp_windows_Shortcut (ctrl+v)
 
 ---
@@ -121,9 +125,13 @@ For the ASSESSMENT section, include LLM capability analysis based on available R
 
 Add 2-3 bullet points recommending what size models the system can handle for GAIA/Lemonade.
 
-## Step 5: Open Notepad
+## Step 5: Open a New, Empty Notepad File
 
-mcp_windows_Shell with command: Start-Process notepad
+Never paste into a Notepad window or file that was already open. Create a fresh
+temp file and open it, so the report cannot be appended to an old document:
+
+mcp_windows_Shell with command:
+$f = Join-Path $env:TEMP ("gaia-health-" + (Get-Date -Format yyyyMMdd-HHmmss) + ".txt"); New-Item -ItemType File -Path $f | Out-Null; Start-Process notepad -ArgumentList $f
 
 Then use mcp_windows_Wait with duration: 2
 

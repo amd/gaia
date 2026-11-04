@@ -611,6 +611,13 @@ CREATE TABLE IF NOT EXISTS forgotten (
     sensitive    INTEGER NOT NULL DEFAULT 0,
     forgotten_at TEXT NOT NULL
 );
+
+-- Agent UI chats the user deleted (#5931). A stopped turn can finish after its
+-- chat is gone, in another process; its writes check here and file nothing.
+CREATE TABLE IF NOT EXISTS deleted_sessions (
+    session_id  TEXT PRIMARY KEY,
+    deleted_at  TEXT NOT NULL
+);
 """
 
 # Sync triggers for conversations_fts (external-content FTS5 table).
@@ -751,6 +758,10 @@ def resolve_memory_db_path() -> Path:
 
 class MemoryStoreClosedError(RuntimeError):
     """A store call arrived after ``close()``."""
+
+
+class MemoryScrubError(RuntimeError):
+    """Memory was erased, but the deleted text may still be readable in the file."""
 
 
 class MemoryStore:
@@ -1059,6 +1070,7 @@ class MemoryStore:
         context: str = "global",
         *,
         preserve_full: bool = False,
+        erase_count: int | None = None,
     ) -> None:
         """Store one conversation turn.
 
@@ -1069,6 +1081,9 @@ class MemoryStore:
         turn up to 256000 characters, or fail explicitly above that bound.
         Empty or whitespace-only turns are silently skipped — they add no
         signal to conversation history and pollute FTS5 with empty entries.
+        A turn that began before all of memory was erased (``erase_count`` as
+        read then, see :meth:`erase_count`) is dropped, so a turn still
+        finishing does not refill the log.
         """
         if not content or not content.strip():
             return  # Skip empty turns
@@ -1080,11 +1095,18 @@ class MemoryStore:
             content = content[:MAX_TURN_LENGTH]
         now = _now_iso()
         with self._locked():
+            if erase_count is not None and self._erase_count_locked() != erase_count:
+                logger.info(
+                    "[MemoryStore] turn not stored: all memory was erased after "
+                    "it began"
+                )
+                return
             try:
                 self._conn.execute(
                     "INSERT INTO conversations (session_id, role, content, context, timestamp) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (session_id, role, content, context, now),
+                    "SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS "
+                    "(SELECT 1 FROM deleted_sessions WHERE session_id = ?)",
+                    (session_id, role, content, context, now, session_id),
                 )
                 self._conn.commit()
             except Exception:
@@ -2753,8 +2775,13 @@ class MemoryStore:
         error: str | None = None,
         duration_ms: int | None = None,
         executed: bool = True,
+        erase_count: int | None = None,
     ) -> None:
-        """Log a tool call to tool_history."""
+        """Log a tool call to tool_history.
+
+        Dropped when all of memory was erased after its turn began
+        (``erase_count`` as read then).
+        """
         now = _now_iso()
         args_json = _bounded_args_json(args)
         # Truncate the text columns to MAX_FTS_QUERY_LENGTH chars. Tool args,
@@ -2766,12 +2793,21 @@ class MemoryStore:
             error = error[:MAX_FTS_QUERY_LENGTH]
 
         with self._locked():
+            if erase_count is not None and self._erase_count_locked() != erase_count:
+                logger.info(
+                    "[MemoryStore] %s call not logged: all memory was erased "
+                    "after its turn began",
+                    tool_name,
+                )
+                return
             try:
                 self._conn.execute(
                     """
                     INSERT INTO tool_history
                         (session_id, tool_name, args, result_summary, success, executed, error, duration_ms, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    WHERE NOT EXISTS
+                        (SELECT 1 FROM deleted_sessions WHERE session_id = ?)
                     """,
                     (
                         session_id,
@@ -2783,6 +2819,7 @@ class MemoryStore:
                         error,
                         duration_ms,
                         now,
+                        session_id,
                     ),
                 )
                 self._conn.commit()
@@ -4544,30 +4581,98 @@ class MemoryStore:
                 raise
         logger.info("[MemoryStore] FTS5 indexes rebuilt")
 
+    _ERASE_COUNT_KEY = "erase_count"
+
+    def erase_count(self) -> int:
+        """How many times all of memory has been erased.
+
+        Work that started before an erase holds the count it saw and drops its
+        writes once the count moves. A counter, not a time, so a clock set
+        ahead or back cannot drop or let through every later write.
+        """
+        with self._locked():
+            return self._erase_count_locked()
+
+    def _erase_count_locked(self) -> int:
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (self._ERASE_COUNT_KEY,)
+        ).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def erased_since(self, erase_count: Optional[int]) -> bool:
+        """Whether memory was erased after *erase_count* was read (None: no)."""
+        if erase_count is None:
+            return False
+        with self._locked():
+            return self._erase_count_locked() != erase_count
+
     def clear_all(self) -> Dict:
         """Permanently delete all knowledge, tool history, and conversation data.
 
         Wipes every knowledge entry, tool call log, and conversation turn
         from the database.  FTS5 indexes are reset to empty in the same
-        transaction so search stays consistent.
+        transaction so search stays consistent, then the file is vacuumed and
+        its WAL truncated so the deleted text can't be read back from disk.
+
+        Raises:
+            RuntimeError: the rows were deleted but another connection kept the
+                file from being scrubbed.
 
         Returns:
             Dict with counts of deleted rows per table:
             ``{knowledge: int, tool_history: int, conversations: int}``
         """
         with self._locked():
+            # Deleted rows otherwise stay readable in free pages, the WAL and
+            # the FTS index segments of the database file.
+            secure_delete = self._conn.execute("PRAGMA secure_delete").fetchone()[0]
+            self._conn.execute("PRAGMA secure_delete=ON")
             try:
                 knowledge_deleted = self._conn.execute("DELETE FROM knowledge").rowcount
                 self._rebuild_knowledge_fts_locked()
                 tool_deleted = self._conn.execute("DELETE FROM tool_history").rowcount
                 conv_deleted = self._conn.execute("DELETE FROM conversations").rowcount
                 self._rebuild_conversations_fts_locked()
+                # A plain FTS5 delete only tombstones; merging drops the old tokens.
+                for fts in ("knowledge_fts", "conversations_fts"):
+                    self._conn.execute(f"INSERT INTO {fts}({fts}) VALUES('optimize')")
                 # No conversation is left to relearn from.
                 self._conn.execute("DELETE FROM forgotten")
+                # Session goals are the user's own first message; the marks
+                # stay so learned procedures are not distilled again.
+                self._conn.execute(
+                    "UPDATE synthesis_marks SET goal = NULL, detail = NULL"
+                )
+                # Work begun before this must not refill memory.
+                self._conn.execute(
+                    "INSERT INTO meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (self._ERASE_COUNT_KEY, str(self._erase_count_locked() + 1)),
+                )
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
+                self._conn.execute(f"PRAGMA secure_delete={secure_delete}")
                 raise
+            try:
+                self._conn.execute("VACUUM")
+                busy = self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[
+                    0
+                ]
+            except sqlite3.OperationalError as e:
+                raise MemoryScrubError(
+                    f"Memory at {self._db_path} was erased, but the deleted text "
+                    f"could not be scrubbed from the file ({e}). Close other GAIA "
+                    "windows and erase again."
+                ) from e
+            finally:
+                self._conn.execute(f"PRAGMA secure_delete={secure_delete}")
+            if busy:
+                raise MemoryScrubError(
+                    f"Memory at {self._db_path} was erased, but another connection "
+                    "kept its write-ahead log from being cleared, so deleted text "
+                    "may remain there. Close other GAIA windows and erase again."
+                )
         logger.info(
             "[MemoryStore] cleared all: knowledge=%d tool_history=%d conversations=%d",
             knowledge_deleted,
@@ -4613,6 +4718,40 @@ class MemoryStore:
                 raise
         logger.info("[MemoryStore] cleared conversations: %d rows", deleted)
         return {"conversations": deleted}
+
+    def delete_session(self, session_id: str) -> Dict:
+        """Delete *session_id*'s conversation turns and tool calls.
+
+        Both hold the chat's own words: tool args and result summaries can
+        quote files, searches and pages. What was learned from the session
+        (knowledge, procedures) is kept. The FTS index follows through the
+        delete trigger. The id is recorded as deleted, so a turn still
+        finishing under it files nothing. Returns the deleted row counts.
+        """
+        with self._locked():
+            try:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO deleted_sessions (session_id, deleted_at) "
+                    "VALUES (?, ?)",
+                    (session_id, _now_iso()),
+                )
+                conv_deleted = self._conn.execute(
+                    "DELETE FROM conversations WHERE session_id = ?", (session_id,)
+                ).rowcount
+                tool_deleted = self._conn.execute(
+                    "DELETE FROM tool_history WHERE session_id = ?", (session_id,)
+                ).rowcount
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        logger.info(
+            "[MemoryStore] deleted session %s: %d conversation turns, %d tool calls",
+            session_id,
+            conv_deleted,
+            tool_deleted,
+        )
+        return {"conversations": conv_deleted, "tool_history": tool_deleted}
 
     def seed_bulk(self, items: List[Dict]) -> List[str]:
         """Bulk-insert knowledge rows, bypassing dedup.

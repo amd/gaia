@@ -3925,7 +3925,7 @@
     "type": "object"
   },
   "SetupRunRequest": {
-    "description": "``skip_chat_model`` when the chat runs on a cloud provider;\n``gaia_lemonade`` to set up GAIA's own server instead of the user's;\n``acknowledge_low_disk`` to download past a too-small model drive;\n``keep_trying`` to wait up to two minutes out a dropped connection;\n``extra_models`` to pull models beside the plan's (the user ticked them);\n``server_only`` to start the model server and stop, so the models can be\nchosen against it before anything downloads.",
+    "description": "``skip_chat_model`` when the chat runs on a cloud provider;\n``gaia_lemonade`` to set up GAIA's own server instead of the user's;\n``acknowledge_low_disk`` to download past a too-small model drive;\n``keep_trying`` to wait up to two minutes out a dropped connection;\n``extra_models`` to pull models beside the plan's (the user ticked them);\n``server_only`` to start the model server and stop, so the models can be\nchosen against it before anything downloads;\n``upgrade_embedded`` to replace an older embedded server artifact without\ndownloading the existing model cache again.",
     "properties": {
       "acknowledge_low_disk": {
         "default": false,
@@ -3958,6 +3958,11 @@
       "skip_chat_model": {
         "default": false,
         "title": "Skip Chat Model",
+        "type": "boolean"
+      },
+      "upgrade_embedded": {
+        "default": false,
+        "title": "Upgrade Embedded",
         "type": "boolean"
       }
     },
@@ -5103,6 +5108,24 @@
     "title": "ValidationError",
     "type": "object"
   },
+  "VisionModelRequest": {
+    "description": "A model that reads images, or null to go back to GAIA's choice.",
+    "properties": {
+      "model_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model Id"
+      }
+    },
+    "title": "VisionModelRequest",
+    "type": "object"
+  },
   "WarmUpStatus": {
     "description": "Whether a new chat's first turn will find its prompt already read.",
     "properties": {
@@ -5199,6 +5222,11 @@
         },
         "title": "Indexing",
         "type": "array"
+      },
+      "setup": {
+        "default": false,
+        "title": "Setup",
+        "type": "boolean"
       }
     },
     "required": [

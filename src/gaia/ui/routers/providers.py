@@ -395,6 +395,7 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
         _model_ids_match,
         catalog_context_window,
         find_model_requirement,
+        runs_on_npu,
     )
     from gaia.llm.recommended_models import rank
 
@@ -440,12 +441,12 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
                 "price": None if provider == LOCAL else price_card(model_id),
             }
         )
-    # A custom model Lemonade has not registered yet is not in its list; a
-    # missing built-in is one this Lemonade cannot pull, so it stays out.
+    # A custom model Lemonade has not registered yet is not in its list, nor is
+    # an FLM model before the NPU backend is in (its download installs that). Any
+    # other missing built-in is one this Lemonade cannot pull, so it stays out.
     for model_id in offered:
-        if model_id.startswith("user.") and not any(
-            _model_ids_match(model_id, m["id"]) for m in out
-        ):
+        unlisted = model_id.startswith("user.") or runs_on_npu(model_id)
+        if unlisted and not any(_model_ids_match(model_id, m["id"]) for m in out):
             req = find_model_requirement(model_id)
             out.append(
                 {
@@ -453,7 +454,8 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
                     "context_length": None,
                     "downloaded": False,
                     "labels": [],
-                    "recipe": req.recipe if req else None,
+                    "recipe": (req.recipe if req else None)
+                    or ("flm" if runs_on_npu(model_id) else None),
                     "size_gb": req.size_gb if req else None,
                     "rank": None,
                     "note": None,
@@ -1237,11 +1239,12 @@ def _context_view(model_id: str) -> Dict[str, Any]:
         _raise(e)
     except (ModelFitError, GaiaConfigError) as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    from gaia.llm.lemonade_client import GPU_CTX_SIZE, npu_ctx_ceiling, runs_on_npu
+    from gaia.llm.lemonade_client import GPU_CTX_SIZE, npu_default_ctx, runs_on_npu
+    from gaia.llm.model_fit import NPU_RAM
 
     span = context_range(model_id, capacity, trained)
     # A model GAIA has no entry for loads at its device's flat window.
-    flat = npu_ctx_ceiling(model_id) if runs_on_npu(model_id) else GPU_CTX_SIZE
+    flat = npu_default_ctx(model_id) if runs_on_npu(model_id) else GPU_CTX_SIZE
     name = display_name(model_id)
     return {
         "model": model_id,
@@ -1252,7 +1255,7 @@ def _context_view(model_id: str) -> Dict[str, Any]:
         "max_fit": span["max_fit"] if span else None,
         "options": span["options"] if span else [],
         "loaded_ctx": loaded_ctx,
-        "memory_source": capacity.memory_source,
+        "memory_source": NPU_RAM if runs_on_npu(model_id) else capacity.memory_source,
         "note": _context_note(span, name),
     }
 

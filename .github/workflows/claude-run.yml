@@ -83,6 +83,11 @@ on:
         required: false
         type: string
         default: ""
+      comment_marker:
+        description: "With comment_file set: a hidden HTML comment appended to the posted body, so a later job can tell this caller's comments from other github-actions[bot] comments. The workflow appends it, not the model, so it is always there."
+        required: false
+        type: string
+        default: ""
       require_comment:
         description: "With comment_file set: true fails the job when Claude produced no comment (pr-review — a review is mandatory); false treats an absent file as legitimate silence (pr-rereview)."
         required: false
@@ -156,6 +161,22 @@ jobs:
           else
             rm -f /tmp/review-rubric.md
             echo "::warning title=Review rubric not loaded::REVIEW.md not found on base ref '$BASE_REF'; reviewer falls back to inline guidance."
+          fi
+
+      # The same trust rule as the rubric: a fork must not rewrite the reviewer's checklist.
+      - name: Fetch known bug classes from base ref
+        if: github.event_name == 'pull_request_target'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          rm -f /tmp/missed-bug-classes.md
+          if git fetch origin "$BASE_REF" 2>/dev/null && \
+             git show "FETCH_HEAD:scripts/audit/missed_bug_classes.md" > /tmp/missed-bug-classes.md 2>/dev/null && \
+             [ -s /tmp/missed-bug-classes.md ]; then
+            echo "✅ Loaded known bug classes from base ref '$BASE_REF'"
+          else
+            rm -f /tmp/missed-bug-classes.md
+            echo "::warning title=Bug classes not loaded::scripts/audit/missed_bug_classes.md not found on base ref '$BASE_REF'; the review says so at the top."
           fi
 
       # --- Issue / issue_comment events: plain checkout, plus a fork-aware diff when
@@ -232,6 +253,12 @@ jobs:
           echo "Diff generated: $(wc -l < pr-diff.txt) lines"
           echo "Files changed: $(wc -l < pr-files.txt) files"
 
+      # The reviewer reads evidence-bundle.md as this run's evidence, so one committed in
+      # the PR's tree (a fork's included) would be relayed as if the harness produced it.
+      - name: Drop any evidence-bundle.md the PR tree carries
+        if: github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment'
+        run: rm -f evidence-bundle.md
+
       # --- Real-world evidence stage (opt-in via generate_evidence; pr-review only) ---
       # SECURITY: every step here is gated on head.repo.fork == false. A fork PR's code
       # is untrusted and this job holds secrets under pull_request_target, so we NEVER
@@ -260,6 +287,7 @@ jobs:
           fi
 
       - name: Set up GAIA for evidence
+        id: evidence_setup
         if: steps.surface.outputs.testable == 'true'
         continue-on-error: true   # a failed install must not block the review; reviewer notes evidence unavailable
         uses: actions/setup-python@v7
@@ -267,6 +295,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install GAIA (evidence lane)
+        id: evidence_install
         if: steps.surface.outputs.testable == 'true'
         continue-on-error: true
         run: pip install -e ".[dev]"
@@ -360,20 +389,68 @@ jobs:
             --max-turns 100 \
             --model claude-opus-5-5
 
-      # Fail loudly, don't mask: the step above is continue-on-error, so a broken evidence
-      # harness (auth / install / rate-limit) leaves NO bundle — which otherwise reads as
-      # "nothing to test". Write a visible sentinel so the review says the harness broke, not
-      # that the surface was clean. A silent-green evidence stage is exactly how #2417 hid.
-      - name: Flag evidence-harness failure (no silent green)
-        if: steps.surface.outputs.testable == 'true' && steps.evidence.outcome == 'failure' && steps.evidence_secondary.outcome != 'success'
+      # Fail loudly, don't mask: the evidence steps are continue-on-error, so a broken
+      # harness leaves no bundle, which otherwise reads as "nothing to test". Two shapes
+      # hide that: a step that errored, and one that exited 0 without writing a bundle.
+      # Both get a sentinel naming the cause, a job-summary line, and the red gate at the
+      # end of this job (#3855; a silent-green evidence stage is how #2417 hid).
+      - name: Check the evidence harness produced a bundle
+        id: evidence_check
+        if: "!cancelled() && steps.surface.outputs.testable == 'true'"
+        env:
+          SETUP_OUTCOME: ${{ steps.evidence_setup.outcome }}
+          INSTALL_OUTCOME: ${{ steps.evidence_install.outcome }}
+          PRIMARY_OUTCOME: ${{ steps.evidence.outcome }}
+          QUOTA: ${{ steps.evidence_quota.outputs.quota }}
+          SECONDARY_OUTCOME: ${{ steps.evidence_secondary.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/evidence-primary.log"
+          ran=false
+          if [ "$PRIMARY_OUTCOME" = "success" ] || [ "$SECONDARY_OUTCOME" = "success" ]; then
+            ran=true
+          fi
+          # Match the log, never echo it: the cause lands in a public PR comment.
+          tail_text=$(tail -c 4000 "$log" 2>/dev/null || true)
+          if [ "$SETUP_OUTCOME" = "failure" ] || [ "$INSTALL_OUTCOME" = "failure" ]; then
+            cause='GAIA failed to install on the evidence runner (setup-python or pip install -e ".[dev]")'
+          elif [ "$ran" = "true" ] && [ -s evidence-bundle.md ]; then
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+            echo "Evidence bundle produced ($(wc -c < evidence-bundle.md) bytes)."
+            exit 0
+          elif [ "$ran" = "true" ]; then
+            cause='the evidence run exited cleanly but wrote no evidence-bundle.md (out of turns, or it skipped the write)'
+          elif [ "$QUOTA" = "true" ] && [ "$HAS_SECONDARY" = "true" ]; then
+            cause='both Claude accounts are out of quota (the secondary retry failed too)'
+          elif [ "$QUOTA" = "true" ]; then
+            cause='the Claude account is out of quota and CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set'
+          elif printf '%s' "$tail_text" | grep -qiE "$CREDENTIAL_RE"; then
+            cause='Claude rejected the credential: CLAUDE_CODE_OAUTH_TOKEN is expired or missing'
+          elif [ ! -s "$log" ]; then
+            cause='the Claude CLI never started (its npm install failed, or the runner died first)'
+          else
+            cause='the evidence run errored; see the "Generate real-world evidence" step log'
+          fi
           {
             echo "⚠️ EVIDENCE HARNESS FAILED TO RUN — this is NOT \"nothing to test\"."
             echo
-            echo "The evidence stage errored before producing evidence (auth / install / rate-limit"
-            echo "— see this run's logs). The changed surface was NOT exercised; the verdict below"
-            echo "rests on static review only."
+            echo "Cause: $cause."
+            echo
+            echo "The changed surface was NOT exercised; the verdict below rests on static review"
+            echo "only. Re-run the review job once the cause is fixed, or attach manual evidence"
+            echo "to the PR before merging. Log: $RUN_URL"
           } > evidence-bundle.md
+          {
+            echo "### ⚠️ Evidence harness failed"
+            echo
+            echo "Cause: $cause. The PR's surface was not exercised."
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "failed=true"
+            echo "cause=$cause"
+          } >> "$GITHUB_OUTPUT"
+          echo "Evidence harness failed: $cause"
 
       # --- Attempt 1 ---
       # continue-on-error: a rate-limit / expired-token / outage / install-crash must
@@ -418,7 +495,7 @@ jobs:
       # conditions, both required:
       #   - the call never reached a model (is_error, empty modelUsage, $0). A run
       #     that did may already have posted through `gh` (pr-comment,
-      #     issue-handler, issue-triage), and a retry would post twice;
+      #     issue-triage), and a retry would post twice;
       #   - quota WORDING (QUOTA_RE, never a bare per-minute 429). A refusal with no
       #     text, or one naming the credential, never fails over: the other account
       #     would hide a token to rotate.
@@ -529,13 +606,17 @@ jobs:
       # Posting must not be the model's own final `gh` call — when that call doesn't
       # happen the job still goes green with nothing published, which is undetectable.
       - name: Post Claude's comment
+        id: post
         if: "!cancelled() && inputs.comment_file != ''"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMENT_FILE: ${{ inputs.comment_file }}
           REQUIRE_COMMENT: ${{ inputs.require_comment }}
           HARNESS_STATUS: ${{ steps.harness.outputs.status }}
-          IS_PR: ${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment' }}
+          # Reviews only: a pr-comment reply carries no verdict, so a stamp would fail the status.
+          REVIEWED_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || '' }}
+          IS_PR: ${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request != null }}
+          COMMENT_MARKER: ${{ inputs.comment_marker }}
           NUMBER: ${{ (github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment') && github.event.pull_request.number || github.event.issue.number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -555,6 +636,18 @@ jobs:
             fi
             echo "No comment at $COMMENT_FILE — nothing to post (silence is a valid outcome for this job)."
             exit 0
+          fi
+          # Only this step may stamp a comment, on every event: drop any stamp the model wrote.
+          # Not `sed -i`: BSD sed reads its next argument as a suffix, and Git Bash cannot
+          # rename its temp file across drives.
+          stripped=$(sed -E 's/<!--[^>]*reviewed-sha[^>]*-->//g' "$COMMENT_FILE")
+          printf '%s\n' "$stripped" > "$COMMENT_FILE"
+          if [ -n "$COMMENT_MARKER" ]; then
+            printf '\n\n%s\n' "$COMMENT_MARKER" >> "$COMMENT_FILE"
+          fi
+          # Shows which commit a review read; the merge check reads the artifact below.
+          if [ -n "${REVIEWED_SHA:-}" ]; then
+            printf '\n<!-- reviewed-sha: %s -->\n' "$REVIEWED_SHA" >> "$COMMENT_FILE"
           fi
           if [ "$IS_PR" = "true" ]; then
             gh pr comment "$NUMBER" --body-file "$COMMENT_FILE"
@@ -577,6 +670,7 @@ jobs:
       # model did the work — a silent downgrade unless this step goes red. The comment is
       # already posted by then; the red check is what flags it.
       - name: Claude run completed on the requested model
+        id: model_ok
         if: "!cancelled() && steps.harness.outputs.status == 'ok'"
         env:
           TURNS: ${{ steps.harness.outputs.turns }}
@@ -604,6 +698,44 @@ jobs:
           done < <(printf '%s\n' "$MODELS" | tr ',' '\n')
           echo "::error title=Claude ran on a different model::The $KIND for $TARGET asked for $requested but the CLI billed only [${MODELS:-none}], so a model this job did not pin wrote it. Check the CLI's model support at the pinned claude-code-action SHA and the subscription's model limits. Log: $RUN_URL"
           exit 1
+
+      # The only verdict the merge check trusts (util/check_review_verdict.py): written by
+      # this step, only for a review that ran on the pinned model and was posted. An absent
+      # comment here is a silent re-review, recorded as "clear".
+      - name: Record the review verdict
+        if: >-
+          !cancelled() && github.event_name == 'pull_request_target' &&
+          inputs.comment_file != '' &&
+          steps.post.outcome == 'success' && steps.model_ok.outcome == 'success'
+        env:
+          COMMENT_FILE: ${{ inputs.comment_file }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEWED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/review-verdict"
+          mkdir -p "$RUNNER_TEMP/review-verdict"
+          if [ -s "$COMMENT_FILE" ]; then
+            verdict=$(grep -m1 -oE '^\*\*Verdict: [A-Za-z ]+\*\*' "$COMMENT_FILE" \
+                        | sed -E 's/^\*\*Verdict: (.*)\*\*$/\1/' || true)
+          else
+            verdict=clear
+          fi
+          jq -n --argjson pr "$PR_NUMBER" --arg sha "$REVIEWED_SHA" --arg verdict "$verdict" \
+            '{pr: $pr, sha: $sha, verdict: $verdict}' > "$RUNNER_TEMP/review-verdict/verdict.json"
+          echo "Recorded verdict '${verdict:-<none>}' for PR #$PR_NUMBER at ${REVIEWED_SHA:0:9}"
+
+      - name: Upload the review verdict
+        if: >-
+          !cancelled() && github.event_name == 'pull_request_target' &&
+          inputs.comment_file != '' &&
+          steps.post.outcome == 'success' && steps.model_ok.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: review-verdict
+          path: ${{ runner.temp }}/review-verdict/verdict.json
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Claude errored after reaching the model — a real run went wrong
         if: "!cancelled() && steps.harness.outputs.status == 'errored'"
@@ -677,3 +809,15 @@ jobs:
             exit 1
           fi
           echo "::warning title=Claude $KIND crashed before starting::$msg"
+
+      # Last, so the review has already posted. Red on purpose, unlike an outage of the
+      # review itself on optional lanes: a harness failure on a testable PR is a missing
+      # gate, and "N/A" must never be what it looks like at merge time (#3855).
+      - name: Evidence harness failed — this PR's surface was not exercised
+        if: "!cancelled() && steps.evidence_check.outputs.failed == 'true'"
+        env:
+          CAUSE: ${{ steps.evidence_check.outputs.cause }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          echo "::error title=Evidence harness failed::The real-world evidence stage did not run, so this PR's changed surface was NOT exercised and the review rests on static reading only. Cause: $CAUSE. Fix the cause and re-run this job, or attach manual evidence to the PR before merging. Log: $RUN_URL"
+          exit 1

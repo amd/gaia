@@ -29,11 +29,12 @@ icon: sparkles
 # registers only when GAIA_DYNAMIC_TOOLS=1 turns per-turn selection on.
 # + 3 audio-generation tools (enabled on the flagship, disabled in fast mode).
 # This is the REGISTERED size — what the agent can do.
-tools_count: 104
+tools_count: 105
 
 language: python
-# ChatAgent (gaia_agent.chat_agent) calls RAGSDK.document_scripts (#6165);
-# 0.25.4 is the first core that ships it. (0.25.1 added reasoning_tools;
+# ChatAgent (gaia_agent.chat_agent) calls RAGSDK.document_scripts (#6165)
+# and init_memory(session_id=) (#5931); 0.25.4 is the first core that ships
+# them. (0.25.1 added reasoning_tools;
 # 0.25.0 added the allowed-folders check, #4656; 0.24.1 was the first whose
 # daemon can supervise this, #2932.)
 min_gaia_version: "0.25.4"
@@ -65,8 +66,9 @@ requirements:
 # `default_skill_set` is deliberately COMMENTED OUT, following the email agent's
 # precedent (#2848): loading skill bodies costs prompt tokens and shrinks the
 # result envelope, and no eval has yet measured that trade for this agent. Until
-# one has, skills are opt-in via `--skill-set` or GAIA_SKILL_SET, and the
-# out-of-the-box prompt budget is identical to plain ChatAgent doc.
+# one has, no sets are declared (so any GAIA_SKILL_SET stops startup), task
+# skills load mid-session through load_skill, and the out-of-the-box prompt
+# budget is identical to plain ChatAgent doc.
 #
 # Re-enabling is uncommenting the two blocks below — no code change.
 
@@ -77,7 +79,7 @@ requirements:
 # the flagship and they corrupt an answer no matter which task is running, so
 # they cannot live in an opt-in bundle the way a task skill can.
 #
-# Its body is 702 tiktoken (cl100k) tokens, measured, and it declares no tools —
+# Its body is 789 tiktoken (cl100k) tokens, measured, and it declares no tools —
 # so the concern that kept `default_skill_set` commented out, loading several
 # large skill bodies into every prompt, does not apply. Keep it that size: it is
 # paid on every LLM call of every turn. default_skill_set stays off.

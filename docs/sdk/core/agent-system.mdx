@@ -1045,16 +1045,30 @@ The tool that ran the check says so. `run_shell_command`, `run_python`, and
 a `CheckResult` (`label`, `target`, `kind`, `passed`, `summary`) when the program
 was a test, lint, typecheck, or build runner, and `null` when it was not. The
 note reads that and nothing else. A shell run counts only when the program
-itself is the runner (`pytest -q`, `python -m pytest`, `uv run pytest`), so
-`cat pytest.ini` is not a test run; a failing summary line wins over a zero exit
-code, so `pytest | tail` that failed reads as failed.
+itself is the runner (`pytest -q`, `python -u -m pytest`, `py -m pytest`, `uv
+run --with pytest pytest`, `npm.cmd test`), so `cat pytest.ini` is not a test
+run; a failing summary line wins over a zero exit code, so `pytest | tail` that
+failed reads as failed. A `run_python` snippet or an `execute_python_file`
+script counts only when its code invokes a runner — `pytest.main()`,
+`unittest.main()`, a `TextTestRunner`, or a `subprocess` / `os.system` /
+`os.exec*` / `runpy` call whose program is itself the runner — and its output
+carries that runner's summary. The program is read the way the shell tool reads
+it, plus the interpreter: `sys.executable` reads as Python whether it sits in an
+argv list, an f-string (`f'{sys.executable} -m pytest'`) or a concatenation, and
+a runner behind `sh -c` or `cmd /c` counts. Printing a saved log is not a test
+run, whatever the log says or is named: `print(open('ci.log').read())` and
+`subprocess.run(['cat', 'pytest.log'])` both read a file. A runner reached only
+through a helper the snippet imports (`from mytests import run_all`) does not
+count either; the run is reported as unverified rather than guessed.
 
 Results that carry no `check_result` — MCP tools, hub agents built before the
 field existed — are still classified from their text: a tool named `run_tests`,
 `run_lint`, `typecheck`, or `build`, a `command` argument naming a known runner,
-or a `run_python` / `execute_python_file` output with a test runner's summary
-(pytest, unittest, jest, vitest, mocha, `go test`, `cargo test`). Other
-unrecognized runners don't count as a check.
+or a `run_python` output with a test runner's summary (pytest, unittest, jest,
+vitest, mocha, `go test`, `cargo test`) whose `code` argument invokes a runner. An
+`execute_python_file` result without the field never counts: the script it ran
+is not in the call's arguments. Other unrecognized runners don't count as a
+check.
 
 Before the answer goes out, the loop also checks it against the same record. An
 answer that reports a test outcome (`111 passed`, "all tests pass") when no test

@@ -1,0 +1,16 @@
+{
+  "scorecards_dir": "eval-out",
+  "scorecard_count": 3,
+  "quality_gate": {
+    "passed": true,
+    "enforce": true,
+    "should_fail": false,
+    "breaches": [],
+    "measured": {
+      "judged": 37,
+      "passed": 27,
+      "judged_pass_rate": 0.7297297297297297,
+      "avg_score": 8.196486486486487
+    }
+  }
+}

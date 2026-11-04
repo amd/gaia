@@ -1,0 +1,95 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+"""GAIA reads no images while chat runs on the NPU, and says so wherever it comes up.
+
+The NPU model doesn't read images, and loading a second model next to it for
+that one job would mean a 6 GB download, so the feature is off instead.
+"""
+
+import types
+
+import pytest
+
+from gaia.installer.init_command import InitCommand
+from gaia.llm import lemonade_client as lc
+from gaia.rag.sdk import RAGSDK, ImageExtractionError
+from gaia.ui import setup_plan
+from gaia.vlm.mixin import VLMToolsMixin
+
+NPU = "gemma4-it-e4b-FLM"
+
+
+@pytest.fixture
+def chat_model(monkeypatch):
+    def use(model, vision_model=None):
+        monkeypatch.setattr(lc, "resolve_default_chat_model", lambda: model)
+        monkeypatch.setattr(
+            "gaia.config.GaiaConfig.load",
+            classmethod(lambda cls: types.SimpleNamespace(vision_model=vision_model)),
+        )
+
+    return use
+
+
+def test_no_vision_model_while_chat_runs_on_the_npu(chat_model):
+    chat_model(NPU)
+    assert lc.resolve_default_vision_model() is None
+
+
+def test_a_saved_vision_model_does_not_turn_it_back_on(chat_model):
+    chat_model(NPU, vision_model=lc.DEFAULT_MODEL_NAME)
+    assert lc.resolve_default_vision_model() is None
+
+
+def test_the_gpu_keeps_its_vision_model(chat_model):
+    chat_model(lc.LARGE_DEFAULT_MODEL_NAME)
+    assert lc.resolve_default_vision_model() == lc.LARGE_DEFAULT_MODEL_NAME
+
+
+def test_chat_is_told_it_is_off_and_offered_no_download(chat_model, monkeypatch):
+    chat_model(NPU)
+    monkeypatch.setattr(
+        setup_plan, "build_plan", lambda *a, **k: pytest.fail("no plan needed")
+    )
+    need = setup_plan.model_need("vision")
+    assert need == {
+        "job": "vision",
+        "needed": False,
+        "model": None,
+        "disk_free_gb": None,
+        "off": "npu",
+    }
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda host, path: host._analyze_image(path),
+        lambda host, path: host._answer_question_about_image(path, "what is it?"),
+    ],
+)
+def test_the_image_tools_say_why_they_cannot_read(call, tmp_path):
+    host = VLMToolsMixin()
+    host.vlm_model = None
+    host.vlm_client = None
+    image = tmp_path / "photo.png"
+    image.write_bytes(b"x")
+    result = call(host, str(image))
+    assert result["status"] == "error"
+    assert result["error"] == lc.VISION_OFF_ON_NPU
+
+
+def test_indexing_an_image_says_why_it_is_not_read(tmp_path):
+    sdk = RAGSDK.__new__(RAGSDK)
+    sdk.config = types.SimpleNamespace(vlm_model=None, use_vlm=True)
+    image = tmp_path / "scan.png"
+    image.write_bytes(b"x")
+    with pytest.raises(ImageExtractionError, match="while it runs on the NPU"):
+        sdk._extract_text_from_image(str(image))
+
+
+def test_init_does_not_test_reading_images_on_the_npu(monkeypatch):
+    cmd = InitCommand(profile="gaia", yes=True)
+    monkeypatch.setattr(cmd, "_chat_model", lambda client: NPU)
+    assert cmd._vision_test_model(client=None) is None

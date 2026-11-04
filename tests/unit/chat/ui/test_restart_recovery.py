@@ -15,6 +15,7 @@ which is how a server tells an earlier app in its own process from itself.
 import asyncio
 import os
 import sqlite3
+import sys
 import threading
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -631,6 +632,48 @@ async def test_a_clock_step_does_not_make_a_live_server_look_gone(monkeypatch):
     assert not process_owner.owner_is_gone(f"{parent}:b00t/4242:other")
     # A different process now holding that pid started at another tick.
     assert process_owner.owner_is_gone(f"{parent}:b00t/9999:other")
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or not process_owner._UNSHIFTED,
+    reason="needs psutil 7.1+'s unshifted create_time; Windows is never shifted",
+)
+async def test_a_shifted_create_time_does_not_make_a_live_server_look_gone(
+    monkeypatch,
+):
+    """psutil shifts create_time() on macOS by how far the boot time moved
+    since it loaded, which a sleep does; the owner check must not read it."""
+    parent = os.getppid()
+    monkeypatch.setattr(process_owner, "_LINUX", False, raising=False)
+    recorded = process_owner._started(parent)
+    real = psutil.Process.create_time
+    monkeypatch.setattr(psutil.Process, "create_time", lambda self: real(self) + 3600)
+    assert process_owner._started(parent) == recorded
+    assert not process_owner.owner_is_gone(f"{parent}:{recorded}:other")
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="psutil's macOS boot snapshot")
+async def test_a_server_running_across_a_sleep_leaves_a_newer_ones_turn_alone(
+    tmp_path, monkeypatch
+):
+    from psutil import _psosx
+
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    try:
+        sid = db.create_session()["id"]
+        db.begin_turn(sid, "hello?")
+        # A newer server (this test's parent) is running the turn.
+        parent = os.getppid()
+        live = f"{parent}:{process_owner._started(parent)}:newer"
+        db._conn.execute("UPDATE unfinished_turns SET owner = ?", (live,))
+        db._conn.commit()
+        # This server loaded psutil before the Mac slept, which moved the
+        # boot time; psutil now shifts every create_time() it reads.
+        monkeypatch.setattr(_psosx, "INIT_BOOT_TIME", _psosx.boot_time() - 3600)
+
+        assert recover_interrupted_work(db) == {"turns": 0, "documents": 0}
+    finally:
+        db.close()
 
 
 async def test_a_recovered_turn_shows_failed_and_unread_in_the_chat_list(tmp_path):

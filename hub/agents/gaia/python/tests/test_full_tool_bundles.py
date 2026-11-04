@@ -38,7 +38,7 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
 
 #: Ceiling on bundle size. A pull-in must never be able to exhaust the dynamic
-#: slots on its own (GaiaAgentConfig.dynamic_tools_max=29 minus 16 CORE leaves 13).
+#: slots on its own (GaiaAgentConfig.dynamic_tools_max=31 minus 18 CORE leaves 13).
 MAX_BUNDLE_MEMBERS = 6
 
 

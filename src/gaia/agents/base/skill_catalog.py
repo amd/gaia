@@ -53,8 +53,9 @@ GROUNDING_RULE = (
 
 CATALOG_HEADER = (
     "==== SKILLS ====\n"
-    "Installed skills. Each carries instructions for a kind of work; some unlock "
-    "a CLI (such as gh) that is refused until the skill is loaded. Skills combine: "
+    "Installed skills. Each carries instructions for a kind of work; some "
+    "pre-approve a CLI (such as gh) — until the skill is loaded, each of its "
+    "commands waits for the user's approval. Skills combine: "
     "call load_skill for EVERY skill whose description matches any part of the "
     "request — what it reads (files, data, logs, notes, the web) and what it "
     "produces (a deck, workbook, document, report). When several match, load "

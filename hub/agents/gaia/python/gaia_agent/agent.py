@@ -33,9 +33,10 @@ Skills are discovered from the bundled ``skills/`` directory (highest-precedence
 root) and declared in ``gaia-agent.yaml``. Following the email agent's precedent
 (#2848), **no skill set loads by default** — the manifest ships its
 ``default_skill_set`` commented out until an eval measures the prompt-token cost.
-Skills are opt-in via ``--skill-set``, ``GAIA_SKILL_SET``, or — mid-session — the
-skill-library tools in :mod:`gaia.agents.tools.skill_library_tools`, which let the model
-discover, install, load, and unload skills on demand without a restart. Those
+No sets are declared, so any ``GAIA_SKILL_SET`` stops startup. Task skills load
+mid-session through the skill-library tools in
+:mod:`gaia.agents.tools.skill_library_tools`, which let the model discover,
+install, load, and unload skills on demand without a restart. Those
 tools never load anything on their own, so the out-of-the-box prompt budget is
 unchanged.
 """
@@ -259,7 +260,7 @@ class GaiaAgentConfig(ChatAgentConfig):
     # Overridable via GAIA_DYNAMIC_TOOLS.
     dynamic_tools: bool = False
 
-    # 16 CORE (FULL_CORE_TOOLS) + 13 dynamic slots. The inherited 14 was sized
+    # 18 CORE (FULL_CORE_TOOLS) + 13 dynamic slots. The inherited 14 was sized
     # for the doc profile's 11 CORE, leaving 3 slots — less than one 6-member
     # bundle, so the flagship would truncate a cohesion group mid-pull instead
     # of loading it. Swept offline against nine representative queries with 13
@@ -269,7 +270,7 @@ class GaiaAgentConfig(ChatAgentConfig):
     # per-session workspace CORE additions (e.g. the shell in a repo) don't
     # need a bump here — _resolve_dynamic_tools_max() grows the cap by
     # len(_workspace_core_tools()) automatically.
-    dynamic_tools_max: int = 29
+    dynamic_tools_max: int = 31
 
     # List every installed skill in the system prompt so the model loads one
     # when the work fits, and the user never has to know a skill's name. On for

@@ -109,3 +109,105 @@ describe("backend port selection fails loudly", () => {
     expect(body).toMatch(/\}\)\.catch\(\(err\) => \{[^}]*_fatalHandler\(err\);/);
   });
 });
+
+describe("crash-loop safe mode (issue #938)", () => {
+  test("safe mode is decided from the counter at the threshold", () => {
+    expect(MAIN).toContain("const _crashCount = readCount(() => os.homedir());");
+    expect(MAIN).toContain("const _inSafeMode = _crashCount >= SAFE_MODE_THRESHOLD;");
+  });
+
+  test("the counter is read after the safety net is installed and before the log tee", () => {
+    const net = MAIN.indexOf("installSafetyNet({");
+    const decide = MAIN.indexOf("const _inSafeMode =");
+    const tee = MAIN.indexOf("if (!_inSafeMode) installMainLogTee();");
+    expect(net).toBeGreaterThan(-1);
+    expect(decide).toBeGreaterThan(net);
+    expect(tee).toBeGreaterThan(decide);
+  });
+
+  test("the log tee runs only through the safe-mode guard", () => {
+    expect(MAIN).not.toContain("(function installMainLogTee()");
+    expect(MAIN.match(/installMainLogTee\(\)/g)).toHaveLength(2);
+  });
+
+  test("safe mode prompts first thing on ready and returns before any start-up work", () => {
+    const body = whenReadyBody();
+    const guard = body.indexOf("if (_inSafeMode) {");
+    const ret = body.indexOf("return;", guard);
+    const seed = body.indexOf("agentSeeder.seedBundledAgents()");
+    expect(guard).toBeGreaterThan(-1);
+    expect(body.slice(guard, ret)).toContain("await runSafeModePrompt({");
+    expect(ret).toBeLessThan(seed);
+    expect(ret).toBeLessThan(body.indexOf("cleanupOrphanedBackend()"));
+  });
+});
+
+describe("the window opens before anything slow", () => {
+  const position = (needle) => {
+    const at = whenReadyBody().indexOf(needle);
+    expect(at).toBeGreaterThan(-1);
+    return at;
+  };
+
+  test("the window and tray exist before seeding, orphan cleanup, install or backend", () => {
+    const window = position("createWindow();");
+    expect(window).toBeLessThan(position("initializeServices();"));
+    for (const later of [
+      "agentSeeder.seedBundledAgents()",
+      "await cleanupOrphanedBackend()",
+      "engineInstall.run()",
+      "backendStarting = startBackend();",
+    ]) {
+      expect(position("initializeServices();")).toBeLessThan(position(later));
+    }
+  });
+
+  test("an install puts its screen up before the slow steps, and only then runs", () => {
+    const decided = position("showingInstallScreen = !backendInstaller.isBackendCurrent();");
+    const screen = position("if (showingInstallScreen) await loadApp();");
+    expect(decided).toBeLessThan(screen);
+    expect(screen).toBeLessThan(position("agentSeeder.seedBundledAgents()"));
+    expect(position("await cleanupOrphanedBackend()")).toBeLessThan(position("engineInstall.run()"));
+  });
+
+  test("a current backend loads the app once, with no install page first", () => {
+    expect(position("if (!showingInstallScreen) await loadApp();")).toBeGreaterThan(
+      position("backendProcess = await backendStarting;")
+    );
+  });
+
+  test("the install screen waits for the backend to answer, then loads the app", () => {
+    const answered = position("backendReady = await waitForBackend(");
+    const app = position("showingInstallScreen = false;");
+    expect(answered).toBeLessThan(app);
+    expect(app).toBeLessThan(whenReadyBody().indexOf("await loadApp();", app));
+  });
+
+  test("the app page carries the real port once the backend has one", () => {
+    const body = functionBody("loadApp");
+    expect(body).toContain(
+      "showingInstallScreen ? INSTALL_SCREEN_QUERY : buildIndexQuery(backendPort)"
+    );
+    expect(position("trayManager.setBackendPort(backendPort)")).toBeGreaterThan(
+      position("backendProcess = await backendStarting;")
+    );
+  });
+
+  test("a reopened window on the macOS dock is wired before a long install can need it", () => {
+    expect(position('app.on("activate"')).toBeLessThan(position("engineInstall.run()"));
+  });
+
+  test("the separate progress window and its native failure boxes are gone", () => {
+    expect(MAIN).not.toMatch(/createProgressWindow|showFailureDialog|isBootstrapping/);
+  });
+
+  test("a quit releases an install waiting on Try again", () => {
+    expect(functionBody("cleanup")).toContain("engineInstall.stop()");
+  });
+
+  test("a failed install is shown even after a start in the tray", () => {
+    const body = functionBody("showInstallFailure");
+    expect(body).toContain("win.show()");
+    expect(body).toContain("_fatalHandler(err)");
+  });
+});

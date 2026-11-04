@@ -23,6 +23,34 @@ const DEFAULT_MAX_REFERENCED_BYTES = 5 * 1024 ** 3; // 5 GiB
 /** Artifact filename: a single safe path segment (no traversal, no separators). */
 export const ARTIFACT_FILENAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
 
+/**
+ * Fail unless `filename` is a safe single segment that no per-version doc of
+ * the lane is stored under (`reserved`) — a colliding doc write would replace
+ * the artifact after its SHA-256 was recorded.
+ */
+export function assertArtifactFilename(
+  filename: string,
+  reserved: ReadonlySet<string>,
+  example: string
+): void {
+  if (!ARTIFACT_FILENAME_RE.test(filename)) {
+    throw new HttpError(
+      400,
+      "invalid_artifact",
+      `Artifact filename ${JSON.stringify(filename)} is invalid. Use a single path ` +
+        `segment of letters, digits, '.', '_', '+', '-' (e.g. '${example}').`
+    );
+  }
+  if (reserved.has(filename)) {
+    throw new HttpError(
+      400,
+      "invalid_artifact",
+      `Artifact filename ${JSON.stringify(filename)} is reserved for a per-version ` +
+        `document (${[...reserved].sort().join(", ")}). Rename the artifact (e.g. '${example}').`
+    );
+  }
+}
+
 /** Lowercase hex SHA-256 of the given bytes, computed in the Worker. */
 export async function sha256Hex(bytes: ArrayBuffer | Uint8Array): Promise<string> {
   const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);

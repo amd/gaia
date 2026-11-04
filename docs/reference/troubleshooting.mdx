@@ -458,6 +458,10 @@ in, and about 11 GB free when GAIA starts gets it the full window.
 
 What GAIA does on a small PC:
 
+- **Setup picks a model that fits the memory free now.** Before it downloads
+  the larger default (Qwen3.6), `gaia init` and the Agent UI's setup screen
+  check free memory, not just the PC's total. When it won't fit, they pick
+  Gemma-4-E4B and say how much Qwen3.6 needs and how much is free.
 - **The context window shrinks to fit.** Gemma-4-E4B loads with a 65,536-token
   window when there is room, and otherwise steps down in 8,192-token steps to no
   less than 32,768. The log says so. Restart GAIA after freeing memory to get the
@@ -672,7 +676,7 @@ error. To run the chat model in the cloud instead, see
   <Accordion title="GPU stuck at 100% on ROCm with two models loaded" icon="microchip">
     With llama.cpp's ROCm backend, the chat model and the embedding model both resident on the GPU can hold it at 100% even while idle. It is an amdgpu kernel driver issue, reported fixed in Linux kernel 7.4.
 
-    GAIA avoids it by loading the embedding model on the CPU whenever llama.cpp uses ROCm, either as Lemonade's default backend or as the backend you chose for chat models in **Settings → Advanced → Model server**. That panel then reads:
+    GAIA avoids it by loading the embedding model on the CPU whenever llama.cpp uses ROCm, either as Lemonade's default backend or as one saved before GAIA offered only Vulkan in **Settings → Advanced → Model server**. That panel then reads:
 
     ```
     Embedding model runs on the CPU with ROCm to avoid a known GPU driver issue.
@@ -700,7 +704,7 @@ error. To run the chat model in the cloud instead, see
     Symptoms like `request exceeds the available context size`, spurious `INFRA_ERROR`, or `llama-server failed to start` usually mean two evals raced the same Lemonade server.
     - **Rule**: run at most one `gaia eval agent` process at a time — never in parallel (`&`). Chain runs serially instead.
     - **Backend**: the Agent UI backend must be running (`python -m gaia.ui.server --port 4200`).
-    - **Judge access**: if the run errors with `ANTHROPIC_API_KEY not found`, export the key for the judge/simulator.
+    - **Judge access**: the judge uses your Claude Code login (`claude`, then `/login`) first, then `ANTHROPIC_API_KEY` from the environment, then from a `.env` file, and prints which one. If it errors with `No Claude credential for the eval`, log in to the `claude` CLI or export the key.
   </Accordion>
 
   <Accordion title="Dependency compatibility issues" icon="cubes">
@@ -723,6 +727,25 @@ error. To run the chat model in the cloud instead, see
 ## Electron App Issues
 
 <AccordionGroup>
+  <Accordion title="GAIA says it keeps crashing" icon="triangle-exclamation">
+    After GAIA crashes three times in a row without you reaching its window,
+    the next launch starts in safe mode: it shows a "GAIA has crashed N times
+    in a row" dialog before doing anything else, and skips copying console
+    output to `~/.gaia/electron-main.log` on that launch.
+
+    - **Try again** clears the crash count
+      (`~/.gaia/electron-startup-failures.json`) and starts GAIA normally. It
+      changes nothing else, so if the cause remains, GAIA asks again after
+      three more crashes.
+    - **Open log folder** opens `~/.gaia/` so you can attach the logs to a
+      bug report, then asks again.
+    - **Quit** closes GAIA and keeps the count, so the next launch asks again.
+
+    The count also resets the first time a GAIA window gets focus. Only errors
+    GAIA catches are counted: a crash of the app process itself does not
+    reach safe mode.
+  </Accordion>
+
   <Accordion title="Cannot find module 'electron'" icon="window-restore">
     **Cause**: Import path is incorrect
 

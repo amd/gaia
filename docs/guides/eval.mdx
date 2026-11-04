@@ -32,12 +32,18 @@ Unlike unit tests that check individual functions, Agent Eval tests the **full s
     ```
   </Step>
 
-  <Step title="Set your Anthropic API key">
-    The benchmark uses Claude as the judge model:
+  <Step title="Authenticate Claude">
+    The benchmark uses Claude to drive and judge each scenario. A Claude Code login
+    (`claude`, then `/login`) is enough, and it wins over any API key. Without one,
+    export an API key in the shell:
 
     ```bash
     export ANTHROPIC_API_KEY=sk-ant-...
     ```
+
+    A key in a `.env` file is used only when there is no login and no exported key.
+    The run prints which credential it uses, for example
+    `Claude eval driver: using the Claude Code CLI login`.
   </Step>
 
   <Step title="Install Claude Code CLI">
@@ -277,7 +283,7 @@ Fix mode runs in a loop:
 4. Compare results -- stop when `--target-pass-rate` is reached
 
 <Warning>
-  Fix mode patches `src/gaia/` source files directly. Always review diffs before committing. Run `python util/lint.py --all --fix` after fix iterations.
+  Fix mode patches `src/gaia/` source files directly, so it refuses to start while tracked files have uncommitted changes — commit your work or run it from a separate worktree. A fixer iteration that times out or fails stops the loop; check `git diff` for partial edits. Always review diffs before committing. Run `python util/lint.py --all --fix` after fix iterations.
 </Warning>
 
 ### Capturing Real Sessions
@@ -330,6 +336,18 @@ gaia eval agent --output-format markdown
 <Tip>
   Start with `--audit-only` (free) to understand expected failures, then run individual categories to control costs during development.
 </Tip>
+
+### Which Claude account pays
+
+Every eval that calls Claude (`gaia eval agent`, `gaia eval tasks`, email drafting, action items, briefings, `gaia eval sessions`, retrieval) and PDF corpus generation uses the first of these, and prints which one, never any part of the key or token:
+
+1. **Your Claude Code subscription**, through `claude -p`: `CLAUDE_CODE_OAUTH_TOKEN`, or the CLI's own login (checked with `claude auth status`). Where no interactive login is possible (CI), set `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. A subscription token is not an API key, so never export it as `ANTHROPIC_API_KEY`.
+2. **`ANTHROPIC_API_KEY` from the environment:** the Messages API, billed per token to that console account.
+3. **`ANTHROPIC_API_KEY` from a `.env` file**, the same way.
+
+With none of them, the run stops with an error naming all three. It never falls back to a weaker scorer.
+
+On the subscription path, token counts and `total_cost_usd` come from the CLI's JSON output. The cost is the list price of those tokens, not money spent. Token counting (`count_tokens`) and inline PDF analysis exist only on the API path.
 
 ---
 

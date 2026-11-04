@@ -98,6 +98,7 @@ const TOOL_ICON: Record<string, LucideIcon> = {
     remember: Brain,
     update_memory: Brain,
     forget: Brain,
+    forget_everything: Brain,
     schedule_follow_up: Clock,
     list_follow_ups: Clock,
     cancel_follow_up: Clock,

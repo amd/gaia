@@ -155,7 +155,7 @@ class TestAgentUiRouter:
     def test_target_offers_a_switch_until_someone_chooses(self, client):
         body = client.get("/api/lemonade/target", headers=self.H).json()
         assert body["mode"] == "gaia" and body["offer"] is True
-        assert "embedding model" in body["what_gaia_does"]
+        assert "leaves your server's settings" in body["what_gaia_does"]
         _save(lemonade_mode="gaia")
         assert (
             client.get("/api/lemonade/target", headers=self.H).json()["offer"] is False
@@ -485,6 +485,35 @@ class TestInitReviewRegressions:
         monkeypatch.setattr(cmd, "_hand_server_to_daemon", lambda: None)
         assert cmd._start_embedded_server() is starts
         assert GaiaConfig.load().lemonade_mode == ("gaia" if starts else "external")
+
+    @pytest.mark.parametrize("download_works", [True, False])
+    def test_a_new_version_is_downloaded_before_the_old_server_stops(
+        self, monkeypatch, download_works
+    ):
+        from gaia.llm import lemonade_embedded as emb
+
+        _save(lemonade_mode="external", lemonade_base_url=USER_URL)
+        cmd = self._cmd(yes=True, gaia_lemonade=True)
+        assert cmd._choose_lemonade() is True
+        embedded = mock.Mock()
+        embedded.status.return_value = mock.Mock(
+            unresponsive_pid=None, running=True, version="old"
+        )
+        embedded.version = "new"
+        embedded.is_installed.return_value = False
+        embedded.start.return_value = mock.Mock(version="new", port=1)
+        if not download_works:
+            embedded.install.side_effect = emb.EmbeddedLemonadeError("offline")
+        monkeypatch.setattr(emb, "EmbeddedLemonade", lambda **k: embedded)
+        monkeypatch.setattr(cmd, "_hand_server_to_daemon", lambda: None)
+
+        assert cmd._start_embedded_server() is download_works
+
+        calls = [c[0] for c in embedded.method_calls]
+        if download_works:
+            assert calls.index("install") < calls.index("stop")
+        else:
+            assert "stop" not in calls
 
     def test_force_models_never_deletes_from_the_users_server(self, monkeypatch):
         _save(lemonade_mode="external", lemonade_base_url=USER_URL)

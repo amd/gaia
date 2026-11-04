@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
+from gaia.eval.claude_credential import resolve_claude_credential
 from gaia.eval.claude_refusal import (
     CREDENTIAL_CODES,
     QUOTA_CODES,
@@ -89,11 +90,17 @@ def claude_account() -> str:
     """Which credential the driver used, without revealing it."""
     label = os.environ.get(ACCOUNT_LABEL_VAR, "").strip()
     suffix = f" (the {label} account)" if label else ""
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return f"the API key in ANTHROPIC_API_KEY{suffix}"
-    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
-        return f"the Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN{suffix}"
-    return f"the account the `claude` CLI is logged in to{suffix}"
+    try:
+        return resolve_claude_credential().label + suffix
+    except (ValueError, RuntimeError):
+        return "no usable Claude credential" + suffix
+
+
+def _api_key_in_use() -> bool:
+    try:
+        return not resolve_claude_credential().is_subscription
+    except (ValueError, RuntimeError):
+        return False
 
 
 def switch_to_backup_account(outage: dict) -> Optional[dict]:
@@ -101,12 +108,12 @@ def switch_to_backup_account(outage: dict) -> Optional[dict]:
 
     Called only for a quota outage. Returns what was switched (labels and the
     exhausted account's reset time, never a token), or ``None`` when there is
-    no backup: no backup token, it is the token already in use, or an API key
-    is set, which the CLI prefers over any token.
+    no backup: no backup token, it is the token already in use, or the run is
+    on an API key rather than the subscription.
     """
     backup = os.environ.get(BACKUP_TOKEN_VAR, "").strip()
     active = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
-    if not backup or backup == active or os.environ.get("ANTHROPIC_API_KEY"):
+    if not backup or backup == active or _api_key_in_use():
         return None
     was = os.environ.get(ACCOUNT_LABEL_VAR, "").strip() or "first"
     now = _OTHER_LABEL.get(was, "backup")

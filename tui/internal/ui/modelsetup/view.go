@@ -5,6 +5,7 @@ package modelsetup
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -34,6 +35,7 @@ var (
 	infoStyle    = lipgloss.NewStyle().Foreground(theme.Info)
 	accentStyle  = lipgloss.NewStyle().Foreground(theme.Accent)
 	focusStyle   = lipgloss.NewStyle().Bold(true).Foreground(theme.Selected)
+	jobStyle     = lipgloss.NewStyle().Bold(true).Foreground(theme.Text)
 	trackStyle   = lipgloss.NewStyle().Foreground(theme.Divider)
 )
 
@@ -42,7 +44,7 @@ const (
 	minW    = 40
 	minH    = 10
 	nameW   = 22
-	purpW   = 12
+	labelW  = 8
 	sizeW   = 9
 )
 
@@ -99,6 +101,12 @@ func (m Model) View() string {
 	case scrDownload:
 		title = titleDownload
 		body, foot = m.downloadView(w)
+	case scrContents:
+		title = titleContents
+		body, foot = m.contentsView(w)
+	case scrTest:
+		title = titleTest
+		body, foot = m.testView(w)
 	case scrReady:
 		title = titleReady
 		body, foot = m.readyView(w)
@@ -240,7 +248,13 @@ func deref(p *float64) float64 {
 func (m Model) shortPurpose() bool { return m.width > 0 && m.width < 60 }
 
 func (m Model) modelsView(w, h int) (body, foot []string) {
-	var top []string
+	top, bottom, foot, budget := m.modelsLayout(w, h)
+	body = append(top, m.listLines(w, budget)...)
+	return append(body, bottom...), foot
+}
+
+// modelsLayout is what surrounds the list, and the lines left for it.
+func (m Model) modelsLayout(w, h int) (top, bottom, foot []string, budget int) {
 	if m.resume && m.opts.Mode == ModeFirstRun {
 		top = append(top, pad(warnStyle.Render("[!] "+resumeBanner+" ")+dimStyle.Render("enter resume")))
 	}
@@ -250,17 +264,13 @@ func (m Model) modelsView(w, h int) (body, foot []string) {
 		top = append(top, indentAll(wrapStyled(dimStyle, introFor(m.opts.Mode == ModeModels), w-2*indentW), indentW)...)
 	}
 
-	bottom := m.modelsBottom(w)
-	keys := m.modelsKeys()
-	foot = m.footer(w, keys)
-
-	budget := h - 4 - len(foot) + 1 - len(top) - len(bottom)
+	bottom = m.modelsBottom(w)
+	foot = m.footer(w, m.modelsKeys())
+	budget = h - 4 - len(foot) + 1 - len(top) - len(bottom)
 	if budget < 1 {
 		budget = 1
 	}
-	list := m.listLines(w, budget)
-	body = append(top, list...)
-	return append(body, bottom...), foot
+	return top, bottom, foot, budget
 }
 
 func (m Model) modelsKeys() [][2]string {
@@ -272,10 +282,14 @@ func (m Model) modelsKeys() [][2]string {
 	if m.installedCount() > 0 {
 		keys = append(keys, [2]string{"l", "installed"})
 	}
-	if !m.sel.cloud {
+	if !m.sel.cloud && !m.radio() {
 		keys = append(keys, [2]string{"c", "default"})
 	}
-	keys = append(keys, [2]string{"space", "tick"})
+	if m.radio() {
+		keys = append(keys, [2]string{"v", "everything"}, [2]string{"space", "choose"})
+	} else {
+		keys = append(keys, [2]string{"space", "tick"})
+	}
 	if m.opts.Mode == ModeModels {
 		if r, ok := m.focusedRow(); ok && r.downloaded {
 			keys = append(keys, [2]string{"x", "remove"})
@@ -283,6 +297,9 @@ func (m Model) modelsKeys() [][2]string {
 		keys = append(keys, [2]string{"a", "apply"})
 	} else {
 		label := "continue"
+		if len(m.sel.pending()) == 0 {
+			label = "test and start"
+		}
 		if m.sel.shortfall(m.freeGB(), m.drive()) != "" {
 			label = "continue anyway"
 		}
@@ -296,19 +313,63 @@ func (m Model) modelsKeys() [][2]string {
 	return append(keys, [2]string{"esc", "back"})
 }
 
-// listLines is the checklist with the focused row's note under it, scrolled
-// so the cursor is on screen. The note shrinks before any row is hidden.
-func (m Model) listLines(w, budget int) []string {
-	items := m.items()
-	var rows []string
-	for i, it := range items {
-		rows = append(rows, m.itemLine(i, it, w))
+// listRow is one line of the checklist; item is -1 on a heading.
+type listRow struct {
+	text string
+	item int
+}
+
+// listRows are the checklist's lines: each job's heading above its models.
+func (m Model) listRows(w int) []listRow {
+	var out []listRow
+	job := ""
+	for i, it := range m.items() {
+		if it.job != job {
+			job = it.job
+			for _, l := range m.jobHeading(job, w) {
+				out = append(out, listRow{text: l, item: -1})
+			}
+		}
+		out = append(out, listRow{text: m.itemLine(i, it, w), item: i})
 	}
-	note := m.noteLines(w)
-	if len(rows) == 0 {
-		return nil
+	return out
+}
+
+func (m Model) jobHeading(job string, w int) []string {
+	width := w - 2*indentW
+	var out []string
+	if m.height >= 30 && job != jobChat {
+		out = append(out, "")
 	}
-	// The note sits under the focused row; it gives way to rows first.
+	switch job {
+	case jobChat:
+		out = append(out, pad(jobStyle.Render(jobChatTitle)))
+	case jobVision:
+		out = append(out, pad(jobStyle.Render(jobVisionTitle)))
+		if m.radio() {
+			chat := "This model"
+			if r, ok := m.sel.find(m.sel.chat); ok {
+				chat = r.name
+			}
+			text := visionNeeded(chat)
+			if m.builtInVision() {
+				text = visionBuiltIn(chat)
+			}
+			out = append(out, pad(dimStyle.Render(truncate(text, width))))
+		}
+	case jobDocs:
+		out = append(out, pad(jobStyle.Render(jobDocsTitle)))
+	case jobExtras:
+		out = append(out, pad(jobStyle.Render(jobExtrasTitle)+dimStyle.Render(" ("+extrasOff+")")))
+	}
+	return out
+}
+
+// listWindow picks the lines on screen: the focused row and its note in view,
+// with the note giving way to rows first.
+func (m Model) listWindow(w, budget int) (rows []listRow, note []string, start, end, at int) {
+	rows = m.listRows(w)
+	note = m.noteLines(w)
 	room := budget - len(rows)
 	if room < 0 {
 		room = 0
@@ -320,23 +381,33 @@ func (m Model) listLines(w, budget int) []string {
 			note = nil
 		}
 	}
-	// Scroll: keep the focused row and its note in view.
 	visible := budget - len(note)
 	if visible < 1 {
 		visible = 1
 	}
-	start := 0
-	if m.focus >= visible {
-		start = m.focus - visible + 1
+	for i, r := range rows {
+		if r.item == m.focus {
+			at = i
+		}
 	}
-	end := start + visible
+	if at >= visible {
+		start = at - visible + 1
+	}
+	end = start + visible
 	if end > len(rows) {
 		end = len(rows)
 	}
+	return rows, note, start, end, at
+}
+
+// listLines is the checklist with the focused row's note under it, scrolled
+// so the cursor is on screen. The note shrinks before any row is hidden.
+func (m Model) listLines(w, budget int) []string {
+	rows, note, start, end, at := m.listWindow(w, budget)
 	var out []string
 	for i := start; i < end; i++ {
-		out = append(out, rows[i])
-		if i == m.focus {
+		out = append(out, rows[i].text)
+		if i == at {
 			out = append(out, note...)
 		}
 	}
@@ -345,34 +416,13 @@ func (m Model) listLines(w, budget int) []string {
 
 // scrollHints are the ^/v marks on the dividers when rows are off screen.
 func (m Model) scrollHints() (up, down string) {
-	items := m.items()
-	_, foot := []string{}, m.footer(m.width, m.modelsKeys())
-	budget := m.height - 4 - len(foot) + 1 - len(m.modelsBottom(max(m.width, minW)))
-	if m.resume {
-		budget--
-	}
-	if m.sel.cloud || m.height >= 30 {
-		budget--
-	}
-	note := len(m.noteLines(max(m.width, minW)))
-	if budget-len(items) < note {
-		note = max(budget-len(items), 0)
-	}
-	visible := budget - note
-	if visible < 1 {
-		visible = 1
-	}
-	if len(items) <= visible {
-		return "", ""
-	}
-	start := 0
-	if m.focus >= visible {
-		start = m.focus - visible + 1
-	}
+	w := max(m.width, minW)
+	_, _, _, budget := m.modelsLayout(w, m.height)
+	rows, _, start, end, _ := m.listWindow(w, budget)
 	if start > 0 {
 		up = "^ more"
 	}
-	if start+visible < len(items) {
+	if end < len(rows) {
 		down = "v more"
 	}
 	return up, down
@@ -391,36 +441,74 @@ func (m Model) itemLine(i int, it item, w int) string {
 		}
 		return pad(cursor + dimStyle.Render("[ ] "+label))
 	}
+	if it.action != "" {
+		return pad(cursor + dimStyle.Render(m.actionText(it)))
+	}
 	r := it.row
-	short := m.shortPurpose()
-	nw, pw := nameW, purpW
-	if short {
-		pw = 4
-		nw = 18
-	}
-	tick := "[ ]"
-	tickStyle := dimStyle
-	switch {
-	case r.installed && sameID(r.id, m.sel.chat):
-		tick, tickStyle = "(•)", okStyle
-	case r.installed:
-		tick = "( )"
-	case m.sel.ticked[r.id]:
-		tick, tickStyle = "[x]", textStyle
-	}
+	tick, tickStyle := m.tickOf(it)
 	nameStyle := textStyle
 	if focused {
 		nameStyle = focusStyle
 	}
+	name := r.name
+	if r.optional != "" {
+		name = extraLabel(r.optional)
+	}
 	size := m.sizeText(r)
-	line := cursor + tickStyle.Render(tick) + " " +
-		nameStyle.Render(fmt.Sprintf("%-*s", nw, truncate(r.name, nw))) + " " +
-		dimStyle.Render(fmt.Sprintf("%-*s", pw, truncate(r.purposeText(short, sameID(r.id, m.sel.chat)), pw))) + " " +
-		dimStyle.Render(fmt.Sprintf("%-*s", m.sizeCol(), truncate(size, m.sizeCol())))
-	if marks := m.marks(r, w-2*indentW-lipgloss.Width(line)-1); marks != "" {
+	line := cursor + tickStyle.Render(tick) + " "
+	if m.shortPurpose() {
+		line += nameStyle.Render(fmt.Sprintf("%-*s", 18, truncate(name, 18))) + " "
+	} else {
+		line += nameStyle.Render(fmt.Sprintf("%-*s", nameW, truncate(name, nameW))) + " " +
+			dimStyle.Render(fmt.Sprintf("%-*s", labelW, r.supportText())) + " "
+	}
+	line += dimStyle.Render(fmt.Sprintf("%-*s", m.sizeCol(), truncate(size, m.sizeCol())))
+	if marks := m.marks(it, w-2*indentW-lipgloss.Width(line)-1); marks != "" {
 		line += " " + marks
 	}
 	return pad(line)
+}
+
+// tickOf is a row's box: setup picks one model for chat and one for images,
+// so those read as radio buttons; everything else ticks.
+func (m Model) tickOf(it item) (string, lipgloss.Style) {
+	r := it.row
+	radio := m.radio() && (it.job == jobChat || it.job == jobVision)
+	picked := sameID(r.id, m.sel.chat)
+	if it.job == jobVision {
+		picked = sameID(r.id, m.sel.resolveVision())
+	}
+	switch {
+	case (radio || r.installed) && picked:
+		return "(•)", okStyle
+	case radio || r.installed:
+		return "( )", dimStyle
+	case m.sel.ticked[r.id]:
+		return "[x]", textStyle
+	}
+	return "[ ]", dimStyle
+}
+
+// actionText is a vision line that isn't a model.
+func (m Model) actionText(it item) string {
+	if it.action == actionOtherVision {
+		if m.showVision {
+			return hideVision
+		}
+		return otherVision
+	}
+	if m.builtInVision() {
+		mark := "( )"
+		if sameID(m.sel.resolveVision(), m.sel.chat) {
+			mark = "(•)"
+		}
+		return mark + " " + useChatForVision
+	}
+	mark := "( )"
+	if m.sel.resolveVision() == "" {
+		mark = "(•)"
+	}
+	return mark + " " + skipVision
 }
 
 // sizeCol is the size column's width: wide enough for "12.3 GB left" when a
@@ -450,21 +538,50 @@ func (m Model) sizeText(r rowEntry) string {
 	return statusDownload(*r.leftGB)
 }
 
+// recommendedFor is the backend's recommendation for the job a row is under,
+// as the Agent UI reads it: one chat model, and GAIA's own vision model only
+// when the chat model can't read images itself.
+func (m Model) recommendedFor(it item) bool {
+	r := it.row
+	switch it.job {
+	case jobChat:
+		return sameID(r.id, m.sel.recommended)
+	case jobVision:
+		return !m.builtInVision() && r.gaiaModel && r.support == setupapi.SupportVerified
+	}
+	return r.recommended
+}
+
+// caveat is the warning for a model left out, when a job goes without it.
+func (m Model) caveat(it item) string {
+	r := it.row
+	if r.installed || m.sel.ticked[r.id] {
+		return ""
+	}
+	if r.vision && (it.job != jobVision || m.sel.resolveVision() != "") {
+		return ""
+	}
+	return skippedCaveat(r)
+}
+
 // marks are the row's flags, in words: a warning, an unknown fit, the
 // recommendation, the NPU chip. When they don't fit in avail columns the
 // recommendation shortens to its "*", so the warning words survive.
-func (m Model) marks(r rowEntry, avail int) string {
+func (m Model) marks(it item, avail int) string {
+	r := it.row
 	var parts []string
 	switch {
+	case r.optional == setupapi.RoleImageCreation && m.imagesOff():
+		parts = append(parts, warnStyle.Render("[!] "+notWithThisChat))
 	case r.fits != nil && !*r.fits:
 		parts = append(parts, warnStyle.Render("[!] won't fit"))
 	case r.fits == nil && !r.downloaded:
 		parts = append(parts, warnStyle.Render("[?] "+fitUnknownChip))
-	case !r.installed && !m.sel.ticked[r.id] && skippedCaveat(r) != "":
+	case m.caveat(it) != "":
 		parts = append(parts, warnStyle.Render("[!]"))
 	}
 	rec := -1
-	if r.recommended && (r.fits != nil || r.planned) && !r.installed {
+	if m.recommendedFor(it) && (r.fits != nil || r.planned) && !r.installed {
 		rec = len(parts)
 		parts = append(parts, accentStyle.Render(markRecommended))
 	}
@@ -482,10 +599,12 @@ func (m Model) marks(r rowEntry, avail int) string {
 // noteLines explain the focused row: what it is for, whether it fits, and
 // what is lost without it.
 func (m Model) noteLines(w int) []string {
-	r, ok := m.focusedRow()
-	if !ok {
+	items := m.items()
+	if m.focus < 0 || m.focus >= len(items) || items[m.focus].group {
 		return nil
 	}
+	it := items[m.focus]
+	r := it.row
 	indent := indentW + 6
 	width := w - indent - indentW
 	var out []string
@@ -494,11 +613,29 @@ func (m Model) noteLines(w int) []string {
 			out = append(out, strings.Repeat(" ", indent)+s.Render(l))
 		}
 	}
-	line := purposeLine(r)
+	if it.action != "" {
+		if it.action == actionNoVision && !m.builtInVision() {
+			add(warnStyle, skipVisionNote)
+		}
+		return out
+	}
+	line := purposeLine(r, it.job)
+	if m.shortPurpose() && r.supportText() != "" {
+		line = r.supportText() + ". " + line
+	}
 	if r.fits != nil && *r.fits && r.needGB != nil && r.haveGB != nil {
 		line += " " + fitLine(*r.needGB, *r.haveGB)
 	}
 	add(dimStyle, line)
+	if it.job == jobChat && r.support == setupapi.SupportUntested {
+		add(dimStyle, untestedNote)
+	}
+	if r.optional != "" {
+		add(dimStyle, extrasNote)
+	}
+	if name, off := m.sel.imagesBlocked(); off && r.optional == setupapi.RoleImageCreation {
+		add(warnStyle, "[!] "+imagesBlockedLine(name))
+	}
 	if r.partial && r.leftGB != nil {
 		add(dimStyle, "Partly downloaded, "+formatGB(*r.leftGB)+" left.")
 	}
@@ -508,10 +645,8 @@ func (m Model) noteLines(w int) []string {
 	case r.fits == nil && !r.downloaded:
 		add(warnStyle, "[?] "+fitUnknownLine)
 	}
-	if !r.installed && !m.sel.ticked[r.id] {
-		if c := skippedCaveat(r); c != "" {
-			add(warnStyle, c)
-		}
+	if c := m.caveat(it); c != "" {
+		add(warnStyle, c)
 	}
 	if r.installed && r.chatable && !sameID(r.id, m.sel.chat) {
 		add(dimStyle, "Already on this PC. Press space to chat with it.")
@@ -520,32 +655,40 @@ func (m Model) noteLines(w int) []string {
 }
 
 // modelsBottom is the default chat model, the keep-trying toggle, the disk
-// totals, and any warning about the whole selection.
+// totals, what else setup fetches, and any warning about the whole selection.
 func (m Model) modelsBottom(w int) []string {
 	out := []string{""}
 	width := w - 2*indentW
 	if !m.sel.cloud {
 		chat := "none"
-		if r, ok := m.sel.find(m.sel.chat); ok {
+		r, ok := m.sel.find(m.sel.chat)
+		if ok {
 			chat = r.name
 			if r.npu {
 				chat += " (" + markNPU + ")"
 			}
 		}
-		out = append(out, pad(dimStyle.Render("Default chat: ")+textStyle.Render(chat)+dimStyle.Render("   (c to change)")))
+		hint := "   (c to change)"
+		if m.radio() {
+			hint = ""
+		}
+		out = append(out, pad(dimStyle.Render("Default chat: ")+textStyle.Render(chat)+dimStyle.Render(hint)))
+		if ok && r.support == setupapi.SupportUntested {
+			out = append(out, indentAll(wrapStyled(warnStyle, "[!] "+untestedPicked, width), indentW)...)
+		}
 	}
 	if m.opts.Mode == ModeFirstRun {
 		out = append(out, pad(m.keepTryLine()))
 	}
 	out = append(out, pad(dimStyle.Render(truncate(diskSummary(m.sel.downloadGB(), m.freeGB(), m.drive()), width))))
+	if names := m.componentsToFetch(); len(names) > 0 {
+		out = append(out, pad(dimStyle.Render(truncate(alsoSetUp(names), width))))
+	}
 	if msg := m.sel.shortfall(m.freeGB(), m.drive()); msg != "" {
 		out = append(out, indentAll(wrapStyled(warnStyle, "[!] "+msg, width), indentW)...)
 	}
 	if m.sel.blocked() {
 		out = append(out, indentAll(wrapStyled(warnStyle, "[!] "+zeroChat, width), indentW)...)
-	}
-	if m.shortPurpose() {
-		out = append(out, pad(dimStyle.Render("C chat · V vision · D documents")))
 	}
 	if m.busy != "" {
 		out = append(out, pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
@@ -553,6 +696,85 @@ func (m Model) modelsBottom(w int) []string {
 		out = append(out, indentAll(wrapStyled(warnStyle, m.note, width), indentW)...)
 	}
 	return out
+}
+
+// components are what setup fetches besides the models, for the screens of
+// setup's own run; /models fetches models alone.
+func (m Model) components() []setupapi.Component {
+	if m.opts.Mode != ModeFirstRun || m.plan == nil {
+		return nil
+	}
+	return m.plan.Components
+}
+
+// componentsToFetch names the components not on this PC yet.
+func (m Model) componentsToFetch() []string {
+	var out []string
+	for _, c := range m.components() {
+		if !c.IsInstalled() {
+			out = append(out, componentName(c.ID))
+		}
+	}
+	return out
+}
+
+func contentSize(gb *float64) string {
+	if gb == nil {
+		return contentsSizeLater
+	}
+	return formatGB(*gb)
+}
+
+// contentLine is one thing coming to this PC: state, size and source on a row.
+func contentLine(marker, name string, st lipgloss.Style, w int, facts ...string) string {
+	const col = 20
+	var parts []string
+	for _, f := range facts {
+		if f != "" {
+			parts = append(parts, f)
+		}
+	}
+	room := w - 2*indentW - 5 - col - 1
+	return pad(st.Render(fmt.Sprintf("%-4s", marker)) + " " + textStyle.Render(fmt.Sprintf("%-*s", col, truncate(name, col))) + " " +
+		dimStyle.Render(truncate(strings.Join(parts, " · "), room)))
+}
+
+// componentLine shows how far a component is. A component reports only its
+// state, so it gets words, never an invented percentage.
+func (m Model) componentLine(c setupapi.Component, w int) string {
+	marker, st, state := "[ ]", dimStyle, contentsWaiting
+	run := ""
+	if m.status != nil {
+		run = m.status.Components[c.ID]
+	}
+	switch {
+	case run == setupapi.ComponentActive:
+		marker, st, state = "[..]", infoStyle, contentsWorking
+	case run == setupapi.ComponentDone:
+		marker, st, state = "[ok]", okStyle, contentsReady
+	case run == setupapi.ComponentFailed:
+		marker, st, state = "[!]", failStyle, contentsFailed
+	case c.IsInstalled():
+		marker, st, state = "[ok]", okStyle, contentsHere
+	}
+	return contentLine(marker, componentName(c.ID), st, w, state, contentSize(c.SizeGB), contentsFrom+c.Source)
+}
+
+// contentsView is everything coming to this PC, before anything starts.
+func (m Model) contentsView(w int) (body, foot []string) {
+	body = indentAll(wrapStyled(dimStyle, contentsLede, w-2*indentW), indentW)
+	for _, c := range m.components() {
+		body = append(body, m.componentLine(c, w))
+	}
+	for _, r := range m.sel.pending() {
+		from := ""
+		if r.source != "" {
+			from = contentsFrom + r.source
+		}
+		body = append(body, contentLine("[ ]", r.name, dimStyle, w, contentsWaiting, contentSize(r.leftGB), from))
+	}
+	body = append(body, "", pad(dimStyle.Render(truncate(diskSummary(m.sel.downloadGB(), m.freeGB(), m.drive()), w-2*indentW))))
+	return body, m.footer(w, [][2]string{{"enter", "continue"}, {"esc", "back"}})
 }
 
 func (m Model) keepTryLine() string {
@@ -827,6 +1049,7 @@ func (m Model) downloadView(w int) (body, foot []string) {
 		// A finished download re-reads the plan, which then has nothing left.
 		body = append(body, m.overallLine(w, now))
 	}
+	comps := len(body)
 	if m.lost != nil {
 		body = append(body, indentAll(wrapStyled(failStyle, "[!] "+lostContact, width), indentW)...)
 	}
@@ -848,6 +1071,11 @@ func (m Model) downloadView(w int) (body, foot []string) {
 			leaving = leavingKeeps
 		}
 		body = append(body, pad(dimStyle.Render(truncate(leaving, width))))
+	}
+	// Under the models, whose rows the user acts on; a window too short for
+	// the list keeps only the rows.
+	if lines := m.componentLines(w, m.height-4-len(body)); len(lines) > 0 {
+		body = append(body[:comps:comps], append(lines, body[comps:]...)...)
 	}
 
 	// Least important first: a narrow window drops hints from the front.
@@ -872,12 +1100,25 @@ func (m Model) downloadView(w int) (body, foot []string) {
 		}
 		if m.dl.active {
 			keys = append(keys, [2]string{"c", "cancel"})
-		} else if m.allReady() {
+		} else if m.canFinish() {
 			keys = append(keys, [2]string{"enter", "continue"})
 		}
 	}
 	keys = append(keys, [2]string{"esc", "back"})
 	return body, m.footer(w, keys)
+}
+
+// componentLines are the components with their state, when room lines fit.
+func (m Model) componentLines(w, room int) []string {
+	comps := m.components()
+	if room < len(comps) {
+		return nil
+	}
+	out := make([]string, 0, len(comps))
+	for _, c := range comps {
+		out = append(out, m.componentLine(c, w))
+	}
+	return out
 }
 
 // stallLine says a download has had no data for a while, "" while it moves.
@@ -939,6 +1180,12 @@ func (m Model) progressLine(i int, r setupapi.ModelProgress, w int, now time.Tim
 		text = dimStyle.Render("queued")
 		if done := m.inPlanBytes(r, m.doneBytes(r)); done > 0 {
 			text += dimStyle.Render(", " + formatGB(bytesGB(done)) + " already here")
+		}
+		if size := m.sizeOf(r); size > 0 {
+			text += dimStyle.Render(" · " + formatGB(bytesGB(size)))
+		}
+		if e, ok := m.sel.find(r.ID); ok && e.source != "" {
+			text += dimStyle.Render(" · " + contentsFrom + e.source)
 		}
 	case setupapi.StateDownloading:
 		marker, st = "[..]", infoStyle
@@ -1083,6 +1330,9 @@ func (m Model) progressNote(r setupapi.ModelProgress, width int) []string {
 		if r.DownloadedBeforeGB != nil && *r.DownloadedBeforeGB > 0 {
 			add(dimStyle, "Resumed: "+formatGB(*r.DownloadedBeforeGB)+" was already on this PC.")
 		}
+		if e, ok := m.sel.find(r.ID); ok && e.source != "" {
+			add(dimStyle, contentsFrom+e.source)
+		}
 	case setupapi.StateCancelled:
 		add(dimStyle, "Press r to resume from where it stopped.")
 	case setupapi.StateUnchecked:
@@ -1143,12 +1393,179 @@ func (m Model) overallLine(w int, now time.Time) string {
 	return pad(line + warnStyle.Render(tail))
 }
 
+// --- test -------------------------------------------------------------------
+
+// runError matches the backend's "`gaia init ...` failed (exit 1): " prefix. The
+// user has nothing to type, so the screen keeps only what went wrong.
+var runError = regexp.MustCompile("^`[^`]*` failed \\(exit -?\\d+\\):\\s*")
+
+// expectedTests are the jobs this setup should end up testing, so the count
+// has a true total before they have all reported.
+func (m Model) expectedTests() []string {
+	if m.plan == nil {
+		return nil
+	}
+	jobs := []string{setupapi.JobServer}
+	if !m.sel.cloud {
+		jobs = append(jobs, setupapi.RoleChat)
+		if m.sel.resolveVision() != "" {
+			jobs = append(jobs, setupapi.RoleVision)
+		}
+	}
+	for _, r := range m.sel.rows {
+		if r.embedding && m.sel.ticked[r.id] {
+			jobs = append(jobs, setupapi.RoleEmbedding)
+			break
+		}
+	}
+	for _, id := range m.runExtras {
+		if r, ok := m.sel.find(id); ok && r.optional != "" {
+			jobs = append(jobs, r.optional)
+		}
+	}
+	if !m.sel.cloud {
+		jobs = append(jobs, setupapi.JobAgent)
+	}
+	return jobs
+}
+
+// waitingTests are the expected jobs that haven't reported. A stopped run won't
+// reach them, so it lists none.
+func (m Model) waitingTests() []string {
+	if !m.dl.active || m.status == nil {
+		return nil
+	}
+	var out []string
+	for _, job := range m.expectedTests() {
+		seen := false
+		for _, r := range m.status.Tests {
+			seen = seen || r.Job == job
+		}
+		if !seen {
+			out = append(out, job)
+		}
+	}
+	return out
+}
+
+func (m Model) testLine(marker string, st lipgloss.Style, label, result string, w int) string {
+	const col = 16
+	room := w - 2*indentW - 5 - col - 1
+	return pad(st.Render(fmt.Sprintf("%-4s", marker)) + " " +
+		textStyle.Render(fmt.Sprintf("%-*s", room, truncate(label, room))) + " " + dimStyle.Render(result))
+}
+
+// testView lists every test with its real result. A required failure stays on
+// this screen with its own error and the keys to go on; nothing here sends the
+// user to a terminal.
+func (m Model) testView(w int) (body, foot []string) {
+	width := w - 2*indentW
+	var rows []setupapi.TestRow
+	if m.status != nil {
+		rows = m.status.Tests
+	}
+	waiting := m.waitingTests()
+	finished := 0
+	for _, r := range rows {
+		if r.State != setupapi.TestRunning {
+			finished++
+		}
+	}
+	total := len(rows) + len(waiting)
+	if total == 0 {
+		total = 1
+	}
+	head := testCount(finished, total)
+	line := textStyle.Render(head)
+	if barW := width - lipgloss.Width(head) - 7; barW >= 6 {
+		if barW > 30 {
+			barW = 30
+		}
+		f, t := bar(frac(int64(finished), int64(total)), barW, m.opts.Motion.ASCII)
+		line += " " + infoStyle.Render(f) + trackStyle.Render(t)
+	}
+	body = append(body, pad(line+" "+warnStyle.Render(fmt.Sprintf("%d%%", finished*100/total))))
+	if m.dl.active {
+		body = append(body, pad(dimStyle.Render(truncate(testLede, width))))
+	}
+	shownErrors := map[string]bool{}
+	for _, r := range rows {
+		label := testJobLabel(r.Job)
+		if r.Subject != nil {
+			label += " · " + m.nameOf(*r.Subject)
+		}
+		marker, st := "[..]", infoStyle
+		switch r.State {
+		case setupapi.TestPassed:
+			marker, st = "[ok]", okStyle
+		case setupapi.TestFailed:
+			marker, st = "[!]", failStyle
+		case setupapi.TestSkipped:
+			marker, st = "[-]", dimStyle
+		}
+		body = append(body, m.testLine(marker, st, label, testResult(r), w))
+		if r.Error != nil && *r.Error != "" {
+			shownErrors[*r.Error] = true
+			body = append(body, indentAll(wrapStyled(failStyle, *r.Error, width-6), indentW+6)...)
+		}
+	}
+	for _, job := range waiting {
+		body = append(body, m.testLine("[ ]", dimStyle, testJobLabel(job), testWaiting, w))
+	}
+	if m.lost != nil {
+		body = append(body, indentAll(wrapStyled(failStyle, "[!] "+lostContact, width), indentW)...)
+	}
+	if m.busy != "" {
+		body = append(body, pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
+	} else if m.note != "" {
+		body = append(body, indentAll(wrapStyled(warnStyle, m.note, width), indentW)...)
+	}
+
+	keys := [][2]string{{"d", "details"}}
+	switch {
+	case m.lost != nil:
+		keys = append(keys, [2]string{"r", "reconnect"})
+	case m.dl.active:
+		keys = append(keys, [2]string{"c", "cancel"})
+	default:
+		body = append(body, m.testFailure(width, shownErrors)...)
+		keys = append(keys, [2]string{"m", "choose another model"})
+		if _, ok := m.brokenModel(); ok {
+			keys = append(keys, [2]string{"x", "download again"})
+		}
+		keys = append(keys, [2]string{"r", "test again"})
+	}
+	return body, m.footer(w, append(keys, [2]string{"esc", "back"}))
+}
+
+// testFailure says why setup isn't ready: the run's own error when no row
+// already said it, then what to do about it.
+func (m Model) testFailure(width int, shown map[string]bool) []string {
+	out := []string{""}
+	if m.status != nil && m.status.Error != nil {
+		if why := runError.ReplaceAllString(*m.status.Error, ""); why != "" && !shown[why] {
+			out = append(out, indentAll(wrapStyled(failStyle, "[!] "+why, width), indentW)...)
+		}
+	}
+	help := testFailedHelp
+	for _, r := range m.requiredFailures() {
+		if r.Kind != nil && *r.Kind == setupapi.KindMemory {
+			help = testFailedMem
+		}
+	}
+	out = append(out, indentAll(wrapStyled(warnStyle, help, width), indentW)...)
+	if row, ok := m.brokenModel(); ok {
+		out = append(out, indentAll(wrapStyled(dimStyle, downloadAgain(m.nameOf(*row.Subject)), width), indentW)...)
+	}
+	return out
+}
+
 // --- ready ------------------------------------------------------------------
 
 func (m Model) readyView(w int) (body, foot []string) {
 	width := w - 2*indentW
 	if m.plan != nil {
-		var chat, vision, docs string
+		var chat, docs string
 		var missing []string
 		for _, r := range m.sel.rows {
 			on := r.downloaded || m.landed(r.id)
@@ -1159,9 +1576,6 @@ func (m Model) readyView(w int) (body, foot []string) {
 					where = "on this PC, NPU"
 				}
 				chat = readyChat(r.name, where)
-			}
-			if r.vision && on && (m.sel.ticked[r.id] || r.installed) {
-				vision = r.name
 			}
 			if r.embedding && on && m.sel.ticked[r.id] {
 				docs = r.name
@@ -1177,8 +1591,8 @@ func (m Model) readyView(w int) (body, foot []string) {
 		} else if chat != "" {
 			body = append(body, pad(textStyle.Render(chat)))
 		}
-		if vision != "" {
-			body = append(body, pad(textStyle.Render(readyVision(vision))))
+		if v, ok := m.sel.find(m.sel.resolveVision()); ok && (v.downloaded || v.installed || m.landed(v.id)) {
+			body = append(body, pad(textStyle.Render(readyVision(v.name))))
 		} else if v, ok := m.visionRow(); ok {
 			body = append(body, indentAll(wrapStyled(warnStyle, "[!] "+readyVisionOff(v.name), width), indentW)...)
 		}
@@ -1197,10 +1611,17 @@ func (m Model) readyView(w int) (body, foot []string) {
 	if g := m.gpu; g != nil && (m.gpuPhase == gpuPendingSaved || m.gpuPhase == gpuApplied) {
 		body = append(body, indentAll(wrapStyled(warnStyle, "[!] "+gpuPendingLine(formatGBShort(m.targetPool())), width), indentW)...)
 	}
-	if m.runErr != "" {
-		body = append(body, "")
-		body = append(body, indentAll(wrapStyled(warnStyle, "[!] Setup stopped after the downloads: "+m.runErr+
-			" The models are on this PC; GAIA checks that they load next. Press d for details.", width), indentW)...)
+	if m.status != nil {
+		// GAIA is ready without an extra, but never hides that one failed.
+		for _, r := range m.status.Tests {
+			if r.State == setupapi.TestFailed && r.Optional() {
+				why := testFailed
+				if r.Error != nil {
+					why = *r.Error
+				}
+				body = append(body, indentAll(wrapStyled(warnStyle, "[!] "+extraFailed(extraLabel(r.Job), why), width), indentW)...)
+			}
+		}
 	}
 	if len(m.dl.ids) == 0 && (m.status == nil || len(m.status.Models) == 0) && m.nothingLeftOut() {
 		body = append(body, "", pad(dimStyle.Render(everythingHere)))
@@ -1294,6 +1715,11 @@ func (m Model) detailLines(w int) []string {
 		}
 		if m.status.Error != nil {
 			raw = append(raw, "Error: "+*m.status.Error)
+		}
+		for _, c := range m.components() {
+			if state := m.status.Components[c.ID]; state != "" {
+				raw = append(raw, componentName(c.ID)+": "+state)
+			}
 		}
 		raw = append(raw, m.status.LogTail...)
 	}

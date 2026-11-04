@@ -18,6 +18,7 @@ on:
       - 'tests/mcp/**'
       - 'tests/unit/test_agent_ui_mcp*.py'
       - 'tests/unit/test_mcp2_server.py'
+      - 'tests/unit/mcp/client/test_mcp_http_sdk_server.py'
       - 'setup.py'
       - '.github/workflows/test_agent_mcp_server.yml'
       - 'conftest.py'
@@ -33,7 +34,7 @@ on:
       - 'tests/unit/test_mcp_bridge_protocol.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - 'src/gaia/version.py'
       - '.github/actions/install-lemonade/**'
@@ -43,6 +44,7 @@ on:
       - 'tests/mcp/**'
       - 'tests/unit/test_agent_ui_mcp*.py'
       - 'tests/unit/test_mcp2_server.py'
+      - 'tests/unit/mcp/client/test_mcp_http_sdk_server.py'
       - 'setup.py'
       - '.github/workflows/test_agent_mcp_server.yml'
       - 'conftest.py'
@@ -119,6 +121,11 @@ jobs:
       # Skips wholesale without mcp 2.x, which test_unit.yml does not install.
       - name: Run mcp 2.x server API tests
         run: python -m pytest tests/unit/test_mcp2_server.py tests/unit/test_mcp_bridge_protocol.py -v
+
+      # Runs GAIA's HTTP client against the official SDK server; skips wholesale
+      # without the [mcp] extra, which test_unit.yml does not install.
+      - name: Run MCP HTTP transport tests
+        run: python -m pytest tests/unit/mcp/client/test_mcp_http_sdk_server.py -v
 
       # TODO: Start Lemonade server for integration tests
       # For now, integration tests requiring LLM will be skipped.

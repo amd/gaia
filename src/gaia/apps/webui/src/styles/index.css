@@ -335,7 +335,8 @@ a:hover { text-decoration: underline; }
     letter-spacing: normal;
     text-transform: none;
     overflow-wrap: break-word;
-    color: oklch(from currentColor max(l, 0.5) c h);
+    /* 0.49, not 0.5: the brass label on a hovered primary button needs it for 4.5:1. */
+    color: oklch(from currentColor max(l, 0.49) c h);
 }
 [data-theme="dark"] .i18n-gloss.i18n-gloss {
     color: oklch(from currentColor min(l, 0.8) c h);
@@ -400,6 +401,8 @@ textarea:focus-visible {
 }
 .btn-primary { background: var(--accent-fill); color: var(--accent-fill-text); }
 .btn-primary:hover { background: var(--accent-fill-hover); }
+/* Lightened, the English fell to 4.46:1 on the hover fill. */
+.btn-primary .i18n-gloss.i18n-gloss { color: inherit; }
 .btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); }
 .btn-secondary:hover { background: var(--bg-active); }
 .btn-danger { background: var(--danger-dim); color: var(--danger); }

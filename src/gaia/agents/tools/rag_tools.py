@@ -28,8 +28,12 @@ from gaia.agents.tools.path_access import (
 from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
-from gaia.rag.keyword_search import rank_keyword_chunks
-from gaia.rag.sdk import EmbeddingUnavailableError, text_scripts
+from gaia.rag.keyword_search import keyword_index
+from gaia.rag.sdk import (
+    EmbeddingUnavailableError,
+    folder_index_skip_reason,
+    text_scripts,
+)
 from gaia.tool_cancellation import raise_if_cancelled
 
 logger = get_logger(__name__)
@@ -45,6 +49,9 @@ _SESSION_SAVE_WARNING = (
 #: meeting summary off mid-sentence; a model that always reasons (Gemma 4)
 #: spends part of this before it writes anything.
 SUMMARY_MAX_TOKENS = 8192
+
+# Cap on skipped files listed in an index_directory result, to bound the reply.
+_MAX_SKIPPED_REPORTED = 50
 
 
 def _summary_text(chat: Any, prompt: str) -> str:
@@ -349,13 +356,6 @@ def _chunks_have_pages(chunks: List[Dict[str, Any]]) -> bool:
     return any("page" in chunk for chunk in chunks)
 
 
-_MARKER_NOTE = (
-    "A chunk's 'page' is where it starts; text after a '[Page N]' marker inside "
-    "it is on page N, so cite N for facts that follow the marker and the page "
-    "before N for facts ahead of it."
-)
-
-
 def _question_language_note(question: str, chunks: List[Dict[str, Any]]) -> str:
     """Name the question when the chunks could pull the answer into their language."""
     asked = text_scripts(question)
@@ -393,6 +393,42 @@ def _answers_in_question_language(mixin: Any):
     return wrap
 
 
+_SEARCH_AGAIN_NOTE = (
+    "\n\nIf these chunks do not answer the question, do not say so yet: search once "
+    "more with different words (other terms for the same thing, and the question's "
+    "words in the document's language). If that search misses too, say it is not "
+    "in the documents."
+)
+
+
+_NO_TURN = object()
+
+
+def _asks_once_for_another_search(mixin: Any):
+    """Ask for one more search before "not in the document", once per turn.
+
+    Only the turn's first search that returns chunks carries the note, so it
+    buys one extra search and never a chain of them.
+    """
+
+    def wrap(search: Callable[..., Dict[str, Any]]):
+        @functools.wraps(search)
+        def wrapper(*args, **kwargs) -> Dict[str, Any]:
+            result = search(*args, **kwargs)
+            if result.get("status") != "success" or not result.get("chunks"):
+                return result
+            turn = getattr(mixin, "_turn_seq", None)
+            if getattr(mixin, "_search_again_turn", _NO_TURN) == turn:
+                return result
+            mixin._search_again_turn = turn
+            result["instruction"] = result.get("instruction", "") + _SEARCH_AGAIN_NOTE
+            return result
+
+        return wrapper
+
+    return wrap
+
+
 def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
     """How query_documents asks the model to cite: the full path, plus pages if any."""
     instruction = (
@@ -406,9 +442,7 @@ def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
         instruction += (
             "Format: 'According to <absolute_path> (page X):'\n"
             "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
-            "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n"
-            + _MARKER_NOTE
-            + "\n\n"
+            "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n\n"
         )
         if not all_paged:
             instruction += (
@@ -442,8 +476,7 @@ def _file_instruction(file_name: str, num_chunks: int, has_pages: bool) -> str:
         f"Your answer MUST start with: 'According to {file_name}, page X:' where X is the "
         "page number from the chunk's 'page' field.\n\n"
         f"Example: If chunk has 'page': 2, say 'According to {file_name}, page 2:'\n"
-        f"If info from multiple pages, say 'According to {file_name}, pages 2 and 5:'\n"
-        + _MARKER_NOTE
+        f"If info from multiple pages, say 'According to {file_name}, pages 2 and 5:'"
     )
 
 
@@ -492,6 +525,54 @@ def extract_page_from_chunk(
 
 # Markers the extractor writes inside a page, not at its start.
 _IN_PAGE_SECTION = re.compile(r"\s*(?:\*\*Content Extracted|### |\*\*Speaker Notes)")
+
+
+# Text one default-size chunk (~500 tokens) costs the prompt.
+_CHUNK_CHARS = 2000
+
+
+def top_or_whole_index(
+    ranked: List[tuple], candidates: List[str], limit: int, chunk_chars: int
+) -> List[tuple]:
+    """Return the top ``limit`` (chunk, score) pairs, or every candidate when
+    all of them fit in the text ``limit`` full-size chunks would take.
+
+    A rollup over eight one-paragraph reports must see all eight.
+    """
+    if sum(len(chunk) for chunk in candidates) > limit * chunk_chars:
+        return ranked[:limit]
+    seen = {chunk for chunk, _ in ranked}
+    rest = []
+    for chunk in candidates:
+        if chunk not in seen:
+            seen.add(chunk)
+            rest.append((chunk, 0.0))
+    return ranked + rest
+
+
+def split_entries_at_pages(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """*entries* with each page-spanning chunk split, so every 'page' field is true.
+
+    A model cites the field, so a chunk starting on page 22 that runs into page
+    23 would have page 23's facts cited as page 22.
+    """
+    split = []
+    for entry in entries:
+        content, page, start = entry["content"], entry.get("page"), 0
+        for marker in _PAGE_MARKER.finditer(content):
+            if page is None or _IN_PAGE_SECTION.match(content, marker.end()):
+                continue
+            text = content[start : marker.start()].strip()
+            if text:
+                split.append({**entry, "content": text, "page": page})
+            start, page = marker.start(), int(marker.group(1))
+        tail = {**entry, "content": content[start:]}
+        if page is not None:
+            tail["page"] = page
+        split.append(tail)
+    for number, entry in enumerate(split, 1):
+        entry["chunk_id"] = number
+    return split
 
 
 def _page_before(chunk_index, all_chunks, chunk_to_file):
@@ -546,6 +627,7 @@ class RAGToolsMixin:
             atomic=True,
         )
         @_answers_in_question_language(self)
+        @_asks_once_for_another_search(self)
         def query_documents(
             query: str, debug: bool = False  # pylint: disable=unused-argument
         ) -> Dict[str, Any]:
@@ -566,6 +648,8 @@ class RAGToolsMixin:
                         "message": message,
                         "instruction": (
                             f"{message} "
+                            "If the user named a folder or file to index, call index_directory "
+                            "or index_document on it now, without asking, then query again. "
                             "For domain-specific questions (HR policies, PTO, remote work, company procedures, "
                             "financial data, project plans, technical specs): use the SMART DISCOVERY WORKFLOW — "
                             "use search_file to find relevant files, index_document to index them, then query_specific_file to answer. "
@@ -677,11 +761,10 @@ class RAGToolsMixin:
 
                 # HYBRID SEARCH: add the chunks that best match the query's words
                 keyword_boost_info = []
-                for chunk_idx, boost_score, matching_terms in rank_keyword_chunks(
-                    query, enumerate(rag.chunks)
-                ):
+                keywords = keyword_index(rag)
+                for chunk_idx, boost_score, matching_terms in keywords.rank(query):
                     # Deduplication below keeps a chunk's higher score.
-                    all_chunks.append(rag.chunks[chunk_idx])
+                    all_chunks.append(keywords.texts[chunk_idx])
                     all_scores.append(boost_score)
 
                     # Get source file for this chunk
@@ -796,8 +879,14 @@ class RAGToolsMixin:
                 else:
                     adaptive_max = self.max_chunks  # Default (5) for small docs
 
-                top_chunks = [chunk for chunk, score in sorted_items[:adaptive_max]]
-                top_scores = [score for chunk, score in sorted_items[:adaptive_max]]
+                kept = top_or_whole_index(
+                    sorted_items,
+                    rag.chunks,
+                    adaptive_max,
+                    _CHUNK_CHARS,
+                )
+                top_chunks = [chunk for chunk, score in kept]
+                top_scores = [score for chunk, score in kept]
 
                 # Find the actual chunk indices from the RAG system
                 chunk_indices = []
@@ -844,10 +933,11 @@ class RAGToolsMixin:
                     if _page is not None:
                         _entry["page"] = _page
                     formatted_chunks.append(_entry)
+                formatted_chunks = split_entries_at_pages(formatted_chunks)
 
                 # Update debug info with final chunks
                 if debug_info:
-                    debug_info["final_chunks_returned"] = len(top_chunks)
+                    debug_info["final_chunks_returned"] = len(formatted_chunks)
                     debug_info["score_distribution"] = {
                         "max": float(max(top_scores)) if top_scores else 0,
                         "min": float(min(top_scores)) if top_scores else 0,
@@ -883,9 +973,9 @@ class RAGToolsMixin:
                 # Return chunks for agent to use in answer generation
                 result = {
                     "status": "success",
-                    "message": f"Found {len(top_chunks)} relevant document chunks",
+                    "message": f"Found {len(formatted_chunks)} relevant document chunks",
                     "chunks": formatted_chunks,
-                    "num_chunks": len(top_chunks),
+                    "num_chunks": len(formatted_chunks),
                     "search_keys_used": search_keys,
                     "source_files": matched_source_files,
                     "instruction": _documents_instruction(
@@ -923,6 +1013,7 @@ class RAGToolsMixin:
             timeout=600,
         )
         @_answers_in_question_language(self)
+        @_asks_once_for_another_search(self)
         def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
             """
             Query a specific file for fast, targeted retrieval.
@@ -1166,16 +1257,13 @@ class RAGToolsMixin:
                         str(target_file), []
                     )
                     file_keyword_info = []
-                    for chunk_idx, boost_score, matching_terms in rank_keyword_chunks(
+                    keywords = keyword_index(rag)
+                    for chunk_idx, boost_score, matching_terms in keywords.rank(
                         query,
-                        (
-                            (chunk_idx, rag.chunks[chunk_idx])
-                            for chunk_idx in file_chunk_indices
-                            if chunk_idx < len(rag.chunks)
-                        ),
+                        [i for i in file_chunk_indices if i < len(keywords)],
                     ):
                         # Deduplication below keeps a chunk's higher score.
-                        all_chunks.append(rag.chunks[chunk_idx])
+                        all_chunks.append(keywords.texts[chunk_idx])
                         all_scores.append(boost_score)
                         file_keyword_info.append(
                             {
@@ -1276,8 +1364,18 @@ class RAGToolsMixin:
                 else:
                     adaptive_max = self.max_chunks  # Default (5) for small docs
 
-                top_chunks = [chunk for chunk, score in sorted_items[:adaptive_max]]
-                top_scores = [score for chunk, score in sorted_items[:adaptive_max]]
+                kept = top_or_whole_index(
+                    sorted_items,
+                    [
+                        rag.chunks[i]
+                        for i in rag.file_to_chunk_indices.get(str(target_file), [])
+                        if i < len(rag.chunks)
+                    ],
+                    adaptive_max,
+                    _CHUNK_CHARS,
+                )
+                top_chunks = [chunk for chunk, score in kept]
+                top_scores = [score for chunk, score in kept]
 
                 # Update debug info with final chunks
                 if debug_info:
@@ -1331,17 +1429,18 @@ class RAGToolsMixin:
                     if _page is not None:
                         _entry["page"] = _page
                     formatted_chunks.append(_entry)
+                formatted_chunks = split_entries_at_pages(formatted_chunks)
 
                 result = {
                     "status": "success",
-                    "message": f"Found {len(top_chunks)} relevant chunks in {Path(target_file).name}",
+                    "message": f"Found {len(formatted_chunks)} relevant chunks in {Path(target_file).name}",
                     "chunks": formatted_chunks,
                     "file": str(target_file),
                     "source_files": [source_path],
                     "auto_indexed": auto_indexed,
                     "instruction": _file_instruction(
                         Path(target_file).name,
-                        len(top_chunks),
+                        len(formatted_chunks),
                         _chunks_have_pages(formatted_chunks),
                     ),
                 }
@@ -2239,7 +2338,11 @@ references from the section summaries.
             """
             Index all supported files in a directory.
 
-            Returns statistics about indexed files.
+            Indexes PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx),
+            CSV, JSON, EPUB, text, Markdown and source-code files. Images and
+            other types are skipped; skipped_files lists each with a reason.
+
+            Returns statistics about indexed, failed and skipped files.
             """
             try:
                 if not self.rag:
@@ -2274,25 +2377,10 @@ references from the section summaries.
 
                 logger.info(f"Indexing directory: {dir_path} (recursive={recursive})")
 
-                # Supported file extensions
-                supported_extensions = {
-                    ".pdf",
-                    ".txt",
-                    ".csv",
-                    ".json",
-                    ".py",
-                    ".js",
-                    ".java",
-                    ".cpp",
-                    ".c",
-                    ".h",
-                    ".md",
-                }
-
                 indexed_files = []
                 failed_files = []
                 failure_reasons: Dict[str, str] = {}
-                skipped_files = []
+                skipped_files: List[Dict[str, str]] = []
                 embedding_failure: Optional[Dict[str, Any]] = None
 
                 # Get files to index
@@ -2302,11 +2390,19 @@ references from the section summaries.
                     files_to_index = [f for f in dir_path.iterdir() if f.is_file()]
 
                 for file_path in files_to_index:
+                    rel_name = file_path.relative_to(dir_path).as_posix()
                     # A link out of the folder, or a secret in it, is not indexed.
                     if not readable_entry(self, file_path):
-                        skipped_files.append(str(file_path))
+                        skipped_files.append(
+                            {
+                                "file": rel_name,
+                                "reason": "outside the allowed folders or a "
+                                "protected file",
+                            }
+                        )
                         continue
-                    if file_path.suffix.lower() in supported_extensions:
+                    skip_reason = folder_index_skip_reason(file_path)
+                    if skip_reason is None:
                         try:
                             # Use the RAG SDK to index the file
                             result = self.rag.index_document(str(file_path))
@@ -2327,7 +2423,7 @@ references from the section summaries.
                             failed_files.append(str(file_path))
                             failure_reasons[file_path.name] = f"{type(e).__name__}: {e}"
                     else:
-                        skipped_files.append(str(file_path))
+                        skipped_files.append({"file": rel_name, "reason": skip_reason})
 
                 # Update system prompt after indexing directory
                 if indexed_files:
@@ -2343,8 +2439,11 @@ references from the section summaries.
                         [Path(f).name for f in failed_files] if failed_files else []
                     ),
                     "failure_reasons": failure_reasons,
+                    "skipped_files": skipped_files[:_MAX_SKIPPED_REPORTED],
                     "message": f"Indexed {len(indexed_files)} files from {dir_path.name}",
                 }
+                if len(skipped_files) > _MAX_SKIPPED_REPORTED:
+                    result["skipped_files_truncated"] = True
                 if embedding_failure is not None:
                     return {**result, **embedding_failure}
                 if failed_files and not indexed_files:

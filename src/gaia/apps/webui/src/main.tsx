@@ -4,11 +4,14 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { EngineInstallScreen } from './components/EngineInstallScreen';
+import { isInstallScreen } from './utils/engineInstall';
 import { purgeLegacyAlwaysAllow } from './stores/notificationStore';
 import { applyTheme, markTitleBar, resolveTheme, syncTitleBar, watchTitleBarScrim } from './utils/theme';
 import { applyPalette } from './utils/palette';
 import { useChatStore } from './stores/chatStore';
 import { applyLocale } from './i18n/registry';
+import { registerServiceWorker } from './pwa/register';
 import './styles/index.css';
 import './styles/palettes.css';
 import './styles/motion.css';
@@ -33,6 +36,14 @@ watchTitleBarScrim();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
-        <App />
+        {isInstallScreen() ? <EngineInstallScreen /> : <App />}
     </React.StrictMode>,
 );
+
+window.addEventListener('load', () => {
+    void registerServiceWorker({
+        isProduction: import.meta.env.PROD,
+        protocol: window.location.protocol,
+        serviceWorker: 'serviceWorker' in navigator ? navigator.serviceWorker : undefined,
+    });
+});

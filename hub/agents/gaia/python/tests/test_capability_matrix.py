@@ -67,14 +67,16 @@ _spec.loader.exec_module(capability_matrix)
 # is in the loop_control bundle but registers on gpt-oss only, so not counted.
 # 98 with the three audio_generation tools (music, sound effects, model list).
 # 101 with get_thread, list_connected_mailboxes and list_waiting_on_you.
-# 104 with the three follow-up tools.
-_EXPECTED_TOOLS_TOTAL = 104
+# 102 with `forget_everything`.
+# 105 with the three follow-up tools.
+_EXPECTED_TOOLS_TOTAL = 105
 # 11 since #3235 put `load_skill` in the core set: the shortlist prompt tells
 # the model to call it even when the skills bundle was not selected.
 # 16 with `sleep`, which joins the core set rather than a bundle: waiting out a
 # rate limit is not a capability a query can be matched to.
-# 17 with `schedule_follow_up`, so "remind me" always reaches it.
-_EXPECTED_CORE_COUNT = 17
+# 17 with `forget_everything`, beside `forget` so "forget everything" always reaches it.
+# 18 with `schedule_follow_up`, so "remind me" always reaches it.
+_EXPECTED_CORE_COUNT = 18
 # 25: the `cli_setup` bundle, `shell_session` (get_shell_state,
 # reset_shell_session), plus `browser_nav` and `browser_use` — the browser
 # tools arrive as two bundles so one pull-in cannot exhaust the dynamic slots.
@@ -109,14 +111,15 @@ _EXPECTED_REST_OP_NAMES = {
     "sessions/{session_id}/bypass",
     "sessions/{session_id}/internet",
     "sessions/{session_id}/grants",
+    "sessions/{session_id}/tools",
     "memory",
     "skills",
 }
 # One per route method: sessions/{session_id}/grants is both GET and DELETE.
-_EXPECTED_REST_FUNCTIONAL_COUNT = 11
+_EXPECTED_REST_FUNCTIONAL_COUNT = 12
 # + the init readiness probe and the three liveness/version probes
 # (/health, /version, /v1/gaia/version).
-_EXPECTED_REST_IN_CONTRACT_COUNT = 15
+_EXPECTED_REST_IN_CONTRACT_COUNT = 16
 
 _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 

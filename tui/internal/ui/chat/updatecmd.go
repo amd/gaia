@@ -5,6 +5,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/update"
 )
 
@@ -22,7 +24,7 @@ import (
 const updateCommandPrefix = "/update"
 
 const updateUsage = "Usage: /update (check) · /update now (install the newest) · " +
-	"/update v0.25.0 (install that exact version and pin it) · /update list · " +
+	"/update v0.25.0 (install that exact version and pin it) · /update back (return to the version before the last update) · /update list · " +
 	"/update auto on|off · /update rc on|off (also offer release candidates) · /update unpin · /update cancel"
 
 // updateCheckTimeout bounds a check: GitHub not answering must not leave
@@ -44,7 +46,7 @@ type updateCheckedMsg struct {
 	status update.Status
 	err    error
 	launch bool
-	then   string // "", "now" or "list"
+	then   string // "", "now", "list" or "setting"
 }
 
 // updatePlannedMsg is an install ready to run once the TUI exits.
@@ -55,8 +57,9 @@ type updatePlannedMsg struct {
 }
 
 type updateSavedMsg struct {
-	text string
-	err  error
+	text    string
+	err     error
+	recheck bool // the setting changes what is on offer, so ask again
 }
 
 func checkUpdateCmd(launch bool, then string) tea.Cmd {
@@ -79,11 +82,7 @@ func planTagCmd(tag string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), updateCheckTimeout)
 		defer cancel()
-		r, err := update.GetRelease(ctx, tag)
-		if err != nil {
-			return updatePlannedMsg{err: err}
-		}
-		p, err := update.NewPlan(r, true /* an exact version stays put */)
+		p, err := update.PlanTag(ctx, tag)
 		return updatePlannedMsg{plan: p, err: err}
 	}
 }
@@ -91,6 +90,12 @@ func planTagCmd(tag string) tea.Cmd {
 func saveUpdateSettingCmd(text string, save func() error) tea.Cmd {
 	return func() tea.Msg {
 		return updateSavedMsg{text: text, err: save()}
+	}
+}
+
+func saveThenCheckCmd(text string, save func() error) tea.Cmd {
+	return func() tea.Msg {
+		return updateSavedMsg{text: text, err: save(), recheck: true}
 	}
 }
 
@@ -113,7 +118,7 @@ func (m ChatModel) runUpdateCommand(arg string) (tea.Model, tea.Cmd) {
 	case arg == "list":
 		return m.statusNote("Listing releases…"), checkUpdateCmd(false, "list")
 	case arg == "auto on":
-		return m, saveUpdateSettingCmd("Auto-update is on: a newer release installs when you quit GAIA. "+
+		return m, saveThenCheckCmd("Auto-update is on: a newer release installs when you quit GAIA. "+
 			"The desktop app follows the same setting.", func() error { return update.SetAutoUpdate(true) })
 	case arg == "auto off":
 		return m, saveUpdateSettingCmd("Auto-update is off: GAIA tells you when a release is out and waits for /update now.",
@@ -123,12 +128,29 @@ func (m ChatModel) runUpdateCommand(arg string) (tea.Model, tea.Cmd) {
 				return update.SetAutoUpdate(false)
 			})
 	case arg == "rc on":
-		return m, saveUpdateSettingCmd("GAIA now offers release candidates (vX.Y.Z-rcN) too. One installs only when you "+
+		return m, saveThenCheckCmd("GAIA now offers release candidates (vX.Y.Z-rcN) too. One installs only when you "+
 			"ask, or when you quit if auto-update is on. /update rc off goes back to final releases only.",
 			func() error { return update.SetPrereleases(true) })
 	case arg == "rc off":
 		return m, saveUpdateSettingCmd("GAIA offers final releases only (a release candidate build still gets the next candidate).",
-			func() error { return update.SetPrereleases(false) })
+			func() error {
+				// A candidate the check queued for quit is no longer wanted.
+				if p, ok := update.Pending(); ok && p.Release.Prerelease {
+					update.Cancel()
+				}
+				return update.SetPrereleases(false)
+			})
+	case arg == "back":
+		cfg, err := update.ReadConfig()
+		if err != nil {
+			m.messages = append(m.messages, Message{Role: RoleError, Content: err.Error()})
+			m.updateViewport()
+			return m, nil
+		}
+		if cfg.Previous == "" || !update.Newer(update.Current, cfg.Previous) {
+			return m.statusNote("No earlier version to go back to. /update list shows the releases you can install."), nil
+		}
+		return m.statusNote("Looking up GAIA " + cfg.Previous + "…"), planTagCmd(cfg.Previous)
 	case arg == "unpin":
 		return m, saveUpdateSettingCmd("Unpinned: GAIA offers new releases again.", func() error { return update.SetPin("") })
 	case arg == "cancel":
@@ -150,6 +172,12 @@ func (m ChatModel) runUpdateCommand(arg string) (tea.Model, tea.Cmd) {
 
 func (m ChatModel) handleUpdateChecked(msg updateCheckedMsg) (tea.Model, tea.Cmd) {
 	st := msg.status
+	var remote update.RemoteError
+	if msg.launch && errors.As(msg.err, &remote) {
+		// Nobody asked: being offline is no reason to open on an error.
+		control.DevLogf("launch update check failed: %v", msg.err)
+		return m, nil
+	}
 	if msg.err != nil {
 		return m.errorNote("Could not check for GAIA updates: " + msg.err.Error()), nil
 	}
@@ -175,6 +203,14 @@ func (m ChatModel) handleUpdateChecked(msg updateCheckedMsg) (tea.Model, tea.Cmd
 		return m.statusNote("Preparing GAIA " + st.Latest.Tag + "…"), planUpdateCmd(st.Latest, false, false)
 	case "list":
 		return m.statusNote(releaseList(st)), nil
+	case "setting":
+		if st.Available && !pinned && st.Config.AutoUpdate {
+			return m, planUpdateCmd(st.Latest, false, true)
+		}
+		if st.Available && !pinned {
+			return m.statusNote(st.Summary() + " Type /update now to install it."), nil
+		}
+		return m.statusNote(st.Summary()), nil
 	}
 	text := st.Summary()
 	if st.Available && !pinned {
@@ -242,6 +278,9 @@ func (m ChatModel) handleUpdateSaved(msg updateSavedMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		return m.errorNote("Could not save the update setting: " + msg.err.Error()), nil
 	}
+	if msg.recheck {
+		return m.statusNote(msg.text), checkUpdateCmd(false, "setting")
+	}
 	return m.statusNote(msg.text), nil
 }
 
@@ -265,6 +304,9 @@ func releaseList(st update.Status) string {
 		}
 		shown++
 		line := "\n  " + r.Tag
+		if date := r.Date(); date != "" {
+			line += "  " + date
+		}
 		if r.Prerelease {
 			line += "  (release candidate)"
 		}

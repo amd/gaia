@@ -25,6 +25,7 @@ from gaia.llm.lemonade_client import (
     resolve_effective_ctx_size,
     resolve_lemonade_api_key,
     resolve_lemonade_base_url,
+    runs_on_npu,
 )
 from gaia.llm.lemonade_manager import gpu_display_info
 
@@ -237,6 +238,12 @@ async def _auto_load_after_download(model_name: str) -> None:
     )
 
 
+def _install_npu_backend(model_name: str) -> None:
+    from gaia.llm.lemonade_client import LemonadeClient
+
+    LemonadeClient(verbose=False).ensure_npu_backend(model_name)
+
+
 async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     """Issue ``POST /v1/pull?stream=true`` and feed the SSE event stream
     into ``_download_progress[model_name]``.
@@ -260,20 +267,18 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     if force:
         payload["force"] = True
 
-    _set_download_progress(
-        model_name,
-        {
-            "state": "starting",
-            "model_name": model_name,
-            "percent": 0,
-            "file": None,
-            "file_index": 0,
-            "total_files": 0,
-            "downloaded_bytes": 0,
-            "total_bytes": 0,
-            "message": None,
-        },
-    )
+    starting = {
+        "state": "starting",
+        "model_name": model_name,
+        "percent": 0,
+        "file": None,
+        "file_index": 0,
+        "total_files": 0,
+        "downloaded_bytes": 0,
+        "total_bytes": 0,
+        "message": None,
+    }
+    _set_download_progress(model_name, starting)
     logger.info("Pull stream starting: %s (force=%s)", model_name, force)
 
     # Track files we've already finished so the running ``downloaded_bytes``
@@ -289,7 +294,16 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     # link, and we'd rather hold open than wrongly bail.
     client_timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
     headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+    from gaia.llm.lemonade_client import LemonadeClientError
+
     try:
+        if runs_on_npu(model_name):
+            # A first install downloads a release and can take minutes.
+            _set_download_progress(
+                model_name,
+                {**starting, "message": "Getting the NPU backend ready…"},
+            )
+            await asyncio.to_thread(_install_npu_backend, model_name)
         async with httpx.AsyncClient(timeout=client_timeout) as client:
             async with client.stream(
                 "POST", f"{base_url}/pull", json=payload, headers=headers
@@ -450,6 +464,22 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
                             logger.error(
                                 "Pull stream error for %s: %s", model_name, err_msg
                             )
+    except LemonadeClientError as exc:
+        logger.error("NPU backend not ready for %s: %s", model_name, exc)
+        _set_download_progress(
+            model_name,
+            {
+                "state": "error",
+                "model_name": model_name,
+                "percent": 0,
+                "file": None,
+                "file_index": 0,
+                "total_files": 0,
+                "downloaded_bytes": 0,
+                "total_bytes": 0,
+                "message": str(exc),
+            },
+        )
     except Exception as exc:  # pylint: disable=broad-except
         logger.error("Pull stream blew up for %s: %s", model_name, exc, exc_info=True)
         _set_download_progress(
@@ -1270,7 +1300,7 @@ async def model_server():
 async def set_model_server_backend(body: ModelServerBackendRequest):
     """Save the llama.cpp backend for chat models; it applies on the next load.
 
-    Only a backend Lemonade reports as usable on this machine is accepted.
+    Only a backend GAIA has tested and Lemonade can run on this machine is accepted.
     """
     from gaia.config import GaiaConfig, GaiaConfigError
 
@@ -1282,12 +1312,13 @@ async def set_model_server_backend(body: ModelServerBackendRequest):
                 raise HTTPException(status_code=503, detail=current.error)
             usable = sorted(b.name for b in current.available_backends)
             if choice not in usable:
-                offered = ", ".join(usable) if usable else "none it reports"
+                offered = ", ".join(usable) if usable else "none on this machine"
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"llama.cpp's '{choice}' backend is not available on this "
-                        f"machine. Lemonade offers: {offered}."
+                        f"llama.cpp's '{choice}' backend isn't one GAIA offers here: "
+                        f"it offers only backends it has tested that this machine "
+                        f"can run ({offered})."
                     ),
                 )
         await asyncio.to_thread(GaiaConfig.save_key, "llamacpp_backend", choice)
@@ -1400,11 +1431,14 @@ def _running_index_ids(request: Request) -> List[str]:
 
 @router.get("/api/system/work-in-progress", response_model=WorkInProgress)
 async def work_in_progress(request: Request, db: ChatDatabase = Depends(get_db)):
-    """Answers still being written and documents still being indexed.
+    """Answers still being written, documents still being indexed, and setup still downloading.
 
     The desktop app asks this before it quits or frees the model's memory,
     so it can warn that the work will be lost.
     """
+    from gaia.ui.setup_runner import runner as setup_runner
+
+    setup_status = setup_runner.status() or {}
     answers = []
     for sid in run_manager.active_sessions():
         session = db.get_session(sid)
@@ -1419,7 +1453,11 @@ async def work_in_progress(request: Request, db: ChatDatabase = Depends(get_db))
                 document_id=doc_id, filename=doc["filename"] if doc else None
             )
         )
-    return WorkInProgress(answers=answers, indexing=indexing)
+    return WorkInProgress(
+        answers=answers,
+        indexing=indexing,
+        setup=setup_status.get("state") in ("running", "verifying"),
+    )
 
 
 class UnloadModelRequest(BaseModel):

@@ -543,6 +543,31 @@ def _replace_outdated(inst: DaemonInstance, why: str) -> None:
         )
 
 
+def replace_outdated_daemon() -> Optional[str]:
+    """Stop a daemon an update left running, even a busy one.
+
+    For a caller about to replace GAIA's Lemonade Server, which cuts off the
+    daemon's work anyway: left running, a daemon from the previous release
+    brings that release's server back as soon as the new one is stopped.
+
+    Returns:
+        Why the daemon was out of date, or None when none was.
+
+    Raises:
+        DaemonError: The outdated daemon would not stop.
+    """
+    with StartLock(timeout=_START_TIMEOUT):
+        inst = read_instance()
+        if inst is None or not pid_alive(inst.pid):
+            return None
+        stale = runs_replaced_install(inst)
+        if stale is None:
+            return None
+        _replace_outdated(inst, stale)
+        _set_deferred_notice(None)
+        return stale
+
+
 def missing_daemon_deps() -> list:
     """Distributions the daemon needs that this interpreter cannot import."""
     import importlib.util
