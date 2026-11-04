@@ -4,74 +4,26 @@
 ; GAIA Agent UI — custom NSIS installer additions.
 ;
 ; This file is `include`d by the electron-builder-generated NSIS script.
-; It writes the Windows autostart registry entry so GAIA Agent UI starts
-; on user login (default ON, matching Slack/Discord/Zoom convention per
-; plan §4.1), and cleans up that registry entry on uninstall.
 ;
-; ─── Why "always on" instead of a finish-page checkbox ──────────────────
-;
-; An earlier revision of this file used MUI_FINISHPAGE_SHOWREADME_FUNCTION
-; to display a "Start GAIA when I sign in to Windows" checkbox on the
-; finish page. That approach is incompatible with electron-builder's
-; standard page flow: electron-builder emits BOTH MUI_PAGE_FINISH and
-; MUI_UNPAGE_FINISH, and the finish-page macro is shared between them.
-; If MUI_FINISHPAGE_SHOWREADME_FUNCTION points at a globally-named
-; function (e.g. `GaiaSetAutoStart`), the uninstaller's finish page tries
-; to `Call GaiaSetAutoStart` — but NSIS requires all functions called
-; from the uninstall section to be prefixed with `un.`. The build fails
-; with:
-;
-;   Call must be used with function names starting with "un." in the uninstall section.
-;
-; Fixing this by defining a parallel `un.GaiaSetAutoStart` doesn't work
-; either — NSIS prohibits using `!undef` on MUI macro-reserved symbols
-; between the two page insertions when they're both emitted by a parent
-; script we don't control. The simplest robust fix is to drop the
-; checkbox entirely and write the autostart key on a fresh install. This
-; matches the plan's "default ON" intent and mirrors how Slack/Discord
-; behave. Users who want to disable autostart can:
-;
-;   1. Use Settings → General → "Start GAIA when you sign in". That switch
-;      owns this same Run value (WIN_LOGIN_ITEM_NAME in
-;      services/tray-manager.cjs must equal ${PRODUCT_NAME}, args included)
-;      and removes it again at startup if an update wrote it back.
-;   2. Or disable via Windows Task Manager → Startup tab
-;   3. Or delete the HKCU Run key manually with regedit
-;
-; electron-builder exposes extension macros we hook into:
-;
-;   customInstall    — runs at the end of the main install section
-;   customUnInstall  — runs at the start of the uninstall section
-;
-; Reference: https://github.com/electron-userland/electron-builder
-
-; ─── Install: write the autostart Run key ──────────────────────────────
-;
-; HKCU\Software\Microsoft\Windows\CurrentVersion\Run is the per-user
-; autostart registry hive. We pass `--minimized` so the Electron app
-; starts into the tray (handled by services/tray-manager.cjs) rather
-; than popping a window on login.
-;
-; Using HKCU (not HKLM) matches perMachine=false in electron-builder.yml
-; — we're a per-user install, so per-user autostart is correct.
+; Start at sign-in is the app's: Settings > General ("Start GAIA when you sign
+; in", services/tray-manager.cjs) owns the HKCU Run value named ${PRODUCT_NAME},
+; which must equal WIN_LOGIN_ITEM_NAME there. The installer never turns it on.
 
 ; At file scope, not in a macro: electron-builder may expand a macro twice.
 !include "LogicLib.nsh"
 
 !ifndef BUILD_UNINSTALLER
-  Var gaiaPriorInstall
-  Var gaiaAutostart
+  Var GaiaRunValue
+  Var GaiaRunLegacy
 !endif
 
-; Read first: the old version's uninstaller deletes the sign-in entry before
-; customInstall runs.
+; On an update electron-builder runs the old uninstaller, customUnInstall
+; included, before customInstall. Read here so a user's Run value survives that.
 !macro customInit
-  ; Both hives: the per-user or all-users choice isn't made yet.
-  ReadRegStr $gaiaPriorInstall HKCU "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
-  ${If} $gaiaPriorInstall == ""
-    ReadRegStr $gaiaPriorInstall HKLM "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
-  ${EndIf}
-  ReadRegStr $gaiaAutostart HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_NAME}"
+  ReadRegStr $GaiaRunValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
+      "${PRODUCT_NAME}"
+  ReadRegStr $GaiaRunLegacy HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
+      "GAIA Agent UI"
 !macroend
 
 !macro customInstall
@@ -80,12 +32,15 @@
   ; Run entry pointing at a binary path that no longer exists.
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "GAIA Agent UI"
 
-  ; An update keeps the user's sign-in choice.
-  ${If} $gaiaPriorInstall == ""
-  ${OrIf} $gaiaAutostart != ""
+  ; The old value points at the old binary, so only the choice carries over.
+  ${If} $GaiaRunValue == ""
+  ${AndIf} $GaiaRunLegacy != ""
+    StrCpy $GaiaRunValue '"$INSTDIR\${PRODUCT_FILENAME}.exe" --minimized'
+  ${EndIf}
+
+  ${If} $GaiaRunValue != ""
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
-        "${PRODUCT_NAME}" \
-        '"$INSTDIR\${PRODUCT_FILENAME}.exe" --minimized'
+        "${PRODUCT_NAME}" "$GaiaRunValue"
   ${EndIf}
 !macroend
 

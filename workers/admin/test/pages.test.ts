@@ -13,7 +13,7 @@ describe("page scripts", () => {
   const pages: [string, string][] = [
     ["users", renderUsersPage()],
     ["growth", renderGrowthPage([["alice", "alice-work"], ["bob"]])],
-    ["developers", renderDevelopersPage(["alice", "bob-work"])],
+    ["developers", renderDevelopersPage({ people: [["alice", "alice-work"], ["bob"]], source: "dashboard", updatedAt: "2026-10-29T00:00:00Z", updatedBy: "a</script>@x" })],
     ["ci", renderCiPage()],
     ["evals", renderEvalsPage()],
   ];

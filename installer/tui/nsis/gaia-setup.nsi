@@ -7,7 +7,7 @@
 ;   Desktop app  runs the embedded, unmodified electron-builder setup
 ;                (gaia-agent-ui-<v>-x64-setup.exe /S /currentuser). That setup
 ;                stays the app's owner -- its files, Installed-apps entry,
-;                shortcuts, autostart and uninstaller -- because electron-updater
+;                shortcuts and uninstaller -- because electron-updater
 ;                re-runs exactly that file to update the app. A second owner here
 ;                would be duplicated by the first auto-update.
 ;   Terminal     gaia-tui + gaia-agent, PATH, Windows Terminal profile, shortcuts,
@@ -27,12 +27,12 @@
 ; through it would mean carrying an Electron app's assumptions (asar, an app
 ; bundle, a chrome-sandbox) for two files that need none of them. The
 ; conventions this repo already established for the Agent UI installer --
-; per-user install, "leave ~/.gaia alone unless asked" -- are followed here;
-; see installer/nsis/installer.nsh for their original statement and rationale.
+; per-user install, "leave ~/.gaia alone unless asked" -- are followed here; see
+; installer/nsis/installer.nsh for their original statement and rationale.
 ;
 ; Nothing is downloaded at INSTALL time, so the install itself works offline and
-; behind a proxy. Lemonade is not part of it: GAIA's first run sets up its own
-; private Lemonade under ~/.gaia, which needs the network once.
+; behind a proxy. GAIA's own Lemonade Server and models come with first-run setup
+; in the app; no system-wide Lemonade is installed.
 ;
 ; Build:
 ;   makensis -DVERSION=<x.y.z, or x.y.z-rc.N for a release candidate> \
@@ -749,7 +749,7 @@ SectionEnd
 ; ─── Component selection ───────────────────────────────────────────────────
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecUI} "GAIA Agent UI, the desktop app: a window with chat, your documents and files, and every tool call shown as it runs. Adds a GAIA shortcut to the desktop and Start menu, and starts with Windows (turn that off in the app's tray menu)."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecUI} "GAIA Agent UI, the desktop app: a window with chat, your documents and files, and every tool call shown as it runs. Adds a GAIA shortcut to the desktop and Start menu."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "GAIA Terminal UI (gaia-tui): the same agent in your terminal, on your PATH, with a GAIA profile for Windows Terminal. Adds a GAIA Terminal UI shortcut to the desktop and Start menu."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
@@ -806,11 +806,9 @@ Function HasAllUsersUi
 FunctionEnd
 
 Function .onInit
-  ; $PLUGINSDIR is where the desktop app's setup is unpacked, and it does not
-  ; exist until something asks for it. MUI2 alone never does -- the Agent UI's
-  ; installer.nsh gets away with omitting this only because electron-builder's
-  ; generated script calls it first. Without it SetOutPath lands on "" and the
-  ; desktop app install fails for every user.
+  ; $PLUGINSDIR is where the desktop app setup is unpacked, and it does not
+  ; exist until something asks for it. MUI2 alone never does. Without it
+  ; SetOutPath lands on "" and the desktop app install fails for every user.
   InitPluginsDir
   ; electron-builder writes the desktop app's all-users key in the 64-bit view;
   ; a 32-bit NSIS process would otherwise read WOW6432Node and never see it.

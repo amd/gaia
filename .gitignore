@@ -209,6 +209,9 @@ version.txt
 installer/**.exe
 release_info.json
 
+# Binaries the desktop build fetches into its extraResources
+src/gaia/apps/webui/build/vendor/
+
 # version
 version.txt
 **/.gaia_servers.json

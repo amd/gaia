@@ -114,7 +114,9 @@ func RunArgs(claudeMode bool) []string {
 	// installed — so setup from this screen dead-ended on a component the screen
 	// does not use. Released installs skip the step anyway, so this changes
 	// nothing for them.
-	args := []string{"init", "--profile", Profile, "--yes", "--skip-webui-build"}
+	//
+	// --skip-pip-extras: the apps never pip-install; GAIA ships its own packages.
+	args := []string{"init", "--profile", Profile, "--yes", "--skip-webui-build", "--skip-pip-extras"}
 	if claudeMode {
 		args = append(args, "--skip-chat-model")
 	}

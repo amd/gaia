@@ -114,6 +114,7 @@ on:
       - 'tests/electron/*-smoke.test.mjs'
       - 'tests/electron/fixtures/**'
       - 'src/gaia/version.py'
+      - 'src/gaia/llm/lemonade_embedded.py'
       - 'conftest.py'
       - 'tests/conftest.py'
       - 'pyproject.toml'
@@ -166,6 +167,7 @@ jobs:
           - platform: windows
             runner: windows-latest
             npm_script: package:win
+            lemonade_platform: win-x64
             artifacts: |
               src/gaia/apps/webui/dist-app/*.exe
               src/gaia/apps/webui/dist-app/*.exe.blockmap
@@ -173,6 +175,7 @@ jobs:
           - platform: macos
             runner: macos-latest  # Apple Silicon (arm64)
             npm_script: package:mac
+            lemonade_platform: mac-arm64
             artifacts: |
               src/gaia/apps/webui/dist-app/*.dmg
               src/gaia/apps/webui/dist-app/*.dmg.blockmap
@@ -180,6 +183,7 @@ jobs:
           - platform: linux
             runner: ubuntu-latest
             npm_script: package:linux
+            lemonade_platform: linux-x64
             artifacts: |
               src/gaia/apps/webui/dist-app/*.deb
               src/gaia/apps/webui/dist-app/*.AppImage
@@ -346,6 +350,19 @@ jobs:
           # binary via `codesign --verify --strict` instead of a fixed digest.
           shasum -a 256 "${DEST_DIR}/uv"
 
+      # ─── Bundle the embeddable Lemonade archive ─────────────────────
+      # electron-builder skips a missing extraResources source without failing,
+      # so this step and the packaged-archive check below are what enforce it.
+      - name: Fetch the pinned Lemonade archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY="$(command -v python || command -v python3)"
+          "$PY" installer/scripts/fetch_lemonade_embeddable.py \
+            --platform "${{ matrix.lemonade_platform }}" \
+            --out src/gaia/apps/webui/build/vendor/lemonade \
+            --attempts 3
+
       - name: Build frontend (Vite)
         working-directory: src/gaia/apps/webui
         shell: bash
@@ -428,6 +445,18 @@ jobs:
           else
             echo "(dist-app/ does not exist — build may have failed)"
           fi
+
+      - name: Verify the Lemonade archive was packaged
+        working-directory: src/gaia/apps/webui
+        shell: bash
+        run: |
+          set -euo pipefail
+          FOUND=$(find dist-app -ipath '*/resources/vendor/lemonade/lemonade-embeddable-*')
+          if [ -z "${FOUND}" ]; then
+            echo "::error::No Lemonade archive under resources/vendor/lemonade in dist-app; check extraResources in electron-builder.yml." >&2
+            exit 1
+          fi
+          echo "${FOUND}"
 
       # ─── Verify macOS code signature ─────────────────────────────────
       # Guards against shipping a broken .app bundle (the class of bug
@@ -580,7 +609,7 @@ jobs:
             else
               SIZE=$(stat -c%s "${EXE}" 2>/dev/null || stat -f%z "${EXE}")
               echo "EXE: $(basename "${EXE}") (${SIZE} bytes)"
-              # NSIS installer should be >50MB (Electron plus the bundled runtimes)
+              # The Electron runtime alone puts the NSIS installer past 50MB
               if [ "${SIZE}" -lt 52428800 ]; then
                 echo "::error::Windows .exe smaller than 50MB — likely missing bundled components"
                 FAIL=1
