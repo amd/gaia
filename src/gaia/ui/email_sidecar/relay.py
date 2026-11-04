@@ -254,6 +254,9 @@ def _dispatch_one(
                     args[RISK_NOTE_ARG] = str(context["risk_note"])
                 if context.get("file_path"):
                     args["file_path"] = str(context["file_path"])
+                # What GAIA checked, in place of the model's own spelling.
+                if isinstance(context.get("shown_args"), dict):
+                    args.update(context["shown_args"])
             if args:
                 request["args"] = args
                 if event.get("args_truncated"):

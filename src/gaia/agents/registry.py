@@ -62,6 +62,7 @@ KNOWN_TOOLS: Dict[str, tuple] = {
         "BrowserUseToolsMixin",
     ),
     "email": ("gaia.agents.tools.email_tools", "EmailToolsMixin"),
+    "calendar": ("gaia.agents.tools.calendar_tools", "CalendarToolsMixin"),
     "sd": ("gaia.sd.mixin", "SDToolsMixin"),
     "vlm": ("gaia.vlm.mixin", "VLMToolsMixin"),
     "skills": ("gaia.agents.tools.skill_library_tools", "SkillLibraryToolsMixin"),
