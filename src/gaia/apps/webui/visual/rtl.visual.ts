@@ -913,7 +913,8 @@ test('a browser never shows the install screen, even when the URL asks', async (
     await expect(page.locator('.sb')).toBeVisible();
 });
 
-test('window controls take the color of the sidebar beneath them', async ({ page }) => {
+/** The Windows desktop frame: the window controls are drawn over the app's top-right corner. */
+async function withWindowsControls(page: Page): Promise<void> {
     await page.addInitScript(() => {
         const calls: unknown[] = [];
         Object.assign(window, {
@@ -927,21 +928,68 @@ test('window controls take the color of the sidebar beneath them', async ({ page
             },
         });
     });
-    await open(page);
-    const [last, sidebar] = await page.evaluate(() => [
-        (window as unknown as { __colors: { color: string }[] }).__colors.at(-1)?.color,
-        getComputedStyle(document.documentElement).getPropertyValue('--bg-sidebar').trim(),
-    ]);
-    expect(last).toBe(sidebar);
+}
 
-    await page.locator('.sb').getByRole('button', { name: /الإعدادات/ }).first().click();
-    await expect(page.locator('.settings-overlay')).toBeVisible();
-    await expect.poll(async () => brightness(await lastColor(page))).toBeLessThan(brightness(sidebar));
+for (const [locale, settings, beneath] of [['ar', /الإعدادات/, '--bg-sidebar'], ['en', /^Settings$/, '--bg-primary']] as const) {
+    test(`window controls take the color beneath them and dim with a modal (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withWindowsControls);
+        const behind = await page.evaluate((token) => getComputedStyle(document.documentElement).getPropertyValue(token).trim(), beneath);
+        await expect.poll(() => lastColor(page)).toBe(behind);
 
-    await page.keyboard.press('Escape');
-    await expect(page.locator('.settings-overlay')).toHaveCount(0);
-    await expect.poll(() => lastColor(page)).toBe(sidebar);
+        await page.locator('.sb').getByRole('button', { name: settings }).first().click();
+        await expect(page.locator('.settings-overlay')).toBeVisible();
+        await expect.poll(async () => brightness(await lastColor(page))).toBeLessThan(brightness(behind));
+
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.settings-overlay')).toHaveCount(0);
+        await expect.poll(() => lastColor(page)).toBe(behind);
+        expect(await refusedColors(page)).toEqual([]);
+    });
+}
+
+test('window controls dim under the missing-model dialog too', async ({ page }) => {
+    await open(page, '', 'en', async (p) => {
+        await withWindowsControls(p);
+        await withMissingModel(p);
+    });
+    const canvas = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim());
+    await page.locator('textarea').first().fill('hello');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.model-needed')).toBeVisible();
+    await expect.poll(async () => brightness(await lastColor(page))).toBeLessThan(brightness(canvas));
+    expect(await refusedColors(page)).toEqual([]);
 });
+
+/** Colors the desktop window would refuse: main.cjs takes only #rrggbb. */
+const refusedColors = (page: Page): Promise<string[]> =>
+    page.evaluate(() =>
+        (window as unknown as { __colors: { color: string; symbolColor: string }[] }).__colors
+            .flatMap((c) => [c.color, c.symbolColor])
+            .filter((c) => !/^#[\da-f]{6}$/i.test(c)),
+    );
+
+/** The width Windows 11 gives minimize, maximize and close; a browser reports no controls. */
+const WINDOW_CONTROLS_W = 138;
+
+for (const locale of ['ar', 'en']) {
+    test(`the top notice keeps its action clear of the window controls (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withWindowsControls);
+        await page.evaluate((w) => document.documentElement.style.setProperty('--titlebar-controls-w', `${w}px`), WINDOW_CONTROLS_W);
+        const notice = page.locator('.app-notice').first();
+        await expect(notice.getByRole('button')).toBeVisible();
+        const controls = { left: 1400 - WINDOW_CONTROLS_W, bottom: 48 };
+        const boxes = await notice.evaluate((el) =>
+            [el, ...el.querySelectorAll('button, a')].map((n) => {
+                const box = n.getBoundingClientRect();
+                return { right: box.right, top: box.top };
+            }),
+        );
+        for (const box of boxes) {
+            expect(box.right > controls.left && box.top < controls.bottom, JSON.stringify(box)).toBe(false);
+        }
+        expect(await audit(page)).toEqual([]);
+    });
+}
 
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
     await open(page);
