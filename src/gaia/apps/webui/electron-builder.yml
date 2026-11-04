@@ -19,7 +19,8 @@ executableName: gaia-desktop       # Actual binary name — must NOT collide wit
                                    # could find /usr/bin/gaia-desktop instead of the venv's
                                    # Python gaia binary.
                                    # Affects: .app/Contents/MacOS/gaia-desktop, gaia-desktop.exe,
-                                   # /usr/bin/gaia-desktop, deb package name, AppImage binary name
+                                   # /usr/bin/gaia-desktop, and the AppImage binary name.
+                                   # The Debian package name is configured separately below.
 copyright: Copyright © 2026 Advanced Micro Devices, Inc.
 
 directories:
@@ -249,6 +250,16 @@ linux:
       StartupWMClass: gaia-desktop
 
 deb:
+  # Keep the desktop package installable alongside the terminal package,
+  # which intentionally remains named `gaia`.
+  packageName: gaia-desktop
+  # Existing releases accidentally registered the desktop package as `gaia`.
+  # Replaces lets apt upgrade those installations without colliding with the
+  # terminal package after this package receives its distinct name.
+  replaces:
+    - gaia
+  breaks:
+    - gaia (<< 0.25.5)
   depends:
     - libnotify4
     - libnss3
