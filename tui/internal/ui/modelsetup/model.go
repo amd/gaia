@@ -1,9 +1,10 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// Package modelsetup is the TUI's model setup: first-run "choose your models",
-// the GPU memory step, the download with per-model progress, and the ready
-// summary — plus /models and /gpu, which reopen the same screens later.
+// Package modelsetup is the TUI's model setup: first-run "choose your models"
+// by job, the GPU memory step, the download with per-model progress, the Test
+// step that proves it works, and the ready summary — plus /models and /gpu,
+// which reopen the same screens later.
 //
 // Every fact on screen comes from the daemon (setupapi), which serves the
 // Agent UI's own plan and choice handlers, so the two apps never disagree
@@ -25,7 +26,8 @@ import (
 type Mode int
 
 const (
-	// ModeFirstRun is setup's own flow: models, GPU memory, download, ready.
+	// ModeFirstRun is setup's own flow: models, GPU memory, download, test,
+	// ready.
 	ModeFirstRun Mode = iota
 	// ModeModels is /models: the same checklist with live state and Apply.
 	ModeModels
@@ -44,6 +46,8 @@ const (
 	scrGPU
 	scrGuide
 	scrDownload
+	scrContents
+	scrTest
 	scrReady
 )
 
@@ -57,6 +61,8 @@ var screenNames = map[screen]string{
 	scrGPU:       "gpu",
 	scrGuide:     "gpu-guide",
 	scrDownload:  "download",
+	scrContents:  "contents",
+	scrTest:      "test",
 	scrReady:     "ready",
 }
 
@@ -135,8 +141,11 @@ type Model struct {
 	focus   int
 	scroll  int
 	showAll bool // the "already in Lemonade" group is open
-	details bool
-	pick    int // chat picker cursor
+	// showVision opens the other vision models under a chat model that reads
+	// images itself.
+	showVision bool
+	details    bool
+	pick       int // chat picker cursor
 
 	ask       confirmKind
 	askRow    rowEntry
@@ -179,8 +188,9 @@ type Model struct {
 	// disk, not yet load-checked by setup's run.
 	notChecked map[string]bool
 	since      time.Time
-	// runErr is why setup's own run stopped, kept for the ready summary.
-	runErr string
+	// runExtras are the models outside the plan the latest run fetches and
+	// tests; testing again sends the same list.
+	runExtras []string
 }
 
 type gpuPhase int
@@ -492,6 +502,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m = m.withPlan(msg.plan, true)
+		if m.scr == scrDownload && !m.dl.active && m.needsLoadCheck() {
+			return m.startCheckRun()
+		}
 		return m.checkFinished(), nil
 
 	case tea.KeyMsg:
@@ -557,9 +570,6 @@ func (m Model) loaded(msg loadedMsg) (Model, tea.Cmd) {
 				m.resume = true
 			}
 		}
-		if len(m.sel.pending()) == 0 && !m.sel.blocked() && !m.resume {
-			m.scr = scrReady
-		}
 	}
 	return m, nil
 }
@@ -580,6 +590,7 @@ type Choices struct {
 	Chat       string
 	ChatChosen bool
 	KeepTrying bool
+	Vision     string
 }
 
 func (m Model) choices() *Choices {
@@ -587,7 +598,7 @@ func (m Model) choices() *Choices {
 		return nil
 	}
 	c := &Choices{Ticked: map[string]bool{}, Unticked: map[string]bool{}, Chat: m.sel.chat,
-		ChatChosen: m.sel.chatChosen, KeepTrying: m.keepTry}
+		ChatChosen: m.sel.chatChosen, KeepTrying: m.keepTry, Vision: m.sel.vision}
 	for id, v := range m.sel.ticked {
 		c.Ticked[id] = v
 	}
@@ -617,6 +628,8 @@ func (m Model) applyChoices(c Choices) Model {
 		m.sel.chat = m.sel.fallbackChat()
 	}
 	m.keepTry = c.KeepTrying
+	m.sel.vision = c.Vision
+	m.sel.applyVision()
 	return m
 }
 
@@ -637,6 +650,7 @@ func (m Model) withPlan(p setupapi.Plan, keep bool) Model {
 			}
 		}
 		m.sel.chatChosen = prev.chatChosen
+		m.sel.vision = prev.vision
 	}
 	if keep {
 		for id, v := range prev.ticked {
@@ -648,6 +662,7 @@ func (m Model) withPlan(p setupapi.Plan, keep bool) Model {
 			m.sel.chat = prev.chat
 		}
 	}
+	m.sel.applyVision()
 	m.clampFocus()
 	return m
 }
@@ -703,8 +718,8 @@ func (m Model) save() (Model, tea.Cmd) {
 	}, m.tickCmd())
 }
 
-// applyChoices saves the chat model, then which of setup's models to skip,
-// against the plan the chat choice produced.
+// applyChoices saves the chat model, the model that reads images, then which
+// of setup's models to skip, against the plan those choices produced.
 func applyChoices(api setupapi.API, plan setupapi.Plan, sel selection, ackChat bool) appliedMsg {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*callTimeout)
 	defer cancel()
@@ -715,8 +730,28 @@ func applyChoices(api setupapi.API, plan setupapi.Plan, sel selection, ackChat b
 		}
 		plan = p
 	}
+	if v := sel.savedVision(); !sel.cloud && !sameID(v, strOf(plan.VisionModel)) {
+		var id *string
+		if v != "" {
+			id = &v
+		}
+		p, err := api.ChooseVision(ctx, id)
+		if err != nil {
+			return appliedMsg{plan: plan, err: err}
+		}
+		plan = p
+	}
 	for _, e := range plan.Catalog {
 		if !e.Planned {
+			// A model removed earlier is on the skip list, which drops it from
+			// every download: ticking it again takes it off.
+			if e.Skipped && sel.wants(e.ID) {
+				p, err := api.Skip(ctx, e.ID, false)
+				if err != nil {
+					return appliedMsg{plan: plan, err: err}
+				}
+				plan = p
+			}
 			continue
 		}
 		want := sel.wants(e.ID)
@@ -756,6 +791,7 @@ func (m Model) applied(msg appliedMsg) (Model, tea.Cmd) {
 	if chat != "" && m.sel.canChat(chat) {
 		m.sel.chat = chat
 	}
+	m.sel.applyVision()
 	if m.opts.Mode == ModeFirstRun && m.gpuStepShown() && !m.gpuDone {
 		m.scr = scrGPU
 		return m, nil
@@ -800,8 +836,8 @@ func (m Model) gpuHelps(g setupapi.GPUModel) bool {
 }
 
 // These screens are one step of the host's setup ("choose and download the
-// models"), so they keep its number and count; the models, GPU memory and the
-// download are parts of that step.
+// models"), so they keep its number and count; the models, GPU memory, the
+// download and the test are parts of that step.
 func (m Model) stepLabel(s screen) string {
 	part := m.partOf(s)
 	if part == 0 {
@@ -827,12 +863,15 @@ func (m Model) partCount() int {
 	if m.needsDownload() {
 		n++
 	}
+	if m.opts.Mode == ModeFirstRun {
+		n++
+	}
 	return n
 }
 
 func (m Model) partOf(s screen) int {
 	switch s {
-	case scrModels, scrChatPick:
+	case scrModels, scrChatPick, scrContents:
 		return 1
 	case scrGPU, scrGuide:
 		return 2
@@ -841,6 +880,8 @@ func (m Model) partOf(s screen) int {
 			return 3
 		}
 		return 2
+	case scrTest:
+		return m.partCount()
 	}
 	return 0
 }
@@ -861,20 +902,19 @@ func (m Model) needsDownload() bool {
 
 // --- the download -----------------------------------------------------------
 
+// startDownload fetches what is still missing. First-run setup always goes
+// through `gaia init`, even with nothing to download: its tests are what prove
+// GAIA works, and it fetches and tests the extras beside the plan's models.
 func (m Model) startDownload() (Model, tea.Cmd) {
 	pending := m.sel.pending()
-	if len(pending) == 0 {
-		if m.opts.Mode == ModeModels {
-			m.note = "Saved."
-			return m, nil
-		}
-		m.scr = scrReady
+	if len(pending) == 0 && m.opts.Mode == ModeModels {
+		m.note = "Saved."
 		return m, nil
 	}
 	m.scr = scrDownload
 	m.since = m.opts.Now()
 	m.focus = 0
-	m.note, m.runErr = "", ""
+	m.note = ""
 	m.dl = download{active: true}
 	m.rates = map[string]*rate{}
 	m.total = rate{}
@@ -882,27 +922,22 @@ func (m Model) startDownload() (Model, tea.Cmd) {
 	for _, r := range pending {
 		m.dl.ids = append(m.dl.ids, r.id)
 	}
-	// Setup's own download runs `gaia init`, which also loads each model to
-	// check it; anything else ticked downloads one at a time after it.
-	runs := false
-	for _, r := range pending {
-		if r.planned && m.opts.Mode == ModeFirstRun {
-			runs = true
-		} else {
-			m.dl.queue = append(m.dl.queue, r.id)
-		}
-	}
-	if runs {
+	if m.opts.Mode == ModeFirstRun {
+		m.runExtras = m.sel.extraModels()
 		m.dl.run = true
 		m.dl.starting = true
 		return m, tea.Batch(m.runCmd(), m.tickCmd())
+	}
+	for _, r := range pending {
+		m.dl.queue = append(m.dl.queue, r.id)
 	}
 	return m.nextSingle()
 }
 
 func (m Model) runCmd() tea.Cmd {
 	api := m.api
-	req := setupapi.RunRequest{SkipChatModel: m.opts.Cloud, AcknowledgeLowDisk: m.ackedDisk, KeepTrying: m.keepTry}
+	req := setupapi.RunRequest{SkipChatModel: m.opts.Cloud, AcknowledgeLowDisk: m.ackedDisk, KeepTrying: m.keepTry,
+		ExtraModels: m.runExtras}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 		defer cancel()
@@ -1049,6 +1084,9 @@ func (m Model) advance() (Model, tea.Cmd) {
 	ranRun := m.dl.run
 	if m.dl.run {
 		if st.Running() {
+			if m.opts.Mode == ModeFirstRun && m.scr == scrDownload && (len(st.Tests) > 0 || st.State == setupapi.RunVerifying) {
+				m.scr, m.focus = scrTest, 0
+			}
 			return m, m.tickCmd()
 		}
 		m.dl.run = false
@@ -1056,11 +1094,6 @@ func (m Model) advance() (Model, tea.Cmd) {
 		m.notChecked = map[string]bool{}
 		if st.State == setupapi.RunCancelled {
 			m.dl.cancelled = true
-		}
-		if st.State == setupapi.RunFailed && st.Error != nil {
-			// Said on the summary too: the models may all be here and setup
-			// still have stopped on something else.
-			m.runErr = *st.Error
 		}
 		if st.State == setupapi.RunIdle {
 			// The run is gone without an ending: GAIA's background service
@@ -1084,8 +1117,16 @@ func (m Model) advance() (Model, tea.Cmd) {
 	}
 	m.dl.active = false
 	m.polling = false
+	if ranRun && m.testsBlocked() {
+		m.scr, m.focus = scrTest, 0
+		return m, nil
+	}
+	if m.scr == scrTest {
+		// Stopped short of the tests: the download screen says what to do.
+		m.scr = scrDownload
+	}
 	if !ranRun && m.needsLoadCheck() {
-		// Everything is downloaded but not all of it checked: finish setup
+		// Everything is downloaded but not all of it proven: finish setup
 		// now, as the Agent UI's Finish setup does, instead of waiting at
 		// 100% for a key nobody knows to press.
 		return m.startCheckRun()
@@ -1098,13 +1139,48 @@ func (m Model) advance() (Model, tea.Cmd) {
 	return m, nil
 }
 
+// proven reports whether setup's own run ended ready, with every job it
+// requires passing its test. Only that lets first-run setup call GAIA ready.
+func (m Model) proven() bool {
+	return m.status != nil && m.status.State == setupapi.RunReady && len(m.requiredFailures()) == 0
+}
+
+// requiredFailures are the failed tests GAIA can't be ready without.
+func (m Model) requiredFailures() []setupapi.TestRow {
+	if m.status == nil {
+		return nil
+	}
+	var out []setupapi.TestRow
+	for _, r := range m.status.Tests {
+		if r.State == setupapi.TestFailed && !r.Optional() {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// testsBlocked reports whether a finished run stopped on its tests rather than
+// on a download, whose own row says what went wrong.
+func (m Model) testsBlocked() bool {
+	if m.opts.Mode != ModeFirstRun || m.status == nil {
+		return false
+	}
+	switch m.status.State {
+	case setupapi.RunFailed:
+		return !m.status.ModelFailed && (len(m.status.Tests) > 0 || m.allReady())
+	case setupapi.RunReady:
+		return len(m.requiredFailures()) > 0
+	}
+	return false
+}
+
 // needsLoadCheck reports whether first-run setup has every model downloaded
-// and some not yet load-checked, with nothing failed, queued or downloading.
+// and something still unproven, with nothing failed, queued or downloading.
 func (m Model) needsLoadCheck() bool {
 	if m.opts.Mode != ModeFirstRun || m.dl.cancelled {
 		return false
 	}
-	unchecked := false
+	unchecked := !m.proven()
 	for _, r := range m.shownRows() {
 		switch m.shownState(r) {
 		case setupapi.StateUnchecked:
@@ -1121,10 +1197,26 @@ func (m Model) needsLoadCheck() bool {
 func (m Model) startCheckRun() (Model, tea.Cmd) {
 	ids := m.dl.ids
 	m.scr = scrDownload
-	m.note, m.runErr = checkingModels, ""
+	m.note = checkingModels
 	m.dl = download{active: true, run: true, starting: true, checking: true, ids: ids}
 	m.total = rate{}
 	m.polling = true
+	return m, tea.Batch(m.runCmd(), m.tickCmd())
+}
+
+// retest runs setup again from the Test step: nothing on disk downloads again,
+// and every job is tested from the start.
+func (m Model) retest() (Model, tea.Cmd) {
+	ids := m.dl.ids
+	m.note = ""
+	m.dl = download{active: true, run: true, starting: true, checking: true, ids: ids}
+	m.total = rate{}
+	m.polling = true
+	if m.status != nil {
+		st := *m.status
+		st.State, st.Tests, st.Error, st.ModelFailed = setupapi.RunRunning, nil, nil, false
+		m.status = &st
+	}
 	return m, tea.Batch(m.runCmd(), m.tickCmd())
 }
 
@@ -1151,9 +1243,10 @@ func (m Model) rootCause() int {
 }
 
 // checkFinished moves a finished download on: the ready summary in setup, a
-// note in /models. A failed model holds it until retried or skipped.
+// note in /models. A failed model holds it until retried or skipped, and setup
+// is never ready until its tests have passed.
 func (m Model) checkFinished() Model {
-	if m.scr != scrDownload || m.dl.active || !m.allReady() {
+	if m.scr != scrDownload || m.dl.active || !m.canFinish() {
 		return m
 	}
 	if m.opts.Mode == ModeFirstRun {
@@ -1225,11 +1318,17 @@ func (m Model) shownRows() []setupapi.ModelProgress {
 	return out
 }
 
-// allReady reports whether every listed model is on this PC.
+// canFinish reports whether the download step can move on.
+func (m Model) canFinish() bool {
+	return m.allReady() && (m.opts.Mode != ModeFirstRun || m.proven())
+}
+
+// allReady reports whether every listed model is on this PC. Setup with
+// nothing to download lists none, and has nothing left once its run is proven.
 func (m Model) allReady() bool {
 	rows := m.shownRows()
 	if len(rows) == 0 {
-		return false
+		return m.opts.Mode == ModeFirstRun && m.proven()
 	}
 	for _, r := range rows {
 		if m.shownState(r) != setupapi.StateReady {
@@ -1529,32 +1628,109 @@ func (m Model) drive() string {
 	return driveOf(m.plan.Disk.Path)
 }
 
-// item is one line the cursor can sit on: a model, or the line that opens
-// and closes the "already in Lemonade" group.
+// The jobs models are grouped by, in screen order.
+const (
+	jobChat   = "chat"
+	jobVision = "vision"
+	jobDocs   = "documents"
+	jobExtras = "extras"
+)
+
+// The lines under "Reading images" that are a choice, not a model.
+const (
+	actionOtherVision = "other-vision"
+	actionNoVision    = "no-vision"
+)
+
+// item is one line the cursor can sit on: a model under a job, the line that
+// opens and closes the "already in Lemonade" group, or a vision action.
 type item struct {
-	row   rowEntry
-	group bool
+	row    rowEntry
+	group  bool
+	job    string
+	action string
 }
 
-// items are the checklist lines in screen order: setup's and GAIA's models,
-// the group line, then the group's models while it is open.
+// radio reports whether models under a job are picked one at a time. First-run
+// setup chooses one model for each job; /models manages what is on this PC, so
+// it can tick several.
+func (m Model) radio() bool { return m.opts.Mode == ModeFirstRun }
+
+// builtInVision reports whether the chat model reads images itself.
+func (m Model) builtInVision() bool {
+	r, ok := m.sel.find(m.sel.chat)
+	return ok && r.readsImages
+}
+
+// jobOf is the one job a model is listed under; setup also offers a vision
+// model that can chat under "Reading images".
+func (m Model) jobOf(r rowEntry) string {
+	switch {
+	case r.embedding:
+		return jobDocs
+	case r.optional != "", !r.chatable && !r.vision:
+		return jobExtras
+	case !r.chatable:
+		return jobVision
+	case r.vision && !m.radio() && !sameID(r.id, m.sel.chat):
+		return jobVision
+	}
+	return jobChat
+}
+
+// items are the checklist lines in screen order, by job: Verified chat models
+// ahead of Untested ones and the group line, then what reads images, documents
+// and memory, and the extras.
 func (m Model) items() []item {
 	var out []item
-	for _, r := range m.sel.rows {
-		if !r.installed {
-			out = append(out, item{row: r})
-		}
-	}
-	if m.installedCount() == 0 {
-		return out
-	}
-	out = append(out, item{group: true})
-	if m.showAll {
+	rows := func(job string, keep func(rowEntry) bool) {
 		for _, r := range m.sel.rows {
-			if r.installed {
-				out = append(out, item{row: r})
+			if !r.installed && keep(r) {
+				out = append(out, item{row: r, job: job})
 			}
 		}
+	}
+	rows(jobChat, func(r rowEntry) bool { return m.jobOf(r) == jobChat && r.support == setupapi.SupportVerified })
+	rows(jobChat, func(r rowEntry) bool { return m.jobOf(r) == jobChat && r.support != setupapi.SupportVerified })
+	if m.installedCount() > 0 {
+		out = append(out, item{group: true, job: jobChat})
+		if m.showAll {
+			for _, r := range m.sel.rows {
+				if r.installed {
+					out = append(out, item{row: r, job: jobChat})
+				}
+			}
+		}
+	}
+	if !m.radio() {
+		rows(jobVision, func(r rowEntry) bool { return m.jobOf(r) == jobVision })
+	} else if !m.sel.cloud {
+		out = append(out, m.visionItems()...)
+	}
+	rows(jobDocs, func(r rowEntry) bool { return m.jobOf(r) == jobDocs })
+	rows(jobExtras, func(r rowEntry) bool { return m.jobOf(r) == jobExtras })
+	return out
+}
+
+// visionItems are setup's "Reading images" lines: nothing to choose while the
+// chat model reads images itself, until the user asks for another model.
+func (m Model) visionItems() []item {
+	var models []item
+	for _, r := range m.sel.rows {
+		if r.vision && !sameID(r.id, m.sel.chat) {
+			models = append(models, item{row: r, job: jobVision})
+		}
+	}
+	builtIn := m.builtInVision()
+	if len(models) == 0 && !builtIn {
+		return nil
+	}
+	var out []item
+	if builtIn {
+		out = append(out, item{job: jobVision, action: actionOtherVision})
+	}
+	if !builtIn || m.showVision {
+		out = append(append(out, models...), item{job: jobVision, action: actionNoVision})
 	}
 	return out
 }
@@ -1585,10 +1761,10 @@ func (m *Model) clampScroll() {
 	}
 }
 
-// focusedRow is the model under the cursor; false on the group line.
+// focusedRow is the model under the cursor; false on any other line.
 func (m Model) focusedRow() (rowEntry, bool) {
 	items := m.items()
-	if m.focus >= 0 && m.focus < len(items) && !items[m.focus].group {
+	if m.focus >= 0 && m.focus < len(items) && !items[m.focus].group && items[m.focus].action == "" {
 		return items[m.focus].row, true
 	}
 	return rowEntry{}, false

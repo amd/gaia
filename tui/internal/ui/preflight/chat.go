@@ -310,7 +310,12 @@ func (m Model) chooserLines(w, budget int) []string {
 			}
 			out = append(out, pad(cursor+style.Render(fmt.Sprintf("%d. %s", i+1, o.Label))))
 			if !selected {
-				detail = detail[:max(0, 2-tight)]
+				// An unavailable option keeps its reason however tight it gets.
+				keep := max(0, 2-tight)
+				if o.Unavailable != "" {
+					keep = max(1, keep)
+				}
+				detail = detail[:keep]
 			}
 			for _, d := range detail {
 				for _, l := range wrap(d, textW) {

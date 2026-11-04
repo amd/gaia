@@ -482,6 +482,44 @@ class TestJourney:
         )
         assert out.returncode == 124
 
+    def test_a_phase_whose_output_the_console_cannot_encode_still_passes(
+        self, results, tmp_path
+    ):
+        # The phase writes UTF-8 bytes, as gaia-tui does; only the relay's own
+        # console is cp1252, as on a Windows runner.
+        script = tmp_path / "utf8_phase.py"
+        script.write_text(
+            "import sys\n" "sys.stdout.buffer.write('\\u274c failed\\n'.encode())\n",
+            encoding="utf-8",
+        )
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"}
+        env["PYTHONIOENCODING"] = "cp1252"
+        out = subprocess.run(
+            [
+                sys.executable,
+                str(HEADLESS / "journey.py"),
+                "run",
+                "--results",
+                str(results),
+                "--phases",
+                "health",
+                "--thresholds",
+                str(_thresholds(tmp_path, {})),
+                "--",
+                sys.executable,
+                str(script),
+                "{phase}",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="cp1252",
+            errors="replace",
+            env=env,
+        )
+        assert "Traceback" not in out.stderr, out.stderr
+        assert out.returncode == 0, out.stdout + out.stderr
+        assert json.loads(results.read_text())["phases"]["health"]["status"] == "pass"
+
     def test_summarize_fails_when_any_row_failed(self, tmp_path):
         d = tmp_path / "res"
         d.mkdir()
