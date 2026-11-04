@@ -29,7 +29,8 @@
 #                 fake Lemonade with nothing downloaded: Download, Test, Ready.
 #                 A PR or a dispatch can pick a release that predates that
 #                 setup, so only the tag, whose checkout is the code under
-#                 test, runs it. test_setup_journey.yml covers the screens on
+#                 test, runs it, or a dispatch that asks for it with
+#                 setup_journey. test_setup_journey.yml covers the screens on
 #                 PRs, and test_setup_real_download.yml a real download nightly.
 #   terminal      `gaia-tui version` reports the release, and one non-interactive
 #                 turn (`gaia-tui chat --agent gaia --query ...`) completes
@@ -84,6 +85,11 @@ on:
         required: false
         default: ''
         type: string
+      setup_journey:
+        description: 'Also walk first-run setup in the desktop rows. Only for a release whose app has that setup, close to the checked-out ref.'
+        required: false
+        default: false
+        type: boolean
   push:
     tags: ['v*']
   pull_request:
@@ -314,7 +320,7 @@ jobs:
       ROW: ${{ matrix.row }}
       KIND: ${{ matrix.kind }}
       COMPONENTS: ${{ matrix.components }}
-      SETUP_PHASE: ${{ github.event_name == 'push' && github.ref_type == 'tag' && matrix.setup == true }}
+      SETUP_PHASE: ${{ matrix.setup == true && ((github.event_name == 'push' && github.ref_type == 'tag') || inputs.setup_journey == true) }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -405,7 +411,7 @@ jobs:
       ROW: ${{ matrix.row }}
       KIND: ${{ matrix.kind }}
       TUI_PLATFORM: ${{ matrix.tui_platform }}
-      SETUP_PHASE: ${{ github.event_name == 'push' && github.ref_type == 'tag' && matrix.setup == true }}
+      SETUP_PHASE: ${{ matrix.setup == true && ((github.event_name == 'push' && github.ref_type == 'tag') || inputs.setup_journey == true) }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

@@ -25,7 +25,8 @@ from gaia.llm.gateway import (
     GatewayModel,
     GatewayState,
 )
-from gaia.version import LEMONADE_GATEWAY_MIN_VERSION
+from gaia.llm.lemonade_client import LemonadeClientError
+from gaia.version import LEMONADE_MIN_VERSION, LEMONADE_VERSION
 
 
 def _response(status_code=200, body=None):
@@ -43,6 +44,7 @@ def manager():
     client = MagicMock()
     client.base_url = "http://localhost:13305/api/v1"
     client.credential_base_url.return_value = client.base_url
+    client.health_check.return_value = {"status": "ok", "version": LEMONADE_VERSION}
     return GatewayManager(client=client)
 
 
@@ -310,7 +312,7 @@ class TestErrors:
             "gaia.llm.gateway.requests.request",
             return_value=_response(status_code=404, body={}),
         ):
-            with pytest.raises(GatewayError, match="11.8.0"):
+            with pytest.raises(GatewayError, match="oldest version GAIA supports"):
                 manager.clear_token()
 
     @pytest.mark.parametrize("status", [401, 403, 301, 302, 303, 307, 308])
@@ -368,32 +370,32 @@ class TestListModels:
                 "id": "amd.Claude-Opus-5",
                 "recipe": "cloud",
                 "labels": ["tool-calling", "vision"],
-                "context_length": 1000000,
+                "max_context_window": 1000000,
             },
             {
                 "id": "amd.zephyr-small",
                 "recipe": "cloud",
                 "labels": [],
-                "context_length": 8192,
+                "max_context_window": 8192,
             },
             {
                 "id": "amd.gemma-4-31b-it",
                 "recipe": "cloud",
                 "labels": ["tool-calling"],
-                "context_length": 131072,
+                "max_context_window": 131072,
             },
             {
                 "id": "amd.DeepSeek-V4.1-Flash",
                 "recipe": "cloud",
                 "labels": ["tool-calling"],
-                "context_length": 131072,
+                "max_context_window": 131072,
             },
             # The older flash is a different model: it must not win the default.
             {
                 "id": "amd.DeepSeek-V4-Flash",
                 "recipe": "cloud",
                 "labels": ["tool-calling"],
-                "context_length": 131072,
+                "max_context_window": 131072,
             },
             # Another provider's cloud model must not leak into the AMD list.
             {"id": "fireworks.kimi", "recipe": "cloud", "labels": []},
@@ -854,12 +856,48 @@ class TestProbeDoesNotLeakTheTokenOverPlaintext:
         assert get.called
 
 
-class TestPreCloudOffloadServerIsRejected:
-    """A Lemonade older than 11.8 answers the cloud routes with 200, reports
-    success, lists the provider — and discovers nothing. It also exposes no
-    ``version`` field, so the 404 check and any version comparison both miss
-    it. Observed live on 11.5.0, where it cost an evening of debugging a token
-    that was never the problem.
+class TestAnUnsupportedServerIsRefusedBeforeRegistering:
+    """An old Lemonade can answer install 200 and discover nothing, which
+    would read as a rejected key; refuse it by version first."""
+
+    @pytest.mark.parametrize(
+        "reported,named",
+        [("11.5.0", "v11.5.0"), (None, "no version"), ("dev", "'dev'")],
+    )
+    def test_refused_naming_what_it_reported(self, manager, reported, named):
+        manager.client.health_check.return_value = {"status": "ok", "version": reported}
+        with patch("gaia.llm.gateway.requests.request") as request:
+            with pytest.raises(GatewayError) as excinfo:
+                manager.install("https://gw.example.com/v1", api_key="sk-real")
+
+        request.assert_not_called()
+        message = str(excinfo.value)
+        assert named in message
+        assert LEMONADE_MIN_VERSION in message
+        assert "rejected the key" not in message
+
+    def test_a_development_build_of_the_floor_is_accepted(self, manager):
+        manager.client.health_check.return_value = {
+            "status": "ok",
+            "version": f"{LEMONADE_MIN_VERSION}~3.abc1234",
+        }
+        with patch("gaia.llm.gateway.requests.request") as request:
+            request.return_value = _response(body={"models_discovered": 2})
+            manager.install("https://gw.example.com/v1")
+        request.assert_called_once()
+
+    def test_an_unreachable_server_registers_nothing(self, manager):
+        manager.client.health_check.side_effect = LemonadeClientError("refused")
+        with patch("gaia.llm.gateway.requests.request") as request:
+            with pytest.raises(GatewayError, match="refused"):
+                manager.install("https://gw.example.com/v1")
+        request.assert_not_called()
+
+
+class TestAKeyThatDiscoversNothingIsRejected:
+    """Lemonade stores a key without validating it, so registration reports
+    success with zero models when the gateway refused the key. That is an
+    error, not a working gateway.
     """
 
     def _install(self, manager, body):
@@ -870,7 +908,7 @@ class TestPreCloudOffloadServerIsRejected:
     def test_success_with_zero_models_and_a_key_is_an_error(
         self, manager, isolated_state
     ):
-        with pytest.raises(GatewayError, match=LEMONADE_GATEWAY_MIN_VERSION):
+        with pytest.raises(GatewayError, match="rejected the key"):
             self._install(
                 manager,
                 {

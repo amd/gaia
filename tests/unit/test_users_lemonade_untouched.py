@@ -75,7 +75,7 @@ class FakeLemonade:
                     return self._reply(
                         {
                             "status": "ok",
-                            "version": "2026.40.0",
+                            "version": "2026.44.1",
                             "model_loaded": fake.root_model,
                             "all_models_loaded": fake.loaded,
                         }

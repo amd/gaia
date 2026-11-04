@@ -302,7 +302,7 @@ export async function withModelPage(page: Page, models: unknown[], plan: unknown
             ],
         },
         'GET /providers/fireworks/models': { provider: 'fireworks', models: FIREWORKS_MODELS },
-        'GET /spending': { month: '2026-10', total_usd: 1.25, turns: 12, unpriced_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price' },
+        'GET /spending': { month: '2026-10', total_usd: 1.25, turns: 12, unpriced_turns: 0, unreported_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price' },
     };
     await page.route('**/api/**', async (route: Route) => {
         const url = new URL(route.request().url());
@@ -418,4 +418,98 @@ export async function useLocale(page: Page, locale: string): Promise<void> {
     await page.addInitScript((code) => {
         window.localStorage.setItem('gaia-chat-locale', code);
     }, locale);
+}
+
+const memoryItem = (id: string, category: string, content: string, over: Record<string, unknown> = {}) => ({
+    id, category, content, domain: null, source: 'llm_extract', confidence: 0.8, metadata: null, use_count: 2,
+    context: 'global', sensitive: false, entity: null, created_at: iso(60 * 30), updated_at: iso(60 * 5),
+    last_used: null, due_at: null, reminded_at: null, superseded_by: null, has_embedding: true, ...over,
+});
+
+const MEMORY_ITEMS = [
+    memoryItem('k1', 'preference', 'Prefers short answers with the numbers first', { source: 'tool' }),
+    memoryItem('k2', 'fact', 'Lives in Calgary and works at a hospital', { entity: 'place:calgary', source: 'user' }),
+    memoryItem('k3', 'reminder', 'Dentist appointment', { due_at: '2026-10-23', context: 'personal' }),
+    memoryItem('k4', 'fact', 'Bank PIN hint', { sensitive: true }),
+    memoryItem('k5', 'note', 'يفضّل الاجتماعات الصباحية', { source: 'consolidation' }),
+];
+
+const GOAL = {
+    id: 'g1', title: 'Ship the Q3 report', description: 'Collect the numbers and draft the summary.', status: 'in_progress',
+    source: 'agent_inferred', mode_required: 'manual', approved_for_auto: false, priority: 'high', progress_notes: '',
+    created_at: iso(60), updated_at: iso(30),
+    tasks: [
+        { id: 't1', goal_id: 'g1', description: 'Collect the numbers', status: 'completed', result: 'Done' },
+        { id: 't2', goal_id: 'g1', description: 'Draft the summary', status: 'blocked', result: null },
+    ],
+};
+
+const DISCOVERY_EVENTS = [
+    { type: 'log', message: 'Scanning installed apps' },
+    { type: 'finding', item: { content: 'Uses VS Code for Python work', category: 'fact', context: 'global', confidence: 0.9, _source_name: 'installed_apps' } },
+    { type: 'finding', item: { content: 'Works on the gaia repository', category: 'fact', context: 'work', confidence: 0.7 } },
+    { type: 'done', total: 2 },
+];
+
+export interface MemoryState {
+    enabled?: boolean;
+    empty?: boolean;
+    /** Every read fails, as when the memory store is locked. */
+    failed?: boolean;
+}
+
+/** The Memory dashboard's endpoints: a few memories, goals and tools, or empty, off or failing. */
+export async function withMemory(page: Page, { enabled = true, empty = false, failed = false }: MemoryState = {}): Promise<void> {
+    const items = empty ? [] : MEMORY_ITEMS;
+    const answers: Record<string, unknown> = {
+        'GET /memory/settings': { memory_enabled: enabled, mcp_memory_enabled: false, system_discovery_consent: false },
+        'GET /memory/stats': {
+            knowledge: {
+                total: items.length, total_retrievals: empty ? 0 : 9,
+                by_category: empty ? {} : { fact: 2, preference: 1, reminder: 1, note: 1 },
+                by_context: empty ? {} : { global: 4, personal: 1 }, sensitive_count: empty ? 0 : 1,
+                entity_count: empty ? 0 : 1, avg_confidence: 0.8, oldest: null, newest: null,
+            },
+            conversations: { total_turns: empty ? 0 : 12, total_sessions: empty ? 0 : 3, first_session: null, last_session: null },
+            tools: { total_calls: empty ? 0 : 8, unique_tools: empty ? 0 : 2, overall_success_rate: 0.75, total_errors: empty ? 0 : 2 },
+            temporal: { upcoming_count: empty ? 0 : 1, overdue_count: 0 },
+            embedding: { total_items: items.length, with_embedding: items.length, without_embedding: 0, coverage_pct: 100 },
+            db_size_bytes: 9_700_000,
+        },
+        'GET /memory/activity': empty ? [] : [
+            { date: '2026-10-14', conversations: 2, tool_calls: 3, knowledge_added: 1, errors: 0 },
+            { date: '2026-10-15', conversations: 1, tool_calls: 5, knowledge_added: 2, errors: 1 },
+            { date: '2026-10-16', conversations: 3, tool_calls: 0, knowledge_added: 2, errors: 1 },
+        ],
+        'GET /memory/knowledge': { items, total: items.length, offset: 0, limit: 15 },
+        'GET /memory/entities': empty ? [] : [{ entity: 'place:calgary', count: 1, last_updated: iso(60) }],
+        'GET /memory/tools': empty ? [] : [
+            { tool_name: 'run_shell', total_calls: 6, success_count: 4, failure_count: 2, denied_count: 1, success_rate: 0.67, avg_duration_ms: 1500, last_used: iso(20), last_error: 'Command timed out after 30 s' },
+            { tool_name: 'fetch_page', total_calls: 2, success_count: 2, failure_count: 0, denied_count: 0, success_rate: 1, avg_duration_ms: 420, last_used: iso(90), last_error: null },
+        ],
+        'GET /memory/conversations': empty ? [] : [
+            { session_id: ANSWER_SESSION, turn_count: 4, started_at: iso(200), last_activity: iso(120), first_message: 'Summarize the meeting notes', consolidated: true },
+            { session_id: 'deadbeef-0000-4000-8000-000000000009', turn_count: 1, started_at: iso(3000), last_activity: iso(3000), first_message: 'تذكّر أنني أسكن في كالغاري', consolidated: false },
+        ],
+        'GET /memory/upcoming': empty ? [] : [
+            { id: 'k3', content: 'Dentist appointment', category: 'reminder', due_at: '2026-10-23T09:00:00Z', reminded_at: null, context: 'personal', created_at: iso(600) },
+        ],
+        'GET /memory/embedding-coverage': { total_items: items.length, with_embedding: items.length, without_embedding: 0, coverage_pct: 100 },
+        'GET /goals': { goals: empty ? [] : [GOAL, { ...GOAL, id: 'g2', title: 'Tidy the inbox', status: 'pending_approval', tasks: [] }], total: empty ? 0 : 2 },
+        'GET /goals/stats': { goals: empty ? {} : { in_progress: 1, pending_approval: 1, completed: 3 }, tasks: {} },
+    };
+    await page.route('**/api/**', async (route: Route) => {
+        const url = new URL(route.request().url());
+        const key = `${route.request().method()} ${url.pathname.replace(/^\/api/, '')}`;
+        if (key === 'GET /memory/stream-discovery') {
+            const body = DISCOVERY_EVENTS.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('');
+            await route.fulfill({ status: 200, contentType: 'text/event-stream', body });
+        } else if (failed && key.startsWith('GET /memory/') && key !== 'GET /memory/settings') {
+            await route.fulfill({ status: 500, json: { detail: 'Memory store is locked by another process' } });
+        } else if (key in answers) {
+            await route.fulfill({ json: answers[key] });
+        } else {
+            await route.fallback();
+        }
+    });
 }

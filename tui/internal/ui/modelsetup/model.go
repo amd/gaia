@@ -187,7 +187,10 @@ type Model struct {
 	// notChecked are models a single pull finished in first-run setup: on
 	// disk, not yet load-checked by setup's run.
 	notChecked map[string]bool
-	since      time.Time
+	// retests are single "downloads" the backend runs as a test again: the
+	// model failed its test with nothing wrong with the file.
+	retests map[string]bool
+	since   time.Time
 	// runExtras are the models outside the plan the latest run fetches and
 	// tests; testing again sends the same list.
 	runExtras []string
@@ -244,6 +247,7 @@ func New(api setupapi.API, opts Options) Model {
 		verifyAt:   map[string]time.Time{},
 		kept:       map[string]int64{},
 		notChecked: map[string]bool{},
+		retests:    map[string]bool{},
 	}
 	m.busy = readingModels
 	m.busySince = opts.Now()
@@ -956,6 +960,10 @@ func (m Model) nextSingle() (Model, tea.Cmd) {
 	m.dl.queue = m.dl.queue[1:]
 	m.dl.current = id
 	m.dl.starting = true
+	if row, ok := m.progressFor(id); ok && setupapi.IsTestKind(row.ErrorKind) {
+		// The backend tests it again; a pass is a checked model.
+		m.retests[id] = true
+	}
 	api, ack, keep := m.api, m.ackedDisk, m.keepTry
 	return m, tea.Batch(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
@@ -1103,13 +1111,15 @@ func (m Model) advance() (Model, tea.Cmd) {
 	}
 	if m.dl.current != "" {
 		row, ok := m.progressFor(m.dl.current)
-		if !ok || row.State == setupapi.StateDownloading || row.State == setupapi.StateQueued {
+		if !ok || row.State == setupapi.StateDownloading || row.State == setupapi.StateQueued ||
+			row.State == setupapi.StateVerifying {
 			return m, m.tickCmd()
 		}
-		if row.State == setupapi.StateReady && m.opts.Mode == ModeFirstRun {
+		if row.State == setupapi.StateReady && m.opts.Mode == ModeFirstRun && !m.retests[row.ID] {
 			// A single pull downloads; only setup's run checks that it loads.
 			m.notChecked[row.ID] = true
 		}
+		delete(m.retests, row.ID)
 		m.dl.current = ""
 	}
 	if len(m.dl.queue) > 0 && !m.dl.cancelled {
@@ -1351,13 +1361,13 @@ func (m Model) doneBytes(r setupapi.ModelProgress) int64 {
 }
 
 // shownState is a row's state as the user can act on it. "verifying" means
-// downloaded and waiting for setup's load check; once no run is going to do
-// that check (stopped, or finished), the model is simply on this PC.
+// downloaded and waiting for setup's load check, or being tested again; once
+// nothing is going to check it (stopped, or finished), it is simply on this PC.
 func (m Model) shownState(r setupapi.ModelProgress) string {
 	if r.State == setupapi.StateReady && m.notChecked[r.ID] {
 		return setupapi.StateUnchecked
 	}
-	if r.State == setupapi.StateVerifying && !(m.dl.active && m.dl.run) {
+	if r.State == setupapi.StateVerifying && !(m.dl.active && (m.dl.run || m.retests[r.ID])) {
 		return setupapi.StateReady
 	}
 	return r.State

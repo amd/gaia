@@ -816,6 +816,7 @@ export interface MessageResponse {
   role: string;
   session_id: string;
   stats?: InferenceStatsResponse | null;
+  stopped?: boolean;
   turn_summary?: TurnSummaryResponse | null;
 }
 /**
@@ -1227,7 +1228,9 @@ export interface SettingsUpdateRequest {
  * ``keep_trying`` to wait up to two minutes out a dropped connection;
  * ``extra_models`` to pull models beside the plan's (the user ticked them);
  * ``server_only`` to start the model server and stop, so the models can be
- * chosen against it before anything downloads.
+ * chosen against it before anything downloads;
+ * ``upgrade_embedded`` to replace an older embedded server artifact without
+ * downloading the existing model cache again.
  */
 export interface SetupRunRequest {
   acknowledge_low_disk?: boolean;
@@ -1236,6 +1239,7 @@ export interface SetupRunRequest {
   keep_trying?: boolean;
   server_only?: boolean;
   skip_chat_model?: boolean;
+  upgrade_embedded?: boolean;
 }
 export interface SkipModelRequest {
   model_id: string;

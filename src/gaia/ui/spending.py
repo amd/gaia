@@ -7,7 +7,8 @@ Prices are list prices from the one rate card GAIA keeps
 (:mod:`gaia.eval.bench.metering`), so the price shown before a model is picked,
 the cost recorded after a turn, and the turn's own estimate all agree. A model
 with no card has an unknown price: it is shown as unknown and counted apart,
-never as $0.
+never as $0. A priced turn whose usage never came back (a stopped answer) is
+counted apart the same way, as unreported rather than unpriced.
 
 The limit applies to Agent UI chats. Once this month's known spending reaches
 it, a cloud turn is refused with how to go on, until the user raises the limit
@@ -139,15 +140,19 @@ def month_report(db, month: Optional[str] = None) -> Dict[str, Any]:
                 "turns": 0,
                 "usd": 0.0,
                 "unpriced_turns": 0,
+                "unreported_turns": 0,
             },
         )
         entry["turns"] += 1
-        if r["usd"] is None:
+        if r["usd"] is not None:
+            entry["usd"] += r["usd"]
+        elif price_card(r["model"]) is None:
             entry["unpriced_turns"] += 1
         else:
-            entry["usd"] += r["usd"]
+            entry["unreported_turns"] += 1
     total = sum(e["usd"] for e in by_model.values())
     unpriced = sum(e["unpriced_turns"] for e in by_model.values())
+    unreported = sum(e["unreported_turns"] for e in by_model.values())
     limit = get_limit(db)
     allowed = db.get_setting(ALLOWED_MONTH_SETTING) == month
     if limit is None:
@@ -163,6 +168,7 @@ def month_report(db, month: Optional[str] = None) -> Dict[str, Any]:
         "total_usd": round(total, 4),
         "turns": len(rows),
         "unpriced_turns": unpriced,
+        "unreported_turns": unreported,
         "limit_usd": limit,
         "state": state,
         "by_model": sorted(by_model.values(), key=lambda e: -e["usd"]),

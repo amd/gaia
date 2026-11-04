@@ -355,7 +355,8 @@ export interface TurnPerformance {
     /** A null name is tool time measured outside any recorded step. */
     tools: Array<{ name: string | null; seconds: number | null }>;
     loads: Array<{ model: string | null; seconds: number; replaced?: string[]; during?: 'request' }>;
-    cost: { kind: 'local' | 'estimate' | 'unknown'; usd: number | null };
+    /** `unreported`: the model is priced, but its usage never came back (a stopped answer). */
+    cost: { kind: 'local' | 'estimate' | 'unknown' | 'unreported'; usd: number | null };
     /** Why a value is unknown, keyed by field. */
     unknown?: Partial<Record<'first_token_seconds' | 'prefill_tokens_per_second' | 'generation_tokens_per_second' | 'tokens' | 'tokens_cached' | 'time', string>>;
 }
@@ -1010,9 +1011,13 @@ export interface SetupStep {
 /** `gaia init --check --json`: ready, or the stage and reasons it is not. */
 export interface SetupCheck {
     ready: boolean;
-    stage?: 'setup' | 'server' | 'load' | string;
+    stage?: 'setup' | 'upgrade' | 'server' | 'load' | string;
     reasons?: string[];
     models?: Array<{ id: string; role: string; size_gb: number | null; loaded: boolean; error: string | null }>;
+    /** True but no setup step, e.g. no GAIA agent build for this PC. */
+    warnings?: string[];
+    /** The hub has no GAIA agent build for this PC, so chat can't run here. */
+    no_agent_build?: boolean;
     steps: SetupStep[];
     /** The steps for a cloud provider, which downloads only the embedding model. */
     cloud_steps?: SetupStep[];
@@ -1089,6 +1094,8 @@ export interface SetupRunStatus {
     tests?: SetupTest[];
     /** The run only starts the model server; models are chosen and pulled after. */
     server_only?: boolean;
+    /** The run replaces an older embedded Lemonade artifact without model downloads. */
+    upgrade_embedded?: boolean;
     /** The chat model setup chose, once it has said. */
     chat_model?: string | null;
     /** Each model's download, the run's and any single download's. */
@@ -1399,9 +1406,11 @@ export interface SpendingReport {
     turns: number;
     /** Turns on a model with no known price, counted apart rather than as $0. */
     unpriced_turns: number;
+    /** Turns on a priced model whose usage never came back, such as a stopped answer. */
+    unreported_turns: number;
     limit_usd: number | null;
     state: 'no_limit' | 'ok' | 'near' | 'reached' | 'allowed_over';
-    by_model: Array<{ model: string; provider: string; turns: number; usd: number; unpriced_turns: number }>;
+    by_model: Array<{ model: string; provider: string; turns: number; usd: number; unpriced_turns: number; unreported_turns: number }>;
     price_source: string;
 }
 

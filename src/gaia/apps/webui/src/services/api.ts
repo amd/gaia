@@ -678,7 +678,8 @@ export class StreamStalledError extends Error {
 
 /** The connection broke after the run started (network switch, proxy reset, restart). */
 export class StreamDroppedError extends Error {
-    constructor(readonly cause: unknown) {
+    /** `unreachable`: the request never reached GAIA, so nothing there is still answering. */
+    constructor(readonly cause: unknown, readonly unreachable = false) {
         super(`The connection to GAIA was cut: ${cause instanceof Error ? cause.message : String(cause)}`);
         this.name = 'StreamDroppedError';
     }
@@ -935,7 +936,7 @@ export function attachToRun(
             } else if (err instanceof TypeError) {
                 // The run lives server-side; a failed attach is a connection problem, not a lost run.
                 log.stream.error('Run attach could not connect', err);
-                callbacks.onError(new StreamDroppedError(err));
+                callbacks.onError(new StreamDroppedError(err, true));
             } else {
                 log.stream.error('Run attach fetch error', err);
                 callbacks.onError(err);
