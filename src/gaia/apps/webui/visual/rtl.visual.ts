@@ -1250,8 +1250,9 @@ for (const locale of ['ar', 'en']) {
 
 for (const locale of ['ar', 'en']) {
     test(`the context meter names GAIA's window on a cloud model (${locale})`, async ({ page }, info) => {
-        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
-            p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({ json: { ...MEASURED_CONTEXT, model_window: 1048576 } })));
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({ json: { ...MEASURED_CONTEXT, model_window: 1048576 } }));
+        });
         await page.locator('button.context-meter').click();
         const cap = page.locator('.context-meter-cap');
         await expect(cap).toBeVisible();
