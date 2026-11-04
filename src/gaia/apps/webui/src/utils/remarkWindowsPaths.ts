@@ -24,8 +24,10 @@ interface MdNode {
  * `]`, a char Windows forbids, or a `)` that closes no `(` inside the path.
  * An escaped `\*` stays in, so a glob like `C:\logs\*.txt` keeps its backslash;
  * a bare `*` ends the path so emphasis around it still parses.
+ * A space stays in only when the next word holds a `\`, so `C:\My Docs\_drafts`
+ * is one path while `C:\foo and more` ends at `foo`.
  */
-const RAW_WIN_PATH_RE = /(?:(?<![A-Za-z0-9])[A-Za-z]:\\|\\\\[A-Za-z0-9_.$-]+\\)(?:\\\*|[^\s"`()\]<>|*]|\((?:\\\*|[^\s"`()\]<>|*])*\))*/g;
+const RAW_WIN_PATH_RE = /(?:(?<![A-Za-z0-9])[A-Za-z]:\\|\\\\[A-Za-z0-9_.$-]+\\)(?:\\\*|[^\s"`()\]<>|*]| (?=[^\s"`()\]<>|*]*\\)|\((?:\\\*|[^\s"`()\]<>|*])*\))*/g;
 
 const ESCAPE_RE = /\\([!-/:-@[-`{-~])/g;
 

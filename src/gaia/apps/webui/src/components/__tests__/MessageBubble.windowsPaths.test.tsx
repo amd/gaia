@@ -40,6 +40,17 @@ describe('Windows paths in prose keep their backslashes', () => {
         expect(textOf(`Saved to ${path} just now.`)).toBe(`Saved to ${path} just now.`);
     });
 
+    it.each(['C:\\My Docs\\_drafts\\plan.md', 'C:\\Program Files\\.gaia', '\\\\nas\\team share\\_tmp'])(
+        'keeps the spaced path %s',
+        (path) => {
+            expect(textOf(`Saved to ${path} just now.`)).toBe(`Saved to ${path} just now.`);
+        },
+    );
+
+    it('ends a path at a space when the next word has no backslash', () => {
+        expect(textOf('See C:\\me.gaia and \\_literal')).toBe('See C:\\me.gaia and _literal');
+    });
+
     it('keeps paths inside bold and list items', () => {
         expect(textOf('**C:\\Users\\me\\.gaia** is the home')).toBe('C:\\Users\\me\\.gaia is the home');
         expect(textOf('- C:\\x\\.cache\n- \\\\nas\\share\\_tmp')).toContain('C:\\x\\.cache');
