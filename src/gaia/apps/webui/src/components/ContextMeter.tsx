@@ -6,11 +6,13 @@ import { AlertTriangle } from 'lucide-react';
 import { Popover } from './Popover';
 import { ContextPanel } from './ContextPanel';
 import type { ContextUsage } from '../types';
+import { useT } from '../i18n/useT';
 import './ContextMeter.css';
 
 export function formatTokens(n: number): string {
     if (n < 1000) return String(n);
-    return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`;
+    if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`;
+    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
 }
 
 const PARTS = [
@@ -34,6 +36,7 @@ interface ContextMeterProps {
 
 /** How full the model's context window is, with a breakdown on click. */
 export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUsage, onDetails }: ContextMeterProps) {
+    const t = useT();
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
     const [details, setDetails] = useState(false);
@@ -52,6 +55,11 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
     const pct = Math.min(100, Math.round((usage.used / usage.window) * 100));
     const warn = usage.at_risk.length > 0;
     const free = Math.max(0, usage.window - usage.used - usage.reply_reserve);
+    // The meter fills against GAIA's admitted window, which can be far below a cloud model's own.
+    const modelWindow = usage.model_window != null && usage.model_window > usage.window ? usage.model_window : null;
+    const capNote = modelWindow
+        ? `GAIA uses ${formatTokens(usage.window)} of the model's ${formatTokens(modelWindow)}`
+        : null;
     return (
         <div className="composer-chip-wrap context-meter-wrap">
             <button
@@ -60,8 +68,8 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
                 className={`context-meter${warn ? ' is-warning' : ''}`}
                 onClick={() => setOpen((v) => !v)}
                 aria-expanded={open}
-                aria-label={`Context ${pct}% full: ${formatTokens(usage.used)} of ${formatTokens(usage.window)} tokens`}
-                title="How full the model's context window is"
+                aria-label={`Context ${pct}% full: ${formatTokens(usage.used)} of ${formatTokens(usage.window)} tokens${capNote ? ` (${capNote})` : ''}`}
+                title={capNote ? `How full GAIA's context window is: ${capNote}` : "How full the model's context window is"}
             >
                 <span className="context-meter-bar" aria-hidden="true"><span style={{ width: `${pct}%` }} /></span>
                 <span className="context-meter-label">{pct}%</span>
@@ -70,6 +78,12 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
                 <div className="context-meter-panel">
                     <div className="context-meter-head">
                         <strong>{formatTokens(usage.used)}</strong> of {formatTokens(usage.window)} tokens
+                        {modelWindow && (
+                            <span className="context-meter-cap" title={t('ctx.windowTitle')}>
+                                {' · '}{t.bare('ctx.gaiaUses')} <bdi dir="ltr">{formatTokens(usage.window)}</bdi>
+                                {' '}{t.bare('ctx.ofModel')} <bdi dir="ltr">{formatTokens(modelWindow)}</bdi>
+                            </span>
+                        )}
                     </div>
                     <div className="context-meter-stack" aria-hidden="true">
                         {PARTS.map(({ key }) => (
