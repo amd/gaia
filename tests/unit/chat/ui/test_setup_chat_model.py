@@ -265,3 +265,23 @@ def test_a_model_setup_cant_name_fails_the_chat_test_with_its_reason(sidecar):
     assert view["state"] == "failed"
     assert _agent_row(view)["error"] == "Setup didn't say which chat model it set up."
     assert proxy.bodies == []
+
+
+@pytest.mark.parametrize(
+    "device, where",
+    [("cpu", "this PC's CPU"), ("gpu", "this PC's GPU"), (None, "this PC,")],
+)
+def test_a_failed_chat_names_where_the_model_runs_not_always_the_gpu(
+    monkeypatch, device, where
+):
+    from gaia.ui import warmup
+
+    seen = []
+    monkeypatch.setattr(
+        warmup, "_device_for", lambda _c, model: seen.append(model) or device
+    )
+    error = sr._agent_turn_failure(DEFAULT_MODEL_NAME)
+    assert seen == [DEFAULT_MODEL_NAME]
+    assert f"loads on {where}" in error
+    if device != "gpu":
+        assert "GPU" not in error

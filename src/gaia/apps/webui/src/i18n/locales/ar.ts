@@ -1177,6 +1177,8 @@ const messages: Messages = {
     'setup.models.warn.tooBig': 'يحتاج إلى نحو {need}؛ لدى هذا الجهاز {have}. قد يكون بطيئًا جدًا أو يفشل في التحميل.',
     'setup.models.warn.npu': 'يعمل فقط على وحدة Ryzen AI NPU، ولا توجد على هذا الجهاز وحدة NPU يمكنها تشغيله.',
     'setup.models.warn.backend': 'لا يستطيع محرك الذكاء الاصطناعي على هذا الجهاز تشغيل هذا النوع من النماذج.',
+    'setup.models.cantRun.chat': 'لا يمكن تشغيل {name} على هذا الجهاز. {why} اختر نموذج دردشة آخر.',
+    'setup.models.cantRun.other': 'لا يمكن تشغيل {name} على هذا الجهاز. {why} ألغِ تحديده للمتابعة.',
     'setup.models.warn.tooBigNoNumbers': 'قد لا يعمل على هذا الجهاز: قد يحتاج إلى ذاكرة أكثر مما لدى هذا الجهاز للنماذج.',
     'setup.blocked': 'لا يستطيع هذا الجهاز تشغيل نماذج GAIA كما هو. توضح التفاصيل السبب؛ ويظل النموذج السحابي يعمل.',
     'setup.download.working': 'جارٍ الإعداد…',

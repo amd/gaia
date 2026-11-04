@@ -618,11 +618,40 @@ def run_disk_warning(
     profile: str = PROFILE,
     skip_chat_model: bool = False,
     extra_models: Optional[List[str]] = None,
+    check_disk: bool = True,
+    check_chat_model: bool = False,
 ) -> Optional[Dict[str, Any]]:
-    """The low-disk warning for the selected downloads, or None when they fit."""
+    """The low-disk warning for the selected downloads, or None when they fit.
+
+    *check_chat_model* raises :class:`CantRunHere` when nothing on this PC can
+    run the chat model setup would set up, such as an NPU model saved by
+    ``gaia init --profile npu`` where FastFlowLM can't run.
+    """
+    if not (check_disk or check_chat_model):
+        return None
     plan = build_plan(profile, skip_chat_model, extra_models)
+    if check_chat_model and not skip_chat_model:
+        _refuse_unrunnable(plan)
+    if not check_disk:
+        return None
     return model_choice.disk_shortfall(
         [(m["id"], m["size_gb"]) for m in plan["models"]], plan["disk"]
+    )
+
+
+def _refuse_unrunnable(plan: Dict[str, Any]) -> None:
+    """Raise :class:`CantRunHere` when *plan*'s chat model can't run on this PC."""
+    chat_id = plan["chat_model"]["id"]
+    entry = next((e for e in plan["catalog"] if e["id"] == chat_id), None)
+    if entry is None or entry["fit_code"] not in (
+        model_choice.FIT_NPU,
+        model_choice.FIT_BACKEND,
+    ):
+        return
+    raise CantRunHere(
+        f"Setup's chat model, {_display_name(chat_id)}, can't run on this PC: "
+        f"{entry['fit_reason']}. Choose another chat model (Customize in setup, "
+        "or `gaia config set default_model <model>`), then start setup again."
     )
 
 

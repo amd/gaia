@@ -1056,3 +1056,46 @@ def test_choosing_an_npu_model_that_cant_run_here_is_refused_not_confirmed(
     assert r.status_code == 409
     assert "can't run on this PC" in r.json()["detail"]
     assert GaiaConfig.load().default_model is None
+
+
+def test_setup_refuses_to_start_on_a_saved_npu_model_this_pc_cant_run(
+    client, running, monkeypatch
+):
+    """`gaia init --profile npu` saved the NPU model; FastFlowLM can't run here (#6632)."""
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    GaiaConfig.save_key("default_model", NPU_DEFAULT_MODEL_NAME)
+    GaiaConfig.save_key("last_model", NPU_DEFAULT_MODEL_NAME)
+    fake = running(MachineCapacity(96, "AMD iGPU", 500, npu_memory_gb=64))
+    _flm_backend(fake, "unsupported", "FLM does not support this kernel")
+    started = []
+    monkeypatch.setattr(
+        setup_router.runner, "start", lambda *a, **k: started.append(k) or {}
+    )
+    # Acknowledging low disk confirms the disk, not a model nothing here runs.
+    for body in ({}, {"acknowledge_low_disk": True}):
+        r = client.post("/api/setup/run", json=body, headers=UI)
+        assert r.status_code == 409
+        detail = r.json()["detail"]
+        assert "can't run on this PC" in detail
+        assert "Ryzen AI NPU" in detail and "Choose another chat model" in detail
+    assert started == []
+
+
+def test_a_cloud_setup_is_not_refused_for_a_saved_npu_model(
+    client, running, monkeypatch
+):
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    GaiaConfig.save_key("default_model", NPU_DEFAULT_MODEL_NAME)
+    fake = running(MachineCapacity(96, "AMD iGPU", 500, npu_memory_gb=64))
+    _flm_backend(fake, "unsupported")
+    started = []
+    monkeypatch.setattr(
+        setup_router.runner, "start", lambda *a, **k: started.append(a) or {}
+    )
+    r = client.post("/api/setup/run", json={"skip_chat_model": True}, headers=UI)
+    assert r.status_code == 200
+    assert len(started) == 1

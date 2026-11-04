@@ -357,18 +357,17 @@ def _agent_turn_problem(model_id: str) -> Optional[str]:
 
 def _agent_turn_failure(model_id: str) -> str:
     """The Test step's sentence for a failed chat on *model_id*."""
-    from gaia.llm.lemonade_client import cloud_model_provider, runs_on_npu
+    from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
     from gaia.ui.routers.providers import display_name
+    from gaia.ui.warmup import _device_for
 
     name = display_name(model_id)
     if model_id.startswith("claude-") or cloud_model_provider(model_id):
         what = f"GAIA's test chat on {name}, which runs in the cloud, got no answer."
     else:
-        device = "NPU" if runs_on_npu(model_id) else "GPU"
-        what = (
-            f"{name} loads on this PC's {device}, but GAIA's test chat on it "
-            "got no answer."
-        )
+        device = _device_for(LemonadeClient(verbose=False), model_id)
+        where = f"this PC's {device.upper()}" if device else "this PC"
+        what = f"{name} loads on {where}, but GAIA's test chat on it got no answer."
     return (
         f"{what} Test again, or choose another chat model. The setup report "
         "has the details."

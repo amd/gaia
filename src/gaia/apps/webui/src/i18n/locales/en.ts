@@ -1177,6 +1177,8 @@ export const enMessages = {
     'setup.models.warn.tooBig': 'Needs about {need}; this PC has {have}. It may be very slow or fail to load.',
     'setup.models.warn.npu': "Runs only on a Ryzen AI NPU, and this PC has none that can run it.",
     'setup.models.warn.backend': "This PC's AI engine can't run this kind of model.",
+    'setup.models.cantRun.chat': "{name} can't run on this PC. {why} Choose another chat model.",
+    'setup.models.cantRun.other': "{name} can't run on this PC. {why} Untick it to continue.",
     'setup.models.warn.tooBigNoNumbers': "May not run on this PC: it may need more memory than this PC has for models.",
     'setup.blocked': "This PC can't run GAIA's models as it is. Details say why; a cloud model still works.",
     'setup.download.working': 'Setting things up…',

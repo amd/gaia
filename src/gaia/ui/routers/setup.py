@@ -346,15 +346,17 @@ def start_run(body: SetupRunRequest, chat_model_for) -> Dict[str, Any]:
     except SetupPlanError as e:
         raise _plan_error(e, _PLAN_FAILED) from e
     try:
-        # Switching to GAIA's own server: the user's server's disk is moot.
+        # Switching to GAIA's own server: the user's server is moot.
         if (
             not body.gaia_lemonade
-            and not body.acknowledge_low_disk
             and not body.server_only
             and not body.upgrade_embedded
         ):
             warning = plan_api.run_disk_warning(
-                skip_chat_model=body.skip_chat_model, extra_models=extras
+                skip_chat_model=body.skip_chat_model,
+                extra_models=extras,
+                check_disk=not body.acknowledge_low_disk,
+                check_chat_model=True,
             )
             if warning:
                 raise _confirm(warning)

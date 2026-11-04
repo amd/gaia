@@ -356,11 +356,19 @@ describe('SetupScreen: the recommendation', () => {
     });
 
     it('names the verified model that would not fit, and why', async () => {
-        const big = { ...QWEN, fits: false as const, need_gb: 27.1, capacity_gb: 16, planned: false, selected: false, recommended: false };
+        const big = { ...QWEN, fits: false as const, fit_code: 'memory' as const, need_gb: 27.1, capacity_gb: 16, planned: false, selected: false, recommended: false };
         const small = { ...GEMMA_CHAT, chat_choice: true };
         mockedApi.getSetupPlan.mockResolvedValue(plan([small, big, EMBED], { chat_model: { id: GEMMA.id, user_set: false, size_gb: 5.97, downloaded: false } }));
         await open();
         expect(await planScreen()).toHaveTextContent(`${QWEN.name} is a bigger model that answers better, but it needs about 27.1 GB of memory and this PC has 16.0 GB.`);
+    });
+
+    it("calls no model this PC can't run a bigger model", async () => {
+        const npu = { ...QWEN, fits: false as const, fit_code: 'npu' as const, need_gb: 27.1, capacity_gb: 16, planned: false, selected: false, recommended: false };
+        const small = { ...GEMMA_CHAT, chat_choice: true };
+        mockedApi.getSetupPlan.mockResolvedValue(plan([small, npu, EMBED], { chat_model: { id: GEMMA.id, user_set: false, size_gb: 5.97, downloaded: false } }));
+        await open();
+        expect(await planScreen()).not.toHaveTextContent('is a bigger model');
     });
 
     it('opens everything that will download, components and models', async () => {
@@ -652,6 +660,25 @@ describe('SetupScreen: warnings and confirmations', () => {
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
         fireEvent.click(within(sheet).getByRole('button', { name: 'Download anyway' }));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalled());
+    });
+
+    // `gaia init --profile npu` saved an NPU model this PC can't run (#6632): no confirm can make it work.
+    it('refuses a saved chat model this PC can\'t run, naming it and why, without asking', async () => {
+        const npu = {
+            ...FLM, downloaded: false, size_gb: 3.2, planned: true, selected: true, roles: ['chat' as const],
+            fits: false as const, need_gb: 3.5, capacity_gb: 16, fit_code: 'npu' as const,
+            fit_reason: 'needs an AMD Ryzen AI NPU and its driver',
+        };
+        const saved = plan([npu, GEMMA, EMBED]);
+        mockedApi.getSetupPlan.mockResolvedValue({ ...saved, chat_model: { ...saved.chat_model, id: npu.id, user_set: true } });
+        await open();
+        clickStart();
+        expect(await screen.findByText(
+            "Gemma 4 E2B (NPU) can't run on this PC. Runs only on a Ryzen AI NPU, and this PC has none that can run it. Choose another chat model.",
+        )).toBeInTheDocument();
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+        expect(mockedApi.startSetup).not.toHaveBeenCalled();
+        expect(mockedApi.chooseSetupChatModel).not.toHaveBeenCalled();
     });
 
     it('stays put on Pick a smaller one, with nothing downloading', async () => {
