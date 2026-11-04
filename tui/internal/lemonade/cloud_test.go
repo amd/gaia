@@ -133,6 +133,22 @@ func TestErrorsNeverReflectProviderBodyOrFollowRedirects(t *testing.T) {
 		})
 	}
 }
+
+// A Lemonade without the cloud API is older than the floor; name it and the
+// same remedy the Python side gives, never a version GAIA no longer accepts.
+func TestNoCloudAPINamesTheFloor(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer s.Close()
+	err := New(s.URL).Clear(context.Background(), "fireworks")
+	if err == nil || !strings.Contains(err.Error(), MinExternalVersion) ||
+		!strings.Contains(err.Error(), "gaia daemon restart") ||
+		!strings.Contains(err.Error(), "lemonade-server.ai") {
+		t.Fatalf("404 error does not name the floor and the remedy: %v", err)
+	}
+}
+
 func TestProviderURLValidation(t *testing.T) {
 	for _, u := range []string{"http://gateway.example/v1", "http://localhost/v1", "https://user:secret@example.com/v1", "https://example.com/v1?key=secret", "file:///tmp/key"} {
 		if validateURL(u, false) == nil {

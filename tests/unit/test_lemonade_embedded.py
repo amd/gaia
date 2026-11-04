@@ -720,9 +720,12 @@ class TestStatus:
             raise EmbeddedLemonadeError("download failed")
 
         monkeypatch.setattr(EmbeddedLemonade, "install", failing_install)
-        with pytest.raises(EmbeddedLemonadeError, match="download failed"):
+        with pytest.raises(EmbeddedLemonadeError, match="download failed") as exc:
             manager.start(upgrade_older=True)
         assert events == []
+        message = str(exc.value)
+        assert "11.7.0 is still running on port 4321" in message
+        assert manager.version in message
 
     def test_no_install_never_downloads_an_upgrade(self, manager, monkeypatch):
         """`gaia lemonade embedded start --no-install` must not download."""

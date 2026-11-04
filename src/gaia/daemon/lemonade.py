@@ -245,7 +245,10 @@ class EmbeddedLemonadeOwner:
                     f"but this GAIA needs v{embedded.version}. Run `gaia init` "
                     "to replace it."
                 )
-            if orphaned:
+            # An older one that still answers is replaced by start() only once
+            # the new version is on disk, so a failed download leaves it up.
+            replaced_on_start = current.running and embedded.is_older(current.version)
+            if orphaned and not replaced_on_start:
                 logger.warning(
                     "daemon: reaping embedded Lemonade (pid %s) left by daemon "
                     "pid %s, which exited; it was %s",

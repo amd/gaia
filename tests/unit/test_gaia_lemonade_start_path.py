@@ -32,6 +32,7 @@ from gaia.llm.lemonade_launcher import (
 )
 from gaia.llm.lemonade_manager import LemonadeManager
 from gaia.llm.lemonade_supervisor import LemonadeStartError, LemonadeSupervisor
+from gaia.version import LEMONADE_VERSION
 
 EMBEDDED_PORT = 45678
 EMBEDDED_URL = f"http://localhost:{EMBEDDED_PORT}/api/v1"
@@ -128,7 +129,9 @@ def machine(tmp_path, monkeypatch):
         return m.embedded_up and client.port == EMBEDDED_PORT
 
     def get_status(self):
-        status = lc.LemonadeStatus(url=self.base_url, running=answers(self))
+        status = lc.LemonadeStatus(
+            version=LEMONADE_VERSION, url=self.base_url, running=answers(self)
+        )
         if status.running:
             status.context_size = 65536
             status.loaded_models = [{"id": "Gemma-4-E4B-it-GGUF", "type": "llm"}]

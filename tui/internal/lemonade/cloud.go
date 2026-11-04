@@ -254,7 +254,8 @@ func (c *Client) request(ctx context.Context, method, path string, data any, res
 		case 401, 403:
 			return fmt.Errorf("Authentication was rejected. Check the Lemonade or provider credential and retry")
 		case 404:
-			return fmt.Errorf("Cloud setup is unavailable. Update Lemonade to 11.8.1 or later and retry")
+			return fmt.Errorf("Cloud setup is unavailable: this Lemonade is older than %s, "+
+				"the oldest version GAIA supports. %s", MinExternalVersion, UpgradeHint)
 		case 409:
 			return fmt.Errorf("Lemonade has an environment key for this provider. It takes precedence; the pasted key was not saved. Leave the key blank to use it")
 		default:

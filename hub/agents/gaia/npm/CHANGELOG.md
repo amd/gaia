@@ -29,7 +29,8 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 - **Needs Lemonade Server 2026.44.1 or newer.** `GET /v1/gaia/init` reports
   `min_version: "2026.44.1"` (was `10.2.0`) and answers not-ready on anything
   older. Its `hint` no longer tells you to run `gaia init --force-reinstall`:
-  GAIA upgrades its own Lemonade when it next starts it, and a Lemonade you
+  GAIA upgrades its own Lemonade when its daemon next starts it (`gaia daemon
+  restart` does that now), and a Lemonade you
   run yourself is pointed at https://lemonade-server.ai. This hint needs the
   `gaia` CLI from the same release; the release that ships it raises the
   `amd-gaia` floor.

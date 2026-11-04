@@ -423,7 +423,10 @@ def describe_upgrade_hint(base_url: Optional[str] = None) -> str:
     it updates depends on how it was installed.
     """
     if gaia_runs_lemonade(base_url):
-        return "GAIA updates its own Lemonade Server the next time it starts it."
+        return (
+            "GAIA updates its own Lemonade Server the next time its daemon "
+            "starts it; run `gaia daemon restart` to do that now."
+        )
     return f"Update it from {_DOWNLOAD_URL}, then retry."
 
 

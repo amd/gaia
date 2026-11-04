@@ -41,7 +41,9 @@ from gaia.llm.lemonade_client import (
     CLOUD_RECIPE,
     LemonadeClient,
     LemonadeClientError,
+    LemonadeVersionError,
     catalog_context_window,
+    check_lemonade_version,
     lemonade_auth_headers,
     resolve_lemonade_api_key,
 )
@@ -826,6 +828,7 @@ class GatewayManager:
                 raise GatewayBlockedError(local_only_key_message("AMD LLM Gateway"))
             payload["api_key"] = api_key
 
+        self._refuse_an_unsupported_server()
         result = self._request(
             "POST", "install", payload=payload, timeout=_DISCOVERY_TIMEOUT, redact=True
         )
@@ -834,6 +837,26 @@ class GatewayManager:
         state.base_url = payload["base_url"]
         state.save()
         return result
+
+    def _refuse_an_unsupported_server(self) -> None:
+        """Refuse a Lemonade GAIA does not support before registering with it.
+
+        An old one can answer the install 200 and discover nothing, which
+        would otherwise read as a rejected key.
+        """
+        base_url = self.base_url
+        try:
+            health = self.client.health_check()
+        except LemonadeClientError as e:
+            raise GatewayError(
+                f"Lemonade at {base_url} did not answer its health check, so the "
+                f"gateway was not registered: {e}"
+            ) from e
+        version = health.get("version") if isinstance(health, dict) else None
+        try:
+            check_lemonade_version(version, base_url)
+        except LemonadeVersionError as e:
+            raise GatewayError(str(e)) from e
 
     def _reject_key_that_discovered_nothing(
         self, install_result: Dict[str, Any], api_key: Optional[str]

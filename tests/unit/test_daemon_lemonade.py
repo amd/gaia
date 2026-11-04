@@ -116,6 +116,29 @@ class TestEnsure:
             upgrade_older=True,
         )
 
+    def test_a_crashed_daemons_older_server_waits_for_the_download(self):
+        """Stopping it first would leave no server if the download fails."""
+        gone = OWNER + 1
+        embedded = _embedded(_running(version="0.0.1", owner_pid=gone))
+        embedded.start.side_effect = EmbeddedLemonadeError(
+            "Could not upgrade embedded Lemonade 0.0.1 to 11.8.1, so 0.0.1 is "
+            "still running on port 51234. Failed to download: offline."
+        )
+        with pytest.raises(EmbeddedLemonadeError, match="still running"):
+            _owner(embedded).ensure()
+
+        embedded.stop.assert_not_called()
+        embedded.start.assert_called_once()
+
+    def test_a_crashed_daemons_unanswering_server_is_still_reaped(self):
+        gone = OWNER + 1
+        embedded = _embedded(
+            _status(port=51234, unresponsive_pid=9, owner_pid=gone, version="0.0.1")
+        )
+        _owner(embedded).ensure()
+
+        embedded.stop.assert_called_once()
+
     def test_newer_version_owned_by_another_live_daemon_is_left_alone(self):
         other = OWNER + 1
         embedded = _embedded(_running(version="9999.1.0", owner_pid=other))
@@ -216,10 +239,11 @@ class TestEnsure:
             upgrade_older=True,
         )
 
-    def test_old_version_a_crashed_daemon_left_is_reaped_and_replaced(self):
+    def test_old_version_a_crashed_daemon_left_is_replaced_by_the_start(self):
+        """start() stops it once the new version is on disk, not before."""
         embedded = _embedded(_running(version="0.0.1", owner_pid=CRASHED))
         assert _owner(embedded).ensure().started is True
-        embedded.stop.assert_called_once_with()
+        embedded.stop.assert_not_called()
         embedded.start.assert_called_once()
 
     def test_stalled_server_whose_owner_still_runs_is_never_killed(self):

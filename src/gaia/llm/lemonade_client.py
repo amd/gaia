@@ -3156,16 +3156,67 @@ class CloudModelUnavailableError(LemonadeClientError):
         self.status = 404
 
 
-class LemonadeVersionError(LemonadeClientError):
-    """Raised when Lemonade Server is older than the oldest version GAIA supports."""
+def describe_version_refusal(
+    found_version: Optional[str], min_version: str, url: Optional[str] = None
+) -> str:
+    """Why a Lemonade reporting *found_version* is refused, naming what it said."""
+    server = f"Lemonade Server at {url}" if url else "Lemonade Server"
+    if not found_version:
+        return (
+            f"{server} reports no version, so GAIA cannot confirm it is "
+            f"v{min_version} or newer."
+        )
+    if parse_version(found_version) is None:
+        return (
+            f"{server} reports version {found_version!r}, which GAIA cannot "
+            f"read, so it cannot confirm it is v{min_version} or newer."
+        )
+    return (
+        f"{server} is v{found_version}, older than v{min_version}, the oldest "
+        "version GAIA supports."
+    )
 
-    def __init__(self, found_version: str, min_version: str, remedy: str):
+
+class LemonadeVersionError(LemonadeClientError):
+    """Raised when Lemonade Server is older than GAIA supports, or reports no
+    version GAIA can read."""
+
+    def __init__(
+        self,
+        found_version: Optional[str],
+        min_version: str,
+        remedy: str,
+        url: Optional[str] = None,
+    ):
         self.found_version = found_version
         self.min_version = min_version
         super().__init__(
-            f"Lemonade Server v{found_version} is older than v{min_version}, "
-            f"the oldest version GAIA supports. {remedy}"
+            f"{describe_version_refusal(found_version, min_version, url)} {remedy}"
         )
+
+
+def check_lemonade_version(
+    found_version: Optional[str], base_url: Optional[str] = None
+) -> None:
+    """Refuse a server below ``LEMONADE_MIN_VERSION`` or one with no readable version.
+
+    Every supported Lemonade reports its version on ``/health``; CalVer
+    development builds (``2026.44.1~3.abc1234``) compare by their release.
+
+    Raises:
+        LemonadeVersionError: Named both versions, or what the server reported.
+    """
+    from gaia.version import LEMONADE_MIN_VERSION
+
+    found = parse_version(found_version)
+    if found is not None and found >= parse_version(LEMONADE_MIN_VERSION):
+        return
+    raise LemonadeVersionError(
+        found_version,
+        LEMONADE_MIN_VERSION,
+        describe_upgrade_hint(base_url),
+        url=base_url,
+    )
 
 
 class ModelDownloadCancelledError(LemonadeClientError):
@@ -9375,46 +9426,30 @@ class LemonadeClient:
         Args:
             expected_version: The version GAIA installs (e.g. ``LEMONADE_VERSION``);
                 a supported version that differs only gets a note.
-            actual_version: The version to check. If None, detected from the
-                local Lemonade CLI.
+            actual_version: The version a running server reported. If None,
+                the installed Lemonade CLI is asked, before a start.
             quiet: Suppress console output (the log still records it).
 
         Returns:
-            True when the version meets the floor; None when it cannot be
-            determined, after a warning — an unknown version is never reported
-            as compatible.
+            True when the version meets the floor. None only when no server is
+            running and the CLI's version cannot be read: the server's own
+            report is checked once it answers.
 
         Raises:
-            LemonadeVersionError: The version is below the floor.
+            LemonadeVersionError: The version is below the floor, or a running
+                server reported none GAIA can read.
         """
-        from gaia.version import LEMONADE_MIN_VERSION
-
         if actual_version is None:
             actual_version = self.get_lemonade_version()
+            if parse_version(actual_version) is None:
+                self.log.info(
+                    "Installed Lemonade reports no readable version (%r); "
+                    "checking the server's once it answers",
+                    actual_version,
+                )
+                return None
 
-        found = parse_version(actual_version)
-        if found is None:
-            reported = (
-                f"an unrecognised version ({actual_version!r})"
-                if actual_version
-                else "no version"
-            )
-            message = (
-                f"Lemonade Server reported {reported}, so GAIA cannot confirm it "
-                f"is at least v{LEMONADE_MIN_VERSION}. If requests fail, "
-                f"{describe_upgrade_hint(self.base_url)}"
-            )
-            self.log.warning(message)
-            if not quiet:
-                print(f"{_emoji('⚠️', '[WARN]')}  {message}")
-            return None
-
-        if found < parse_version(LEMONADE_MIN_VERSION):
-            raise LemonadeVersionError(
-                actual_version,
-                LEMONADE_MIN_VERSION,
-                describe_upgrade_hint(self.base_url),
-            )
+        check_lemonade_version(actual_version, self.base_url)
 
         if actual_version != expected_version and not quiet:
             print(
@@ -9590,6 +9625,10 @@ class LemonadeClient:
                             )
                         status = self.get_status()
                         status.running = True
+                        try:
+                            check_lemonade_version(status.version, self.base_url)
+                        except LemonadeVersionError as e:
+                            return self._version_error_status(status, e, quiet)
                         return status
                 except Exception as exc:
                     get_logger(__name__).debug(

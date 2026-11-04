@@ -56,7 +56,6 @@ from gaia.installer._stdin import stdin_is_tty
 from gaia.llm.model_fit import MachineCapacity, format_gb
 from gaia.logger import get_logger
 from gaia.ui.build import WebuiBuildStatus
-from gaia.version import LEMONADE_MIN_VERSION
 
 log = get_logger(__name__)
 
@@ -595,23 +594,21 @@ def skipped_gemma(profile: str, model_ids) -> bool:
 
 
 def configured_server_too_old(health: object, url: str) -> Optional[str]:
-    """Why a user-chosen server is too old for GAIA, or None if it is not.
+    """Why a user-chosen server cannot serve GAIA, or None if it can.
 
-    Shared by `gaia init` and `gaia init --check` so they can never disagree.
-    Every supported Lemonade reports its version on ``/health``, so a server
-    that reports none, or none GAIA can read, is refused too.
+    Shared by `gaia init` and `gaia init --check` so they can never disagree,
+    and the same check the client runs before loading a model: a server below
+    ``LEMONADE_MIN_VERSION``, or one reporting no version GAIA can read, is
+    refused.
     """
-    from gaia.agents.base.readiness import version_meets_min
-    from gaia.llm.lemonade_launcher import describe_upgrade_hint
+    from gaia.llm.lemonade_client import LemonadeVersionError, check_lemonade_version
 
     version = health.get("version") if isinstance(health, dict) else None
-    if version_meets_min(version, LEMONADE_MIN_VERSION):
-        return None
-    found = f"v{version}" if version else "no version"
-    return (
-        f"Lemonade Server at {url} reports {found}; GAIA needs "
-        f"v{LEMONADE_MIN_VERSION} or newer. {describe_upgrade_hint(url)}"
-    )
+    try:
+        check_lemonade_version(version, url)
+    except LemonadeVersionError as e:
+        return str(e)
+    return None
 
 
 def check_setup_status(

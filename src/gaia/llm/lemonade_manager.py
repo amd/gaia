@@ -24,6 +24,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     LemonadeStatus,
     _model_ids_match,
+    check_lemonade_version,
     cloud_model_provider,
     fit_ctx_to_free_memory,
     is_llm_model_entry,
@@ -1049,13 +1050,7 @@ class LemonadeManager:
                             cls.print_server_error(min_context_size)
                         return False
 
-                if status.version:
-                    from gaia.version import LEMONADE_VERSION
-
-                    # Raises LemonadeVersionError below LEMONADE_MIN_VERSION.
-                    client._check_version_compatibility(
-                        LEMONADE_VERSION, actual_version=status.version, quiet=True
-                    )
+                check_lemonade_version(status.version, client.base_url)
 
                 if is_cloud:
                     # Lemonade holds cloud keys in memory only; a fresh start has none.

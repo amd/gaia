@@ -1895,7 +1895,16 @@ class EmbeddedLemonade:
         existing = self._status(reap=False)
         if existing.running and self.is_older(existing.version):
             # Download first, so a failed download leaves the old server up.
-            self._ensure_installed(install_if_missing, upgrade_older, upgrading=True)
+            try:
+                self._ensure_installed(
+                    install_if_missing, upgrade_older, upgrading=True
+                )
+            except EmbeddedLemonadeError as e:
+                raise EmbeddedLemonadeError(
+                    f"Could not upgrade embedded Lemonade {existing.version} to "
+                    f"{self.version}, so {existing.version} is still running on "
+                    f"port {existing.port}. {e}"
+                ) from e
             log.warning(
                 "Embedded Lemonade %s is running; replacing it with %s",
                 existing.version,

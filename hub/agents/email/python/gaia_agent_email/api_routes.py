@@ -3076,8 +3076,9 @@ def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
             hint=(
                 f"Lemonade {version} is older than the required "
                 f"{MIN_LEMONADE_VERSION}. GAIA updates its own Lemonade Server "
-                "when it next starts it; update any other from "
-                "https://lemonade-server.ai, then retry."
+                "the next time its daemon starts it (`gaia daemon restart` does "
+                "that now); update any other from https://lemonade-server.ai, "
+                "then retry."
             ),
         )
 
