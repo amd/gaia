@@ -55,6 +55,13 @@ jobs:
       MODELS: ${{ inputs.models }}
       GAIA_REF: ${{ inputs.gaia_ref }}
     steps:
+      - name: Paths for this run
+        run: |
+          {
+            echo "REPRO_WORKDIR=$RUNNER_TEMP/npu-repro"
+            echo "VENV=$RUNNER_TEMP/npu-repro-venv"
+          } >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v7
 
       - name: Check out the GAIA under test
@@ -63,13 +70,6 @@ jobs:
         with:
           ref: ${{ inputs.gaia_ref }}
           path: gaia-under-test
-
-      - name: Paths for this run
-        run: |
-          {
-            echo "REPRO_WORKDIR=$RUNNER_TEMP/npu-repro"
-            echo "VENV=$RUNNER_TEMP/npu-repro-venv"
-          } >> "$GITHUB_ENV"
 
       - name: Install GAIA and the flagship agent into a fresh venv
         run: |
@@ -113,6 +113,8 @@ jobs:
       - name: Leave the machine clean
         if: always()
         run: |
+          # An empty pattern would match (and kill) every process the runner owns.
+          [ -n "${REPRO_WORKDIR:-}" ] || exit 0
           leftovers=$(pgrep -f "$REPRO_WORKDIR" || true)
           if [ -n "$leftovers" ]; then
             echo "::warning::Stopping processes the repro left behind: $leftovers"
