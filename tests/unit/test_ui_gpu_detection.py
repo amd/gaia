@@ -204,9 +204,7 @@ def test_a_bogus_vram_report_cannot_outrank_a_real_card():
 # ── /api/system/status ───────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "kind,source", [("legacy", "probe"), ("modern", "env"), ("modern", "probe")]
-)
+@pytest.mark.parametrize("kind,source", [("modern", "env"), ("modern", "probe")])
 @pytest.mark.allow_network
 def test_system_status_renders_the_complete_context_remedy(
     kind, source, stub_lemonade, monkeypatch
@@ -221,9 +219,7 @@ def test_system_status_renders_the_complete_context_remedy(
             kind=kind,
             source=source,
             client_path="/usr/bin/lemonade",
-            server_launcher=(
-                "/usr/bin/lemonade-server" if kind == "legacy" else "/usr/bin/lemond"
-            ),
+            server_launcher="/usr/bin/lemond",
         ),
     )
     stub_lemonade(
@@ -235,11 +231,7 @@ def test_system_status_renders_the_complete_context_remedy(
     )
     body = TestClient(create_app(db_path=":memory:")).get("/api/system/status").json()
 
-    if kind == "legacy":
-        assert body["start_command"] == (
-            "/usr/bin/lemonade-server serve --ctx-size 32768"
-        )
-    elif source == "env":
+    if source == "env":
         assert body["start_command"] == "/usr/bin/lemond"
     else:
         assert body["start_command"] is None

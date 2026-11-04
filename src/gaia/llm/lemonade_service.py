@@ -105,9 +105,8 @@ def ensure_lemonade_running(
 
     Args:
         ctx_size: the machine's profile window
-            (``lemonade_client.profile_ctx_size``). Only the legacy
-            Lemonade CLI takes it at start; modern Lemonade reads
-            no start-time window and gets it on each ``/load`` instead.
+            (``lemonade_client.profile_ctx_size``), logged only: Lemonade
+            reads no start-time window and gets it on each ``/load``.
         timeout: how long a freshly started server gets to answer.
         base_url: which server to check; omit for the ``LEMONADE_BASE_URL``
             environment default.

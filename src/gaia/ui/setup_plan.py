@@ -113,23 +113,15 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
         find_model_requirement,
         free_memory_shortfall,
         kv_cache_for,
-        lemonade_server_version,
     )
-    from gaia.llm.model_fit import (
-        ModelFitError,
-        check_fit,
-        check_server_supports,
-        required_memory_gb,
-    )
+    from gaia.llm.model_fit import ModelFitError, check_fit, required_memory_gb
 
     catalog: Dict[str, float] = {}
-    server_version = None
     if client is not None:
         for entry in client.list_models(show_all=True).get("data", []):
             for model_id in DEFAULT_MODEL_LADDER:
                 if _model_ids_match(entry.get("id"), model_id) and entry.get("size"):
                     catalog[model_id] = float(entry["size"])
-        server_version = lemonade_server_version(client)
 
     options = []
     for model_id in DEFAULT_MODEL_LADDER:
@@ -145,10 +137,6 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
             if need > capacity.memory_gb:
                 # The memory reason in the plan's decimal GB, like its numbers.
                 reason = model_choice.memory_reason(need, capacity)
-        if fits and client is not None and mr and mr.min_lemonade_version:
-            supported = check_server_supports(mr.min_lemonade_version, server_version)
-            if not supported.fits:
-                fits, reason = False, supported.reason
         if fits and client is not None and mr and model_id != DEFAULT_MODEL_LADDER[-1]:
             try:
                 busy = free_memory_shortfall(client, mr, capacity)

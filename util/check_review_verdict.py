@@ -38,8 +38,14 @@ BLOCKING = "Request changes"
 #: Silent re-review: the reviewer finished and found nothing blocking.
 CLEAR = "clear"
 VERDICTS = {"Approve", "Approve with suggestions", BLOCKING, CLEAR}
+#: A review ran but its record aged out of artifact retention.
+EXPIRED = "expired"
 MAX_DESCRIPTION = 140
 GH_TIMEOUT = 60
+
+
+class NotFound(RuntimeError):
+    """gh got HTTP 404."""
 
 
 def _gh(*args: str) -> str:
@@ -57,6 +63,8 @@ def _gh(*args: str) -> str:
             f"gh {args[0]} {args[1]} timed out after {GH_TIMEOUT}s"
         ) from e
     if result.returncode != 0:
+        if "(HTTP 404)" in result.stderr:
+            raise NotFound(f"gh {args[0]} {args[1]}: {result.stderr.strip()}")
         raise RuntimeError(f"gh {args[0]} {args[1]} failed: {result.stderr.strip()}")
     return result.stdout
 
@@ -97,14 +105,17 @@ def review_runs(repo: str, branch: str, head_repo: str) -> list[dict]:
 
 
 def read_artifact(repo: str, run_id: int) -> str | None:
-    names = _gh(
+    """The run's verdict.json, None if it uploaded none, or EXPIRED."""
+    expired = _gh(
         "api",
         f"repos/{repo}/actions/runs/{run_id}/artifacts?name={ARTIFACT}",
         "--jq",
-        ".artifacts[] | select(.expired | not) | .name",
-    )
-    if not names.strip():
+        ".artifacts[] | .expired",
+    ).split()
+    if not expired:
         return None
+    if "false" not in expired:
+        return EXPIRED
     with tempfile.TemporaryDirectory() as tmp:
         _gh("run", "download", str(run_id), "--repo", repo, "-n", ARTIFACT, "-D", tmp)
         path = Path(tmp) / "verdict.json"
@@ -113,11 +124,15 @@ def read_artifact(repo: str, run_id: int) -> str | None:
 
 def latest_review(
     repo: str, number: int, branch: str, head_repo: str
-) -> tuple[str, str] | None:
+) -> tuple[str, str] | str | None:
+    """The newest ``(reviewed_sha, verdict)``, EXPIRED, or None if never reviewed."""
     for run in review_runs(repo, branch, head_repo):
         text = read_artifact(repo, run["id"])
         if text is None:
             continue
+        # Its verdict can't be read, so an older record must not stand in for it.
+        if text == EXPIRED:
+            return EXPIRED
         record = parse_record(text, number)
         if record is not None:
             return record
@@ -142,23 +157,29 @@ def override_by_maintainer(repo: str, number: int, labels: set[str]) -> bool:
     actor = added[-1]
     if actor.get("type") != "User":
         return False
-    role = _gh(
-        "api",
-        f"repos/{repo}/collaborators/{actor['login']}/permission",
-        "--jq",
-        ".role_name",
-    ).strip()
+    try:
+        role = _gh(
+            "api",
+            f"repos/{repo}/collaborators/{actor['login']}/permission",
+            "--jq",
+            ".role_name",
+        ).strip()
+    except NotFound:
+        # A removed collaborator.
+        return False
     return role in OVERRIDE_ROLES
 
 
 def decide(
-    review: tuple[str, str] | None, head_sha: str, overridden: bool
+    review: tuple[str, str] | str | None, head_sha: str, overridden: bool
 ) -> tuple[str, str]:
     """Commit status ``(state, description)`` for this PR's head."""
     if overridden:
         return "success", f"A maintainer overrode the review with {OVERRIDE_LABEL}"
     if review is None:
         return "success", "No review to answer"
+    if review == EXPIRED:
+        return "pending", "The latest review record expired, so re-run the review"
     reviewed_sha, verdict = review
     if not verdict:
         return "failure", "The latest review has no verdict line, so re-run the review"

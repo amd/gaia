@@ -74,7 +74,7 @@ beforeEach(() => {
     mockedApi.getSetupStatus.mockResolvedValue({ state: 'idle' });
     mockedApi.getCloudPrices.mockResolvedValue({ provider: 'fireworks', models: [], source: null, note: 'Prices are set by the organization that runs the gateway.' });
     mockedApi.getSpending.mockResolvedValue({
-        month: '2026-10', total_usd: 0, turns: 0, unpriced_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price',
+        month: '2026-10', total_usd: 0, turns: 0, unpriced_turns: 0, unreported_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price',
     });
     mockedApi.startSetup.mockResolvedValue(READY);
     mockedApi.getLemonadeTarget.mockResolvedValue({ ...TARGET, offer: false });
@@ -224,6 +224,37 @@ describe('SetupScreen: checking this PC', () => {
 describe('SetupScreen: a cold PC (no model server yet)', () => {
     const SERVER_RUNNING: SetupRunStatus = { state: 'running', server_only: true, text: 'Starting the local model server', steps: [] };
     const SERVER_READY: SetupRunStatus = { state: 'ready', server_only: true, steps: [] };
+
+    it("waits for the user when looking for their Lemonade failed, instead of installing GAIA's own", async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(COLD_SERVER);
+        mockedApi.getLemonadeTarget.mockResolvedValue({ ...TARGET, offer: true });
+        mockedApi.detectLemonade.mockRejectedValue(new Error('timed out'));
+        mockedApi.startSetup.mockResolvedValue(SERVER_RUNNING);
+        renderSetup();
+        await screen.findByRole('button', { name: 'Check again' });
+        await new Promise((r) => setTimeout(r, 50));
+        expect(mockedApi.startSetup).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole('button', { name: "Install GAIA's own" }));
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledExactlyOnceWith(false, false, { serverOnly: true }));
+    });
+
+    it("doesn't offer to install GAIA's own once it is already running", async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue({ ...TARGET, offer: true });
+        mockedApi.detectLemonade.mockRejectedValue(new Error('timed out'));
+        mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
+        renderSetup();
+        await screen.findByRole('button', { name: 'Check again' });
+        expect(screen.queryByRole('button', { name: "Install GAIA's own" })).not.toBeInTheDocument();
+    });
+
+    it('offers Try again when starting the model server is refused', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(COLD_SERVER);
+        mockedApi.startSetup.mockRejectedValueOnce(new Error('connection reset')).mockResolvedValue(SERVER_RUNNING);
+        renderSetup();
+        fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(2));
+        expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, false, { serverOnly: true });
+    });
 
     it('starts only the model server by itself, then recommends from what it reads', async () => {
         mockedApi.getSetupPlan.mockResolvedValueOnce(COLD_SERVER).mockResolvedValue(COLD_BIG());
@@ -488,9 +519,13 @@ describe('SetupScreen: the rail', () => {
     it('lets a first-time user pick the language on the first screen', async () => {
         renderSetup();
         await screen.findByRole('region', { name: 'What setup found' });
+        const reads = [mockedApi.getSetupStatus.mock.calls.length, mockedApi.getSetupPlan.mock.calls.length];
         const language = screen.getByRole('combobox', { name: 'Language' });
         fireEvent.change(language, { target: { value: 'ar' } });
         expect(document.documentElement.dir).toBe('rtl');
+        // Changing language changes words only: setup is not read, or restarted, again.
+        await new Promise((r) => setTimeout(r, 50));
+        expect([mockedApi.getSetupStatus.mock.calls.length, mockedApi.getSetupPlan.mock.calls.length]).toEqual(reads);
         expect(localStorage.getItem('gaia-chat-locale')).toBe('ar');
         act(() => useChatStore.getState().setLocale('en'));
         localStorage.removeItem('gaia-chat-locale');
@@ -884,6 +919,19 @@ describe('SetupScreen: downloading', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Delete and download again' }));
         await waitFor(() => expect(mockedApi.removeSetupModel).toHaveBeenCalledWith(QWEN.id));
         await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(QWEN.id, { keepTrying: false }));
+    });
+
+    it('tests a model again without deleting it when its test failed for want of memory', async () => {
+        const failed = runStatus([
+            progress({ id: QWEN.id, state: 'failed', bytes_done: 23.3e9, bytes_total: 23.3e9, error_kind: 'memory', error: 'not enough memory', can_retry: true }),
+        ], { state: 'failed', error: 'A model failed its test' });
+        mockedApi.startSetup.mockResolvedValue(failed);
+        mockedApi.downloadSetupModel.mockResolvedValue(failed);
+        await startLocal();
+        fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(QWEN.id, { keepTrying: false }));
+        expect(mockedApi.removeSetupModel).not.toHaveBeenCalled();
     });
 
     it('asks before retrying past a disk that is still too full', async () => {

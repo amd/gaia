@@ -9,6 +9,7 @@
 ; in", services/tray-manager.cjs) owns the HKCU Run value named ${PRODUCT_NAME},
 ; which must equal WIN_LOGIN_ITEM_NAME there. The installer never turns it on.
 
+; At file scope, not in a macro: electron-builder may expand a macro twice.
 !include "LogicLib.nsh"
 
 !ifndef BUILD_UNINSTALLER
@@ -45,8 +46,10 @@
 
 ; ─── Uninstall: clean up the autostart Run key ─────────────────────────
 ;
-; A system Lemonade Server from an earlier release is intentionally NOT
-; uninstalled: `gaia uninstall --purge-lemonade` removes it.
+; Lemonade Server is not uninstalled here. GAIA's own copy lives in
+; ~/.gaia/lemonade, so it goes only if the user agrees to delete ~/.gaia below;
+; a system Lemonade an older GAIA installer added stays because other apps may
+; use it.
 
 !macro customUnInstall
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \

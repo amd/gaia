@@ -106,7 +106,7 @@ function createEngineInstall({ installer, ipcMain, shell, getWindow, isPackaged,
             reason: err.reason || null,
             // The rest is the tool's output, which the log tail carries.
             message: String(err.message).split("\n")[0],
-            logTail: installer.readLogTail(),
+            logTail: logTailOrWhy(),
             previousVersion: previousVersion(),
           },
         });
@@ -116,6 +116,16 @@ function createEngineInstall({ installer, ipcMain, shell, getWindow, isPackaged,
         if (retrying === CONTINUE) return true;
         if (!retrying) return false;
       }
+    }
+  }
+
+  /** The log's last lines; a log that can't be read says why instead of crashing the failure screen. */
+  function logTailOrWhy() {
+    try {
+      return installer.readLogTail();
+    } catch (err) {
+      console.error(`[main] Could not read the install log: ${err.stack || err}`);
+      return [`The install log could not be read: ${err.message}`];
     }
   }
 
