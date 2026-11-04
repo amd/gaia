@@ -425,6 +425,7 @@ def test_live_empty_response_names_the_answer_keys(scaffolded_python, monkeypatc
 
 
 _MODEL = cli_agent._MODEL_REMEDY
+_UNUSABLE = cli_agent._UNUSABLE_REMEDY
 
 
 @pytest.mark.parametrize(
@@ -442,6 +443,51 @@ _MODEL = cli_agent._MODEL_REMEDY
             ("the model was unreachable", _MODEL),
         ),
         ({"model_failed": True}, ("the model call failed", _MODEL)),
+        (
+            {
+                "model_failed": True,
+                "error_history": [
+                    {
+                        "type": "output_truncated",
+                        "error": "reply cut off at the output-token limit",
+                    }
+                ],
+            },
+            (
+                "the model call failed (reply cut off at the output-token limit)",
+                _UNUSABLE,
+            ),
+        ),
+        (
+            {
+                "status": "failed",
+                "error_history": [
+                    {"type": "tool_call_parse_error", "error": "bad json"}
+                ],
+            },
+            ("the model never gave a usable reply (bad json)", _UNUSABLE),
+        ),
+        (
+            {
+                "error_history": [
+                    {"type": "stream_cut_off", "error": "stream ended early"}
+                ]
+            },
+            ("the model never gave a usable reply (stream ended early)", _UNUSABLE),
+        ),
+        (
+            {
+                "status": "failed",
+                "error_history": [
+                    {
+                        "type": "tool_call_parse_error",
+                        "error": "bad json",
+                        "recovered": True,
+                    }
+                ],
+            },
+            None,
+        ),
         (
             {"status": "error", "error": "boom"},
             ("status 'error' (boom)", "Fix the agent"),

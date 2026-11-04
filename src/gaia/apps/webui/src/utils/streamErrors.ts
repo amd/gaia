@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { ApiError, parseErrorDetail, StreamTimeoutError } from '../services/api';
+import { ApiError, parseErrorDetail, StreamTimeoutError, type StreamDroppedError } from '../services/api';
 import { getT, type Translate } from '../i18n/useT';
 
 /** How many times a turn's lost stream is re-attached before the view gives up. */
@@ -19,8 +19,14 @@ export function isStreamInterrupted(err: Error): boolean {
     return err.name === 'StreamStalledError' || err.name === 'StreamDroppedError';
 }
 
+/** The last re-attach never reached GAIA, so no run there can still be answering. */
+export function isGaiaUnreachable(err: Error): boolean {
+    return err.name === 'StreamDroppedError' && (err as StreamDroppedError).unreachable === true;
+}
+
 /** The view lost the turn, but its run may still finish server-side; resending would ask twice. */
 export function mayStillFinish(err: Error): boolean {
+    if (isGaiaUnreachable(err)) return false;
     return isStreamInterrupted(err) || err instanceof StreamTimeoutError;
 }
 
@@ -28,11 +34,9 @@ export function mayStillFinish(err: Error): boolean {
  * Plain words and a next step for a chat-stream failure the client can name,
  * or null to leave the message to the caller's generic handling.
  */
-export function describeStreamError(err: Error): string | null {
-    if (isStreamInterrupted(err)) {
-        return 'Lost the live view of this answer: the connection to GAIA dropped '
-            + `${MAX_STREAM_RECONNECTS + 1} times. The answer may still finish. Reopen this chat in a minute to see it.`;
-    }
+export function describeStreamError(err: Error, t: Translate = getT()): string | null {
+    if (isGaiaUnreachable(err)) return t('chatError.gaiaStopped');
+    if (isStreamInterrupted(err)) return t('chatError.liveViewLost', { n: MAX_STREAM_RECONNECTS + 1 });
     if (err instanceof StreamTimeoutError) {
         if (err.endpoint === 'send') {
             return `GAIA did not start this answer within ${Math.round(err.timeoutMs / 1000)} seconds; it may be busy or stuck. `
@@ -67,7 +71,7 @@ const TIMEOUT_RE = /timed out|timeout/i;
  * do next. Never the raw error text, which goes to the console log instead.
  */
 export function classifyChatError(err: Error, t: Translate = getT()): { kind: ChatErrorKind; text: string } {
-    const described = describeStreamError(err);
+    const described = describeStreamError(err, t);
     if (described) return { kind: 'stream', text: described };
     const msg = err.message || '';
     if (CONTEXT_RE.test(msg)) return { kind: 'context', text: t('chatError.context') };

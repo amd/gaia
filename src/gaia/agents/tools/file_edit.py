@@ -373,6 +373,17 @@ def apply_unique_replacement(
 
     offsets = _match_offsets(current_content, old_content)
 
+    if len(offsets) == 1 and "\n" not in old_content and "\r\n" in current_content:
+        # A one-line old_content carries no line ending of its own, so a
+        # multi-line LF new_content would leave a CRLF line with mixed endings.
+        # Use the ending of the line it matched on. A multi-line old_content
+        # already says which endings it matched, so it is left alone: with no
+        # CRLF it can only have matched an LF region, and with CRLF the caller
+        # is choosing endings deliberately.
+        eol = current_content.find("\n", offsets[0])
+        if eol == -1 or current_content[eol - 1] == "\r":
+            new_content = _retarget_newlines(new_content, current_content)
+
     if not offsets:
         # Retry once with old_content's line endings rewritten to the file's.
         # Only a line-ending difference can be rescued this way, and only when

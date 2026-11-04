@@ -407,9 +407,11 @@ jobs:
   # ── The tagged commit passed CI ─────────────────────────────────────
   # The test workflows ran when this commit reached main, not on the tag, and
   # most of those runs were cancelled by the next merge. util/check_release_ci.py
-  # requires a passing run of each required workflow on this exact commit,
+  # requires a passing run of each required check on this exact commit,
   # dispatches any that has none against the tag, and waits. Parallel with the
-  # builds, so it only adds time when CI is slower than they are.
+  # builds, so it only adds time when CI is slower than they are. An RC needs
+  # only its RC_CRITICAL set and reports the rest as warnings; a final needs
+  # FINAL_REQUIRED, everything.
   ci-green:
     name: Tagged commit passed CI
     needs: validate
@@ -423,7 +425,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.x'
-      - name: Check the required workflows passed on this commit
+      - name: Check the required checks passed on this commit
         env:
           GITHUB_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ needs.validate.outputs.tag_name }}

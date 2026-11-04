@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useChatStore } from '../stores/chatStore';
-import { compose, pluralKey, translate, translateBare, withHint, type MessageKey, type Params, type PluralKey, type Say } from './registry';
+import { compose, DEFAULT_LOCALE, pluralKey, translate, translateBare, withHint, type MessageKey, type Params, type PluralKey, type Say } from './registry';
 
 export interface Translate {
     (key: MessageKey, params?: Params): string;
@@ -47,3 +47,8 @@ export function getT(): Translate {
 
 /** English, for helpers whose callers pass no translator. */
 export const tEn: Translate = translator('en');
+
+/** Dates in the interface language with Western digits; English follows the PC's own region. */
+export function dateLocale(t: Translate): string | undefined {
+    return t.locale === DEFAULT_LOCALE ? undefined : `${t.locale}-u-nu-latn`;
+}

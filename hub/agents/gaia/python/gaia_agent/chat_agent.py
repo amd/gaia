@@ -11,6 +11,7 @@ import platform
 import re
 import shutil
 import sqlite3
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, FrozenSet, List, Optional
@@ -2902,23 +2903,25 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             """Turn text into one WAV audio file with an installed local TTS model.
 
             Use this when the user asks to hear, narrate, or save text as audio.
-            It never downloads a model. Empty output_path writes a WAV under
-            ~/.gaia/tts/. Use a listed Kokoro voice; unknown voices are refused
+            It never downloads a model. Empty output_path writes a WAV to GAIA's
+            audio folder. Use a listed Kokoro voice; unknown voices are refused
             before Lemonade can return a server error. Long text is split at
             sentence boundaries and joined into one file.
 
             Args:
                 text: Text to speak.
-                output_path: Optional WAV destination. Empty uses ~/.gaia/tts/.
+                output_path: Optional WAV destination. Empty uses GAIA's audio folder.
                 voice: Kokoro voice, such as af_bella, am_michael, bf_emma, or
                     bm_george.
                 speed: Speech rate from 0.5 to 2.0; 1.0 is normal.
 
             Returns:
-                status, output_path, duration_seconds, voice, model, chunks.
+                status, output_path, audio_path, duration_seconds, voice, model,
+                chunks.
             """
             import time
 
+            import gaia.config as gaia_config
             from gaia.audio.lemonade_tts import (
                 DEFAULT_TTS_MODEL,
                 KOKORO_VOICES,
@@ -2942,11 +2945,16 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             if not text or not text.strip():
                 return {"status": "error", "error": "text to speak must not be empty."}
             if not output_path:
-                # GAIA's own output folder, not the user's files.
-                tts_dir = Path.home() / ".gaia" / "tts"
+                # Where the Agent UI serves inline audio from (gaia.ui.generated_media).
+                tts_dir = (
+                    Path(gaia_config.GAIA_CONFIG_DIR)
+                    / "cache"
+                    / "audio"
+                    / "generations"
+                )
                 tts_dir.mkdir(parents=True, exist_ok=True)
                 ts = time.strftime("%Y%m%d_%H%M%S")
-                destination = tts_dir / f"speech_{ts}.wav"
+                destination = tts_dir / f"speech_{ts}_{uuid.uuid4().hex[:10]}.wav"
             else:
                 destination = _workspace_target(self, output_path)
                 denied = write_access_error(self, destination)
@@ -2982,6 +2990,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 "status": "success",
                 "output_path": str(destination),
                 "file_path": str(destination),
+                "audio_path": str(destination),
                 "duration_seconds": round(duration, 2),
                 "voice": voice,
                 "model": model,
