@@ -1794,7 +1794,7 @@ export function MemoryDashboard() {
                                 <div className="mem-section">
                                     <div className="mem-section-title">
                                         <Wrench size={14} /> Tool Performance
-                                        <span className="mem-section-note" title="remember, recall, update_memory, forget and search_past_conversations are not logged">excludes memory tools</span>
+                                        <span className="mem-section-note" title="remember, recall, update_memory, forget, forget_everything and search_past_conversations are not logged">excludes memory tools</span>
                                     </div>
                                     {tools.length > 0 ? (
                                         <div style={{ overflowX: 'auto' }}>
@@ -2311,7 +2311,7 @@ export function MemoryDashboard() {
                                     <div className="mem-setting-info">
                                         <span className="mem-setting-label">Delete all memories</span>
                                         <span className="mem-setting-desc">
-                                            Permanently wipe all knowledge entries, conversation history, and tool logs. This cannot be undone.
+                                            Permanently wipe all knowledge entries, conversation history, and tool logs. Skills GAIA learned for doing tasks are kept. This cannot be undone.
                                         </span>
                                     </div>
                                     {deleteConfirm ? (

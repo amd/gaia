@@ -30,6 +30,14 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   request names no voice or speed, `text_to_speech` now uses the read-aloud
   voice and speed chosen in the Agent UI (Settings › Read aloud) or the TUI
   (`/voice`), instead of a fixed `af_bella` at normal speed.
+- **Needs Lemonade Server 2026.44.1 or newer.** `GET /v1/gaia/init` reports
+  `min_version: "2026.44.1"` (was `10.2.0`) and answers not-ready on anything
+  older. Its `hint` no longer tells you to run `gaia init --force-reinstall`:
+  GAIA upgrades its own Lemonade when its daemon next starts it (`gaia daemon
+  restart` does that now), and a Lemonade you
+  run yourself is pointed at https://lemonade-server.ai. This hint needs the
+  `gaia` CLI from the same release; the release that ships it raises the
+  `amd-gaia` floor.
 - **A project's `.env` can only supply the Claude API key.** The sidecar reads
   `ANTHROPIC_API_KEY` from a `.env` in its working directory, for its own
   Claude calls, and ignores every other name there with one warning. Settings
@@ -102,6 +110,19 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **"Forget everything" forgets everything.** It deleted each memory a plain
+  `recall` listed, but that listing holds back sensitive ones, so a saved PIN
+  survived while the agent said memory was empty. The next session then rebuilt
+  the whole profile, a trip the user had asked it to forget included, from past
+  conversations. The new `forget_everything` tool erases all memory and the
+  stored conversations, after the user approves it. Other open chats stop
+  using what it erased from their next message, and a turn or background
+  summary still running when it ran can't write it back. Skills GAIA learned for doing
+  tasks are kept, as they are by the Memory page's **Delete all memories**;
+  `gaia skill deltas <skill> --reset` undoes what it learned about a skill. A
+  plain `recall` now says
+  how many sensitive entries it held back, and `search_past_conversations`
+  leaves out turns that mention something forgotten after they were said.
 - **Deleting a chat removes it from Memory.** The agent filed each Agent UI
   chat's turns and tool calls under a random id, so a deleted chat stayed
   readable in full under Memory > Advanced > Conversation history. It now

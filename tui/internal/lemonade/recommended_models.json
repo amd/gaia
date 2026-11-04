@@ -11,7 +11,6 @@
       "label": "Qwen3.6 35B A3B",
       "note": "default where a GPU holds it (~27 GB for models); faster than Flash, with vision",
       "size_gb": 23.3,
-      "min_lemonade_version": "11.7.0",
       "min_ctx_size": 65536,
       "kv_bytes_per_token": 20480
     },
@@ -27,7 +26,6 @@
       "mmproj": "mmproj-F16.gguf",
       "vision": true,
       "reasoning": true,
-      "min_lemonade_version": "2026.39.1",
       "min_ctx_size": 65536,
       "kv_bytes_per_token": 24576
     },

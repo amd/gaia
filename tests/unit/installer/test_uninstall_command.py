@@ -971,55 +971,6 @@ class TestLemonadeProductCodeUninstall:
 
 
 # ---------------------------------------------------------------------------
-# Lemonade Python interpreter resolution
-# ---------------------------------------------------------------------------
-
-
-class TestLemonadePythonResolution:
-    """When called from the GAIA installer bundle, ``sys.executable`` is
-    the GAIA venv, NOT where Lemonade was installed — so pip-uninstalling
-    against it is a no-op. ``_resolve_lemonade_python`` locates the real
-    interpreter by inspecting the lemonade-server console script.
-    """
-
-    def test_resolves_direct_shebang_posix(self, fake_home, monkeypatch):
-        lemonade = fake_home / "bin" / "lemonade-server"
-        lemonade.parent.mkdir(parents=True, exist_ok=True)
-        lemonade.write_bytes(b"#!/opt/venvs/lemon/bin/python\n# rest\n")
-
-        # Patch only uc's view: pyfakefs teardown calls os.getuid() on a global "linux".
-        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
-        monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
-
-        assert uc._resolve_lemonade_python() == "/opt/venvs/lemon/bin/python"
-
-    def test_resolves_env_shebang_posix(self, fake_home, monkeypatch):
-        lemonade = fake_home / "bin" / "lemonade-server"
-        lemonade.parent.mkdir(parents=True, exist_ok=True)
-        lemonade.write_bytes(b"#!/usr/bin/env python3\n# rest\n")
-
-        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
-        monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
-
-        assert uc._resolve_lemonade_python() == "python3"
-
-    def test_not_on_path_returns_none(self, monkeypatch):
-        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
-        monkeypatch.setattr(uc.shutil, "which", lambda name: None)
-        assert uc._resolve_lemonade_python() is None
-
-    def test_script_without_shebang_returns_none(self, fake_home, monkeypatch):
-        lemonade = fake_home / "bin" / "lemonade-server"
-        lemonade.parent.mkdir(parents=True, exist_ok=True)
-        lemonade.write_bytes(b"# no shebang here\nprint('hi')\n")
-
-        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
-        monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
-
-        assert uc._resolve_lemonade_python() is None
-
-
-# ---------------------------------------------------------------------------
 # GAIA home safety: a misconfigured GAIA_HOME must not become a deletion plan
 # ---------------------------------------------------------------------------
 

@@ -30,6 +30,7 @@ INSTALLER_TUI = REPO_ROOT / "installer" / "tui"
 NSI = INSTALLER_TUI / "nsis" / "gaia-setup.nsi"
 BUILD_SETUP = INSTALLER_TUI / "nsis" / "build-setup.sh"
 SMOKE = INSTALLER_TUI / "nsis" / "smoke-test.ps1"
+INSTALLER_NSH = REPO_ROOT / "installer" / "nsis" / "installer.nsh"
 ELECTRON_BUILDER = (
     REPO_ROOT / "src" / "gaia" / "apps" / "webui" / "electron-builder.yml"
 )
@@ -634,3 +635,18 @@ def test_documentation_links_open_the_docs_not_the_home_page():
     assert _define("DOCS_URL") == "https://amd-gaia.ai/docs"
     assert '!define MUI_FINISHPAGE_LINK_LOCATION "${DOCS_URL}"' in nsi
     assert "Details: ${PRODUCT_URL}" not in nsi
+
+
+def test_setup_leaves_lemonade_to_gaia():
+    # GAIA runs its own Lemonade under ~/.gaia. A bundled system MSI would add a
+    # second server, and its install kills every lemond.exe, GAIA's own included.
+    for script in (_nsi(), INSTALLER_NSH.read_text(encoding="utf-8")):
+        assert "msiexec" not in script.lower()
+        assert ".msi" not in script.lower()
+    for workflow in ("build-installers.yml", "windows_setup.yml"):
+        text = (REPO_ROOT / ".github" / "workflows" / workflow).read_text(
+            encoding="utf-8"
+        )
+        assert "lemonade-sdk/lemonade/releases" not in text, workflow
+        assert not re.search(r"\.msi\b", text), workflow
+    assert "--lemonade-msi" not in BUILD_SETUP.read_text(encoding="utf-8")

@@ -132,11 +132,11 @@ for the version you have.
 The agent thinks with a model hosted by **Lemonade Server**, which this package
 does not install. Required before any query succeeds:
 
-1. Lemonade **10.2.0 or newer**, running. GAIA's daemon starts and supervises
-   one, so `gaia daemon start` is normally all that is needed (`gaia init`
-   also installs and starts it on first run). Qwen3.8 Flash Next needs
-   **v2026.39.1 or newer**, the version `gaia init` installs; older servers
-   cannot load it.
+1. Lemonade **2026.44.1 or newer**, running. GAIA's daemon starts and
+   supervises one, so `gaia daemon start` is normally all that is needed
+   (`gaia init` also installs and starts it on first run). GAIA upgrades its
+   own Lemonade when it starts it; a Lemonade you run yourself is refused below
+   that version, and the `hint` says so.
 2. The machine's default chat model downloaded — run `gaia init`. It picks
    `Qwen3.6-35B-A3B-GGUF` where a GPU holds it (~27 GB for models,
    weights plus context cache — a 64 GB+ Strix Halo or a 32 GB GPU) and
@@ -165,7 +165,7 @@ alone:
 {
   "ready": false,
   "lemonade": { "reachable": false, "base_url": "…", "version": null,
-                "min_version": "10.2.0", "compatible": null },
+                "min_version": "2026.44.1", "compatible": null },
   "model":    { "id": "Gemma-4-E4B-it-GGUF", "present": false,
                 "loadable": null, "ctx_size": null },
   // The manual fallback ("Otherwise: …") is resolved for the host's Lemonade
@@ -378,23 +378,23 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Twelve of the agent's 101 tools mutate the machine and need explicit approval
+Thirteen of the agent's 102 tools mutate the machine and need explicit approval
 before they run. (Gemma 4 E4B, on the GPU or the NPU, gets fewer: it is not
 offered the scratchpad, email, image-generation or skill-hub tools, so
-`install_skill` and `remove_skill` never reach it.) Nine sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
+`install_skill` and `remove_skill` never reach it.) Ten sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
 **`wait_for_condition`**, which re-runs a shell command until it succeeds,
 **`execute_python_file`**, **`run_python`**, **`notify_desktop`**, which spawns
-a PowerShell child on Windows to draw the notification, and **`install_cli`** /
+a PowerShell child on Windows to draw the notification, **`install_cli`** /
 **`sign_in_cli`**, which install software and sign a CLI in to the user's
-account — and the flagship adds three of its own
+account, and **`forget_everything`**, which erases all memory except learned skills — and the flagship adds three of its own
 (`CONFIRMATION_REQUIRED_TOOLS`): **`install_skill`**, **`capture_skill`**, and
 **`remove_skill`**, because installing or capturing a skill writes third-party
 content under `~/.gaia/skills` and removing one deletes it. A capture that does
 land is additionally **code-inert**: its instructions load, but any
 `tools.py`/scripts stay unregistered until a human runs
 `gaia skill promote <name>` in a terminal. Everything else — reading,
-indexing, querying, web fetching, memory, and the read-only `check_cli_setup`
+indexing, querying, web fetching, the other memory tools, and the read-only `check_cli_setup`
 — runs without asking. A write or edit inside the agent's own scratch
 folder (`gaia-scratch-…` under the system temp folder) runs without asking too,
 so running a script from it asks every time and carries no `always_scope`. So does a shell command run there or naming a path there, and a script handed a scratch path as an argument.

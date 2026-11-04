@@ -1026,8 +1026,9 @@ Section "Uninstall"
 
   Call un.RemoveFromUserPath
 
-  ; A system Lemonade Server from an earlier setup is deliberately NOT uninstalled:
-  ; other things may be using it. `gaia uninstall --purge-lemonade` removes it.
+  ; Lemonade Server is not uninstalled here. GAIA's own copy lives in ~/.gaia, so
+  ; it goes only if the user agrees to delete that below; a system Lemonade an
+  ; older setup added stays. Same contract as installer/nsis/installer.nsh.
 
   ; Optional cleanup deletes the entire shared GAIA home, including other
   ; installations' runtimes. Interactive and silent defaults preserve it.
