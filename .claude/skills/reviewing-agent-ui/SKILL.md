@@ -20,8 +20,18 @@ npm run test:visual # pixel baselines, Windows, local only
 ```
 
 `test:rtl` lives in `visual/rtl.visual.ts`. **When a review finds a bug it missed, add
-the rule there first and watch it fail**, then fix the bug. New screens join its list.
-Set `GAIA_VISUAL_CHROMIUM` to a Chrome or Edge binary to skip downloading Chromium.
+the rule there first and watch it fail**, then fix the bug. **Every top-level screen,
+dialog and popover has a scene there**: it only audits what it opens, so the Memory
+dashboard, Scheduled tasks and the model-status popover shipped entirely in English
+(#6590, #6591, #6585). Set `GAIA_VISUAL_CHROMIUM` to a Chrome or Edge binary to skip
+downloading Chromium.
+
+`npm test` also runs `src/i18n/__tests__/hardcodedText.test.ts`, which fails when a
+component gains English written straight into JSX (text, `title`, `placeholder`,
+`aria-label`, `alt`). Put the text through `useT`. When you translate strings, lower the
+baseline (`UPDATE_I18N_BASELINE=1 npx vitest run hardcodedText`); raise it only for text
+that stays English in every language, and say why in the PR. It can't see strings built
+in code or sent by the backend, so those still need the screenshot.
 
 **Every option on a screen must be one GAIA has proven.** A backend, device, model or
 setting the user can pick is a promise; list only what passed evals on that hardware
