@@ -6441,6 +6441,8 @@ Let me know your answer!
                 sys.exit(exit_code)
             if status.ready:
                 print(f"READY: profile '{profile}' is already set up")
+                for warning in status.warnings:
+                    print(f"  ! {warning}")
                 sys.exit(0)
             if status.stage == "load":
                 print(f"NOT READY: profile '{profile}' is downloaded but will not load")

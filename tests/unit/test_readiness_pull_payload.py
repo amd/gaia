@@ -86,7 +86,7 @@ def test_a_known_gateway_namespace_is_refused_on_a_cold_catalog():
 
 def test_an_unknown_user_model_fails_loudly_rather_than_sending_a_bad_pull():
     """Silently sending name-only here is what produced the confusing 500."""
-    with pytest.raises(ValueError, match="not in GAIA's model registry"):
+    with pytest.raises(ValueError, match="Add a model from Hugging Face"):
         _sent("user.not-a-real-model")
 
 
@@ -101,4 +101,4 @@ def test_an_unknown_user_model_yields_a_failure_line_instead_of_raising():
         lines = list(provision_progress(BASE, "user.not-a-real-model"))
 
     assert lines[-1].startswith("✗")
-    assert any("not in GAIA's model registry" in line for line in lines)
+    assert any("Add a model from Hugging Face" in line for line in lines)

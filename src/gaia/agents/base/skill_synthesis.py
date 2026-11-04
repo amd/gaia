@@ -345,8 +345,9 @@ class ReconcileResult:
     """Outcome of ``reconcile_and_store`` for one distilled candidate.
 
     Attributes:
-        action: ``"add"`` (new row), ``"update"`` (new row + old superseded), or
-            ``"noop"`` (existing row already dominates).
+        action: ``"add"`` (new row), ``"update"`` (new row + old superseded),
+            ``"noop"`` (existing row already dominates), or ``"erased"`` (all
+            memory was erased after the pass began, so nothing was written).
         skill_id: The stored procedure id for ``add`` / ``update``; None on noop.
         superseded_id: The id superseded by an ``update``, else None.
     """
@@ -698,6 +699,7 @@ def reconcile_and_store(
     store,
     embedding: Optional[bytes] = None,
     similarity_tau: float = SIMILARITY_TAU,
+    erase_count: Optional[int] = None,
 ) -> ReconcileResult:
     """RECONCILE/STORE — persist a distilled candidate as ADD / UPDATE / NOOP.
 
@@ -735,13 +737,15 @@ def reconcile_and_store(
             used as the match vector (previously persist-only).
         similarity_tau: Cosine threshold for treating a stored procedure as the
             same goal; defaults to the clustering ``SIMILARITY_TAU``.
+        erase_count: ``MemoryStore.erase_count()`` when the pass began; an
+            erase since then drops the write (action ``"erased"``).
 
     Returns:
         A ``ReconcileResult`` describing the action taken.
     """
     prior = _nearest_enabled_procedure(store, embedding, similarity_tau)
 
-    def _insert(sessions: List[str], successes: int, attempts: int) -> str:
+    def _insert(sessions: List[str], successes: int, attempts: int) -> Optional[str]:
         return store.put_skill(
             name=candidate.name,
             when_to_use=candidate.when_to_use,
@@ -752,12 +756,15 @@ def reconcile_and_store(
             attempt_count=attempts,
             provenance={"source": "synthesized", "from_sessions": sessions},
             embedding=embedding,
+            erase_count=erase_count,
         )
 
     if prior is None:
         new_id = _insert(
             cluster.from_sessions, cluster.success_count, cluster.attempt_count
         )
+        if new_id is None:
+            return ReconcileResult(action="erased")
         logger.info(
             "[skill_synthesis] ADD procedure %s name=%s", new_id, candidate.name
         )
@@ -768,6 +775,8 @@ def reconcile_and_store(
         new_id = _insert(
             lineage.from_sessions, lineage.success_count, lineage.attempt_count
         )
+        if new_id is None:
+            return ReconcileResult(action="erased")
         store.supersede_skill(prior["id"], new_id)
         logger.info(
             "[skill_synthesis] UPDATE procedure %s supersedes %s "

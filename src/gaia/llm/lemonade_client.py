@@ -431,13 +431,18 @@ def resolve_default_vision_model() -> Optional[str]:
     """
     from gaia.config import GaiaConfig
 
+    config = GaiaConfig.load()
     model = resolve_default_chat_model()
-    if runs_on_npu(model):
+    # The model chat reopens on, unless that runs in the cloud.
+    current = config.last_model
+    if not current or current.startswith("claude-") or cloud_model_provider(current):
+        current = model
+    if runs_on_npu(current):
         return None
-    chosen = GaiaConfig.load().vision_model
+    chosen = config.vision_model
     if chosen:
         return chosen
-    return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
+    return current if current in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
 
 
 def resident_vision_model(configured: str, base_url: Optional[str] = None) -> str:
@@ -2942,9 +2947,11 @@ def pull_request_body(model_id: str) -> Dict[str, Any]:
 
 def _unknown_user_model_message(model_id: str) -> str:
     return (
-        f"Cannot pull custom model '{model_id}': it is not in GAIA's "
-        "model registry, so its checkpoint and recipe are unknown. "
-        "Add it to MODELS in gaia.llm.lemonade_client, or run `gaia init`."
+        f"Cannot download '{model_id}': GAIA doesn't know where to download "
+        "it from. Add it from its Hugging Face link, then download it: in the "
+        "Agent UI use Settings > Model > Add a model from Hugging Face; in the "
+        "terminal app use /provider, choose Local, then ctrl+a; or run "
+        "`gaia model add <link>`."
     )
 
 
@@ -3158,8 +3165,7 @@ def _chosen_backend_hint(backend: Optional[str]) -> str:
     return (
         f" GAIA asked for llama.cpp's {backend} backend, as set in Settings → "
         "Advanced → Model server (llamacpp_backend in ~/.gaia/config.json). "
-        "Choose Vulkan there, the GPU backend GAIA has tested, or run "
-        "`gaia config set llamacpp_backend vulkan`."
+        "Choose Vulkan there, the GPU backend GAIA has tested."
     )
 
 

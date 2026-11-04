@@ -110,6 +110,12 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **Document Q&A says why it couldn't start.** Any startup failure, such as
+  an unwritable cache folder or a bad embedder setting, was reported as "RAG not
+  installed" and never retried for the session. Only a missing `[rag]` extra
+  now says to install it; any other failure names its cause and is tried again
+  on the next document request. `list_indexed_documents` returns an error when
+  document Q&A is down, like the other document tools, instead of an empty list.
 - **The SPEC names `GAIA_ALLOWED_PATHS` and the 150-step default.** Reading
   only the SPEC, an integrator could not see that a bad allowlist entry stops
   the sidecar at startup, or that an omitted `/query` `max_steps` runs 150
