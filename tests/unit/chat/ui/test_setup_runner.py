@@ -2265,3 +2265,87 @@ def test_cancel_during_the_load_check_leaves_no_row_verifying(monkeypatch):
     release.set()
     runner._thread.join(5)
     assert _models(runner)[GEMMA]["state"] == "unchecked"
+
+
+# ── a main-plan model's failed load: re-download only when the file is broken ──
+
+
+def _load_failed_run(monkeypatch, kind, error="raw load error"):
+    """A run whose load check failed Gemma, from the plan, with *kind*."""
+    plan = json.dumps(
+        {
+            "event": "plan",
+            "models": [
+                {"id": GEMMA, "bytes_total": 10, "downloaded": True},
+                {"id": EMBED, "bytes_total": 10, "downloaded": True},
+            ],
+        }
+    )
+    _popen(monkeypatch, _FakeProc(io.BytesIO((plan + "\n").encode())))
+    monkeypatch.setattr(
+        sr,
+        "check",
+        lambda *_a, **_k: {
+            "ready": False,
+            "stage": "load",
+            "reasons": [f"Model '{GEMMA}' failed"],
+            "models": [
+                {"id": EMBED, "loaded": True},
+                {"id": GEMMA, "loaded": False, "error": error, "kind": kind},
+            ],
+        },
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False)
+    view = _wait_done(runner)
+    rows = {m["id"]: m for m in view["models"]}
+    assert rows[EMBED]["state"] == "ready"
+    assert all(m["state"] != "verifying" for m in view["models"])
+    return runner, rows[GEMMA]
+
+
+@pytest.mark.parametrize(
+    "kind, said",
+    [
+        ("memory", "enough free memory"),
+        ("stuck", "didn't answer"),
+        ("answer", "nothing usable back"),
+        ("window", "smaller context window"),
+    ],
+)
+def test_a_plan_model_that_failed_its_load_for_a_fine_file_is_not_offered_a_redownload(
+    monkeypatch, kind, said
+):
+    _runner, row = _load_failed_run(monkeypatch, kind)
+    assert row["state"] == "failed" and row["can_retry"]
+    assert row["error_kind"] == kind
+    assert said in row["error"] and "would not load" not in row["error"]
+    assert "Load check: raw load error" in row["log"]
+
+
+@pytest.mark.parametrize("kind", ["broken", None])
+def test_a_plan_model_whose_file_did_not_load_is_still_offered_a_redownload(
+    monkeypatch, kind
+):
+    _runner, row = _load_failed_run(monkeypatch, kind, "bad magic")
+    assert row["error_kind"] == "verify"
+    assert "would not load: bad magic" in row["error"]
+
+
+def test_retry_on_a_plan_model_repeats_its_load_without_downloading(monkeypatch):
+    from gaia.installer import init_command
+
+    runner, _row = _load_failed_run(monkeypatch, "memory")
+    calls = []
+
+    def retest(client, model_id, job=None):
+        calls.append((model_id, job))
+        return (True, None, None)
+
+    monkeypatch.setattr(init_command, "retest_model", retest)
+    runner.download_model(_NoPullClient(), GEMMA)
+    assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "ready")
+    assert calls == [(GEMMA, init_command.LOAD_CHECK_JOB)]
+    assert not runner.busy_with(GEMMA)
+    # The load check is no Test-step row; a retest of it must not add one.
+    assert not any(t["subject"] == GEMMA for t in runner.status()["tests"])

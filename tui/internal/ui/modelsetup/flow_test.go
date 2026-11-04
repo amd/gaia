@@ -1457,6 +1457,53 @@ func TestRetryTestsAFineFileAgainWithoutRemovingIt(t *testing.T) {
 	}
 }
 
+// A model from setup's own plan that failed the run's load check for want of
+// memory is tested again on r, never deleted; once it passes, the failed run
+// is run again to finish setup, as nothing has proven setup ready yet.
+func TestRetryOfAPlanModelsLoadCheckFinishesSetupWithoutRemovingIt(t *testing.T) {
+	h := startedDownload(t)
+	kind, msg := setupapi.ErrTestMemory, "Gemma-4-E4B-it-GGUF is downloaded, but this PC didn't have enough free memory to test it."
+	h.api.SetRunState(setupapi.RunFailed)
+	h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateFailed, ErrorKind: &kind, Error: &msg,
+		BytesDone: total(gemma), BytesTotal: total(gemma)})
+	h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateReady, BytesDone: total(qwen), BytesTotal: total(qwen)})
+	h.api.Progress(setupapi.ModelProgress{ID: emb, State: setupapi.StateReady, BytesDone: total(emb), BytesTotal: total(emb)})
+	h.poll()
+	h.poll()
+	for i, r := range h.m.shownRows() {
+		if r.ID == gemma {
+			h.m.focus = i
+		}
+	}
+	h.expect("Nothing is downloaded again.")
+	runs := func() int {
+		n := 0
+		for _, c := range h.api.CallList() {
+			if strings.HasPrefix(c, "run ") {
+				n++
+			}
+		}
+		return n
+	}
+	before := runs()
+	h.key("r")
+	if h.m.ask != askNone {
+		t.Fatalf("a fine file asked before retrying (ask %v)", h.m.ask)
+	}
+	h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateVerifying, BytesDone: total(gemma), BytesTotal: total(gemma)})
+	h.poll()
+	h.api.Progress(setupapi.ModelProgress{ID: gemma, State: setupapi.StateReady, BytesDone: total(gemma), BytesTotal: total(gemma)})
+	h.poll()
+	for _, c := range h.api.CallList() {
+		if strings.HasPrefix(c, "remove") {
+			t.Fatalf("retrying a fine file removed it: %v", h.api.CallList())
+		}
+	}
+	if runs() == before {
+		t.Fatalf("a passed retest on a failed run did not finish setup: %v", h.api.CallList())
+	}
+}
+
 // A run that failed before its load check keeps what it downloaded: those rows
 // read "downloaded", are no failure, offer no retry, and the run's own note
 // shows only when no download failed (its row would already say why).

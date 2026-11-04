@@ -26,7 +26,13 @@ from gaia.installer.init_command import (
     _test_limit_s,
     _tone_wav,
 )
-from gaia.llm.lemonade_client import LemonadeClientError, LemonadeUnresponsiveError
+from gaia.llm.lemonade_client import (
+    InsufficientMemoryError as LemonadeInsufficientMemory,
+)
+from gaia.llm.lemonade_client import (
+    LemonadeClientError,
+    LemonadeUnresponsiveError,
+)
 from gaia.ui import setup_plan, setup_runner
 
 
@@ -647,3 +653,68 @@ def test_the_agent_row_is_failed_only_when_no_agent_answers(problem, kept, state
     cmd = InitCommand(profile="gaia", yes=True)
     cmd._agent_problem, cmd._agent_kept = problem, kept
     assert cmd._agent_component_state() == state
+
+
+# ── the load check names why a model failed; only "broken" is a bad file ──
+
+
+def _load_client():
+    client = MagicMock()
+    client.base_url = "http://127.0.0.1:13305/api/v1"
+    client.get_model_info.side_effect = lambda m: {"id": m, "size_gb": 1.0}
+    return client
+
+
+@pytest.mark.parametrize(
+    "raised, kind",
+    [
+        (LemonadeInsufficientMemory("Not enough free memory for m"), "memory"),
+        (LemonadeUnresponsiveError("no answer in 60 s"), "stuck"),
+        (requests.ConnectionError("connection reset"), "stuck"),
+        (LemonadeClientError("model_load_error: bad gguf"), "broken"),
+        (RuntimeError("boom"), "broken"),
+    ],
+)
+def test_the_load_check_says_why_a_chat_model_did_not_load(raised, kind):
+    client = _load_client()
+    client._ensure_model_loaded.side_effect = raised
+    load = init_command._load_model_once(client, "Gemma-4-E4B-it-GGUF")
+    assert load.loaded is False and load.kind == kind
+    reason = init_command._load_failure_reason(load)
+    assert ("would not load" in reason) == (kind == "broken")
+
+
+def test_an_empty_embedding_is_an_answer_not_a_broken_file():
+    client = _load_client()
+    client.embeddings.return_value = {"data": [{"embedding": []}]}
+    load = init_command._load_model_once(client, "user.embeddinggemma-300m-GGUF")
+    assert (load.loaded, load.kind) == (False, "answer")
+
+
+def test_a_silent_speech_model_is_an_answer_not_a_broken_file():
+    import numpy as np
+
+    with patch(
+        "gaia.audio.lemonade_tts.LemonadeTTSClient.synthesize",
+        return_value=(np.zeros(0, dtype=np.float32), 24000),
+    ):
+        load = init_command._load_model_once(_load_client(), "kokoro-v1")
+    assert (load.loaded, load.kind) == (False, "answer")
+    assert "no audio" in load.error
+
+
+def test_a_retest_of_a_load_check_failure_repeats_the_load():
+    client = _load_client()
+    client._ensure_model_loaded.side_effect = LemonadeInsufficientMemory("short")
+    assert init_command.retest_model(client, "Gemma-4-E4B-it-GGUF", "load") == (
+        False,
+        "short",
+        "memory",
+    )
+    client._ensure_model_loaded.side_effect = None
+    assert init_command.retest_model(client, "Gemma-4-E4B-it-GGUF", "load") == (
+        True,
+        None,
+        None,
+    )
+    client.chat_completions.assert_not_called()

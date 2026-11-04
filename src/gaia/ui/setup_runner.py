@@ -1082,6 +1082,8 @@ class SetupRunner:
     def _retest(self, client, model_id: str) -> Optional[Dict[str, Any]]:
         """Test one downloaded model again, on its own thread; nothing is
         deleted. None when its last failure was not a test of a fine file."""
+        from gaia.installer.init_command import LOAD_CHECK_JOB
+
         with self._lock:
             entry = self._models.get(model_id)
             if (
@@ -1101,7 +1103,7 @@ class SetupRunner:
             self._pulls[model_id] = stop
             entry.state, entry.error, entry.speed_bps = "verifying", None, 0
             entry.add_log(f"Testing {model_id} again")
-            if self._run is not None:
+            if self._run is not None and entry.test_job != LOAD_CHECK_JOB:
                 self._record_test(
                     self._run,
                     {"job": entry.test_job, "subject": model_id, "state": "running"},
@@ -1112,7 +1114,7 @@ class SetupRunner:
         return self.status() or {"state": "idle"}
 
     def _retest_one(self, client, model_id: str, stop: threading.Event) -> None:
-        from gaia.installer.init_command import retest_model
+        from gaia.installer.init_command import LOAD_CHECK_JOB, retest_model
 
         with self._lock:
             job = self._models[model_id].test_job
@@ -1138,7 +1140,7 @@ class SetupRunner:
                 # The test can't be interrupted; its result no longer counts.
                 entry.state = "cancelled"
                 entry.add_log("Cancelled")
-                if self._run is not None:
+                if self._run is not None and entry.test_job != LOAD_CHECK_JOB:
                     self._record_test(self._run, {**row, "state": "skipped"})
                 return
             if passed:
@@ -1154,7 +1156,7 @@ class SetupRunner:
                     else "Failed its test"
                 )
                 entry.add_log(f"{said}: {error}")
-            if self._run is not None:
+            if self._run is not None and entry.test_job != LOAD_CHECK_JOB:
                 self._record_test(
                     self._run,
                     {
@@ -1513,12 +1515,17 @@ class SetupRunner:
                 run.note(f"Load check failed: {e}")
                 self._settle_models(None, {}, run_failed=True)
             return False
+        from gaia.installer.init_command import LOAD_CHECK_JOB
+
         loads = status.get("models") or []
-        failed = {
-            m["id"]: f"{m['id']} is downloaded but would not load: {m.get('error')}"
-            for m in loads
-            if not m.get("loaded")
-        }
+        failed: Dict[str, str] = {}
+        kinds: Dict[str, str] = {}
+        for m in loads:
+            if not m.get("loaded"):
+                # Only a broken file is offered a fresh download.
+                kinds[m["id"]], failed[m["id"]] = _test_failure(
+                    m["id"], m.get("kind"), m.get("error")
+                )
         with self._lock:
             # Cancelled during the check: its results belong to no run any more.
             if run.state == "cancelled":
@@ -1526,9 +1533,16 @@ class SetupRunner:
             run.status = status
             for m in loads:
                 outcome = (
-                    "loads" if m.get("loaded") else f"would not load: {m.get('error')}"
+                    "loads"
+                    if m.get("loaded")
+                    else f"failed ({m.get('kind') or 'broken'}): {m.get('error')}"
                 )
                 run.note(f"Load check {m['id']}: {outcome}")
+                entry = self._models.get(m["id"])
+                if entry is not None and not m.get("loaded"):
+                    # Retry repeats this load; the friendly line may drop its words.
+                    entry.test_job = LOAD_CHECK_JOB
+                    entry.add_log(f"Load check: {m.get('error')}")
             loaded = {m["id"] for m in loads if m.get("loaded")}
             # gaia init's Test step ran what the user ticked; this check only
             # covers the plan. Any other model it skipped stays unverified.
@@ -1539,7 +1553,6 @@ class SetupRunner:
                 for t in run.tests.values()
                 if t.get("state") == "failed" and t.get("subject") in run.extra_models
             }
-            kinds: Dict[str, str] = {}
             for i, test in tested_failed.items():
                 if i in checked:
                     continue
