@@ -141,8 +141,8 @@ def describe_placement(
 def recipe_unavailable_reason(recipe: Optional[str], system_info: Any) -> Optional[str]:
     """Why no backend for *recipe* runs on this PC, or None when one can.
 
-    Unknown means can run: an older Lemonade that does not report a recipe's
-    backends offers no grounds to hide its models.
+    A recipe with no local backends to report, such as ``cloud``, offers no
+    grounds to hide its models.
     """
     if not recipe:
         return None

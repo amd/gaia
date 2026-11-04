@@ -2182,3 +2182,165 @@ def test_a_leftover_that_cannot_be_deleted_does_not_stop_the_install(
     installer._install_binary_artifact(b"new", target.name, tmp_path)
 
     assert target.read_bytes() == b"new"
+
+
+# ---------------------------------------------------------------------------
+# no_build_reason: `gaia init --check` asks the question install() answers by
+# refusing, without downloading anything.
+# ---------------------------------------------------------------------------
+
+
+def _serving_manifest(manifest, agent_id="email"):
+    from gaia.hub import catalog
+
+    url = catalog.manifest_url(agent_id, BASE)
+    fetched = []
+
+    def fetcher(u):
+        fetched.append(u)
+        if u == url:
+            return json.dumps(manifest).encode("utf-8")
+        raise AssertionError(f"no_build_reason must download nothing, fetched {u}")
+
+    return fetcher, fetched
+
+
+@pytest.mark.parametrize(
+    "platform_key", ["win32-x64", "linux-x64", "win32-arm64", "linux-arm64"]
+)
+def test_no_build_reason_agrees_with_install(tmp_path, platform_key):
+    """Whatever install() refuses as "no build for this machine", and nothing else."""
+    manifest = _binary_manifest(
+        platform_keys=("win32-x64", "linux-x64"), singular_key="win32-x64"
+    )
+    fetcher, _ = _serving_manifest(manifest)
+    reason = installer.no_build_reason(
+        "email",
+        base_url=BASE,
+        fetcher=fetcher,
+        platform_key=platform_key,
+        install_root=tmp_path,
+    )
+
+    try:
+        install(
+            "email",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_binary_fetcher(manifest),
+            run_pip=_refuse_pip,
+            install_root=tmp_path / "install",
+            platform_key=platform_key,
+        )
+        refused = None
+    except installer.UnsupportedPlatformError as exc:
+        refused = str(exc)
+
+    assert reason == refused
+    if platform_key.endswith("arm64"):
+        assert platform_key in reason
+
+
+def test_no_build_reason_downloads_only_the_manifest(tmp_path):
+    manifest = _binary_manifest(platform_keys=("win32-x64",), singular_key="win32-x64")
+    fetcher, fetched = _serving_manifest(manifest)
+
+    installer.no_build_reason(
+        "email",
+        base_url=BASE,
+        fetcher=fetcher,
+        platform_key="win32-x64",
+        install_root=tmp_path,
+    )
+
+    assert len(fetched) == 1
+
+
+def test_no_build_reason_honours_the_manifest_platform_gate(tmp_path, monkeypatch):
+    """A matching artifact still loses to requirements.platforms, as in install()."""
+    from gaia.hub import compatibility
+
+    monkeypatch.setattr(compatibility, "detect_platform", lambda: "linux-arm64")
+    manifest = _binary_manifest(platform_keys=("win32-x64",), singular_key="win32-x64")
+    manifest["requirements"]["platforms"] = ["win-x64"]
+    fetcher, _ = _serving_manifest(manifest)
+
+    reason = installer.no_build_reason(
+        "email",
+        base_url=BASE,
+        fetcher=fetcher,
+        platform_key="win32-x64",
+        install_root=tmp_path,
+    )
+
+    assert reason and "linux-arm64" in reason
+
+
+def test_a_full_disk_is_not_a_missing_build(tmp_path, monkeypatch):
+    """init fails loudly on a full disk; it must not read as "no build here"."""
+    from gaia.hub import compatibility
+
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 0.1)
+    manifest = _binary_manifest(platform_keys=("win32-x64",), singular_key="win32-x64")
+    manifest["requirements"]["min_disk_gb"] = 100
+    fetcher, _ = _serving_manifest(manifest)
+
+    with pytest.raises(DiskSpaceError):
+        installer.no_build_reason(
+            "email",
+            base_url=BASE,
+            fetcher=fetcher,
+            platform_key="win32-x64",
+            install_root=tmp_path,
+        )
+
+
+def test_an_unreachable_hub_is_not_a_missing_build(tmp_path):
+    from gaia.hub import catalog
+
+    def offline(url):
+        raise catalog.CatalogError("connection refused")
+
+    with pytest.raises(catalog.CatalogError):
+        installer.no_build_reason(
+            "email", base_url=BASE, fetcher=offline, install_root=tmp_path
+        )
+
+
+def test_no_build_reason_reads_a_release_candidates_own_build(tmp_path, monkeypatch):
+    """An RC installs the flagship from its pre-release; ask that, not the hub."""
+    from types import SimpleNamespace
+
+    from gaia.hub import prerelease
+
+    rc_manifest = _binary_manifest(
+        agent_id="gaia", platform_keys=("win32-x64",), singular_key="win32-x64"
+    )
+    monkeypatch.setattr(
+        prerelease,
+        "flagship_source",
+        lambda agent_id, fetcher: SimpleNamespace(
+            manifest=rc_manifest, base_url="https://rc.test"
+        ),
+    )
+
+    def no_hub(url):
+        raise AssertionError(f"an RC must not read the hub: {url}")
+
+    assert (
+        installer.no_build_reason(
+            "gaia",
+            base_url=BASE,
+            fetcher=no_hub,
+            platform_key="win32-x64",
+            install_root=tmp_path,
+        )
+        is None
+    )
+    assert "linux-arm64" in installer.no_build_reason(
+        "gaia",
+        base_url=BASE,
+        fetcher=no_hub,
+        platform_key="linux-arm64",
+        install_root=tmp_path,
+    )

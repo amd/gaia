@@ -20,8 +20,8 @@ from gaia.llm.lemonade_client import (
     _is_local_url,
     _model_ids_match,
     cloud_model_provider,
-    find_model_requirement,
     lemonade_auth_headers,
+    pull_request_body,
     resolve_effective_ctx_size,
     resolve_lemonade_api_key,
     resolve_lemonade_base_url,
@@ -256,17 +256,6 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     import httpx  # pylint: disable=import-outside-toplevel
 
     base_url = resolve_lemonade_base_url()
-    payload: Dict[str, Any] = {"model_name": model_name, "stream": True}
-    requirement = find_model_requirement(model_name)
-    registration = requirement.pull_kwargs() if requirement is not None else {}
-    if registration:
-        # A custom model registers on its first pull, under its ``user.`` name;
-        # built-ins send nothing extra (#1655).
-        payload["model_name"] = requirement.model_id
-        payload.update({k: v for k, v in registration.items() if v is not None})
-    if force:
-        payload["force"] = True
-
     starting = {
         "state": "starting",
         "model_name": model_name,
@@ -278,9 +267,6 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
         "total_bytes": 0,
         "message": None,
     }
-    _set_download_progress(model_name, starting)
-    logger.info("Pull stream starting: %s (force=%s)", model_name, force)
-
     # Track files we've already finished so the running ``downloaded_bytes``
     # advances monotonically across the multi-file pull. Lemonade's progress
     # events carry per-file counters; we synthesise an overall counter by
@@ -297,6 +283,21 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     from gaia.llm.lemonade_client import LemonadeClientError
 
     try:
+        try:
+            payload = pull_request_body(model_name)
+        except (RuntimeError, ValueError) as exc:
+            _set_download_progress(
+                model_name,
+                {**starting, "state": "error", "message": str(exc)},
+            )
+            logger.error("Pull refused for %s: %s", model_name, exc)
+            return
+        payload["stream"] = True
+        if force:
+            payload["force"] = True
+
+        _set_download_progress(model_name, starting)
+        logger.info("Pull stream starting: %s (force=%s)", model_name, force)
         if runs_on_npu(model_name):
             # A first install downloads a release and can take minutes.
             _set_download_progress(
@@ -642,17 +643,6 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                         status.model_context_size = resolve_effective_ctx_size(
                             ctx, chat_entry.get("max_context_window")
                         )
-                elif not loaded_models:
-                    # Older Lemonade names the model only at the root.
-                    status.model_loaded = health_data.get("model_loaded") or None
-
-                # Fallback: older Lemonade versions expose context_size at root
-                # level. A newer one's root describes its last load, which may
-                # be a speech or embedding model, not the chat model.
-                if status.model_context_size is None and not loaded_models:
-                    legacy_ctx = health_data.get("context_size")
-                    if legacy_ctx is not None:
-                        status.model_context_size = legacy_ctx
 
                 # Fetch model catalog for size, labels, and fallback context size
                 models_resp = await client.get(f"{base_url}/models", headers=_auth)
@@ -1459,7 +1449,12 @@ async def work_in_progress(request: Request, db: ChatDatabase = Depends(get_db))
     return WorkInProgress(
         answers=answers,
         indexing=indexing,
-        setup=setup_status.get("state") in ("running", "verifying"),
+        # A model download started from Retry or Settings runs outside a setup run.
+        setup=setup_status.get("state") in ("running", "verifying")
+        or any(
+            m.get("state") in ("queued", "downloading")
+            for m in setup_status.get("models") or []
+        ),
     )
 
 
@@ -1524,6 +1519,10 @@ async def download_model_endpoint(body: DownloadModelRequest):
     model_name = body.model_name.strip()
     if not model_name:
         raise HTTPException(status_code=400, detail="model_name must not be empty")
+    try:
+        pull_request_body(model_name)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     task = asyncio.create_task(_stream_lemonade_pull(model_name, body.force))
     _background_tasks.add(task)

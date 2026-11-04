@@ -774,6 +774,7 @@ export interface MessageResponse {
   role: string;
   session_id: string;
   stats?: InferenceStatsResponse | null;
+  stopped?: boolean;
   turn_summary?: TurnSummaryResponse | null;
 }
 /**

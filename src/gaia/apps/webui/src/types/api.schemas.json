@@ -2655,6 +2655,11 @@
           }
         ]
       },
+      "stopped": {
+        "default": false,
+        "title": "Stopped",
+        "type": "boolean"
+      },
       "turn_summary": {
         "anyOf": [
           {
