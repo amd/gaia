@@ -300,6 +300,11 @@ class SetupStatus:
     stage: Optional[str] = None
     #: One ModelLoad per model the load check tried; empty unless ``load=True``.
     models: list = field(default_factory=list)
+    #: The profile's GAIA agent is one of the things setup still has to do.
+    agent_missing: bool = False
+    #: True but worth saying, e.g. no GAIA agent build exists for this PC; never
+    #: a step setup could take.
+    warnings: list = field(default_factory=list)
 
     def to_json(self) -> dict:
         return {
@@ -307,6 +312,8 @@ class SetupStatus:
             "stage": self.stage,
             "reasons": list(self.reasons),
             "models": [m.__dict__ for m in self.models],
+            "agent_missing": self.agent_missing,
+            "warnings": list(self.warnings),
         }
 
 
@@ -622,7 +629,9 @@ def check_setup_status(
 ) -> SetupStatus:
     """Check whether `gaia init --profile <profile>` still has work to do.
 
-    Never installs, prompts, or downloads anything. A stopped GAIA Lemonade
+    Never installs, prompts, or downloads anything; with the profile's GAIA
+    agent missing it reads the hub's agent manifest, to tell "install it" from
+    "no build for this PC", which `gaia init` skips. A stopped GAIA Lemonade
     Server is started through the daemon, which every entry point does anyway,
     so a reboot does not read as "needs setup". Checks the SAME real state
     `run()` itself acts on (GAIA's Lemonade Server installed + running,
@@ -791,13 +800,46 @@ def check_setup_status(
         if not available:
             reasons.append(f"Model '{model_id}' is not downloaded")
 
+    agent_missing = False
+    warnings: list = []
+    agent_id = profile_config.get("agent")
+    if agent_id in HUB_INSTALL_AGENTS and not InitCommand._is_hub_agent_available(
+        agent_id
+    ):
+        # Same sentinel run() installs; models on the server do not imply the agent.
+        command = (
+            "gaia init"
+            if profile == DEFAULT_INIT_PROFILE
+            else f"gaia init --profile {profile}"
+        )
+        no_build = _agent_build_missing(agent_id)
+        if no_build:
+            from gaia.hub.compatibility import current_platform_key
+
+            # init finishes without it here, so setup has nothing left to do.
+            warnings.append(
+                f"No GAIA agent build for this PC ({current_platform_key()}) yet, "
+                f"so chat isn't available here. Run `{command}` again once one "
+                f"is published. ({no_build})"
+            )
+        else:
+            agent_missing = True
+            reasons.append(f"The GAIA agent is not installed -- run: {command}")
+
     if reasons:
         # Sizes let a caller say what the download will cost before it starts;
         # ``downloaded`` lets it leave out models the server already has.
         models = _describe_models(client, model_ids, downloaded) if load else []
-        return SetupStatus(ready=False, reasons=reasons, stage="setup", models=models)
+        return SetupStatus(
+            ready=False,
+            reasons=reasons,
+            stage="setup",
+            models=models,
+            agent_missing=agent_missing,
+            warnings=warnings,
+        )
     if not load:
-        return SetupStatus(ready=True, reasons=[])
+        return SetupStatus(ready=True, reasons=[], warnings=warnings)
 
     if chat_model and not skip_chat_model and not is_embedding_model_id(chat_model):
         model_ids = [m for m in model_ids if is_embedding_model_id(m)] + [chat_model]
@@ -812,8 +854,33 @@ def check_setup_status(
             ],
             stage="load",
             models=models,
+            warnings=warnings,
         )
-    return SetupStatus(ready=True, reasons=[], models=models)
+    return SetupStatus(ready=True, reasons=[], models=models, warnings=warnings)
+
+
+def _agent_build_missing(agent_id: str) -> Optional[str]:
+    """Why `gaia init` would skip *agent_id* here for lack of a build, else None.
+
+    A hub that can't answer is not "no build": the agent is reported missing,
+    and setup surfaces the real error when it tries the install.
+    """
+    import requests
+
+    from gaia.hub import catalog as hub_catalog
+    from gaia.hub import installer as hub_installer
+
+    try:
+        return hub_installer.no_build_reason(agent_id)
+    except (
+        hub_catalog.CatalogError,
+        hub_installer.InstallError,
+        requests.RequestException,
+    ) as e:
+        log.warning(
+            "Could not ask the hub whether '%s' has a build here: %s", agent_id, e
+        )
+        return None
 
 
 def remaining_download_gb(full_gb, on_disk_bytes) -> Optional[float]:

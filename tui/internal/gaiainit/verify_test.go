@@ -104,3 +104,42 @@ func TestTheScannerDeliversEachProgressRedraw(t *testing.T) {
 		t.Errorf("lines = %q, want %q", got, want)
 	}
 }
+
+func TestAgentOnlyWhenEveryModelIsAlreadyDownloaded(t *testing.T) {
+	const models = `"models": [{"id": "e", "role": "embedding", "downloaded": %s},` +
+		` {"id": "c", "role": "chat", "downloaded": true}]`
+	cases := []struct {
+		name, json string
+		want       bool
+	}{
+		{"agent only", `{"ready": false, "stage": "setup", "agent_missing": true, ` +
+			strings.Replace(models, "%s", "true", 1) + `}`, true},
+		{"a model is missing too", `{"ready": false, "stage": "setup", "agent_missing": true, ` +
+			strings.Replace(models, "%s", "false", 1) + `}`, false},
+		{"older gaia says nothing about the agent", `{"ready": false, "stage": "setup", ` +
+			strings.Replace(models, "%s", "true", 1) + `}`, false},
+		{"no models described", `{"ready": false, "stage": "setup", "agent_missing": true, "models": []}`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st, err := parseStatus(tc.json)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := st.AgentOnly(); got != tc.want {
+				t.Errorf("AgentOnly() = %v, want %v for %+v", got, tc.want, st)
+			}
+		})
+	}
+}
+
+func TestParseStatusKeepsWarnings(t *testing.T) {
+	st, err := parseStatus(`{"ready": true, "stage": null, "reasons": [], "models": [], ` +
+		`"agent_missing": false, "warnings": ["No GAIA agent build for this PC (linux-arm64) yet"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Ready || st.AgentMissing || len(st.Warnings) != 1 {
+		t.Errorf("status = %+v", st)
+	}
+}
