@@ -20,6 +20,12 @@ from gaia_agent import server as server_mod  # noqa: E402
 import gaia.llm.lemonade_client as lc  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def fresh_warm_up(monkeypatch):
+    """A sidecar that just started: no turn has stopped its warm-up."""
+    monkeypatch.setattr(server_mod, "_startup_warm_up", server_mod._StartupWarmUp())
+
+
 @pytest.fixture
 def default_model(monkeypatch):
     def _set(model_id, downloaded):
@@ -74,7 +80,7 @@ class _Agent:
         self.fail = fail
         self.warmed = False
 
-    def warm_up(self):
+    def warm_up(self, cancel=None):
         if self.fail:
             raise ConnectionError("Lemonade not reachable")
         self.warmed = True
