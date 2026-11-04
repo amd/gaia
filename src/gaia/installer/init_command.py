@@ -2869,23 +2869,25 @@ class InitCommand:
                     save_options=not users_server,
                 )
 
-                # Verify context size was set correctly by reading it back
+                # Read the window back from the loaded entry; /models holds the
+                # saved options, which a user's own server leaves unchanged.
                 try:
-                    # Get full model list with recipe_options
-                    models_list = client.list_models()
-                    model_info = next(
-                        (
-                            m
-                            for m in models_list.get("data", [])
-                            if model_choice.ids_match(m.get("id"), model_id)
-                        ),
-                        None,
-                    )
+                    from gaia.llm.lemonade_client import loaded_ctx_size
 
-                    if not model_info:
-                        return (False, "Model info not found")
+                    loaded = client.health_check().get("all_models_loaded") or []
+                    if not any(
+                        model_choice.ids_match(m.get("model_name"), model_id)
+                        for m in loaded
+                        if isinstance(m, dict)
+                    ):
+                        return (
+                            False,
+                            f"Lemonade accepted the load of {model_id}, but its "
+                            f"/health does not list it as loaded, so its context "
+                            f"window is unknown",
+                        )
 
-                    actual_ctx = model_info.get("recipe_options", {}).get("ctx_size")
+                    actual_ctx = loaded_ctx_size(loaded, model_id)
 
                     if actual_ctx and actual_ctx >= min_ctx:
                         # Success - context verified

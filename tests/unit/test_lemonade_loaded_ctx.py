@@ -157,3 +157,47 @@ def test_reload_whose_model_vanished_from_health_fails_loudly(client):
     ):
         LemonadeManager._try_reload_with_ctx(client, status, 65536, True, lock)
     assert lock.locked()
+
+
+def _setup_client(health, catalog):
+    from unittest.mock import MagicMock
+
+    client = MagicMock()
+    client.base_url = "http://127.0.0.1:1/api/v1"
+    client.check_model_loaded.return_value = False
+    client.health_check.return_value = health
+    client.list_models.return_value = catalog
+    client.chat_completions.return_value = {"choices": [{"message": {"content": "ok"}}]}
+    return client
+
+
+def _run_setup_test(monkeypatch, client, required):
+    from gaia.installer.init_command import InitCommand
+
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.resolve_ctx_size", lambda **_: required
+    )
+    cmd = InitCommand(profile="chat", yes=True)
+    # The person's own Lemonade: its saved options are left unchanged.
+    cmd._lemonade_base_url = "http://127.0.0.1:1/api/v1"
+    monkeypatch.setattr(cmd, "_uses_saved_server", lambda: True)
+    return cmd, cmd._test_model_inference(client, LOCAL)
+
+
+def test_setup_verifies_the_loaded_window_not_the_saved_catalog_one(monkeypatch):
+    health = _health(_cloud_entry(), _local_entry(262144))
+    catalog = {"data": [{"id": LOCAL, "recipe_options": {"ctx_size": 65536}}]}
+    client = _setup_client(health, catalog)
+    cmd, result = _run_setup_test(monkeypatch, client, 262144)
+    assert result == (True, None)
+    assert cmd._ctx_verified == 262144
+    assert client.load_model.call_args.kwargs["save_options"] is False
+
+
+def test_setup_fails_clearly_when_the_loaded_model_is_not_in_health(monkeypatch):
+    health = _health(_cloud_entry())
+    catalog = {"data": [{"id": LOCAL, "recipe_options": {"ctx_size": 262144}}]}
+    client = _setup_client(health, catalog)
+    _, (ok, error) = _run_setup_test(monkeypatch, client, 262144)
+    assert ok is False
+    assert LOCAL in error and "/health" in error
