@@ -190,6 +190,59 @@ def running_embedded_lemonade_url() -> Optional[str]:
     return resolve_lemonade_base_url(f"http://{DEFAULT_HOST}:{state['port']}")
 
 
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _same_local_server(url_a: str, url_b: str) -> bool:
+    """Do two Lemonade URLs name the same server on this machine?"""
+    from urllib.parse import urlparse
+
+    a, b = urlparse(url_a), urlparse(url_b)
+    return (
+        (a.hostname or "").lower() in _LOOPBACK_HOSTS
+        and (b.hostname or "").lower() in _LOOPBACK_HOSTS
+        and a.port is not None
+        and a.port == b.port
+    )
+
+
+def embedded_lemonade_log_path(base_url: Optional[str] = None) -> Optional[Path]:
+    """``lemond.log`` of GAIA's own server when *base_url* is that server.
+
+    *base_url* None means the server GAIA is set to use. Returns None for any
+    other server: an installed Lemonade keeps its log wherever its installer
+    put it, so it is not guessed.
+    """
+    embedded = running_embedded_lemonade_url()
+    if embedded is None:
+        return None
+    if base_url is None:
+        from gaia.config import GaiaConfigError
+        from gaia.llm.lemonade_choice import LemonadeChoiceError
+
+        try:
+            base_url = resolve_lemonade_base_url()
+        except (GaiaConfigError, LemonadeChoiceError) as e:
+            log.warning("Cannot tell which Lemonade server is in use: %s", e)
+            return None
+    if not _same_local_server(base_url, embedded):
+        return None
+    home = os.getenv("GAIA_HOME", "").strip()
+    if home:
+        return Path(os.path.expandvars(home)).expanduser() / "lemonade" / "lemond.log"
+    if EMBEDDED_LEMONADE_STATE is None:
+        return None
+    return EMBEDDED_LEMONADE_STATE.parent / "lemond.log"
+
+
+def lemonade_log_hint(base_url: Optional[str] = None) -> str:
+    """One sentence saying where the Lemonade server at *base_url* logs."""
+    path = embedded_lemonade_log_path(base_url)
+    if path is not None:
+        return f"GAIA's Lemonade log has the full error: {path}."
+    return "Lemonade's server log has the full error."
+
+
 def _get_lemonade_config() -> tuple:
     """
     Get Lemonade host, port, and base_url from environment or defaults.
@@ -8411,9 +8464,8 @@ class LemonadeClient:
             raise LemonadeClientError(
                 f"Failed to load model '{model}' on {self.base_url}: {e} "
                 f"Check that the model is available and the Lemonade server "
-                f"has enough memory; see the server log (typical path: "
-                f"~/.cache/lemonade/server.log), or run `gaia init` to "
-                f"(re)install it."
+                f"has enough memory, or run `gaia init` to (re)install it. "
+                f"{lemonade_log_hint(self.base_url)}"
             ) from e
         # Recorded only after a successful load — a failed/cancelled load
         # raises above and never reaches here, so it can't be misattributed
@@ -8881,8 +8933,7 @@ class LemonadeClient:
                             f"delete + re-download attempt ({fresh_error}). "
                             f"Try the Force-redownload action in the Agent UI, or manually "
                             f"delete the model and re-run. "
-                            f"Check the Lemonade server log for details "
-                            f"(typical path: ~/.cache/lemonade/server.log)."
+                            f"{lemonade_log_hint(self.base_url)}"
                         ) from fresh_error
 
             # Check if this is a "model not found" error and auto_download is enabled
