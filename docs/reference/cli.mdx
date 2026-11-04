@@ -707,7 +707,8 @@ is removed only when it is the app's exact wrapper around this GAIA home's venv;
 
 <Note>
 `--purge` also undoes what the one-line installer set up. It stops a running GAIA daemon
-before deleting its state, removes `gaia-tui` and `gaia-agent` from `~/.gaia/bin`, and
+before deleting its state, removes `~/.gaia/bin` (`gaia-tui`, `gaia-agent`, and the `gaia`
+command links the Linux and macOS installer puts there), and
 removes the installer's PATH entries: the `# Added by GAIA installer` block in
 `~/.zshrc`, `~/.bashrc`, `~/.bash_profile` or `~/.profile`, or the `~\.gaia\venv\Scripts`
 and `~\.gaia\bin` entries on the Windows user PATH. The rest of each file and every
