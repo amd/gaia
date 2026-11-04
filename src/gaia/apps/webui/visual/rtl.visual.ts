@@ -679,6 +679,31 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** GAIA answered once that this chat was running, then stopped listening. */
+async function withGaiaStoppedMidAnswer(page: Page): Promise<void> {
+    let polls = 0;
+    await page.route('**/api/chat/active', (route) => (polls++ === 0
+        ? route.fulfill({ json: { session_ids: [ANSWER_SESSION], queued: [], awaiting_user: {} } })
+        : route.abort('connectionrefused')));
+    await page.route(/\/api\/(chat\/attach|sessions\/[^/]+\/(changes|outputs))/, (route) => route.abort('connectionrefused'));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`GAIA stopped mid-answer: plain words, a retry, no raw error, not running (${locale})`, async ({ page }) => {
+        test.setTimeout(60_000);
+        await open(page, `#${ANSWER_SESSION}`, locale, withGaiaStoppedMidAnswer);
+        const stopped = locale === 'ar' ? 'توقّف GAIA قبل أن يُكمل هذه الإجابة' : 'GAIA stopped before it finished this answer';
+        // Three re-attaches, the last 10 s after the second.
+        await expect(page.getByText(stopped)).toBeVisible({ timeout: 30_000 });
+        await expect(page.getByText(/Failed to fetch/)).toHaveCount(0);
+        await expect(page.getByText(/may still finish/)).toHaveCount(0);
+        await expect(page.getByRole('button', { name: /Try again/ })).toBeVisible();
+        await expect(page.locator('.sb-dot.is-running')).toHaveCount(0);
+        await shot(page, `gaia-stopped-mid-answer-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 for (const locale of ['ar', 'en']) {
     test(`a stopped server's hint wraps inside its row and names no command (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {

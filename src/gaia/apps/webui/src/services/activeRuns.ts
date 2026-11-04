@@ -13,6 +13,7 @@
 import * as api from './api';
 import { useChatStore } from '../stores/chatStore';
 import { log } from '../utils/logger';
+import { isNetworkError } from '../utils/requestErrors';
 
 export const BUSY_INTERVAL_MS = 1_000;
 export const IDLE_MAX_MS = 15_000;
@@ -29,7 +30,13 @@ export function refreshActiveRuns(): Promise<void> {
     const requestedAt = Date.now();
     inFlight = api.getActiveRuns()
         .then((runs) => useChatStore.getState().setActiveRuns(runs, requestedAt))
-        .catch((err) => log.api.warn('Could not read which chats are running', err))
+        .catch((err) => {
+            log.api.warn('Could not read which chats are running', err);
+            // GAIA is gone, so none of its chats is still running.
+            if (isNetworkError(err)) {
+                useChatStore.getState().setActiveRuns({ session_ids: [], queued: [], awaiting_user: {} }, requestedAt);
+            }
+        })
         .finally(() => { inFlight = null; });
     return inFlight;
 }

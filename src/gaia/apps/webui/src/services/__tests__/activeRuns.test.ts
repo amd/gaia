@@ -83,6 +83,21 @@ describe('active-runs poll', () => {
         expect(mockedApi.getActiveRuns).toHaveBeenCalledTimes(2);
     });
 
+    it('shows no chat as running once GAIA cannot be reached (#6588)', async () => {
+        useChatStore.setState({ runningSessionIds: ['a'], queuedSessionIds: ['b'] });
+        mockedApi.getActiveRuns.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+        await refreshActiveRuns();
+        expect(useChatStore.getState().runningSessionIds).toEqual([]);
+        expect(useChatStore.getState().queuedSessionIds).toEqual([]);
+    });
+
+    it('keeps the running chats when GAIA answered with an error', async () => {
+        useChatStore.setState({ runningSessionIds: ['a'] });
+        mockedApi.getActiveRuns.mockRejectedValueOnce(new Error('HTTP 500'));
+        await refreshActiveRuns();
+        expect(useChatStore.getState().runningSessionIds).toEqual(['a']);
+    });
+
     it('stops cleanly, and a second start replaces the first', async () => {
         const first = startActiveRunsPoll();
         stop = startActiveRunsPoll();
