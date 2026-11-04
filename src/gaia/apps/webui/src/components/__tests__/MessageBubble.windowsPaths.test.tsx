@@ -45,6 +45,8 @@ describe('Windows paths in prose keep their backslashes', () => {
         'C:\\Program Files\\.gaia',
         'C:\\Program Files (x86)\\.gaia\\x',
         '\\\\nas\\team share\\_tmp',
+        'C:\\Users\\Kalin\\OneDrive - AMD\\_drafts\\plan.md',
+        'C:\\My Old Docs\\_drafts\\plan.md',
     ])(
         'keeps the spaced path %s',
         (path) => {
@@ -54,6 +56,15 @@ describe('Windows paths in prose keep their backslashes', () => {
 
     it('ends a path at a space when the next word has no backslash', () => {
         expect(textOf('See C:\\me.gaia and \\_literal')).toBe('See C:\\me.gaia and _literal');
+    });
+
+    it('ends a path at a space before another path', () => {
+        expect(textOf('See C:\\foo and then C:\\bar\\_x')).toBe('See C:\\foo and then C:\\bar\\_x');
+        expect(textOf('See C:\\foo C:\\bar and \\_x')).toBe('See C:\\foo C:\\bar and _x');
+    });
+
+    it('ends a path at a space when the backslash is four words away', () => {
+        expect(textOf('Saved to C:\\foo is in the bar\\_x')).toBe('Saved to C:\\foo is in the bar_x');
     });
 
     it('ends a path at a space before an escape, so the prose after it still unescapes', () => {
