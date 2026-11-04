@@ -10,9 +10,9 @@ Lemonade's cache and the first real question only reads its own words.
 
 One warm-up runs at a time, and never starts while a streamed chat turn is
 running: both would share Lemonade's single slot (a non-streaming turn is not
-tracked, so it can overlap). A turn that starts mid-warm-up waits for it
-(:func:`wait_for_warm_up`) instead of reading the prefix a second time, and
-says what it is waiting on; Stop ends that wait.
+tracked, so it can overlap). A local-model turn that starts mid-warm-up waits
+for it (:func:`wait_for_warm_up`) instead of reading the prefix a second time,
+and says what it is waiting on; Stop ends that wait. A cloud turn never waits.
 """
 
 from __future__ import annotations
@@ -357,12 +357,15 @@ def _set_phase(phase: str) -> None:
         _warmer.set_phase(phase)
 
 
-def wait_for_warm_up(timeout: float = 300.0, *, handler=None) -> None:
+def wait_for_warm_up(
+    timeout: float = 300.0, *, handler=None, model: Optional[str] = None
+) -> None:
     """Let a running warm-up finish so the turn reuses what it cached.
 
     With an SSE *handler*, the turn shows what the warm-up is doing, and a
     Stop (``handler.cancelled``) ends the wait at once; the caller checks
-    ``cancelled`` afterwards.
+    ``cancelled`` afterwards. A turn on a cloud *model* never waits: it does
+    not use the local model the warm-up is loading.
 
     Raises:
         TimeoutError: the warm-up is still running after *timeout* seconds;
@@ -371,6 +374,12 @@ def wait_for_warm_up(timeout: float = 300.0, *, handler=None) -> None:
     warmer = _warmer
     if warmer is None or warmer.wait(0):
         return
+    if model:
+        from gaia.ui import _chat_helpers as chat
+
+        if chat._ui_cloud_provider(model):
+            logger.info("Chat turn on %s is not waiting for the warm-up", model)
+            return
     logger.info("Chat turn waiting for the running warm-up to finish")
     deadline = time.monotonic() + timeout
     shown = None

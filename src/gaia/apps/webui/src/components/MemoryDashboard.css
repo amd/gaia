@@ -10,6 +10,18 @@
     background: var(--bg-primary);
     overflow: hidden;
 }
+.mem-beta { letter-spacing: 0.5px; }
+/* Headers and badges here run at 10 px; the gloss's 11 px floor would set the English above the Arabic. */
+.memory-dashboard-page .i18n-gloss.i18n-gloss {
+    font-size: min(1em, max(0.8em, 11px));
+}
+/* A memory keeps its own direction, so it truncates at its end, but sits on the interface's reading edge. */
+.memory-dashboard-page bdi:is(.mem-review-content, .mem-task-desc, .mem-detail-value, .mem-goal-title) {
+    text-align: left;
+}
+:root[dir='rtl'] .memory-dashboard-page bdi:is(.mem-review-content, .mem-task-desc, .mem-detail-value, .mem-goal-title) {
+    text-align: right;
+}
 
 .memory-dashboard-header {
     display: flex; align-items: center; justify-content: space-between;
@@ -65,7 +77,7 @@
     display: flex; align-items: center; gap: 8px;
 }
 .mem-section-note {
-    margin-left: 8px;
+    margin-inline-start: 8px;
     font-weight: 400;
     letter-spacing: 0.5px;
     text-transform: none;
@@ -129,7 +141,7 @@
     transition: all var(--duration) var(--ease);
 }
 .mem-range-tab + .mem-range-tab {
-    border-left: 1px solid var(--border);
+    border-inline-start: 1px solid var(--border);
 }
 .mem-range-tab:hover { color: var(--text-primary); background: var(--bg-hover); }
 .mem-range-tab.active { background: var(--accent-fill); color: var(--accent-fill-text); }
@@ -326,11 +338,12 @@
     transition: border-color var(--duration) var(--ease);
     -webkit-appearance: none;
     appearance: none;
-    padding-right: 28px;
+    padding-inline-end: 28px;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239898b0' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 8px center;
 }
+.mem-filter-select:dir(rtl) { background-position: left 8px center; }
 .mem-filter-select:focus { border-color: var(--accent); }
 
 /* ── Category multi-select pills ─────────────────────────────── */
@@ -391,7 +404,8 @@
     box-sizing: border-box;
     width: 100%;
     min-width: 180px;
-    padding: 7px 12px 7px 32px;
+    padding-block: 7px;
+    padding-inline: 32px 12px;
     font-size: 12px;
     font-family: var(--font-mono);
     border: 1px solid var(--border);
@@ -411,7 +425,7 @@
 }
 .mem-filter-search-wrap .search-icon {
     position: absolute;
-    left: 10px;
+    inset-inline-start: 10px;
     top: 50%;
     transform: translateY(-50%);
     color: var(--text-muted);
@@ -427,7 +441,7 @@
 }
 
 .mem-knowledge-table th {
-    text-align: left;
+    text-align: start;
     padding: 8px 12px;
     font-size: 10px;
     font-weight: 600;
@@ -443,7 +457,7 @@
 }
 .mem-knowledge-table th:hover { color: var(--text-primary); }
 .mem-knowledge-table th.sorted { color: var(--accent); }
-.mem-sort-arrow { margin-left: 4px; font-size: 10px; }
+.mem-sort-arrow { margin-inline-start: 4px; font-size: 10px; }
 
 .mem-knowledge-table td {
     padding: 10px 12px;
@@ -520,7 +534,7 @@
     display: inline-flex;
     align-items: center;
     gap: 3px;
-    margin-right: 4px;
+    margin-inline-end: 4px;
     font-size: 11px;
 }
 
@@ -563,10 +577,11 @@
 /* Actions stay pinned to the visible edge while the table scrolls sideways. */
 .mem-knowledge-table .mem-actions-cell {
     position: sticky;
-    right: 0;
+    inset-inline-end: 0;
     background: var(--bg-primary);
     box-shadow: -8px 0 8px -8px rgba(0, 0, 0, 0.35);
 }
+.mem-knowledge-table .mem-actions-cell:dir(rtl) { box-shadow: 8px 0 8px -8px rgba(0, 0, 0, 0.35); }
 .mem-knowledge-table tbody tr:hover .mem-actions-cell,
 .mem-knowledge-table .mem-expanded-row .mem-actions-cell {
     background: color-mix(in srgb, var(--text-primary) 3%, var(--bg-primary));
@@ -644,7 +659,7 @@
 }
 
 .mem-tool-table th {
-    text-align: left;
+    text-align: start;
     padding: 8px 12px;
     font-size: 10px;
     font-weight: 600;
@@ -701,7 +716,7 @@
 }
 .mem-conv-search .search-icon {
     position: absolute;
-    left: 10px;
+    inset-inline-start: 10px;
     top: 50%;
     transform: translateY(-50%);
     color: var(--text-muted);
@@ -709,7 +724,8 @@
 }
 .mem-conv-search input {
     width: 100%;
-    padding: 8px 12px 8px 32px;
+    padding-block: 8px;
+    padding-inline: 32px 12px;
     font-size: 12px;
     font-family: var(--font-mono);
     border: 1px solid var(--border);
@@ -720,11 +736,11 @@
     transition: border-color var(--duration) var(--ease);
 }
 .mem-conv-search input:focus { border-color: var(--accent); }
-.mem-conv-search input { padding-right: 32px; }
+.mem-conv-search input { padding-inline-end: 32px; }
 
 .mem-search-clear {
     position: absolute;
-    right: 8px;
+    inset-inline-end: 8px;
     top: 50%;
     transform: translateY(-50%);
     display: flex; align-items: center; justify-content: center;
@@ -799,7 +815,7 @@
     font-family: var(--font-mono);
     color: var(--text-muted);
     flex-shrink: 0;
-    margin-left: 12px;
+    margin-inline-start: 12px;
 }
 
 /* Conversation detail modal overlay */
@@ -886,10 +902,10 @@
 }
 .mem-temporal-item:hover { border-color: var(--border); }
 .mem-temporal-item.overdue {
-    border-left: 3px solid var(--danger);
+    border-inline-start: 3px solid var(--danger);
 }
 .mem-temporal-item.upcoming {
-    border-left: 3px solid var(--accent-yellow);
+    border-inline-start: 3px solid var(--accent-yellow);
 }
 
 .mem-temporal-icon {
@@ -1121,7 +1137,7 @@
 .mem-maintenance-menu {
     position: absolute;
     top: calc(100% + 6px);
-    right: 0;
+    inset-inline-end: 0;
     min-width: 220px;
     background: var(--bg-card);
     border: 1px solid var(--border);
@@ -1142,7 +1158,7 @@
     color: var(--text-primary);
     border-radius: var(--radius-md);
     transition: background var(--duration-fast) var(--ease);
-    text-align: left;
+    text-align: start;
 }
 .mem-maintenance-item:hover:not(:disabled) {
     background: var(--tint-subtle);
@@ -1169,7 +1185,7 @@
 .mem-embed-dot {
     display: inline-flex;
     align-items: center;
-    margin-right: 5px;
+    margin-inline-end: 5px;
     vertical-align: middle;
 }
 .mem-embed-dot.embedded { color: var(--accent-green); }
@@ -1206,7 +1222,7 @@
 .mem-consolidated-badge {
     display: inline-flex;
     align-items: center;
-    margin-left: 6px;
+    margin-inline-start: 6px;
     color: var(--accent-green);
     opacity: 0.7;
     vertical-align: middle;
@@ -1220,7 +1236,7 @@
 .mem-toast-container {
     position: fixed;
     bottom: 24px;
-    right: 24px;
+    inset-inline-end: 24px;
     z-index: 200;
     display: flex;
     flex-direction: column;
@@ -1242,9 +1258,9 @@
     animation: toastIn var(--duration) var(--ease);
     pointer-events: auto;
 }
-.mem-toast-success { border-left: 3px solid var(--accent-green); }
-.mem-toast-error { border-left: 3px solid var(--danger); }
-.mem-toast-info { border-left: 3px solid var(--accent-blue); }
+.mem-toast-success { border-inline-start: 3px solid var(--accent-green); }
+.mem-toast-error { border-inline-start: 3px solid var(--danger); }
+.mem-toast-info { border-inline-start: 3px solid var(--accent-blue); }
 
 @keyframes toastIn {
     from { opacity: 0; transform: translateY(10px) scale(0.96); }
@@ -1277,13 +1293,13 @@
 .mem-toggle {
     position: relative;
     flex-shrink: 0;
-    width: 40px;
+    min-inline-size: 40px;
     height: 22px;
     border-radius: 11px;
     border: none;
     background: var(--border);
     cursor: pointer;
-    padding: 0;
+    padding: 0 8px;
     transition: background var(--duration) var(--ease);
 }
 .mem-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -1657,9 +1673,8 @@
         flex-direction: column;
     }
     .mem-toast-container {
-        right: 12px;
+        inset-inline: 12px;
         bottom: 12px;
-        left: 12px;
     }
 }
 
@@ -1834,7 +1849,7 @@
     min-width: 16px; height: 16px; padding: 0 4px;
     border-radius: 8px; font-size: 10px; font-weight: 700;
     background: var(--accent-yellow); color: var(--text-inverse);
-    margin-left: 2px;
+    margin-inline-start: 2px;
 }
 
 .mem-goal-header:focus-visible {

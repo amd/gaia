@@ -586,6 +586,51 @@ def is_llm_model_entry(model: Dict[str, Any]) -> bool:
     return "image" not in labels and "embeddings" not in labels
 
 
+def is_cloud_model_entry(entry: Dict[str, Any]) -> bool:
+    """True when a loaded-model entry is gateway-routed rather than local.
+
+    Accepts a raw ``all_models_loaded`` entry or an enriched ``loaded_models``
+    one. Its ``ctx_size`` is a 4096 placeholder, never a local window.
+    """
+    raw = entry.get("_health") or {}
+    name = entry.get("model_name") or entry.get("id") or ""
+    provider, _, upstream = name.partition(".")
+    return (
+        CLOUD_RECIPE in (entry.get("recipe"), raw.get("recipe"))
+        or "cloud" in (entry.get("labels") or [])
+        or cloud_model_provider(name) is not None
+        or (
+            "none" in (entry.get("device"), raw.get("device"))
+            and bool(upstream)
+            and provider.lower() != "user"
+        )
+    )
+
+
+def loaded_ctx_size(
+    entries: Optional[List[Dict[str, Any]]], model: Optional[str] = None
+) -> Optional[int]:
+    """The ``ctx_size`` *model* is loaded at, read from its own entry.
+
+    With no *model*, the first local LLM entry that reports one. None when the
+    entry is missing or reports no window; a cloud entry never answers.
+    """
+    for entry in entries or []:
+        if not isinstance(entry, dict) or is_cloud_model_entry(entry):
+            continue
+        if model is not None:
+            if not _model_ids_match(entry.get("model_name") or entry.get("id"), model):
+                continue
+        elif not is_llm_model_entry(entry):
+            continue
+        ctx = (entry.get("recipe_options") or {}).get("ctx_size")
+        if isinstance(ctx, int) and not isinstance(ctx, bool) and ctx > 0:
+            return ctx
+        if model is not None:
+            return None
+    return None
+
+
 # Minimum context window (in tokens) that GAIA agents assume is loaded. The
 # bundled ChatAgent system prompt alone runs >7000 tokens before any user
 # message; running below this silently truncates prompts and yields empty
@@ -3291,6 +3336,10 @@ class InsufficientDiskSpaceError(LemonadeClientError):
 
 class InsufficientMemoryError(LemonadeClientError):
     """Raised instead of a load that would run this machine out of memory."""
+
+
+class LoadedModelMissingError(LemonadeClientError):
+    """A load returned, but ``/health`` does not list the model it loaded."""
 
 
 class UsersServerUnchangedError(LemonadeClientError):
@@ -9142,16 +9191,7 @@ class LemonadeClient:
         try:
             health = self.health_check()
 
-            # The window lives on all_models_loaded[N].recipe_options.ctx_size.
-            all_models = health.get("all_models_loaded", [])
-            reported_ctx = 0
-            for m in all_models:
-                if not is_llm_model_entry(m):
-                    continue
-                ctx = m.get("recipe_options", {}).get("ctx_size", 0)
-                if ctx:
-                    reported_ctx = ctx
-                    break
+            reported_ctx = loaded_ctx_size(health.get("all_models_loaded")) or 0
 
             if reported_ctx >= required_tokens:
                 self.log.debug(
@@ -9195,18 +9235,10 @@ class LemonadeClient:
             status.health_data = health
             status.version = health.get("version")
 
-            # The window lives on all_models_loaded[N].recipe_options.ctx_size.
-            # Only consider LLM entries — a co-loaded transcription or
-            # embedding model's ctx_size is irrelevant and, if it sorts
-            # first, would otherwise be misreported as the server's context.
-            all_models = health.get("all_models_loaded", [])
-            for m in all_models:
-                if not is_llm_model_entry(m):
-                    continue
-                ctx = m.get("recipe_options", {}).get("ctx_size", 0)
-                if ctx:
-                    status.context_size = ctx
-                    break
+            # The first local LLM's window: speech, embedding and cloud entries
+            # can sort first and carry a placeholder ctx_size.
+            all_models = health.get("all_models_loaded") or []
+            status.context_size = loaded_ctx_size(all_models) or 0
 
             # Loaded models: ``/health.all_models_loaded`` should be used,
             # NOT ``/models`` (`/health.all_models_loaded`` gets what is in
@@ -9245,7 +9277,8 @@ class LemonadeClient:
                         # Carried through so consumers can tell a gateway-routed
                         # model from a local one. Without it every ctx-size and
                         # slot decision downstream treats a cloud model as local.
-                        "recipe": catalog.get("recipe", ""),
+                        "recipe": catalog.get("recipe") or hm.get("recipe", ""),
+                        "device": hm.get("device"),
                         "recipe_options": hm.get("recipe_options", {}),
                         "checkpoint": hm.get("checkpoint", ""),
                         # Trained-context ceiling (#2992) — ``/health`` reports

@@ -165,8 +165,8 @@ from gaia.agents.base.verification import (
 )
 
 # First-party imports
-from gaia.chat.sdk import AgentConfig, AgentSDK
-from gaia.daemon.broker_client import LeaseWaitCancelled
+from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
+from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
     budget_for_ctx,
@@ -3881,7 +3881,7 @@ Do NOT wrap conversational replies in JSON.
         return self._active_tool_filter
 
     def _prime_second_prefix(  # pylint: disable=unused-argument
-        self, say: Callable[[str], None]
+        self, say: Callable[[str], None], cancel: Optional[threading.Event]
     ) -> None:
         """Prime anything a warm-up keeps ready beside the first turn's prompt.
 
@@ -9509,7 +9509,9 @@ Do NOT wrap conversational replies in JSON.
     WARM_UP_PROMPT = "Reply with OK."
 
     def warm_up(
-        self, progress: Optional[Callable[[str], None]] = None
+        self,
+        progress: Optional[Callable[[str], None]] = None,
+        cancel: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
         """Do the first turn's one-time work now, before anyone is waiting on it.
 
@@ -9518,6 +9520,9 @@ Do NOT wrap conversational replies in JSON.
         context size and leaves the prompt prefix in the server's cache, so the
         first real question starts answering instead of reading ~10K tokens of
         instructions. Only worth it for a local model; the caller decides.
+
+        Setting *cancel* abandons the warm-up, even mid-prompt, and raises
+        ``LLMCallCancelled``: a turn on another model must not wait behind it.
 
         Raises whatever the embedder or LLM client raises: a warm-up that failed
         must say so, or the slow first turn it was meant to prevent looks
@@ -9533,12 +9538,7 @@ Do NOT wrap conversational replies in JSON.
         if warm_filter != self._active_tool_filter:
             self._apply_tool_filter(warm_filter)
         say(f"Loading {self.model_id} and reading its instructions")
-        self.chat.send_messages(
-            [{"role": "user", "content": self.WARM_UP_PROMPT}],
-            system_prompt=self.system_prompt,
-            tools=self._openai_tools,
-            max_tokens=1,
-        )
+        self._send_warm_up(cancel)
         result: Dict[str, Any] = {"seconds": round(time.perf_counter() - started, 1)}
         client = getattr(self.chat, "llm_client", None)
         usage_of = getattr(client, "get_last_usage", None)
@@ -9546,9 +9546,52 @@ Do NOT wrap conversational replies in JSON.
         if isinstance(usage, dict):
             result["prompt_tokens"] = usage.get("prompt_tokens")
             result["cached_tokens"] = usage.get("cached_tokens")
-        self._prime_second_prefix(say)
+        self._prime_second_prefix(say, cancel)
         result["seconds"] = round(time.perf_counter() - started, 1)
         return result
+
+    def _send_warm_up(self, cancel: Optional[threading.Event], **request: Any) -> None:
+        """One warm-up request with the live prompt and tools; *request* adds kwargs."""
+        if cancel is None:
+            self.chat.send_messages(
+                [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                system_prompt=self.system_prompt,
+                tools=self._openai_tools,
+                max_tokens=1,
+                **request,
+            )
+        else:
+            self._send_warm_up_cancellable(cancel, **request)
+
+    def _send_warm_up_cancellable(
+        self, cancel: threading.Event, **request: Any
+    ) -> None:
+        """The warm-up request, abandoned the moment *cancel* is set.
+
+        Streamed, with *cancel* as the Stop hook, so it also ends during the
+        silent prompt read and while queued for the model slot.
+        """
+        if cancel.is_set():
+            raise LLMCallCancelled("warm-up stopped before the model was reached")
+        try:
+            with (
+                model_retry_notices(lambda _notice: None, cancel.is_set),
+                lease_cancel_scope(cancel),
+            ):
+                self.chat.send_messages(
+                    [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                    system_prompt=self.system_prompt,
+                    tools=self._openai_tools,
+                    max_tokens=1,
+                    cancel=cancel,
+                    **request,
+                )
+        except LLMCallCancelled:
+            raise
+        except Exception as e:
+            if cancel.is_set():
+                raise LLMCallCancelled(f"warm-up stopped: {e}") from e
+            raise
 
     def process_query(
         self,

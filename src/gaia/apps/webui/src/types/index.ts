@@ -1014,6 +1014,10 @@ export interface SetupCheck {
     stage?: 'setup' | 'upgrade' | 'server' | 'load' | string;
     reasons?: string[];
     models?: Array<{ id: string; role: string; size_gb: number | null; loaded: boolean; error: string | null }>;
+    /** True but no setup step, e.g. no GAIA agent build for this PC. */
+    warnings?: string[];
+    /** The hub has no GAIA agent build for this PC, so chat can't run here. */
+    no_agent_build?: boolean;
     steps: SetupStep[];
     /** The steps for a cloud provider, which downloads only the embedding model. */
     cloud_steps?: SetupStep[];

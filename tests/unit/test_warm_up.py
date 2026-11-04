@@ -10,6 +10,7 @@ safe: the first real turn behaves exactly as it would have without it.
 
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -19,7 +20,10 @@ import pytest
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tool_loader import ToolLoader
+from gaia.chat.sdk import LLMCallCancelled
+from gaia.daemon import broker_client
 from gaia.llm.lemonade_client import FULL_TOOLS_SLOT
+from gaia.llm.retry import current_cancel_check
 
 TOOLS = ["read_file", "write_file", "web_search", "send_email"]
 CORE = ["write_file", "read_file"]
@@ -187,7 +191,7 @@ def test_warm_up_primes_the_second_prefix_after_the_first():
     order: list = []
 
     class _Second(_Agent):
-        def _prime_second_prefix(self, say):
+        def _prime_second_prefix(self, say, cancel):
             order.append(len(self.chat.calls))
             say("second prefix")
 
@@ -236,6 +240,83 @@ def test_warm_up_leaves_memory_upkeep_pending_for_a_private_agent():
 
     agent.warm_up()
 
+    assert _MemoryAgent.runs == 0
+    assert agent._memory_post_init_pending is True  # pylint: disable=protected-access
+
+
+# ── Stopping a warm-up for a turn on another model (#6582) ─────────────────
+
+
+def test_a_stopped_warm_up_never_reaches_the_model():
+    agent = _Agent()
+    cancel = threading.Event()
+    cancel.set()
+
+    with pytest.raises(LLMCallCancelled):
+        agent.warm_up(cancel=cancel)
+    assert agent.chat.calls == []
+
+
+def test_a_stoppable_warm_up_can_be_stopped_mid_prompt():
+    """The prompt read sends nothing back, so only the stream's Stop hook and
+    the lease wait's cancel scope can end it there."""
+    agent = _Agent()
+    cancel = threading.Event()
+    seen = {}
+
+    def send(messages, system_prompt=None, tools=None, **kwargs):
+        seen["cancel"] = kwargs.get("cancel")
+        seen["stop_hook"] = current_cancel_check()
+        seen["lease_scope"] = broker_client._cancel_scope.get()
+
+    agent.chat.send_messages = send
+    agent.warm_up(cancel=cancel)
+
+    assert seen["cancel"] is cancel
+    assert seen["lease_scope"] is cancel
+    assert seen["stop_hook"]() is False
+    cancel.set()
+    assert seen["stop_hook"]() is True
+
+
+def test_a_request_cut_off_by_the_stop_reads_as_stopped():
+    agent = _Agent()
+    cancel = threading.Event()
+
+    def send(*_a, **_k):
+        cancel.set()
+        raise RuntimeError("Stopped while waiting for the model to respond.")
+
+    agent.chat.send_messages = send
+    with pytest.raises(LLMCallCancelled):
+        agent.warm_up(cancel=cancel)
+
+
+def test_a_warm_up_failure_is_not_mistaken_for_a_stop():
+    agent = _Agent()
+
+    def send(*_a, **_k):
+        raise ConnectionError("Lemonade not reachable")
+
+    agent.chat.send_messages = send
+    with pytest.raises(ConnectionError):
+        agent.warm_up(cancel=threading.Event())
+
+
+def test_a_stopped_warm_up_skips_the_memory_upkeep():
+    class _MemoryAgent(MemoryMixin, _Agent):
+        runs = 0
+
+        def _run_memory_post_init(self):
+            type(self).runs += 1
+
+    agent = _MemoryAgent()
+    agent._memory_post_init_pending = True  # pylint: disable=protected-access
+    cancel = threading.Event()
+    cancel.set()
+
+    with pytest.raises(LLMCallCancelled):
+        agent.warm_up(cancel=cancel)
     assert _MemoryAgent.runs == 0
     assert agent._memory_post_init_pending is True  # pylint: disable=protected-access
 
@@ -343,6 +424,28 @@ def test_a_failed_second_prime_raises_and_still_restores_core(chat_agent):
 
     with pytest.raises(ConnectionError):
         chat_agent.warm_up()
+
+    assert chat_agent._active_tool_filter == chat_agent.tool_loader.offered(
+        chat_agent._tools_registry
+    )
+
+
+def test_a_stop_during_the_full_list_read_ends_the_warm_up(chat_agent):
+    """A turn on another model must not wait behind the second prime either."""
+    cancel = threading.Event()
+    real_send = chat_agent.chat.send_messages
+
+    def stop_on_slot_two(messages, **kwargs):
+        if kwargs.get("id_slot") == FULL_TOOLS_SLOT:
+            assert kwargs.get("cancel") is cancel
+            cancel.set()
+            raise RuntimeError("Stopped while waiting for the model to respond.")
+        real_send(messages, **kwargs)
+
+    chat_agent.chat.send_messages = stop_on_slot_two
+
+    with pytest.raises(LLMCallCancelled):
+        chat_agent.warm_up(cancel=cancel)
 
     assert chat_agent._active_tool_filter == chat_agent.tool_loader.offered(
         chat_agent._tools_registry

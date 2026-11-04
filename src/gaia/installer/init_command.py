@@ -31,7 +31,7 @@ import wave
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 # Rich imports for better CLI formatting
@@ -308,6 +308,8 @@ class SetupStatus:
     #: True but worth saying, e.g. no GAIA agent build exists for this PC; never
     #: a step setup could take.
     warnings: list = field(default_factory=list)
+    #: The hub has no GAIA agent build for this PC, so chat can't run here.
+    no_agent_build: bool = False
 
     def to_json(self) -> dict:
         return {
@@ -317,6 +319,7 @@ class SetupStatus:
             "models": [m.__dict__ for m in self.models],
             "agent_missing": self.agent_missing,
             "warnings": list(self.warnings),
+            "no_agent_build": self.no_agent_build,
         }
 
 
@@ -807,6 +810,7 @@ def check_setup_status(
             reasons.append(f"Model '{model_id}' is not downloaded")
 
     agent_missing = False
+    no_agent_build = False
     warnings: list = []
     agent_id = profile_config.get("agent")
     if agent_id in HUB_INSTALL_AGENTS and not InitCommand._is_hub_agent_available(
@@ -818,10 +822,11 @@ def check_setup_status(
             if profile == DEFAULT_INIT_PROFILE
             else f"gaia init --profile {profile}"
         )
-        no_build = _agent_build_missing(agent_id)
+        no_build, unknown = _agent_build_missing(agent_id)
         if no_build:
             from gaia.hub.compatibility import current_platform_key
 
+            no_agent_build = True
             # init finishes without it here, so setup has nothing left to do.
             warnings.append(
                 f"No GAIA agent build for this PC ({current_platform_key()}) yet, "
@@ -830,7 +835,8 @@ def check_setup_status(
             )
         else:
             agent_missing = True
-            reasons.append(f"The GAIA agent is not installed -- run: {command}")
+            reason = f"The GAIA agent is not installed -- run: {command}"
+            reasons.append(f"{reason}. {unknown}" if unknown else reason)
 
     if reasons:
         # Sizes let a caller say what the download will cost before it starts;
@@ -843,9 +849,12 @@ def check_setup_status(
             models=models,
             agent_missing=agent_missing,
             warnings=warnings,
+            no_agent_build=no_agent_build,
         )
     if not load:
-        return SetupStatus(ready=True, reasons=[], warnings=warnings)
+        return SetupStatus(
+            ready=True, reasons=[], warnings=warnings, no_agent_build=no_agent_build
+        )
 
     if chat_model and not skip_chat_model and not is_embedding_model_id(chat_model):
         model_ids = [m for m in model_ids if is_embedding_model_id(m)] + [chat_model]
@@ -858,15 +867,23 @@ def check_setup_status(
             stage="load",
             models=models,
             warnings=warnings,
+            no_agent_build=no_agent_build,
         )
-    return SetupStatus(ready=True, reasons=[], models=models, warnings=warnings)
+    return SetupStatus(
+        ready=True,
+        reasons=[],
+        models=models,
+        warnings=warnings,
+        no_agent_build=no_agent_build,
+    )
 
 
-def _agent_build_missing(agent_id: str) -> Optional[str]:
-    """Why `gaia init` would skip *agent_id* here for lack of a build, else None.
+def _agent_build_missing(agent_id: str) -> Tuple[Optional[str], Optional[str]]:
+    """``(no_build, unknown)``: why `gaia init` would skip *agent_id* here for
+    lack of a build, or why that could not be told.
 
-    A hub that can't answer is not "no build": the agent is reported missing,
-    and setup surfaces the real error when it tries the install.
+    Not knowing is not "no build": the caller reports the agent missing, with
+    *unknown* saying what to check.
     """
     import requests
 
@@ -874,16 +891,24 @@ def _agent_build_missing(agent_id: str) -> Optional[str]:
     from gaia.hub import installer as hub_installer
 
     try:
-        return hub_installer.no_build_reason(agent_id)
+        return hub_installer.no_build_reason(agent_id), None
     except (
         hub_catalog.CatalogError,
-        hub_installer.InstallError,
         requests.RequestException,
+        # A 200 that isn't JSON (a captive portal), or a file:// hub that
+        # isn't there.
+        ValueError,
+        OSError,
     ) as e:
-        log.warning(
-            "Could not ask the hub whether '%s' has a build here: %s", agent_id, e
+        hub_url = hub_catalog.get_hub_base_url()
+        log.warning("Could not read %s for the '%s' agent: %s", hub_url, agent_id, e)
+        return None, (
+            f"Could not read {hub_url} to check for a build for this PC ({e}); "
+            "check your network or GAIA_HUB_URL."
         )
-        return None
+    except hub_installer.InstallError as e:
+        log.warning("Could not tell whether '%s' has a build here: %s", agent_id, e)
+        return None, str(e)
 
 
 def remaining_download_gb(full_gb, on_disk_bytes) -> Optional[float]:
@@ -2844,23 +2869,25 @@ class InitCommand:
                     save_options=not users_server,
                 )
 
-                # Verify context size was set correctly by reading it back
+                # Read the window back from the loaded entry; /models holds the
+                # saved options, which a user's own server leaves unchanged.
                 try:
-                    # Get full model list with recipe_options
-                    models_list = client.list_models()
-                    model_info = next(
-                        (
-                            m
-                            for m in models_list.get("data", [])
-                            if model_choice.ids_match(m.get("id"), model_id)
-                        ),
-                        None,
-                    )
+                    from gaia.llm.lemonade_client import loaded_ctx_size
 
-                    if not model_info:
-                        return (False, "Model info not found")
+                    loaded = client.health_check().get("all_models_loaded") or []
+                    if not any(
+                        model_choice.ids_match(m.get("model_name"), model_id)
+                        for m in loaded
+                        if isinstance(m, dict)
+                    ):
+                        return (
+                            False,
+                            f"Lemonade accepted the load of {model_id}, but its "
+                            f"/health does not list it as loaded, so its context "
+                            f"window is unknown",
+                        )
 
-                    actual_ctx = model_info.get("recipe_options", {}).get("ctx_size")
+                    actual_ctx = loaded_ctx_size(loaded, model_id)
 
                     if actual_ctx and actual_ctx >= min_ctx:
                         # Success - context verified

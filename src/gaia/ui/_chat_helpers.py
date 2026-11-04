@@ -3745,7 +3745,7 @@ async def _get_chat_response(
 
         # ── Agent cache ──────────────────────────────────────────────────────
         # Reuse what a running warm-up is caching rather than read it twice.
-        wait_for_warm_up()
+        wait_for_warm_up(model=model_id)
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
         working_directory = _session_working_directory(
             load_environment(db, session_id)["folders"]
@@ -4213,7 +4213,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                 # ── Agent cache check ─────────────────────────────────────────
                 # Reuse what a running warm-up is caching rather than read it twice.
-                wait_for_warm_up(handler=sse_handler)
+                wait_for_warm_up(handler=sse_handler, model=model_id)
                 if sse_handler.cancelled.is_set():
                     return
                 cached_agent = _get_cached_agent(session_id, model_id, agent_type)

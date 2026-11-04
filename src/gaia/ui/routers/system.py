@@ -644,27 +644,14 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             ctx, chat_entry.get("max_context_window")
                         )
 
-                # Fetch model catalog for size, labels, and fallback context size
+                # Catalog for size and labels; its ctx_size is the saved option,
+                # not the loaded window.
                 models_resp = await client.get(f"{base_url}/models", headers=_auth)
                 if models_resp.status_code == 200:
                     for m in models_resp.json().get("data", []):
                         if m.get("id") == status.model_loaded:
                             status.model_size_gb = m.get("size")
                             status.model_labels = m.get("labels")
-                            # Only use catalog ctx_size when health data didn't
-                            # provide it (e.g. model not yet fully loaded) —
-                            # clamped the same way as the health-derived value
-                            # above.
-                            if status.model_context_size is None and not (
-                                chat_entry and chat_entry.get("recipe") == "cloud"
-                            ):
-                                ctx = m.get("recipe_options", {}).get("ctx_size")
-                                if ctx is not None:
-                                    status.model_context_size = (
-                                        resolve_effective_ctx_size(
-                                            ctx, m.get("max_context_window")
-                                        )
-                                    )
                         if "embed" in m.get("id", "").lower():
                             status.embedding_model_loaded = True
 

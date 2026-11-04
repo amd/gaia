@@ -11,6 +11,7 @@ import platform
 import re
 import shutil
 import sqlite3
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Optional, Set
@@ -1215,7 +1216,9 @@ class ChatAgent(
         self.tool_loader.admit_tools(self._standing_skill_tools(), self._tools_registry)
         return self.tool_loader.warm(self._tools_registry)
 
-    def _prime_second_prefix(self, say: Callable[[str], None]) -> None:
+    def _prime_second_prefix(
+        self, say: Callable[[str], None], cancel: Optional[threading.Event]
+    ) -> None:
         """Prime the full tool list on its own slot, so a first task starts at once.
 
         Needs the third slot: anywhere else it would overwrite the prefix just
@@ -1238,13 +1241,7 @@ class ChatAgent(
         say("Reading the full tool list")
         self._apply_tool_filter(list(self._tools_registry))
         try:
-            self.chat.send_messages(
-                [{"role": "user", "content": self.WARM_UP_PROMPT}],
-                system_prompt=self.system_prompt,
-                tools=self._openai_tools,
-                max_tokens=1,
-                id_slot=FULL_TOOLS_SLOT,
-            )
+            self._send_warm_up(cancel, id_slot=FULL_TOOLS_SLOT)
         finally:
             self._apply_tool_filter(core)
             self._tool_notice_due = notice_due

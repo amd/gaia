@@ -762,6 +762,28 @@ func (l localRunner) verifyModelsStatus(ctx context.Context, _ Config) (Row, str
 }
 
 func (l localRunner) verifyModelsWith(ctx context.Context) (Row, string, string, gaiainit.Status) {
+	row, chat, chatID, st := l.verifyModelsRow(ctx)
+	if st.Ready && st.NoAgentBuild {
+		row = noAgentBuildRow(row, st)
+	}
+	return row, chat, chatID, st
+}
+
+// noAgentBuildRow keeps a ready model row from reading as a clean pass when
+// there is no GAIA agent build for this PC: setup cannot help, so it notifies.
+func noAgentBuildRow(row Row, st gaiainit.Status) Row {
+	row.State = StateUnknown
+	row.Disposition = status.DispositionNotify
+	row.Line = "no GAIA agent build for this PC yet"
+	row.Detail = strings.Join(st.Warnings, "\n")
+	if row.Detail == "" {
+		row.Detail = "There is no GAIA agent build for this PC yet, so chat isn't available here."
+	}
+	row.Fix = FixNone
+	return row
+}
+
+func (l localRunner) verifyModelsRow(ctx context.Context) (Row, string, string, gaiainit.Status) {
 	row := Row{Key: KeyModel}
 
 	st, err := gaiainit.Verify(ctx, l.verifySkipsChatModel(), l.localChatModel())
@@ -904,7 +926,7 @@ func (l localRunner) agentMissingRow(st gaiainit.Status) Row {
 		Disposition: status.DispositionHalt,
 		Line:        "models downloaded — the GAIA agent needs installing",
 		Step:        "install the GAIA agent",
-		Detail:      "Your models are already on the model server. Setup installs the GAIA agent and downloads no models.",
+		Detail:      agentMissingDetail(st),
 		Fix:         FixRunSetup,
 		Remedy: Remedy{
 			Action:  "Setup installs the GAIA agent.",
@@ -913,6 +935,16 @@ func (l localRunner) agentMissingRow(st gaiainit.Status) Row {
 		},
 		Raw: strings.Join(st.Reasons, "\n"),
 	}
+}
+
+// agentMissingDetail says setup only installs the agent, and keeps any other
+// reason the check gave, such as a skipped chat model, in view.
+func agentMissingDetail(st gaiainit.Status) string {
+	detail := "Your models are already on the model server. Setup installs the GAIA agent and downloads no models."
+	if others := st.OtherReasons(); len(others) > 0 {
+		detail += "\nAlso: " + strings.Join(others, "\nAlso: ")
+	}
+	return detail
 }
 
 // loadFailedRow is a model that is downloaded and will not load — a real
