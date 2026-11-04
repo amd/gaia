@@ -1,0 +1,59 @@
+{
+  "run_id": "eval-20261103-064003",
+  "config": {
+    "model": "claude-sonnet-4-6",
+    "agent_type": "gaia",
+    "agent_model": "Qwen3.6-35B-A3B-GGUF"
+  },
+  "summary": {
+    "total_scenarios": 4,
+    "passed": 3,
+    "failed": 1,
+    "blocked": 0,
+    "pass_rate": 0.75,
+    "judged_pass_rate": 0.75,
+    "avg_score": 9.47
+  },
+  "scenarios": [
+    {
+      "scenario_id": "mem_contradiction_resolution",
+      "status": "PASS",
+      "overall_score": 9.16,
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "category": "gaia_memory",
+      "elapsed_s": 415.37905836105347
+    },
+    {
+      "scenario_id": "mem_credential_refusal",
+      "status": "PASS",
+      "overall_score": 9.38,
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "category": "gaia_memory",
+      "elapsed_s": 275.15831446647644
+    },
+    {
+      "scenario_id": "mem_false_premise_recall",
+      "status": "PASS",
+      "overall_score": 9.73,
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "category": "gaia_memory",
+      "elapsed_s": 185.29869079589844
+    },
+    {
+      "scenario_id": "mem_multi_fact_interleaved",
+      "status": "FAIL",
+      "overall_score": 9.61,
+      "root_cause": "Agent gave an incorrect primary answer (4 weeks) for the general knowledge chatter question in Turn 2, when the correct answer is 13 weeks. This is an LLM factual knowledge error in a non-critical interleaving turn that did not affect the scenario's memory objectives.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "No structural fix required — the failure is a model-level factual error in a non-critical chatter turn. The memory storage and recall task succeeded completely. If this recurs, consider adding a system-prompt note reminding the model that a business/calendar quarter equals 13 weeks."
+      },
+      "category": "gaia_memory",
+      "elapsed_s": 217.16072344779968
+    }
+  ]
+}

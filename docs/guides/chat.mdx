@@ -163,7 +163,7 @@ RAG (Retrieval-Augmented Generation) enables chatting with documents — includi
 </Tabs>
 
 <Note>
-  **Document Indexing Requirements:** Text in images and scans is read by a Vision Language Model (VLM): a tested vision model that is already loaded, then your default chat model when it can read images, which `Gemma-4-E4B-it-GGUF` and `Qwen3.6-35B-A3B-GGUF` both can, and otherwise `Gemma-4-E4B-it-GGUF`. `gaia init` already downloads these, unless you set a `default_model` that can't read images: then `gaia init` skips Gemma, so download it yourself:
+  **Document Indexing Requirements:** Text in images and scans is read by a Vision Language Model (VLM): a tested vision model that is already loaded, then your default chat model when it can read images, which `Gemma-4-E4B-it-GGUF` and `Qwen3.6-35B-A3B-GGUF` both can, and otherwise `Gemma-4-E4B-it-GGUF`. While chat runs on the NPU, images are not read at all: the NPU model doesn't read them, and GAIA says so instead of loading a second model. `gaia init` already downloads these, unless you set a `default_model` that can't read images: then `gaia init` skips Gemma, so download it yourself:
   ```bash
   lemonade pull Gemma-4-E4B-it-GGUF
   ```

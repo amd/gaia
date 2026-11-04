@@ -97,21 +97,23 @@ class TestBareInitTargetsTheFlagship:
         assert any(r.startswith("fastapi") for r in ui)
         assert any(r.startswith("uvicorn") for r in ui)
 
-    def test_availability_probe_uses_the_flagships_real_module_name(self, monkeypatch):
-        """`gaia_agent_gaia` does not exist and never will, so probing for it
-        would report the flagship missing forever and reinstall it every run."""
+    def test_an_importable_flagship_package_does_not_count_as_installed(
+        self, monkeypatch
+    ):
+        """The apps run the flagship as its binary, so a checkout's importable
+        `gaia_agent` must not stop `gaia init` installing that binary."""
         asked = []
 
         def fake_find_spec(name):
             asked.append(name)
-            return None
+            return object()
 
         monkeypatch.setattr(
             "gaia.installer.init_command.importlib.util.find_spec", fake_find_spec
         )
         monkeypatch.setattr("gaia.hub.installer.read_sentinel", lambda _id: None)
-        InitCommand._is_hub_agent_available(FLAGSHIP_AGENT_ID)
-        assert asked == [FLAGSHIP_IMPORT_NAME]
+        assert InitCommand._is_hub_agent_available(FLAGSHIP_AGENT_ID) is False
+        assert FLAGSHIP_IMPORT_NAME not in asked
 
     def test_other_agents_keep_the_gaia_agent_prefix_convention(self, monkeypatch):
         asked = []
@@ -509,17 +511,21 @@ class TestRuntimeFailureStillInstallsTheFlagship:
         )
         return tmp_path
 
-    def _run(self, failing_step, install_effect=None):
+    def _run(self, failing_step, install_effect=None, index_effect=None, emit=None):
         from gaia.hub import installer as hub_installer
 
         cmd = InitCommand(profile=FLAGSHIP_AGENT_ID, yes=True, skip_webui_build=True)
+        if emit is not None:
+            cmd.events.emit = emit
         steps = {
             "_choose_lemonade": True,
             "_ensure_lemonade_ready": True,
+            "_ensure_llamacpp_backend": True,
             "_download_models": True,
             "_install_pip_extras": True,
         }
-        steps[failing_step] = False
+        if failing_step:
+            steps[failing_step] = False
         patches = [
             patch.object(InitCommand, name, return_value=ok)
             for name, ok in steps.items()
@@ -535,6 +541,7 @@ class TestRuntimeFailureStillInstallsTheFlagship:
             patch(
                 "gaia.hub.catalog.load_index",
                 return_value=SimpleNamespace(agents=[{"id": FLAGSHIP_AGENT_ID}]),
+                side_effect=index_effect,
             ),
             install as install_mock,
         ):
@@ -585,6 +592,21 @@ class TestRuntimeFailureStillInstallsTheFlagship:
         out = capsys.readouterr().out
         assert "has no build for this machine" in out
         assert "Everything else is set up" not in out
+
+    def test_an_unreachable_hub_marks_the_agent_row_failed(self, cold_home):
+        seen = []
+
+        def emit(event, **fields):
+            if event == "component" and fields["component"] == "agent":
+                seen.append(fields["state"])
+
+        code, install_mock = self._run(
+            None, index_effect=OSError("hub is down"), emit=emit
+        )
+
+        assert code == 1
+        install_mock.assert_not_called()
+        assert seen == ["active", "failed"]
 
     def test_a_failed_agent_install_still_fails_init(self, cold_home, capsys):
         from gaia.hub.installer import InstallError

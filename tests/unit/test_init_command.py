@@ -2103,10 +2103,10 @@ class TestHubInstallWiringFlagshipProfile(_HubInstallWiringTestBase):
         cmd = self._make_cmd("gaia")
         self._patch_common_steps(cmd)
         with (
-            patch(
-                "gaia.installer.init_command.importlib.util.find_spec",
-                return_value=MagicMock(),  # a real find_spec() result -> importable
-            ),
+            # Only the installed binary counts for the flagship.
+            patch("gaia.hub.installer.read_sentinel", return_value=MagicMock()),
+            patch.object(cmd, "_installed_agent_is_stale", return_value=False),
+            patch("gaia.hub.prerelease.flagship_source", return_value=None),
             patch("gaia.hub.installer.install") as mock_install,
         ):
             rc = cmd.run()

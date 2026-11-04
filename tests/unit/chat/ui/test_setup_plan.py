@@ -247,6 +247,23 @@ def test_a_busy_big_pc_shows_why_the_large_model_does_not_fit_now(running, free_
         sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
 
 
+def test_picking_the_large_model_on_a_busy_pc_is_kept_for_setup(
+    running, free_gb, config_file
+):
+    """It matches the memory recommendation, but setup would pick by free memory."""
+    from gaia.installer.init_command import resolve_init_chat_model
+
+    fake = running(BIG_GPU)
+    free_gb(fake, 10)
+    sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME, acknowledge_no_fit=True)
+    assert (
+        json.loads(config_file.read_text())["default_model"] == LARGE_DEFAULT_MODEL_NAME
+    )
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=False)
+    assert choice.model_id == LARGE_DEFAULT_MODEL_NAME
+    assert choice.user_set is True
+
+
 def test_picking_gemma_on_a_busy_pc_survives_a_later_idle_run(
     running, free_gb, config_file
 ):
@@ -959,3 +976,34 @@ def test_plan_memory_matches_the_gpu_memory_pane(
     assert pane["applies"] is True
     # Settings shows both: the same machine must read the same number.
     assert plan["capacity_gb"] == pane["gpu_gb"]
+
+
+def test_a_pc_with_an_npu_is_offered_gaias_npu_chat_model(running):
+    """Lemonade lists no FLM model until its backend is in, so setup names it."""
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    running(MachineCapacity(96, "AMD iGPU", 500, npu_memory_gb=64))
+    entry = next(
+        (e for e in sp.build_plan()["catalog"] if e["id"] == NPU_DEFAULT_MODEL_NAME),
+        None,
+    )
+    assert entry is not None and entry["chat_choice"]
+    assert entry["support"] == "verified" and entry["fits"] is True
+    # What the screen keys NPU on, though Lemonade doesn't list the model yet.
+    assert entry["recipe"] == "flm" and entry["in_lemonade"] is False
+
+
+def test_a_pc_without_an_npu_is_not_offered_one(running):
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    fake = running(BIG_GPU)
+    report = fake.get_system_info
+
+    def no_npu(timeout=None):
+        info = report(timeout)
+        info["devices"].pop("amd_npu")
+        return info
+
+    fake.get_system_info = no_npu
+    ids = [e["id"] for e in sp.build_plan()["catalog"]]
+    assert NPU_DEFAULT_MODEL_NAME not in ids

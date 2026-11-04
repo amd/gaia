@@ -131,6 +131,7 @@ export interface ApiSchemas {
   UpdateSessionRequest: UpdateSessionRequest;
   UserInputRequest: UserInputRequest;
   ValidationError: ValidationError;
+  VisionModelRequest: VisionModelRequest;
   WarmUpStatus: WarmUpStatus;
   WorkInProgress: WorkInProgress;
   gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
@@ -1315,11 +1316,18 @@ export interface UserInputRequest {
   value: string;
 }
 /**
+ * A model that reads images, or null to go back to GAIA's choice.
+ */
+export interface VisionModelRequest {
+  model_id?: string | null;
+}
+/**
  * Work that quitting or unloading the model would cut short.
  */
 export interface WorkInProgress {
   answers: RunningAnswer[];
   indexing: RunningIndexJob[];
+  setup?: boolean;
 }
 export interface Gaia_Ui_Routers_Setup__DownloadModelRequest {
   acknowledge_low_disk?: boolean;

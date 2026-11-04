@@ -4,8 +4,9 @@
 
 Upstream ships an "embeddable" Lemonade build: a ``lemond`` daemon plus a
 ``lemonade`` HTTP client, with no installer, no tray app and no machine-wide
-state. This module downloads that artifact, unpacks it under ``~/.gaia``, and
-runs it on a private port behind a generated API key.
+state. This module takes that artifact from the copy the desktop app ships, or
+downloads it, unpacks it under ``~/.gaia``, and runs it on a private port behind
+a generated API key.
 
 The point is a GAIA that carries its own inference server: ``gaia init``
 installs and starts this one, and a system-wide Lemonade install is never
@@ -69,6 +70,11 @@ GITHUB_RELEASE_BASE = "https://github.com/lemonade-sdk/lemonade/releases/downloa
 #: environment describe GAIA's own server, not one the user runs.
 EMBEDDED_ENV_MARKER = "GAIA_LEMONADE_EMBEDDED"
 RELEASES_PAGE = "https://github.com/lemonade-sdk/lemonade/releases"
+
+#: Directory holding the archive the desktop app ships, set by its main.cjs. The
+#: filename carries the version, so a gaia upgraded past that copy finds nothing
+#: there and downloads.
+BUNDLED_ARCHIVE_DIR_ENV = "GAIA_BUNDLED_LEMONADE_DIR"
 
 # (platform.system(), normalized machine) -> asset name template.
 _ASSET_TEMPLATES: Dict[Tuple[str, str], str] = {
@@ -584,6 +590,25 @@ def asset_url(version: str = LEMONADE_VERSION) -> str:
     return f"{GITHUB_RELEASE_BASE}/v{version}/{asset_name(version)}"
 
 
+def bundled_archive(name: str) -> Optional[Path]:
+    """Return the desktop app's copy of the asset *name*, if it ships one.
+
+    Args:
+        name: Asset filename from :func:`asset_name`.
+
+    Returns:
+        The archive's path, or None when nothing is bundled for this version.
+    """
+    directory = os.environ.get(BUNDLED_ARCHIVE_DIR_ENV)
+    if not directory:
+        return None
+    candidate = Path(directory) / name
+    if candidate.is_file():
+        return candidate
+    log.info("%s has no %s; downloading it", directory, name)
+    return None
+
+
 def _inside(path: str, root: str) -> bool:
     """Whether *path* is under *root* (both compared case-normalized)."""
     try:
@@ -852,7 +877,9 @@ class EmbeddedLemonade:
     # -- install ----------------------------------------------------------
 
     def install(self, force: bool = False) -> Path:
-        """Download, verify and unpack the embeddable artifact.
+        """Verify and unpack the embeddable artifact.
+
+        Uses the copy the desktop app ships for this version, else downloads it.
 
         Args:
             force: Reinstall even when the version is already unpacked.
@@ -862,7 +889,8 @@ class EmbeddedLemonade:
 
         Raises:
             UnsupportedPlatformError: No asset for this OS/architecture.
-            EmbeddedLemonadeError: Download, checksum or unpack failed.
+            EmbeddedLemonadeError: Download, checksum or unpack failed. A bundled
+                archive that fails its checksum never falls back to a download.
         """
         if self.is_installed() and not force:
             log.debug("Embedded Lemonade %s already installed", self.version)
@@ -890,10 +918,14 @@ class EmbeddedLemonade:
             )
 
         self.root.mkdir(parents=True, exist_ok=True)
+        bundled = bundled_archive(name)
         with tempfile.TemporaryDirectory(prefix="gaia-lemonade-") as tmp:
             archive = Path(tmp) / name
-            self._download(asset_url(self.version), archive)
-            self._verify(archive, expected)
+            if bundled is None:
+                self._download(asset_url(self.version), archive)
+                self._verify(archive, expected)
+            else:
+                self._copy_bundled(bundled, archive, expected)
 
             unpacked = Path(tmp) / "unpacked"
             _extract(archive, unpacked)
@@ -960,12 +992,44 @@ class EmbeddedLemonade:
                 f"from {RELEASES_PAGE}/tag/v{self.version}."
             ) from e
 
-    def _verify(self, archive: Path, expected_sha256: str) -> None:
+    def _copy_bundled(self, bundled: Path, dest: Path, expected_sha256: str) -> None:
+        """Copy the desktop app's archive to *dest* and verify it.
+
+        Args:
+            bundled: The archive inside the installed app.
+            dest: File to write.
+            expected_sha256: Hex digest the release publishes.
+
+        Raises:
+            EmbeddedLemonadeError: It cannot be read or fails its checksum.
+        """
+        log.info("Installing Lemonade from the app's copy at %s", bundled)
+        try:
+            shutil.copyfile(bundled, dest)
+        except OSError as e:
+            raise EmbeddedLemonadeError(
+                f"Could not read the Lemonade Server archive shipped with GAIA "
+                f"at {bundled}: {e}. Reinstall the GAIA desktop app."
+            ) from e
+        self._verify(
+            dest,
+            expected_sha256,
+            remedy=(
+                f"The copy shipped with GAIA at {bundled} is damaged or was "
+                f"altered. Reinstall the GAIA desktop app."
+            ),
+        )
+
+    def _verify(
+        self, archive: Path, expected_sha256: str, remedy: Optional[str] = None
+    ) -> None:
         """Check *archive* against its pinned digest.
 
         Args:
-            archive: Downloaded file.
+            archive: The file to check.
             expected_sha256: Hex digest the release publishes.
+            remedy: What the error tells the user to do. Defaults to retrying
+                the download.
 
         Raises:
             EmbeddedLemonadeError: The digest does not match.
@@ -976,11 +1040,14 @@ class EmbeddedLemonade:
                 digest.update(block)
         actual = digest.hexdigest()
         if actual != expected_sha256:
+            remedy = remedy or (
+                f"The download is corrupt or the release asset was replaced. "
+                f"Retry; if it persists, compare against "
+                f"{RELEASES_PAGE}/tag/v{self.version}."
+            )
             raise EmbeddedLemonadeError(
                 f"Checksum mismatch for {archive.name}: expected "
-                f"{expected_sha256}, got {actual}. The download is corrupt or "
-                f"the release asset was replaced. Retry; if it persists, "
-                f"compare against {RELEASES_PAGE}/tag/v{self.version}."
+                f"{expected_sha256}, got {actual}. {remedy}"
             )
         log.debug("Verified %s (sha256 %s)", archive.name, actual)
 
