@@ -176,6 +176,12 @@ def read_turn(lines: Iterable[str]) -> TurnResult:
                 final = event["content"]
             if kind == "done":
                 result.done = True
+                # A failed turn's content is the reason, not an answer.
+                for flag in ("failed", "cancelled"):
+                    if event.get(flag):
+                        result.errors.append(
+                            f"the turn ended {flag}: {event.get('content') or '(no reason given)'}"
+                        )
         elif kind in ("agent_error", "error"):
             result.errors.append(
                 str(event.get("content") or event.get("message") or event)

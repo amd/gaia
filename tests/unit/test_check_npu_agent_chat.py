@@ -80,6 +80,23 @@ def test_an_unreachable_message_written_as_the_answer_still_fails():
     assert any("#6632" in p for p in npu.turn_problems(result))
 
 
+@pytest.mark.parametrize("flag", ["failed", "cancelled"])
+def test_a_turn_the_done_event_marks_failed_or_cancelled_fails(flag):
+    # The reason reads like an answer and names no unreachable marker.
+    result = npu.read_turn(
+        sse({"type": "done", "content": "The model stopped responding.", flag: True})
+    )
+    problems = npu.turn_problems(result)
+    assert any(f"ended {flag}" in p for p in problems), problems
+
+
+def test_a_done_event_with_the_flags_false_still_passes():
+    result = npu.read_turn(
+        sse({"type": "done", "content": "Hi.", "failed": False, "cancelled": False})
+    )
+    assert npu.turn_problems(result) == []
+
+
 def test_a_stream_cut_short_fails():
     result = npu.read_turn([f"data: {json.dumps({'type': 'chunk', 'content': 'Hi'})}"])
     assert any("without a done event" in p for p in npu.turn_problems(result))

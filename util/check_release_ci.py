@@ -84,6 +84,8 @@ RC_CRITICAL = (
     ),
 )
 
+# Named, so a push run that started only the Windows row cannot pass for both.
+_NPU_JOBS = ("NPU agent chat (Windows, cold)", "NPU agent chat (Linux, cold)")
 _NPU_WHY = (
     "one Agent UI turn on the NPU default model, through GAIA's own Lemonade "
     "and the gaia-agent sidecar, on Windows and Linux Strix Halo (#6632)"
@@ -101,7 +103,7 @@ RC_ADVISORY = (
     ),
     Check("test_gaia_cli_linux.yml"),
     Check("release_train_dryrun.yml", why=_DRY_RUN_WHY),
-    Check("test_npu_agent_chat.yml", why=_NPU_WHY),
+    Check("test_npu_agent_chat.yml", jobs=_NPU_JOBS, why=_NPU_WHY),
 )
 
 # The dry run takes an RC name, so the gate never starts one for a final: run
@@ -116,7 +118,7 @@ FINAL_REQUIRED = (
         remedy_args="-f rc_tag=<the candidate tagged on this commit>",
         why=_DRY_RUN_WHY,
     ),
-    Check("test_npu_agent_chat.yml", why=_NPU_WHY),
+    Check("test_npu_agent_chat.yml", jobs=_NPU_JOBS, why=_NPU_WHY),
 )
 
 # Jobs in publish.yml itself that approve-publish requires on a candidate.
