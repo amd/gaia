@@ -602,20 +602,20 @@ for (const locale of ['ar', 'en']) {
 }
 
 /** Visible text left in English on an Arabic screen; names and paths sit in <bdi>. */
-const untranslated = (page: Page, scope = '.settings-scroll'): Promise<string[]> =>
-    page.evaluate((scope) => {
-        const root = document.querySelector(scope) as Element;
+const untranslated = (page: Page, within = '.settings-scroll', userText = 'bdi'): Promise<string[]> =>
+    page.evaluate(([selector, skip]) => {
+        const root = document.querySelector(selector) as Element;
         const left = new Set<string>();
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
         for (let n = walker.nextNode(); n; n = walker.nextNode()) {
             const text = n.textContent?.trim() ?? '';
             const el = n.parentElement as Element;
             if (!/[A-Za-z]{3}/.test(text) || /[\u0600-\u06ff]/.test(text) || !el.checkVisibility()) continue;
-            if (el.closest('.i18n-gloss, code, bdi, kbd, select, .provider-tab, .skill-row-name, .connector-tile-type, .beta-badge, .status-label, .status-value')) continue;
+            if (el.closest(`.i18n-gloss, code, bdi, kbd, select, .provider-tab, .skill-row-name, .connector-tile-type, .beta-badge, .status-label, .status-value, ${skip}`)) continue;
             left.add(text.slice(0, 60));
         }
         return [...left];
-    }, scope);
+    }, [within, userText]);
 
 const LOCAL_STATUS = {
     state: 'loaded', active_model: 'Gemma-4-E4B-it-GGUF', active_display_name: 'Gemma 4 E4B', active_remote: false,
@@ -654,6 +654,82 @@ for (const section of ['general', 'permissions', 'skills', 'memory', 'notificati
         await page.locator('.settings-disclosure:not([open]) > summary, .settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
         await page.waitForTimeout(100);
         expect(await untranslated(page)).toEqual([]);
+    });
+}
+
+/** Schedules with a failed run, a chat to open and a run history; and a "when" GAIA can't read. */
+async function withSchedules(page: Page, schedules: unknown[] = SCHEDULE_ROWS): Promise<void> {
+    await page.route('**/api/schedules', (route) => route.fulfill({ json: { schedules, total: schedules.length } }));
+    await page.route('**/api/schedules/*/results*', (route) => route.fulfill({
+        json: { results: [
+            { id: 'r1', task_id: 's1', executed_at: new Date(NOW.getTime() - 7 * 60_000).toISOString(), result: '3 new items', error: null },
+            { id: 'r2', task_id: 's1', executed_at: new Date(NOW.getTime() - 3 * 3_600_000).toISOString(), result: null, error: 'The model server stopped.' },
+        ] },
+    }));
+    await page.route('**/api/schedules/parse', (route) => route.fulfill({
+        json: { interval_seconds: 0, time_of_day: null, start_hour: null, end_hour: null, days_of_week: null, description: "25:00 isn't a time — use 0:00–23:59.", next_run_at: null, valid: false },
+    }));
+}
+
+const SCHEDULE_ROW = {
+    id: 's1', name: 'Morning brief', interval_seconds: 86_400, prompt: 'Summarize my unread email and calendar for today',
+    status: 'active', created_at: null, last_run_at: new Date(NOW.getTime() - 7 * 60_000).toISOString(),
+    next_run_at: new Date(NOW.getTime() + 17 * 60_000).toISOString(), last_result: '3 new items', run_count: 9, error_count: 1,
+    session_id: 'chat-1', schedule_config: null, description: 'Daily at 8:00 AM', last_error: 'The model server stopped.',
+};
+const SCHEDULE_ROWS = [SCHEDULE_ROW, { ...SCHEDULE_ROW, id: 's2', name: 'Weekly budget check-in', status: 'paused', next_run_at: null, error_count: 0, last_error: null, session_id: null, description: 'Every Monday at 9:00 AM' }];
+
+/** Titles, labels and placeholders in the schedules dialog that carry no Arabic. */
+const untranslatedAttributes = (page: Page): Promise<string[]> =>
+    page.locator('.schedule-modal').evaluate((root) =>
+        [root.closest('[role="dialog"]')!, ...root.querySelectorAll('[title], [aria-label], [placeholder]')].flatMap((el) =>
+            ['aria-label', 'placeholder', ...(el.closest('.schedule-card-meta') ? [] : ['title'])]
+                .map((a) => el.getAttribute(a) ?? '')
+                .filter((v) => /[A-Za-z]{3}/.test(v) && !/[؀-ۿ]/.test(v))));
+
+for (const locale of ['ar', 'en']) {
+    test.describe(`scheduled tasks (${locale})`, () => {
+        const openSchedules = async (page: Page, schedules?: unknown[]) => {
+            await open(page, '', locale, (p) => withSchedules(p, schedules));
+            await page.locator('.sb').getByRole('button', { name: locale === 'ar' ? /المهام المجدولة/ : /Scheduled tasks/ }).click();
+            await expect(page.locator('.schedule-modal')).toBeVisible();
+        };
+        const check = async (page: Page, name: string) => {
+            await shot(page, `schedules-${locale}-${name}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') {
+                expect(await untranslated(page, '.schedule-modal', '[dir="auto"], textarea')).toEqual([]);
+                expect(await untranslatedAttributes(page)).toEqual([]);
+            }
+        };
+
+        test('empty', async ({ page }) => {
+            await openSchedules(page, []);
+            await expect(page.locator('.schedule-empty')).toBeVisible();
+            await check(page, 'empty');
+        });
+
+        test('list with a failed run and its history open', async ({ page }) => {
+            await openSchedules(page);
+            await page.locator('.schedule-card').first().click();
+            await expect(page.locator('.schedule-result-item')).toHaveCount(2);
+            await check(page, 'list');
+        });
+
+        test('new schedule, nothing typed yet', async ({ page }) => {
+            await openSchedules(page, []);
+            await page.locator('.schedule-modal .btn-primary').click();
+            await expect(page.locator('.schedule-nl-input')).toBeVisible();
+            await check(page, 'form-empty');
+        });
+
+        test('new schedule with a "when" GAIA cannot read', async ({ page }) => {
+            await openSchedules(page);
+            await page.locator('.schedule-modal .btn-primary').click();
+            await page.locator('.schedule-nl-input').fill('daily at 25:00');
+            await expect(page.locator('.schedule-parsed-hint')).toBeVisible();
+            await check(page, 'form-invalid');
+        });
     });
 }
 
