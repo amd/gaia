@@ -63,6 +63,14 @@ def test_forget_everything_takes_sensitive_rows_and_past_conversations(store):
     assert _tool("search_past_conversations")(query="Lisbon")["count"] == 0
 
 
+def test_forget_everything_reply_gives_the_model_no_command_to_relay(store):
+    """The model repeats this reply to a desktop user, who has no terminal."""
+    _Host(store, [])
+    message = _tool("forget_everything")()["message"]
+    assert "gaia " not in message
+    assert "`" not in message
+
+
 def test_forget_everything_needs_the_users_approval():
     assert "forget_everything" in TOOLS_REQUIRING_CONFIRMATION
 

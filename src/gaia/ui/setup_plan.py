@@ -650,8 +650,8 @@ def _refuse_unrunnable(plan: Dict[str, Any]) -> None:
         return
     raise CantRunHere(
         f"Setup's chat model, {_display_name(chat_id)}, can't run on this PC: "
-        f"{entry['fit_reason']}. Choose another chat model (Customize in setup, "
-        "or `gaia config set default_model <model>`), then start setup again."
+        f"{entry['fit_reason']}. Choose another chat model under Customize, "
+        "then start setup again."
     )
 
 
