@@ -44,6 +44,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RELEASE_CALVER = "2026.39.1"
 # The dev/candidate shape documented in the v2026.39.1 release notes.
 DEV_CALVER = "2026.39.0~12.abc1234"
+# A dev build of the supported floor, which must clear it.
+DEV_OF_FLOOR = f"{LEMONADE_MIN_VERSION}~12.abc1234"
 # The last semver release, for the transition comparison.
 LAST_SEMVER = "11.9.0"
 
@@ -146,7 +148,7 @@ def test_pinned_version_is_accepted_by_the_readiness_gate():
 
 
 def test_dev_build_of_the_pin_still_clears_the_floor():
-    assert version_meets_min(DEV_CALVER, LEMONADE_MIN_VERSION) is True
+    assert version_meets_min(DEV_OF_FLOOR, LEMONADE_MIN_VERSION) is True
 
 
 def test_genuinely_old_version_is_still_rejected():
@@ -199,13 +201,14 @@ def _client_gate(actual):
 
     client = LemonadeClient.__new__(LemonadeClient)
     client.log = logging.getLogger("test_lemonade_calver")
+    client.base_url = "http://localhost:13305/api/v1"
     return LemonadeClient._check_version_compatibility(
         client, LEMONADE_VERSION, actual_version=actual, quiet=True
     )
 
 
 def test_client_gate_accepts_release_calver():
-    assert _client_gate(RELEASE_CALVER) is True
+    assert _client_gate(LEMONADE_MIN_VERSION) is True
 
 
 def test_client_gate_accepts_dev_calver():
@@ -214,7 +217,7 @@ def test_client_gate_accepts_dev_calver():
     It returned True for the *wrong* reason — "parsing failed, do not block" —
     so a genuinely old dev build would have been waved through too.
     """
-    assert _client_gate(DEV_CALVER) is True
+    assert _client_gate(DEV_OF_FLOOR) is True
 
 
 def test_client_gate_rejects_an_old_dev_build():

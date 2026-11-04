@@ -60,7 +60,7 @@ from gaia.utils.terminal import (
     popen_outliving_job,
     windows_hidden_popen_kwargs,
 )
-from gaia.version import LEMONADE_VERSION
+from gaia.version import LEMONADE_VERSION, parse_version
 
 log = get_logger(__name__)
 
@@ -873,6 +873,22 @@ class EmbeddedLemonade:
             True if :attr:`daemon_path` exists.
         """
         return self.daemon_path.is_file()
+
+    def replaces_older_install(self) -> bool:
+        """Whether an older version is unpacked, which this one upgrades.
+
+        GAIA keeps its own server on the version it targets, so a start
+        installs over an older one instead of asking the user to.
+        """
+        target = parse_version(self.version)
+        dist = self.root / "dist"
+        if target is None or not dist.is_dir():
+            return False
+        return any(
+            (found := parse_version(entry.name)) is not None and found < target
+            for entry in dist.iterdir()
+            if entry.is_dir()
+        )
 
     def older_installed_version(self) -> Optional[str]:
         """The newest other version unpacked here, or None.
@@ -1834,6 +1850,7 @@ class EmbeddedLemonade:
         install_if_missing: bool = True,
         owner_pid: Optional[int] = None,
         owner_started: Optional[float] = None,
+        upgrade_older: bool = False,
     ) -> EmbeddedStatus:
         """Start the private daemon and wait for it to answer.
 
@@ -1845,6 +1862,9 @@ class EmbeddedLemonade:
             install_if_missing: Download the artifact when it is not unpacked.
             owner_pid: The GAIA daemon starting it, recorded as its owner.
             owner_started: That daemon's process start time.
+            upgrade_older: Download this version, even when
+                *install_if_missing* is false, if it replaces an older one
+                that is installed or running.
 
         Returns:
             Status of the running instance.
@@ -1855,8 +1875,32 @@ class EmbeddedLemonade:
         """
         with self._instance_lock():
             return self._start_locked(
-                port, timeout, install_if_missing, owner_pid, owner_started
+                port,
+                timeout,
+                install_if_missing,
+                owner_pid,
+                owner_started,
+                upgrade_older,
             )
+
+    def is_older(self, version: Optional[str]) -> bool:
+        """Whether *version* predates the one this instance targets."""
+        found, target = parse_version(version), parse_version(self.version)
+        return found is not None and target is not None and found < target
+
+    def _ensure_installed(
+        self, install_if_missing: bool, upgrade_older: bool, upgrading: bool
+    ) -> None:
+        if self.is_installed():
+            return
+        replaces = upgrading or self.replaces_older_install()
+        if not install_if_missing and not (upgrade_older and replaces):
+            raise EmbeddedLemonadeError(
+                f"Embedded Lemonade {self.version} is not installed at "
+                f"{self.dist_dir}. Run `gaia lemonade embedded start` "
+                f"without --no-install to download it."
+            )
+        self.install()
 
     def _start_locked(
         self,
@@ -1865,8 +1909,28 @@ class EmbeddedLemonade:
         install_if_missing: bool,
         owner_pid: Optional[int],
         owner_started: Optional[float],
+        upgrade_older: bool,
     ) -> EmbeddedStatus:
         existing = self._status(reap=False)
+        if existing.running and self.is_older(existing.version):
+            # Download first, so a failed download leaves the old server up.
+            try:
+                self._ensure_installed(
+                    install_if_missing, upgrade_older, upgrading=True
+                )
+            except EmbeddedLemonadeError as e:
+                raise EmbeddedLemonadeError(
+                    f"Could not upgrade embedded Lemonade {existing.version} to "
+                    f"{self.version}, so {existing.version} is still running on "
+                    f"port {existing.port}. {e}"
+                ) from e
+            log.warning(
+                "Embedded Lemonade %s is running; replacing it with %s",
+                existing.version,
+                self.version,
+            )
+            self._stop_locked(_STOP_TIMEOUT)
+            existing = self._status(reap=False)
         if existing.running:
             if existing.version != self.version:
                 raise EmbeddedLemonadeError(
@@ -1893,14 +1957,7 @@ class EmbeddedLemonade:
                 f"`gaia lemonade embedded stop`, then start again."
             )
 
-        if not self.is_installed():
-            if not install_if_missing:
-                raise EmbeddedLemonadeError(
-                    f"Embedded Lemonade {self.version} is not installed at "
-                    f"{self.dist_dir}. Run `gaia lemonade embedded start` "
-                    f"without --no-install to download it."
-                )
-            self.install()
+        self._ensure_installed(install_if_missing, upgrade_older, upgrading=False)
 
         self._reap_orphaned_backends()
         self.write_config()

@@ -642,17 +642,6 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                         status.model_context_size = resolve_effective_ctx_size(
                             ctx, chat_entry.get("max_context_window")
                         )
-                elif not loaded_models:
-                    # Older Lemonade names the model only at the root.
-                    status.model_loaded = health_data.get("model_loaded") or None
-
-                # Fallback: older Lemonade versions expose context_size at root
-                # level. A newer one's root describes its last load, which may
-                # be a speech or embedding model, not the chat model.
-                if status.model_context_size is None and not loaded_models:
-                    legacy_ctx = health_data.get("context_size")
-                    if legacy_ctx is not None:
-                        status.model_context_size = legacy_ctx
 
                 # Fetch model catalog for size, labels, and fallback context size
                 models_resp = await client.get(f"{base_url}/models", headers=_auth)

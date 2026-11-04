@@ -375,19 +375,17 @@ class TestInitProfiles(unittest.TestCase):
         self.assertEqual(email["agent"], "email")
         self.assertIn("Gemma-4-E4B-it-GGUF", email["models"])
 
-    def test_email_profile_min_version_locksteps_with_agent(self):
-        """The email init profile's min Lemonade version must match the email
-        agent's runtime minimum — readiness (/v1/email/init) and the installer
-        must agree on what 'compatible' means."""
-        from gaia.installer.init_command import INIT_PROFILES
+    def test_email_min_version_locksteps_with_core(self):
+        """The email agent's runtime minimum must match GAIA's floor —
+        readiness (/v1/email/init) and the installer must agree on what
+        'compatible' means."""
+        from gaia.version import LEMONADE_MIN_VERSION
 
         try:
             from gaia_agent_email.version import MIN_LEMONADE_VERSION
         except ImportError:
             self.skipTest("gaia_agent_email (standalone email wheel) not installed")
-        self.assertEqual(
-            INIT_PROFILES["email"]["min_lemonade_version"], MIN_LEMONADE_VERSION
-        )
+        self.assertEqual(LEMONADE_MIN_VERSION, MIN_LEMONADE_VERSION)
 
     def test_email_profile_is_a_cli_choice(self):
         """The init subparser must accept --profile email (argparse choices)."""
@@ -738,14 +736,14 @@ class TestLemonadeReady(unittest.TestCase):
 
     def test_configured_server_is_used_without_installing_anything(self):
         ok, out, client_class = self._run_configured(
-            "http://localhost:13305", health={"status": "ok", "version": "99.0.0"}
+            "http://localhost:13305", health={"status": "ok", "version": "9999.0.0"}
         )
 
         self.assertTrue(ok)
         self.assertEqual(
             client_class.call_args.kwargs["base_url"], "http://localhost:13305/api/v1"
         )
-        self.assertIn("v99.0.0", out)
+        self.assertIn("v9999.0.0", out)
 
     def test_unreachable_configured_server_fails_and_says_how_to_recover(self):
         ok, out, _ = self._run_configured("http://gpu-box:13305", error="refused")
@@ -765,7 +763,7 @@ class TestLemonadeReady(unittest.TestCase):
         self.assertTrue(ok)
         embedded.start.assert_called_once()
 
-    def test_configured_server_below_profile_minimum_is_refused(self):
+    def test_configured_server_below_the_minimum_is_refused(self):
         ok, out, _ = self._run_configured(
             "http://gpu-box:13305", health={"status": "ok", "version": "1.0.0"}
         )
@@ -2704,7 +2702,7 @@ class TestHardwareChatModel(unittest.TestCase):
 
     def _client(self, system_info, have=()):
         client = MagicMock()
-        client.health_check.return_value = {"status": "ok", "version": "2026.39.1"}
+        client.health_check.return_value = {"status": "ok", "version": "2026.44.1"}
         client.get_system_info.return_value = system_info
         client.check_model_available.side_effect = lambda m: m in have
         client.ensure_model_downloaded.return_value = True
@@ -2964,25 +2962,6 @@ class TestHardwareChatModel(unittest.TestCase):
             resolve_init_chat_model(client, reset_corrupt=True, enforce_fit=True)
         self.assertIn("gaia config set default_model", str(ctx.exception))
         client.ensure_model_downloaded.assert_not_called()
-
-    def test_a_user_default_the_server_cannot_load_is_refused(self):
-        """The default's floor (v11.7.0) is older than the Lemonade gaia init installs, so
-        this refusal path is exercised by a user-configured Flash instead,
-        which still needs llama.cpp's qwen4exp (v2026.39.1+)."""
-        from gaia.config import GaiaConfig
-        from gaia.llm.lemonade_client import FLASH_OPTION_MODEL_NAME
-        from gaia.llm.model_fit import ModelFitError
-
-        cfg = GaiaConfig()
-        cfg.default_model = FLASH_OPTION_MODEL_NAME
-        cfg.save()
-        client = self._client(STRIX_HALO_128)
-        client.health_check.return_value = {"status": "ok", "version": "11.9.0"}
-        client.list_models.return_value = {"data": []}
-        from gaia.installer.init_command import resolve_init_chat_model
-
-        with self.assertRaisesRegex(ModelFitError, "--force-reinstall"):
-            resolve_init_chat_model(client, reset_corrupt=True, enforce_fit=True)
 
     def test_a_failed_hardware_request_keeps_gemma_and_still_answers_check(self):
         from gaia.installer.init_command import check_setup_status

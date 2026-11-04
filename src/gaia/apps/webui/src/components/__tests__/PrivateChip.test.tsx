@@ -63,7 +63,7 @@ describe('PrivateChip', () => {
         act(() => useChatStore.setState({ settingsSection: 'memory' }));
         act(() => useChatStore.setState({ settingsSection: null }));
         await screen.findByRole('button', { name: 'Memory off' });
-        expect(useChatStore.getState().draftPrivate).toBe(false);
+        await waitFor(() => expect(useChatStore.getState().draftPrivate).toBe(false));
 
         // Memory back on: the chip and the draft agree the chat is not private.
         getSettings.mockResolvedValue(memory(true));
@@ -78,7 +78,6 @@ describe('PrivateChip', () => {
         getSettings.mockResolvedValue(memory(false));
         render(<PrivateChip />);
         await screen.findByRole('button', { name: 'Memory off' });
-        // The chip shows before its effect clears the draft; a loaded runner can read in between.
         await waitFor(() => expect(useChatStore.getState().draftPrivate).toBe(false));
     });
 

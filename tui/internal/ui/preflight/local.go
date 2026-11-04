@@ -48,10 +48,10 @@ import (
 // answering rather than answering slowly.
 const lemonadeProbeTimeout = 3 * time.Second
 
-// lemonadePorts are the ports a local Lemonade listens on, newest first.
-// Mirrors client.detectLemonadeURL — a probe that looked elsewhere would report
-// a running server as down.
-var lemonadePorts = []string{"13305", "8000"}
+// lemonadePorts are the ports a local Lemonade listens on. Mirrors
+// client.detectLemonadeURL — a probe that looked elsewhere would report a
+// running server as down.
+var lemonadePorts = []string{"13305"}
 
 // lemonadeBaseURLEnv points the agent at a specific server, possibly on another
 // machine. When it is set it is the ONLY thing probed: finding a local server
@@ -499,7 +499,7 @@ type embeddedLemonade = lemonade.EmbeddedState
 //
 // Both fields matter and neither was used here. The port is picked when the
 // server starts — 63207 on the machine this was found on — so probing the
-// fixed 13305/8000 could never reach it; and the key means an unauthenticated
+// fixed 13305 could never reach it; and the key means an unauthenticated
 // probe gets 401 from a server that is healthy and serving. Together they made
 // this screen report "Lemonade not running" for GAIA's own model server, then
 // offer to install a second one.

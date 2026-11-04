@@ -75,7 +75,7 @@ class FakeLemonade(LemonadeClient):
         self.deleted = []
 
     def health_check(self):
-        return {"status": "ok", "version": "11.8.0"}
+        return {"status": "ok", "version": "2026.44.1"}
 
     def get_system_info(self, timeout=None):
         devices = {"amd_igpu": {"available": True, "vram_gb": self.vram_gb}}
