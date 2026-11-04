@@ -16,6 +16,14 @@ whenever a person finds a bug the pass missed.
   command.
 - Upgrade over the previous release: the agent binary really updates. A locked old
   binary once made upgrades silently keep the old agent.
+- Upgrade while another GAIA process holds `~/.gaia/venv/Scripts/gaia.exe` (run that
+  venv's `gaia.exe chat --ui --ui-port <free port>` first): the app names the holder and
+  can close it and continue, and the venv keeps every launcher afterwards (#6570).
+- A fresh profile on a Lemonade that already has the models still gets the guided setup,
+  and setup installs the agent (#6571).
+- Run setup's chat test twice: on a Lemonade where no cloud model has been used, and
+  after using a Fireworks model once. A cloud entry in `/health`, or a stale saved
+  window in `/models`, once made the local model's window read wrong (#6575).
 
 ## Window, tray, quit and restart
 

@@ -295,6 +295,10 @@ so they don't conflict.
 - A turn started by a hook or another session can't start sessions. Then run the
   fixes as background subagents with `isolation: "worktree"`, one per component, under
   the same brief. They commit to their own worktree branches, which you merge the same way.
+- A fix whose failure mode unit tests can't reproduce (a Windows file lock, a real
+  Lemonade's `/health`) isn't fixed until it has been reproduced for real in the app. A
+  rename-aside fix passed all its tests, failed on the first real lock (uv's launcher
+  keeps its own file open), and deleted 17 launchers on the way.
 - As each one reports, check its diff and test result before you believe it. Record
   progress with `link $RUN F3 --pr <url>`.
 - A fix session that finds the bug is not what the issue said updates the issue. It
