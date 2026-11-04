@@ -178,6 +178,54 @@ class TestInitializeReportsTheFloor:
         assert "weird-build" in caplog.text
 
 
+class TestEnsureReadyRefusesAnOldServer:
+    """Agents and `gaia llm` go through ensure_ready, not initialize()."""
+
+    _URL = "http://gpu-box:13305/api/v1"
+
+    @pytest.fixture(autouse=True)
+    def _fresh_manager(self, monkeypatch):
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", self._URL)
+        LemonadeManager.reset()
+        yield
+        LemonadeManager.reset()
+
+    def _serve(self, mocker, version):
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        status = LemonadeStatus(url=self._URL, running=True, version=version)
+        mocker.patch.object(LemonadeClient, "get_status", return_value=status)
+        return mocker.patch.object(LemonadeManager, "_try_preload_with_ctx")
+
+    @pytest.mark.parametrize("found", ["10.2.0", "2026.39.1"])
+    def test_an_old_server_is_refused_before_any_model_load(self, mocker, found):
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        preload = self._serve(mocker, found)
+
+        with pytest.raises(LemonadeVersionError) as excinfo:
+            LemonadeManager.ensure_ready(min_context_size=32768, base_url=self._URL)
+
+        message = str(excinfo.value)
+        assert found in message
+        assert LEMONADE_MIN_VERSION in message
+        assert _REMEDY in message
+        preload.assert_not_called()
+        assert LemonadeManager._initialized is False
+
+    @pytest.mark.parametrize("found", [LEMONADE_MIN_VERSION, "2999.1.0"])
+    def test_a_supported_server_is_not_refused(self, mocker, found):
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        self._serve(mocker, found)
+
+        assert LemonadeManager.ensure_ready(
+            min_context_size=32768, base_url=self._URL, preload=False
+        )
+
+
 class TestGetStatusCatalogFailure:
     def test_failed_catalog_lookup_is_logged_and_loaded_models_still_report(
         self, mocker, caplog

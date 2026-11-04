@@ -348,10 +348,11 @@ class LemonadeManager:
     def start_embedded_if_stopped(cls) -> bool:
         """Have the daemon start GAIA's embedded Lemonade when it is stopped.
 
-        Does nothing when ``LEMONADE_BASE_URL`` names another server, when GAIA's
-        own server is not installed (``gaia init`` installs it), or when it is
-        already running -- so only a machine that set GAIA up ever talks to the
-        daemon here.
+        A running one older than this GAIA targets is handed to the daemon too,
+        which replaces it. Does nothing when ``LEMONADE_BASE_URL`` names another
+        server, when GAIA's own server is not installed (``gaia init`` installs
+        it), or when the current version is already running -- so only a
+        machine that set GAIA up ever talks to the daemon here.
 
         Returns:
             True if the daemon started the server.
@@ -363,13 +364,23 @@ class LemonadeManager:
             return False
         from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
-        if EmbeddedLemonade().status().running:
+        embedded = EmbeddedLemonade()
+        status = embedded.status()
+        if status.running and not embedded.is_older(status.version):
             return False
         from gaia.daemon.client import ensure_lemonade
 
-        cls._log.info(
-            "GAIA's Lemonade Server is stopped; asking the daemon to start it"
-        )
+        if status.running:
+            cls._log.info(
+                "GAIA's Lemonade Server is v%s; asking the daemon to replace it "
+                "with v%s",
+                status.version,
+                embedded.version,
+            )
+        else:
+            cls._log.info(
+                "GAIA's Lemonade Server is stopped; asking the daemon to start it"
+            )
         return bool(ensure_lemonade().get("started"))
 
     @classmethod
@@ -1037,6 +1048,14 @@ class LemonadeManager:
                         if not quiet:
                             cls.print_server_error(min_context_size)
                         return False
+
+                if status.version:
+                    from gaia.version import LEMONADE_VERSION
+
+                    # Raises LemonadeVersionError below LEMONADE_MIN_VERSION.
+                    client._check_version_compatibility(
+                        LEMONADE_VERSION, actual_version=status.version, quiet=True
+                    )
 
                 if is_cloud:
                     # Lemonade holds cloud keys in memory only; a fresh start has none.

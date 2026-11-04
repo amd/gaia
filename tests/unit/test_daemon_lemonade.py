@@ -416,11 +416,17 @@ class TestManagerHook:
     """LemonadeManager only reaches for the daemon when GAIA's own server is
     installed and stopped -- never in CI or on a machine that didn't set it up."""
 
-    def _patch_embedded(self, installed, running):
+    def _patch_embedded(self, installed, running, version=VERSION):
         embedded = mock.Mock()
+        embedded.version = VERSION
         embedded.is_installed.return_value = installed
         embedded.replaces_older_install.return_value = False
-        embedded.status.return_value = _running() if running else _status()
+        embedded.is_older.side_effect = lambda found: (
+            parse_version(found) < parse_version(VERSION)
+        )
+        embedded.status.return_value = (
+            _running(version=version) if running else _status()
+        )
         return mock.patch(
             "gaia.llm.lemonade_embedded.EmbeddedLemonade", return_value=embedded
         )
@@ -436,6 +442,32 @@ class TestManagerHook:
         ):
             assert LemonadeManager.start_embedded_if_stopped() is True
         ensure.assert_called_once()
+
+    def test_an_older_running_server_is_handed_to_the_daemon(self):
+        """After a GAIA upgrade the daemon replaces it; the client must ask."""
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        with (
+            self._patch_embedded(installed=False, running=True, version="10.2.0"),
+            mock.patch(
+                "gaia.llm.lemonade_manager.gaia_runs_lemonade", return_value=True
+            ),
+            mock.patch(
+                "gaia.daemon.client.ensure_lemonade", return_value={"started": True}
+            ) as ensure,
+        ):
+            assert LemonadeManager.start_embedded_if_stopped() is True
+        ensure.assert_called_once()
+
+    def test_a_newer_running_server_is_left_alone(self):
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        with (
+            self._patch_embedded(installed=True, running=True, version="2999.1.0"),
+            mock.patch("gaia.daemon.client.ensure_lemonade") as ensure,
+        ):
+            assert LemonadeManager.start_embedded_if_stopped() is False
+        ensure.assert_not_called()
 
     @pytest.mark.parametrize(
         "installed,running", [(False, False), (True, True)], ids=["absent", "running"]
