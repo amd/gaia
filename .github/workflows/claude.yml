@@ -1709,12 +1709,21 @@ jobs:
           if [ -z "$EXEC_FILE" ]; then
             exit 0
           fi
-          gh label create needs-human --repo "$REPO" --color D93F0B \
-            --description "An automated fix stalled; a maintainer has to pick it up" --force
-          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label needs-human
+          # A failed label call must not cost the issue its comment; it fails the step after.
+          labelled=1
+          { gh label create needs-human --repo "$REPO" --color D93F0B \
+              --description "An automated fix stalled; a maintainer has to pick it up" --force \
+            && gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label needs-human; } \
+            || labelled=0
           # An abandoned fix already told the issue why.
           if [ "$OUTCOME" != "FAILED" ]; then
-            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "⚠️ The automated fix attempt ran but didn't complete cleanly, so this needs a maintainer (labelled needs-human). cc @kovtcharov-amd"
+            note="labelled needs-human"
+            [ "$labelled" = 1 ] || note="the needs-human label could not be added"
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "⚠️ The automated fix attempt ran but didn't complete cleanly, so this needs a maintainer ($note). cc @kovtcharov-amd"
+          fi
+          if [ "$labelled" = 0 ]; then
+            echo "::error title=needs-human label failed::could not label issue #$ISSUE_NUMBER needs-human; add it by hand."
+            exit 1
           fi
 
   # Generate release notes when PyPi workflow completes successfully on a tag

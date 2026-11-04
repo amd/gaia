@@ -316,12 +316,17 @@ def run_notify(job, tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     calls = tmp_path / "calls"
-    (bin_dir / "gh").write_text('#!/bin/sh\necho "$*" >> "$CALLS"\n', encoding="utf-8")
+    (bin_dir / "gh").write_text(
+        '#!/bin/sh\necho "$*" >> "$CALLS"\n'
+        'case "$1 $2" in "label create"|"issue edit") exit "$LABEL_EXIT";; esac\n',
+        encoding="utf-8",
+    )
     (bin_dir / "gh").chmod(0o755)
 
-    def run(exec_file, outcome):
+    def run(exec_file, outcome, label_fails=False):
         env = {
             **os.environ,
+            "LABEL_EXIT": "1" if label_fails else "0",
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             "CALLS": str(calls),
             "ISSUE_NUMBER": "42",
@@ -349,6 +354,17 @@ def test_a_stalled_fix_gets_needs_human(run_notify, outcome, comments):
     assert result.returncode == 0, result.stderr
     assert "issue edit 42 --repo amd/gaia --add-label needs-human" in calls
     assert ("issue comment 42" in calls) is comments
+
+
+@needs_bash
+@pytest.mark.parametrize("outcome, comments", [("", True), ("FAILED", False)])
+def test_a_failed_label_still_comments_and_fails_loudly(run_notify, outcome, comments):
+    result, calls = run_notify("/tmp/exec.json", outcome, label_fails=True)
+    assert result.returncode != 0
+    assert "::error title=needs-human label failed::" in result.stdout
+    assert ("issue comment 42" in calls) is comments
+    if comments:
+        assert "could not be added" in calls
 
 
 @needs_bash
