@@ -47,6 +47,7 @@ PHASES = [
     "upgrade",
     "launch",
     "health",
+    "setup",
     "preflight",
     "quit",
     "uninstall",
@@ -554,6 +555,9 @@ def cmd_summarize(args: argparse.Namespace) -> int:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    # A Windows runner's console is cp1252; an echoed ❌ must not kill the relay.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(errors="replace")
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

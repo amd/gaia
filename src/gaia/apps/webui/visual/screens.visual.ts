@@ -4,7 +4,8 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, NOW, mockApi, useTheme } from './fixtures';
+import { ANSWER_SESSION, NOW, mockApi, useLocale, useTheme } from './fixtures';
+import { SETUP_SCENES, withSetup } from './setup-scenes';
 
 let unhandled: string[] = [];
 
@@ -63,3 +64,20 @@ test('phone width', async ({ page }, info) => {
     await expect(page.getByText('Action items from Aug 28')).toBeVisible();
     await expect(page).toHaveScreenshot('phone-answer.png');
 });
+
+for (const locale of ['en', 'ar']) {
+    for (const s of SETUP_SCENES) {
+        test(`setup, ${s.name}, ${locale}`, async ({ page }, info) => {
+            await page.emulateMedia({ reducedMotion: 'reduce' });
+            await page.clock.setFixedTime(NOW);
+            unhandled = await mockApi(page);
+            await withSetup(page, s.answers);
+            await useTheme(page, themeOf(info.project.name));
+            await useLocale(page, locale);
+            await page.goto('/');
+            await page.evaluate(() => document.fonts.ready);
+            await s.reach(page);
+            await expect(page).toHaveScreenshot(`setup-${s.name}-${locale}.png`, { fullPage: true });
+        });
+    }
+}

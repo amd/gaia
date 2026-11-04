@@ -143,6 +143,9 @@ def clean(text, limit: int = ROOT_CAUSE_CHARS) -> str:
         text = match.group(1)
     elif len(text) > limit:
         text = text[: limit - 1].rstrip() + "…"
+    # First: a judge's `\[` would otherwise escape our `&` and leave a live
+    # `&#91;` (an issue link) instead of a bracket.
+    text = text.replace("\\", "\\\\")
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     text = text.replace("|", "\\|").replace("`", "'")
     # Scenarios plant hostile links: no clickable link, image, URL, issue

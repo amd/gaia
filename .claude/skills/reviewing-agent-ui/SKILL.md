@@ -23,6 +23,11 @@ npm run test:visual # pixel baselines, Windows, local only
 the rule there first and watch it fail**, then fix the bug. New screens join its list.
 Set `GAIA_VISUAL_CHROMIUM` to a Chrome or Edge binary to skip downloading Chromium.
 
+**Every option on a screen must be one GAIA has proven.** A backend, device, model or
+setting the user can pick is a promise; list only what passed evals on that hardware
+and the setup journey, never what the server merely reports it can run. See
+[Offer users only what GAIA has proven](../../../CLAUDE.md#important-offer-users-only-what-gaia-has-proven).
+
 ## 2. Look at every screen you touched, in both languages
 
 Take a screenshot with real data, then open the image and read it. Switch language
