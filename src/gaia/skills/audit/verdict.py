@@ -68,9 +68,9 @@ UNAUDITABLE_RULE_IDS = frozenset({"code.unparseable", "code.unreadable"})
 
 #: Some instruction findings must hold even the lowest capture tier. A capture
 #: audit is the last gate before untrusted text becomes model-facing content;
-#: outbound transmission to an arbitrary URL needs an explicit maintainer look,
-#: while remaining non-critical so legitimate, user-approved webhook skills are
-#: reviewable rather than blocked outright.
+#: outbound transmission to an arbitrary URL needs an explicit maintainer look.
+#: It stays non-critical so a legitimate webhook skill is reviewable below
+#: ``verified``; at ``verified`` its ``high`` severity blocks, by design.
 FORCE_REVIEW_RULE_IDS = frozenset({"body.injection.outbound_url"})
 
 #: Tiers the hub refuses to publish without an audit report (mirrors

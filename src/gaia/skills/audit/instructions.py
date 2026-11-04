@@ -177,8 +177,9 @@ INJECTION_RULES: tuple[InjectionRule, ...] = (
     _rule(
         "body.injection.outbound_url",
         "high",
-        r"\b(?:send|post|upload|forward|transmit|submit)\b"
-        r"[^.\n]{0,80}?\b(?:to|at)\b[^.\n]{0,20}?"
+        r"\b(?:send|sent|post|upload|forward|transmit|submit)"
+        r"(?:s|ed|ted|ing|ting)?\b"
+        r"[^.\n]{0,80}?\b(?:to|at|into|via)\b[^.\n]{0,40}?"
         r"(?:https?://|\bwebhook\b)",
         "Instructs the model to send content to an external endpoint.",
         "Remove the outbound transmission instruction or make the destination "
