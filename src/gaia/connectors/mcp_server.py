@@ -114,6 +114,76 @@ def _saved_keyring_usernames(connector_id: str, entry: Any) -> List[str]:
     return usernames
 
 
+def _rederived_env(spec: ConnectorSpec, entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Build *spec*'s ``$keyring`` env block; a renamed key reads its old slot."""
+    saved = set(_saved_keyring_usernames(spec.id, entry))
+    stale = sorted(saved - {f"{spec.id}:{env_key}" for env_key in spec.mcp_env_keys})
+    unsaved = [k for k in spec.mcp_env_keys if f"{spec.id}:{k}" not in saved]
+    env: Dict[str, Any] = {
+        env_key: {"$keyring": _keyring_ref(spec.id, env_key)}
+        for env_key in spec.mcp_env_keys
+    }
+    # One key gone and one new: a rename, so the secret is still under the old name.
+    if len(stale) == 1 and len(unsaved) == 1:
+        env[unsaved[0]] = {"$keyring": f"{SERVICE_NAME}:{stale[0]}"}
+    return env
+
+
+def rederive_catalog_entries(servers: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Return *servers* with each catalog connector's entry rebuilt from the catalog.
+
+    A saved entry holds what ``configure`` wrote at the time, so catalog fixes
+    (a version pin, a new command, a renamed env var) never reached people who
+    had already connected. The catalog-owned fields (``command``, ``args`` and
+    the ``env`` keys it defines) are rebuilt; the user's own (``disabled``,
+    ``timeout``, plain env values they added) are kept, and secrets stay in the
+    keyring.
+
+    Ids the catalog doesn't know (hand-added servers) are returned unchanged.
+    Nothing is written back: ``configure`` / ``disconnect`` stay the only writers.
+    """
+    # Imported here: the catalog imports this module to register the handler.
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    rebuilt = dict(servers)
+    for connector_id, entry in servers.items():
+        if connector_id not in REGISTRY or not isinstance(entry, dict):
+            continue
+        spec = REGISTRY.get(connector_id)
+        if spec.type != "mcp_server":
+            continue
+        saved_env = entry.get("env")
+        env = {
+            key: value
+            for key, value in (saved_env if isinstance(saved_env, dict) else {}).items()
+            if key not in spec.mcp_env_keys and isinstance(value, str)
+        }
+        env.update(_rederived_env(spec, entry))
+        rebuilt[connector_id] = {
+            **entry,
+            "command": spec.mcp_command,
+            "args": list(spec.mcp_args),
+            "env": env,
+        }
+    return rebuilt
+
+
+def _saved_secret(spec: ConnectorSpec, env_key: str) -> Optional[str]:
+    """Return *env_key*'s secret; a renamed key reads the slot it was saved under."""
+    value = keyring.get_password(SERVICE_NAME, f"{spec.id}:{env_key}")
+    if value is not None:
+        return value
+    entry = _read_mcp_servers_json().get(spec.id)
+    if not isinstance(entry, dict):
+        return None
+    _, _, username = _rederived_env(spec, entry)[env_key]["$keyring"].partition(":")
+    if username == f"{spec.id}:{env_key}":
+        return None
+    return keyring.get_password(SERVICE_NAME, username)
+
+
 def _delete_keyring_slots(usernames: Iterable[str]) -> None:
     """Delete each ``gaia.connections`` keyring slot; absent slots are already gone."""
     for username in sorted(usernames):
@@ -185,10 +255,9 @@ class McpServerHandler:
         env: Dict[str, str] = {}
         missing: List[str] = []
         for env_key in spec.mcp_env_keys:
-            username = f"{spec.id}:{env_key}"
-            value = keyring.get_password(SERVICE_NAME, username)
+            value = _saved_secret(spec, env_key)
             if value is None:
-                missing.append(f"{SERVICE_NAME}:{username}")
+                missing.append(_keyring_ref(spec.id, env_key))
             else:
                 env[env_key] = value
 
@@ -352,8 +421,7 @@ class McpServerHandler:
 
         missing: List[str] = []
         for env_key in spec.mcp_env_keys:
-            username = f"{spec.id}:{env_key}"
-            if keyring.get_password(SERVICE_NAME, username) is None:
+            if _saved_secret(spec, env_key) is None:
                 missing.append(env_key)
 
         if missing:
