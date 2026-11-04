@@ -1180,3 +1180,30 @@ for (const locale of ['ar', 'en']) {
         });
     });
 }
+
+/** A question and an answer that each name a Windows path with spaces. */
+const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
+const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';
+
+async function withSpacedPaths(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: `Summarize ${SPACED_PATH} for me`, created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: `Done. I saved the summary to ${SPACED_ANSWER_PATH}.`, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a path with spaces is one chip in the question and the answer (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withSpacedPaths);
+        const chips = page.locator('.file-path-link');
+        await expect(chips).toHaveText([SPACED_PATH, SPACED_ANSWER_PATH]);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath('spaced-paths.png') });
+    });
+}
