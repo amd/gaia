@@ -17,6 +17,7 @@
  *   - installBackend(opts)           → Promise<void>
  *   - ensureBackend(opts)            → Promise<string>  (returns gaia bin path)
  *   - isBackendCurrent()             → boolean  (nothing to install or refresh)
+ *   - stopRunningDaemon(opts)        → Promise<void>  (before the venv is touched)
  *   - getInstalledVersion(gaiaBin)   → string | null
  *   - findGaiaBin()                  → string | null
  *   - getState() / setState()        → state machine helpers
@@ -150,7 +151,12 @@ const FAILURE_REASONS = Object.freeze({
   NETWORK: "network",
   TLS: "tls",
   LOCKED: "locked",
+  DAEMON: "daemon",
 });
+
+// `gaia daemon stop` can take about 90 s: up to 45 s for a graceful exit, then
+// terminating the daemon and its agents, then up to 20 s for GAIA's Lemonade Server.
+const DAEMON_STOP_TIMEOUT_MS = 120 * 1000;
 
 // Stage an older installer recorded while it ran `gaia init`; the package was
 // already in place by then.
@@ -460,7 +466,7 @@ function findGaiaBin() {
  * `onLine(line)` sees each whole stdout line as it arrives; a line it returns
  * true for is left out of the log.
  */
-function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
+function runCommand(cmd, args, { env, stageLabel, onLine, timeoutMs } = {}) {
   return new Promise((resolve) => {
     log(`$ ${cmd} ${args.join(" ")}`);
     let proc;
@@ -525,16 +531,84 @@ function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
       });
     });
 
+    // From `timers`, not the globals: the installer tests run this file in a bare vm context.
+    let timer = null;
+    if (timeoutMs) {
+      timer = require("timers").setTimeout(() => {
+        logError(`${cmd} ${args.join(" ")} did not finish within ${Math.round(timeoutMs / 1000)}s — ending it`);
+        killTree(proc);
+        resolve({ code: null, stdout, stderr, timedOut: true });
+      }, timeoutMs);
+    }
+    const stopTimer = () => {
+      if (timer) require("timers").clearTimeout(timer);
+    };
+
     proc.on("error", (err) => {
+      stopTimer();
       logError(`${cmd} error: ${err.message}`);
       resolve({ code: -1, stdout, stderr, error: err });
     });
 
     proc.on("exit", (code) => {
+      stopTimer();
       log(`  exit code: ${code}`);
       resolve({ code, stdout, stderr });
     });
   });
+}
+
+/** End `proc` and what it started: a Windows venv launcher runs Python as a child. */
+function killTree(proc) {
+  if (IS_WINDOWS) {
+    const r = spawnSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
+      windowsHide: true,
+      timeout: 30 * 1000,
+    });
+    if (r.error || r.status !== 0) {
+      logError(`taskkill /PID ${proc.pid} /T /F failed: ${r.error ? r.error.message : `exit ${r.status}`}`);
+    }
+    return;
+  }
+  try {
+    proc.kill("SIGKILL");
+  } catch (err) {
+    logError(`Could not end pid ${proc.pid}: ${err.message}`);
+  }
+}
+
+/**
+ * Stop the GAIA daemon (and the agents it runs) that the existing venv may be
+ * running, so the install doesn't trip over its open files. Throws an
+ * InstallError naming the daemon when it would not stop.
+ */
+async function stopRunningDaemon({ timeoutMs = DAEMON_STOP_TIMEOUT_MS } = {}) {
+  if (!fs.existsSync(GAIA_BIN) || !fs.existsSync(GAIA_PYTHON_BIN)) return;
+  const result = await runCommand(GAIA_BIN, ["daemon", "stop"], {
+    stageLabel: "daemon",
+    timeoutMs,
+    // gaia prints emoji, which a Windows pipe's code page can't encode.
+    env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+  });
+  if (result.code === 0) return;
+  const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+  if (result.code === 2 && /invalid choice: '?daemon'?/.test(output)) {
+    log("The installed GAIA predates the daemon — nothing to stop");
+    return;
+  }
+  const why = result.timedOut
+    ? `did not stop within ${Math.round(timeoutMs / 1000)} seconds`
+    : `could not be stopped (gaia daemon stop exit ${result.code})`;
+  log(`To stop it by hand: ${GAIA_BIN} daemon stop`);
+  throw new InstallError(
+    `GAIA's background service (the GAIA daemon) ${why}, so its files can't be updated.`,
+    {
+      stage: STAGES.CREATE_VENV,
+      code: result.code,
+      reason: FAILURE_REASONS.DAEMON,
+      suggestion: `It has no window to close. Restart your PC, then try again. The log at ${LOG_FILE} has the details.`,
+    }
+  );
 }
 
 /**
@@ -1577,6 +1651,7 @@ async function installBackend(opts = {}) {
   report(STAGES.CREATE_VENV, 0, "Creating Python 3.12 environment");
 
   ensureGaiaHome();
+  await stopRunningDaemon();
 
   // If the venv exists but the python binary is missing, treat as partial.
   const venvLooksValid =
@@ -2238,6 +2313,7 @@ module.exports = {
   getInstalledVersion,
   findGaiaBin,
   toPep440,
+  stopRunningDaemon,
 
   // Pre-checks
   runPreChecks,
@@ -2271,6 +2347,7 @@ module.exports = {
   STATES,
   STAGES,
   FAILURE_REASONS,
+  DAEMON_STOP_TIMEOUT_MS,
   GAIA_HOME,
   GAIA_VENV,
   GAIA_BIN,

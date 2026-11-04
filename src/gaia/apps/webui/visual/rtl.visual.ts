@@ -1254,6 +1254,15 @@ const INSTALL_LOCKED_OTHER = {
         }],
     },
 };
+const INSTALL_DAEMON = {
+    ...INSTALL_FAILED,
+    error: {
+        ...INSTALL_FAILED.error,
+        stage: 'create-venv',
+        reason: 'daemon',
+        message: "GAIA's background service (the GAIA daemon) did not stop within 120 seconds, so its files can't be updated.",
+    },
+};
 
 for (const locale of ['ar', 'en']) {
     test.describe(`engine install (${locale})`, () => {
@@ -1290,6 +1299,13 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('.engine-retry')).toHaveCount(1);
             expect(await audit(page)).toEqual([]);
             await shot(page, `engine-locked-other-${locale}`);
+        });
+
+        test('failed because the GAIA daemon would not stop', async ({ page }) => {
+            await open(page, '?engine=install', locale, (p) => withInstall(p, INSTALL_DAEMON));
+            await expect(page.locator('.engine-retry')).toHaveCount(1);
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `engine-daemon-${locale}`);
         });
 
         test('narrow window: no sideways scroll', async ({ page }) => {

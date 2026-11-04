@@ -9826,9 +9826,42 @@ def _handle_daemon_stop(exit_on_lemonade_error: bool = True):
         else:
             print(f"⚠️  daemon pid {inst.pid} did not exit; terminating")
             terminate_instance(inst)
+            if not client.wait_until_gone(inst, timeout=5.0):
+                print(
+                    f"❌ GAIA daemon pid {inst.pid} is still running after it was "
+                    "terminated. End that process (Task Manager on Windows, "
+                    f"`kill -9 {inst.pid}` elsewhere), then run `gaia daemon stop` "
+                    "again."
+                )
+                sys.exit(1)
             remove_instance(only_pid=inst.pid)
             print(f"✅ GAIA daemon terminated (pid {inst.pid})")
+    # A daemon that was killed, or whose shutdown hung, can leave its agents running.
+    if not _reap_orphaned_sidecars():
+        sys.exit(1)
     _stop_gaia_lemonade_left_running(exit_on_error=exit_on_lemonade_error)
+
+
+def _reap_orphaned_sidecars() -> bool:
+    """Kill agent sidecars the stopped daemon left running.
+
+    Returns False, after saying which, when one is still running.
+    """
+    from gaia.daemon.sidecars import ledger
+
+    killed, survivors = ledger.reap_after_stop()
+    for pid in killed:
+        if pid not in survivors:
+            print(f"✅ Stopped an agent the daemon left running (pid {pid})")
+    if survivors:
+        pids = ", ".join(str(pid) for pid in survivors)
+        print(
+            f"❌ GAIA agent process(es) {pids} are still running after the "
+            "daemon stopped. End them (Task Manager on Windows, `kill -9` "
+            "elsewhere), then run `gaia daemon stop` again."
+        )
+        return False
+    return True
 
 
 def _stop_gaia_lemonade_left_running(exit_on_error: bool = True):
