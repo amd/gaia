@@ -10,6 +10,7 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **The query stream documents the `reconnecting` status phase.** Integrators can show a live reconnecting state while Lemonade restarts or becomes temporarily unavailable, instead of treating the status as an unknown phase.
 - **Images are not read while chat runs on the NPU.** The NPU model doesn't
   read images, and loading Gemma next to it would mean a 6 GB download, so
   `analyze_image` and `answer_question_about_image` answer with why they
