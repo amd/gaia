@@ -151,6 +151,8 @@ const messages: Messages = {
     'composer.reply': 'الرد على GAIA',
     'composer.queueNext': 'أضف رسالتك التالية إلى قائمة الانتظار',
     'composer.starting': 'جارٍ تشغيل GAIA…',
+    'composer.heldLabel': 'رسالة بانتظار الإرسال',
+    'composer.heldUntilStarted': 'ستُرسل بعد اكتمال تشغيل GAIA.',
     'composer.message': 'الرسالة',
     'composer.attached': 'الملفات المرفقة',
     'composer.uploading': 'جارٍ الرفع…',
