@@ -25,12 +25,13 @@
 #
 # It runs nightly on main, so a passing result for the commit is usually there
 # before anyone decides to tag (#6611). The nightly names the next unused RC of
-# version.py's version, and skips a commit that already has a passing run.
+# version.py's version, and skips a commit whose passing run's artifacts can
+# still be downloaded (7 days); after that it builds the commit again.
 #
 # Run it:  gh workflow run release_train_dryrun.yml --ref main [-f rc_tag=v0.25.1-rc3]
-# Find the verified build of a commit, and its digests. Take the oldest passing
-# run: a later nightly on the same commit skipped the build and has no manifest.
-#   gh run list --workflow release_train_dryrun.yml --commit <sha> --status success
+# Find the verified build of a commit, and its digests. A nightly that skipped
+# passes with no manifest, so ask for a run that is still whole:
+#   python util/release_train.py verified-run --repo amd/gaia --sha <sha>
 #   gh run download <run-id> -n release-train-manifest   # release-manifest.json
 
 name: Release train dry run
@@ -48,6 +49,15 @@ on:
 
 permissions:
   contents: read
+
+# One dry run per branch at a time: a nightly that lands during a dispatch
+# waits, then sees that run's pass and skips. GitHub keeps one pending run per
+# group, so a newer queued run replaces an older queued one; a running one is
+# never cancelled. That includes a dispatch queued behind a running dry run:
+# if the nightly queues after it, the dispatch is cancelled. Dispatch again.
+concurrency:
+  group: release-train-dryrun-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   PYTHONUTF8: '1'
@@ -90,10 +100,12 @@ jobs:
             echo "build=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          prior="$(gh run list -R "${GITHUB_REPOSITORY}" --workflow release_train_dryrun.yml \
-            --commit "${GITHUB_SHA}" --status success --limit 1 --json url --jq '.[0].url // ""')"
+          # Only a pass whose artifacts can still be downloaded counts: past
+          # retention the commit would have a verdict but nothing to promote.
+          prior="$(python3 util/release_train.py verified-run \
+            --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}")"
           if [ -n "${prior}" ]; then
-            echo "${GITHUB_SHA} already passed: ${prior}" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "${GITHUB_SHA} already passed, artifacts still live: ${prior}" | tee -a "$GITHUB_STEP_SUMMARY"
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
             echo "build=true" >> "$GITHUB_OUTPUT"

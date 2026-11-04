@@ -267,3 +267,20 @@ def test_prefixed_artifact_names_reduce_to_todays(filename):
         if "inputs.artifact_prefix" in line and re.match(r"\s+name:", line):
             today = line.replace("${{ inputs.artifact_prefix }}", "")
             assert "artifact_prefix" not in today, line
+
+
+def test_a_nightly_and_a_dispatch_never_overlap(workflow):
+    assert workflow["concurrency"] == {
+        "group": "release-train-dryrun-${{ github.ref }}",
+        "cancel-in-progress": False,
+    }
+
+
+def test_the_skip_requires_a_build_that_is_still_downloadable(workflow):
+    (step,) = [
+        s
+        for s in workflow["jobs"]["plan"]["steps"]
+        if s.get("name") == "Skip a commit that already passed"
+    ]
+    assert "release_train.py verified-run" in step["run"]
+    assert "gh run list" not in step["run"], "a plain pass may have expired artifacts"
