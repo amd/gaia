@@ -31,6 +31,7 @@ from pathlib import Path
 import pytest
 
 from gaia.skills import cli as skills_cli
+from tests.unit.packaging_helpers import find_source_packages
 from tests.unit.skills_helpers import copy_fixture
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -445,10 +446,7 @@ def test_skills_package_ships_in_the_wheel():
     )
     assert "gaia.skills" in declared
 
-    on_disk = {
-        ".".join(p.parent.relative_to(REPO_ROOT / "src").parts)
-        for p in (REPO_ROOT / "src").rglob("__init__.py")
-    }
+    on_disk = find_source_packages(REPO_ROOT / "src")
     assert on_disk == declared, (
         "src/gaia packages and setup.py's explicit list have drifted; add the new "
         f"package(s) to setup.py: {sorted(on_disk - declared)}"
