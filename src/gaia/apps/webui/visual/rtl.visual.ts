@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MODEL_LIST, NOW, SYSTEM_STATUS, mockApi, useLocale, useTheme, withConnectors, withDesktopBridges, withModelPage, withSettingsPanes } from './fixtures';
+import { ANSWER_SESSION, MODEL_LIST, NOW, SYSTEM_STATUS, mockApi, useLocale, useTheme, withConnectors, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -116,6 +116,22 @@ const audit = (page: Page): Promise<string[]> =>
             }
         }
 
+        // Arabic letters join: a monospace face or added tracking pulls a word apart into
+        // separate letters. Only the stack's Arabic fallback matters; Latin may stay mono.
+        const ARABIC_FACE = /Segoe UI|Noto Sans Arabic|Noto Naskh Arabic|Tahoma|Arial|Helvetica|sans-serif|serif|system-ui|-apple-system/i;
+        const textWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        const seen = new Set<string>();
+        for (let node = textWalker.nextNode(); node; node = textWalker.nextNode()) {
+            const el = node.parentElement;
+            if (!el || !arabic.test(node.textContent ?? '') || !shown(el) || seen.has(label(el))) continue;
+            const style = getComputedStyle(el);
+            const families = style.fontFamily.split(',').map((f) => f.trim().replace(/^["']|["']$/g, ''));
+            const fallback = families.find((f) => f === 'monospace' || ARABIC_FACE.test(f));
+            if (fallback === 'monospace') problems.push(`Arabic in a monospace font: ${label(el)}`);
+            if (style.letterSpacing !== 'normal' && parseFloat(style.letterSpacing) !== 0) problems.push(`Arabic letter-spaced ${style.letterSpacing}: ${label(el)}`);
+            seen.add(label(el));
+        }
+
         // The English of a label is quieter than its translation, and still readable.
         const paint = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
         const rgb = (color: string): number[] => {
@@ -166,11 +182,57 @@ const audit = (page: Page): Promise<string[]> =>
             }
             return false;
         };
+        // The part of a button's text a person sees: each text node clipped by every box that hides
+        // its overflow up to the button, so an ellipsis-cut label isn't measured at full length.
+        const visibleTextBox = (button: Element) => {
+            let left = Infinity;
+            let right = -Infinity;
+            const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                if (!node.textContent?.trim()) continue;
+                const clips: DOMRect[] = [];
+                for (let at = node.parentElement; at; at = at.parentElement) {
+                    if (getComputedStyle(at).overflowX !== 'visible') clips.push(at.getBoundingClientRect());
+                    if (at === button) break;
+                }
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) {
+                    const l = Math.max(rect.left, ...clips.map((c) => c.left));
+                    const rr = Math.min(rect.right, ...clips.map((c) => c.right));
+                    if (rr <= l) continue;
+                    left = Math.min(left, l);
+                    right = Math.max(right, rr);
+                }
+            }
+            return right > left ? { left, right } : null;
+        };
         for (const button of document.querySelectorAll('button')) {
             if (!shown(button) || inScroller(button)) continue;
             const r = button.getBoundingClientRect();
             if (r.left < -1 || r.right > window.innerWidth + 1) problems.push(`button runs off the window: ${label(button)}`);
             if (button.scrollWidth > button.clientWidth + 1) problems.push(`label spills out of its button: ${label(button)}`);
+            // A filled button whose words reach its edge reads as text spilling out of a pill.
+            if (button.textContent?.trim() && rgb(getComputedStyle(button).backgroundColor)[3] > 0) {
+                const text = visibleTextBox(button);
+                if (text && Math.min(text.left - r.left, r.right - text.right) < 3) problems.push(`label touches its button's edge: ${label(button)}`);
+            }
+        }
+
+        // An icon drawn over a field must sit in its padding, not on the text, in either direction.
+        for (const input of document.querySelectorAll('input:not([type="checkbox"]):not([type="radio"])')) {
+            if (!shown(input)) continue;
+            const box = input.getBoundingClientRect();
+            const s = getComputedStyle(input);
+            const textLeft = box.left + parseFloat(s.borderLeftWidth) + parseFloat(s.paddingLeft);
+            const textRight = box.right - parseFloat(s.borderRightWidth) - parseFloat(s.paddingRight);
+            for (const icon of input.parentElement?.querySelectorAll(':scope > svg, :scope > .search-icon') ?? []) {
+                const r = icon.getBoundingClientRect();
+                if (getComputedStyle(icon).position !== 'absolute' || !shown(icon)) continue;
+                if (r.right > textLeft + 1 && r.left < textRight - 1 && r.bottom > box.top && r.top < box.bottom) {
+                    problems.push(`icon sits on a field's text: ${label(input)}`);
+                }
+            }
         }
 
         // An icon and its label need space between them, in either direction.
@@ -900,6 +962,30 @@ const INSTALL_FAILED = {
         logTail: ['$ uv pip install amd-gaia[ui]==0.25.4', '  [pip] error: Failed to fetch https://pypi.org/simple/numpy/', '  exit code: 1'],
     },
 };
+const INSTALL_LOCKED = {
+    ...INSTALL_FAILED,
+    error: {
+        ...INSTALL_FAILED.error,
+        reason: 'locked',
+        message: "GAIA couldn't replace its own files because another program has them open (gaia.exe).",
+        lockedBy: [{
+            pid: 32852, name: 'gaia.exe', isGaia: true,
+            path: 'C:\\Users\\kalin.ovtcharov\\Work\\demo-projects\\customer-showcase-home\\.gaia\\venv\\Scripts\\gaia.exe',
+            folder: 'C:\\Users\\kalin.ovtcharov\\Work\\demo-projects\\customer-showcase-home',
+        }],
+    },
+};
+const INSTALL_LOCKED_OTHER = {
+    ...INSTALL_LOCKED,
+    error: {
+        ...INSTALL_LOCKED.error,
+        lockedBy: [{
+            pid: 4100, name: 'Code.exe', isGaia: false,
+            path: 'C:\\Users\\kalin.ovtcharov\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe',
+            folder: 'C:\\Users\\kalin.ovtcharov\\AppData\\Local\\Programs\\Microsoft VS Code',
+        }],
+    },
+};
 
 for (const locale of ['ar', 'en']) {
     test.describe(`engine install (${locale})`, () => {
@@ -923,6 +1009,20 @@ for (const locale of ['ar', 'en']) {
                 expect(await audit(page)).toEqual([]);
             });
         }
+
+        test('failed on a file another copy of GAIA holds open', async ({ page }) => {
+            await open(page, '?engine=install', locale, (p) => withInstall(p, INSTALL_LOCKED));
+            await expect(page.locator('.engine-retry')).toHaveCount(2);
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `engine-locked-gaia-${locale}`);
+        });
+
+        test('failed on a file another program holds open', async ({ page }) => {
+            await open(page, '?engine=install', locale, (p) => withInstall(p, INSTALL_LOCKED_OTHER));
+            await expect(page.locator('.engine-retry')).toHaveCount(1);
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `engine-locked-other-${locale}`);
+        });
 
         test('narrow window: no sideways scroll', async ({ page }) => {
             await page.setViewportSize({ width: 320, height: 720 });
@@ -1023,6 +1123,55 @@ test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
     await expect(page.locator('.app-notice')).toContainText('غير مثبّت');
     await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
 });
+
+/** POST /api/chat/send streams `events`, then stays open, as a turn waiting on the user does. */
+function streamThenWait(events: unknown[]): void {
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (!url.includes('/api/chat/send')) return realFetch(input, init);
+        const encoder = new TextEncoder();
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                for (const event of events) controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+            },
+        });
+        return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+}
+
+const PYTHON_PROMPT = [{
+    type: 'permission_request', tool: 'run_python', tool_label: 'running python', confirm_id: 'c-rtl',
+    args: { code: 'p = r"C:\\Users\\you\\notes.txt"\nt = open(p, encoding="utf-8").read()\nprint(len(t))' },
+}];
+
+for (const locale of ['ar', 'en']) {
+    test(`a permission prompt's code reads left to right (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, PYTHON_PROMPT);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('count the characters in my notes');
+        await page.keyboard.press('Enter');
+        const code = page.getByTestId('perm-code');
+        await expect(code).toBeVisible();
+        const style = await code.evaluate((el) => {
+            const s = getComputedStyle(el);
+            return { direction: s.direction, textAlign: s.textAlign };
+        });
+        expect(style.direction).toBe('ltr');
+        expect(['left', 'start']).toContain(style.textAlign);
+        // The first line's text starts at the block's left edge, not its right.
+        const gap = await code.evaluate((el) => {
+            const range = document.createRange();
+            range.selectNodeContents(el.firstChild!);
+            return range.getClientRects()[0].left - el.getBoundingClientRect().left;
+        });
+        expect(gap).toBeLessThan(16);
+        await expect(page.locator('.perm-card-title bdi')).toHaveText('Allow running python?');
+        await expect(page.getByRole('button', { name: /Allow once/ })).toContainText(locale === 'ar' ? 'السماح مرة واحدة' : 'Allow once');
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `permission-python-${locale}`);
+    });
+}
 
 /** A first message whose chat model isn't downloaded, on a disk too small for it. */
 async function withMissingModel(page: Page): Promise<void> {
@@ -1177,6 +1326,161 @@ for (const locale of ['ar', 'en']) {
             await expect(error).not.toContainText('gaia-update-error');
             expect(await audit(page)).toEqual([]);
             await page.screenshot({ path: info.outputPath('settings-refused.png') });
+        });
+    });
+}
+
+/** Visible text on the Memory dashboard left in English; memories, names and codes sit in <bdi>. */
+const memoryLeftovers = (page: Page): Promise<string[]> =>
+    page.locator('.memory-dashboard-page').evaluate((root) => {
+        const left = new Set<string>();
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+            const text = n.textContent?.trim() ?? '';
+            const el = n.parentElement as Element;
+            if (!/[A-Za-z]{3}/.test(text) || /[\u0600-\u06ff]/.test(text) || !el.checkVisibility()) continue;
+            if (el.closest('.i18n-gloss, bdi, code, select, textarea')) continue;
+            left.add(text.slice(0, 60));
+        }
+        for (const el of root.querySelectorAll('input[placeholder], textarea[placeholder]')) {
+            const hint = el.getAttribute('placeholder') ?? '';
+            // "global" is the default context's literal value, offered as the example to type.
+            if (hint !== 'global' && /[A-Za-z]{3}/.test(hint) && !/[\u0600-\u06ff]/.test(hint)) left.add(`placeholder: ${hint}`);
+        }
+        return [...left];
+    });
+
+async function openMemory(page: Page, locale: string, state: MemoryState = {}, theme: 'light' | 'dark' = 'light'): Promise<void> {
+    await open(page, '', locale, (p) => withMemory(p, state), theme);
+    const sidebar = page.getByRole('button', { name: /Open sidebar/ });
+    if (await sidebar.isVisible()) await sidebar.click();
+    await page.locator('.sb').getByRole('button', { name: /Memory/ }).first().click();
+    await expect(page.locator('.memory-dashboard-page')).toBeVisible();
+}
+
+const memoryTab = (page: Page, name: RegExp) => page.getByRole('tab', { name }).click();
+
+/** The audit, plus no English left on an Arabic screen. */
+async function checkMemory(page: Page, locale: string, name: string): Promise<void> {
+    await shot(page, `memory-${locale}-${name}`);
+    expect(await audit(page)).toEqual([]);
+    if (locale === 'ar') expect(await memoryLeftovers(page)).toEqual([]);
+}
+
+for (const locale of ['ar', 'en']) {
+    test.describe(`memory dashboard (${locale})`, () => {
+        test('about you, with memories', async ({ page }) => {
+            await openMemory(page, locale);
+            await expect(page.getByText('Lives in Calgary and works at a hospital')).toBeVisible();
+            await checkMemory(page, locale, 'about');
+        });
+
+        test('about you, editing a memory', async ({ page }) => {
+            await openMemory(page, locale);
+            const item = page.locator('.mem-about-item', { hasText: 'Lives in Calgary' });
+            await item.locator('.mem-about-btn').first().click();
+            await expect(item.locator('textarea')).toBeVisible();
+            await checkMemory(page, locale, 'about-editing');
+        });
+
+        test('about you, empty', async ({ page }) => {
+            await openMemory(page, locale, { empty: true });
+            await expect(page.locator('.mem-about-empty')).toBeVisible();
+            await checkMemory(page, locale, 'about-empty');
+        });
+
+        test('about you, memory off', async ({ page }) => {
+            await openMemory(page, locale, { enabled: false });
+            await expect(page.locator('.mem-about-empty .btn-secondary')).toBeVisible();
+            await checkMemory(page, locale, 'about-off');
+        });
+
+        test('about you, failed to load', async ({ page }) => {
+            await openMemory(page, locale, { failed: true });
+            await expect(page.getByText('Memory store is locked', { exact: false })).toBeVisible();
+            await checkMemory(page, locale, 'about-failed');
+        });
+
+        test('goals, suggested and one open with its tasks', async ({ page }) => {
+            await openMemory(page, locale);
+            await memoryTab(page, /Goals/);
+            await page.locator('.mem-goal-header', { hasText: 'Ship the Q3 report' }).click();
+            await expect(page.locator('.mem-task-row')).toHaveCount(2);
+            await page.locator('.mem-goals-toolbar .btn-primary').click();
+            await expect(page.locator('.mem-goals-add-form')).toBeVisible();
+            await checkMemory(page, locale, 'goals');
+        });
+
+        test('goals, empty', async ({ page }) => {
+            await openMemory(page, locale, { empty: true });
+            await memoryTab(page, /Goals/);
+            await expect(page.locator('.mem-goals-tab .mem-empty')).toBeVisible();
+            await checkMemory(page, locale, 'goals-empty');
+        });
+
+        test('profile setup, before and after a discovery run', async ({ page }) => {
+            await openMemory(page, locale);
+            await memoryTab(page, /Profile setup/);
+            await expect(page.locator('.mem-profile-card')).toHaveCount(2);
+            await checkMemory(page, locale, 'profile');
+            await page.locator('.mem-profile-run-btn').first().click();
+            await expect(page.locator('.mem-review-item')).toHaveCount(2);
+            await checkMemory(page, locale, 'profile-review');
+        });
+
+        test('advanced, with stats, tables and settings', async ({ page }) => {
+            await openMemory(page, locale);
+            await memoryTab(page, /Advanced/);
+            await expect(page.getByText('run_shell')).toBeVisible();
+            // Unisolated, a percentage reads "%100" in a right-to-left line.
+            if (locale === 'ar') await expect(page.locator('.mem-embedding-label')).toContainText('\u2068100%\u2069');
+            await checkMemory(page, locale, 'advanced');
+            await page.locator('.memory-dashboard-body').evaluate((el) => { el.scrollTop = el.scrollHeight; });
+            await checkMemory(page, locale, 'advanced-end');
+        });
+
+        test('advanced, a row open and the add form', async ({ page }) => {
+            await openMemory(page, locale);
+            await memoryTab(page, /Advanced/);
+            await page.locator('.mem-knowledge-table tbody tr', { hasText: 'Lives in Calgary' }).locator('td').first().click();
+            await expect(page.locator('.mem-detail-panel')).toBeVisible();
+            await page.locator('.mem-section-add-btn').click();
+            await expect(page.locator('.mem-inline-form')).toBeVisible();
+            await checkMemory(page, locale, 'advanced-open');
+        });
+
+        test('advanced, empty', async ({ page }) => {
+            await openMemory(page, locale, { empty: true });
+            await memoryTab(page, /Advanced/);
+            await expect(page.locator('.mem-stat-cards')).toBeVisible();
+            await checkMemory(page, locale, 'advanced-empty');
+        });
+
+        test('advanced, memory off with the enable dialog open', async ({ page }) => {
+            await openMemory(page, locale, { enabled: false });
+            await memoryTab(page, /Advanced/);
+            await page.locator('.mem-toggle').first().click();
+            await expect(page.getByRole('dialog')).toBeVisible();
+            await checkMemory(page, locale, 'advanced-dialog');
+        });
+
+        test('advanced in the dark theme', async ({ page }) => {
+            await openMemory(page, locale, {}, 'dark');
+            await memoryTab(page, /Advanced/);
+            await expect(page.getByText('run_shell')).toBeVisible();
+            await checkMemory(page, locale, 'advanced-dark');
+        });
+
+        test('phone width', async ({ page }) => {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await openMemory(page, locale);
+            // The closed drawer waits off screen by design; this test is about the dashboard.
+            await page.addStyleTag({ content: '.sb:not(.is-open) { display: none; }' });
+            await expect(page.getByText('Lives in Calgary and works at a hospital')).toBeVisible();
+            await checkMemory(page, locale, 'about-phone');
+            await memoryTab(page, /Advanced/);
+            await expect(page.getByText('run_shell')).toBeVisible();
+            await checkMemory(page, locale, 'advanced-phone');
         });
     });
 }
