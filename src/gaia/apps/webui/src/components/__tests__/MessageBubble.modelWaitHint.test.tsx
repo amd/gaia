@@ -9,6 +9,7 @@ import { MessageBubble } from '../MessageBubble';
 import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../../utils/modelWait';
 import { tEn } from '../../i18n/useT';
 import { useModelStore } from '../../stores/modelStore';
+import { useChatStore } from '../../stores/chatStore';
 import type { ActiveModel } from '../../types';
 import type { Message } from '../../types';
 
@@ -125,5 +126,25 @@ describe('model wait hint', () => {
         expect(isModelWaitLabel(null)).toBe(true);
         expect(isModelWaitLabel('Thinking...')).toBe(true);
         expect(isModelWaitLabel('Reading your request')).toBe(true);
+    });
+});
+
+describe('live status line in Arabic', () => {
+    afterEach(() => act(() => useChatStore.getState().setLocale('en')));
+
+    it('reads in Arabic, with the seconds counter kept left to right', () => {
+        act(() => useChatStore.getState().setLocale('ar'));
+        const { container } = renderBubble('Reading your request');
+        // The line types itself out one character per tick.
+        for (let i = 0; i < 100; i++) act(() => { vi.advanceTimersByTime(100); });
+        expect(container.querySelector('.thinking-indicator-text')?.textContent).toContain('جارٍ قراءة طلبك');
+        expect(container.querySelector('.thinking-indicator-elapsed bdi[dir="ltr"]')?.textContent).toBe('10s');
+    });
+
+    it('says the model is still silent in Arabic', () => {
+        act(() => useChatStore.getState().setLocale('ar'));
+        renderBubble('Reading your request');
+        act(() => { vi.advanceTimersByTime(MODEL_WAIT_HINT_S * 1000); });
+        expect(screen.getByRole('status').textContent).toContain('ما زلنا بانتظار النموذج');
     });
 });

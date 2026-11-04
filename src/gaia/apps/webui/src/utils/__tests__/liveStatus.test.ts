@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { stripIsolates } from '../../i18n/registry';
 import { tEn, translator } from '../../i18n/useT';
 import { localizeLiveStatus } from '../liveStatus';
+import { SEND_WAITING_NOTICE_TEXT } from '../../services/api';
 
 const ar = (label: string) => stripIsolates(localizeLiveStatus(translator('ar'), label));
 
@@ -38,7 +39,18 @@ describe('localizeLiveStatus', () => {
     });
 
     it('shows a line it does not know as written', () => {
-        expect(ar('Writing file — 120 characters so far')).toBe('Writing file — 120 characters so far');
-        expect(ar('Downloading file — 120 characters so far')).toBe('Downloading file — 120 characters so far');
+        for (const label of [
+            'Writing file — 120 characters so far',
+            'Downloading file — 120 characters so far',
+            "Downloading the embedding model 'nomic-embed-text-v2-moe-GGUF' for memory: 40%",
+            'Downloading Whisper-Large-v3-Turbo through Lemonade (~1.60 GB)',
+            'The model stopped sending — retrying now (1/1)',
+        ]) {
+            expect(ar(label)).toBe(label);
+        }
+    });
+
+    it('recognises the lines the UI itself writes', () => {
+        expect(ar(SEND_WAITING_NOTICE_TEXT)).toContain('بانتظار أن يبدأ GAIA');
     });
 });

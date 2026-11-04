@@ -24,9 +24,10 @@ export function localizeLiveStatus(t: Translate, label: string): string {
     if (m) return t('live.reasoningWords', { n: m[1] });
     m = /^Connection lost\. Reconnecting \(attempt (\d+) of (\d+)\)…$/.exec(label);
     if (m) return t('live.reconnectingStream', { attempt: m[1], max: m[2] });
-    m = /^Loading ([^—]+) into memory$/.exec(label);
+    // A model id has no spaces, so "Downloading the embedding model …" is not one of these.
+    m = /^Loading (\S+) into memory$/.exec(label);
     if (m) return t('live.loadingModel', { model: m[1] });
-    m = /^Downloading ([^—]+)$/.exec(label);
+    m = /^Downloading (\S+)$/.exec(label);
     if (m) return t('live.downloadingModel', { model: m[1] });
     return label;
 }
