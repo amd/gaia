@@ -5099,6 +5099,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 model_messages=model_messages,
                 turn_summary=turn_summary,
                 ends_turn=True,
+                stopped=turn_cancelled,
             )
             link_warning = (
                 turn_box["recording"].link_message(msg_id)
@@ -5194,6 +5195,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     model_messages=result_holder.get("model_messages"),
                     turn_summary=turn_summary,
                     ends_turn=True,
+                    stopped=turn_cancelled,
                 )
                 done_event = _done_event(
                     msg_id,
@@ -5387,7 +5389,7 @@ async def _run_chat_lifecycle(
                 await run.slot.acquire()
             except TurnCancelled:
                 msg_id = db.add_message(
-                    session_id, "assistant", "Cancelled.", ends_turn=True
+                    session_id, "assistant", "Cancelled.", ends_turn=True, stopped=True
                 )
                 _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
                 return

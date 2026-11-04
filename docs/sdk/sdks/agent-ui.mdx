@@ -775,7 +775,8 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/messages">
-    Get messages for a session, ordered oldest first.
+    Get messages for a session, ordered oldest first. Each message carries `stopped`:
+    true when the person stopped the answer, kept across restarts.
 
     **Query params:** `limit` (default 100), `offset` (default 0)
 
@@ -1089,7 +1090,7 @@ Deleting a chat deletes its copies.
     | `outputs` | What it made besides files, for the session panel's Outputs: `kind` (`image`, `document` indexed, `memory` saved, `schedule` created), `name`, and `path`, `detail` or `ref` (a memory's id) where they apply. |
     | `live_data` | `attempted` and `failed` counts for the internet tools. All failed means the answer has no live data. |
     | `model` | `remote`, `provider`, `provider_name`, `name`. Absent when the location could not be determined. |
-    | `cost` | `kind`: `local`, `estimate` (with `usd`, at list price), or `unknown`. |
+    | `cost` | `kind`: `local`, `estimate` (with `usd`, at list price), `unknown` (no known price), or `unreported` (the model is priced but no usage came back, such as a stopped answer). |
     | `error` | Set, with the rest empty, when the summary could not be built. |
 
     **Non-streaming response:**
@@ -1203,7 +1204,7 @@ Deleting a chat deletes its copies.
     `prefill_tokens_per_second`, `generation_tokens_per_second`, `tokens_in`,
     `tokens_new`, `tokens_cached` (reused from the server's prompt cache),
     `tokens_out`, `tool_calls`, `loads` and `cost` (`local` at $0, a cloud
-    `estimate` at list price, or `unknown`). `totals` sums the chat. `now` is
+    `estimate` at list price, `unknown`, or `unreported` when a priced model sent no usage). `totals` sums the chat. `now` is
     the model as Lemonade reports it: `provider` (`local`, a cloud provider,
     or `unknown`), `device`, `backend`, `ctx_size`, `weights_gb`,
     `kv_cache_gb` and `free_gb`. `latest_message_id` is the newest answer, so
@@ -2882,7 +2883,9 @@ model with no known price reads as unknown, never $0. Cloud models from
     This month's cloud chat turns in the Agent UI at list price, without cache
     discounts. A turn that fails or is stopped before it answers isn't counted,
     so the total can read lower than the bill as well as higher: `total_usd`, `turns`, `unpriced_turns` (turns on a model with no
-    known price, counted apart), `by_model`, `limit_usd`, and `state`
+    known price, counted apart), `unreported_turns` (turns on a priced model that
+    sent no usage, such as a stopped answer, also counted apart), `by_model` (each
+    entry carries its own `unpriced_turns` and `unreported_turns`), `limit_usd`, and `state`
     (`no_limit`, `ok`, `near` at 80% of the limit, `reached`, or
     `allowed_over`). **500** when the saved limit is unreadable.
   </Accordion>

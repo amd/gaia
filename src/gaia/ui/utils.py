@@ -277,6 +277,7 @@ def message_to_response(msg: dict) -> MessageResponse:
         agent_steps=agent_steps,
         stats=stats,
         turn_summary=turn_summary,
+        stopped=bool(msg.get("stopped")),
     )
 
 
