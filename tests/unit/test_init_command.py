@@ -2998,9 +2998,13 @@ class TestModelSmokeTest:
     def _client(self, message):
         client = MagicMock()
         client.check_model_loaded.return_value = False
-        client.list_models.return_value = {
-            "data": [
-                {"id": "Qwen3.6-35B-A3B-GGUF", "recipe_options": {"ctx_size": 1 << 20}}
+        client.health_check.return_value = {
+            "all_models_loaded": [
+                {
+                    "model_name": "Qwen3.6-35B-A3B-GGUF",
+                    "type": "llm",
+                    "recipe_options": {"ctx_size": 1 << 20},
+                }
             ]
         }
         client.chat_completions.return_value = {"choices": [{"message": message}]}
