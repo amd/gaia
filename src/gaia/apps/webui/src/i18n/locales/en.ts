@@ -265,6 +265,7 @@ export const enMessages = {
     'retry.head': 'Retry with…',
     'media.showFull': 'Show full size',
     'media.showSmaller': 'Show smaller',
+    'media.audioUnplayable': "This audio can't be played. The file may have been moved or deleted.",
 
     // Agent activity while GAIA works
     'activity.thinking': 'Thinking',

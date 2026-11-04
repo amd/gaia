@@ -265,6 +265,7 @@ const messages: Messages = {
     'retry.head': 'إعادة المحاولة باستخدام…',
     'media.showFull': 'عرض بالحجم الكامل',
     'media.showSmaller': 'عرض بحجم أصغر',
+    'media.audioUnplayable': 'تعذّر تشغيل هذا الصوت. ربما نُقل الملف أو حُذف.',
 
     // Agent activity while GAIA works
     'activity.thinking': 'جارٍ التفكير',
