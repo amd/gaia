@@ -106,6 +106,47 @@ def test_a_turn_waits_for_the_running_warm_up(monkeypatch):
     assert waited.is_set()
 
 
+def test_a_cloud_turn_does_not_wait_for_the_local_warm_up(monkeypatch):
+    """It does not use the model the warm-up is loading (#6582)."""
+    job, release, _calls = _gate_job({"seconds": 1.0})
+    warmer = warmup.PrefixWarmer(job)
+    monkeypatch.setattr(warmup, "_warmer", warmer)
+    warmer.request("a")
+    try:
+        waited = threading.Event()
+
+        def turn():
+            warmup.wait_for_warm_up(timeout=5, model="fireworks.deepseek-v4p1-flash")
+            waited.set()
+
+        t = threading.Thread(target=turn)
+        t.start()
+        assert waited.wait(5), "the cloud turn waited on the local warm-up"
+        assert not warmer.wait(0), "the warm-up should still be running"
+    finally:
+        release.set()
+        warmer.wait(5)
+
+
+def test_a_local_turn_still_waits_for_the_warm_up(monkeypatch):
+    job, release, _calls = _gate_job({"seconds": 1.0})
+    warmer = warmup.PrefixWarmer(job)
+    monkeypatch.setattr(warmup, "_warmer", warmer)
+    warmer.request("a")
+    waited = threading.Event()
+
+    def turn():
+        warmup.wait_for_warm_up(timeout=5, model="Qwen3.6-35B-A3B-GGUF")
+        waited.set()
+
+    t = threading.Thread(target=turn)
+    t.start()
+    assert not waited.wait(0.2), "the turn must not race the warm-up"
+    release.set()
+    t.join(5)
+    assert waited.is_set()
+
+
 def test_the_status_names_the_model_and_device_being_loaded():
     job, release, _calls = _gate_job({"seconds": 1.0})
     warmer = warmup.PrefixWarmer(job)
