@@ -11,6 +11,7 @@ import pytest
 
 from gaia.daemon.lemonade import EmbeddedLemonadeOwner, LemonadeNotManaged
 from gaia.llm.lemonade_embedded import EmbeddedLemonadeError, EmbeddedStatus
+from gaia.version import parse_version
 
 VERSION = "11.8.1"
 #: This daemon's pid in every test.
@@ -42,10 +43,12 @@ def _running(port=51234, version=VERSION, owner_pid=None):
     )
 
 
-def _embedded(status, installed=True):
+def _embedded(status, installed=True, older_install=False):
     embedded = mock.Mock()
     embedded.version = VERSION
     embedded.is_installed.return_value = installed
+    embedded.replaces_older_install.return_value = older_install
+    embedded.is_older.side_effect = lambda v: parse_version(v) < parse_version(VERSION)
     embedded.status.return_value = status
     embedded.start.return_value = _running(port=60000)
     embedded.log_path = "/gaia/lemonade/lemond.log"
@@ -79,17 +82,87 @@ class TestEnsure:
         assert ensured.port == 60000
         assert ensured.pid == 7
         embedded.start.assert_called_once_with(
-            install_if_missing=False, owner_pid=OWNER, owner_started=mock.ANY
+            install_if_missing=False,
+            owner_pid=OWNER,
+            owner_started=mock.ANY,
+            upgrade_older=True,
         )
 
-    def test_older_version_is_reported_not_replaced(self):
-        """Replacing a running server is `gaia init`'s call, not the daemon's."""
-        embedded = _embedded(_running(version="0.0.1"))
-        with pytest.raises(EmbeddedLemonadeError, match="gaia init"):
+    def test_older_version_is_upgraded_not_reported(self):
+        """GAIA keeps its own server current; the user is asked for nothing."""
+        embedded = _embedded(_running(version="0.0.1", owner_pid=OWNER))
+        ensured = _owner(embedded).ensure()
+
+        assert ensured.started is True
+        embedded.start.assert_called_once_with(
+            install_if_missing=False,
+            owner_pid=OWNER,
+            owner_started=mock.ANY,
+            upgrade_older=True,
+        )
+
+    def test_older_version_owned_by_another_live_daemon_is_upgraded(self):
+        """An older daemon cannot start a newer server, so there is no flip-flop."""
+        other = OWNER + 1
+        embedded = _embedded(_running(version="0.0.1", owner_pid=other))
+        ensured = _owner(embedded, alive=(other,)).ensure()
+
+        assert ensured.started is True
+        embedded.stop.assert_not_called()
+        embedded.start.assert_called_once_with(
+            install_if_missing=False,
+            owner_pid=OWNER,
+            owner_started=mock.ANY,
+            upgrade_older=True,
+        )
+
+    def test_a_crashed_daemons_older_server_waits_for_the_download(self):
+        """Stopping it first would leave no server if the download fails."""
+        gone = OWNER + 1
+        embedded = _embedded(_running(version="0.0.1", owner_pid=gone))
+        embedded.start.side_effect = EmbeddedLemonadeError(
+            "Could not upgrade embedded Lemonade 0.0.1 to 11.8.1, so 0.0.1 is "
+            "still running on port 51234. Failed to download: offline."
+        )
+        with pytest.raises(EmbeddedLemonadeError, match="still running"):
+            _owner(embedded).ensure()
+
+        embedded.stop.assert_not_called()
+        embedded.start.assert_called_once()
+
+    def test_a_crashed_daemons_unanswering_server_is_still_reaped(self):
+        gone = OWNER + 1
+        embedded = _embedded(
+            _status(port=51234, unresponsive_pid=9, owner_pid=gone, version="0.0.1")
+        )
+        _owner(embedded).ensure()
+
+        embedded.stop.assert_called_once()
+
+    def test_newer_version_owned_by_another_live_daemon_is_left_alone(self):
+        other = OWNER + 1
+        embedded = _embedded(_running(version="9999.1.0", owner_pid=other))
+        with pytest.raises(EmbeddedLemonadeError, match="needs v"):
+            _owner(embedded, alive=(other,)).ensure()
+
+        embedded.stop.assert_not_called()
+        embedded.start.assert_not_called()
+
+    def test_newer_version_is_reported_not_replaced(self):
+        """A newer GAIA's server is not this one's to downgrade."""
+        embedded = _embedded(_running(version="9999.1.0", owner_pid=OWNER))
+        with pytest.raises(EmbeddedLemonadeError, match="needs v"):
             _owner(embedded).ensure()
 
         embedded.stop.assert_not_called()
         embedded.start.assert_not_called()
+
+    def test_an_older_install_is_upgraded_on_start(self):
+        embedded = _embedded(
+            _status(installed=False), installed=False, older_install=True
+        )
+        assert _owner(embedded).ensure().started is True
+        embedded.start.assert_called_once()
 
     def test_slow_server_is_reported_never_killed(self):
         """A server that stopped answering is reported; only `gaia init`,
@@ -160,13 +233,17 @@ class TestEnsure:
         assert ensured.started is True
         embedded.stop.assert_called_once_with()
         embedded.start.assert_called_once_with(
-            install_if_missing=False, owner_pid=OWNER, owner_started=mock.ANY
+            install_if_missing=False,
+            owner_pid=OWNER,
+            owner_started=mock.ANY,
+            upgrade_older=True,
         )
 
-    def test_old_version_a_crashed_daemon_left_is_reaped_and_replaced(self):
+    def test_old_version_a_crashed_daemon_left_is_replaced_by_the_start(self):
+        """start() stops it once the new version is on disk, not before."""
         embedded = _embedded(_running(version="0.0.1", owner_pid=CRASHED))
         assert _owner(embedded).ensure().started is True
-        embedded.stop.assert_called_once_with()
+        embedded.stop.assert_not_called()
         embedded.start.assert_called_once()
 
     def test_stalled_server_whose_owner_still_runs_is_never_killed(self):
@@ -363,10 +440,17 @@ class TestManagerHook:
     """LemonadeManager only reaches for the daemon when GAIA's own server is
     installed and stopped -- never in CI or on a machine that didn't set it up."""
 
-    def _patch_embedded(self, installed, running):
+    def _patch_embedded(self, installed, running, version=VERSION):
         embedded = mock.Mock()
+        embedded.version = VERSION
         embedded.is_installed.return_value = installed
-        embedded.status.return_value = _running() if running else _status()
+        embedded.replaces_older_install.return_value = False
+        embedded.is_older.side_effect = lambda found: (
+            parse_version(found) < parse_version(VERSION)
+        )
+        embedded.status.return_value = (
+            _running(version=version) if running else _status()
+        )
         return mock.patch(
             "gaia.llm.lemonade_embedded.EmbeddedLemonade", return_value=embedded
         )
@@ -382,6 +466,32 @@ class TestManagerHook:
         ):
             assert LemonadeManager.start_embedded_if_stopped() is True
         ensure.assert_called_once()
+
+    def test_an_older_running_server_is_handed_to_the_daemon(self):
+        """After a GAIA upgrade the daemon replaces it; the client must ask."""
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        with (
+            self._patch_embedded(installed=False, running=True, version="10.2.0"),
+            mock.patch(
+                "gaia.llm.lemonade_manager.gaia_runs_lemonade", return_value=True
+            ),
+            mock.patch(
+                "gaia.daemon.client.ensure_lemonade", return_value={"started": True}
+            ) as ensure,
+        ):
+            assert LemonadeManager.start_embedded_if_stopped() is True
+        ensure.assert_called_once()
+
+    def test_a_newer_running_server_is_left_alone(self):
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        with (
+            self._patch_embedded(installed=True, running=True, version="2999.1.0"),
+            mock.patch("gaia.daemon.client.ensure_lemonade") as ensure,
+        ):
+            assert LemonadeManager.start_embedded_if_stopped() is False
+        ensure.assert_not_called()
 
     @pytest.mark.parametrize(
         "installed,running", [(False, False), (True, True)], ids=["absent", "running"]

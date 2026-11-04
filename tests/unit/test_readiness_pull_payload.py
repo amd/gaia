@@ -41,10 +41,47 @@ def test_a_builtin_model_is_pulled_by_name_only():
 def test_a_user_model_carries_checkpoint_recipe_and_the_embedding_flag():
     """A user.-prefixed model is not registered yet, so the pull must register it."""
     payload = _sent("user.embeddinggemma-300m-GGUF")
-    assert payload["model_name"] == "user.embeddinggemma-300m-GGUF"
-    assert payload["checkpoint"] == "ggml-org/embeddinggemma-300M-GGUF:Q8_0"
-    assert payload["recipe"] == "llamacpp"
-    assert payload["embedding"] is True
+    assert payload == {
+        "model_name": "user.embeddinggemma-300m-GGUF",
+        "checkpoint": "ggml-org/embeddinggemma-300M-GGUF:Q8_0",
+        "recipe": "llamacpp",
+        "embedding": True,
+    }
+
+
+def test_a_gateway_model_is_refused_before_any_request():
+    """Lemonade 400s on a pull of a gateway model, and the message talks about a download."""
+    from gaia.llm.lemonade_client import record_cloud_models
+
+    record_cloud_models(
+        {
+            "data": [
+                {
+                    "id": "other.remote-chat",
+                    "recipe": "cloud",
+                    "labels": [],
+                }
+            ]
+        }
+    )
+    try:
+        with patch("requests.post") as post:
+            with pytest.raises(RuntimeError, match="gateway"):
+                pull_model(BASE, "other.remote-chat")
+            assert post.call_count == 0
+    finally:
+        record_cloud_models({"data": []})
+
+
+def test_a_known_gateway_namespace_is_refused_on_a_cold_catalog():
+    """``amd.`` is a gateway even before this process has read /models."""
+    from gaia.llm.lemonade_client import record_cloud_models
+
+    record_cloud_models({"data": []})
+    with patch("requests.post") as post:
+        with pytest.raises(RuntimeError, match="gateway"):
+            pull_model(BASE, "amd.Claude-Opus-5")
+        assert post.call_count == 0
 
 
 def test_an_unknown_user_model_fails_loudly_rather_than_sending_a_bad_pull():

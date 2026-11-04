@@ -521,7 +521,7 @@ hardware. Where Lemonade reports a GPU with enough memory for it — about 27 GB
 models, its 23.3 GB of weights and vision projector plus the context cache at its
 smallest, 64K window, so a 64 GB+ Strix Halo or a 32 GB GPU, but not a 24 GB card or a
 CPU-only PC — `gaia init` also sets up `Qwen3.6-35B-A3B-GGUF` (a 23 GB Lemonade
-built-in MoE, run with thinking on, needs Lemonade v11.7.0 or newer) as the chat model,
+built-in MoE, run with thinking on) as the chat model,
 prints why, and records it as `default_model`. It must also fit the memory free when
 setup runs, so a PC busy with other apps keeps Gemma and says why: close them and
 re-run `gaia init`. If setup's verify step fails, no default model is recorded. It loads with the largest window the
@@ -538,9 +538,8 @@ when it is missing. `--check` asks for the same models `gaia init` would downloa
 
 <Note>
 `user.Qwen3.8-Flash-Next-GGUF` (an 82 GB download, multimodal, thinking on) is
-available on a 128 GB Strix Halo and never auto-selected. It needs ~90 GB for models
-and Lemonade v2026.39.1 or newer (its llama.cpp cannot load the model otherwise;
-upgrade with `gaia init --force-reinstall`). Choose it with
+available on a 128 GB Strix Halo and never auto-selected. It needs ~90 GB for models.
+Choose it with
 `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`, or pick it in the
 terminal UI's model picker; Lemonade downloads it on first use. `gaia init` refuses it
 on a PC that cannot hold it and names the memory it needs. To measure both on your
@@ -625,7 +624,7 @@ never touches a Lemonade app you installed yourself.
     GAIA sends it as `Authorization: Bearer <key>` on every Lemonade-bound request
     (see [Lemonade docs](https://lemonade-server.ai/docs/guide/configuration/#api-key-and-security)).
 
-    1. **Checks the Server** — it must answer and meet the profile's minimum Lemonade version
+    1. **Checks the Server** — it must answer and be Lemonade v2026.44.1 or newer
     2. **Downloads Models** — downloads models on that server via its REST API
     3. **Verifies Setup** — tests each model with inference to detect corrupted downloads
   </Tab>
@@ -1742,7 +1741,7 @@ gaia connectors configure mcp-github --set GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx
 ```
 
 ```bash Grant an agent scopes
-gaia connectors grants grant google builtin:chat --scopes gmail.readonly
+gaia connectors grants grant google installed:gaia --scopes https://www.googleapis.com/auth/gmail.readonly
 ```
 </CodeGroup>
 
@@ -1761,7 +1760,7 @@ environment variable; see [the Microsoft connector guide](/connectors/microsoft#
 ## AMD LLM Gateway
 
 Runs GAIA agents on gateway-hosted models — larger on-prem models and frontier
-models — alongside local inference. Requires **Lemonade Server 11.8.0+**.
+models — alongside local inference.
 
 You enter your token once. Lemonade holds it in memory and forgets it on
 restart, so GAIA keeps a copy in your **OS credential store** (DPAPI, Keychain,
@@ -2130,6 +2129,10 @@ and no admin rights. `gaia init` installs and starts it; a Lemonade you installe
 yourself is left alone unless you choose to use it (see
 [Use a Lemonade you already run](#use-a-lemonade-you-already-run)).
 
+GAIA keeps its own server current. When an update to GAIA targets a newer
+Lemonade, the next start replaces the older one, downloading it if needed; you
+run nothing.
+
 ```bash
 gaia lemonade embedded start      # download if needed, then run
 gaia lemonade embedded status
@@ -2180,8 +2183,8 @@ gaia config set lemonade_mode gaia             # back to GAIA's own
 
 | Command | Description |
 |---------|-------------|
-| `connect [URL]` | Check the server (it must be Lemonade v10.9.0 or newer), save it as `lemonade_mode external`, and switch a running daemon. Without `URL`, uses the one `detect` finds. Asks for the API key if the server needs one; `--api-key-stdin` reads it from a pipe. The key goes to the OS credential store |
-| `detect` | Look for a Lemonade on `localhost:13305` and `localhost:8000`. Only a Lemonade `/health` answer counts, or a request for an API key on a PC with Lemonade installed. `--json` prints one object, or `null` |
+| `connect [URL]` | Check the server (it must be Lemonade v2026.44.1 or newer), save it as `lemonade_mode external`, and switch a running daemon. Without `URL`, uses the one `detect` finds. Asks for the API key if the server needs one; `--api-key-stdin` reads it from a pipe. The key goes to the OS credential store |
+| `detect` | Look for a Lemonade on `localhost:13305`. Only a Lemonade `/health` answer counts, or a request for an API key on a PC with Lemonade installed. `--json` prints one object, or `null` |
 | `status` | Print which server GAIA uses and whether `LEMONADE_BASE_URL` or the saved setting chose it. `--json` prints one object |
 
 `LEMONADE_BASE_URL` wins over the saved setting.

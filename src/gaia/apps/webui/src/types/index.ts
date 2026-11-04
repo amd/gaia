@@ -355,7 +355,8 @@ export interface TurnPerformance {
     /** A null name is tool time measured outside any recorded step. */
     tools: Array<{ name: string | null; seconds: number | null }>;
     loads: Array<{ model: string | null; seconds: number; replaced?: string[]; during?: 'request' }>;
-    cost: { kind: 'local' | 'estimate' | 'unknown'; usd: number | null };
+    /** `unreported`: the model is priced, but its usage never came back (a stopped answer). */
+    cost: { kind: 'local' | 'estimate' | 'unknown' | 'unreported'; usd: number | null };
     /** Why a value is unknown, keyed by field. */
     unknown?: Partial<Record<'first_token_seconds' | 'prefill_tokens_per_second' | 'generation_tokens_per_second' | 'tokens' | 'tokens_cached' | 'time', string>>;
 }
@@ -1401,9 +1402,11 @@ export interface SpendingReport {
     turns: number;
     /** Turns on a model with no known price, counted apart rather than as $0. */
     unpriced_turns: number;
+    /** Turns on a priced model whose usage never came back, such as a stopped answer. */
+    unreported_turns: number;
     limit_usd: number | null;
     state: 'no_limit' | 'ok' | 'near' | 'reached' | 'allowed_over';
-    by_model: Array<{ model: string; provider: string; turns: number; usd: number; unpriced_turns: number }>;
+    by_model: Array<{ model: string; provider: string; turns: number; usd: number; unpriced_turns: number; unreported_turns: number }>;
     price_source: string;
 }
 

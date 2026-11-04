@@ -4560,6 +4560,9 @@ These positions indicate where to split the text."""
         """
         Query the indexed documents with enhanced metadata tracking.
 
+        Each call answers from the chunks retrieved for this question. Earlier
+        queries are not included in the prompt.
+
         Args:
             question: Question to ask about the documents
             include_metadata: Whether to include detailed metadata in response
@@ -4596,8 +4599,8 @@ Question: {question}
 
 Answer:"""
 
-        # Get LLM response
-        response = self.chat.send(prompt)
+        # One question per call — stored history would resend earlier chunks.
+        response = self.chat.send(prompt, no_history=True)
 
         # Build query metadata
         query_metadata = None

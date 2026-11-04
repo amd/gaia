@@ -771,9 +771,17 @@ textarea:focus-visible {
     text-align: left;
 }
 /* Windows: minimize, maximize and close sit at the top right. */
+:root[data-titlebar="overlay"] {
+    --titlebar-controls-w: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+}
 :root[data-titlebar="overlay"] .task-header {
     min-height: var(--titlebar-h);
-    padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px);
+    padding-right: calc(var(--titlebar-controls-w) + 12px);
+}
+/* Notices above the chat header end before the controls, so their actions stay clickable. */
+:root[data-titlebar="overlay"]:not([dir="rtl"]) .main-content > :is(.app-notice, .connection-banner, .download-chip.is-main) {
+    inline-size: auto;
+    margin-right: calc(var(--titlebar-controls-w) + 8px);
 }
 /* macOS: the traffic lights sit at the top left, over the sidebar's first row. */
 :root[data-titlebar="mac"] .sb-top {
@@ -785,7 +793,7 @@ textarea:focus-visible {
     padding-right: 12px;
 }
 :root[data-titlebar="overlay"][dir="rtl"] .sb-top {
-    padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px);
+    padding-right: calc(var(--titlebar-controls-w) + 12px);
 }
 :root[data-titlebar="mac"][dir="rtl"] .sb-top {
     padding-left: 10px;

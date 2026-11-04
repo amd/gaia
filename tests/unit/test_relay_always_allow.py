@@ -385,7 +385,7 @@ def live_gaia_sidecar(monkeypatch):
         lambda: {
             "base_url": "http://lemonade.invalid/api/v1",
             "reachable": True,
-            "version": "99.0.0",
+            "version": "9999.0.0",
             "present": True,
             "ctx_size": None,
             "model_id": "m",

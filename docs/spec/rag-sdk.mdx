@@ -169,6 +169,9 @@ class RAGSDK:
         """
         Query the indexed documents with enhanced metadata tracking.
 
+        Each call answers from the chunks retrieved for this question. Earlier
+        queries are not included in the prompt.
+
         Args:
             question: Question to ask about the documents
             include_metadata: Whether to include detailed metadata in response

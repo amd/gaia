@@ -56,9 +56,10 @@ function documentMeta(say: Say, pages: number[] | undefined, passages: number): 
     return parts.join(' · ');
 }
 
-function costText(summary: TurnSummary, t: Translate = tEn): string {
+function costText(summary: TurnSummary, t: Translate = tEn, stopped = false): string {
     const { cost } = summary;
     if (cost.kind === 'local') return t('rail.costLocal');
+    if (cost.kind === 'unreported') return t(stopped ? 'rail.costUnreportedStopped' : 'rail.costUnreported');
     if (cost.kind === 'estimate' && typeof cost.usd === 'number') {
         const usd = cost.usd < 0.01 ? cost.usd.toFixed(4) : cost.usd.toFixed(2);
         return t('rail.costAbout', { usd });
@@ -108,7 +109,7 @@ export function ThisAnswer({ messages, busy = false }: ThisAnswerProps) {
                 <>
                     <SourcesSection summary={summary} />
                     <FilesSection summary={summary} />
-                    <ThisTurnSection summary={summary} />
+                    <ThisTurnSection summary={summary} stopped={state.kind === 'turn' && !!state.turn.stopState} />
                 </>
             ))}
         </div>
@@ -281,7 +282,7 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
     );
 }
 
-function ThisTurnSection({ summary }: { summary: TurnSummary }) {
+function ThisTurnSection({ summary, stopped }: { summary: TurnSummary; stopped: boolean }) {
     const t = useT();
     useModelNames();
     const { model } = summary;
@@ -315,7 +316,7 @@ function ThisTurnSection({ summary }: { summary: TurnSummary }) {
                 <dt>{t('rail.websites')}</dt>
                 <dd>{sites.length > 0 ? <span dir="ltr">{sites.join(', ')}</span> : t('rail.noSites')}</dd>
                 <dt>{t('rail.cost')}</dt>
-                <dd>{costText(summary, t)}</dd>
+                <dd>{costText(summary, t, stopped)}</dd>
             </dl>
         </Section>
     );
