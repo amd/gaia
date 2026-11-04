@@ -7,7 +7,7 @@ REST API for creating, managing, and monitoring recurring scheduled tasks.
 """
 
 import logging
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -47,6 +47,22 @@ class UpdateScheduleRequest(BaseModel):
     )
 
 
+class ScheduleDescription(BaseModel):
+    """When a schedule runs, as data the UI words in its own language.
+
+    ``every``: count + unit, optional days. ``window``: that plus start/end
+    hour. ``days``: named days, optional time. ``daily``: a time each day.
+    """
+
+    kind: Literal["every", "window", "days", "daily"]
+    count: Optional[int] = None
+    unit: Optional[Literal["second", "minute", "hour", "day", "week"]] = None
+    days: Optional[List[int]] = Field(None, description="0=Monday … 6=Sunday")
+    time: Optional[str] = Field(None, description='"HH:MM", 24-hour')
+    start_hour: Optional[int] = None
+    end_hour: Optional[int] = None
+
+
 class ScheduleResponse(BaseModel):
     """A scheduled task."""
 
@@ -64,6 +80,7 @@ class ScheduleResponse(BaseModel):
     session_id: Optional[str] = None
     schedule_config: Optional[str] = None
     description: str
+    description_parts: ScheduleDescription
     last_error: Optional[str] = None
     running: bool = False
 
@@ -114,6 +131,8 @@ class ParseScheduleResponse(BaseModel):
     end_hour: Optional[int] = None
     days_of_week: Optional[List[int]] = None
     description: str
+    # None when the input was rejected; description then says what to fix.
+    description_parts: Optional[ScheduleDescription] = None
     next_run_at: Optional[str] = None
     timezone: Optional[str] = None
     valid: bool  # True if the schedule could be parsed
@@ -142,11 +161,18 @@ def get_scheduler(request: Request) -> Scheduler:
 @router.post("/api/schedules/parse", response_model=ParseScheduleResponse)
 async def parse_schedule(request: ParseScheduleRequest):
     """Parse a natural language schedule description into structured config."""
-    from ..scheduler import compute_next_run, parse_schedule_input, resolve_zone
+    from ..scheduler import (
+        compute_next_run,
+        describe_parts,
+        parse_schedule_input,
+        resolve_zone,
+    )
 
     config = parse_schedule_input(request.input)
     next_run = None
+    parts = None
     if config.interval_seconds > 0:
+        parts = describe_parts(config)
         try:
             config.timezone = resolve_zone(request.timezone).key
         except ValueError as e:
@@ -161,6 +187,7 @@ async def parse_schedule(request: ParseScheduleRequest):
         end_hour=config.end_hour,
         days_of_week=config.days_of_week,
         description=config.description,
+        description_parts=parts,
         next_run_at=next_run,
         timezone=config.timezone,
         valid=config.interval_seconds > 0,
