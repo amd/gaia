@@ -111,6 +111,32 @@ def setup_plan() -> Dict[str, Any]:
         raise _plan_error(e, _PLAN_FAILED) from e
 
 
+@router.post("/api/setup/npu/recheck", dependencies=[Depends(require_ui_header)])
+def setup_npu_recheck() -> Dict[str, Any]:
+    """Read the NPU's setup afresh, after the user fixed something; returns the plan."""
+    from gaia.llm import npu_linux
+
+    npu_linux.forget()
+    return setup_plan()
+
+
+@router.post("/api/setup/npu/memlock-fix", dependencies=[Depends(require_ui_header)])
+def setup_npu_memlock_fix() -> Dict[str, Any]:
+    """Raise the locked-memory limit FastFlowLM needs, behind the desktop's own
+    administrator prompt; returns the plan. It applies after a restart."""
+    from gaia.llm import npu_linux
+
+    try:
+        npu_linux.apply_memlock_fix()
+    except npu_linux.MemlockFixError as e:
+        logger.warning("NPU memlock fix not applied (%s): %s", e.code, e)
+        status = 409 if e.code in ("cancelled", "timeout") else 500
+        raise HTTPException(
+            status_code=status, detail={"code": e.code, "message": str(e)}
+        ) from e
+    return setup_plan()
+
+
 def _confirm(warning: Dict[str, Any]) -> HTTPException:
     """409 whose detail says what to confirm and which field confirms it."""
     return HTTPException(status_code=409, detail=warning)

@@ -4,6 +4,7 @@
 import { Check, ChevronDown, Loader2 } from 'lucide-react';
 import { useT } from '../../i18n/useT';
 import { isDownloading } from '../modelMeta';
+import { NpuNotReady } from '../setup/NpuNotReady';
 import { formatPrice } from './cloudPrice';
 import type { ProviderModel } from '../../types';
 
@@ -20,10 +21,12 @@ interface Props {
     onAskRemove: () => void;
     onKeep: () => void;
     onRemove: () => void;
+    /** Read the model list again, after the user fixed what stops the NPU. */
+    onNpuRecheck?: () => void;
 }
 
 /** One model: its name and chips, with the long facts one click away. */
-export function ModelRow({ model: m, label, current, remote, busy, confirmingRemove, onUse, onDownload, onAskRemove, onKeep, onRemove }: Props) {
+export function ModelRow({ model: m, label, current, remote, busy, confirmingRemove, onUse, onDownload, onAskRemove, onKeep, onRemove, onNpuRecheck }: Props) {
     const t = useT();
     const progress = isDownloading(m) ? m.download_progress : null;
     const placement = m.placement?.label;
@@ -62,7 +65,11 @@ export function ModelRow({ model: m, label, current, remote, busy, confirmingRem
                     <span className={`model-row-meta${m.price ? '' : ' is-unknown-price'}`}>{formatPrice(m.price, t)}</span>
                 )}
                 {m.placement?.warning && <span className="model-row-meta is-warning" role="alert"><bdi>{m.placement.warning}</bdi></span>}
-                {m.unavailable_reason && <span className="model-row-meta">{t('settings.model.cantRun', { reason: m.unavailable_reason })}</span>}
+                {m.npu_problems?.length ? (
+                    <NpuNotReady problems={m.npu_problems} disabled={busy !== null} onRecheck={onNpuRecheck} id={`npu-problems-${m.id}`} />
+                ) : (
+                    m.unavailable_reason && <span className="model-row-meta">{t('settings.model.cantRun', { reason: m.unavailable_reason })}</span>
+                )}
                 {progress && (
                     <progress max={100} value={progress.percent} aria-label={t('settings.model.downloadingAria', { name: label })} />
                 )}

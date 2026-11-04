@@ -53,14 +53,16 @@ def test_removal_preserves_user_data(tmp_path, action, sudo_user):
         assert "gaia uninstall --purge" in result.stdout
 
 
-def _run_script(script, action, tmp_path, *, target=None, regular_file=False):
+def _run_script(
+    script, action, tmp_path, *, target=None, regular_file=False, npu=False
+):
     """Run a maintainer script with fake absolute paths redirected by sh."""
     home = tmp_path / "home"
     home.mkdir()
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     # These commands are only used by the scripts' optional cache refreshes.
-    for name in ("update-desktop-database", "gtk-update-icon-cache"):
+    for name in ("update-desktop-database", "gtk-update-icon-cache", "systemctl"):
         command = fake_bin / name
         command.write_text("#!/bin/sh\nexit 0\n")
         command.chmod(0o755)
@@ -75,6 +77,10 @@ def _run_script(script, action, tmp_path, *, target=None, regular_file=False):
     root = tmp_path / "root"
     (root / "usr/bin").mkdir(parents=True)
     text = text.replace("/usr/bin/gaia-desktop", str(root / "usr/bin/gaia-desktop"))
+    text = text.replace("/sys/module/amdxdna", str(root / "sys/module/amdxdna"))
+    text = text.replace("/etc/", str(root / "etc") + "/")
+    if npu:
+        (root / "sys/module/amdxdna").mkdir(parents=True)
     script_copy = tmp_path / script.name
     script_copy.write_text(text)
     if target is not None:
@@ -152,3 +158,37 @@ def test_scripts_preserve_regular_file(tmp_path, script, action):
     assert result.returncode == 0
     assert not link.is_symlink()
     assert link.read_text() == "admin's own launcher\n"
+
+
+def test_postinst_lifts_memlock_for_the_npu_where_its_driver_is_loaded(tmp_path):
+    """#6632: FastFlowLM can't pin a model in a desktop session's 8 MB."""
+    from gaia.llm.npu_linux import MEMLOCK_DROPINS, memlock_fix_installed
+
+    _run_script(POSTINST, "configure", tmp_path, npu=True)
+    root = tmp_path / "root"
+    for path, text in MEMLOCK_DROPINS.items():
+        assert (root / path.lstrip("/")).read_text() == text
+    # The app reads the same files to know the fix waits only for a restart.
+    assert memlock_fix_installed(root)
+
+
+def test_postinst_leaves_memlock_alone_without_an_npu(tmp_path):
+    _run_script(POSTINST, "configure", tmp_path)
+    assert not (tmp_path / "root" / "etc").exists()
+
+
+def test_postrm_purge_removes_only_our_memlock_dropins(tmp_path):
+    from gaia.llm.npu_linux import MEMLOCK_DROPINS
+
+    root = tmp_path / "root"
+    (ours, ours_text), (theirs, _) = MEMLOCK_DROPINS.items()
+    for path, text in ((ours, ours_text), (theirs, "admin's own setting")):
+        target = root / path.lstrip("/")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+    script = tmp_path / "postrm"
+    script.write_text(POSTRM.read_text().replace("/etc/", str(root / "etc") + "/"))
+    for action, ours_kept in (("remove", True), ("purge", False)):
+        subprocess.run(["/bin/sh", str(script), action], check=True, timeout=5)
+        assert (root / ours.lstrip("/")).exists() == ours_kept
+    assert (root / theirs.lstrip("/")).read_text() == "admin's own setting"

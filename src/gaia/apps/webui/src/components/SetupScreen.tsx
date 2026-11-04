@@ -1105,7 +1105,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     {stage === 'models' && (
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.models.title')}</h1>
-                            {plan && selection && <BackendChoice plan={plan} selection={selection} onSelection={setSelection} disabled={busy || runGoing} />}
+                            {plan && selection && <BackendChoice plan={plan} selection={selection} onSelection={setSelection} disabled={busy || runGoing} onRecheck={() => void loadPlan()} />}
                             {showGpu && gpu?.total_gb != null && gpu.gpu_gb != null && (
                                 <p className="setup-hint setup-gpu-option">
                                     {t('setup.models.gpu', { gpu: formatSize(gpu.gpu_gb), total: formatSize(gpu.total_gb) })}{' '}

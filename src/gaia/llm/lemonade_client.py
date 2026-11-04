@@ -2381,11 +2381,16 @@ def optional_chat_models_that_fit(capacity: Any) -> List[str]:
 
 def npu_chat_models_that_fit(capacity: Any) -> List[str]:
     """``NPU_MODEL_LADDER`` models this PC's NPU memory holds, KV cache at their
-    floor included; none without an NPU."""
-    from gaia.llm.model_fit import check_fit, kv_cache_gb, npu_capacity
+    floor included; none without an NPU, or one not set up to run them yet."""
+    from gaia.llm.model_fit import (
+        check_fit,
+        kv_cache_gb,
+        npu_capacity,
+        npu_not_ready_reason,
+    )
 
     npu = npu_capacity(capacity)
-    if npu is None:
+    if npu is None or npu_not_ready_reason(npu):
         return []
     out = []
     for model_id in NPU_MODEL_LADDER:
@@ -2406,6 +2411,7 @@ def recommend_npu_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
         ModelFitError,
         capacity_from_system_info,
         npu_capacity,
+        npu_not_ready_reason,
         pick_default_model,
     )
 
@@ -2420,6 +2426,13 @@ def recommend_npu_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
             f"({', '.join(NPU_MODEL_LADDER)}) cannot run. Run `gaia init` without "
             "`--profile npu` to use the GPU, or see "
             "https://amd-gaia.ai/docs/guides/npu for supported processors."
+        )
+    not_ready = npu_not_ready_reason(npu)
+    if not_ready:
+        raise ModelFitError(
+            f"This PC's NPU can't run models yet. {not_ready} Run `gaia init` "
+            "without `--profile npu` to use the GPU meanwhile, or see "
+            "https://amd-gaia.ai/docs/guides/npu#linux."
         )
     model = NPU_DEFAULT_MODEL_NAME
     candidates = [(model, find_model_requirement(model).size_gb, 0.0)]

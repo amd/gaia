@@ -267,6 +267,7 @@ def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, A
         MachineCapacity,
         check_fit,
         npu_capacity,
+        npu_not_ready_reason,
         required_memory_gb,
     )
 
@@ -288,6 +289,14 @@ def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, A
                 "capacity_gb": None,
                 "fit_reason": "runs on a Ryzen AI NPU, and Lemonade reports none "
                 "on this PC",
+            }
+        not_ready = npu_not_ready_reason(capacity)
+        if not_ready:
+            return {
+                "fits": False,
+                "need_gb": None,
+                "capacity_gb": None,
+                "fit_reason": not_ready,
             }
     mr = find_model_requirement(model_id)
     kv = kv_cache_for(mr, capacity) if mr else 0.0
