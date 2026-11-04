@@ -334,7 +334,20 @@ def test_confidence_values_a_model_returns_are_normalised(value, expected):
 
 
 @pytest.mark.parametrize(
-    "value", ["very sure", "", None, [0.9], {"v": 1}, True, float("nan")]
+    "value",
+    [
+        "very sure",
+        "",
+        None,
+        [0.9],
+        {"v": 1},
+        True,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        "Infinity",
+        "nan",
+    ],
 )
 def test_unusable_confidence_values_are_rejected(value):
     assert normalize_confidence(value) is None

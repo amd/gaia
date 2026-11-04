@@ -121,8 +121,9 @@ def normalize_confidence(value: Any) -> Optional[float]:
 
     Numbers (and numeric strings) are clamped to ``[0, 1]``. The words
     ``low``/``medium``/``high`` (any case, surrounding whitespace ignored)
-    map to 0.4/0.7/0.9. Anything else returns ``None`` so the caller can
-    skip the insight and say why, rather than guess a value.
+    map to 0.4/0.7/0.9. Anything else, including NaN and infinity, returns
+    ``None`` so the caller can skip the insight and say why, rather than guess
+    a value.
     """
     if isinstance(value, bool):
         return None
@@ -138,6 +139,6 @@ def normalize_confidence(value: Any) -> Optional[float]:
             return None
     else:
         return None
-    if math.isnan(number):
+    if not math.isfinite(number):
         return None
     return max(0.0, min(1.0, number))
