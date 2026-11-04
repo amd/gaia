@@ -10,7 +10,7 @@ These tests use mocking to avoid actual network calls and installations.
 import io
 import sys
 import unittest
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, patch
 
 from gaia.installer.lemonade_installer import (
     InstallResult,
@@ -81,34 +81,6 @@ class TestLemonadeInstaller(unittest.TestCase):
         self.assertEqual(installer.target_version, "10.0.0")
 
     @patch("platform.system")
-    def test_is_platform_supported_windows(self, mock_system):
-        """Test platform support on Windows."""
-        mock_system.return_value = "Windows"
-        installer = LemonadeInstaller()
-        self.assertTrue(installer.is_platform_supported())
-
-    @patch("platform.system")
-    def test_is_platform_supported_linux(self, mock_system):
-        """Test platform support on Linux."""
-        mock_system.return_value = "Linux"
-        installer = LemonadeInstaller()
-        self.assertTrue(installer.is_platform_supported())
-
-    @patch("platform.system")
-    def test_is_platform_supported_macos(self, mock_system):
-        """Test platform support on macOS."""
-        mock_system.return_value = "Darwin"
-        installer = LemonadeInstaller()
-        self.assertTrue(installer.is_platform_supported())
-
-    @patch("platform.system")
-    def test_is_platform_supported_unknown(self, mock_system):
-        """Test platform support on an unsupported OS."""
-        mock_system.return_value = "FreeBSD"
-        installer = LemonadeInstaller()
-        self.assertFalse(installer.is_platform_supported())
-
-    @patch("platform.system")
     def test_get_download_url_windows(self, mock_system):
         """Test download URL generation for Windows."""
         mock_system.return_value = "Windows"
@@ -124,7 +96,7 @@ class TestLemonadeInstaller(unittest.TestCase):
         installer = LemonadeInstaller(target_version="9.1.4")
         with self.assertRaises(RuntimeError) as ctx:
             installer.get_download_url()
-        self.assertIn("not supported", str(ctx.exception))
+        self.assertIn("only to uninstall it on Windows", str(ctx.exception))
 
     @patch("platform.system")
     def test_get_download_url_windows_minimal(self, mock_system):
@@ -150,36 +122,6 @@ class TestLemonadeInstaller(unittest.TestCase):
         installer = LemonadeInstaller(target_version="9.1.4", minimal=False)
         filename = installer.get_installer_filename()
         self.assertEqual(filename, "lemonade.msi")
-
-    def test_needs_install_not_installed(self):
-        """Test needs_install when not installed."""
-        installer = LemonadeInstaller(target_version="9.1.4")
-        info = LemonadeInfo(installed=False)
-        self.assertTrue(installer.needs_install(info))
-
-    def test_needs_install_no_version(self):
-        """Test needs_install when installed but no version."""
-        installer = LemonadeInstaller(target_version="9.1.4")
-        info = LemonadeInfo(installed=True, version=None)
-        self.assertTrue(installer.needs_install(info))
-
-    def test_needs_install_older_version(self):
-        """Test needs_install with older version."""
-        installer = LemonadeInstaller(target_version="9.2.0")
-        info = LemonadeInfo(installed=True, version="9.1.4")
-        self.assertTrue(installer.needs_install(info))
-
-    def test_needs_install_same_version(self):
-        """Test needs_install with same version."""
-        installer = LemonadeInstaller(target_version="9.1.4")
-        info = LemonadeInfo(installed=True, version="9.1.4")
-        self.assertFalse(installer.needs_install(info))
-
-    def test_needs_install_newer_version(self):
-        """Test needs_install with newer version installed."""
-        installer = LemonadeInstaller(target_version="9.1.0")
-        info = LemonadeInfo(installed=True, version="9.1.4")
-        self.assertFalse(installer.needs_install(info))
 
     @patch("gaia.installer.lemonade_installer.resolve_lemonade")
     def test_check_installation_not_found(self, mock_resolve):
@@ -1500,242 +1442,13 @@ class TestInstallPipExtras(unittest.TestCase):
             mock_run.assert_not_called()
 
 
-class TestNeedsInstallConsistency(unittest.TestCase):
-    """LemonadeInstaller.needs_install treats newer versions as installed."""
+class TestDiagnoseLaunchpadOutage(unittest.TestCase):
+    """diagnose_launchpad_outage names a Launchpad outage in apt's output.
 
-    def test_newer_version_needs_no_install(self):
-        """LemonadeInstaller.needs_install returns False for newer versions."""
-        installer = LemonadeInstaller(target_version="9.3.0")
-        info = LemonadeInfo(installed=True, version="9.3.4")
-        self.assertFalse(installer.needs_install(info))
-
-    def test_older_version_needs_install(self):
-        """LemonadeInstaller.needs_install returns True for older versions."""
-        installer = LemonadeInstaller(target_version="9.3.0")
-        info = LemonadeInfo(installed=True, version="9.2.0")
-        self.assertTrue(installer.needs_install(info))
-
-
-class TestInstallViaPpa(unittest.TestCase):
-    """Tests for _install_via_ppa — the Linux PPA-based install path.
-
-    The `os.geteuid` patches carry `create=True` because the attribute is
-    POSIX-only; without it these never reach their assertions on a Windows host.
+    CI's Linux runners install Lemonade from the PPA and use this to tell an
+    upstream outage from a real failure.
     """
 
-    def _make_linux_installer(self):
-        with patch("platform.system", return_value="Linux"):
-            return LemonadeInstaller(target_version="10.2.0")
-
-    def _ok_run(self):
-        result = MagicMock()
-        result.returncode = 0
-        result.stdout = ""
-        result.stderr = ""
-        return result
-
-    def _fail_run(self, stdout="", stderr="error output"):
-        result = MagicMock()
-        result.returncode = 1
-        result.stdout = stdout
-        result.stderr = stderr
-        return result
-
-    @patch("os.geteuid", return_value=1000, create=True)
-    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
-    @patch("subprocess.run")
-    def test_install_via_ppa_runs_commands_in_order(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """Three subprocess calls in order: add-apt-repository, apt-get update, apt-get install."""
-        import subprocess as _sub
-
-        installer = self._make_linux_installer()
-        mock_run.return_value = self._ok_run()
-
-        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
-            with patch.object(installer, "check_installation") as mock_check:
-                mock_check.return_value = LemonadeInfo(
-                    installed=True, version="10.2.0", path="/usr/bin/lemonade-server"
-                )
-                result = installer._install_via_ppa(non_interactive=False)
-
-        self.assertTrue(result.success)
-        self.assertEqual(mock_run.call_count, 3)
-
-        calls = mock_run.call_args_list
-        first_cmd = calls[0][0][0]
-        self.assertIn("sudo", first_cmd)
-        self.assertIn("add-apt-repository", first_cmd)
-
-        second_cmd = calls[1][0][0]
-        self.assertIn("apt-get", second_cmd)
-        self.assertIn("update", second_cmd)
-
-        third_cmd = calls[2][0][0]
-        self.assertIn("apt-get", third_cmd)
-        self.assertIn("install", third_cmd)
-        self.assertIn("lemonade-server", third_cmd)
-
-        for call in calls:
-            self.assertEqual(call[1].get("stdin"), _sub.DEVNULL)
-
-    @patch("os.geteuid", return_value=1000, create=True)
-    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
-    @patch("subprocess.run")
-    def test_install_via_ppa_noninteractive_sets_env_and_devnull_stdin(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """non_interactive=True: DEBIAN_FRONTEND=noninteractive and stdin=DEVNULL on all calls."""
-        import subprocess as _sub
-
-        installer = self._make_linux_installer()
-
-        sudo_ok = self._ok_run()
-        install_ok = self._ok_run()
-        mock_run.side_effect = [sudo_ok, install_ok, install_ok, install_ok]
-
-        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
-            with patch.object(installer, "check_installation") as mock_check:
-                mock_check.return_value = LemonadeInfo(
-                    installed=True, version="10.2.0", path="/usr/bin/lemonade-server"
-                )
-                result = installer._install_via_ppa(non_interactive=True)
-
-        self.assertTrue(result.success)
-        for call in mock_run.call_args_list:
-            self.assertEqual(call[1].get("stdin"), _sub.DEVNULL)
-            env = call[1].get("env", {})
-            if call[0][0] != ["sudo", "-n", "true"]:
-                self.assertEqual(env.get("DEBIAN_FRONTEND"), "noninteractive")
-
-    @patch("os.geteuid", return_value=1000, create=True)
-    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
-    @patch("subprocess.run")
-    def test_install_via_ppa_sudo_password_required_returns_clear_error(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """non_interactive+not-root+sudo requires password -> clear error, not timeout."""
-        installer = self._make_linux_installer()
-        mock_run.return_value = self._fail_run(stderr="sudo: a password is required")
-
-        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
-            result = installer._install_via_ppa(non_interactive=True)
-
-        self.assertFalse(result.success)
-        self.assertIn("sudo", result.error.lower())
-        self.assertIn("passwordless", result.error.lower())
-        mock_run.assert_called_once()
-
-    @patch("os.geteuid", return_value=1000, create=True)
-    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
-    @patch("subprocess.run")
-    def test_install_via_ppa_apt_install_failure_returns_actionable_error(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """apt-get install failure: error names step, stdout+stderr, docs URL."""
-        installer = self._make_linux_installer()
-
-        ok = self._ok_run()
-        fail = self._fail_run(stdout="E: Package not found", stderr="dpkg error")
-        mock_run.side_effect = [ok, ok, fail]
-
-        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
-            result = installer._install_via_ppa(non_interactive=False)
-
-        self.assertFalse(result.success)
-        self.assertIn("lemonade-server", result.error)
-        self.assertIn("amd-gaia.ai", result.error)
-
-    @patch("os.geteuid", return_value=1000, create=True)
-    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
-    @patch("subprocess.run")
-    def test_install_via_ppa_unsupported_distro_returns_clear_error(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """_check_linux_version returns error string -> early return with that message."""
-        installer = self._make_linux_installer()
-        version_msg = "Requires Ubuntu 24.04+. Detected: Ubuntu 22.04"
-
-        with patch.object(
-            LemonadeInstaller, "_check_linux_version", return_value=version_msg
-        ):
-            result = installer._install_via_ppa(non_interactive=False)
-
-        self.assertFalse(result.success)
-        self.assertIn("Ubuntu 22.04", result.error)
-        mock_run.assert_not_called()
-
-    @patch(
-        "builtins.open",
-        new_callable=mock_open,
-        read_data=('ID=fedora\nVERSION_ID="41"\nPRETTY_NAME="Fedora Linux 41"\n'),
-    )
-    def test_check_linux_version_rejects_non_debian_distros_with_manual_remedy(
-        self, mock_os_release
-    ):
-        """Non-Debian systems do not receive an apt command they cannot run."""
-        error = LemonadeInstaller._check_linux_version()
-
-        self.assertIsNotNone(error)
-        self.assertIn("Fedora Linux 41", error)
-        self.assertIn("Lemonade PPA", error)
-        self.assertIn("lemonade-server.ai", error)
-        self.assertIn("LEMONADE_BASE_URL", error)
-
-    @patch(
-        "builtins.open",
-        new_callable=mock_open,
-        read_data=(
-            'ID=pop\nID_LIKE="ubuntu debian"\n'
-            'VERSION_ID="24.04"\nPRETTY_NAME="Pop!_OS 24.04 LTS"\n'
-        ),
-    )
-    def test_check_linux_version_accepts_ubuntu_family_derivative(
-        self, mock_os_release
-    ):
-        """Ubuntu-family derivatives retain the PPA path via ID_LIKE."""
-        assert LemonadeInstaller._check_linux_version() is None
-
-    @patch("os.geteuid", return_value=1000, create=True)
-    @patch("shutil.which", return_value=None)
-    @patch("subprocess.run")
-    def test_install_via_ppa_missing_add_apt_repository_clear_error(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """add-apt-repository missing -> error mentions software-properties-common."""
-        installer = self._make_linux_installer()
-
-        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
-            result = installer._install_via_ppa(non_interactive=False)
-
-        self.assertFalse(result.success)
-        self.assertIn("software-properties-common", result.error)
-        mock_run.assert_not_called()
-
-    @patch("os.geteuid", return_value=1000, create=True)
-    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
-    @patch("subprocess.run")
-    def test_install_via_ppa_returns_real_version_from_check_installation(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """Returned version comes from check_installation(), not self.target_version."""
-        installer = self._make_linux_installer()
-        mock_run.return_value = self._ok_run()
-
-        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
-            with patch.object(installer, "check_installation") as mock_check:
-                mock_check.return_value = LemonadeInfo(
-                    installed=True, version="10.3.0", path="/usr/bin/lemonade-server"
-                )
-                result = installer._install_via_ppa(non_interactive=False)
-
-        self.assertTrue(result.success)
-        self.assertEqual(result.version, "10.3.0")
-        self.assertNotEqual(result.version, installer.target_version)
-
-    # Log text below is copied verbatim from the GAIA CLI Tests (Linux) runs that
-    # went red during the 2026-09-21 Launchpad outage.
     APT_UPDATE_503 = (
         "Get:1 http://azure.archive.ubuntu.com/ubuntu noble InRelease [256 kB]\n"
         "Err:8 https://ppa.launchpadcontent.net/lemonade-team/stable/ubuntu "
@@ -1757,54 +1470,23 @@ class TestInstallViaPpa(unittest.TestCase):
         "ERROR: b'GPGKeyTemporarilyNotFoundError'\n"
     )
 
-    # create=True: os.geteuid does not exist on Windows dev machines.
-    @patch("os.geteuid", create=True, return_value=1000)
-    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
-    @patch("subprocess.run")
-    def test_install_via_ppa_launchpad_index_outage_is_named(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """A 503 on the PPA index stops the install and blames Launchpad, not apt."""
-        installer = self._make_linux_installer()
+    def test_index_outage_blames_launchpad_not_apt(self):
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
 
-        # apt-get update exits 0 when only *some* indexes fail -- that is the trap.
-        update = self._ok_run()
-        update.stdout = self.APT_UPDATE_503
-        mock_run.side_effect = [self._ok_run(), update]
+        message = diagnose_launchpad_outage(self.APT_UPDATE_503)
+        self.assertIn("Launchpad", message)
+        self.assertIn("503", message)
+        self.assertNotIn("dpkg --configure", message)
 
-        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
-            result = installer._install_via_ppa(non_interactive=False)
+    def test_key_outage_is_named_without_the_traceback(self):
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
 
-        self.assertFalse(result.success)
-        self.assertIn("Launchpad", result.error)
-        self.assertIn("503", result.error)
-        # The old message sent users to repair a dpkg state that was never broken.
-        self.assertNotIn("dpkg --configure", result.error)
-        # Negative control: without the check, apt-get install would have run and
-        # failed with "Unable to locate package lemonade-server".
-        self.assertEqual(mock_run.call_count, 2)
+        message = diagnose_launchpad_outage(self.ADD_APT_GPG_500)
+        self.assertIn("Launchpad", message)
+        self.assertIn("signing key", message)
+        self.assertNotIn("Traceback", message)
 
-    # create=True: os.geteuid does not exist on Windows dev machines.
-    @patch("os.geteuid", create=True, return_value=1000)
-    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
-    @patch("subprocess.run")
-    def test_install_via_ppa_launchpad_key_outage_is_named(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """A failed signing-key fetch reports the outage, not a raw Python traceback."""
-        installer = self._make_linux_installer()
-        mock_run.side_effect = [self._fail_run(stderr=self.ADD_APT_GPG_500)]
-
-        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
-            result = installer._install_via_ppa(non_interactive=False)
-
-        self.assertFalse(result.success)
-        self.assertIn("Launchpad", result.error)
-        self.assertIn("signing key", result.error)
-        self.assertNotIn("Traceback", result.error)
-
-    def test_diagnose_launchpad_outage_ignores_unrelated_repositories(self):
-        """Another PPA failing must not be blamed on Launchpad's Lemonade archive."""
+    def test_unrelated_repositories_are_not_blamed_on_launchpad(self):
         from gaia.installer.lemonade_installer import diagnose_launchpad_outage
 
         unrelated = (
@@ -1813,34 +1495,6 @@ class TestInstallViaPpa(unittest.TestCase):
         )
         self.assertIsNone(diagnose_launchpad_outage(unrelated))
         self.assertIsNone(diagnose_launchpad_outage("Reading package lists... Done\n"))
-        self.assertIsNotNone(diagnose_launchpad_outage(self.APT_UPDATE_503))
-
-    @patch("platform.system", return_value="Linux")
-    def test_install_dispatches_to_ppa_on_linux(self, mock_system):
-        """install() on Linux calls _install_via_ppa without requiring installer_path."""
-        installer = LemonadeInstaller()
-
-        expected = InstallResult(success=True, version="10.2.0", message="via ppa")
-        with patch.object(
-            installer, "_install_via_ppa", return_value=expected
-        ) as mock_ppa:
-            result = installer.install(silent=True)
-
-        mock_ppa.assert_called_once_with(non_interactive=True)
-        self.assertTrue(result.success)
-
-    @patch("platform.system", return_value="Windows")
-    def test_install_windows_still_requires_installer_path(self, mock_system):
-        """install() on Windows with missing path returns failure immediately."""
-        from pathlib import Path
-
-        installer = LemonadeInstaller()
-        result = installer.install(
-            installer_path=Path("/nonexistent_does_not_exist.msi")
-        )
-
-        self.assertFalse(result.success)
-        self.assertIn("not found", result.error.lower())
 
 
 class TestWaitForMsiMutex(unittest.TestCase):
