@@ -33,6 +33,10 @@ whenever a person finds a bug the pass missed.
 - Quit from the tray actually exits, the first time. A second quit in the same tick
   used to be dropped.
 - The crash dialog's buttons work.
+- GAIA's backend dies mid-answer: end the process listening on the UI port, not the
+  `gaia.exe` launcher, whose Python child keeps answering. The chat agrees with the
+  "GAIA stopped" dialog. Every control its text names (such as Try again) exists, and
+  so does the note shown after Restart GAIA, in both languages (#6588).
 - The tray and taskbar icons are correct.
 - After a relaunch, the app reopens on the last model and the last chat.
 
@@ -77,6 +81,13 @@ whenever a person finds a bug the pass missed.
 - English and Arabic, light and dark, at 390 px phone width. Rules are in the
   `reviewing-agent-ui` skill.
 - New strings from the backend (banners, step lines, errors) are translated.
+- Visit every screen in Arabic, not only the ones the diff touched. In rc4, the Memory
+  dashboard, Scheduled tasks and the model-status popover were still entirely English
+  (#6585, #6590, #6591).
+- Paths inside Arabic sentences read left to right: `~/.gaia/skills` once rendered as
+  "gaia/skills./~" (#6592).
+- Arabic is never set in a monospace or letter-spaced face. The Memory tabs' code
+  font pulled the letters apart.
 
 ## Performance
 

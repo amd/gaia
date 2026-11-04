@@ -163,6 +163,8 @@ granted by its exe name. The Claude app itself is never grantable.
 | For native chrome (title bar, tray, dialogs, crash box) use `screenshot(save_to_disk=true)` or `capture_window.py --pid` **with the window in front** | Electron can stop painting a covered window, so PrintWindow may return an old frame; the script warns when the window isn't in front, and a `--cdp` capture of the same moment is the cross-check |
 | Crop full-desktop screenshots to the app before they go anywhere public | They show the person's other windows: file names, folders, chats |
 | Keep Settings › Model out of evidence | It shows the tail of the person's cloud API key |
+| Press a native dialog's default button through UI Automation, or `SetForegroundWindow` then Enter, when computer use can't reach it | The crash dialog's buttons are panes with no invoke pattern; say in the report that it was driven this way |
+| To simulate a crash, end the process listening on the UI port | Killing the `gaia.exe` launcher leaves its Python child answering, so "may still finish" is then true and the test proves nothing |
 
 **Check every chat result twice: the pixels and the backend.**
 `app_state.py last` prints the answer text, every tool step and whether it
@@ -352,7 +354,10 @@ get findings like any other, and they force another round.
 
 **Stop when `test_report.py gate $RUN` exits 0.** At that point every item has a
 result, every failure has a finding, every finding is verified, `wontfix` or
-`duplicate` (with a reason), and the last round found nothing new. If you have to stop
+`duplicate` (with a reason), no P1 item is left `not-tested`, and the last round found
+nothing new. A P1 you truly can't test here (no NPU, an unsigned build that computer use
+can't reach) is set `out-of-scope` with that reason. In rc4, four P1 flows deferred in
+round 2 were never revisited, and two of them hid bugs. If you have to stop
 early, the gate's output is the honest list of what's left. Put it in the report.
 
 ## 9. Publish the report

@@ -205,6 +205,16 @@ def test_blocked_items_keep_the_pass_open(tmp_path):
     assert any("still blocked" in p for p in _problems(tmp_path))
 
 
+def test_an_untested_p1_keeps_the_pass_open_until_ruled_out(tmp_path):
+    _init(tmp_path)
+    t1 = next(i for i in report.load(tmp_path)["items"] if i["id"] == "T1")
+    assert t1["priority"] == "P1"
+    _set(tmp_path, "T1", "not-tested", note="not set up in this pass")
+    assert any("T1 (P1) is not tested" in p for p in _problems(tmp_path))
+    _set(tmp_path, "T1", "out-of-scope", note="needs a signed build; next RC")
+    assert not any(p.startswith("T1 ") for p in _problems(tmp_path))
+
+
 def test_failures_and_skips_must_say_why(tmp_path):
     _init(tmp_path)
     for status in ("failed", "not-tested", "blocked"):

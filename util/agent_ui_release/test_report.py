@@ -337,6 +337,11 @@ def problems(rep: dict) -> list[str]:
             and not any(it["id"] in f["items"] for f in rep["findings"])
         ):
             out.append(f"{it['id']} failed with no finding recorded")
+        # A deferred P1 gets forgotten; test it, or rule it out-of-scope on the record.
+        if it["status"] == "not-tested" and it.get("priority") == "P1":
+            out.append(
+                f"{it['id']} (P1) is not tested: test it, or set it out-of-scope with why"
+            )
     for f in rep["findings"]:
         if f["status"] not in CLOSED_FINDING:
             out.append(f"{f['id']} is {f['status']}: {f['title']}")

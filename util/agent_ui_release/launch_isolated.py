@@ -374,7 +374,8 @@ def cmd_stop(a) -> None:
     else:
         print(f"{st['pid']} already exited")
     # The daemon and its agent sidecars are detached by design and outlive the
-    # window; stop the ones running from this home's own install, nothing else.
+    # window, and "Restart GAIA" relaunches the app under a new PID; stop what
+    # runs from this home's install or on its profile, nothing else.
     for pid, exe in processes_under(home.resolve()):
         subprocess.run(
             ["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=60
@@ -384,10 +385,13 @@ def cmd_stop(a) -> None:
 
 
 def processes_under(root: Path) -> list[tuple[int, str]]:
-    """(pid, exe) of every process whose executable lives under *root*."""
+    """(pid, exe) of every process whose executable lives under *root*, or that
+    runs on a --user-data-dir inside it."""
     script = (
-        "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and "
-        f"$_.ExecutablePath.StartsWith('{root}\\', 'OrdinalIgnoreCase') }} | "
+        "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.ExecutablePath -and ("
+        f"$_.ExecutablePath.StartsWith('{root}\\', 'OrdinalIgnoreCase') -or "
+        f"($_.CommandLine -replace '\"', '').IndexOf('--user-data-dir={root}\\', "
+        "[StringComparison]::OrdinalIgnoreCase) -ge 0) } | "
         'ForEach-Object { "$($_.ProcessId)`t$($_.ExecutablePath)" }'
     )
     out = subprocess.run(
