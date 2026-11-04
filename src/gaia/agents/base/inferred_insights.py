@@ -11,7 +11,8 @@ because its end is unknown. Only a reply with no usable insight is an error.
 """
 
 import json
-from typing import Any, Dict, List, NamedTuple, Tuple
+import math
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 
 class ParsedInsights(NamedTuple):
@@ -108,3 +109,36 @@ def parse_inferred_insights(raw_response: str) -> ParsedInsights:
             "non-empty text `content`"
         )
     return ParsedInsights(insights, incomplete=len(insights) < len(parsed))
+
+
+DEFAULT_CONFIDENCE = 0.7
+
+_CONFIDENCE_WORDS = {"low": 0.4, "medium": 0.7, "high": 0.9}
+
+
+def normalize_confidence(value: Any) -> Optional[float]:
+    """Turn an insight's ``confidence`` into a float in ``[0, 1]``.
+
+    Numbers (and numeric strings) are clamped to ``[0, 1]``. The words
+    ``low``/``medium``/``high`` (any case, surrounding whitespace ignored)
+    map to 0.4/0.7/0.9. Anything else, including NaN and infinity, returns
+    ``None`` so the caller can skip the insight and say why, rather than guess
+    a value.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        word = value.strip().lower()
+        if word in _CONFIDENCE_WORDS:
+            return _CONFIDENCE_WORDS[word]
+        try:
+            number = float(word)
+        except ValueError:
+            return None
+    else:
+        return None
+    if not math.isfinite(number):
+        return None
+    return max(0.0, min(1.0, number))
