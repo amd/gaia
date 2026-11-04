@@ -58,7 +58,7 @@ class FakeResponse:
         return self._body
 
 
-def _lemonade(version="11.8.1"):
+def _lemonade(version="2026.44.1"):
     return FakeResponse(body={"status": "ok", "version": version, "model_loaded": None})
 
 
@@ -334,16 +334,16 @@ class TestProbe:
         assert choice.probe(USER_URL, "wrong").status == choice.BAD_KEY
 
     def test_too_old_names_both_versions_and_the_upgrade(self, http):
-        http.routes[f"{USER_URL}/health"] = _lemonade("10.2.0")
+        http.routes[f"{USER_URL}/health"] = _lemonade("11.9.0")
         result = choice.probe(USER_URL)
         assert result.status == choice.TOO_OLD
         msg = result.message()
-        assert "v10.2.0" in msg and f"v{choice.minimum_version()}" in msg
+        assert "v11.9.0" in msg and f"v{choice.minimum_version()}" in msg
         assert "Upgrade" in msg and "lemonade_mode" not in msg
         assert "lemonade_mode gaia" in result.message(in_use=True)
 
     def test_calver_is_new_enough(self, http):
-        http.routes[f"{USER_URL}/health"] = _lemonade("2026.40.0")
+        http.routes[f"{USER_URL}/health"] = _lemonade("2026.45.0~3.abc1234")
         assert choice.probe(USER_URL).status == choice.OK
 
     def test_down_server_is_unreachable(self, http):
@@ -464,7 +464,7 @@ class TestDetect:
             assert choice.detect_running_lemonade() is None
 
     def test_too_old_is_reported_not_offered(self, http):
-        http.routes[f"{USER_URL}/health"] = _lemonade("10.2.0")
+        http.routes[f"{USER_URL}/health"] = _lemonade("11.9.0")
         assert choice.detect_running_lemonade().status == choice.TOO_OLD
 
     def test_a_busy_server_gets_time_to_answer(self, http, monkeypatch):
@@ -508,7 +508,7 @@ class TestUseExternal:
         "response,status",
         [
             (FakeResponse(401), choice.NEEDS_KEY),
-            (_lemonade("10.2.0"), choice.TOO_OLD),
+            (_lemonade("11.9.0"), choice.TOO_OLD),
             (FakeResponse(body=None, content_type="text/html"), choice.NOT_LEMONADE),
             (None, choice.UNREACHABLE),
         ],

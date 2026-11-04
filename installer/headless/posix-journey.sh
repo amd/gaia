@@ -293,11 +293,21 @@ stop_agent_ui() {
   kill -9 $(app_pids) 2>/dev/null || true
 }
 
+# The daemon the backend started outlives the app by design, and keeps the
+# agent sidecar it supervises running, so stop it the way a user would.
+stop_daemon() {
+  local gaia="${GAIA_HOME}/venv/bin/gaia"
+  if [ ! -x "${gaia}" ]; then echo "no ${gaia}: the app installed no backend, so no daemon"; return 0; fi
+  local rc=0
+  "${gaia}" daemon stop || rc=$?
+  [ "${rc}" -eq 0 ] || die "\`gaia daemon stop\` exited ${rc}"
+}
+
 assert_gone() { for p in "$@"; do [ ! -e "${p}" ] || die "left behind: ${p}"; done; }
 
 no_gaia_processes() {
   local left
-  left="$(pgrep -fl 'gaia-desktop|gaia-tui|gaia-agent|\.gaia/venv/bin/gaia' || true)"
+  left="$(pgrep -fl 'gaia-desktop|gaia-tui|gaia-agent|\.gaia/venv/bin/|-m gaia\.daemon' || true)"
   [ -z "${left}" ] || die "still running after uninstall: ${left}"
 }
 
@@ -445,6 +455,7 @@ preflight) preflight_no_lemonade ;;
 
 quit)
   stop_agent_ui
+  stop_daemon
   if [ -s "${WORK}/quit-leftovers" ]; then
     finding "processes outlived the app's quit by 30 s (killed to continue): $(tr '\n' ';' <"${WORK}/quit-leftovers")"
   fi

@@ -214,7 +214,7 @@ export async function withSetup(page: Page, { status = { state: 'idle' }, plan =
         'GET /spending/prices/fireworks': prices,
         'GET /spending/prices/amd': { provider: 'amd', models: [], source: null, note: 'Prices are set by the organization that runs the gateway.' },
         'GET /memory/settings': { enabled: true },
-        'GET /spending': { month: '2026-10', total_usd: 0, turns: 0, unpriced_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price' },
+        'GET /spending': { month: '2026-10', total_usd: 0, turns: 0, unpriced_turns: 0, unreported_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price' },
     };
     await page.route('**/api/**', async (route) => {
         const url = new URL(route.request().url());

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 // Service worker for the installable Agent UI. The build (vite.config.ts)
-// stamps the build id into CACHE_NAME so every build ships a new worker and a new cache.
+// stamps the build id into CACHE_NAME so every release or code change ships a new worker and a new cache.
 //
 // It caches only the content-hashed files under assets/, which never change
 // once built. Pages, the API and streams always go to the network, so a phone

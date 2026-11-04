@@ -100,10 +100,21 @@ def test_local_turns_cost_nothing_and_are_not_recorded(db):
 
 def test_unpriced_turns_are_counted_apart_not_as_zero(db):
     _turn(db, model="amd.gpt-oss-120b")
-    spending.record_turn(db, FLASH, {})  # no token counts reported
     report = spending.month_report(db)
-    assert report["turns"] == 2
-    assert report["unpriced_turns"] == 2
+    assert report["turns"] == 1
+    assert report["unpriced_turns"] == 1
+    assert report["unreported_turns"] == 0
+    assert report["total_usd"] == 0
+
+
+def test_a_priced_turn_with_no_usage_is_unreported_not_unpriced(db):
+    # A stopped answer: the stream ended before Fireworks reported its tokens.
+    spending.record_turn(db, FLASH, {})
+    report = spending.month_report(db)
+    assert report["turns"] == 1
+    assert report["unpriced_turns"] == 0
+    assert report["unreported_turns"] == 1
+    assert report["by_model"][0]["unreported_turns"] == 1
     assert report["total_usd"] == 0
 
 
@@ -274,7 +285,7 @@ class _CloudAgent:
     "result,priced",
     [
         ({"result": "4", "input_tokens": 1_000_000, "output_tokens": 100_000}, True),
-        # No counts: still recorded, as a turn of unknown cost, never as $0.
+        # No counts: still recorded, as a turn whose usage went unreported, never as $0.
         ("4", False),
     ],
 )
@@ -305,4 +316,4 @@ def test_non_streaming_cloud_turns_are_recorded(db, monkeypatch, result, priced)
             price(FLASH, 1_000_000, 0, 100_000), abs=1e-4
         )
     else:
-        assert report["unpriced_turns"] == 1
+        assert report["unreported_turns"] == 1

@@ -49,7 +49,7 @@ def config_file(tmp_path, monkeypatch):
 class _FakeLemonade:
     """A running Lemonade on a PC with *capacity*; *downloaded* models are on disk."""
 
-    def __init__(self, capacity, downloaded=(), version="11.8.0"):
+    def __init__(self, capacity, downloaded=(), version="2026.44.1"):
         self.capacity = capacity
         self.downloaded = set(downloaded)
         self.version = version
@@ -84,7 +84,7 @@ class _FakeLemonade:
 def running(monkeypatch):
     """Point the plan at a fake running server on *capacity*."""
 
-    def use(capacity, downloaded=(), version="11.8.0"):
+    def use(capacity, downloaded=(), version="2026.44.1"):
         fake = _FakeLemonade(capacity, downloaded, version)
         monkeypatch.setattr(sp, "_client", lambda url: fake)
         return fake
@@ -173,17 +173,6 @@ def test_options_show_the_catalog_size(running):
     running(BIG_GPU)
     options = {o["id"]: o for o in sp.build_plan()["options"]}
     assert options[DEFAULT_MODEL_NAME]["size_gb"] == 5.6
-
-
-def test_a_model_this_lemonade_is_too_old_for_is_not_offered(running):
-    """It fits the PC, but setup would refuse it on this server's version."""
-    running(BIG_GPU, version="10.9.1")
-    options = {o["id"]: o for o in sp.build_plan()["options"]}
-    assert options[LARGE_DEFAULT_MODEL_NAME]["fits"] is False
-    assert "Lemonade" in options[LARGE_DEFAULT_MODEL_NAME]["reason"]
-    assert options[DEFAULT_MODEL_NAME]["fits"] is True
-    with pytest.raises(sp.NeedsAcknowledgement, match="Lemonade v11"):
-        sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
 
 
 def test_picking_the_smaller_model_saves_it_and_drops_the_large_download(
@@ -680,6 +669,7 @@ def test_run_endpoint_asks_before_downloading_past_the_free_space(
             "keep_trying": False,
             "extra_models": [],
             "server_only": False,
+            "upgrade_embedded": False,
         }
     ]
 
@@ -754,6 +744,57 @@ def test_server_only_run_skips_the_disk_check_and_takes_no_extras(
         headers=UI,
     )
     assert r.status_code == 422 and len(seen) == 1
+
+
+def test_upgrade_embedded_run_uses_no_model_downloads(client, flm_box, monkeypatch):
+    flm_box(downloaded=(DEFAULT_MODEL_NAME,), free_gb=0.1)
+    seen = []
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: seen.append(k) or {"state": "running"},
+    )
+    r = client.post("/api/setup/run", json={"upgrade_embedded": True}, headers=UI)
+    assert r.status_code == 200
+    assert seen == [
+        {
+            "allow_low_disk": False,
+            "keep_trying": False,
+            "extra_models": [],
+            "server_only": False,
+            "upgrade_embedded": True,
+        }
+    ]
+
+
+def test_setup_run_rejects_extra_models_during_embedded_upgrade(client, monkeypatch):
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: pytest.fail("must not start"),
+    )
+    r = client.post(
+        "/api/setup/run",
+        json={"upgrade_embedded": True, "extra_models": [DEFAULT_MODEL_NAME]},
+        headers=UI,
+    )
+    assert r.status_code == 422
+    assert "no extra_models" in r.json()["detail"]
+
+
+def test_setup_run_rejects_conflicting_server_only_and_upgrade(client, monkeypatch):
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: pytest.fail("must not start"),
+    )
+    r = client.post(
+        "/api/setup/run",
+        json={"server_only": True, "upgrade_embedded": True},
+        headers=UI,
+    )
+    assert r.status_code == 422
+    assert "not both" in r.json()["detail"]
 
 
 def test_catalog_separates_gaias_models_from_ones_only_in_lemonade(flm_box):

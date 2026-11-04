@@ -20,6 +20,7 @@ from gaia.llm.lemonade_client import LemonadeStatus
 from gaia.llm.lemonade_manager import LemonadeManager
 from gaia.llm.lemonade_service import LemonadeStartError
 from gaia.llm.lemonade_supervisor import LemonadeState
+from gaia.version import LEMONADE_VERSION
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +33,7 @@ def _reset_manager():
 
 def _status(running=True, context_size=0, loaded_models=None):
     return LemonadeStatus(
+        version=LEMONADE_VERSION,
         running=running,
         context_size=context_size,
         loaded_models=[] if loaded_models is None else loaded_models,

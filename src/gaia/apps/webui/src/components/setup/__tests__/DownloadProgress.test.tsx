@@ -5,7 +5,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { useChatStore } from '../../../stores/chatStore';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SetupRunStatus } from '../../../types';
-import { DownloadProgress } from '../DownloadProgress';
+import { DownloadProgress, downloadsActive } from '../DownloadProgress';
 import { EMBED, GEMMA, QWEN, progress, runStatus } from './fixtures';
 
 const NAMES = { [QWEN.id]: 'Qwen3.6-35B-A3B', [GEMMA.id]: 'Gemma-4-E4B-it', [EMBED.id]: 'embeddinggemma-300m' };
@@ -369,6 +369,34 @@ describe('a model that failed its load check', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
         expect(onRetry).toHaveBeenCalledWith(QWEN.id, 'network');
         expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+});
+
+describe('a model that failed its test with nothing wrong with the file', () => {
+    it.each([
+        ['memory', 'Qwen3.6-35B-A3B is downloaded, but this PC didn’t have enough free memory to test it. Close some apps, then press Retry to test it again. Nothing is downloaded again.'],
+        ['stuck', 'Qwen3.6-35B-A3B is downloaded, but the model server didn’t answer before its test finished. Press Retry to test it again. Nothing is downloaded again.'],
+        ['answer', 'Qwen3.6-35B-A3B loaded, but its test got nothing usable back. Details has what it returned. Press Retry to test it again. Nothing is downloaded again.'],
+        ['window', 'Qwen3.6-35B-A3B loaded with a smaller context window than GAIA needs. Press Retry to test it again. Nothing is downloaded again.'],
+    ] as const)('says why (%s) and retries with no delete sheet', (kind, text) => {
+        const onRetry = vi.fn();
+        render(<DownloadProgress
+            status={runStatus([progress({ id: QWEN.id, state: 'failed', bytes_done: 23.3e9, bytes_total: 23.3e9, error: 'x', error_kind: kind, can_retry: true })], { state: 'ready' })}
+            names={NAMES}
+            onRetry={onRetry}
+        />);
+        const row = rowOf('Qwen3.6-35B-A3B');
+        expect(within(row).getByText(text)).toBeInTheDocument();
+        expect(within(row).queryByText(/didn’t load|deletes it/)).not.toBeInTheDocument();
+        fireEvent.click(within(row).getByRole('button', { name: 'Retry' }));
+        expect(onRetry).toHaveBeenCalledExactlyOnceWith(QWEN.id, kind);
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+
+    it('counts a row being tested again as still moving', () => {
+        const retesting = runStatus([progress({ id: QWEN.id, state: 'verifying', bytes_done: 23.3e9, bytes_total: 23.3e9 })], { state: 'ready' });
+        expect(downloadsActive(retesting)).toBe(true);
+        expect(downloadsActive(runStatus([progress({ id: QWEN.id, state: 'ready', bytes_done: 1, bytes_total: 1 })], { state: 'ready' }))).toBe(false);
     });
 });
 
