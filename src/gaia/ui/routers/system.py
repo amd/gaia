@@ -1303,7 +1303,7 @@ async def model_server():
 async def set_model_server_backend(body: ModelServerBackendRequest):
     """Save the llama.cpp backend for chat models; it applies on the next load.
 
-    Only a backend Lemonade reports as usable on this machine is accepted.
+    Only a backend GAIA has tested and Lemonade can run on this machine is accepted.
     """
     from gaia.config import GaiaConfig, GaiaConfigError
 
@@ -1315,12 +1315,13 @@ async def set_model_server_backend(body: ModelServerBackendRequest):
                 raise HTTPException(status_code=503, detail=current.error)
             usable = sorted(b.name for b in current.available_backends)
             if choice not in usable:
-                offered = ", ".join(usable) if usable else "none it reports"
+                offered = ", ".join(usable) if usable else "none on this machine"
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"llama.cpp's '{choice}' backend is not available on this "
-                        f"machine. Lemonade offers: {offered}."
+                        f"llama.cpp's '{choice}' backend isn't one GAIA offers here: "
+                        f"it offers only backends it has tested that this machine "
+                        f"can run ({offered})."
                     ),
                 )
         await asyncio.to_thread(GaiaConfig.save_key, "llamacpp_backend", choice)
@@ -1433,11 +1434,14 @@ def _running_index_ids(request: Request) -> List[str]:
 
 @router.get("/api/system/work-in-progress", response_model=WorkInProgress)
 async def work_in_progress(request: Request, db: ChatDatabase = Depends(get_db)):
-    """Answers still being written and documents still being indexed.
+    """Answers still being written, documents still being indexed, and setup still downloading.
 
     The desktop app asks this before it quits or frees the model's memory,
     so it can warn that the work will be lost.
     """
+    from gaia.ui.setup_runner import runner as setup_runner
+
+    setup_status = setup_runner.status() or {}
     answers = []
     for sid in run_manager.active_sessions():
         session = db.get_session(sid)
@@ -1452,7 +1456,11 @@ async def work_in_progress(request: Request, db: ChatDatabase = Depends(get_db))
                 document_id=doc_id, filename=doc["filename"] if doc else None
             )
         )
-    return WorkInProgress(answers=answers, indexing=indexing)
+    return WorkInProgress(
+        answers=answers,
+        indexing=indexing,
+        setup=setup_status.get("state") in ("running", "verifying"),
+    )
 
 
 class UnloadModelRequest(BaseModel):

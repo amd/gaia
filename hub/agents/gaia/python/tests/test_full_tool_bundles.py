@@ -113,6 +113,7 @@ def test_core_is_the_list_every_session_starts_on():
         "fetch_page",
         "find_files",
         "forget",
+        "forget_everything",
         "index_document",
         "load_skill",
         "query_documents",

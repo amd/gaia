@@ -3919,9 +3919,24 @@ Examples:
         help="Skip model downloads (only set up Lemonade Server)",
     )
     init_parser.add_argument(
+        "--server-only",
+        action="store_true",
+        help="Start the model server and stop, fetching nothing else",
+    )
+    init_parser.add_argument(
+        "--agent-only",
+        action="store_true",
+        help="Only install or update the GAIA agent; no Lemonade or model steps",
+    )
+    init_parser.add_argument(
         "--skip-webui-build",
         action="store_true",
         help="Skip building the Agent UI frontend (same effect as GAIA_SKIP_WEBUI_BUILD)",
+    )
+    init_parser.add_argument(
+        "--skip-pip-extras",
+        action="store_true",
+        help="Install no Python packages (the desktop app ships its own)",
     )
     init_parser.add_argument(
         "--force-reinstall",
@@ -4052,29 +4067,6 @@ Examples:
         action="store_true",
         help="When a download's connection drops, retry it for up to two "
         "minutes before failing.",
-    )
-
-    # Install command (install specific components)
-    install_parser = subparsers.add_parser(
-        "install",
-        help="Install GAIA components",
-        parents=[parent_parser],
-    )
-    install_parser.add_argument(
-        "--lemonade",
-        action="store_true",
-        help="Install Lemonade Server",
-    )
-    install_parser.add_argument(
-        "--yes",
-        "-y",
-        action="store_true",
-        help="Skip confirmation prompts",
-    )
-    install_parser.add_argument(
-        "--silent",
-        action="store_true",
-        help="Silent installation (no UI, no desktop shortcuts)",
     )
 
     # Uninstall command: tiered cleanup of the Python-side GAIA install.
@@ -6362,6 +6354,19 @@ Let me know your answer!
         # --minimal flag overrides --profile
         profile = "minimal" if args.minimal else args.profile
 
+        if args.agent_only:
+            if profile != "gaia" or args.check:
+                print(
+                    "Error: --agent-only updates the GAIA agent; it does not "
+                    "combine with --profile, --minimal or --check.",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            from gaia.installer.init_command import run_agent_refresh
+
+            log_manager.configure_agent_console(debug=getattr(args, "verbose", False))
+            sys.exit(run_agent_refresh())
+
         # MCP profile has its own init flow (no Lemonade/models)
         if profile == "mcp":
             from gaia.installer.mcp_init import run_mcp_init
@@ -6458,6 +6463,7 @@ Let me know your answer!
             verbose=getattr(args, "verbose", False),
             remote=getattr(args, "remote", False),
             skip_webui_build=getattr(args, "skip_webui_build", False),
+            skip_pip_extras=getattr(args, "skip_pip_extras", False),
             skip_chat_model=getattr(args, "skip_chat_model", False),
             lemonade_url=getattr(args, "lemonade_url", None),
             gaia_lemonade=getattr(args, "gaia_lemonade", False),
@@ -6465,84 +6471,9 @@ Let me know your answer!
             allow_low_disk=args.allow_low_disk,
             keep_trying=args.keep_trying,
             extra_models=args.download_model,
+            server_only=getattr(args, "server_only", False),
         )
         sys.exit(exit_code)
-
-    # Handle install command
-    if args.action == "install":
-        if args.lemonade:
-            from gaia.installer.lemonade_installer import (
-                LemonadeInstaller,
-                discard_download,
-                discard_kept_installers,
-            )
-            from gaia.version import LEMONADE_VERSION
-
-            installer = LemonadeInstaller()
-
-            # Check if already installed
-            info = installer.check_installation()
-            if info.installed and info.version:
-                # Use needs_install (returns True if current < target)
-                if not installer.needs_install(info):
-                    print(
-                        f"✅ Lemonade Server v{info.version} is already installed"
-                        f" (>= v{LEMONADE_VERSION})"
-                    )
-                    sys.exit(0)
-                else:
-                    print(f"Lemonade Server v{info.version} is installed")
-                    print(f"GAIA expects v{LEMONADE_VERSION}+")
-                    print("")
-                    print("To update, run:")
-                    print("  gaia uninstall --purge --purge-lemonade")
-                    print("  gaia install --lemonade")
-                    sys.exit(1)
-
-            # Confirm installation
-            if not args.yes:
-                response = input(f"Install Lemonade v{LEMONADE_VERSION}? [Y/n]: ")
-                if response.lower() == "n":
-                    print("Installation cancelled")
-                    sys.exit(0)
-
-            # Download and install
-            try:
-                if installer.system == "linux":
-                    print("Adding Lemonade PPA and installing lemonade-server...")
-                    installer_path = None
-                else:
-                    print("Downloading Lemonade Server...")
-                    download_started = time.time()
-                    installer_path = installer.download_installer()
-                    print("Installing...")
-                result = installer.install(installer_path, silent=args.silent)
-                # A failed install keeps the file: its retry hint names it.
-                if installer_path is not None and result.success:
-                    discard_download(installer_path)
-                    discard_kept_installers(installer_path.parent, download_started)
-                elif installer_path is not None:
-                    print(f"   The downloaded installer is kept at {installer_path}")
-
-                if result.success:
-                    # Verify installation
-                    verify_info = installer.check_installation()
-                    if verify_info.installed:
-                        print(f"✅ Installed Lemonade Server v{verify_info.version}")
-                    else:
-                        print(f"✅ Installed Lemonade Server v{result.version}")
-                    if result.restart_required:
-                        print(f"⚠️  {result.message}")
-                    sys.exit(0)
-                else:
-                    print(f"❌ Installation failed: {result.error}")
-                    sys.exit(1)
-            except Exception as e:
-                print(f"❌ Installation failed: {e}")
-                sys.exit(1)
-        else:
-            print("Specify what to install: --lemonade")
-            sys.exit(1)
 
     # Handle uninstall command — delegates to the shared implementation in
     # gaia.installer.uninstall_command so every desktop installer platform
@@ -9110,7 +9041,7 @@ def handle_diagnostics_command(args):
     - every log :func:`_diag_log_files` lists, with its rotated files
       (``gaia.log.1`` ...); a file over 50 MB contributes only its last 50 MB,
       as ``<name>.tail``
-    - ``~/.gaia/electron-install-state.json``
+    - ``~/.gaia/electron-install-state.json`` and ``setup-report.json``
     - OS version (``uname``/``lsb_release`` on Linux, ``sw_vers`` on macOS,
       ``ver`` on Windows)
     - ``env`` entries matching ``gaia|lemonade|xdg|wayland|display`` (case-insensitive)
@@ -9146,8 +9077,12 @@ def handle_diagnostics_command(args):
         sys.exit(1)
 
     log_files = _diag_log_files(gaia_dir)
+    from gaia.home import gaia_home
+
     state_files = [
         gaia_dir / "electron-install-state.json",
+        # First-run setup's record: its run, plan and every stage's log.
+        gaia_home() / "setup-report.json",
     ]
 
     # System info snapshot

@@ -163,7 +163,7 @@ RAG (Retrieval-Augmented Generation) enables chatting with documents — includi
 </Tabs>
 
 <Note>
-  **Document Indexing Requirements:** Text in images and scans is read by a Vision Language Model (VLM): a tested vision model that is already loaded, then your default chat model when it can read images, which `Gemma-4-E4B-it-GGUF` and `Qwen3.6-35B-A3B-GGUF` both can, and otherwise `Gemma-4-E4B-it-GGUF`. `gaia init` already downloads these, unless you set a `default_model` that can't read images: then `gaia init` skips Gemma, so download it yourself:
+  **Document Indexing Requirements:** Text in images and scans is read by a Vision Language Model (VLM): a tested vision model that is already loaded, then your default chat model when it can read images, which `Gemma-4-E4B-it-GGUF` and `Qwen3.6-35B-A3B-GGUF` both can, and otherwise `Gemma-4-E4B-it-GGUF`. While chat runs on the NPU, images are not read at all: the NPU model doesn't read them, and GAIA says so instead of loading a second model. `gaia init` already downloads these, unless you set a `default_model` that can't read images: then `gaia init` skips Gemma, so download it yourself:
   ```bash
   lemonade pull Gemma-4-E4B-it-GGUF
   ```
@@ -306,7 +306,7 @@ print(result)
 </Note>
 
 A local model has to read every tool's description before it can answer, which is most
-of the wait on a first reply. With dynamic tool loading a chat starts on the 26 tools people
+of the wait on a first reply. With dynamic tool loading a chat starts on the 27 tools people
 use most, in short form (name, one sentence, and parameters). On a Radeon 8060S with
 Qwen3.6-35B-A3B that cut what a cold first turn reads from about 21,300 tokens to about
 8,900, and the time to read it from 37.5 s to 18.7 s.

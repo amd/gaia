@@ -221,6 +221,8 @@ class WorkInProgress(BaseModel):
 
     answers: List[RunningAnswer]
     indexing: List[RunningIndexJob]
+    #: Setup is downloading or checking models; quitting stops it part way.
+    setup: bool = False
 
 
 class UnloadModelResponse(BaseModel):

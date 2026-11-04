@@ -2432,6 +2432,52 @@ def _refuse_internet_off(
     )
 
 
+def relay_one_prompt(
+    handler,
+    prompt: str,
+    *,
+    agent_type: str,
+    model_id: str | None,
+    memory: str,
+    max_steps: int | None,
+) -> str | None:
+    """One prompt through *agent_type*'s installed binary, with no chat history.
+
+    Returns the answer, or None when the run ended without one. An error the
+    agent reported, or a failed run, raises :class:`RuntimeError` with its text.
+    *handler* must be a background-mode ``SSEOutputHandler``: its events are
+    read back here once the turn ends.
+    """
+    _dispatch_sidecar_query(
+        handler,
+        ChatRequest(session_id="", message=prompt, agent_type=agent_type),
+        history_pairs=[],
+        model_id=model_id,
+        agent_type=agent_type,
+        memory=memory,
+        max_steps=max_steps,
+    )
+    # Drained only after the turn ends: safe because event_queue is unbounded.
+    answer = None
+    failure = None
+    while not handler.event_queue.empty():
+        event = handler.event_queue.get_nowait()
+        if not event:
+            continue
+        if event.get("type") == "agent_error":
+            failure = str(event.get("content") or "The GAIA agent reported an error.")
+        elif event.get("type") == "answer":
+            answer = event
+    if failure:
+        raise RuntimeError(failure)
+    if answer is None:
+        return None
+    content = str(answer.get("content") or "")
+    if answer.get("failed"):
+        raise RuntimeError(content or "The GAIA agent's run failed.")
+    return content
+
+
 def _dispatch_sidecar_query(
     sse_handler,
     request: ChatRequest,

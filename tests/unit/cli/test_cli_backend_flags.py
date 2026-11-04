@@ -23,7 +23,6 @@ _NON_BACKEND_COMMANDS = [
     ["slack"],
     ["mcp"],
     ["mcp", "start"],
-    ["install"],
     ["uninstall"],
     ["eval"],
     ["llm", "hi"],

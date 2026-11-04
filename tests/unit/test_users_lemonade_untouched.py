@@ -598,10 +598,10 @@ class TestSettingsSave:
         app = FastAPI()
         app.include_router(system_mod.router)
         r = TestClient(app).put(
-            "/api/system/model-server/backend", json={"backend": "cpu"}
+            "/api/system/model-server/backend", json={"backend": "vulkan"}
         )
         assert r.status_code == 200, r.text
-        assert GaiaConfig.load().llamacpp_backend == "cpu"
+        assert GaiaConfig.load().llamacpp_backend == "vulkan"
         assert [m for m, _, _ in users_server.requests if m != "GET"] == []
 
 

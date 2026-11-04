@@ -985,3 +985,9 @@ def test_gaia_spec_literals_match_the_installed_caller_auth_module():
     gaia = builtin_specs()["gaia"]
     assert gaia.token_env_var == caller_auth.TOKEN_ENV_VAR
     assert gaia.token_file_env_var == caller_auth.TOKEN_FILE_ENV_VAR
+
+
+def test_the_flagship_gets_time_for_a_cold_first_start():
+    """30 s timed out a first start on a cold Windows runner before it answered."""
+    assert builtin_specs()["gaia"].health_timeout >= 120.0
+    assert builtin_specs()["email"].health_timeout == 30.0

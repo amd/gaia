@@ -11,6 +11,7 @@
     "edit_file",
     "evaluate_retrieval",
     "forget",
+    "forget_everything",
     "get_file_info",
     "get_shell_state",
     "get_system_info",

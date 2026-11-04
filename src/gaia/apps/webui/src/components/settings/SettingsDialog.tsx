@@ -16,13 +16,14 @@ import { NotificationSettings } from './NotificationSettings';
 import '../SettingsModal.css';
 import './SettingsDialog.css';
 import { useT } from '../../i18n/useT';
+import { SetupSettings } from './SetupSettings';
 
 // The two heaviest panes load on first open.
 const ConnectorsPane = lazy(() => import('./ConnectorsPane').then((m) => ({ default: m.ConnectorsPane })));
 const AdvancedPane = lazy(() => import('./AdvancedSettings').then((m) => ({ default: m.AdvancedSettings })));
 
 const SECTIONS: SettingsSection[] = [
-    'general', 'model', 'permissions', 'skills', 'connectors', 'memory', 'notifications', 'privacy', 'advanced',
+    'general', 'setup', 'model', 'permissions', 'skills', 'connectors', 'memory', 'notifications', 'privacy', 'advanced',
 ];
 
 /** One settings window with a section list on the left. */
@@ -55,6 +56,7 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
     const pane = (() => {
         switch (section) {
             case 'general': return <GeneralSettings />;
+            case 'setup': return <SetupSettings />;
             case 'model': return <ModelSettings />;
             case 'permissions': return <PermissionsSettings />;
             case 'skills': return <SkillsSettings onUseSkill={(name) => { close(); onUseSkill(name); }} />;

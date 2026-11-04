@@ -335,7 +335,8 @@ a:hover { text-decoration: underline; }
     letter-spacing: normal;
     text-transform: none;
     overflow-wrap: break-word;
-    color: oklch(from currentColor max(l, 0.5) c h);
+    /* 0.49, not 0.5: the brass label on a hovered primary button needs it for 4.5:1. */
+    color: oklch(from currentColor max(l, 0.49) c h);
 }
 [data-theme="dark"] .i18n-gloss.i18n-gloss {
     color: oklch(from currentColor min(l, 0.8) c h);
