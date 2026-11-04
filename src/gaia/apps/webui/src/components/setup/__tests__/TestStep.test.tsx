@@ -81,6 +81,21 @@ describe('Test step', () => {
         expect(onChooseAnother).toHaveBeenCalledTimes(1);
     });
 
+    it('offers no local model picker on a cloud setup', () => {
+        render(
+            <TestStep
+                run={runStatus([], { state: 'failed', tests: [row('embedding', 'failed', { subject: EMBED.id, kind: 'memory', error: 'out of memory' })] })}
+                expected={[]}
+                names={NAMES}
+                catalog={[QWEN, GEMMA, EMBED, WHISPER]}
+                busy={false}
+                onRetry={vi.fn()}
+            />,
+        );
+        expect(screen.queryByRole('button', { name: 'Choose another model' })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Test again' })).toBeInTheDocument();
+    });
+
     it('for a broken model offers to download that model again', () => {
         const { onDownloadAgain } = show([row('chat', 'failed', { subject: QWEN.id, kind: 'broken', error: 'bad file' })], 'failed');
         const alert = screen.getByRole('alert');

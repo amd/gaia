@@ -425,15 +425,16 @@ def _cost(
     # Only Fireworks publishes a rate card GAIA carries.
     if location.provider != "fireworks":
         return {"kind": "unknown"}
+    # Lazy: the rate card lives with the benchmark's metering code.
+    from gaia.eval.bench.metering import price, rate_card
+
     input_tokens = usage.get("input_tokens")
     output_tokens = usage.get("tokens")
     if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
-        return {"kind": "unknown"}
+        # A stopped stream ends before the provider reports its usage.
+        return {"kind": "unreported" if rate_card(location.model) else "unknown"}
     cached = usage.get("cached_tokens")
     cached = cached if isinstance(cached, int) else 0
-    # Lazy: the rate card lives with the benchmark's metering code.
-    from gaia.eval.bench.metering import price
-
     usd = price(location.model, input_tokens, cached, output_tokens)
     if usd is None:
         return {"kind": "unknown"}

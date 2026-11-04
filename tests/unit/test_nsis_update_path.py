@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""The desktop installer must leave Lemonade and the sign-in choice alone on update.
+"""The desktop installer must leave the sign-in choice alone on update.
 
 GAIA bundles its own Lemonade, so the installer never runs a Lemonade MSI. The
 old version's uninstaller deletes the sign-in entry before ``customInstall``
