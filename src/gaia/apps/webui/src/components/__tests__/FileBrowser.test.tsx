@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FileBrowser } from '../FileBrowser';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import type { BrowseResponse } from '../../types';
+import { stripIsolates } from '../../i18n/registry';
+import { ARABIC_MONTH, ENGLISH_MONTH, resetUiLocale, setUiLocale } from '../../test/dates';
 
 vi.mock('../../services/api');
 
@@ -385,5 +387,22 @@ describe('FileBrowser hidden selections from search', () => {
         await searchAndTick(['.env'], true);
         fireEvent.click(screen.getByRole('button', { name: 'Back to browsing' }));
         expect(await screen.findByText('1 item(s) selected')).toBeInTheDocument();
+    });
+});
+
+describe('FileBrowser dates follow the interface language', () => {
+    afterEach(resetUiLocale);
+
+    it('shows an older file date in Arabic in an Arabic UI', async () => {
+        setUiLocale('ar');
+        mockedApi.browseFiles.mockResolvedValue({
+            ...BROWSE_RESPONSE,
+            entries: [{ ...BROWSE_RESPONSE.entries[0], modified: '2025-03-14T10:00:00Z' }],
+        });
+        render(<FileBrowser onStartChat={vi.fn()} />);
+        const name = await screen.findByText('report.pdf');
+        const date = stripIsolates(name.closest('.fb-entry')!.querySelector('.fb-entry-date')!.textContent ?? '');
+        expect(date).toMatch(ARABIC_MONTH);
+        expect(date).not.toMatch(ENGLISH_MONTH);
     });
 });

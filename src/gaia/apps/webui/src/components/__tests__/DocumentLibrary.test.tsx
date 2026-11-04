@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DocumentLibrary } from '../DocumentLibrary';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import type { Document } from '../../types';
+import { stripIsolates } from '../../i18n/registry';
+import { ARABIC_MONTH, ENGLISH_MONTH, resetUiLocale, setUiLocale } from '../../test/dates';
 
 vi.mock('../../services/api');
 
@@ -448,5 +450,26 @@ describe('DocumentLibrary chunk counts', () => {
 
         expect(screen.getByText('5 chunks')).toBeTruthy();
         expect(screen.getByText(/· 5 chunks$/)).toBeTruthy();
+    });
+});
+
+describe('DocumentLibrary dates follow the interface language', () => {
+    afterEach(resetUiLocale);
+
+    it('shows when an older document was indexed in Arabic, inline and in the tooltip', async () => {
+        setUiLocale('ar');
+        mockedApi.listDocuments.mockResolvedValue({
+            documents: [{ ...COMPLETE_DOC, indexed_at: '2025-03-14T10:00:00Z' }],
+            total: 1,
+            total_size_bytes: 2048,
+            total_chunks: 5,
+        });
+        const { container } = render(<DocumentLibrary />);
+        await screen.findByText('good.pdf');
+        const stamp = container.querySelector('.doc-timestamp')!;
+        for (const text of [stamp.textContent ?? '', stamp.getAttribute('title') ?? '']) {
+            expect(stripIsolates(text)).toMatch(ARABIC_MONTH);
+            expect(stripIsolates(text)).not.toMatch(ENGLISH_MONTH);
+        }
     });
 });
