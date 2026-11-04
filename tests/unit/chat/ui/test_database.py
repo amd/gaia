@@ -977,6 +977,7 @@ class TestSchemaCurrentCheck:
         [
             ("sessions", "device"),
             ("messages", "search_text"),
+            ("messages", "stopped"),
             ("documents", "error_kind"),
         ],
     )

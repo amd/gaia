@@ -483,7 +483,8 @@ def test_a_failed_load_on_the_chosen_backend_says_how_to_undo_it(config_file):
     client = _recording_client([], fail_load="backend rocm is not installed")
     with pytest.raises(LemonadeClientError) as err:
         client.load_model("Gemma-4-E4B-it-GGUF", prompt=False, load_retries=0)
-    assert "gaia config set llamacpp_backend vulkan" in str(err.value)
+    assert "Choose Vulkan there" in str(err.value)
+    assert "gaia config set" not in str(err.value)
     assert "Auto" not in str(err.value)
     assert "rocm" in str(err.value)
 

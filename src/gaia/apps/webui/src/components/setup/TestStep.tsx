@@ -46,7 +46,8 @@ interface Props {
     names: Record<string, string>;
     catalog: SetupCatalogEntry[];
     onRetry: () => void;
-    onChooseAnother: () => void;
+    /** Absent on a cloud setup: the local model picker would switch it to local. */
+    onChooseAnother?: () => void;
     /** Stops the tests while they run. */
     onCancel?: () => void;
     /** Absent on the user's own server, where GAIA deletes nothing. */
@@ -130,7 +131,7 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
                     <p>{run.state === 'cancelled' ? t('setup.test.cancelled') : required.some((r) => r.kind === 'memory') ? t('setup.test.failedMemory') : t('setup.test.failedHelp')}</p>
                     {/* The way on sits in the bar like every step's; a damaged file's fix is downloading it again. */}
                     <SetupFooter>
-                        {modelAtFault && (
+                        {modelAtFault && onChooseAnother && (
                             <button type="button" className="btn-secondary" onClick={onChooseAnother} disabled={busy}>{t('setup.test.chooseAnother')}</button>
                         )}
                         <button type="button" className={broken.length ? 'btn-secondary' : 'btn-primary'} onClick={onRetry} disabled={busy}>{t('setup.test.tryAgain')}</button>

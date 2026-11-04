@@ -434,6 +434,11 @@ def pull_model(
     most *keep_trying_s* after it first fails, and Lemonade resumes from the
     partial file. *on_retry* is told the deadline before each wait.
     """
+    from gaia.llm.lemonade_client import (
+        LemonadeClientError,
+        ModelDownloadCancelledError,
+    )
+
     last_error: Dict[str, Optional[str]] = {"message": None}
 
     def track(event: Dict[str, Any]) -> None:
@@ -444,7 +449,21 @@ def pull_model(
     deadline = None
     while True:
         last_error["message"] = None
-        if client.ensure_model_downloaded(model_id, on_progress=track, **pull_kwargs):
+        try:
+            downloaded = client.ensure_model_downloaded(
+                model_id, on_progress=track, **pull_kwargs
+            )
+        except ModelDownloadCancelledError:
+            raise
+        except LemonadeClientError as exc:
+            # The client now raises after reporting streamed failures. Keep the
+            # old installer contract here so retry and per-model setup can
+            # classify the failure and continue with later models.
+            if not last_error["message"]:
+                last_error["message"] = str(exc)
+                on_progress({"event": "error", "error": str(exc)})
+            downloaded = False
+        if downloaded:
             return True
         if keep_trying_s <= 0 or error_kind(last_error["message"]) != "network":
             return False

@@ -159,7 +159,7 @@ async def send_message(
                 await turn_queue.acquire(sid)
                 holds_turn = True
         except TurnCancelled:
-            db.add_message(sid, "assistant", "Cancelled.", ends_turn=True)
+            db.add_message(sid, "assistant", "Cancelled.", ends_turn=True, stopped=True)
             session_lock.release()
             raise HTTPException(
                 status_code=409,

@@ -113,33 +113,6 @@ class FitVerdict:
     reason: str = ""
 
 
-def check_server_supports(
-    min_version: Optional[str], server_version: Optional[str]
-) -> FitVerdict:
-    """Whether a Lemonade server is new enough to load a model.
-
-    An unknown server version cannot show support, so it does not pass: the
-    cost of guessing wrong is a large download the server then cannot load.
-    """
-    if not min_version:
-        return FitVerdict(True)
-    from gaia.version import parse_version
-
-    found, wanted = parse_version(server_version), parse_version(min_version)
-    if found is not None and wanted is not None and found >= wanted:
-        return FitVerdict(True)
-    running = (
-        f"this server is v{server_version}"
-        if server_version
-        else ("this server's version is unknown")
-    )
-    return FitVerdict(
-        False,
-        f"needs Lemonade v{min_version} or newer ({running}); "
-        "upgrade it with `gaia init --force-reinstall`",
-    )
-
-
 def required_memory_gb(size_gb: float, kv_cache_gb: float = 0.0) -> float:
     """Memory a model of ``size_gb`` weights needs to load and run.
 
