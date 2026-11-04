@@ -20,6 +20,7 @@ import requests
 
 TELEGRAM_API = "https://api.telegram.org"
 _NOTIFICATION_SYSTEMS = ("Darwin", "Linux", "Windows")
+_WINDOWS_NOTIFICATION_STARTUP_GRACE_S = 3
 
 
 def validate(sink: str, sink_args: Dict[str, Any]) -> None:
@@ -157,21 +158,28 @@ def _to_windows_notification(title: str, output: str) -> None:
     env["GAIA_NOTIFY_TITLE"] = title
     env["GAIA_NOTIFY_MESSAGE"] = output
     try:
-        subprocess.run(
+        process = subprocess.Popen(
             ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
-            check=True,
-            timeout=30,
             env=env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
-    except subprocess.CalledProcessError as e:
-        stderr = e.stderr.decode(errors="replace") if e.stderr else ""
-        raise RuntimeError(
-            f"Windows notification PowerShell exited with code {e.returncode}: "
-            f"{stderr[:200]}. Choose a different --sink or check PowerShell."
-        ) from e
+        try:
+            return_code = process.wait(timeout=_WINDOWS_NOTIFICATION_STARTUP_GRACE_S)
+        except subprocess.TimeoutExpired:
+            # MessageBox::Show remains open until the user dismisses it. Once
+            # PowerShell stayed alive through startup, the notification is on
+            # screen; do not make a scheduled job wait for user interaction.
+            return
+        if return_code:
+            stderr = process.stderr.read().decode(errors="replace") if process.stderr else ""
+            raise RuntimeError(
+                f"Windows notification PowerShell exited with code {return_code}: "
+                f"{stderr[:200]}. Choose a different --sink or check PowerShell."
+            )
+    except FileNotFoundError:
+        raise
 
 
 def _osa(text: str) -> str:

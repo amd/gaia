@@ -24,6 +24,7 @@ from gaia.schedule import sinks
 _REQUESTS = "gaia.schedule.sinks.requests"
 _PLATFORM_SYSTEM = "gaia.schedule.sinks.platform.system"
 _SUBPROCESS_RUN = "gaia.schedule.sinks.subprocess.run"
+_SUBPROCESS_POPEN = "gaia.schedule.sinks.subprocess.Popen"
 
 
 class TestValidate:
@@ -208,30 +209,38 @@ class TestNotificationSink:
 
     def test_windows_falls_back_to_powershell_when_plyer_missing(self, mocker):
         mocker.patch.dict(sys.modules, {"plyer": None})
-        run = mocker.patch(_SUBPROCESS_RUN)
+        process = mocker.Mock()
+        process.wait.return_value = 0
+        popen = mocker.patch(_SUBPROCESS_POPEN, return_value=process)
         sinks._to_windows_notification("T", "body")
-        args, kwargs = run.call_args
+        args, kwargs = popen.call_args
         assert args[0][0] == "powershell"
         assert "body" not in args[0][-1]
         assert kwargs["env"]["GAIA_NOTIFY_TITLE"] == "T"
         assert kwargs["env"]["GAIA_NOTIFY_MESSAGE"] == "body"
+        process.wait.assert_called_once_with(timeout=3)
 
     def test_windows_powershell_failure_is_not_silent(self, mocker):
-        import subprocess
-
         mocker.patch.dict(sys.modules, {"plyer": None})
-        mocker.patch(
-            _SUBPROCESS_RUN,
-            side_effect=subprocess.CalledProcessError(
-                7, "powershell", stderr=b"bad notifier"
-            ),
-        )
+        process = mocker.Mock()
+        process.wait.return_value = 7
+        process.stderr.read.return_value = b"bad notifier"
+        mocker.patch(_SUBPROCESS_POPEN, return_value=process)
         with pytest.raises(RuntimeError, match="PowerShell exited with code 7"):
             sinks._to_windows_notification("T", "body")
 
+    def test_windows_message_box_does_not_block_the_scheduler(self, mocker):
+        import subprocess
+
+        mocker.patch.dict(sys.modules, {"plyer": None})
+        process = mocker.Mock()
+        process.wait.side_effect = subprocess.TimeoutExpired("powershell", 3)
+        mocker.patch(_SUBPROCESS_POPEN, return_value=process)
+        sinks._to_windows_notification("T", "body")
+
     def test_windows_missing_powershell_is_actionable(self, mocker):
         mocker.patch.dict(sys.modules, {"plyer": None})
-        mocker.patch(_SUBPROCESS_RUN, side_effect=FileNotFoundError("powershell"))
+        mocker.patch(_SUBPROCESS_POPEN, side_effect=FileNotFoundError("powershell"))
         with pytest.raises(FileNotFoundError):
             sinks._to_windows_notification("T", "body")
 
