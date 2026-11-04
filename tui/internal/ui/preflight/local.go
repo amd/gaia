@@ -1116,7 +1116,7 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress
 	if errors.Is(err, gaiainit.ErrNoCLI) {
 		return FixResult{Err: err, Diagnosis: Diagnosis{
 			Cause:      "The GAIA CLI isn't installed, and setup needs it.",
-			Remedy:     "Install GAIA with the command below, then press r to re-check.",
+			Remedy:     "Install GAIA with the command below, then open a new terminal and start GAIA again.",
 			Command:    gaiainit.InstallCommand,
 			PowerShell: gaiainit.InstallPowerShellCommand,
 			Where:      installDocs,

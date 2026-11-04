@@ -492,6 +492,10 @@ func TestSetupWithoutTheCLINamesTheInstaller(t *testing.T) {
 		if strings.Contains(d.Command+d.Remedy, "gaia init") || strings.Contains(d.Remedy, "in a terminal") {
 			t.Errorf("fix %v remedy %q points back at the missing CLI", kind, d.Remedy)
 		}
+		// The installer adds gaia to PATH for new shells only, so a re-check here finds nothing.
+		if strings.Contains(d.Remedy, "press r") || !strings.Contains(d.Remedy, "new terminal") {
+			t.Errorf("fix %v remedy %q must send the user to a new terminal", kind, d.Remedy)
+		}
 		if d.Cause == "" || d.Cause[0] < 'A' || d.Cause[0] > 'Z' {
 			t.Errorf("fix %v cause %q must read as a sentence after \"Setup stopped. \"", kind, d.Cause)
 		}
