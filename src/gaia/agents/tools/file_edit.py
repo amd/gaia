@@ -373,6 +373,14 @@ def apply_unique_replacement(
 
     offsets = _match_offsets(current_content, old_content)
 
+    if offsets and "\r\n" in current_content and "\r\n" not in old_content:
+        # old_content matched as-is but carries no CRLF of its own (a single
+        # line, or text the model wrote with LF endings), so new_content is LF
+        # too and would leave this CRLF file with mixed endings. When
+        # old_content does contain CRLF the caller is choosing endings
+        # deliberately, and new_content is left exactly as given.
+        new_content = _retarget_newlines(new_content, current_content)
+
     if not offsets:
         # Retry once with old_content's line endings rewritten to the file's.
         # Only a line-ending difference can be rescued this way, and only when
