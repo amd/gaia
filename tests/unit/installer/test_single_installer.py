@@ -24,15 +24,18 @@ import zipfile
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 INSTALLER_TUI = REPO_ROOT / "installer" / "tui"
 NSI = INSTALLER_TUI / "nsis" / "gaia-setup.nsi"
 BUILD_SETUP = INSTALLER_TUI / "nsis" / "build-setup.sh"
 SMOKE = INSTALLER_TUI / "nsis" / "smoke-test.ps1"
+INSTALLER_NSH = REPO_ROOT / "installer" / "nsis" / "installer.nsh"
 ELECTRON_BUILDER = (
     REPO_ROOT / "src" / "gaia" / "apps" / "webui" / "electron-builder.yml"
 )
+TUI_DEB_BUILD = INSTALLER_TUI / "linux" / "build-packages.sh"
 sys.path.insert(0, str(INSTALLER_TUI))
 
 import fetch_agent_ui_setup as fetch  # noqa: E402
@@ -73,6 +76,66 @@ def test_ui_guid_is_what_electron_builder_derives_from_app_id():
 
 def test_ui_exe_is_electron_builders_executable_name():
     assert _define("UI_EXE") == f"{_electron('executableName')}.exe"
+
+
+def _deb() -> dict:
+    deb = yaml.safe_load(ELECTRON_BUILDER.read_text(encoding="utf-8")).get("deb")
+    assert deb, "electron-builder.yml no longer defines the Debian target"
+    return deb
+
+
+def _fpm_relations(deb: dict) -> list[tuple[str, str]]:
+    """(field, value) for every Debian relationship passed through to fpm."""
+    out = []
+    for arg in deb.get("fpm", []):
+        m = re.match(
+            r"--(?:deb-)?(replaces|conflicts|breaks|provides|field)[= ](.*)", arg
+        )
+        if m:
+            out.append((m.group(1), m.group(2).strip().strip("'\"")))
+    return out
+
+
+def test_linux_desktop_package_has_a_distinct_debian_identity():
+    tui_name = re.search(
+        r'^readonly PKG_NAME="([^"]+)"', TUI_DEB_BUILD.read_text(encoding="utf-8"), re.M
+    )
+    assert tui_name, "build-packages.sh no longer sets PKG_NAME"
+    assert _deb().get("packageName") == "gaia-desktop"
+    assert tui_name.group(1) == "gaia"
+    assert _deb()["packageName"] != tui_name.group(1)
+
+
+def test_desktop_deb_takes_over_files_from_the_old_desktop_package_named_gaia():
+    assert ("replaces", "gaia") in _fpm_relations(_deb())
+
+
+@pytest.mark.parametrize("field", ["breaks", "conflicts"])
+def test_desktop_deb_never_forces_the_terminal_package_out(field):
+    # Old desktop builds and the terminal package are both `gaia` on the same
+    # version numbers, so any Breaks/Conflicts on `gaia` also removes the
+    # terminal app (or makes dpkg -i refuse) -- the bug this package name fixes.
+    for name, value in _fpm_relations(_deb()):
+        if name == "field":
+            assert not re.search(rf"(?i)^{field}\s*:.*\bgaia\b(?!-)", value), value
+        else:
+            assert not (name == field and re.match(r"gaia\b(?!-)", value)), value
+
+
+def test_old_desktop_package_postrm_accepts_disappear():
+    # Once every file of an old `gaia` desktop install is replaced, dpkg runs
+    # its postrm with `disappear`; that must not remove the gaia-desktop link.
+    postrm = (REPO_ROOT / "installer" / "debian" / "postrm").read_text(encoding="utf-8")
+    case = re.search(r"^\s*([a-z|-]*\bdisappear\b[a-z|-]*)\)\s*;;", postrm, re.M)
+    assert case, "postrm must treat `disappear` as a no-op"
+    assert "remove" not in case.group(1).split("|")
+
+
+def test_documented_uninstall_names_the_desktop_package():
+    pkg = _deb()["packageName"]
+    for doc in ("guides/install.mdx", "guides/agent-ui.mdx", "deployment/ui.mdx"):
+        text = (REPO_ROOT / "docs" / doc).read_text(encoding="utf-8")
+        assert f"sudo apt remove {pkg}" in text, doc
 
 
 def test_build_script_accepts_exactly_electron_builders_windows_artifact_name():
@@ -634,3 +697,18 @@ def test_documentation_links_open_the_docs_not_the_home_page():
     assert _define("DOCS_URL") == "https://amd-gaia.ai/docs"
     assert '!define MUI_FINISHPAGE_LINK_LOCATION "${DOCS_URL}"' in nsi
     assert "Details: ${PRODUCT_URL}" not in nsi
+
+
+def test_setup_leaves_lemonade_to_gaia():
+    # GAIA runs its own Lemonade under ~/.gaia. A bundled system MSI would add a
+    # second server, and its install kills every lemond.exe, GAIA's own included.
+    for script in (_nsi(), INSTALLER_NSH.read_text(encoding="utf-8")):
+        assert "msiexec" not in script.lower()
+        assert ".msi" not in script.lower()
+    for workflow in ("build-installers.yml", "windows_setup.yml"):
+        text = (REPO_ROOT / ".github" / "workflows" / workflow).read_text(
+            encoding="utf-8"
+        )
+        assert "lemonade-sdk/lemonade/releases" not in text, workflow
+        assert not re.search(r"\.msi\b", text), workflow
+    assert "--lemonade-msi" not in BUILD_SETUP.read_text(encoding="utf-8")

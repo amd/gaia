@@ -436,6 +436,7 @@ is on the wire. It is sent when the phase actually starts, never on a timer, and
 | `loading_model` / `downloading_model` | the agent starts loading (or first downloading) the model | — |
 | `reasoning` | the model's first reasoning output, then about once a second | `words` reasoned so far |
 | `tool_call` | a long tool call's arguments are still streaming | `chars` so far |
+| `reconnecting` | GAIA's own Lemonade Server stopped mid-request or during a `/model` switch: sent once while the agent waits for the daemon to bring it back, then it retries. A server the user runs, or a remote `LEMONADE_BASE_URL`, is never waited on | — |
 | `model_queue` | the turn is queued for the model behind another request, then every ~2 s while it waits, then once when it gets the model | `queue` (below) |
 
 `model_queue` is the one phase sent on a timer: the steady updates are what let a

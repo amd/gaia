@@ -22,6 +22,7 @@ from gaia.ui.database import ChatDatabase
 from gaia.ui.models import ChatRequest
 from gaia.ui.routers import chat
 from gaia.ui.run_manager import RunManager
+from gaia.ui.utils import message_to_response
 
 pytestmark = pytest.mark.asyncio
 
@@ -115,6 +116,8 @@ async def test_stopped_turn_ends_with_a_cancelled_done_event(runtime):
     saved = db.get_messages(session["id"])
     assert saved[-1]["id"] == done["message_id"]
     assert saved[-1]["content"] == "Cancelled."
+    # A reload still shows the Stopped marker.
+    assert message_to_response(saved[-1]).stopped is True
 
 
 async def test_finished_turn_is_not_labelled_stopped(runtime):
@@ -126,3 +129,4 @@ async def test_finished_turn_is_not_labelled_stopped(runtime):
 
     assert "cancelled" not in done
     assert done["content"] == "Deleted 3 files."
+    assert message_to_response(db.get_messages(session["id"])[-1]).stopped is False

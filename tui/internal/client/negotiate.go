@@ -387,11 +387,11 @@ func noticeForMissingMemory(agentID, version string) string {
 
 // updateCommand names the AGENT-scoped hub command, never the bare verb.
 //
-// `gaia install` / `gaia uninstall` also exist and look right, which is the
-// trap: they are GAIA-wide — `gaia uninstall` is the tiered cleanup of the GAIA
-// install itself, one flag away from `--purge`. They reject a trailing agent id,
-// so a user handed `gaia uninstall email` sees an argparse error and may
-// reasonably retry without the argument, straight at the wrong tool. `gaia hub
+// `gaia uninstall` also exists and looks right, which is the trap: it is
+// GAIA-wide — the tiered cleanup of the GAIA install itself, one flag away from
+// `--purge`. It rejects a trailing agent id, so a user handed `gaia uninstall
+// email` sees an argparse error and may reasonably retry without the argument,
+// straight at the wrong tool. `gaia hub
 // <verb> <id>` takes the agent id and is the same command whether the TUI was
 // launched standalone or through the Python CLI.
 func updateCommand(verb, agentID string) string {
