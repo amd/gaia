@@ -21,6 +21,7 @@ library Python and print `--help`:
 | `test_report.py` | The live report: items, findings, rounds, benchmark, `gate` |
 | `launch_isolated.py` | Download an RC, unpack it without installing, run it on a throwaway profile, stop it, check for leaks |
 | `capture_window.py` | Save the window to disk for evidence (`--cdp` = a fresh frame) |
+| `cdp.py` | Drive the page over DevTools: `shot`, `click "<text>"`, `eval`, `text` (the fallback driver) |
 | `app_state.py` | Read the backend behind the window: answer text, tool steps, idle/busy |
 | `pc_evals.py` | Optional ai-pc-evals benchmark through the window |
 
@@ -43,10 +44,20 @@ These come from earlier passes that went wrong:
 - **One GPU user at a time.** Other sessions' `llama-server`s and evals may be running.
   Loading a model in your test can evict theirs, and theirs can evict yours. Check
   `app_state.py find` and the running evals first (CLAUDE.md, "Run agent evals
-  SERIALLY"). Coordinate over SendMessage, or wait.
+  SERIALLY"). Coordinate over SendMessage, or wait. When the GPU is taken, chat on a
+  **cloud model** instead: point `--lemonade` at the person's running Lemonade that
+  already has Fireworks registered (`GET /api/v1/models` lists `fireworks.*` ids). Cloud
+  models don't take the GPU slot, but RAG indexing of PDFs and images still loads a local
+  vision model, so skip document tests while someone else's eval runs.
 - **Look before you pass.** Read every screenshot before you mark an item passed. A
   pass needs what you saw (`--note`) and, for anything visual, a saved image
   (`--evidence`).
+- **Look as hard before you fail.** Before filing, rule out three things: your own
+  test setup (a missing Desktop folder, `GAIA_DISABLE_UPDATE`), invalid input (`*` is
+  not a legal Windows path character), and UI that appears only on hover or focus
+  (each answer's footer does).
+  Check a "should be" number against the code before you file it. A 34% context meter
+  looked wrong but was GAIA's deliberate 64K cloud budget, and the issue had to be corrected.
 - **A finding a person reports is a gap in this skill.** Add a check to
   `references/checklist.md` in the same change.
 
@@ -144,7 +155,9 @@ granted by its exe name. The Claude app itself is never grantable.
 | Wait with `app_state.py wait`, not screenshots | It returns when no answer is being written or indexed; a timeout is a finding |
 | Screenshots at `scale` 0.5–0.6; `zoom` for small text | Full-size screenshots burn context |
 | Save evidence with `capture_window.py --cdp 9333 $RUN/shots/NNN_what.png` | Computer-use images are masked (other apps go black) and land in the session folder |
-| For native chrome (title bar, tray, dialogs, crash box) use `screenshot(save_to_disk=true)` or `capture_window.py --pid` **with the window in front** | PrintWindow on a covered window returned a stale "Starting GAIA..." frame while the screen showed the setup wizard; the script warns when the window isn't in front |
+| For native chrome (title bar, tray, dialogs, crash box) use `screenshot(save_to_disk=true)` or `capture_window.py --pid` **with the window in front** | Electron can stop painting a covered window, so PrintWindow may return an old frame; the script warns when the window isn't in front, and a `--cdp` capture of the same moment is the cross-check |
+| Crop full-desktop screenshots to the app before they go anywhere public | They show the person's other windows: file names, folders, chats |
+| Keep Settings › Model out of evidence | It shows the tail of the person's cloud API key |
 
 **Check every chat result twice: the pixels and the backend.**
 `app_state.py last` prints the answer text, every tool step and whether it
@@ -164,14 +177,18 @@ Arabic layout rules are in the `reviewing-agent-ui` skill.
 **When access is denied:** dev builds and the taskbar have been denied before. Fall
 back, and say so in the report:
 
-1. Drive through DevTools: Playwright `chromium.connectOverCDP("http://127.0.0.1:9333")`.
+1. Drive through DevTools: `cdp.py --port 9333 click "<button text>"` (or Playwright
+   `chromium.connectOverCDP`). This also reaches a control the app hides from a person,
+   such as a link under the window buttons. Record the bug first, then mark the step
+   "driven through DevTools".
 2. Or open `http://127.0.0.1:<port>/` in the built-in browser pane.
 
 Either way you lose the window controls, tray, native dialogs and installer, so mark
 those items `not-tested` with "computer use denied". **Never call a browser-pane run
 a desktop test.**
 
-Record each result the moment you have it, not in a batch at the end:
+Record each result the moment you have it, not in a batch at the end. `add` prints the
+new item's id; use that id:
 
 ```bash
 python $SK/test_report.py set $RUN PR6123 in-progress
@@ -212,7 +229,12 @@ For each task, one at a time:
 5. If the agent stopped to ask you something, record it with
    `--outcome stalled-asked-human`.
 
-Close the app, then run `pc_evals.py grade $RUN` and copy its headline into the report:
+If the folder picker can't be reached (no screen access), send the prompt anyway: it
+names the task folder, and GAIA asks "Let GAIA use this folder?". Allow it only when
+the path is the task folder, and allow writes only inside it.
+
+Record every task while the app is still running (`record` reads its backend). Then
+close the app, then run `pc_evals.py grade $RUN` and copy its headline into the report:
 `test_report.py bench $RUN --suite smoke --agent gaia-agent-ui --summary <path> --headline "4/5 passed"`.
 
 **Scores come only from the grader.** Without the answers passphrase the result is
@@ -244,13 +266,16 @@ findings into issues:
 
 ## 7. Fix in parallel
 
-Start **one session per issue**, in its own worktree, with
+Start **one session per issue** (`start_session`), in its own worktree, with
 [references/fix-brief.md](references/fix-brief.md) filled in. Send them all at once,
 and give them independent issues. Two fixes in the same component go to one session,
 so they don't conflict.
 
 - Each session writes a failing test first, fixes, lints, commits, opens a PR that says
   `Closes #N`, and reports the branch and PR. It does not edit the report.
+- A turn started by a hook or another session can't start sessions. Then run the
+  fixes as background subagents with `isolation: "worktree"`, one per component, under
+  the same brief. They commit to their own worktree branches, which you merge the same way.
 - As each one reports, check its diff and test result before you believe it. Record
   progress with `link $RUN F3 --pr <url>`.
 - A fix session that finds the bug is not what the issue said updates the issue. It
@@ -264,7 +289,9 @@ PRs.
 1. **Fast local retest.** Merge every fix branch into a local
    `integration/<target>` branch, using full refs (`refs/heads/...`). Build it:
    - `uv build --wheel`
-   - `cd src/gaia/apps/webui && npm ci && npm run build`
+   - `cd src/gaia/apps/webui && npm ci && npm run build`. If
+     `node_modules/electron/dist/electron.exe` is missing afterwards (npm sometimes
+     skips it), run `node node_modules/electron/install.js`.
 
    Mark each merged finding fixed:
    `test_report.py link $RUN F3 --status fixed --note "in integration@abc1234"`.

@@ -12,10 +12,9 @@
 launch_isolated.py opens, so it is always current and works when the window is
 covered. It shows the page only: no title bar, window controls or native dialogs.
 
---pid/--hwnd use PrintWindow, which includes native chrome but can hand back an
-old frame: Electron stops painting a covered window, and a capture of the
-first-run window once showed "Starting GAIA..." while the screen showed the setup
-wizard. Use it only for a window that is in front, and look at the result.
+--pid/--hwnd use PrintWindow, which includes native chrome. Electron can stop
+painting a covered window, so a covered window may come back as an old frame; use
+it with the window in front (the script warns otherwise) and look at the result.
 
 Standard library only; window and screen modes are Windows only.
 """
@@ -23,17 +22,14 @@ Standard library only; window and screen modes are Windows only.
 from __future__ import annotations
 
 import argparse
-import base64
 import ctypes
-import json
-import os
-import socket
 import struct
 import sys
-import urllib.parse
-import urllib.request
 import zlib
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cdp  # noqa: E402
 
 if sys.platform == "win32":
     from ctypes import wintypes
@@ -163,77 +159,6 @@ def write_png(path: Path, w: int, h: int, bgra: bytes) -> None:
     path.write_bytes(png)
 
 
-def cdp_capture(port: int, out: Path) -> tuple[int, int]:
-    """Page.captureScreenshot over the DevTools port: renders a fresh frame, unlike PrintWindow."""
-    with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=3) as r:
-        pages = [
-            p for p in json.loads(r.read().decode("utf-8")) if p.get("type") == "page"
-        ]
-    page = next(
-        (p for p in pages if "index.html" in p.get("url", "")),
-        pages[0] if pages else None,
-    )
-    if not page:
-        sys.exit(f"No page on DevTools port {port}.")
-    u = urllib.parse.urlparse(page["webSocketDebuggerUrl"])
-    sock = socket.create_connection((u.hostname, u.port), timeout=30)
-    key = base64.b64encode(os.urandom(16)).decode()
-    sock.sendall(
-        (
-            f"GET {u.path} HTTP/1.1\r\nHost: {u.hostname}:{u.port}\r\nUpgrade: websocket\r\n"
-            f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
-        ).encode()
-    )
-    head = b""
-    while b"\r\n\r\n" not in head:
-        head += sock.recv(1)
-    if b" 101 " not in head.split(b"\r\n", 1)[0]:
-        sys.exit(f"DevTools refused the connection: {head[:120]!r}")
-    msg = json.dumps(
-        {"id": 1, "method": "Page.captureScreenshot", "params": {"format": "png"}}
-    ).encode()
-    mask = os.urandom(4)
-    hdr = bytes([0x81]) + (
-        bytes([0x80 | len(msg)])
-        if len(msg) < 126
-        else bytes([0xFE]) + struct.pack(">H", len(msg))
-    )
-    sock.sendall(hdr + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(msg)))
-
-    def read(n: int) -> bytes:
-        buf = b""
-        while len(buf) < n:
-            chunk = sock.recv(n - len(buf))
-            if not chunk:
-                sys.exit("DevTools closed the connection mid-capture.")
-            buf += chunk
-        return buf
-
-    while True:
-        payload = b""
-        while True:  # one message, possibly fragmented
-            b0, b1 = read(2)
-            n = b1 & 0x7F
-            n = (
-                struct.unpack(">H", read(2))[0]
-                if n == 126
-                else struct.unpack(">Q", read(8))[0] if n == 127 else n
-            )
-            payload += read(n)
-            if b0 & 0x80:
-                break
-        reply = json.loads(payload)
-        if reply.get("id") == 1:
-            break
-    sock.close()
-    if "error" in reply:
-        sys.exit(f"Page.captureScreenshot failed: {reply['error']}")
-    png = base64.b64decode(reply["result"]["data"])
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(png)
-    return struct.unpack(">II", png[16:24])
-
-
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(
@@ -283,7 +208,7 @@ def main() -> None:
     if not a.out:
         ap.error("give an output path, or --list")
     if a.cdp:
-        w, h = cdp_capture(a.cdp, a.out)
+        w, h = cdp.shot(a.cdp, a.out)
         print(f"{a.out} ({w}x{h}, page via DevTools)")
         return
     if sys.platform != "win32":

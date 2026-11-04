@@ -204,7 +204,15 @@ def cmd_start(a) -> None:
             f"DevTools port {a.cdp} is already in use, probably by another run; "
             "pass a free one with --cdp."
         )
-    for sub in ("AppData/Roaming", "AppData/Local", "userdata"):
+    # A real profile has these; a file picker opening on a missing Desktop errors.
+    for sub in (
+        "AppData/Roaming",
+        "AppData/Local",
+        "userdata",
+        "Desktop",
+        "Documents",
+        "Downloads",
+    ):
         (home / sub).mkdir(parents=True, exist_ok=True)
     env = dict(
         os.environ,
@@ -352,7 +360,32 @@ def cmd_stop(a) -> None:
         print(f"stopped {st['pid']}")
     else:
         print(f"{st['pid']} already exited")
+    # The daemon and its agent sidecars are detached by design and outlive the
+    # window; stop the ones running from this home's own install, nothing else.
+    for pid, exe in processes_under(home.resolve()):
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+        print(f"stopped {pid} ({exe})")
     cmd_isolation(a)
+
+
+def processes_under(root: Path) -> list[tuple[int, str]]:
+    """(pid, exe) of every process whose executable lives under *root*."""
+    script = (
+        "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and "
+        f"$_.ExecutablePath.StartsWith('{root}\\', 'OrdinalIgnoreCase') }} | "
+        'ForEach-Object { "$($_.ProcessId)`t$($_.ExecutablePath)" }'
+    )
+    out = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script],
+        capture_output=True,
+        text=True,
+    ).stdout
+    found = []
+    for line in out.splitlines():
+        pid, _, exe = line.partition("\t")
+        if pid.strip().isdigit():
+            found.append((int(pid), exe.strip()))
+    return found
 
 
 def cmd_isolation(a) -> None:

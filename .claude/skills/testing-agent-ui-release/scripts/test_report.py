@@ -94,9 +94,19 @@ def finding(rep: dict, key: str) -> dict:
     sys.exit(f"No finding {key}.")
 
 
+def next_t_id(rep: dict) -> str:
+    """T1, T2, ... counting only hand-added items, so PR and retest ids don't skip numbers."""
+    used = {
+        int(i["id"][1:])
+        for i in rep["items"]
+        if i["id"].startswith("T") and i["id"][1:].isdigit()
+    }
+    return f"T{max(used, default=0) + 1}"
+
+
 def new_item(rep: dict, title: str, area: str, priority: str, **extra) -> dict:
     it = {
-        "id": extra.pop("id", None) or f"T{len(rep['items']) + 1}",
+        "id": extra.pop("id", None) or next_t_id(rep),
         "title": title,
         "area": area,
         "priority": priority,

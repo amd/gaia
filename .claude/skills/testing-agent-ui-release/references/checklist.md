@@ -19,6 +19,8 @@ whenever a person finds a bug the pass missed.
 
 ## Window, tray, quit and restart
 
+- Notices at the top of the window keep their button clear of the Windows title-bar
+  buttons (#6534), and the button strip dims with a modal (#6542).
 - Closing the window hides GAIA to the tray, with the first-close explainer once.
 - Quit from the tray actually exits, the first time. A second quit in the same tick
   used to be dropped.
@@ -28,6 +30,7 @@ whenever a person finds a bug the pass missed.
 
 ## Model picker
 
+- Choosing a cloud model shows its consent where you clicked, not below the last row (#6535).
 - Picking an undownloaded model downloads it **and switches to it**.
 - The dropdown text is short. Long names truncate at their end, in Arabic too.
 - Only models this PC can run are offered. The NPU entry appears only on a PC with an
@@ -35,7 +38,10 @@ whenever a person finds a bug the pass missed.
 
 ## Chat
 
-- Stop really stops, and the stopped reply doesn't come back on reload.
+- Stop really stops, and the stopped reply doesn't come back on reload. It still says
+  "Stopped" after a restart (#6537).
+- A path with a space links as one path (#6536).
+- The Context meter uses the model's real window. Cloud models have up to 1M tokens (#6538).
 - An empty answer doesn't blame Lemonade when Lemonade is fine.
 - A triple Enter makes one chat, not three.
 - Pasted line breaks and Windows backslashes survive. A long paste is seen in full by
