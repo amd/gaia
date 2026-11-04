@@ -335,8 +335,8 @@ Pick the install path that fits you best:
 
     Each step keeps a log, collapsed under it until you open it. **Save a
     troubleshooting report** on any step saves setup's logs, GAIA's logs and
-    this PC's details in one file. Secrets kept in environment variables are
-    left out, but the logs go in as they are, so look it over before you share
+    this PC's details in one file. API keys and other secrets are removed from
+    the logs, but a log can quote your chats, so look it over before you share
     it. A copy stays in `~/.gaia`.
 
     Later, if a job needs a model that isn't on this PC, GAIA says which one,
@@ -626,6 +626,48 @@ gaia config set llamacpp_backend vulkan   # vulkan | auto
 
 **Change model** opens Settings → Model. To use a different server, set
 `LEMONADE_BASE_URL`.
+
+### Logs
+
+Every log GAIA keeps is readable in the app, so you can see what went wrong
+and share it without a terminal. Open them from:
+
+- **Settings → Advanced → Logs**, with **View logs** and **Save all logs**;
+- the **Model server log** button in the sidebar's model popover (click
+  *Local · model* at the bottom of the sidebar), or in **Settings → Advanced →
+  Model server**;
+- under a reply that failed on a local model.
+
+The viewer has a tab for each part of GAIA:
+
+| Tab | What it shows |
+|---|---|
+| **Model server** | What Lemonade and the backends it runs wrote: llama.cpp's `llama-server` and, on a Ryzen AI NPU, FastFlowLM |
+| **GAIA** | `gaia.log`: this app's server, chats, tools, documents and setup |
+| **Background service** | The daemon that starts the model server and runs agents and scheduled tasks |
+| **Agent** | `gaia-agent.log` and each agent's five newest run logs; pick one under **File** |
+| **Desktop app** | The window, the installer and updates |
+| **Other** | The rest of `~/.gaia/logs`, such as the terminal app's log |
+
+Warnings are yellow and errors red; **Warnings and errors only** hides the
+rest. With **Follow new lines** on, new lines appear every two seconds and the
+view stays on the newest unless you scroll up. **Copy** and **Save to file**
+take the lines shown. **Save all logs** writes every log, with this PC's
+details, into one file to attach to a bug report (the same bundle as
+`gaia diagnostics`).
+
+Where the model server's lines come from:
+
+| Server | Source |
+|---|---|
+| GAIA's own Lemonade | Its log file, `~/.gaia/lemonade/lemond.log`. It's readable even when the server has stopped, and the viewer says so above the last lines it wrote |
+| Your Lemonade on this PC | Its live log stream. If it isn't answering, the viewer says so |
+| A Lemonade on another computer | Its log stream when that computer allows it; otherwise the viewer tells you to read the log there |
+
+API keys, bearer tokens and similar secrets are removed from every line,
+on screen and in a saved file. A line can still quote your chat, such as a
+prompt the backend printed, so read it before you share it. Logs aren't
+available over mobile access.
 
 ## Permissions
 
@@ -1088,6 +1130,10 @@ The agent supports the **Model Context Protocol** in both directions — connect
     ```
 
     The usual cause is that GAIA isn't set up yet. The app shows its setup steps in that case; `gaia init` from a terminal does the same.
+  </Accordion>
+
+  <Accordion title="A model won't load, or a reply says it couldn't reach the local LLM">
+    Open the [logs](#logs): press **Model server log** under the failed reply, or in the sidebar's model popover. Turn on **Warnings and errors only** to find the line that explains it, such as a backend that exited, a device that was busy, or memory that ran out; the **GAIA** tab shows the same failure from GAIA's side. To report it, use **Save all logs** and attach the file.
   </Accordion>
 
   <Accordion title="Mobile access says ngrok is required">

@@ -3,7 +3,7 @@
 
 import React, { createContext, useCallback, useContext, useId, useRef, useState, useEffect, useMemo } from 'react';
 import type { Components } from 'react-markdown';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, FolderOpen, Square, FileText } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, FolderOpen, Square, FileText, ScrollText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
@@ -25,6 +25,7 @@ import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLo
 import { useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
+import { useLogsStore } from '../stores/logsStore';
 import {
     buildCitationIndex, docForToken, findCitations, findPages,
     type CitationIndex, type FoundPage, type LibraryDoc,
@@ -147,6 +148,13 @@ function useElapsedSeconds(active: boolean, key?: string): number {
         return () => clearInterval(t);
     }, [active, key]);
     return elapsed;
+}
+
+/** The answer an agent writes when a model call ends its turn (`_model_failure_answer` in agent.py). */
+const MODEL_FAILURE_RE = /^The model (?:call failed|stopped responding) at step \d+, so this request is unfinished\./;
+
+export function isModelFailure(content: string): boolean {
+    return MODEL_FAILURE_RE.test(content.trimStart());
 }
 
 /** Detect if message content looks like an error. */
@@ -483,6 +491,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         [agentSteps, message.content, message.role, isStreaming],
     );
     const isError = message.role === 'assistant' && (echo.echoed || message.failed === true || isErrorContent(message.content));
+    const place = useInferencePlace();
+    const showServerLog = useLogsStore((s) => s.show);
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
         : undefined;
@@ -686,6 +696,13 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         <button type="button" className="msg-try-again" onClick={onTryAgain}>
                             <RotateCw size={12} aria-hidden="true" />
                             {t('msg.tryAgain')}
+                        </button>
+                    )}
+                    {/* A local model failed: what Lemonade and its backend wrote says why. */}
+                    {(isError || (message.role === 'assistant' && isModelFailure(message.content))) && !isStreaming && place?.remote === false && (
+                        <button type="button" className="msg-try-again" onClick={() => showServerLog('model_server')}>
+                            <ScrollText size={12} aria-hidden="true" />
+                            {t('logs.serverLog')}
                         </button>
                     )}
                     {message.role === 'assistant'

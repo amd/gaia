@@ -133,3 +133,21 @@ def test_windows_skips_posix_tools(install, monkeypatch):
 
     tools = {cmd[0] for cmd in calls}
     assert tools == {"cmd", "netstat"}
+
+
+def test_logs_are_redacted_for_sharing(install, monkeypatch):
+    tmp_path, _ = install
+    monkeypatch.setenv("FIREWORKS_API_KEY", "fw-key-must-not-ship")
+    gaia_dir = tmp_path / ".gaia"
+    (gaia_dir / "gaia.log").write_bytes(
+        b"sent Authorization: Bearer abcdef1234567\nused fw-key-must-not-ship\nplain\n"
+    )
+    (gaia_dir / "lemonade" / "lemond.log").write_bytes(
+        f"started with {LEMONADE_KEY}\n".encode()
+    )
+    members = _bundle(tmp_path)
+
+    assert members["gaia.log"] == (
+        b"sent Authorization: [redacted]\nused [redacted]\nplain\n"
+    )
+    assert LEMONADE_KEY.encode() not in members["lemonade/lemond.log"]
