@@ -6,6 +6,7 @@
 import datetime
 import json
 import os
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -757,16 +758,43 @@ class TestFindFiles:
         assert "indexed.txt" not in result
         mock_index.query_files.assert_not_called()
 
-    def test_find_index_fallback(self, tmp_path):
-        """Falls back to filesystem search when index query fails."""
+    def test_find_locked_index_reports_instead_of_walking(self, tmp_path):
+        """A locked index is reported, not hidden behind a disk walk."""
         _populate_directory(tmp_path)
         mock_index = MagicMock()
-        mock_index.query_files.side_effect = Exception("Index corrupted")
+        mock_index.query_files.side_effect = sqlite3.OperationalError(
+            "database is locked"
+        )
         self.agent._fs_index = mock_index
 
         result = self.find(query="file_a", scope=str(tmp_path))
-        # Should still find the file via filesystem fallback
-        assert "file_a.txt" in result
+        assert "file index" in result
+        assert "Another GAIA process is using it" in result
+        assert "file_a.txt" not in result
+
+    def test_find_damaged_index_says_how_to_rebuild(self, tmp_path):
+        """A damaged index names the file to delete."""
+        _populate_directory(tmp_path)
+        mock_index = MagicMock()
+        mock_index.query_files.side_effect = sqlite3.DatabaseError(
+            "database disk image is malformed"
+        )
+        self.agent._fs_index = mock_index
+
+        result = self.find(query="file_a", scope=str(tmp_path))
+        assert "The file is damaged" in result
+        assert "file_index.db" in result
+
+    def test_find_index_non_sqlite_error_is_not_swallowed(self, tmp_path):
+        """A bug outside the database surfaces as an error, not a walk."""
+        _populate_directory(tmp_path)
+        mock_index = MagicMock()
+        mock_index.query_files.side_effect = KeyError("path")
+        self.agent._fs_index = mock_index
+
+        result = self.find(query="file_a", scope=str(tmp_path))
+        assert result.startswith("Error searching files")
+        assert "file_a.txt" not in result
 
     def test_sort_by_size(self, tmp_path):
         """sort_by='size' sorts results by file size."""

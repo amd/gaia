@@ -13,6 +13,7 @@ import datetime
 import json
 import mimetypes
 import os
+import sqlite3
 import sys
 import threading
 from pathlib import Path
@@ -42,6 +43,7 @@ from gaia.filesystem.name_match import (
     fts_name_terms,
     glob_matches_mid_word,
 )
+from gaia.home import gaia_home
 from gaia.logger import get_logger
 from gaia.utils.user_folders import documents_dir
 
@@ -199,6 +201,12 @@ def _index_unavailable_message(db_path: str, exc: BaseException) -> str:
     return head + "See the GAIA log for details." + tail
 
 
+def _index_db_path(agent) -> str:
+    """Where the agent's file index lives, for an error message."""
+    configured = getattr(getattr(agent, "config", None), "filesystem_index_path", None)
+    return str(Path(configured or (gaia_home() / "file_index.db")).expanduser())
+
+
 class FileSystemToolsMixin:
     """File system navigation, search, and management tools.
 
@@ -231,8 +239,6 @@ class FileSystemToolsMixin:
         db_path = getattr(config, "filesystem_index_path", None)
         if not db_path:
             return None
-        import sqlite3
-
         from gaia.filesystem.index import FileSystemIndexService
 
         with _open_lock_for(self):
@@ -898,40 +904,35 @@ class FileSystemToolsMixin:
                                 else max_results
                             ),
                         )
-                        # The index matches word prefixes; hold its rows to the
-                        # same name rule as the walk, globs included.
-                        if by_name:
-                            index_results = [
-                                r
-                                for r in index_results
-                                if name_matches(Path(r.get("path", "")).name)
-                            ]
-                        if scope_roots:
-                            index_results = [
-                                r
-                                for r in index_results
-                                if _path_in_roots(r.get("path", ""), scope_roots)
-                            ][:max_results]
+                    except sqlite3.Error as exc:
+                        logger.warning("File index search failed: %s", exc)
+                        return _index_unavailable_message(_index_db_path(self), exc)
+                    # The index matches word prefixes; hold its rows to the
+                    # same name rule as the walk, globs included.
+                    if by_name:
                         index_results = [
                             r
                             for r in index_results
-                            if in_env_scope(self, r.get("path", ""))
+                            if name_matches(Path(r.get("path", "")).name)
+                        ]
+                    if scope_roots:
+                        index_results = [
+                            r
+                            for r in index_results
+                            if _path_in_roots(r.get("path", ""), scope_roots)
                         ][:max_results]
-                        if index_results:
-                            lines = [
-                                f"Found {len(index_results)} result(s) from index:\n"
-                            ]
-                            for i, r in enumerate(index_results, 1):
-                                size_str = _format_size(r.get("size", 0))
-                                mod_str = r.get("modified_at", "")
-                                lines.append(
-                                    f"  {i}. {r['path']} ({size_str}, {mod_str})"
-                                )
-                            return "\n".join(lines)
-                    except Exception as e:
-                        logger.debug(
-                            f"Index search failed, falling back to filesystem: {e}"
-                        )
+                    index_results = [
+                        r
+                        for r in index_results
+                        if in_env_scope(self, r.get("path", ""))
+                    ][:max_results]
+                    if index_results:
+                        lines = [f"Found {len(index_results)} result(s) from index:\n"]
+                        for i, r in enumerate(index_results, 1):
+                            size_str = _format_size(r.get("size", 0))
+                            mod_str = r.get("modified_at", "")
+                            lines.append(f"  {i}. {r['path']} ({size_str}, {mod_str})")
+                        return "\n".join(lines)
 
                 # Filesystem search
                 # Determine search roots based on scope
