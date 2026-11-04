@@ -132,6 +132,8 @@ GATEWAY_STATE_FILE = Path(
 )
 
 _REQUEST_TIMEOUT = 30
+# Reading Lemonade's auth state on the Claude route must not stall a chat turn.
+STATUS_PROBE_TIMEOUT = 5
 # Registration and auth trigger upstream model discovery, which is slower.
 _DISCOVERY_TIMEOUT = 60
 # Bounds the wait on a mistyped host: a DNS failure to a non-existent domain
@@ -575,22 +577,43 @@ def gateway_anthropic_base_url(state: Optional[GatewayState] = None) -> str:
     )
 
 
-def resolve_gateway_token_with_source() -> tuple[str, str]:
-    """Return GAIA's gateway token and the non-secret source name.
+STORED_TOKEN_SOURCE = "OS credential store"
 
-    The source is used only for diagnostics; the token value is never included
-    in an error message. Keeping it beside resolution lets Claude explain when
-    its source differs from the key Lemonade currently uses.
+_TOKEN_SOURCE_LABELS = {
+    GATEWAY_ENV_VAR: f"{GATEWAY_ENV_VAR} from GAIA's environment",
+    "GAIA_GATEWAY_TOKEN": "GAIA_GATEWAY_TOKEN from GAIA's environment",
+    STORED_TOKEN_SOURCE: "the token `gaia gateway auth` stored in the OS credential store",
+}
+
+
+def describe_token_source(source: str) -> str:
+    """A token source name as a user reads it. Never the token itself."""
+    return _TOKEN_SOURCE_LABELS.get(source, source)
+
+
+def _env_gateway_token() -> Optional[tuple[str, str]]:
+    """GAIA's gateway token from its own environment, with the variable's name."""
+    for name in (GATEWAY_ENV_VAR, "GAIA_GATEWAY_TOKEN"):
+        value = os.getenv(name)
+        if value and value.strip():
+            return value.strip(), name
+    return None
+
+
+def resolve_gateway_token_with_source() -> tuple[str, str]:
+    """GAIA's one gateway token, and the non-secret name of where it came from.
+
+    Order: ``LEMONADE_AMD_API_KEY`` then ``GAIA_GATEWAY_TOKEN`` in GAIA's
+    environment, then the OS credential store. The Claude route sends this
+    token, and ``GatewayManager.ensure_authenticated`` hands Lemonade the same
+    one, so the two routes share a single source.
     """
-    token = os.getenv(GATEWAY_ENV_VAR)
-    if token and token.strip():
-        return token.strip(), GATEWAY_ENV_VAR
-    token = os.getenv("GAIA_GATEWAY_TOKEN")
-    if token and token.strip():
-        return token.strip(), "GAIA_GATEWAY_TOKEN"
+    from_env = _env_gateway_token()
+    if from_env:
+        return from_env
     token = read_stored_token()
     if token and token.strip():
-        return token.strip(), "OS credential store"
+        return token.strip(), STORED_TOKEN_SOURCE
     raise GatewayError(
         f"No AMD LLM gateway token found, and Claude gateway models need one "
         f"in GAIA's own process. Run `gaia gateway auth` (without "
@@ -604,6 +627,80 @@ def resolve_gateway_token() -> str:
     """The gateway token GAIA itself sends, for routes Lemonade doesn't carry."""
     token, _source = resolve_gateway_token_with_source()
     return token
+
+
+def lemonade_key_conflict(source: str, status: GatewayStatus) -> Optional[str]:
+    """Why a token from *source* can't be the key Lemonade uses, else None.
+
+    Lemonade's own ``LEMONADE_AMD_API_KEY`` beats any token GAIA hands it, and
+    no API reads it back, so the one copy GAIA can share with it is the same
+    variable in GAIA's environment. Any other source is a second copy.
+    """
+    if not status.env_var_set or source == GATEWAY_ENV_VAR:
+        return None
+    return (
+        f"Claude gateway models would not use the same token as your other "
+        f"gateway models. Lemonade reads {GATEWAY_ENV_VAR} from its own "
+        f"environment, which GAIA cannot see, so Claude would get "
+        f"{describe_token_source(source)} instead, and the two can differ. "
+        f"Set {GATEWAY_ENV_VAR} to the same key in GAIA's environment, or unset "
+        f"it in Lemonade's environment, restart Lemonade, and run `gaia gateway "
+        f"auth`. See https://amd-gaia.ai/docs/guides/llm-gateway."
+    )
+
+
+def check_claude_token_source(source: str) -> None:
+    """Refuse a Claude-route token Lemonade can't be sharing.
+
+    Raises:
+        GatewayError: Lemonade holds its own environment key and *source* is a
+            different copy (see ``lemonade_key_conflict``).
+    """
+    try:
+        status = GatewayManager().status(timeout=STATUS_PROBE_TIMEOUT)
+    except GatewayError as e:
+        # No Lemonade answering means no other gateway model is either; a 401
+        # re-checks once it is back.
+        log.debug(f"Could not read Lemonade's gateway auth state: {e}")
+        return
+    conflict = lemonade_key_conflict(source, status)
+    if conflict:
+        raise GatewayError(conflict)
+
+
+def explain_rejected_token(
+    source: Optional[str], status: Optional[GatewayStatus]
+) -> str:
+    """What to do when the gateway rejects the Claude route's token.
+
+    *status* is Lemonade's gateway auth state, or None when it couldn't be read.
+    """
+    generic = (
+        f"Run `gaia gateway auth` with a current token, or update "
+        f"{GATEWAY_ENV_VAR} / GAIA_GATEWAY_TOKEN if you set one."
+    )
+    if not source:
+        return generic
+    if status is not None:
+        conflict = lemonade_key_conflict(source, status)
+        if conflict:
+            return conflict
+    used = f"Claude used {describe_token_source(source)}."
+    if status is None or not status.installed:
+        return f"{used} {generic}"
+    if status.env_var_set:
+        return (
+            f"{used} Lemonade reads {GATEWAY_ENV_VAR} from its own environment, "
+            f"so if other gateway models still work, the value there differs from "
+            f"the one in GAIA's environment. Set the same current key in both."
+        )
+    if status.runtime_key_set:
+        return (
+            f"{used} If other gateway models still work, the token Lemonade holds "
+            f"is current and GAIA's has gone stale. Run `gaia gateway auth` with "
+            f"the current token, which updates both."
+        )
+    return f"{used} {generic}"
 
 
 class GatewayManager:
@@ -702,7 +799,9 @@ class GatewayManager:
                 f"{GATEWAY_ENV_VAR} is already set in Lemonade's environment, "
                 f"so Lemonade refuses to accept a different token at runtime. "
                 f"Either keep using that key, or unset {GATEWAY_ENV_VAR} and "
-                f"restart Lemonade before setting one here."
+                f"restart Lemonade before setting one here. Claude gateway "
+                f"models send the token from GAIA itself, so to keep that key "
+                f"they need {GATEWAY_ENV_VAR} set to it in GAIA's environment too."
             )
         if response.status_code == 404 and "cloud" in url:
             from gaia.llm.lemonade_launcher import describe_upgrade_hint
@@ -937,10 +1036,13 @@ class GatewayManager:
     def ensure_authenticated(
         self, recall: Optional[Callable[[], Optional[str]]] = None
     ) -> bool:
-        """Give Lemonade the remembered token if it has none.
+        """Give Lemonade GAIA's gateway token if it has none.
 
         Lemonade forgets its token on restart, so without this every restart
         means re-entering it. Returns True when the gateway is usable.
+
+        The token is the one the Claude route sends: GAIA's environment first,
+        then the remembered one, so both routes authenticate with one key.
 
         "Usable" means models were discovered, not merely that Lemonade holds a
         key: it stores one without validating it, so a revoked token reports
@@ -978,7 +1080,8 @@ class GatewayManager:
                 f"auth`, or unset {GATEWAY_ENV_VAR} if it is stale."
             )
             return False
-        token = (recall or recall_token)()
+        from_env = _env_gateway_token()
+        token = from_env[0] if from_env else (recall or recall_token)()
         if not token:
             return False
         try:
@@ -986,14 +1089,14 @@ class GatewayManager:
         except GatewayError as e:
             # A remembered token that the gateway now rejects is worth saying
             # out loud — silently prompting again hides a revoked key.
-            self.log.warning(f"The remembered gateway token was not accepted: {e}")
+            self.log.warning(f"GAIA's gateway token was not accepted: {e}")
             return False
         del token
         # Lemonade stores a key without checking it, so this — not the 200 — is
         # where a revoked token first shows.
         if not (result or {}).get("models_discovered"):
             self.log.warning(
-                "The remembered gateway token was stored but discovered no "
+                "GAIA's gateway token was stored but discovered no "
                 "models, which means the gateway rejected it. Re-run "
                 "`gaia gateway auth` with a current token."
             )

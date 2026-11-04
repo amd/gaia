@@ -3830,8 +3830,8 @@ Examples:
     gateway_auth_parser.add_argument(
         "--no-remember",
         action="store_true",
-        help="Do not keep the token in the OS credential store; you will be "
-        "asked again after every Lemonade restart",
+        help="Do not keep the token in the OS credential store, and delete an "
+        "older stored one; you will be asked again after every Lemonade restart",
     )
     gateway_logout_parser = gateway_subparsers.add_parser(
         "logout", help="Clear the session token held by Lemonade"
@@ -7428,6 +7428,40 @@ def _resolve_gateway_token(args, *, prompt: str) -> str:
     return getpass.getpass(prompt)
 
 
+def _claude_route_sends_another_token(token):
+    """True, with the reason printed, when Claude models would send another token.
+
+    Claude models read GAIA's token, not Lemonade's, so a token in GAIA's
+    environment or a failed store leaves them on a different key. Having none
+    at all (``--no-remember``) is only a warning: the other models still work.
+    """
+    from gaia.llm.gateway import (
+        GatewayError,
+        describe_token_source,
+        resolve_gateway_token_with_source,
+    )
+
+    try:
+        claude_token, source = resolve_gateway_token_with_source()
+    except GatewayError as e:
+        print(
+            f"⚠️  Claude gateway models (amd.Claude-*) send the token from GAIA, "
+            f"not Lemonade, and GAIA has none: {e}",
+            file=sys.stderr,
+        )
+        return False
+    if claude_token != token.strip():
+        print(
+            f"❌ Claude gateway models (amd.Claude-*) will still send "
+            f"{describe_token_source(source)}, which is a different token.\n"
+            f"   Update or unset it so every gateway model uses the one you "
+            f"just gave.",
+            file=sys.stderr,
+        )
+        return True
+    return False
+
+
 def _test_gateway_claude(model, source, prompt):
     """``gaia gateway test`` for a Claude model, on the route agents use for it.
 
@@ -7638,6 +7672,12 @@ def handle_gateway_command(args):
                     )
             else:
                 print(f"✅ Token accepted. Models discovered: {discovered}")
+                stored = recall_token()
+                if stored and stored != token_for_store.strip() and forget_token():
+                    print(
+                        "   Deleted the older token remembered in your OS "
+                        "credential store, so Claude models can't keep using it."
+                    )
             chosen = manager.ensure_active_model()
             if chosen:
                 from gaia.config import GaiaConfig
@@ -7653,6 +7693,8 @@ def handle_gateway_command(args):
                     f"Lemonade restarts.\n   Set {GATEWAY_ENV_VAR} in "
                     f"Lemonade's environment to persist it."
                 )
+            if _claude_route_sends_another_token(token_for_store):
+                sys.exit(1)
             return
 
         if action == "logout":

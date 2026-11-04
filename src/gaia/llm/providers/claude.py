@@ -1221,6 +1221,7 @@ class GatewayClaudeProvider(ClaudeProvider):
         from gaia.llm import gateway  # pylint: disable=import-outside-toplevel
 
         token, self._gateway_token_source = gateway.resolve_gateway_token_with_source()
+        gateway.check_claude_token_source(self._gateway_token_source)
         return sdk.Anthropic(
             # Explicit, so the SDK reads no ANTHROPIC_* credential from the
             # environment. _build_params omits the header it would carry.
@@ -1278,36 +1279,23 @@ class GatewayClaudeProvider(ClaudeProvider):
             raise exc
         status = exc.status_code
         if status in (401, 403):
-            detail = (
-                f"{where} rejected the token (HTTP {status}). Run `gaia gateway auth` "
-                "with a current token, or update LEMONADE_AMD_API_KEY / "
-                "GAIA_GATEWAY_TOKEN if you set one."
-            )
             from gaia.llm import gateway  # pylint: disable=import-outside-toplevel
 
             try:
-                gateway_status = gateway.GatewayManager().status(timeout=5)
+                gateway_status = gateway.GatewayManager().status(
+                    timeout=gateway.STATUS_PROBE_TIMEOUT
+                )
             except gateway.GatewayError as gateway_error:  # keep the original 401
                 logger.debug(
                     "Could not inspect Lemonade gateway auth state: %s", gateway_error
                 )
-            else:
-                lemonade_source = None
-                if gateway_status.env_var_set and not gateway_status.runtime_key_set:
-                    lemonade_source = gateway.GATEWAY_ENV_VAR
-                elif gateway_status.runtime_key_set and not gateway_status.env_var_set:
-                    lemonade_source = "Lemonade runtime auth"
-                if (
-                    lemonade_source
-                    and self._gateway_token_source
-                    and lemonade_source != self._gateway_token_source
-                ):
-                    detail += (
-                        f" GAIA's Claude route used {self._gateway_token_source}, "
-                        f"but Lemonade reports {lemonade_source}; if other gateway "
-                        "models still work, those keys differ."
-                    )
-            raise RuntimeError(detail) from exc
+                gateway_status = None
+            raise RuntimeError(
+                f"{where} rejected the token (HTTP {status}). "
+                + gateway.explain_rejected_token(
+                    self._gateway_token_source, gateway_status
+                )
+            ) from exc
         if status == 429:
             raise RuntimeError(
                 f"{where} is rate limiting requests (HTTP 429): {exc.message}. "

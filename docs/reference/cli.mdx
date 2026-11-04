@@ -1793,7 +1793,7 @@ gaia gateway uninstall                # remove the provider
 | `--allow-insecure-http` | `install` | Permit an `http://` gateway. Lemonade refuses to hold a token over plaintext otherwise; only for an on-prem gateway without TLS |
 | `--token` | `auth` | Token value — prefer the prompt, which keeps it out of shell history |
 | `--token-stdin` | `auth` | Read the token from stdin — best for scripts |
-| `--no-remember` | `auth` | Do not store the token; you are asked again after a restart |
+| `--no-remember` | `auth` | Do not store the token, and delete an older stored one; you are asked again after a restart |
 | `--forget` | `logout` | Also delete the stored token |
 | `--model` | `test` | Model to test (default: the active gateway model) |
 

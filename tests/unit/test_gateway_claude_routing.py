@@ -86,7 +86,20 @@ def gateway_env(monkeypatch, tmp_path):
     monkeypatch.setattr(gateway, "GATEWAY_STATE_FILE", tmp_path / "gateway.json")
     monkeypatch.setattr(gateway, "read_stored_token", lambda: None)
     monkeypatch.setattr("gaia.llm.local_only.cloud_blocked", lambda: False)
+    _lemonade_reports(monkeypatch, runtime_key_set=True)
     return gateway
+
+
+def _lemonade_reports(monkeypatch, **auth_state):
+    """Stand in for Lemonade's gateway auth state, as ``/system-info`` gives it."""
+    from gaia.llm.gateway import GatewayStatus
+
+    manager = MagicMock()
+    manager.status.return_value = GatewayStatus(
+        installed=True, models_discovered=5, **auth_state
+    )
+    monkeypatch.setattr("gaia.llm.gateway.GatewayManager", lambda: manager)
+    return manager
 
 
 @pytest.fixture()
@@ -496,37 +509,113 @@ def test_gateway_errors_are_actionable(
     lemonade.assert_not_called()
 
 
-def test_gateway_claude_401_explains_likely_token_drift(
-    fake_sdk, monkeypatch, gateway_env
+# ── one token for both routes (#6387) ──────────────────────────────────
+
+
+def _sent_token(fake_sdk):
+    return fake_sdk.Anthropic.last_init["default_headers"]["Ocp-Apim-Subscription-Key"]
+
+
+def test_claude_shares_lemonade_s_environment_key(fake_sdk, monkeypatch):
+    """Lemonade's own LEMONADE_AMD_API_KEY is the same variable in GAIA's."""
+    _lemonade_reports(monkeypatch, env_var_set=True)
+    _gateway_client()
+    assert _sent_token(fake_sdk) == GATEWAY_TOKEN
+
+
+@pytest.mark.parametrize("source", ["GAIA_GATEWAY_TOKEN", "store"])
+def test_a_second_copy_beside_lemonade_s_environment_key_is_refused(
+    fake_sdk, monkeypatch, gateway_env, source
 ):
-    client = _gateway_client()
-    error = fake_sdk.AuthenticationError("invalid subscription key", 401)
-    client._client.messages.create.side_effect = error
-    manager = MagicMock()
-    manager.status.return_value = SimpleNamespace(
-        env_var_set=True, runtime_key_set=False
-    )
-    monkeypatch.setattr("gaia.llm.gateway.GatewayManager", lambda: manager)
+    """The #6387 repro: Lemonade runs on its env key, GAIA holds another copy.
 
-    with pytest.raises(RuntimeError) as first_raised:
-        client.chat([{"role": "user", "content": "hi"}])
-    assert "those keys differ" not in str(first_raised.value)
+    Lemonade refuses runtime tokens in that state, so GAIA can't sync it, and
+    it can't read the key back. Sending the other copy is what made Claude 401
+    while DeepSeek worked; refuse before any request instead.
+    """
+    monkeypatch.delenv(gateway_env.GATEWAY_ENV_VAR)
+    if source == "store":
+        monkeypatch.setattr(gateway_env, "read_stored_token", lambda: "stale-copy")
+    else:
+        monkeypatch.setenv("GAIA_GATEWAY_TOKEN", "stale-copy")
+    lemonade = _lemonade_reports(monkeypatch, env_var_set=True)
 
-    client._gateway_token_source = "OS credential store"
-    manager.status.return_value = SimpleNamespace(
-        env_var_set=False, runtime_key_set=True
-    )
-
-    with pytest.raises(RuntimeError) as raised:
-        client.chat([{"role": "user", "content": "hi"}])
+    with pytest.raises(gateway_env.GatewayError) as raised:
+        _gateway_client()
 
     message = str(raised.value)
-    assert "GAIA's Claude route used OS credential store" in message
-    assert "Lemonade reports Lemonade runtime auth" in message
-    assert "if other gateway models still work, those keys differ" in message
+    assert "LEMONADE_AMD_API_KEY to the same key in GAIA's environment" in message
+    assert (
+        "GAIA_GATEWAY_TOKEN" if source == "GAIA_GATEWAY_TOKEN" else "credential store"
+    ) in message
+    assert "stale-copy" not in message
+    assert fake_sdk.Anthropic.last_init is None
+    lemonade.status.assert_called_once_with(timeout=5)
+
+
+@pytest.mark.parametrize("held", [{"runtime_key_set": True}, {}])
+def test_gaia_s_token_is_the_one_sent_when_lemonade_has_no_env_key(
+    fake_sdk, monkeypatch, gateway_env, held
+):
+    """Lemonade's session token came from GAIA (``ensure_authenticated``)."""
+    monkeypatch.delenv(gateway_env.GATEWAY_ENV_VAR)
+    monkeypatch.setattr(gateway_env, "read_stored_token", lambda: "remembered")
+    _lemonade_reports(monkeypatch, **held)
+    _gateway_client()
+    assert _sent_token(fake_sdk) == "remembered"
+
+
+def test_lemonade_down_does_not_block_the_claude_route(fake_sdk, monkeypatch):
+    manager = MagicMock()
+    manager.status.side_effect = GatewayError("Lemonade Server is not reachable")
+    monkeypatch.setattr("gaia.llm.gateway.GatewayManager", lambda: manager)
+    _gateway_client()
+    assert _sent_token(fake_sdk) == GATEWAY_TOKEN
+
+
+def _rejected(fake_sdk, client):
+    client._client.messages.create.side_effect = fake_sdk.AuthenticationError(
+        "invalid subscription key", 401
+    )
+    with pytest.raises(RuntimeError) as raised:
+        client.chat([{"role": "user", "content": "hi"}])
+    message = str(raised.value)
+    assert "rejected the token (HTTP 401)" in message
+    return message
+
+
+def test_401_with_a_stale_gaia_copy_says_auth_updates_both(
+    fake_sdk, monkeypatch, gateway_env
+):
+    monkeypatch.delenv(gateway_env.GATEWAY_ENV_VAR)
+    monkeypatch.setattr(gateway_env, "read_stored_token", lambda: "stored-copy-tok")
+    lemonade = _lemonade_reports(monkeypatch, runtime_key_set=True)
+    message = _rejected(fake_sdk, _gateway_client())
+    assert "stored in the OS credential store" in message
+    assert "GAIA's has gone stale" in message
+    assert "`gaia gateway auth`" in message and "updates both" in message
+    assert "stored-copy-tok" not in message
+    assert all(c.kwargs == {"timeout": 5} for c in lemonade.status.call_args_list)
+
+
+def test_401_on_a_shared_env_key_says_the_two_values_differ(fake_sdk, monkeypatch):
+    _lemonade_reports(monkeypatch, env_var_set=True)
+    message = _rejected(fake_sdk, _gateway_client())
+    assert "LEMONADE_AMD_API_KEY from GAIA's environment" in message
+    assert "the value there differs" in message
     assert GATEWAY_TOKEN not in message
-    assert manager.status.call_count == 2
-    assert all(call.kwargs == {"timeout": 5} for call in manager.status.call_args_list)
+
+
+def test_401_after_lemonade_gained_an_env_key_names_the_conflict(
+    fake_sdk, monkeypatch, gateway_env
+):
+    """Lemonade restarted with an env key after this client was built."""
+    monkeypatch.delenv(gateway_env.GATEWAY_ENV_VAR)
+    monkeypatch.setattr(gateway_env, "read_stored_token", lambda: "remembered")
+    client = _gateway_client()
+    _lemonade_reports(monkeypatch, env_var_set=True)
+    message = _rejected(fake_sdk, client)
+    assert "would not use the same token as your other gateway models" in message
 
 
 def test_unreachable_gateway_names_the_vpn(fake_sdk):

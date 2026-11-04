@@ -11,6 +11,7 @@ whether Lemonade would accept the request. The matching contract test lives in
 
 import json
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -55,6 +56,9 @@ def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "gaia.llm.gateway.GATEWAY_STATE_FILE", tmp_path / "gateway.json"
     )
+    # A token in the developer's shell would otherwise become GAIA's token.
+    monkeypatch.delenv(GATEWAY_ENV_VAR, raising=False)
+    monkeypatch.delenv("GAIA_GATEWAY_TOKEN", raising=False)
     return tmp_path / "gateway.json"
 
 
@@ -252,6 +256,8 @@ class TestAuth:
         message = str(excinfo.value)
         assert GATEWAY_ENV_VAR in message  # what
         assert "unset" in message.lower()  # what to do
+        # Claude models can't use Lemonade's key unless GAIA has it too.
+        assert "Claude" in message and "GAIA's environment" in message
 
     def test_clear_token_deletes_the_provider_key(self, manager):
         with patch("gaia.llm.gateway.requests.request") as request:
@@ -1331,3 +1337,133 @@ def test_gateway_install_with_env_token_does_not_touch_the_credential_store(
     output = capsys.readouterr().out
     assert "Models discovered: 4" in output
     assert "No token yet" not in output
+
+
+# --------------------------------------------------------------------------
+# one gateway token for both routes (#6387)
+# --------------------------------------------------------------------------
+
+
+def _lemonade_without_a_key(sent):
+    """Lemonade with the gateway registered and no key, recording the auth POST."""
+
+    def fake_request(method, url, **kwargs):
+        if url.endswith("/system-info"):
+            installed = {
+                "name": GATEWAY_PROVIDER,
+                "base_url": "https://gw/v1",
+                "env_var_set": False,
+                "runtime_key_set": bool(sent),
+                "models_discovered": 76 if sent else 0,
+            }
+            return _response(body={"cloud": {"providers": [installed]}})
+        assert url.endswith("/cloud/auth")
+        sent.append(kwargs["json"])
+        return _response(body={"models_discovered": 76})
+
+    return fake_request
+
+
+@pytest.mark.parametrize("env_var", [GATEWAY_ENV_VAR, "GAIA_GATEWAY_TOKEN"])
+def test_lemonade_gets_the_token_the_claude_route_sends(manager, monkeypatch, env_var):
+    """Replaying only the stored token left Claude on GAIA's env token."""
+    from gaia.llm.gateway import resolve_gateway_token
+
+    monkeypatch.setenv(env_var, "env-token")
+    stored = MagicMock(return_value="stored-token")
+    sent = []
+    with patch(
+        "gaia.llm.gateway.requests.request", side_effect=_lemonade_without_a_key(sent)
+    ):
+        assert manager.ensure_authenticated(recall=stored) is True
+
+    assert sent[0]["api_key"] == "env-token" == resolve_gateway_token()
+    stored.assert_not_called()
+
+
+def test_lemonade_gets_the_stored_token_when_gaia_s_env_has_none(manager):
+    sent = []
+    with patch(
+        "gaia.llm.gateway.requests.request", side_effect=_lemonade_without_a_key(sent)
+    ):
+        assert manager.ensure_authenticated(recall=lambda: "stored-token") is True
+    assert sent[0]["api_key"] == "stored-token"
+
+
+class _AuthManager:
+    """``gaia gateway auth`` against a Lemonade that accepts the token."""
+
+    def __init__(self):
+        self.set_tokens = []
+
+    def set_token(self, token):
+        self.set_tokens.append(token)
+        return {"models_discovered": 3}
+
+    def ensure_active_model(self):
+        return None
+
+
+def _run_auth(monkeypatch, *, token, no_remember=False, stored=None):
+    import gaia.cli as cli
+    from gaia.llm import gateway as gateway_module
+
+    store = {"token": stored} if stored else {}
+
+    def remember(value):
+        store["token"] = value
+
+    monkeypatch.setattr(gateway_module, "GatewayManager", _AuthManager)
+    monkeypatch.setattr(gateway_module, "remember_token", remember)
+    monkeypatch.setattr(gateway_module, "recall_token", lambda: store.get("token"))
+    monkeypatch.setattr(gateway_module, "read_stored_token", lambda: store.get("token"))
+    monkeypatch.setattr(
+        gateway_module, "forget_token", lambda: store.pop("token", None) is not None
+    )
+    cli.handle_gateway_command(
+        SimpleNamespace(
+            gateway_action="auth",
+            token=token,
+            token_stdin=False,
+            no_remember=no_remember,
+        )
+    )
+    return store
+
+
+def test_auth_leaves_both_routes_on_the_new_token(monkeypatch, capsys):
+    store = _run_auth(monkeypatch, token="new-token", stored="old-token")
+    assert store["token"] == "new-token"
+    from gaia.llm.gateway import resolve_gateway_token
+
+    assert resolve_gateway_token() == "new-token"
+    assert "Claude gateway models" not in capsys.readouterr().err
+
+
+def test_auth_fails_when_gaia_s_env_keeps_claude_on_another_token(monkeypatch, capsys):
+    monkeypatch.setenv(GATEWAY_ENV_VAR, "env-token")
+    with pytest.raises(SystemExit) as exit_info:
+        _run_auth(monkeypatch, token="new-token")
+    assert exit_info.value.code == 1
+    err = capsys.readouterr().err
+    assert f"{GATEWAY_ENV_VAR} from GAIA's environment" in err
+    assert "different token" in err
+    assert "env-token" not in err and "new-token" not in err
+
+
+def test_auth_no_remember_deletes_an_older_stored_token(monkeypatch, capsys):
+    store = _run_auth(
+        monkeypatch, token="new-token", no_remember=True, stored="old-token"
+    )
+    assert store == {}
+    captured = capsys.readouterr()
+    assert "Deleted the older token" in captured.out
+    # Claude models now have no token rather than a stale one; that is said.
+    assert "GAIA has none" in captured.err
+
+
+def test_auth_no_remember_keeps_a_matching_stored_token(monkeypatch):
+    store = _run_auth(
+        monkeypatch, token="same-token", no_remember=True, stored="same-token"
+    )
+    assert store == {"token": "same-token"}
