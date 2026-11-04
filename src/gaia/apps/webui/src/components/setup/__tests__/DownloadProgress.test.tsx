@@ -19,14 +19,56 @@ function rowOf(name: string): HTMLElement {
 }
 
 describe('DownloadProgress', () => {
-    it('shows each state as a word, with the embedder first, then chat, then the rest', () => {
+    it('offers no log while it only repeats the row: the model name, its bar, and Downloaded', () => {
+        render(<DownloadProgress status={runStatus([
+            progress({ id: QWEN.id, state: 'downloading', bytes_done: 7.6e9, bytes_total: 23.3e9, log: ['Downloading: Qwen3.6-35B-A3B-GGUF', '[====------] 33% (7.6 GB/23.3 GB)'] }),
+            progress({ id: EMBED.id, roles: ['embedding'], state: 'ready', bytes_done: 0.3e9, bytes_total: 0.3e9, log: ['   Downloading: embeddinggemma-300m-GGUF', '[==========] 100% (330 MB/330 MB)', 'Downloaded'] }),
+        ])} names={NAMES} />);
+        expect(screen.queryByRole('button', { name: /Download log/ })).toBeNull();
+    });
+
+    it('shows a failed download its log once, under Details, with no chevron as well', () => {
+        render(<DownloadProgress status={runStatus([
+            progress({ id: QWEN.id, state: 'failed', error_kind: 'lemonade', log: ['Downloading: Qwen3.6-35B-A3B-GGUF', 'Failed: boom'] }),
+        ])} names={NAMES} />);
+        const row = within(rowOf('Qwen3.6-35B-A3B'));
+        expect(row.queryByRole('button', { name: /Download log/ })).toBeNull();
+        expect(row.getByText('Details')).toBeInTheDocument();
+    });
+
+    it("opens each download's own log from a chevron on its row, closed at first", () => {
+        const log = ['Downloading: Qwen3.6-35B-A3B-GGUF', 'Fetching unsloth/Qwen3.6-35B-A3B-GGUF from huggingface.co', '[====------] 33% (7.6 GB/23.3 GB)'];
+        const { rerender } = render(<DownloadProgress status={runStatus([
+            progress({ id: QWEN.id, state: 'downloading', bytes_done: 7.6e9, bytes_total: 23.3e9, log }),
+            progress({ id: EMBED.id, roles: ['embedding'], state: 'queued', bytes_total: 0.3e9 }),
+        ])} names={NAMES} />);
+        const row = within(rowOf('Qwen3.6-35B-A3B'));
+        const toggle = row.getByRole('button', { name: 'Download log for Qwen3.6-35B-A3B' });
+        expect(toggle).toHaveAttribute('aria-expanded', 'false');
+        expect(row.queryByText(/33% \(7\.6 GB/)).toBeNull();
+        // Nothing printed yet: no chevron to open an empty log.
+        expect(within(rowOf('embeddinggemma-300m')).queryByRole('button', { name: /Download log/ })).toBeNull();
+
+        fireEvent.click(toggle);
+        expect(toggle).toHaveAttribute('aria-expanded', 'true');
+        expect(row.getByText(/33% \(7\.6 GB/)).toBeInTheDocument();
+
+        // It keeps up while the download runs.
+        rerender(<DownloadProgress status={runStatus([
+            progress({ id: QWEN.id, state: 'downloading', bytes_done: 9e9, bytes_total: 23.3e9, log: [log[0], log[1], '[======----] 39% (9.0 GB/23.3 GB)'] }),
+            progress({ id: EMBED.id, roles: ['embedding'], state: 'queued', bytes_total: 0.3e9 }),
+        ])} names={NAMES} />);
+        expect(row.getByText(/39% \(9\.0 GB/)).toBeInTheDocument();
+    });
+
+    it('shows each state as a word, with the download under way first, then what is done, then what waits', () => {
         render(<DownloadProgress status={runStatus([
             progress({ id: GEMMA.id, roles: ['vision'], state: 'queued', bytes_total: 5.97e9 }),
-            progress({ id: QWEN.id, state: 'downloading', bytes_done: 7.6e9, bytes_total: 23.3e9 }),
             progress({ id: EMBED.id, roles: ['embedding'], state: 'ready', bytes_done: 0.3e9, bytes_total: 0.3e9 }),
+            progress({ id: QWEN.id, state: 'downloading', bytes_done: 7.6e9, bytes_total: 23.3e9 }),
         ])} names={NAMES} />);
         const names = [...document.querySelectorAll('.dl-name')].map((n) => n.textContent);
-        expect(names).toEqual(['embeddinggemma-300m', 'Qwen3.6-35B-A3B', 'Gemma-4-E4B-it']);
+        expect(names).toEqual(['Qwen3.6-35B-A3B', 'embeddinggemma-300m', 'Gemma-4-E4B-it']);
         expect(within(rowOf('embeddinggemma-300m')).getByText('Ready')).toBeInTheDocument();
         expect(within(rowOf('Qwen3.6-35B-A3B')).getByText('Downloading')).toBeInTheDocument();
         expect(within(rowOf('Gemma-4-E4B-it')).getByText('Queued')).toBeInTheDocument();
@@ -38,7 +80,7 @@ describe('DownloadProgress', () => {
             progress({ id: GEMMA.id, roles: ['vision'], state: 'failed', error: 'boom', error_kind: 'lemonade' }),
             progress({ id: EMBED.id, roles: ['embedding'], state: 'cancelled', bytes_done: 0.1e9, bytes_total: 0.3e9 }),
         ], { state: 'failed' })} names={NAMES} onRetry={vi.fn()} onResume={vi.fn()} />);
-        expect(within(rowOf('Qwen3.6-35B-A3B')).getByText('Verifying')).toBeInTheDocument();
+        expect(within(rowOf('Qwen3.6-35B-A3B')).getByText('Checking')).toBeInTheDocument();
         expect(within(rowOf('Gemma-4-E4B-it')).getByText('Failed')).toBeInTheDocument();
         expect(within(rowOf('embeddinggemma-300m')).getByText('Cancelled')).toBeInTheDocument();
         expect(within(rowOf('embeddinggemma-300m')).getByText('100 MB kept. Resume continues from there.')).toBeInTheDocument();
@@ -177,7 +219,8 @@ describe('DownloadProgress', () => {
     it.each([
         ['network', 'The connection dropped while downloading Qwen3.6-35B-A3B. Press Retry to continue from where it stopped.'],
         ['disk_full', 'Ran out of disk space after 14.2 GB of Qwen3.6-35B-A3B. Free 7.1 GB and press Retry. Nothing was lost; the download continues from where it stopped.'],
-        ['lemonade', 'Lemonade couldn’t download Qwen3.6-35B-A3B. Details has its message.'],
+        ['lemonade', 'GAIA couldn’t download Qwen3.6-35B-A3B. Details has the reason.'],
+        ['path_too_long', "Windows couldn't save Qwen3.6-35B-A3B: the path to the models folder is too long. Turn on long file paths in Windows, or use a models folder with a shorter path, then press Retry."],
     ] as const)('words a %s failure with what to do, and Retry works', (kind, text) => {
         const onRetry = vi.fn();
         render(<DownloadProgress
@@ -193,6 +236,17 @@ describe('DownloadProgress', () => {
         fireEvent.click(retry);
         expect(onRetry).toHaveBeenCalledWith(QWEN.id, kind);
         expect(within(row).getByText('Details')).toBeInTheDocument();
+    });
+
+    it("Details shows Lemonade's own message from the download's log", () => {
+        render(<DownloadProgress
+            status={runStatus([progress({ id: QWEN.id, state: 'failed', error_kind: 'lemonade', error: 'Lemonade could not download it.', log: ['Downloading', 'Failed: checkpoint not found'] })], { state: 'failed' })}
+            names={NAMES}
+            onRetry={vi.fn()}
+        />);
+        const row = rowOf('Qwen3.6-35B-A3B');
+        fireEvent.click(within(row).getByText('Details'));
+        expect(within(row).getByText(/Failed: checkpoint not found/)).toBeInTheDocument();
     });
 
     it('shows how many failed in the overall line, and offers Skip this model', () => {

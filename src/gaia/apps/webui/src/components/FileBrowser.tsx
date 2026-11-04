@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { ensureModel } from '../stores/modelNeededStore';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
     X, Search, Folder, FileText, Home, Download, Monitor, ChevronRight,
@@ -128,6 +129,7 @@ async function indexAndAttachFiles(
                     succeededFiles.push(filepath);
                 }
             } else {
+                if (!(await ensureModel('embedding'))) break;
                 const doc = await api.uploadDocumentByPath(filepath);
                 if (doc?.id) {
                     docIds.push(doc.id);

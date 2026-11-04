@@ -2514,7 +2514,7 @@ Examples:
 
 A TUI must already be running with --control-port; this drives THAT session so
 the run is visible on screen. The judge uses your Claude Code login (the
-`claude` CLI), or ANTHROPIC_API_KEY when it is set.
+`claude` CLI) first, then ANTHROPIC_API_KEY.
 """,
     )
     sessions_eval_parser.add_argument(
@@ -3919,9 +3919,24 @@ Examples:
         help="Skip model downloads (only set up Lemonade Server)",
     )
     init_parser.add_argument(
+        "--server-only",
+        action="store_true",
+        help="Start the model server and stop, fetching nothing else",
+    )
+    init_parser.add_argument(
+        "--agent-only",
+        action="store_true",
+        help="Only install or update the GAIA agent; no Lemonade or model steps",
+    )
+    init_parser.add_argument(
         "--skip-webui-build",
         action="store_true",
         help="Skip building the Agent UI frontend (same effect as GAIA_SKIP_WEBUI_BUILD)",
+    )
+    init_parser.add_argument(
+        "--skip-pip-extras",
+        action="store_true",
+        help="Install no Python packages (the desktop app ships its own)",
     )
     init_parser.add_argument(
         "--force-reinstall",
@@ -6362,6 +6377,19 @@ Let me know your answer!
         # --minimal flag overrides --profile
         profile = "minimal" if args.minimal else args.profile
 
+        if args.agent_only:
+            if profile != "gaia" or args.check:
+                print(
+                    "Error: --agent-only updates the GAIA agent; it does not "
+                    "combine with --profile, --minimal or --check.",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            from gaia.installer.init_command import run_agent_refresh
+
+            log_manager.configure_agent_console(debug=getattr(args, "verbose", False))
+            sys.exit(run_agent_refresh())
+
         # MCP profile has its own init flow (no Lemonade/models)
         if profile == "mcp":
             from gaia.installer.mcp_init import run_mcp_init
@@ -6458,6 +6486,7 @@ Let me know your answer!
             verbose=getattr(args, "verbose", False),
             remote=getattr(args, "remote", False),
             skip_webui_build=getattr(args, "skip_webui_build", False),
+            skip_pip_extras=getattr(args, "skip_pip_extras", False),
             skip_chat_model=getattr(args, "skip_chat_model", False),
             lemonade_url=getattr(args, "lemonade_url", None),
             gaia_lemonade=getattr(args, "gaia_lemonade", False),
@@ -6465,6 +6494,7 @@ Let me know your answer!
             allow_low_disk=args.allow_low_disk,
             keep_trying=args.keep_trying,
             extra_models=args.download_model,
+            server_only=getattr(args, "server_only", False),
         )
         sys.exit(exit_code)
 
@@ -9110,7 +9140,7 @@ def handle_diagnostics_command(args):
     - every log :func:`_diag_log_files` lists, with its rotated files
       (``gaia.log.1`` ...); a file over 50 MB contributes only its last 50 MB,
       as ``<name>.tail``
-    - ``~/.gaia/electron-install-state.json``
+    - ``~/.gaia/electron-install-state.json`` and ``setup-report.json``
     - OS version (``uname``/``lsb_release`` on Linux, ``sw_vers`` on macOS,
       ``ver`` on Windows)
     - ``env`` entries matching ``gaia|lemonade|xdg|wayland|display`` (case-insensitive)
@@ -9146,8 +9176,12 @@ def handle_diagnostics_command(args):
         sys.exit(1)
 
     log_files = _diag_log_files(gaia_dir)
+    from gaia.home import gaia_home
+
     state_files = [
         gaia_dir / "electron-install-state.json",
+        # First-run setup's record: its run, plan and every stage's log.
+        gaia_home() / "setup-report.json",
     ]
 
     # System info snapshot

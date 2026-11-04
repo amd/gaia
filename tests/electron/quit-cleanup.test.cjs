@@ -281,14 +281,14 @@ describe("main.cjs quit wiring", () => {
     expect(kill).toBeGreaterThan(awaitStart);
   });
 
-  test("startup does not go on to open the window once a quit has begun", () => {
+  test("startup does not go on to load the app once a quit has begun", () => {
     const ready = MAIN.slice(MAIN.indexOf("app.whenReady().then(async () => {"));
     const start = ready.indexOf("backendProcess = await backendStarting;");
     const bail = ready.indexOf("if (shutdownStarted)", start);
-    const window = ready.indexOf("createWindow();");
+    const load = ready.indexOf("if (!showingInstallScreen) await loadApp();");
     expect(start).toBeGreaterThan(-1);
     expect(bail).toBeGreaterThan(start);
-    expect(window).toBeGreaterThan(bail);
+    expect(load).toBeGreaterThan(bail);
   });
 
   test("the fatal quit skips the are-you-sure question", () => {

@@ -10,6 +10,17 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **Images are not read while chat runs on the NPU.** The NPU model doesn't
+  read images, and loading Gemma next to it would mean a 6 GB download, so
+  `analyze_image` and `answer_question_about_image` answer with why they
+  can't read the image and how to switch to the GPU.
+- **Images are read by the model setup chose, not always Gemma.** The image
+  tools loaded Gemma 4 E4B by name, so a PC running Qwen3.6, which reads images
+  itself, was asked to download Gemma on its first image question. They now use
+  `vision_model` from setup, else the chat model when it reads images, else
+  Gemma, the same rule document scans use. Requires the `gaia` Python CLI with
+  `resolve_default_vision_model` (the release that ships first-run setup in the
+  Agent UI).
 - **Reading text aloud no longer downloads a voice model mid-chat.**
   `text_to_speech` used to pull Kokoro on first use; it now stops and asks you
   to run `gaia download --agent talk` first. It also takes a `speed` (0.5-2.0),
@@ -91,6 +102,14 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **Deleting a chat removes it from Memory.** The agent filed each Agent UI
+  chat's turns and tool calls under a random id, so a deleted chat stayed
+  readable in full under Memory > Advanced > Conversation history. It now
+  files them under the chat's id, and deleting the chat deletes them; what
+  GAIA learned about you stays under About you, and the Agent UI's delete
+  confirmation says so. A turn
+  still finishing when its chat is deleted files nothing, and skill learning
+  keeps reading work done in a chat after it was first learned from (#5931).
 - **Skill messages give commands that work and say what really happens.**
   Installing a skill the agent already bundles now says the bundled copy is
   the one that loads, instead of telling the model to load the install. The
