@@ -196,3 +196,17 @@ def test_sidecar_logs_are_found_under_the_agents_dir(tmp_path):
     log.touch()
     assert npu.sidecar_logs(tmp_path) == [log]
     assert npu.sidecar_logs(tmp_path / "elsewhere") == []
+
+
+def test_the_real_cause_behind_couldnt_reach_is_read_from_the_sidecar_log(tmp_path):
+    # #6632: a 500 model_load_error surfaced to the user as "Couldn't reach".
+    log = tmp_path / "agents" / "gaia" / "logs" / "sidecar-51234.log"
+    log.parent.mkdir(parents=True)
+    log.write_text(
+        "INFO turn started\n"
+        'ERROR Request failed with status 500: {"error": {"type": '
+        '"model_load_error", "message": "FLM NPU validation failed"}}\n',
+        encoding="utf-8",
+    )
+    (line,) = npu.sidecar_request_failures(tmp_path)
+    assert "model_load_error" in line and line.startswith("sidecar-51234.log")

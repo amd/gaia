@@ -223,6 +223,23 @@ def sidecar_logs(gaia_home: Path) -> List[Path]:
     return sorted((gaia_home / "agents").glob("*/logs/sidecar-*.log"))
 
 
+def sidecar_request_failures(gaia_home: Path) -> List[str]:
+    """Lemonade error bodies the agent sidecar logged.
+
+    GAIA reports an FLM load failure (Lemonade's 500 ``model_load_error``) as
+    "Couldn't reach the local LLM"; the sidecar log keeps the real cause.
+    """
+    found = []
+    for log in sidecar_logs(gaia_home):
+        text = log.read_text(encoding="utf-8", errors="replace")
+        found += [
+            f"{log.name}: {line.strip()}"
+            for line in text.splitlines()
+            if "Request failed with status" in line
+        ]
+    return found
+
+
 # ── The run ───────────────────────────────────────────────────────────────
 
 
@@ -516,6 +533,9 @@ def run(args: argparse.Namespace) -> None:
         if backend_log is not None:
             backend_log.close()
         _collect_logs(gaia_home, logs)
+        if failure is not None:
+            for line in sidecar_request_failures(gaia_home):
+                _say(f"agent sidecar: {line}")
         for t in trouble:
             _say(f"teardown: {t}")
         if trouble and failure is None:
