@@ -459,9 +459,13 @@ function findGaiaBin() {
  *
  * `onLine(line)` sees each whole stdout line as it arrives; a line it returns
  * true for is left out of the log.
+ *
+ * When `signal` aborts, the child and everything it started are stopped and
+ * the Promise rejects with InstallCancelled once they are gone.
  */
-function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
-  return new Promise((resolve) => {
+function runCommand(cmd, args, { env, stageLabel, onLine, signal } = {}) {
+  if (signal && signal.aborted) return Promise.reject(new InstallCancelled());
+  return new Promise((resolve, reject) => {
     log(`$ ${cmd} ${args.join(" ")}`);
     let proc;
     try {
@@ -477,6 +481,20 @@ function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
       resolve({ code: -1, stdout: "", stderr: String(err.message || err), error: err });
       return;
     }
+
+    let stopping = false;
+    const onAbort = () => {
+      stopping = true;
+      log(`Stopping ${cmd}: GAIA is quitting`);
+      require("./process-tree.cjs")
+        .killProcessTree(proc, { label: stageLabel || cmd, log, logError })
+        .then(() => reject(new InstallCancelled()), reject);
+    };
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    const finish = (result) => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      if (!stopping) resolve(result);
+    };
 
     let stdout = "";
     let stderr = "";
@@ -527,12 +545,12 @@ function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
 
     proc.on("error", (err) => {
       logError(`${cmd} error: ${err.message}`);
-      resolve({ code: -1, stdout, stderr, error: err });
+      finish({ code: -1, stdout, stderr, error: err });
     });
 
     proc.on("exit", (code) => {
       log(`  exit code: ${code}`);
-      resolve({ code, stdout, stderr });
+      finish({ code, stdout, stderr });
     });
   });
 }
@@ -1053,6 +1071,14 @@ class InstallError extends Error {
   }
 }
 
+/** The caller's signal stopped the install: the app is quitting, nothing failed. */
+class InstallCancelled extends Error {
+  constructor() {
+    super("The install stopped because GAIA is quitting; it continues on the next launch.");
+    this.name = "InstallCancelled";
+  }
+}
+
 /** Which FAILURE_REASONS a uv failure's output shows, or null. */
 function failureReason(output) {
   if (isFileLockedError(output)) return FAILURE_REASONS.LOCKED;
@@ -1277,7 +1303,7 @@ function addManagedBinToPath() {
  *
  * Throws InstallError on failure.
  */
-async function ensureUv({ onProgress, isPackaged } = {}) {
+async function ensureUv({ onProgress, isPackaged, signal } = {}) {
   const report = makeProgressReporter(onProgress);
   report(STAGES.ENSURE_UV, 0, "Checking uv (Python package manager)");
 
@@ -1376,13 +1402,13 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
           "-Command",
           "irm https://astral.sh/uv/install.ps1 | iex",
         ],
-        { stageLabel: "uv-install-dev" }
+        { stageLabel: "uv-install-dev", signal }
       );
     } else {
       result = await runCommand(
         "bash",
         ["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
-        { stageLabel: "uv-install-dev" }
+        { stageLabel: "uv-install-dev", signal }
       );
     }
 
@@ -1443,7 +1469,7 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
           "-Command",
           "irm https://astral.sh/uv/install.ps1 | iex",
         ],
-        { stageLabel: "uv-install-packaged-rescue" }
+        { stageLabel: "uv-install-packaged-rescue", signal }
       );
       if (rescue.code === 0) {
         // Ensure common install locations are present on PATH for this
@@ -1469,6 +1495,7 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
         log(`Packaged Windows: automated uv installer exited ${rescue.code}`);
       }
     } catch (rescueErr) {
+      if (rescueErr instanceof InstallCancelled) throw rescueErr;
       log(`Packaged Windows: rescue installer threw: ${rescueErr.message}`);
     }
   }
@@ -1570,7 +1597,7 @@ async function installBackend(opts = {}) {
   setState(STATES.INSTALLING, { stage: STAGES.ENSURE_UV, version });
 
   // Stage 1: ensure uv
-  await ensureUv({ onProgress: opts.onProgress, isPackaged: opts.isPackaged });
+  await ensureUv({ onProgress: opts.onProgress, isPackaged: opts.isPackaged, signal: opts.signal });
 
   // Stage 2: create venv
   setState(STATES.INSTALLING, { stage: STAGES.CREATE_VENV, version });
@@ -1593,7 +1620,7 @@ async function installBackend(opts = {}) {
     }
 
     const venvArgs = ["venv", GAIA_VENV, "--python", "3.12"];
-    let venvResult = await runCommand("uv", venvArgs, { stageLabel: "venv" });
+    let venvResult = await runCommand("uv", venvArgs, { stageLabel: "venv", signal: opts.signal });
     // uv downloads Python 3.12 when none is installed; behind a corporate
     // proxy that fails on uv's bundled roots exactly like the pip step below.
     let venvNativeTls = false;
@@ -1616,6 +1643,7 @@ async function installBackend(opts = {}) {
       }
       venvResult = await runCommand("uv", [...venvArgs, "--native-tls"], {
         stageLabel: "venv",
+        signal: opts.signal,
       });
     }
     if (venvResult.code !== 0) {
@@ -1663,7 +1691,7 @@ async function installBackend(opts = {}) {
     const offline = await runCommand(
       "uv",
       ["pip", "install", pipPackage, "--offline", "--compile-bytecode", "--python", GAIA_PYTHON_BIN],
-      { stageLabel: "pip" }
+      { stageLabel: "pip", signal: opts.signal }
     );
     fs.rmSync(_prefetchMarker(toPep440(version)), { force: true });
     if (offline.code === 0) {
@@ -1685,7 +1713,7 @@ async function installBackend(opts = {}) {
   ) {
     const attemptArgs = useNativeTls ? [...pipArgs, "--native-tls"] : pipArgs;
     if (useNativeTls) nativeTlsAttempted = true;
-    installResult = await runCommand("uv", attemptArgs, { stageLabel: "pip" });
+    installResult = await runCommand("uv", attemptArgs, { stageLabel: "pip", signal: opts.signal });
     if (installResult.code === 0) break;
     const attemptOutput = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
     // A corporate proxy's custom root CA isn't in uv's bundled webpki roots, so
@@ -1728,10 +1756,14 @@ async function installBackend(opts = {}) {
     const moved = moveLockedAside(lockedFiles(firstOutput));
     if (moved.length > 0) {
       report(STAGES.INSTALL_PACKAGE, 0, "Another program has GAIA's files open — retrying the install");
-      installResult = await runCommand("uv", useNativeTls ? [...pipArgs, "--native-tls"] : pipArgs, {
-        stageLabel: "pip",
-      });
-      putBackUnreplaced(moved);
+      try {
+        installResult = await runCommand("uv", useNativeTls ? [...pipArgs, "--native-tls"] : pipArgs, {
+          stageLabel: "pip",
+          signal: opts.signal,
+        });
+      } finally {
+        putBackUnreplaced(moved);
+      }
     }
   }
   if (installResult.code !== 0) {
@@ -1891,6 +1923,7 @@ async function refreshAgent(gaiaBin, opts = {}) {
   const result = await runCommand(gaiaBin, ["init", "--agent-only"], {
     stageLabel: "agent",
     env: { ...process.env, COLUMNS: "1000" },
+    signal: opts.signal,
   });
   const lastLine = `${result.stderr || ""}`.trim().split(/\r?\n/).pop();
   if (result.code === AGENT_KEPT_EXIT) {
@@ -2070,8 +2103,11 @@ function venvPackageVersion() {
  *   - version: override the pinned version
  *   - allowPartialRestart: bool (default true) — restart from scratch if
  *     the state file indicates a `partial` install.
+ *   - signal: AbortSignal — stops the running step (the app is quitting)
  *
- * Throws InstallError on failure and updates the state file.
+ * Throws InstallError on failure and updates the state file. Throws
+ * InstallCancelled when `signal` stopped it; the state file then still says
+ * installing, so the next launch runs the install again.
  */
 async function ensureBackend(opts = {}) {
   openLog({ truncate: true });
@@ -2207,6 +2243,10 @@ async function ensureBackend(opts = {}) {
     await refreshAgent(verified, opts);
     return verified;
   } catch (err) {
+    if (err instanceof InstallCancelled) {
+      log(err.message);
+      throw err;
+    }
     if (err instanceof InstallError) {
       setState(STATES.FAILED, {
         stage: err.stage || null,
@@ -2278,4 +2318,5 @@ module.exports = {
 
   // Error
   InstallError,
+  InstallCancelled,
 };

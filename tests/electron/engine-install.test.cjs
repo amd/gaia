@@ -263,6 +263,64 @@ describe("a failed install", () => {
   });
 });
 
+describe("quitting during the install", () => {
+  /** An install that runs until its signal aborts, then rejects the way the installer does. */
+  function runningInstall({ stopMs = 0 } = {}) {
+    const seen = {};
+    const ensureBackend = jest.fn(
+      ({ signal }) =>
+        new Promise((resolve, reject) => {
+          seen.signal = signal;
+          signal.addEventListener("abort", () =>
+            setTimeout(() => reject(Object.assign(new Error("The install stopped because GAIA is quitting"), { name: "InstallCancelled" })), stopMs)
+          );
+        })
+    );
+    return { ensureBackend, seen };
+  }
+
+  test("stop() stops the running install and waits until it has ended", async () => {
+    const { ensureBackend, seen } = runningInstall({ stopMs: 50 });
+    const { engine } = setup({ ensureBackend });
+    const run = engine.run();
+    await tick();
+    expect(seen.signal.aborted).toBe(false);
+
+    let stopped = false;
+    const stopping = engine.stop().then(() => {
+      stopped = true;
+    });
+    expect(seen.signal.aborted).toBe(true);
+    await tick();
+    expect(stopped).toBe(false);
+
+    await stopping;
+    await expect(run).resolves.toBe(false);
+  });
+
+  test("a stopped install is not shown or reported as a failure", async () => {
+    const { ensureBackend } = runningInstall();
+    const { engine, send, onFailed } = setup({ ensureBackend });
+    const run = engine.run();
+    await tick();
+
+    await engine.stop();
+    await run;
+
+    expect(sent(send).some((s) => s.phase === "failed")).toBe(false);
+    expect(onFailed).not.toHaveBeenCalled();
+    expect(console.error).not.toHaveBeenCalled();
+    expect(ensureBackend).toHaveBeenCalledTimes(1);
+  });
+
+  test("stop() before any install, or after one finished, returns at once", async () => {
+    const { engine } = setup();
+    await expect(engine.stop()).resolves.toBeUndefined();
+    await engine.run();
+    await expect(engine.stop()).resolves.toBeUndefined();
+  });
+});
+
 describe("install:open-log-file", () => {
   test("opens only the installer log, ignoring a renderer-supplied path", async () => {
     const { invoke, shell } = setup();
