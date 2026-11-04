@@ -1,0 +1,106 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.resource-strip {
+    container-type: inline-size;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-block: 6px;
+    padding-inline: 16px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+    font-family: var(--font-sans);
+    flex-shrink: 0;
+}
+
+.resource-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 6px 16px;
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.resource-tiles.is-stale { opacity: 0.55; }
+
+.resource-tile {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--text-primary);
+}
+.tone-cpu .resource-spark { color: var(--accent-blue); }
+.tone-memory .resource-spark { color: var(--accent-purple); }
+.tone-gpu .resource-spark { color: var(--accent-cyan); }
+.tone-npu .resource-spark { color: var(--accent-green); }
+
+.resource-spark {
+    flex-shrink: 0;
+    width: 52px;
+    height: 30px;
+    border: 1px solid currentColor;
+    border-radius: var(--radius-sm);
+    background: var(--bg-input);
+    overflow: hidden;
+}
+.resource-spark-area { fill: currentColor; fill-opacity: 0.16; }
+.resource-spark-line { fill: none; stroke: currentColor; stroke-width: 1.5; }
+
+.resource-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.25;
+}
+.resource-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.resource-reading {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.resource-value { color: var(--text-primary); }
+.resource-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}
+.resource-detail {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-muted);
+}
+
+.resource-status {
+    flex: 1;
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+.resource-status.is-error {
+    flex: 0 1 auto;
+    color: var(--accent-yellow);
+}
+
+.resource-close { flex-shrink: 0; align-self: flex-start; }
+
+/* A narrow chat keeps the numbers and drops the graphs. */
+@container (max-width: 520px) {
+    .resource-spark { display: none; }
+    .resource-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }
+}

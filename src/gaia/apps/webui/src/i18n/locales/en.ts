@@ -1766,6 +1766,22 @@ export const enMessages = {
     'mobile.copied': 'Copied',
     'mobile.downloadPage': 'ngrok download page',
     'mobile.retry': 'Retry',
+
+    // The resource usage strip at the top of a chat
+    'resources.region': 'Resource usage on this PC',
+    'resources.toggle': 'Resource usage',
+    'resources.show': 'Show resource usage',
+    'resources.hide': 'Hide resource usage',
+    'resources.cpu': 'CPU',
+    'resources.memory': 'Memory',
+    'resources.gpu': 'GPU',
+    'resources.npu': 'NPU',
+    'resources.numbered': '{label} {n}',
+    'resources.inUse': '{size} in use',
+    'resources.reading': 'Reading…',
+    'resources.error': "Can't read this PC's usage. Trying again…",
+    'resources.settings': 'Show resource usage in chats',
+    'resources.settingsHint': 'CPU, memory, GPU and NPU load on this PC, updated every second.',
 } as const;
 
 export const en: Locale = {

@@ -1439,3 +1439,37 @@ export interface SkillInfo {
     /** Absent when an older GAIA agent answered the listing. */
     source?: SkillSource | null;
 }
+
+// ── Resource usage (GET /api/system/resources) ────────────────────────────
+
+/** One CPU, memory, GPU or NPU reading; `history` is oldest first, one per interval. */
+export interface CpuUsage {
+    percent: number;
+    ghz: number | null;
+    history: number[];
+}
+
+export interface MemoryUsage {
+    used_bytes: number;
+    total_bytes: number;
+    percent: number;
+    history: number[];
+}
+
+export interface DeviceUsage {
+    id: string;
+    name: string;
+    kind: 'gpu' | 'npu';
+    percent: number;
+    memory_used_bytes: number | null;
+    history: number[];
+}
+
+export interface ResourceUsage {
+    interval_ms: number;
+    /** False until the first sample is in. */
+    ready: boolean;
+    cpu?: CpuUsage | null;
+    memory?: MemoryUsage | null;
+    devices?: DeviceUsage[];
+}

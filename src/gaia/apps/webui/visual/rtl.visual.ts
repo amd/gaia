@@ -201,6 +201,42 @@ test('finished answer', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+/** Every tile and the close button sit beside the docked session panel, not under it. */
+async function expectClearOfPanel(page: Page): Promise<void> {
+    const panel = (await page.locator('.session-panel.is-docked').boundingBox())!;
+    for (const el of await page.locator('.resource-strip li, .resource-strip button').all()) {
+        await expect(el).toBeVisible();
+        const box = (await el.boundingBox())!;
+        expect(box.x + box.width <= panel.x || box.x >= panel.x + panel.width).toBe(true);
+    }
+}
+
+test('resource usage strip', async ({ page }) => {
+    await open(page, `#${ANSWER_SESSION}`);
+    const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
+    await expect(strip.locator('li')).toHaveCount(4);
+    await expect(strip.getByText('45.0/63.6 GB')).toBeVisible();
+    // The close button sits at the row's end, which is the left in rtl.
+    const closeBox = (await strip.getByRole('button').boundingBox())!;
+    const firstTile = (await strip.locator('li').first().boundingBox())!;
+    expect(closeBox.x).toBeLessThan(firstTile.x);
+    await expectClearOfPanel(page);
+    expect(await audit(page)).toEqual([]);
+    await page.screenshot({ path: 'visual/test-results/resource-strip-ar.png' });
+});
+
+test('resource usage strip at phone width', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page, `#${ANSWER_SESSION}`);
+    const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
+    await expect(strip.locator('li')).toHaveCount(4);
+    await expect(strip.locator('.resource-spark').first()).toBeHidden();
+    // The closed sidebar drawer waits off screen at this width; judge the strip.
+    const problems = (await audit(page)).filter((p) => p.includes('resource') || p.includes('scrolls sideways'));
+    expect(problems).toEqual([]);
+    await page.screenshot({ path: 'visual/test-results/resource-strip-ar-phone.png' });
+});
+
 test('documents', async ({ page }) => {
     await open(page);
     await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
@@ -284,6 +320,25 @@ test.describe('English', () => {
         await open(page, `#${ANSWER_SESSION}`, 'en');
         await expect(page.getByText('Action items from Aug 28')).toBeVisible();
         expect(await audit(page)).toEqual([]);
+    });
+
+    test('resource usage strip', async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, 'en');
+        const strip = page.getByRole('region', { name: 'Resource usage on this PC' });
+        await expect(strip.locator('li')).toHaveCount(4);
+        const closeBox = (await strip.getByRole('button', { name: 'Hide resource usage' }).boundingBox())!;
+        const firstTile = (await strip.locator('li').first().boundingBox())!;
+        expect(closeBox.x).toBeGreaterThan(firstTile.x);
+        await expectClearOfPanel(page);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: 'visual/test-results/resource-strip-en.png' });
+    });
+
+    test('resource usage strip in the dark theme', async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, 'en', undefined, 'dark');
+        await expect(page.getByRole('region', { name: 'Resource usage on this PC' }).locator('li')).toHaveCount(4);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: 'visual/test-results/resource-strip-en-dark.png' });
     });
 
     test('documents', async ({ page }) => {

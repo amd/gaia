@@ -102,6 +102,23 @@ tool calls, model loads, model memory and cost. Hover a number for the exact
 value. Anything that was not measured says "unknown". The panel reads nothing
 until you open it.
 
+### Watch Your PC's Resources
+
+A strip under the chat's title shows this PC's CPU, memory, GPU and NPU load,
+each with a graph of the last minute, so you can see the model working while it
+answers. The numbers match Windows Task Manager: CPU with its clock speed,
+memory in use out of the total, and for a GPU or NPU the load of its busiest
+engine and the memory it holds. A PC with several GPUs numbers them from 0.
+
+The strip is on in every chat. Close it with **✕**, and bring it back with the
+pulse button in the chat's header or **Settings › General › Show resource
+usage in chats**. GAIA remembers the choice. While the strip is closed or the
+window is hidden, GAIA stops measuring about 15 seconds later.
+
+On Linux the GPU tile appears for AMD GPUs, and macOS shows CPU and memory
+only. When usage can't be read, the strip says so and dims the last readings
+until it can read them again.
+
 ### Type While GAIA Works
 
 You can keep typing while a reply runs. Press Enter and the message waits in a

@@ -106,6 +106,20 @@ const DOCUMENTS = {
     total_chunks: 108,
 };
 
+/** A Strix Halo mid-answer: the GPU busy with the model, the NPU idle. */
+const GIB = 1024 ** 3;
+const ramp = (from: number, to: number) => Array.from({ length: 60 }, (_, i) => Math.round((from + ((to - from) * i) / 59 + 6 * Math.sin(i / 3)) * 10) / 10);
+export const RESOURCES = {
+    interval_ms: 1000,
+    ready: true,
+    cpu: { percent: 20.4, ghz: 4.7, history: ramp(8, 20) },
+    memory: { used_bytes: 45 * GIB, total_bytes: 63.6 * GIB, percent: 70.8, history: ramp(66, 71) },
+    devices: [
+        { id: '0x00000000_0x0000d938', name: 'AMD Radeon(TM) 8060S Graphics', kind: 'gpu', percent: 14, memory_used_bytes: 30 * GIB, history: ramp(4, 14) },
+        { id: '0x00000000_0x0000f994', name: 'NPU Compute Accelerator Device', kind: 'npu', percent: 0, memory_used_bytes: null, history: ramp(0, 0).map(() => 0) },
+    ],
+};
+
 export const SYSTEM_STATUS = {
     lemonade_running: true, lemonade_error: null, model_loaded: 'Gemma-4-E4B-it-GGUF', embedding_model_loaded: true,
     disk_space_gb: 1293.2, memory_available_gb: 38.5, initialized: true, version: '0.25.0',
@@ -170,6 +184,7 @@ const ROUTES: Record<string, unknown> = {
     'GET /connectors': { connectors: [] },
     'GET /memory/settings': { memory_enabled: true },
     'GET /skills': { skills: [] },
+    'GET /system/resources': RESOURCES,
     'GET /system/model-server': { reachable: true, error: null, base_url: 'http://127.0.0.1:13305', port: 13305, owner: 'gaia' },
     'GET /lemonade/target': { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: 'http://127.0.0.1:13305', saved_base_url: null, api_key_stored: false, env_override: null },
 };

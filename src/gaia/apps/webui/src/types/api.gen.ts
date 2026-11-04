@@ -29,9 +29,11 @@ export interface ApiSchemas {
   ConfigureRequest: ConfigureRequest;
   ConnectRequest: ConnectRequest;
   ContextRequest: ContextRequest;
+  CpuUsage: CpuUsage;
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
   CustomModelRequest: CustomModelRequest;
+  DeviceUsage: DeviceUsage;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
   DocumentListResponse: DocumentListResponse;
@@ -73,6 +75,7 @@ export interface ApiSchemas {
   LoadedModelInfo: LoadedModelInfo;
   McpOutputResponse: McpOutputResponse;
   MemorySettingsBody: MemorySettingsBody;
+  MemoryUsage: MemoryUsage;
   MessageListResponse: MessageListResponse;
   MessageResponse: MessageResponse;
   ModelServerBackendRequest: ModelServerBackendRequest;
@@ -86,6 +89,7 @@ export interface ApiSchemas {
   PullRequestRequest: PullRequestRequest;
   QuickLink: QuickLink;
   RemoveModelRequest: RemoveModelRequest;
+  ResourceUsage: ResourceUsage;
   RestartRequest: RestartRequest;
   RetryChoiceRequest: RetryChoiceRequest;
   RetryWithRequest: RetryWithRequest;
@@ -380,6 +384,17 @@ export interface ContextRequest {
   ctx_size?: number | null;
   model: string;
 }
+export interface CpuUsage {
+  /**
+   * Current clock speed, when the OS reports it.
+   */
+  ghz: number | null;
+  /**
+   * Percent per sample, oldest first, one per interval_ms.
+   */
+  history: number[];
+  percent: number;
+}
 /**
  * Request to create a new scheduled task.
  */
@@ -421,6 +436,23 @@ export interface CreateSessionRequest {
 export interface CustomModelRequest {
   quant?: string | null;
   url: string;
+}
+export interface DeviceUsage {
+  /**
+   * Percent per sample, oldest first, one per interval_ms.
+   */
+  history: number[];
+  id: string;
+  kind: "gpu" | "npu";
+  /**
+   * Dedicated plus shared memory in use, when the OS reports it.
+   */
+  memory_used_bytes: number | null;
+  name: string;
+  /**
+   * Load of the device's busiest engine.
+   */
+  percent: number;
 }
 export interface DiscoveryCommit {
   items: DiscoveryCommitItem[];
@@ -755,6 +787,15 @@ export interface MemorySettingsBody {
   memory_enabled?: boolean | null;
   system_discovery_consent?: boolean | null;
 }
+export interface MemoryUsage {
+  /**
+   * Percent per sample, oldest first, one per interval_ms.
+   */
+  history: number[];
+  percent: number;
+  total_bytes: number;
+  used_bytes: number;
+}
 /**
  * List of messages for a session.
  */
@@ -967,6 +1008,16 @@ export interface PullRequestRequest {
 }
 export interface RemoveModelRequest {
   model_id: string;
+}
+export interface ResourceUsage {
+  cpu?: CpuUsage | null;
+  devices?: DeviceUsage[];
+  interval_ms: number;
+  memory?: MemoryUsage | null;
+  /**
+   * False until the first sample is in.
+   */
+  ready: boolean;
 }
 /**
  * ``confirm`` is required to reload a model on a server GAIA does not run.

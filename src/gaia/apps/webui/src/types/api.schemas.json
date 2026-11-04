@@ -930,6 +930,41 @@
     "title": "ContextRequest",
     "type": "object"
   },
+  "CpuUsage": {
+    "properties": {
+      "ghz": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Current clock speed, when the OS reports it.",
+        "title": "Ghz"
+      },
+      "history": {
+        "description": "Percent per sample, oldest first, one per interval_ms.",
+        "items": {
+          "type": "number"
+        },
+        "title": "History",
+        "type": "array"
+      },
+      "percent": {
+        "title": "Percent",
+        "type": "number"
+      }
+    },
+    "required": [
+      "percent",
+      "ghz",
+      "history"
+    ],
+    "title": "CpuUsage",
+    "type": "object"
+  },
   "CreateScheduleRequest": {
     "description": "Request to create a new scheduled task.",
     "properties": {
@@ -1088,6 +1123,61 @@
       "url"
     ],
     "title": "CustomModelRequest",
+    "type": "object"
+  },
+  "DeviceUsage": {
+    "properties": {
+      "history": {
+        "description": "Percent per sample, oldest first, one per interval_ms.",
+        "items": {
+          "type": "number"
+        },
+        "title": "History",
+        "type": "array"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "gpu",
+          "npu"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "memory_used_bytes": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Dedicated plus shared memory in use, when the OS reports it.",
+        "title": "Memory Used Bytes"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "percent": {
+        "description": "Load of the device's busiest engine.",
+        "title": "Percent",
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "kind",
+      "percent",
+      "memory_used_bytes",
+      "history"
+    ],
+    "title": "DeviceUsage",
     "type": "object"
   },
   "DiscoveryCommit": {
@@ -2572,6 +2662,38 @@
     "title": "MemorySettingsBody",
     "type": "object"
   },
+  "MemoryUsage": {
+    "properties": {
+      "history": {
+        "description": "Percent per sample, oldest first, one per interval_ms.",
+        "items": {
+          "type": "number"
+        },
+        "title": "History",
+        "type": "array"
+      },
+      "percent": {
+        "title": "Percent",
+        "type": "number"
+      },
+      "total_bytes": {
+        "title": "Total Bytes",
+        "type": "integer"
+      },
+      "used_bytes": {
+        "title": "Used Bytes",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "used_bytes",
+      "total_bytes",
+      "percent",
+      "history"
+    ],
+    "title": "MemoryUsage",
+    "type": "object"
+  },
   "MessageListResponse": {
     "description": "List of messages for a session.",
     "properties": {
@@ -3213,6 +3335,52 @@
       "model_id"
     ],
     "title": "RemoveModelRequest",
+    "type": "object"
+  },
+  "ResourceUsage": {
+    "properties": {
+      "cpu": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/CpuUsage"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "devices": {
+        "items": {
+          "$ref": "#/components/schemas/DeviceUsage"
+        },
+        "title": "Devices",
+        "type": "array"
+      },
+      "interval_ms": {
+        "title": "Interval Ms",
+        "type": "integer"
+      },
+      "memory": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/MemoryUsage"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "ready": {
+        "description": "False until the first sample is in.",
+        "title": "Ready",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "interval_ms",
+      "ready"
+    ],
+    "title": "ResourceUsage",
     "type": "object"
   },
   "RestartRequest": {

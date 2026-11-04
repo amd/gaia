@@ -1766,6 +1766,22 @@ const messages: Messages = {
     'mobile.copied': 'تم النسخ',
     'mobile.downloadPage': 'صفحة تنزيل ngrok',
     'mobile.retry': 'إعادة المحاولة',
+
+    // The resource usage strip at the top of a chat
+    'resources.region': 'استخدام الموارد على هذا الجهاز',
+    'resources.toggle': 'استخدام الموارد',
+    'resources.show': 'إظهار استخدام الموارد',
+    'resources.hide': 'إخفاء استخدام الموارد',
+    'resources.cpu': 'CPU',
+    'resources.memory': 'الذاكرة',
+    'resources.gpu': 'GPU',
+    'resources.npu': 'NPU',
+    'resources.numbered': '{label} {n}',
+    'resources.inUse': 'قيد الاستخدام: {size}',
+    'resources.reading': 'جارٍ القراءة…',
+    'resources.error': 'تعذّرت قراءة استخدام هذا الجهاز. جارٍ إعادة المحاولة…',
+    'resources.settings': 'إظهار استخدام الموارد في المحادثات',
+    'resources.settingsHint': 'حمل المعالج والذاكرة وGPU وNPU على هذا الجهاز، يُحدَّث كل ثانية.',
 };
 
 export const ar: Locale = {
