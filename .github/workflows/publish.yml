@@ -817,7 +817,7 @@ jobs:
           if [ "${IS_RC}" != "true" ]; then
             if ! python3 installer/tui/artifacts.py publish-args \
                 --version "${VERSION}" --dir dist --exclude-platform win-x64; then
-              echo "::error::the release built no installer named above, so nothing publishes. Fix the 'Terminal binaries and installers' leg and 'Re-run failed jobs'."
+              echo "::error::the release built no installer named above, so nothing publishes. Fix the 'Terminal installers' leg and 'Re-run failed jobs'."
               exit 1
             fi
             exit 0
@@ -1256,7 +1256,7 @@ jobs:
             [ -s "dist/${f}" ] || missing+=("${f}")
           done < summed.txt
           if [ "${#missing[@]}" -ne 0 ]; then
-            echo "::error::the release is missing terminal installers: ${missing[*]}. Nothing was attached. Re-run the failed 'Terminal binaries and installers' leg, then this job."
+            echo "::error::the release is missing terminal installers: ${missing[*]}. Nothing was attached. Re-run the failed 'Terminal installers' leg, then this job."
             exit 1
           fi
           mapfile -t summed < summed.txt

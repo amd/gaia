@@ -14,10 +14,9 @@
 #
 #   agent_ui_release           a published vX.Y.Z release (PR gate, manual runs)
 #   agent_ui_publish_run_sha   publish.yml's push run for this commit and
-#                              version's tag, which builds the installers before
-#                              its approval gate, so a release does not wait on a
-#                              human. publish.yml passes its own SHA, final or
-#                              RC, and embeds its own build.
+#                              version's tag, taken once its desktop app build
+#                              passed. No caller uses it now: publish.yml passes
+#                              its own windows-installer as agent_ui_artifact.
 #   agent_ui_artifact          an artifact of the caller's own run, holding the
 #                              windows-installer build-installers.yml uploaded
 #                              (publish.yml and the release-train dry run). The
