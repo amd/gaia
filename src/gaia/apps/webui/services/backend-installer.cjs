@@ -157,6 +157,9 @@ const FAILURE_REASONS = Object.freeze({
 // `gaia daemon stop` can take about 90 s: up to 45 s for a graceful exit, then
 // terminating the daemon and its agents, then up to 20 s for GAIA's Lemonade Server.
 const DAEMON_STOP_TIMEOUT_MS = 120 * 1000;
+/** `gaia daemon stop` exit code: the daemon stopped, GAIA's Lemonade Server did not. */
+const DAEMON_STOP_LEMONADE_EXIT = 3;
+const DAEMON_INSTANCE_FILE = path.join(GAIA_HOME, "host", "instance.json");
 
 // Stage an older installer recorded while it ran `gaia init`; the package was
 // already in place by then.
@@ -577,10 +580,31 @@ function killTree(proc) {
   }
 }
 
+/** The pid of the GAIA daemon ~/.gaia/host/instance.json records, when that process is alive. */
+function liveDaemonPid() {
+  let pid;
+  try {
+    pid = Number(JSON.parse(fs.readFileSync(DAEMON_INSTANCE_FILE, "utf8")).pid);
+  } catch (err) {
+    if (err.code !== "ENOENT") log(`Could not read ${DAEMON_INSTANCE_FILE}: ${err.message}`);
+    return null;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    process.kill(pid, 0);
+    return pid;
+  } catch (err) {
+    // EPERM: the process exists but belongs to someone else.
+    return err.code === "EPERM" ? pid : null;
+  }
+}
+
 /**
  * Stop the GAIA daemon (and the agents it runs) that the existing venv may be
  * running, so the install doesn't trip over its open files. Throws an
- * InstallError naming the daemon when it would not stop.
+ * InstallError naming the daemon only when one is still alive afterwards: a
+ * stop that fails with no daemon running (a broken venv, say) must not block
+ * the reinstall that repairs it.
  */
 async function stopRunningDaemon({ timeoutMs = DAEMON_STOP_TIMEOUT_MS } = {}) {
   if (!fs.existsSync(GAIA_BIN) || !fs.existsSync(GAIA_PYTHON_BIN)) return;
@@ -596,12 +620,27 @@ async function stopRunningDaemon({ timeoutMs = DAEMON_STOP_TIMEOUT_MS } = {}) {
     log("The installed GAIA predates the daemon — nothing to stop");
     return;
   }
+  const pid = liveDaemonPid();
+  if (pid === null) {
+    if (result.code === DAEMON_STOP_LEMONADE_EXIT) {
+      log(
+        "The GAIA daemon stopped, but GAIA's Lemonade Server did not (see the lines above). " +
+          "It lives outside the backend's files, so the install goes on."
+      );
+    } else {
+      log(
+        `gaia daemon stop ${result.timedOut ? "timed out" : `exited ${result.code}`}, ` +
+          "but no GAIA daemon is running — continuing"
+      );
+    }
+    return;
+  }
   const why = result.timedOut
     ? `did not stop within ${Math.round(timeoutMs / 1000)} seconds`
     : `could not be stopped (gaia daemon stop exit ${result.code})`;
   log(`To stop it by hand: ${GAIA_BIN} daemon stop`);
   throw new InstallError(
-    `GAIA's background service (the GAIA daemon) ${why}, so its files can't be updated.`,
+    `GAIA's background service (the GAIA daemon, pid ${pid}) ${why}, so its files can't be updated.`,
     {
       stage: STAGES.CREATE_VENV,
       code: result.code,
@@ -2348,6 +2387,7 @@ module.exports = {
   STAGES,
   FAILURE_REASONS,
   DAEMON_STOP_TIMEOUT_MS,
+  DAEMON_STOP_LEMONADE_EXIT,
   GAIA_HOME,
   GAIA_VENV,
   GAIA_BIN,

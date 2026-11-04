@@ -113,6 +113,24 @@ def test_a_stop_that_fails_is_reported_and_removal_continues(tmp_path):
     assert "Could not stop ana's GAIA daemon (exit 1)" in result.stderr
 
 
+def test_a_lemonade_that_will_not_stop_is_named_not_the_daemon(tmp_path):
+    result, stops = _run(
+        tmp_path,
+        "remove",
+        processes=[f"1000 {DAEMON}"],
+        accounts={"1000": "ana"},
+        gaia_users=("ana",),
+        stop_exit=3,
+    )
+
+    assert result.returncode == 0
+    assert len(stops) == 1
+    assert "ana's GAIA daemon stopped, but GAIA's Lemonade Server did not" in (
+        result.stderr
+    )
+    assert "Could not stop" not in result.stderr
+
+
 def test_a_user_without_a_gaia_venv_is_reported(tmp_path):
     result, stops = _run(
         tmp_path,

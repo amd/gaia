@@ -9864,6 +9864,10 @@ def _reap_orphaned_sidecars() -> bool:
     return True
 
 
+# `gaia daemon stop` exit code: the daemon and its agents stopped, GAIA's Lemonade Server did not.
+DAEMON_STOP_LEMONADE_EXIT = 3
+
+
 def _stop_gaia_lemonade_left_running(exit_on_error: bool = True):
     """Stop GAIA's own Lemonade Server if the daemon did not.
 
@@ -9873,8 +9877,9 @@ def _stop_gaia_lemonade_left_running(exit_on_error: bool = True):
     never touched.
 
     Args:
-        exit_on_error: Exit 1 when it will not stop. ``restart`` passes False:
-            the error is printed, and the new daemon still starts.
+        exit_on_error: Exit ``DAEMON_STOP_LEMONADE_EXIT`` when it will not
+            stop. ``restart`` passes False: the error is printed, and the new
+            daemon still starts.
     """
     from gaia.llm.lemonade_client import configured_lemonade_url
     from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
@@ -9884,9 +9889,9 @@ def _stop_gaia_lemonade_left_running(exit_on_error: bool = True):
     try:
         stopped = EmbeddedLemonade().stop()
     except EmbeddedLemonadeError as e:
-        print(f"❌ {e}")
+        print(f"❌ GAIA's Lemonade Server did not stop: {e}")
         if exit_on_error:
-            sys.exit(1)
+            sys.exit(DAEMON_STOP_LEMONADE_EXIT)
         return
     if stopped:
         print("✅ GAIA's Lemonade Server stopped")

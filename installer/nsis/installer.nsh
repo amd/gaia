@@ -68,7 +68,10 @@
     System::Call 'Kernel32::SetEnvironmentVariable(t "PYTHONIOENCODING", t "utf-8")i'
     nsExec::ExecToLog /TIMEOUT=120000 '"$PROFILE\.gaia\venv\Scripts\gaia.exe" daemon stop'
     Pop $0
-    ${If} $0 != 0
+    ; 3: the daemon stopped; only GAIA's Lemonade Server did not.
+    ${If} $0 == 3
+      DetailPrint "The GAIA daemon stopped, but GAIA's Lemonade Server did not. The lines above say how to stop it."
+    ${ElseIf} $0 != 0
       DetailPrint "Could not stop the GAIA daemon (gaia daemon stop returned $0). It keeps running until you restart your PC."
     ${EndIf}
   ${Else}

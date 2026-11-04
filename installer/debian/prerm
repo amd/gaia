@@ -27,9 +27,15 @@ stop_gaia_daemons() {
             continue
         fi
         echo "Stopping $user's GAIA daemon"
+        rc=0
         runuser -u "$user" -- env HOME="$home" PYTHONIOENCODING=utf-8 \
-            timeout 120 "$gaia" daemon stop ||
-            echo "Could not stop $user's GAIA daemon (exit $?); it keeps running until the PC restarts." >&2
+            timeout 120 "$gaia" daemon stop || rc=$?
+        # 3: the daemon stopped; only GAIA's Lemonade Server did not.
+        if [ "$rc" -eq 3 ]; then
+            echo "$user's GAIA daemon stopped, but GAIA's Lemonade Server did not; the lines above say how to stop it." >&2
+        elif [ "$rc" -ne 0 ]; then
+            echo "Could not stop $user's GAIA daemon (exit $rc); it keeps running until the PC restarts." >&2
+        fi
     done
 }
 

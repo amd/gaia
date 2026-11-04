@@ -3714,7 +3714,7 @@ gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 |--------|---------|-------------|
 | `start` | — | Start the daemon or attach to the running one (two callers → one daemon), and start GAIA's Lemonade Server if it is installed and stopped. |
 | `status` | — | Print pid / port / uptime and the supervised sidecar list, or report if no daemon is running. |
-| `stop` | — | Shut the daemon down (tree-killing every sidecar, then GAIA's Lemonade Server, whoever started it) and release `~/.gaia/host/instance.json`. With no daemon running it still stops GAIA's Lemonade Server. It then stops any sidecar a terminated or crashed daemon left running, and exits 1 naming the pid if the daemon or a sidecar is still alive. The desktop app runs it before updating its backend and when it is uninstalled. |
+| `stop` | — | Shut the daemon down (tree-killing every sidecar, then GAIA's Lemonade Server, whoever started it) and release `~/.gaia/host/instance.json`. With no daemon running it still stops GAIA's Lemonade Server. It then stops any sidecar a terminated or crashed daemon left running, and exits 1 naming the pid if the daemon or a sidecar is still alive. It exits 3 when only GAIA's Lemonade Server would not stop, so an installer can tell the two apart. The desktop app runs it before updating its backend and when it is uninstalled. |
 | `restart` | — | `stop` followed by `start`. |
 | `logs` | `--lines`, `--follow` | Print (or stream) the daemon log tail. |
 | `agents` | — | List every registered sidecar agent: id, state, and (when running) mode, pid, port, contract version — never the bearer token. Dev-mode entries also show their source dir; user-mode and stopped entries always report `dev_src_dir: null`. |

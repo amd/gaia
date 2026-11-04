@@ -6,6 +6,7 @@ A daemon that was terminated, or whose shutdown hung, never tears its sidecars
 down, so `gaia daemon stop` and `gaia uninstall` reap them from the ledger.
 """
 
+import os
 import subprocess
 import sys
 import time
@@ -66,8 +67,11 @@ def test_reap_after_stop_kills_a_real_recorded_sidecar():
         "--port",
         str(port),
     ]
-    proc = subprocess.Popen(argv)
+    # Its own session, as the daemon starts agents: the reap kills the process group.
+    proc = subprocess.Popen(argv, start_new_session=True)
     try:
+        if os.name != "nt":
+            assert os.getpgid(proc.pid) != os.getpgid(0)
         ledger.record_spawn(
             agent_id="gaia",
             pid=proc.pid,
