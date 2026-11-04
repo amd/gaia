@@ -318,11 +318,12 @@ NOT READY: profile 'gaia' needs setup
 
 <Warning>
 `user.`-prefixed models are **custom registrations**: pulling one requires
-`checkpoint` + `recipe` (+ `embedding` for an embedder). Built-in models are the
-opposite — pulling one *with* a recipe makes Lemonade treat it as a new
-registration and 400 (#1655). `gaia init` gets this right;
-`readiness.pull_model` posts `model_name` only and therefore cannot pull a
-`user.` model — it returns HTTP 500 `not registered with Lemonade Server`.
+`checkpoint` + `recipe` (+ `embedding` for an embedder, and `mmproj` / `vision`
+/ `reasoning` when the model needs them). Built-in models are the opposite —
+pulling one *with* a recipe makes Lemonade treat it as a new registration and
+400 (#1655). `gaia init` sends those fields, and `readiness.pull_model` and
+the Agent UI Download button share one body (`pull_request_body`). A gateway
+model is refused before any request: there are no weights to fetch.
 </Warning>
 
 ## Related
