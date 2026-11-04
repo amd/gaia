@@ -439,3 +439,31 @@ def test_the_lemonade_download_bar_marks_its_line_open(capsys):
     cmd.events.emit("done", ok=True)
     out = capsys.readouterr().out
     assert '\n{"event": "done", "ok": true}\n' in out
+
+
+def test_one_failed_model_does_not_abandon_the_rest(capsys):
+    """A download that raises marks that model failed; init still tries the rest."""
+    client = _client()
+    pull = client.ensure_model_downloaded.side_effect
+
+    def mixed(model_id, on_progress=None, **kwargs):
+        if model_id == MODELS[0]:
+            on_progress({"event": "error", "error": "No space left on device"})
+            raise LemonadeClientError(f"Failed to download model '{model_id}'")
+        if model_id == MODELS[1]:
+            raise LemonadeClientError(f"Download of '{model_id}' did not finish")
+        return pull(model_id, on_progress=on_progress, **kwargs)
+
+    client.ensure_model_downloaded.side_effect = mixed
+    cmd = InitCommand(profile="minimal", yes=True, progress_json=True)
+    assert not _download(cmd, client)
+    out = capsys.readouterr().out
+    events = _json_lines(out)
+
+    tried = [c.args[0] for c in client.ensure_model_downloaded.call_args_list]
+    assert tried == MODELS
+    errors = [e for e in events if e["event"] == "error"]
+    assert [e["model"] for e in errors] == MODELS[:2]
+    assert [e["model"] for e in events if e["event"] == "model_done"] == MODELS[2:]
+    assert events[-1] == {"event": "done", "ok": False}
+    assert "Error downloading models" not in out

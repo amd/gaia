@@ -1,37 +1,54 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Judge transport selection and the `claude -p` judge client.
+"""Judge credential order and the `claude -p` judge client.
 
 Covers the two things a broken judge credential used to get wrong silently:
-which transport gets picked for which credential, and whether a rejected or
-empty CLI reply surfaces as an actionable error instead of an unscored case.
+which credential gets picked (and whether the run says so), and whether a
+rejected or empty CLI reply surfaces as an actionable error instead of an
+unscored case.
 """
 
 import json
+import os
 import subprocess
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
 
-from gaia.eval import judge_client
+import gaia
+from gaia import env as gaia_env
+from gaia.eval import claude_credential, judge_client
 from gaia.eval.judge_client import (
     ClaudeCliClient,
     make_judge_client,
     probe_judge_credential,
 )
 
+ENV_KEY = "sk-ant-api03-ENVSECRET"
+DOTENV_KEY = "sk-ant-api03-DOTENVSECRET"
+OAUTH = "sk-ant-oat01-OAUTHSECRET"
+SECRETS = (ENV_KEY, DOTENV_KEY, OAUTH)
+
+# Captured at import, before the root conftest stubs it for every test.
+_REAL_AUTH_STATUS = claude_credential._auth_status
+
 
 @pytest.fixture(autouse=True)
 def _clear_credentials(monkeypatch):
-    """Neither credential is set unless a test sets it.
+    """No credential is set unless a test sets it.
 
-    `load_dotenv()` at import time can populate either from a developer's local
+    `load_env()` at import time can populate one from a developer's local
     `.env`, which would otherwise make selection tests pass for the wrong reason.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.delitem(gaia._PRE_DOTENV_ENVIRON, "ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(gaia_env, "_working_dir_credentials", {})
+    monkeypatch.setattr(gaia_env, "_working_dir_credential_files", {})
+    monkeypatch.setattr(gaia_env, "_install_tree_dotenv", lambda: None)
 
 
 @pytest.fixture
@@ -44,9 +61,146 @@ def no_claude_bin(monkeypatch):
     monkeypatch.setattr(judge_client.shutil, "which", lambda _: None)
 
 
+@pytest.fixture
+def logged_out(monkeypatch):
+    """A `claude` on PATH that holds no login."""
+    monkeypatch.setattr(judge_client.shutil, "which", lambda _: "/usr/bin/claude")
+    monkeypatch.setattr(
+        claude_credential,
+        "_auth_status",
+        lambda _bin, _env: {"loggedIn": False, "authMethod": "none"},
+    )
+
+
+def _assert_no_secret(text):
+    for secret in SECRETS:
+        assert secret not in text
+        assert secret[-8:] not in text
+
+
+def _stub_sdk_client(monkeypatch):
+    """Stand in for ClaudeClient so no real Anthropic client is built.
+
+    Announces like the real one, which is what the message tests read.
+    """
+    sentinel = SimpleNamespace(kwargs=None)
+
+    def build(**kwargs):
+        sentinel.kwargs = kwargs
+        claude_credential.announce(claude_credential.api_key_credential())
+        return sentinel
+
+    monkeypatch.setitem(
+        sys.modules, "gaia.eval.claude", SimpleNamespace(ClaudeClient=build)
+    )
+    return sentinel
+
+
+PROJECT_DOTENV = "/work/project/.env"
+
+
+@pytest.fixture
+def project_key(monkeypatch):
+    """ANTHROPIC_API_KEY supplied only by a working-directory .env."""
+    monkeypatch.setitem(
+        gaia_env._working_dir_credentials, "ANTHROPIC_API_KEY", DOTENV_KEY
+    )
+    monkeypatch.setitem(
+        gaia_env._working_dir_credential_files, "ANTHROPIC_API_KEY", PROJECT_DOTENV
+    )
+
+
+@pytest.fixture
+def exported_key(monkeypatch):
+    monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, "ANTHROPIC_API_KEY", ENV_KEY)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", ENV_KEY)
+
+
 # ---------------------------------------------------------------------------
-# Transport selection
+# Credential order: subscription, then the env key, then a .env key
 # ---------------------------------------------------------------------------
+
+
+def test_oauth_token_wins_and_says_so(
+    monkeypatch, fake_claude_bin, exported_key, project_key, capsys
+):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", OAUTH)
+    _stub_sdk_client(monkeypatch)
+    client = make_judge_client(model="claude-sonnet-5")
+    assert isinstance(client, ClaudeCliClient)
+    assert client.model == "claude-sonnet-5"
+    err = capsys.readouterr().err
+    assert (
+        "Claude judge: using the Claude Code subscription (CLAUDE_CODE_OAUTH_TOKEN)"
+        in err
+    )
+    _assert_no_secret(err)
+
+
+def test_cli_login_wins_over_an_exported_key(
+    monkeypatch, claude_login, exported_key, capsys
+):
+    _stub_sdk_client(monkeypatch)
+    assert isinstance(make_judge_client(), ClaudeCliClient)
+    err = capsys.readouterr().err
+    assert "Claude judge: using the Claude Code CLI login" in err
+    _assert_no_secret(err)
+
+
+def test_cli_login_wins_over_a_dotenv_key(monkeypatch, claude_login, project_key):
+    _stub_sdk_client(monkeypatch)
+    assert isinstance(make_judge_client(), ClaudeCliClient)
+
+
+def test_exported_key_when_the_cli_is_logged_out(
+    monkeypatch, logged_out, exported_key, capsys
+):
+    sentinel = _stub_sdk_client(monkeypatch)
+    assert make_judge_client(model="claude-opus-5") is sentinel
+    err = capsys.readouterr().err
+    assert "Claude judge: using ANTHROPIC_API_KEY from the environment" in err
+    _assert_no_secret(err)
+
+
+def test_exported_key_without_a_cli(monkeypatch, no_claude_bin, exported_key, capsys):
+    sentinel = _stub_sdk_client(monkeypatch)
+    assert make_judge_client() is sentinel
+    assert "using ANTHROPIC_API_KEY from the environment" in capsys.readouterr().err
+
+
+def test_env_key_beats_a_dotenv_key(
+    monkeypatch, logged_out, exported_key, project_key, capsys
+):
+    _stub_sdk_client(monkeypatch)
+    make_judge_client()
+    err = capsys.readouterr().err
+    assert "ANTHROPIC_API_KEY from the environment" in err
+    assert PROJECT_DOTENV not in err
+    credential = claude_credential.resolve_claude_credential()
+    assert credential.api_key == ENV_KEY
+    _assert_no_secret(repr(credential))
+
+
+def test_dotenv_key_is_used_last_and_names_its_file(
+    monkeypatch, logged_out, project_key, capsys
+):
+    sentinel = _stub_sdk_client(monkeypatch)
+    assert make_judge_client() is sentinel
+    err = capsys.readouterr().err
+    assert f"Claude judge: using ANTHROPIC_API_KEY from {PROJECT_DOTENV}" in err
+    _assert_no_secret(err)
+
+
+def test_install_tree_dotenv_key_is_labelled_with_its_file(
+    monkeypatch, tmp_path, logged_out
+):
+    """load_env merges GAIA's own .env into os.environ; it is still a .env."""
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(f"ANTHROPIC_API_KEY={DOTENV_KEY}\n", encoding="utf-8")
+    monkeypatch.setattr(gaia_env, "_install_tree_dotenv", lambda: dotenv)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", DOTENV_KEY)
+    credential = claude_credential.resolve_claude_credential()
+    assert credential.label == f"ANTHROPIC_API_KEY from {dotenv}"
 
 
 def test_no_credential_raises_actionable_error(no_claude_bin):
@@ -54,17 +208,19 @@ def test_no_credential_raises_actionable_error(no_claude_bin):
         make_judge_client()
     message = str(excinfo.value)
     assert "CLAUDE_CODE_OAUTH_TOKEN" in message
-    assert "ANTHROPIC_API_KEY" in message
     assert "claude setup-token" in message
     assert "/login" in message
     assert "npm install -g @anthropic-ai/claude-code" in message
+    # The three options, in the order they are tried.
+    sub = message.index("SUBSCRIPTION")
+    env_key = message.index("export ANTHROPIC_API_KEY")
+    dotenv = message.index(".env file in the working")
+    assert sub < env_key < dotenv
 
 
-def test_logged_in_cli_needs_no_variable(fake_claude_bin):
-    """#1344: like the runner, a CLI login is a subscription credential."""
-    client = make_judge_client(model="claude-sonnet-5")
-    assert isinstance(client, ClaudeCliClient)
-    assert client.model == "claude-sonnet-5"
+def test_logged_out_cli_and_no_key_raises(logged_out):
+    with pytest.raises(ValueError, match="No Claude credential"):
+        make_judge_client()
 
 
 def test_blank_credentials_count_as_absent(monkeypatch, no_claude_bin):
@@ -75,14 +231,32 @@ def test_blank_credentials_count_as_absent(monkeypatch, no_claude_bin):
         make_judge_client()
 
 
+def test_token_without_a_cli_uses_the_key_and_warns(
+    monkeypatch, no_claude_bin, exported_key, caplog, capsys
+):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", OAUTH)
+    sentinel = _stub_sdk_client(monkeypatch)
+    with caplog.at_level("WARNING", logger=claude_credential.log.name):
+        assert make_judge_client() is sentinel
+    assert "the `claude` CLI is not on PATH" in caplog.text
+    _assert_no_secret(caplog.text + capsys.readouterr().err)
+
+
+def test_missing_claude_cli_is_an_actionable_error(monkeypatch, no_claude_bin):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", OAUTH)
+    with pytest.raises(RuntimeError) as excinfo:
+        make_judge_client()
+    assert "npm install -g @anthropic-ai/claude-code" in str(excinfo.value)
+    _assert_no_secret(str(excinfo.value))
+
+
 @pytest.mark.parametrize(
     "env,expected",
     [
         ({}, False),
         ({"ANTHROPIC_API_KEY": "  "}, False),
         ({"CLAUDE_CODE_OAUTH_TOKEN": ""}, False),
-        ({"ANTHROPIC_API_KEY": "sk-ant-api-test"}, True),
-        ({"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test"}, True),
+        ({"ANTHROPIC_API_KEY": ENV_KEY}, True),
     ],
 )
 def test_judge_credential_present(monkeypatch, no_claude_bin, env, expected):
@@ -91,46 +265,16 @@ def test_judge_credential_present(monkeypatch, no_claude_bin, env, expected):
     assert judge_client.judge_credential_present() is expected
 
 
-def test_a_claude_cli_on_path_counts_as_present(fake_claude_bin):
+def test_a_logged_in_cli_counts_as_present(claude_login):
     assert judge_client.judge_credential_present() is True
 
 
-def test_oauth_token_selects_the_cli_transport(monkeypatch, fake_claude_bin):
-    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
-    client = make_judge_client(model="claude-sonnet-5")
-    assert isinstance(client, ClaudeCliClient)
-    assert client.model == "claude-sonnet-5"
+def test_a_logged_out_cli_does_not_count_as_present(logged_out):
+    assert judge_client.judge_credential_present() is False
 
 
-def _stub_sdk_client(monkeypatch):
-    """Stand in for gaia.eval.claude so no real Anthropic client is built."""
-    sentinel = SimpleNamespace(kwargs=None)
-
-    def build(**kwargs):
-        sentinel.kwargs = kwargs
-        return sentinel
-
-    monkeypatch.setitem(
-        sys.modules, "gaia.eval.claude", SimpleNamespace(ClaudeClient=build)
-    )
-    return sentinel
-
-
-def test_api_key_selects_the_sdk_transport(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api-test")
-    sentinel = _stub_sdk_client(monkeypatch)
-    assert make_judge_client(model="claude-opus-5") is sentinel
-
-
-def test_api_key_wins_when_both_are_set(monkeypatch, fake_claude_bin):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api-test")
-    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
-    sentinel = _stub_sdk_client(monkeypatch)
-    assert make_judge_client() is sentinel
-
-
-def test_max_tokens_reaches_only_the_sdk_client(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api-test")
+def test_max_tokens_reaches_only_the_sdk_client(monkeypatch, no_claude_bin):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", ENV_KEY)
     sentinel = _stub_sdk_client(monkeypatch)
     make_judge_client(model="m", max_tokens=8192)
     assert sentinel.kwargs == {"model": "m", "max_tokens": 8192}
@@ -139,12 +283,166 @@ def test_max_tokens_reaches_only_the_sdk_client(monkeypatch):
     assert sentinel.kwargs == {"model": "m"}
 
 
-def test_missing_claude_cli_is_an_actionable_error(monkeypatch):
-    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
-    monkeypatch.setattr(judge_client.shutil, "which", lambda _: None)
-    with pytest.raises(RuntimeError) as excinfo:
-        make_judge_client()
-    assert "npm install -g @anthropic-ai/claude-code" in str(excinfo.value)
+def test_the_message_is_printed_once(monkeypatch, claude_login, capsys):
+    make_judge_client()
+    make_judge_client()
+    assert capsys.readouterr().err.count("Claude judge: using") == 1
+
+
+# ---------------------------------------------------------------------------
+# The CLI login check
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "status,logged_in",
+    [
+        ({"loggedIn": True, "authMethod": "claude.ai"}, True),
+        ({"loggedIn": True, "authMethod": "oauth_token"}, True),
+        # A key /login stored is the CLI's own login.
+        (
+            {
+                "loggedIn": True,
+                "authMethod": "api_key",
+                "apiKeySource": "/login managed key",
+            },
+            True,
+        ),
+        ({"loggedIn": False, "authMethod": "none"}, False),
+        # A key from the env or a settings helper is not a login: the env var is
+        # step 2, and the judge does not load settings.
+        (
+            {
+                "loggedIn": True,
+                "authMethod": "api_key",
+                "apiKeySource": "ANTHROPIC_API_KEY",
+            },
+            False,
+        ),
+        (
+            {"loggedIn": True, "authMethod": "api_key", "apiKeySource": "apiKeyHelper"},
+            False,
+        ),
+        ({}, False),
+    ],
+)
+def test_cli_login_reading(monkeypatch, status, logged_in):
+    monkeypatch.setattr(claude_credential, "_auth_status", lambda _b, _e: status)
+    assert claude_credential.cli_logged_in("/usr/bin/claude", {}) is logged_in
+
+
+class _FakeStatusProc:
+    """Stands in for the `claude auth status` child."""
+
+    pid = 4242
+
+    def __init__(self, cmd, outcome, captured):
+        self.outcome = outcome
+        self.returncode = 0
+        captured["cmd"] = cmd
+
+    def communicate(self, timeout=None):
+        if isinstance(self.outcome, BaseException):
+            raise self.outcome
+        self.returncode = self.outcome[0]
+        return self.outcome[1], self.outcome[2]
+
+
+def _fake_popen(monkeypatch, outcome):
+    captured = {}
+
+    def popen(cmd, **kwargs):
+        captured["kwargs"] = kwargs
+        if isinstance(outcome, OSError):
+            raise outcome
+        return _FakeStatusProc(cmd, outcome, captured)
+
+    monkeypatch.setattr(claude_credential.subprocess, "Popen", popen)
+    return captured
+
+
+def test_auth_status_runs_without_the_key_or_token(monkeypatch):
+    captured = _fake_popen(monkeypatch, (1, '{"loggedIn": false}', ""))
+    status = _REAL_AUTH_STATUS(
+        "/usr/bin/claude",
+        {"ANTHROPIC_API_KEY": ENV_KEY, "CLAUDE_CODE_OAUTH_TOKEN": OAUTH, "A": "1"},
+    )
+    assert status == {"loggedIn": False}
+    assert captured["cmd"] == ["/usr/bin/claude", "auth", "status", "--json"]
+    child_env_is_clean = captured["kwargs"]["env"] == {"A": "1"}
+    assert child_env_is_clean
+    # Its own process group, so a timeout can kill the whole tree.
+    assert set(claude_credential.NEW_GROUP) <= set(captured["kwargs"])
+    assert captured["kwargs"]["stdin"] == subprocess.DEVNULL
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        FileNotFoundError("claude"),
+        (1, "error: unknown command 'auth'", ""),
+        (0, "[1, 2]", ""),
+    ],
+    ids=["cannot-start", "not-json", "not-an-object"],
+)
+def test_an_unreadable_login_check_is_an_error(monkeypatch, outcome):
+    _fake_popen(monkeypatch, outcome)
+    with pytest.raises(RuntimeError, match="(npm install|Update the CLI)"):
+        _REAL_AUTH_STATUS("/usr/bin/claude", {})
+
+
+def test_a_hung_login_check_kills_the_whole_tree(monkeypatch):
+    killed = []
+    _fake_popen(monkeypatch, subprocess.TimeoutExpired("claude", 30))
+    monkeypatch.setattr(claude_credential, "kill_tree", killed.append)
+    with pytest.raises(RuntimeError, match="did not answer within"):
+        _REAL_AUTH_STATUS("/usr/bin/claude", {})
+    assert [p.pid for p in killed] == [4242]
+
+
+def test_a_wedged_cli_wrapper_does_not_hang_the_check(monkeypatch, tmp_path):
+    """A wrapper whose own child keeps the pipes open, like Windows' claude.cmd."""
+    grandchild = "import time; time.sleep(120)"
+    if sys.platform == "win32":
+        wrapper = tmp_path / "claude.cmd"
+        wrapper.write_text(f'@"{sys.executable}" -c "{grandchild}"\r\n')
+    else:
+        wrapper = tmp_path / "claude"
+        wrapper.write_text(f"#!/bin/sh\n'{sys.executable}' -c '{grandchild}'\n")
+        wrapper.chmod(0o755)
+    monkeypatch.setattr(claude_credential, "AUTH_STATUS_TIMEOUT", 2.0)
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="did not answer within 2s"):
+        _REAL_AUTH_STATUS(str(wrapper), dict(os.environ))
+    assert time.monotonic() - started < 20
+
+
+def test_the_login_check_runs_once_per_cli(monkeypatch):
+    calls = []
+
+    def status(_bin, _env):
+        calls.append(_bin)
+        return {"loggedIn": True}
+
+    monkeypatch.setattr(claude_credential, "_auth_status", status)
+    for _ in range(3):
+        claude_credential.cli_logged_in("/usr/bin/claude", {})
+    assert calls == ["/usr/bin/claude"]
+
+
+def test_the_cli_judge_child_does_not_inherit_the_key(
+    monkeypatch, claude_login, exported_key
+):
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        payload = {"type": "result", "is_error": False, "result": "ok"}
+        return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(judge_client.subprocess, "run", fake_run)
+    make_judge_client().get_completion("judge this")
+    assert "ANTHROPIC_API_KEY" not in captured["env"]
 
 
 # ---------------------------------------------------------------------------

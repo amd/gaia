@@ -1,0 +1,113 @@
+{
+  "run_id": "eval-20261030-044538",
+  "config": {
+    "model": "claude-sonnet-4-6",
+    "agent_type": "gaia",
+    "agent_model": "Gemma-4-E4B-it-GGUF"
+  },
+  "summary": {
+    "total_scenarios": 9,
+    "passed": 6,
+    "failed": 0,
+    "blocked": 0,
+    "pass_rate": 0.6667,
+    "judged_pass_rate": 1.0,
+    "avg_score": 9.22
+  },
+  "scenarios": [
+    {
+      "scenario_id": "select_data_bundle",
+      "status": "PASS",
+      "overall_score": 10.0,
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "category": "gaia_tool_selection",
+      "elapsed_s": 79.32051801681519
+    },
+    {
+      "scenario_id": "select_memory_vs_data",
+      "status": "PASS",
+      "overall_score": 9.24,
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "category": "gaia_tool_selection",
+      "elapsed_s": 238.69555735588074
+    },
+    {
+      "scenario_id": "select_no_tools",
+      "status": "PASS",
+      "overall_score": 9.17,
+      "root_cause": "On Turn 2 the agent invoked run_python to compute 12.5% × 640, violating the scenario's zero-tool requirement. Turns 1 and 3 showed correct restraint; the arithmetic case triggers unnecessary tool use.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "Add a guideline to the system prompt reminding the agent that simple arithmetic and unit-conversion questions should be answered directly without invoking run_python or any tool — tools are for tasks that cannot be performed from internal knowledge alone."
+      },
+      "category": "gaia_tool_selection",
+      "elapsed_s": 166.69166588783264
+    },
+    {
+      "scenario_id": "select_rag_vs_raw_files",
+      "status": "PASS",
+      "overall_score": 9.52,
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "category": "gaia_tool_selection",
+      "elapsed_s": 196.10968232154846
+    },
+    {
+      "scenario_id": "select_skill_tool_vs_builtin",
+      "status": "PASS",
+      "overall_score": 9.74,
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "category": "gaia_tool_selection",
+      "elapsed_s": 418.0928876399994
+    },
+    {
+      "scenario_id": "select_sounds_like_tool_but_isnt",
+      "status": "PASS",
+      "overall_score": 7.67,
+      "root_cause": "Agent correctly avoids tool use for plain text extraction and URL parsing (turns 1-2) but over-selects tools when the question involves numbers or file paths — invoking `run_python` for 3-number arithmetic and multiple file-access tools to stat a path that only needed a `.csv` extension check.",
+      "recommended_fix": {
+        "target": "prompt",
+        "file": "hub/agents/gaia/python/gaia_agent/agent.py",
+        "description": "Add explicit system prompt guidance: when all information needed to answer is already present inline in the user's message (arithmetic with few inline numbers, URL component extraction, file-extension recognition), answer directly without invoking any tools. Tool use for such questions is over-selection and should be avoided."
+      },
+      "category": "gaia_tool_selection",
+      "elapsed_s": 318.6368763446808
+    },
+    {
+      "scenario_id": "select_three_bundles_one_request",
+      "status": "INFRA_ERROR",
+      "overall_score": null,
+      "category": "gaia_tool_selection",
+      "elapsed_s": 106.15139198303223
+    },
+    {
+      "scenario_id": "select_tool_it_does_not_have",
+      "status": "NOT_RUN",
+      "overall_score": null,
+      "category": "gaia_tool_selection",
+      "elapsed_s": 0.0
+    },
+    {
+      "scenario_id": "select_web_bundle",
+      "status": "NOT_RUN",
+      "overall_score": null,
+      "category": "gaia_tool_selection",
+      "elapsed_s": 0.0
+    }
+  ],
+  "stopped": {
+    "kind": "claude_quota",
+    "headline": "Claude quota exhausted",
+    "detail": "You've hit your weekly limit · resets Oct 31, 12pm (America/Los_Angeles)",
+    "after_scenario": "select_three_bundles_one_request",
+    "not_run": [
+      "select_three_bundles_one_request",
+      "select_tool_it_does_not_have",
+      "select_web_bundle"
+    ]
+  }
+}

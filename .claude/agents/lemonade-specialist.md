@@ -102,8 +102,9 @@ There is no cross-platform "serve" command, so never hard-code one. Lemonade rem
 `lemonade-server` CLI in 10.7; GAIA pins 2026.44.1, where Windows runs `LemonadeServer.exe
 --silent`, Linux runs the `lemond` systemd unit, and macOS runs `lemond` directly. Resolve
 it through `gaia.llm.lemonade_launcher` — `resolve_lemonade()` / `build_start_command()` to
-launch, `describe_start_hint()` for anything shown to a user. Context size is the
-`LEMONADE_CTX_SIZE` env var, not a flag, and GAIA pins it per device profile.
+launch, `describe_start_hint()` for anything shown to a user. Modern Lemonade takes no
+context size at launch (no flag, no env var); GAIA sends its per-profile window with every
+`/load`.
 
 ## Troubleshooting matrix
 

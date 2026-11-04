@@ -363,7 +363,7 @@ describe('first-run setup', () => {
         expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
 
         answer(NOT_READY);
-        expect(await screen.findByRole('heading', { name: 'Set up GAIA' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
     });
 
@@ -375,9 +375,60 @@ describe('first-run setup', () => {
         expect(screen.queryByText('Starting GAIA…')).not.toBeInTheDocument();
     });
 
-    /** Where GAIA runs, then setup's own model set (this suite has no plan to choose from). */
+    it('shows a localized blocking notice while upgrading an older embedded Lemonade, then enters chat', async () => {
+        let finishUpgrade!: (status: { state: 'ready' }) => void;
+        mocked.checkSetup
+            .mockResolvedValueOnce({ ready: false, stage: 'upgrade', steps: [] })
+            .mockResolvedValueOnce(READY);
+        mocked.startSetup.mockResolvedValue({ state: 'running', upgrade_embedded: true } as never);
+        // Idle until the update starts; other screens read the status too.
+        mocked.getSetupStatus.mockImplementation(() => (mocked.startSetup.mock.calls.length
+            ? new Promise((resolve) => { finishUpgrade = resolve; })
+            : Promise.resolve({ state: 'idle' })));
+        render(<App />);
+
+        expect(await screen.findByText('Updating the local model server…')).toBeInTheDocument();
+        expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
+        await waitFor(() => expect(mocked.startSetup).toHaveBeenCalledWith(false, false, { upgradeEmbedded: true }));
+
+        finishUpgrade({ state: 'ready' });
+        expect(await screen.findByLabelText('Message')).toBeInTheDocument();
+        expect(mocked.checkSetup).toHaveBeenCalledTimes(2);
+    });
+
+    it('a re-check during an update follows it instead of starting a second one', async () => {
+        mocked.checkSetup
+            .mockResolvedValueOnce({ ready: false, stage: 'upgrade', steps: [] })
+            .mockResolvedValueOnce(READY);
+        let done = false;
+        mocked.getSetupStatus.mockImplementation(async () => (done
+            ? { state: 'ready' }
+            : { state: 'running', upgrade_embedded: true } as never));
+        render(<App />);
+
+        expect(await screen.findByText('Updating the local model server…')).toBeInTheDocument();
+        done = true;
+        expect(await screen.findByLabelText('Message', {}, { timeout: 5000 })).toBeInTheDocument();
+        expect(mocked.startSetup).not.toHaveBeenCalled();
+    });
+
+    it('a failed update says so and offers to try again, not "could not check"', async () => {
+        mocked.checkSetup.mockResolvedValue({ ready: false, stage: 'upgrade', steps: [] });
+        mocked.startSetup.mockResolvedValue({ state: 'running', upgrade_embedded: true } as never);
+        mocked.getSetupStatus.mockImplementation(async () => (mocked.startSetup.mock.calls.length
+            ? { state: 'failed', error: 'download refused' } as never
+            : { state: 'idle' }));
+        render(<App />);
+
+        expect(await screen.findByText(/couldn't update its local model server.*Details: download refused/)).toBeInTheDocument();
+        expect(screen.queryByText(/Could not check whether GAIA is set up/)).not.toBeInTheDocument();
+
+        await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+        await waitFor(() => expect(mocked.startSetup).toHaveBeenCalledTimes(2));
+    });
+
+    /** This suite has no plan to choose from, so setup offers its own model set. */
     async function runSetup() {
-        await userEvent.click(await screen.findByRole('button', { name: 'Continue' }));
         await userEvent.click(await screen.findByRole('button', { name: 'Use the recommended set' }));
     }
 
@@ -425,9 +476,9 @@ describe('first-run setup', () => {
         mocked.checkSetup.mockResolvedValue(NOT_READY);
         render(<App />);
 
-        expect(await screen.findByRole('heading', { name: 'Set up GAIA' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         // Setup reads as progress: the check's reason is not shown as a problem.
-        expect(screen.getByText('A few minutes of setup, then your first chat.')).toBeInTheDocument();
+        expect(screen.getByText('This takes a few seconds. Nothing downloads yet.')).toBeInTheDocument();
         expect(screen.queryByText('The local model server is not installed.')).not.toBeInTheDocument();
         expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
     });

@@ -4,7 +4,7 @@
 /** Types shared across the GAIA Agent UI frontend. */
 
 import type { TurnSummaryResponse } from './api.gen';
-import type { SetupCatalogEntry, SetupModelProgress, SetupOverall } from './setup';
+import type { SetupCatalogEntry, SetupComponent, SetupModelProgress, SetupOverall, SetupTest } from './setup';
 
 export * from './setup';
 
@@ -441,6 +441,10 @@ export interface Message {
     stopState?: 'stopped' | 'unconfirmed';
     /** Error the server reported while a stopped turn was closing. */
     stopError?: string;
+    /** Client-side: this reply stands in for a turn that failed before answering. */
+    failed?: boolean;
+    /** Client-side: the raw error, to recognize the server's saved copy of this failure. */
+    failureText?: string;
     /** Set when this turn pushed older turns out of the model's view. */
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */
@@ -529,7 +533,7 @@ export interface DownloadProgress {
     downloaded_bytes: number;
     /** Sum of every file's ``bytes_total`` in this download. */
     total_bytes: number;
-    /** Populated only when state === 'error'. */
+    /** Set on 'error', and on 'starting' while a backend installs first. */
     message: string | null;
 }
 
@@ -1006,7 +1010,7 @@ export interface SetupStep {
 /** `gaia init --check --json`: ready, or the stage and reasons it is not. */
 export interface SetupCheck {
     ready: boolean;
-    stage?: 'setup' | 'server' | 'load' | string;
+    stage?: 'setup' | 'upgrade' | 'server' | 'load' | string;
     reasons?: string[];
     models?: Array<{ id: string; role: string; size_gb: number | null; loaded: boolean; error: string | null }>;
     steps: SetupStep[];
@@ -1016,8 +1020,8 @@ export interface SetupCheck {
 
 /** A failed setup with a known fix: the user's Lemonade Server isn't answering. */
 export interface SetupProblem {
-    kind: 'server_unreachable';
-    /** One plain sentence: what is wrong. */
+    kind: 'server_unreachable' | 'server_too_old';
+    /** One plain sentence: what is wrong, in English, with the address and versions. */
     message: string;
     /** How to start that server, or null when this PC has none to start. */
     start: string | null;
@@ -1026,6 +1030,41 @@ export interface SetupProblem {
     /** Set when it can't switch from here (LEMONADE_BASE_URL), and what does. */
     switch_hint: string | null;
 }
+
+export interface SetupDevice {
+    kind: string;
+    name: string;
+    family: string | null;
+    available: boolean;
+    integrated?: boolean | null;
+    cores?: number | null;
+    threads?: number | null;
+}
+
+export interface SetupGaiaBuild {
+    version: string;
+    /** A published release or release candidate, a wheel built from a checkout, or a checkout itself. */
+    kind: 'release' | 'release_candidate' | 'local' | 'source';
+    /** The candidate's number, e.g. "2" for 0.25.5rc2. */
+    rc: string | null;
+    /** The checkout's commit, for a source build. */
+    commit: string | null;
+}
+
+export interface SetupSystem {
+    gaia_version: string;
+    gaia_build?: SetupGaiaBuild;
+    /** Settings, chats, logs and GAIA's own Lemonade. */
+    gaia_home: string | null;
+    agent_version: string | null;
+    lemonade_version: string | null;
+    os: string | null;
+    processor: string | null;
+    physical_memory: string | null;
+    devices: SetupDevice[];
+}
+
+export type SetupLogStage = 'check' | 'download' | 'test';
 
 export interface SetupRunStatus {
     state: 'idle' | 'running' | 'verifying' | 'ready' | 'failed' | 'cancelled';
@@ -1038,13 +1077,20 @@ export interface SetupRunStatus {
     problem?: SetupProblem | null;
     command?: string;
     log_tail?: string[];
+    /** Each stage's log, its last lines: the checks, the downloads, the Test step. */
+    logs?: Partial<Record<SetupLogStage, string[]>>;
     skip_chat_model?: boolean;
     /** The run is switching to GAIA's own server; a retry must keep switching. */
     gaia_lemonade?: boolean;
     /** A model's download failed in this run; its row says why. */
     model_failed?: boolean;
+    /** Each piece besides the models, by id. */
+    components?: Record<string, 'active' | 'done' | 'failed'>;
+    tests?: SetupTest[];
     /** The run only starts the model server; models are chosen and pulled after. */
     server_only?: boolean;
+    /** The run replaces an older embedded Lemonade artifact without model downloads. */
+    upgrade_embedded?: boolean;
     /** The chat model setup chose, once it has said. */
     chat_model?: string | null;
     /** Each model's download, the run's and any single download's. */
@@ -1071,6 +1117,14 @@ export interface SetupPlan {
     disk_warning?: string | null;
     skipped_models?: string[];
     catalog?: SetupCatalogEntry[];
+    /** Backends Lemonade reports for this PC. */
+    backends?: Array<{ recipe: string; backend: string; state: string | null; version?: string | null; default: boolean }>;
+    /** What setup found across the stack; null where nothing could find out. */
+    system?: SetupSystem;
+    /** Everything else setup fetches. */
+    components?: SetupComponent[];
+    /** The model the user chose to read images; null is GAIA's choice. */
+    vision_model?: string | null;
 }
 
 /** A task a new chat offers, from what is set up on this PC. */

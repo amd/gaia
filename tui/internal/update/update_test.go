@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,23 +121,12 @@ func TestBrokenConfigIsAnErrorNotTheDefaults(t *testing.T) {
 	}
 }
 
-func serveReleases(t *testing.T, handler http.HandlerFunc) {
-	t.Helper()
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-	prev := apiBase
-	apiBase = srv.URL
-	t.Cleanup(func() { apiBase = prev })
-}
-
-func TestListReleasesDropsDraftsAndSortsNewestFirst(t *testing.T) {
-	serveReleases(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]Release{
-			{Tag: "v0.24.0"}, {Tag: "v0.26.0", Draft: true}, {Tag: "v0.25.1-rc2", Prerelease: true},
-			{Tag: "v0.25.0"}, {Tag: "nightly"},
-		})
+func TestListReleasesKeepsGAIATagsAndSortsNewestFirst(t *testing.T) {
+	withGitHub(t, &fakeGitHub{
+		feed:   atom("v0.24.0", "agent-pkg-gaia-v0.3.3", "v0.25.1-rc2", "v0.25.0", "nightly"),
+		latest: "v0.25.0",
 	})
-	rs, err := ListReleases(context.Background())
+	rs, err := ListReleases(context.Background(), "0.25.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,54 +140,16 @@ func TestListReleasesDropsDraftsAndSortsNewestFirst(t *testing.T) {
 }
 
 func TestListReleasesSaysWhyItFailed(t *testing.T) {
-	serveReleases(t, func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "rate limited", http.StatusForbidden)
-	})
-	_, err := ListReleases(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "403") || !strings.Contains(err.Error(), ReleasesPage) {
+	withGitHub(t, &fakeGitHub{feedCode: http.StatusServiceUnavailable, latest: "v0.25.0"})
+	_, err := ListReleases(context.Background(), "0.25.0")
+	if err == nil || !strings.Contains(err.Error(), "503") || !strings.Contains(err.Error(), ReleasesPage) {
 		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestRateLimitSaysWhenAndHowToLiftIt(t *testing.T) {
-	t.Setenv("GH_TOKEN", "")
-	t.Setenv("GITHUB_TOKEN", "")
-	serveReleases(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-RateLimit-Remaining", "0")
-		w.Header().Set("X-RateLimit-Reset", "1792816995")
-		http.Error(w, "rate limit exceeded", http.StatusForbidden)
-	})
-	_, err := ListReleases(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "hourly limit") || !strings.Contains(err.Error(), "GH_TOKEN") ||
-		!strings.Contains(err.Error(), "resets at") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestATokenIsSentWhenSet(t *testing.T) {
-	t.Setenv("GH_TOKEN", "abc")
-	var got string
-	serveReleases(t, func(w http.ResponseWriter, r *http.Request) {
-		got = r.Header.Get("Authorization")
-		w.Write([]byte("[]"))
-	})
-	if _, err := ListReleases(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if got != "Bearer abc" {
-		t.Errorf("Authorization = %q", got)
 	}
 }
 
 func TestGetReleaseLooksUpAnyTag(t *testing.T) {
-	serveReleases(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/releases/tags/v0.20.0" {
-			http.NotFound(w, r)
-			return
-		}
-		json.NewEncoder(w).Encode(Release{Tag: "v0.20.0"})
-	})
-	if r, err := GetRelease(context.Background(), "v0.20.0"); err != nil || r.Tag != "v0.20.0" {
+	withGitHub(t, &fakeGitHub{sums: tuiFiles("v0.20.0")})
+	if r, err := GetRelease(context.Background(), "v0.20.0"); err != nil || r.Tag != "v0.20.0" || len(r.Assets) == 0 {
 		t.Fatalf("got %+v, %v", r, err)
 	}
 	if _, err := GetRelease(context.Background(), "v0.19.0"); err == nil || !strings.Contains(err.Error(), "no such release") {
@@ -264,6 +214,21 @@ func TestNewPlanNeedsAVerifiableInstaller(t *testing.T) {
 	}
 	p, err := NewPlan(Release{Tag: "v0.26.0", Assets: []Asset{setup, sums}}, true)
 	if err != nil || p.Kind != KindWindowsSetup || !p.Pin {
+		t.Fatalf("plan = %+v, %v", p, err)
+	}
+}
+
+func TestNewPlanNeedsAVerifiableScriptBuild(t *testing.T) {
+	withScriptInstall(t)
+	build := Asset{Name: "gaia-linux-amd64"}
+	sums := Asset{Name: tuiSums}
+	if _, err := NewPlan(Release{Tag: "v0.26.0", Assets: []Asset{sums}}, false); err == nil {
+		t.Error("a release with no build for this machine must be refused")
+	}
+	if _, err := NewPlan(Release{Tag: "v0.26.0", Assets: []Asset{build}}, false); err == nil {
+		t.Error("a build with no checksums must be refused")
+	}
+	if p, err := NewPlan(Release{Tag: "v0.26.0", Assets: []Asset{build, sums}}, false); err != nil || p.Kind != KindScript {
 		t.Fatalf("plan = %+v, %v", p, err)
 	}
 }

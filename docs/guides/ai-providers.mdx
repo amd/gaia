@@ -86,7 +86,10 @@ models, not an unused local chat model.
 A3B** on any PC whose GPU has ~27 GB for models (its 23.3 GB of weights and
 vision projector plus the context cache at its smallest, 64K window — a 64 GB+
 Strix Halo or a 32 GB GPU qualifies; a 24 GB card does not), **Gemma 4 E4B** everywhere
-else, including CPU-only PCs. GAIA runs Qwen3.6 with thinking on, so each step
+else, including CPU-only PCs. Qwen3.6 must also fit the memory free when setup
+runs (about 26 GB at its smallest window): on a 48 GB Mac with other apps holding
+memory, setup picks Gemma and says how much Qwen3.6 needs and how much is free.
+GAIA keeps that pick; to use Qwen3.6 later, close those apps and choose it in **Settings → Model**. GAIA runs Qwen3.6 with thinking on, so each step
 reasons before it answers or calls a tool. It records the pick as `default_model` in `~/.gaia/config.json`,
 so the TUI's agent starts on it. Set `gaia config set default_model <id>` to
 choose your own; `gaia init` never overwrites it, and downloads it instead of
@@ -140,8 +143,9 @@ titles, memory upkeep, document summaries and `gaia llm`.
 
 ### Add a model from Hugging Face
 
-Any GGUF chat model on Hugging Face can join the local model list. Paste its link
-and GAIA checks it before saving anything:
+Any GGUF chat model on Hugging Face, or a FastFlowLM NPU model from the
+[FastFlowLM organization](https://huggingface.co/FastFlowLM), can join the local
+model list. Paste its link and GAIA checks it before saving anything:
 
 - **Hugging Face link** — any page of a model repo works: its card, `/tree/main`,
   `/discussions`, with a tracking query string or not. A link to one `.gguf` file
@@ -161,6 +165,13 @@ and GAIA checks it before saving anything:
 - **Not already listed** — a model GAIA ships, one you already added, or a name
   Lemonade already uses for another model is refused.
 
+A FastFlowLM repo (its name ends in `-NPU2`) takes a shorter path. There is nothing to
+register, because only models in the FastFlowLM release your Lemonade runs can load, so
+GAIA looks the link up in that release's model list. It needs a Ryzen AI NPU, and it must be
+a chat model; embedding, transcription and single-turn builds are refused. Gemma 4 E4B on
+the NPU is already in the model list on a PC with an NPU it fits, so pasting its link points
+you there.
+
 A chat template without tool support is allowed with a warning: GAIA can chat with
 the model but can't use tools through it.
 
@@ -170,8 +181,8 @@ its own, if smaller): GAIA doesn't know its memory use per token, so it doesn't
 grow the window the way it does for its own models. Removing it deletes its download too, and
 if it was your saved model the next launch uses the default.
 
-- **Agent UI:** Settings › Model › Local, **Add a model from Hugging Face**. The
-  model chip's menu has **Add a model from a link…**. Added models have a
+- **Agent UI:** Settings › Model › Local, open **Add a model from Hugging Face**.
+  The model chip's menu has **Add a model from a link…**. Added models have a
   **Remove** button.
 - **TUI:** in `/provider` › Local, press **Ctrl+A**, paste the link, and press
   **Enter** to check it, **Tab** for another quantization, **Enter** again to add.

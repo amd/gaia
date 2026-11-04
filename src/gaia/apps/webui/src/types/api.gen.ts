@@ -131,6 +131,7 @@ export interface ApiSchemas {
   UpdateSessionRequest: UpdateSessionRequest;
   UserInputRequest: UserInputRequest;
   ValidationError: ValidationError;
+  VisionModelRequest: VisionModelRequest;
   WarmUpStatus: WarmUpStatus;
   WorkInProgress: WorkInProgress;
   gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
@@ -1145,7 +1146,9 @@ export interface SettingsUpdateRequest {
  * ``keep_trying`` to wait up to two minutes out a dropped connection;
  * ``extra_models`` to pull models beside the plan's (the user ticked them);
  * ``server_only`` to start the model server and stop, so the models can be
- * chosen against it before anything downloads.
+ * chosen against it before anything downloads;
+ * ``upgrade_embedded`` to replace an older embedded server artifact without
+ * downloading the existing model cache again.
  */
 export interface SetupRunRequest {
   acknowledge_low_disk?: boolean;
@@ -1154,6 +1157,7 @@ export interface SetupRunRequest {
   keep_trying?: boolean;
   server_only?: boolean;
   skip_chat_model?: boolean;
+  upgrade_embedded?: boolean;
 }
 export interface SkipModelRequest {
   model_id: string;
@@ -1312,11 +1316,18 @@ export interface UserInputRequest {
   value: string;
 }
 /**
+ * A model that reads images, or null to go back to GAIA's choice.
+ */
+export interface VisionModelRequest {
+  model_id?: string | null;
+}
+/**
  * Work that quitting or unloading the model would cut short.
  */
 export interface WorkInProgress {
   answers: RunningAnswer[];
   indexing: RunningIndexJob[];
+  setup?: boolean;
 }
 export interface Gaia_Ui_Routers_Setup__DownloadModelRequest {
   acknowledge_low_disk?: boolean;

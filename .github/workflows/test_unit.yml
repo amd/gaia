@@ -56,6 +56,7 @@ on:
       - 'examples/mcp_windows_system_health_agent.py'
       - 'eval/ci_lanes.json'
       - 'eval/ci_tiers.json'
+      - 'eval/tasks/tasks.json'
       - 'eval/retrieval/**'
       - 'data/pdf/**'
       - 'cpp/src/unicode_upper_ranges.inc'
@@ -70,6 +71,7 @@ on:
       - 'docs/releases/**'
       # Doc pages unit tests check against the code (drift and runnable-command tests).
       - 'docs/connectors/google.mdx'
+      - 'docs/guides/building-skills.mdx'
       - 'docs/guides/chat.mdx'
       - 'docs/guides/gaia.mdx'
       - 'docs/guides/install.mdx'
@@ -84,6 +86,8 @@ on:
       - 'docs/sdk/sdks/skills.mdx'
       - 'docs/sdk/utils/file-watcher.mdx'
       - 'docs/spec/chat-agent.mdx'
+      # The SSE contract test reads this specification directly.
+      - 'docs/spec/agent-ui-query-sse-contract.md'
       - 'hub/agents/*/npm/SKILL.md'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
@@ -123,6 +127,7 @@ on:
       - 'examples/mcp_windows_system_health_agent.py'
       - 'eval/ci_lanes.json'
       - 'eval/ci_tiers.json'
+      - 'eval/tasks/tasks.json'
       - 'eval/retrieval/**'
       - 'data/pdf/**'
       - 'cpp/src/unicode_upper_ranges.inc'
@@ -137,6 +142,7 @@ on:
       - 'docs/releases/**'
       # Doc pages unit tests check against the code (drift and runnable-command tests).
       - 'docs/connectors/google.mdx'
+      - 'docs/guides/building-skills.mdx'
       - 'docs/guides/chat.mdx'
       - 'docs/guides/gaia.mdx'
       - 'docs/guides/install.mdx'
@@ -151,6 +157,8 @@ on:
       - 'docs/sdk/sdks/skills.mdx'
       - 'docs/sdk/utils/file-watcher.mdx'
       - 'docs/spec/chat-agent.mdx'
+      # The SSE contract test reads this specification directly.
+      - 'docs/spec/agent-ui-query-sse-contract.md'
       - 'hub/agents/*/npm/SKILL.md'
   merge_group:
   workflow_dispatch:

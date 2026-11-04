@@ -41,7 +41,7 @@ FEATURE_TOOLS: Dict[str, FrozenSet[str]] = {
     "image_generation": frozenset(
         {"generate_image", "list_sd_models", "get_generation_history"}
     ),
-    # Installed skills still load; only browsing and changing the library goes.
+    # Installed skills still load and capture_skill stays; only the hub goes.
     "skill_hub": frozenset({"search_skill_hub", "install_skill", "remove_skill"}),
 }
 

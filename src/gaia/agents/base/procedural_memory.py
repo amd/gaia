@@ -19,6 +19,7 @@ import functools
 import re
 import threading
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
@@ -861,8 +862,10 @@ class ProceduralMemoryMixin:
 
         An episode is done once a pass handed it to the distiller, whatever the
         outcome — that is what stops a cluster the model could not distil from
-        being re-attempted on every session start.  ``force`` ignores the marks
-        so the whole window is re-read.
+        being re-attempted on every session start.  A marked episode with tool
+        calls newer than its mark is pending again: an Agent UI chat keeps its
+        id, so work done after it was consumed would otherwise never be read.
+        ``force`` ignores the marks so the whole window is re-read.
 
         Returns:
             ``(pending, already_consumed_ids)``.
@@ -871,6 +874,14 @@ class ProceduralMemoryMixin:
             return list(window), set()
 
         marks = store.get_synthesis_marks([s["session_id"] for s in window])
+        # Parsed, not compared as text: the stored local offset changes with DST.
+        marks = {
+            s["session_id"]: marks[s["session_id"]]
+            for s in window
+            if s["session_id"] in marks
+            and datetime.fromisoformat(s["last_at"])
+            <= datetime.fromisoformat(marks[s["session_id"]]["marked_at"])
+        }
         if not marks:
             return list(window), set()
 

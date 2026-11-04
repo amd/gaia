@@ -49,7 +49,7 @@ function fitLine(e: SetupCatalogEntry, t: Say): string | null {
 export function tooBigText(e: SetupCatalogEntry, t: Translate): string {
     return e.need_gb != null && e.capacity_gb != null
         ? t('setup.models.warn.tooBig', { need: formatFitGb(e.need_gb), have: formatFitGb(e.capacity_gb) })
-        : t('setup.models.warn.tooBigNoNumbers', { reason: e.fit_reason ?? '' });
+        : t('setup.models.warn.tooBigNoNumbers');
 }
 
 /** The caveat under an unticked model that turns a feature off. In Settings an

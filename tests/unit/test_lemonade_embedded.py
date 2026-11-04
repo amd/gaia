@@ -20,6 +20,7 @@ from gaia.llm.lemonade_client import REQUEST_BUDGET_ENV
 from gaia.llm.lemonade_embedded import (
     _ASSET_TEMPLATES,
     EMBEDDABLE_SHA256,
+    OWN,
     EmbeddedLemonade,
     EmbeddedLemonadeError,
     UnsupportedPlatformError,
@@ -124,6 +125,114 @@ class TestChecksumPinning:
         archive = tmp_path / "asset.zip"
         archive.write_bytes(payload)
         manager._verify(archive, hashlib.sha256(payload).hexdigest())
+
+
+def _embeddable_zip(path):
+    """Write a Windows-layout archive with its usual single wrapper directory."""
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("lemonade-embeddable/lemond.exe", b"daemon")
+        archive.writestr("lemonade-embeddable/resources/kokoro.txt", b"resource")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class TestBundledArchive:
+    """The desktop app's copy replaces the download, never the verification."""
+
+    @pytest.fixture
+    def bundle(self, monkeypatch, tmp_path):
+        """The app's archive directory, wired up the way main.cjs does it."""
+        _fake_platform(monkeypatch, "Windows", "AMD64")
+        directory = tmp_path / "resources" / "vendor" / "lemonade"
+        directory.mkdir(parents=True)
+        monkeypatch.setenv(lemonade_embedded.BUNDLED_ARCHIVE_DIR_ENV, str(directory))
+        return directory
+
+    @staticmethod
+    def _pin(monkeypatch, digest):
+        monkeypatch.setitem(EMBEDDABLE_SHA256, asset_name(LEMONADE_VERSION), digest)
+
+    @staticmethod
+    def _forbid_network(monkeypatch):
+        def refuse(*args, **kwargs):
+            raise AssertionError("a bundled install must not touch the network")
+
+        monkeypatch.setattr(lemonade_embedded.urllib.request, "urlopen", refuse)
+
+    def test_installs_from_the_bundle_with_no_network(
+        self, manager, bundle, monkeypatch
+    ):
+        self._pin(monkeypatch, _embeddable_zip(bundle / asset_name(LEMONADE_VERSION)))
+        self._forbid_network(monkeypatch)
+
+        dist = manager.install()
+
+        assert (dist / "lemond.exe").read_bytes() == b"daemon"
+        assert (dist / "resources" / "kokoro.txt").read_bytes() == b"resource"
+        assert manager.is_installed()
+        assert (bundle / asset_name(LEMONADE_VERSION)).is_file()
+
+    def test_a_wrong_hash_raises_rather_than_downloading(
+        self, manager, bundle, monkeypatch
+    ):
+        _embeddable_zip(bundle / asset_name(LEMONADE_VERSION))
+        self._pin(monkeypatch, "0" * 64)
+        self._forbid_network(monkeypatch)
+
+        with pytest.raises(EmbeddedLemonadeError) as exc:
+            manager.install()
+
+        assert "Checksum mismatch" in str(exc.value)
+        assert "Reinstall the GAIA desktop app" in str(exc.value)
+        assert not manager.is_installed()
+
+    def test_an_unreadable_bundle_raises_rather_than_downloading(
+        self, manager, bundle, monkeypatch
+    ):
+        self._pin(monkeypatch, _embeddable_zip(bundle / asset_name(LEMONADE_VERSION)))
+        self._forbid_network(monkeypatch)
+
+        def denied(*args, **kwargs):
+            raise PermissionError("denied")
+
+        monkeypatch.setattr(lemonade_embedded.shutil, "copyfile", denied)
+        with pytest.raises(EmbeddedLemonadeError, match="Reinstall the GAIA desktop"):
+            manager.install()
+
+    def test_another_versions_bundle_is_ignored_and_it_downloads(
+        self, manager, bundle, monkeypatch, tmp_path
+    ):
+        # A pip upgrade moved past the app: the app's archive is the old version,
+        # and deliberately corrupt here to prove it is never opened.
+        (bundle / asset_name("2020.1.1")).write_bytes(b"the app's older copy")
+        published = tmp_path / "published.zip"
+        self._pin(monkeypatch, _embeddable_zip(published))
+        urls = []
+
+        def download(url, dest):
+            urls.append(url)
+            dest.write_bytes(published.read_bytes())
+
+        monkeypatch.setattr(manager, "_download", download)
+
+        dist = manager.install()
+
+        assert urls == [asset_url(LEMONADE_VERSION)]
+        assert (dist / "lemond.exe").read_bytes() == b"daemon"
+
+    def test_with_no_bundle_configured_it_downloads(
+        self, manager, monkeypatch, tmp_path
+    ):
+        _fake_platform(monkeypatch, "Windows", "AMD64")
+        monkeypatch.delenv(lemonade_embedded.BUNDLED_ARCHIVE_DIR_ENV, raising=False)
+        published = tmp_path / "published.zip"
+        self._pin(monkeypatch, _embeddable_zip(published))
+        monkeypatch.setattr(
+            manager,
+            "_download",
+            lambda url, dest: dest.write_bytes(published.read_bytes()),
+        )
+
+        assert (manager.install() / "lemond.exe").read_bytes() == b"daemon"
 
 
 class TestArchiveSafety:
@@ -443,6 +552,31 @@ class TestStatus:
         )
         assert manager.recorded_health() == (True, {"status": "ok"})
         assert asked == [(4321, "k")]
+
+    def test_recorded_health_of_an_exited_server_is_no_server(
+        self, manager, monkeypatch
+    ):
+        """A stopped server must not read as one too busy to answer."""
+        import psutil
+
+        manager._write_state({"pid": 1, "port": 4321, "api_key": "k"})
+        monkeypatch.setattr(EmbeddedLemonade, "_health", lambda self, port, key: None)
+
+        def gone(pid):
+            raise psutil.NoSuchProcess(pid)
+
+        monkeypatch.setattr(psutil, "Process", gone)
+        assert manager.recorded_health() == (False, None)
+
+    def test_recorded_health_of_a_live_unanswering_server_is_recorded(
+        self, manager, monkeypatch
+    ):
+        manager._write_state({"pid": 1, "port": 4321, "api_key": "k"})
+        monkeypatch.setattr(EmbeddedLemonade, "_health", lambda self, port, key: None)
+        monkeypatch.setattr(
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: OWN
+        )
+        assert manager.recorded_health() == (True, None)
 
     def test_unreadable_state_file_is_discarded(self, manager):
         manager.root.mkdir(parents=True, exist_ok=True)
