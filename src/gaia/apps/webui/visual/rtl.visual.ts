@@ -173,6 +173,17 @@ const audit = (page: Page): Promise<string[]> =>
             if (button.scrollWidth > button.clientWidth + 1) problems.push(`label spills out of its button: ${label(button)}`);
         }
 
+        // A failed reply's text keeps clear of its red bar, on whichever side the bar sits.
+        for (const reply of document.querySelectorAll('.msg-error')) {
+            const body = reply.querySelector('.msg-body');
+            if (!body || !shown(reply)) continue;
+            const box = reply.getBoundingClientRect();
+            const inner = body.getBoundingClientRect();
+            const rtl = getComputedStyle(reply).direction === 'rtl';
+            const gap = rtl ? box.right - inner.right : inner.left - box.left;
+            if (gap < 8) problems.push(`failed reply's text touches its bar (${Math.round(gap)}px): ${label(reply)}`);
+        }
+
         // An icon and its label need space between them, in either direction.
         for (const button of document.querySelectorAll('button')) {
             const icon = button.querySelector(':scope > svg');
@@ -697,9 +708,50 @@ for (const locale of ['ar', 'en']) {
         await expect(page.getByText(stopped)).toBeVisible({ timeout: 30_000 });
         await expect(page.getByText(/Failed to fetch/)).toHaveCount(0);
         await expect(page.getByText(/may still finish/)).toHaveCount(0);
-        await expect(page.getByRole('button', { name: /Try again/ })).toBeVisible();
+        await expectVisibleTryAgain(page, locale);
         await expect(page.locator('.sb-dot.is-running')).toHaveCount(0);
         await shot(page, `gaia-stopped-mid-answer-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+/** The reply's text asks the user to press Try again, so the button must be on screen, labelled, without a hover. */
+async function expectVisibleTryAgain(page: Page, locale: string): Promise<void> {
+    const retry = page.getByRole('button', { name: /Try again/ });
+    await expect(retry).toHaveCount(1);
+    await expect(retry).toHaveText(locale === 'ar' ? /حاول مجددًا/ : /Try again/);
+    const opacity = await retry.evaluate((el) => {
+        let o = 1;
+        for (let at: Element | null = el; at; at = at.parentElement) o *= Number(getComputedStyle(at).opacity);
+        return o;
+    });
+    expect(opacity).toBeGreaterThan(0.99);
+}
+
+const PARTIAL_ANSWER = 'Coral reefs cover less than one percent of the ocean floor.';
+const INTERRUPTED_NOTICE = 'This answer was interrupted when GAIA closed. Send again to retry.';
+
+/** What a reopened chat holds after GAIA restarted: the saved part of the answer, closed by the server's notice. */
+async function withInterruptedAnswer(page: Page): Promise<void> {
+    await page.route(new RegExp(`/api/sessions/${ANSWER_SESSION}/messages(\\?|$)`), (route) => route.fulfill({
+        json: {
+            messages: [
+                { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Write a 1500-word essay about coral reefs.', created_at: '2026-06-10T00:00:00Z', rag_sources: null },
+                { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: `${PARTIAL_ANSWER}\n\n${INTERRUPTED_NOTICE}`, created_at: '2026-06-10T00:00:05Z', rag_sources: null },
+            ],
+            total: 2,
+        },
+    }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`after GAIA restarts, a cut-off answer says so in plain words and offers Try again (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withInterruptedAnswer);
+        await expect(page.getByText(PARTIAL_ANSWER)).toBeVisible();
+        if (locale === 'ar') await expect(page.getByText('انقطعت هذه الإجابة عندما أُغلق GAIA')).toBeVisible();
+        await expect(page.getByText(/Send again to retry/)).toHaveCount(0);
+        await expectVisibleTryAgain(page, locale);
+        await shot(page, `gaia-restarted-interrupted-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
 }

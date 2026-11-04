@@ -120,12 +120,14 @@ export function isSavedFailure(row: Message | undefined, reply: Message): boolea
 
 /**
  * Whether Try again may replace *question* on the server: nothing follows it
- * there but the saved copy of *reply*'s failure. Anything else is an answer
- * written since (another window, or a run that finished after the view lost it).
+ * there but *reply* itself (a cut-off answer the server saved) or the saved
+ * copy of its failure. Anything else is an answer written since (another
+ * window, or a run that finished after the view lost it).
  */
 export function onlyFailureAfter(server: Message[], question: Message, reply: Message): boolean {
     const after = server.slice(server.findIndex((m) => m.id === question.id) + 1);
-    return after.length === 0 || (after.length === 1 && isSavedFailure(after[0], reply));
+    return after.length === 0
+        || (after.length === 1 && (after[0].id === reply.id || isSavedFailure(after[0], reply)));
 }
 
 /** The server's rows, keeping Try again only on the server's copy of a failed reply. */
