@@ -274,7 +274,7 @@ deb:
     - "--before-remove=../../../../installer/debian/prerm"
     - "--after-remove=../../../../installer/debian/postrm"
     - "--replaces=gaia"
-    - "--breaks=gaia (<< 0.25.5)"
+    - "--deb-breaks=gaia (<< 0.25.5)"
 
 appImage:
   artifactName: gaia-agent-ui-${version}-${arch}.${ext}
