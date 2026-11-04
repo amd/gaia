@@ -743,13 +743,15 @@ class TestWorkflow:
         windows = (HEADLESS / "windows-journey.ps1").read_text(encoding="utf-8")
         step = windows[windows.index("'uninstall' {") : windows.index("'leftovers' {")]
         run = step.index('gaia.exe" uninstall --purge')
-        wait = step.index('while ((Test-Path "$gaiaHome\\venv")')
+        wait = step.index(
+            'while (((Test-Path "$gaiaHome\\venv") -or (Test-Path "$gaiaHome\\bin"))'
+        )
         assert run < wait < step.index("} else {", wait)
-        assert "gaia-uninstall-venv-*.log" in step
+        assert "gaia-uninstall-*-*.log" in step
         uninstall_src = (
             REPO / "src" / "gaia" / "installer" / "uninstall_command.py"
         ).read_text(encoding="utf-8")
-        assert 'f"gaia-uninstall-venv-{os.getpid()}.log"' in uninstall_src
+        assert 'f"gaia-uninstall-{venv.name}-{os.getpid()}.log"' in uninstall_src
 
     def test_pull_request_trigger_has_no_base_branch_filter(self):
         wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))

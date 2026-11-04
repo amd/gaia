@@ -1368,6 +1368,22 @@ def _is_running_from_venv(venv: Path) -> bool:
         return False
 
 
+def _is_launched_from(directory: Path) -> bool:
+    """Whether a console-script launcher in ``directory`` started this process.
+
+    uv's and pip's launchers set ``sys.argv[0]`` to their own path, less ``.exe``;
+    ``python.exe`` is then a child, so the launcher stays locked until we exit.
+    """
+    if not sys.argv or not sys.argv[0]:
+        return False
+    try:
+        return Path(sys.argv[0]).parent.resolve(strict=False) == directory.resolve(
+            strict=False
+        )
+    except (OSError, ValueError):
+        return False
+
+
 def _powershell_literal(path: Path) -> str:
     """Quote a filesystem path as a single-quoted PowerShell literal."""
     return "'" + str(path).replace("'", "''") + "'"
@@ -1376,17 +1392,20 @@ def _powershell_literal(path: Path) -> str:
 def _defer_windows_venv_removal(
     venv: Path, *, printer: Callable[[str], None] = print
 ) -> bool:
-    """Schedule a best-effort delete of this process's venv after it exits.
+    """Schedule a best-effort delete of a directory this process runs from.
 
     Windows keeps ``python.exe`` and extension modules in the active virtual
-    environment open until this command exits. The detached helper therefore
-    waits for our PID, retries briefly, and records any final failure in the
-    system temp directory instead of hiding a failed cleanup.
+    environment open until this command exits, and the ``gaia.exe`` launcher in
+    ``~/.gaia/bin`` that started it. The detached helper therefore waits for our
+    PID (and a parent launched from ``venv``), retries briefly, and records any
+    final failure in the system temp directory instead of hiding a failed cleanup.
     """
     if not _is_windows():
         return False
 
-    log_path = Path(tempfile.gettempdir()) / f"gaia-uninstall-venv-{os.getpid()}.log"
+    log_path = (
+        Path(tempfile.gettempdir()) / f"gaia-uninstall-{venv.name}-{os.getpid()}.log"
+    )
     escaped_venv = _powershell_literal(venv)
     escaped_log = _powershell_literal(log_path)
     parent_pid = os.getppid()
@@ -1496,6 +1515,7 @@ def execute_plan(
     """
     all_ok = True
     venv_path = _gaia_home(home) / "venv"
+    bin_path = _gaia_home(home) / "bin"
 
     for message in plan.blocked_edits:
         _print(f"  [error] {message}", printer=printer)
@@ -1504,13 +1524,15 @@ def execute_plan(
     def _remove(path: Path) -> None:
         nonlocal all_ok
         # Windows cannot delete the active venv's interpreter or extension
-        # modules. Defer this known GAIA-owned path before rmtree can leave a
-        # partially deleted environment for later purge steps to import from.
+        # modules, nor the ~/.gaia/bin launcher that started us. Defer these
+        # known GAIA-owned paths before rmtree can leave a partial tree behind.
         if (
-            path == venv_path
-            and _is_windows()
+            _is_windows()
             and not _is_link(path)
-            and _is_running_from_venv(path)
+            and (
+                (path == venv_path and _is_running_from_venv(path))
+                or (path == bin_path and _is_launched_from(path))
+            )
         ):
             if not _defer_windows_venv_removal(path, printer=printer):
                 all_ok = False
