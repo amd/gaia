@@ -82,8 +82,8 @@ def test_linux_desktop_package_has_a_distinct_debian_identity():
     assert deb, "electron-builder.yml no longer defines the Debian target"
     body = deb.group(1)
     assert re.search(r"^  packageName:\s*gaia-desktop\s*$", body, re.M)
-    assert re.search(r"^  replaces:\n\s+-\s+gaia\s*$", body, re.M)
-    assert re.search(r"^  breaks:\n\s+-\s+gaia \(<< 0\.25\.5\)\s*$", body, re.M)
+    assert '"--replaces=gaia"' in body
+    assert '"--breaks=gaia (<< 0.25.5)"' in body
 
 
 def test_build_script_accepts_exactly_electron_builders_windows_artifact_name():

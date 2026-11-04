@@ -254,12 +254,8 @@ deb:
   # which intentionally remains named `gaia`.
   packageName: gaia-desktop
   # Existing releases accidentally registered the desktop package as `gaia`.
-  # Replaces lets apt upgrade those installations without colliding with the
-  # terminal package after this package receives its distinct name.
-  replaces:
-    - gaia
-  breaks:
-    - gaia (<< 0.25.5)
+  # FPM emits the version-bounded Debian relationship fields; electron-builder
+  # 26 does not accept `replaces` / `breaks` as direct DebOptions keys.
   depends:
     - libnotify4
     - libnss3
@@ -277,6 +273,8 @@ deb:
     - "--after-install=../../../../installer/debian/postinst"
     - "--before-remove=../../../../installer/debian/prerm"
     - "--after-remove=../../../../installer/debian/postrm"
+    - "--replaces=gaia"
+    - "--breaks=gaia (<< 0.25.5)"
 
 appImage:
   artifactName: gaia-agent-ui-${version}-${arch}.${ext}
