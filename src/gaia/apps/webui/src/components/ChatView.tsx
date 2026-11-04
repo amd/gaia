@@ -805,6 +805,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         risk: typeof event.risk === 'string' ? event.risk : undefined,
                         // A relayed agent sends a summary of the call instead of its args.
                         summary: typeof event.summary === 'string' && event.summary ? event.summary : undefined,
+                        pathFollowUp: followUp || undefined,
                         // No timeout from the backend means it waits; don't invent one.
                         timeoutSeconds: event.timeout_seconds,
                     });

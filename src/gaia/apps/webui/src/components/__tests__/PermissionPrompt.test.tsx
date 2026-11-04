@@ -4,7 +4,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PermissionPrompt } from '../PermissionPrompt';
-import { useNotificationStore } from '../../stores/notificationStore';
+import { useNotificationStore, PATH_ACCESS_TOOL } from '../../stores/notificationStore';
+import { useChatStore } from '../../stores/chatStore';
 import type { GaiaNotification } from '../../types/agent';
 
 const originalRespond = useNotificationStore.getState().respondToPermission;
@@ -210,5 +211,51 @@ describe('PermissionPrompt', () => {
         add(request({ id: 'second', tool: 'delete_file' }));
         render(<PermissionPrompt sessionId="chat-1" />);
         expect(screen.getByRole('alertdialog')).toHaveTextContent('delete_file');
+    });
+});
+
+describe('PermissionPrompt heading and question in the UI language', () => {
+    afterEach(() => { useChatStore.setState({ locale: 'en' }); });
+
+    const tool = { tool: 'run_python', toolLabel: 'running python', toolArgs: { code: 'print(1)' } };
+    const path = { tool: PATH_ACCESS_TOOL, toolArgs: { path: 'C:\\Users\\me\\sales.csv', kind: 'file' } };
+
+    it.each([
+        ['en', tool, 'Allow running python?', 'running python'],
+        ['ar', tool, 'هل تسمح بـ', 'running python'],
+        ['en', { tool: 'write_file', toolArgs: {} }, 'Allow GAIA to use write_file?', 'write_file'],
+        ['ar', { tool: 'write_file', toolArgs: {} }, 'هل تسمح لـ GAIA باستخدام', 'write_file'],
+    ] as const)('words a tool prompt\'s heading in %s, the tool left to right', (locale, over, heading, ltr) => {
+        useChatStore.setState({ locale });
+        useNotificationStore.getState().addNotification(request(over));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        const title = screen.getByRole('heading');
+        expect(title).toHaveTextContent(heading);
+        expect(title.querySelector('bdi[dir="ltr"]')).toHaveTextContent(ltr);
+        if (locale === 'en') expect(title.textContent).toBe(heading);
+    });
+
+    it.each([
+        ['en', 'Let GAIA use this file?', "GAIA wants to use the file C:\\Users\\me\\sales.csv. This chat can't reach it yet. Allow it for this chat?"],
+        ['ar', 'هل تسمح لـ GAIA باستخدام هذا الملف؟', 'يريد GAIA استخدام الملف'],
+    ] as const)('words a path prompt from its path and kind in %s', (locale, heading, question) => {
+        useChatStore.setState({ locale });
+        // The stored English title and message are for the notification list, not the card.
+        useNotificationStore.getState().addNotification(request({ ...path, title: 'stale', message: 'stale' }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByRole('heading')).toHaveTextContent(heading);
+        const card = screen.getByRole('alertdialog');
+        expect(card).not.toHaveTextContent('stale');
+        const sentence = card.querySelector('.perm-card-question')!;
+        expect(sentence).toHaveTextContent(question);
+        expect(sentence.querySelector('bdi[dir="ltr"]')).toHaveTextContent('C:\\Users\\me\\sales.csv');
+        if (locale === 'en') expect(sentence.textContent).toBe(question);
+    });
+
+    it('words a path prompt that backs an allowed call as a follow-up', () => {
+        useNotificationStore.getState().addNotification(request({ tool: PATH_ACCESS_TOOL, toolArgs: { path: 'C:\\new.txt' }, pathFollowUp: true }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByRole('heading')).toHaveTextContent('Also let GAIA use this location?');
+        expect(screen.getByRole('alertdialog')).toHaveTextContent('To do what you just allowed, GAIA also needs C:\\new.txt, which doesn\'t exist yet.');
     });
 });
