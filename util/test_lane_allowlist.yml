@@ -132,6 +132,7 @@ module_skips:
   - reason: Needs the [mcp] extra, which test_unit.yml does not install.
     runs_in: test_agent_mcp_server.yml
     paths:
+      - tests/unit/mcp/client/test_mcp_http_sdk_server.py
       - tests/unit/test_agent_ui_mcp_messages.py
       - tests/unit/test_mcp2_server.py
       - tests/unit/test_mcp_bridge_protocol.py

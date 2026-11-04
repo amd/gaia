@@ -287,7 +287,9 @@ class SetupRunRequest(BaseModel):
     ``keep_trying`` to wait up to two minutes out a dropped connection;
     ``extra_models`` to pull models beside the plan's (the user ticked them);
     ``server_only`` to start the model server and stop, so the models can be
-    chosen against it before anything downloads."""
+    chosen against it before anything downloads;
+    ``upgrade_embedded`` to replace an older embedded server artifact without
+    downloading the existing model cache again."""
 
     skip_chat_model: bool = False
     gaia_lemonade: bool = False
@@ -295,6 +297,7 @@ class SetupRunRequest(BaseModel):
     keep_trying: bool = False
     extra_models: List[str] = []
     server_only: bool = False
+    upgrade_embedded: bool = False
 
 
 @router.post("/api/setup/run")
@@ -304,6 +307,17 @@ def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
     When the selected models need more disk than is free, answers 409
     ``low_disk`` until ``acknowledge_low_disk`` confirms it.
     """
+    if body.server_only and body.upgrade_embedded:
+        raise HTTPException(
+            status_code=422,
+            detail="Choose either server_only or upgrade_embedded, not both.",
+        )
+    if body.upgrade_embedded and body.extra_models:
+        raise HTTPException(
+            status_code=422,
+            detail="upgrade_embedded replaces the server without downloading, "
+            "so it takes no extra_models.",
+        )
     if body.server_only and body.extra_models:
         raise HTTPException(
             status_code=422,
@@ -323,6 +337,7 @@ def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
             not body.gaia_lemonade
             and not body.acknowledge_low_disk
             and not body.server_only
+            and not body.upgrade_embedded
         ):
             warning = plan_api.run_disk_warning(
                 skip_chat_model=body.skip_chat_model, extra_models=extras
@@ -336,6 +351,7 @@ def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
             keep_trying=body.keep_trying,
             extra_models=extras,
             server_only=body.server_only,
+            upgrade_embedded=body.upgrade_embedded,
         )
     except SetupPlanError as e:
         raise _plan_error(e, _PLAN_FAILED) from e

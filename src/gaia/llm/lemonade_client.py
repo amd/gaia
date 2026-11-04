@@ -7569,13 +7569,18 @@ class LemonadeClient:
             reasoning: Set True for a custom model that emits reasoning.
 
         Returns:
-            True if model is available (was already downloaded or successfully downloaded),
-            False if download failed
+            True if the model is available (already downloaded or successfully
+            downloaded).
+
+        Raises:
+            LemonadeClientError: If the model cannot be downloaded or the
+                download does not complete before the timeout.
+            ModelDownloadCancelledError: If the user cancels the download.
 
         Example:
             client = LemonadeClient()
-            if client.ensure_model_downloaded("Qwen3-0.6B-GGUF"):
-                client.load_model("Qwen3-0.6B-GGUF")
+            client.ensure_model_downloaded("Qwen3-0.6B-GGUF")
+            client.load_model("Qwen3-0.6B-GGUF")
         """
         if self.cloud_model_provider(model_name):
             catalog = self.list_models(show_all=True)
@@ -7638,8 +7643,16 @@ class LemonadeClient:
                 except LemonadeClientError as e:
                     if not reported_error:
                         on_progress({"event": "error", "error": str(e)})
-                    return False
-                return complete
+                    raise LemonadeClientError(
+                        f"Failed to download model '{model_name}': {e}"
+                    ) from e
+                if not complete:
+                    raise LemonadeClientError(
+                        f"Download did not complete for model '{model_name}': "
+                        "Lemonade ended the stream without reporting it done. "
+                        "Retry to resume from the partial file."
+                    )
+                return True
 
             # Download via pull_model. checkpoint/recipe/embedding register a
             # custom ``user.`` model on first pull; built-ins pull by name only.
@@ -7661,9 +7674,12 @@ class LemonadeClient:
 
         except ModelDownloadCancelledError:
             raise
+        except LemonadeClientError:
+            raise
         except Exception as e:
-            self.log.error(f"Failed to ensure model downloaded: {e}")
-            return False
+            message = f"Failed to ensure model '{model_name}' is downloaded: {e}"
+            self.log.error(message)
+            raise LemonadeClientError(message) from e
 
     @guard_inference()
     def responses(
@@ -7801,9 +7817,11 @@ class LemonadeClient:
             download_task: Optional DownloadTask for cancellation support
 
         Returns:
-            True if model download completed, False if timeout or error
+            True if model download completed.
 
         Raises:
+            LemonadeClientError: If the download does not complete before the
+                timeout. A failed status check is logged and polling continues.
             ModelDownloadCancelledError: If download is cancelled
         """
         poll_interval = 30  # Check every 30 seconds for large downloads
@@ -7853,7 +7871,9 @@ class LemonadeClient:
                 f"{_emoji('⏰', '[TIMEOUT]')} Download timeout ({minutes} minutes) "
                 f"reached for {model_name}"
             )
-        return False
+        raise LemonadeClientError(
+            f"Download of '{model_name}' did not finish within {timeout} seconds."
+        )
 
     @staticmethod
     def _find_loaded_entry(status: "LemonadeStatus", model: str) -> Optional[dict]:

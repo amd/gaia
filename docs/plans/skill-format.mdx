@@ -1425,7 +1425,9 @@ implementation-level questions for whoever builds the runtime:
    does not need to be its own policy — body findings feed the same tier gate as
    code findings, so the split falls out for free: at `experimental` a body
    finding is surfaced and does not gate, at `community` it forces `REVIEW`, at
-   `verified` a `medium` is already enough to hold it. See
+   `verified` a `medium` is already enough to hold it. The one exception is an
+   instruction to send content to a URL or webhook (`body.injection.outbound_url`),
+   which is held for `REVIEW` even at `experimental`. See
    [Pre-publish security audit](#pre-publish-security-audit) for the scan itself.
 
    Two decisions inside it are worth recording, because both trade precision

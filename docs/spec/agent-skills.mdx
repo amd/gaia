@@ -1080,7 +1080,10 @@ standard intentionally leaves open.
   [#2468](https://github.com/amd/gaia/issues/2468).** Every skill's body is
   scanned for injection patterns at publish, and the claimed tier decides the
   consequence rather than a separate policy: advisory at `experimental`, forcing
-  `REVIEW` at `community`, and gated on a `medium` at `verified`. Run it yourself
+  `REVIEW` at `community`, and gated on a `medium` at `verified`. One rule ignores
+  the tier: an instruction to send content to a URL or webhook
+  (`body.injection.outbound_url`) is held for `REVIEW` even at `experimental`.
+  Run it yourself
   with `gaia skill audit ./<skill>/`. The precision trade-offs (fenced text is
   downgraded one step rather than ignored; a prohibition is not a directive) are
   recorded in
