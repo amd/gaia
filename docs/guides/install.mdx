@@ -380,7 +380,7 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Chat file attachments | `~/.gaia/chat/uploads/` |
 | Configuration | `~/.gaia/electron-config.json` |
 | Logs | `~/.gaia/gaia.log` (`$GAIA_HOME/gaia.log` when `GAIA_HOME` is set), or the path in `GAIA_LOG_FILE` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |
-| Terminal UI and agent binaries (one-line installer) | `~/.gaia/bin/` |
+| Terminal UI and agent binaries (one-line installer). On Windows it also holds copies of the `gaia`, `gaia-cli` and `gaia-mcp` launchers, and is the only GAIA directory the installer puts on your PATH | `~/.gaia/bin/` |
 | Agent run traces | `~/.gaia/traces/` |
 | Daemon state (token, custody database, logs) | `~/.gaia/host/` (`$GAIA_HOME/host/` when `GAIA_HOME` is set) |
 | Models (managed by Lemonade) | `~/.cache/lemonade/models/` |

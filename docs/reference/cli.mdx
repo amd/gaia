@@ -707,10 +707,11 @@ is removed only when it is the app's exact wrapper around this GAIA home's venv;
 
 <Note>
 `--purge` also undoes what the one-line installer set up. It stops a running GAIA daemon
-before deleting its state, removes `gaia-tui` and `gaia-agent` from `~/.gaia/bin`, and
+before deleting its state, removes `~/.gaia/bin` (`gaia-tui`, `gaia-agent`, and on Windows
+the `gaia` launchers the installer copies there), and
 removes the installer's PATH entries: the `# Added by GAIA installer` block in
-`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` or `~/.profile`, or the `~\.gaia\venv\Scripts`
-and `~\.gaia\bin` entries on the Windows user PATH. The rest of each file and every
+`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` or `~/.profile`, or the `~\.gaia\bin` entry
+on the Windows user PATH (and `~\.gaia\venv\Scripts`, which earlier installers added). The rest of each file and every
 other PATH entry are left exactly as they were. If you edited the installer's `export PATH`
 line by hand, it is kept and the command tells you to remove it yourself. A `GAIA_HOME`
 other than `~/.gaia` leaves these PATH edits alone, because they still point at `~/.gaia`.

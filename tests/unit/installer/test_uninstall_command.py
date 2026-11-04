@@ -1451,6 +1451,77 @@ class TestDeferredWindowsVenvRemoval:
         )
         assert deferred == [venv]
 
+    def test_purge_defers_the_bin_folder_whose_launcher_started_it(
+        self, monkeypatch, tmp_path
+    ):
+        """`gaia` on PATH is ~/.gaia/bin/gaia.exe, which Windows keeps locked
+        until this command exits; rmtree would fail on it."""
+        gaia_bin = tmp_path / ".gaia" / "bin"
+        gaia_bin.mkdir(parents=True)
+        # Never read or write the machine's real user PATH.
+        monkeypatch.setattr(uc, "_read_user_path", lambda: ("", 2))
+        plan = uc.build_plan(
+            venv=False,
+            purge=True,
+            purge_lemonade=False,
+            purge_models=False,
+            home=tmp_path,
+        )
+        deferred, removed = [], []
+
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+        monkeypatch.setattr(uc, "_is_running_from_venv", lambda _path: False)
+        monkeypatch.setattr(uc.sys, "argv", [str(gaia_bin / "gaia"), "uninstall"])
+        monkeypatch.setattr(
+            uc,
+            "_defer_windows_venv_removal",
+            lambda path, **_kw: deferred.append(path) or True,
+        )
+        monkeypatch.setattr(
+            uc, "_remove_path", lambda path, **_kw: removed.append(path) or True
+        )
+        monkeypatch.setattr(uc, "_clear_credentials", lambda **_kw: True)
+        monkeypatch.setattr(uc, "_stop_daemon", lambda **_kw: True)
+
+        uc.execute_plan(plan, allowed_roots=[tmp_path / ".gaia"], home=tmp_path)
+
+        assert deferred == [gaia_bin]
+        assert gaia_bin not in removed
+
+    def test_is_launched_from_reads_the_launchers_argv0(self, monkeypatch, tmp_path):
+        gaia_bin = tmp_path / ".gaia" / "bin"
+        scripts = tmp_path / ".gaia" / "venv" / "Scripts"
+
+        monkeypatch.setattr(uc.sys, "argv", [str(gaia_bin / "gaia")])
+        assert uc._is_launched_from(gaia_bin)
+        assert not uc._is_launched_from(scripts)
+
+        monkeypatch.setattr(uc.sys, "argv", [str(scripts / "gaia")])
+        assert not uc._is_launched_from(gaia_bin)
+
+        monkeypatch.setattr(uc.sys, "argv", [""])
+        assert not uc._is_launched_from(gaia_bin)
+
+    def test_deferred_log_is_named_for_the_folder(self, monkeypatch, tmp_path):
+        """Venv and bin can both be deferred in one run; one shared log
+        would let either helper delete the other's failure report."""
+        popen_calls = []
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+        monkeypatch.setattr(uc.os, "getpid", lambda: 101)
+        monkeypatch.setattr(uc.tempfile, "gettempdir", lambda: str(tmp_path))
+        monkeypatch.setattr(
+            uc.subprocess, "Popen", lambda *a, **kw: popen_calls.append(a)
+        )
+
+        assert uc._defer_windows_venv_removal(tmp_path / ".gaia" / "venv")
+        assert uc._defer_windows_venv_removal(tmp_path / ".gaia" / "bin")
+
+        logs = [call[0][-1].split("$log = ")[1].split(";")[0] for call in popen_calls]
+        assert logs == [
+            "'" + str(tmp_path / "gaia-uninstall-venv-101.log") + "'",
+            "'" + str(tmp_path / "gaia-uninstall-bin-101.log") + "'",
+        ]
+
     def test_execute_plan_does_not_defer_linked_active_venv(
         self, monkeypatch, tmp_path
     ):
