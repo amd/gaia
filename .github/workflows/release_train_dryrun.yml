@@ -53,7 +53,8 @@ permissions:
 # One dry run per branch at a time: a nightly that lands during a dispatch
 # waits, then sees that run's pass and skips. GitHub keeps one pending run per
 # group, so a newer queued run replaces an older queued one; a running one is
-# never cancelled.
+# never cancelled. That includes a dispatch queued behind a running dry run:
+# if the nightly queues after it, the dispatch is cancelled. Dispatch again.
 concurrency:
   group: release-train-dryrun-${{ github.ref }}
   cancel-in-progress: false
