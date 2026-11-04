@@ -76,11 +76,56 @@ def test_every_empty_index_result_carries_the_hosts_message(cls, expected):
     assert searched["error"] == expected
 
 
-def test_disabled_rag_reports_the_same_message():
+def test_disabled_rag_query_reports_the_hosts_message():
     _make(_ScopedHost, None)
 
     assert _tool("query_documents")(query="q")["message"] == SCOPED
-    assert _tool("list_indexed_documents")()["message"] == SCOPED
+
+
+def test_list_indexed_documents_errors_when_rag_is_unavailable():
+    """A missing RAG instance is an error, the same one the other tools return."""
+    from gaia.agents.tools.rag_tools import _rag_not_available
+
+    _make(_ScopedHost, None)
+
+    listed = _tool("list_indexed_documents")()
+
+    assert listed["status"] == "error"
+    assert listed["error"] == _rag_not_available()
+    assert listed["error"] == _tool("rag_status")()["error"]
+    assert "documents" not in listed
+    assert "count" not in listed
+
+
+def test_startup_failure_is_not_reported_as_a_missing_extra():
+    host = _make(_Host, None)
+    host._rag_init_error = RuntimeError("embedder refused the config")
+
+    listed = _tool("list_indexed_documents")()
+    queried = _tool("query_documents")(query="q")
+
+    assert listed["status"] == "error"
+    assert (
+        listed["error"]
+        == "RAG failed to start: RuntimeError: embedder refused the config"
+    )
+    assert "Install with" not in listed["error"]
+    assert "isn't bundled" not in listed["error"]
+    assert queried["status"] == "error"
+    assert queried["error"] == listed["error"]
+    assert _tool("rag_status")()["error"] == listed["error"]
+
+
+def test_import_error_still_says_how_to_install_the_extra():
+    from gaia.agents.tools.rag_tools import _rag_not_available
+
+    host = _make(_Host, None)
+    host._rag_init_error = ImportError("No module named 'faiss'")
+
+    listed = _tool("list_indexed_documents")()
+
+    assert listed["status"] == "error"
+    assert listed["error"] == _rag_not_available()
 
 
 def test_a_listing_with_documents_has_no_empty_message():
