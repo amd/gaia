@@ -22,6 +22,7 @@ import {
   PATH_ACCESS_TOOL,
 } from '../stores/notificationStore';
 import type { GaiaNotification, NotificationType } from '../types/agent';
+import { dateLocale, useT, type Translate } from '../i18n/useT';
 import './NotificationCenter.css';
 
 interface NotificationCenterProps {
@@ -68,18 +69,18 @@ const NOTIFICATION_META: Record<
 
 // ── Time formatting ──────────────────────────────────────────────────────
 
-function formatNotifTime(timestamp: number): string {
+function formatNotifTime(timestamp: number, t: Translate): string {
   const now = Date.now();
   const diff = now - timestamp;
   const secs = Math.floor(diff / 1000);
-  if (secs < 60) return 'just now';
+  if (secs < 60) return t('time.justNow');
   const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 60) return t('time.minutesAgo', { n: mins });
   const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
+  if (hrs < 24) return t('time.hoursAgo', { n: hrs });
   const days = Math.floor(hrs / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(timestamp).toLocaleDateString(undefined, {
+  if (days < 7) return t('time.daysAgo', { n: days });
+  return new Date(timestamp).toLocaleDateString(dateLocale(t), {
     month: 'short',
     day: 'numeric',
   });
@@ -88,6 +89,7 @@ function formatNotifTime(timestamp: number): string {
 // ── Component ────────────────────────────────────────────────────────────
 
 export function NotificationCenter({ onClose }: NotificationCenterProps) {
+  const t = useT();
   // useShallow is required — the selector filters into a fresh array, and an
   // uncached snapshot makes useSyncExternalStore re-render without end.
   const notifications = useNotificationStore(useShallow(selectVisibleNotifications));
@@ -204,7 +206,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
                   <div className="notification-content-header">
                     <span className="notification-agent">{n.agentName}</span>
                     <span className="notification-time">
-                      {formatNotifTime(n.timestamp)}
+                      {formatNotifTime(n.timestamp, t)}
                     </span>
                   </div>
                   {n.title && (

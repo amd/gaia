@@ -670,7 +670,7 @@ const messages: Messages = {
     'prompt.timer': 'يُرفض تلقائيًا عند انتهاء الوقت',
     'prompt.expired': 'لم تُجب في الوقت المحدد، فأُبلغ GAIA بالرفض.',
     'prompt.repeated.one': 'سبق أن سمحت بهذا مرة واحدة.',
-    'prompt.repeated.other': 'سبق أن سمحت بهذا {n} مرات.',
+    'prompt.repeated.other': 'عدد المرات التي سمحت فيها بهذا من قبل: {n}.',
     'prompt.alwaysHint': 'يوقف «السماح دائمًا» السؤال عن {scope} في هذه المحادثة.',
     'pick.showHidden': 'إظهار المخفي',
     'pick.up': 'مستوى واحد للأعلى',

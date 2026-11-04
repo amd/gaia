@@ -65,6 +65,8 @@ function createEngineInstall({
   let wakeForRetry = null;
   let lockedFiles = null;
   let closing = false;
+  let quitting = null;
+  let installing = null;
 
   /** Who holds `files` open, summarized for the screen; null when Windows can't say. */
   async function findHolders(files) {
@@ -141,18 +143,25 @@ function createEngineInstall({
 
   /**
    * Install, and after a failure wait for Try again. Resolves true once the
-   * backend is installed, false when stop() ended the wait.
+   * backend is installed, false when stop() ended the install or the wait.
    */
   async function run() {
+    quitting = new AbortController();
     for (;;) {
       publish({ phase: "running", stage: null, percent: null, message: "", error: null });
       try {
-        await installer.ensureBackend({
+        installing = installer.ensureBackend({
           isPackaged,
           onProgress: (stage, percent, message) => publish({ stage, percent, message }),
+          signal: quitting.signal,
         });
+        await installing;
         return true;
       } catch (err) {
+        if (quitting.signal.aborted) {
+          console.log(`[main] Backend install stopped for the quit: ${err.message}`);
+          return false;
+        }
         console.error(`[main] Backend install failed: ${err.stack || err}`);
         lockedFiles = err.reason === "locked" && err.lockedFiles?.length ? err.lockedFiles : null;
         const lockedBy = lockedFiles && platform === "win32" ? await findHolders(lockedFiles) : null;
@@ -194,9 +203,19 @@ function createEngineInstall({
     run,
     /** The install is done and the backend process is coming up. */
     starting: () => publish({ stage: STARTING_STAGE, percent: null, message: "" }),
-    /** Quitting: release a run() that is waiting on Try again. */
-    stop: () => {
+    /**
+     * Quitting: stop a running install, with every process it started, or
+     * release a run() waiting on Try again. Resolves once the install has ended.
+     */
+    stop: async () => {
       if (wakeForRetry) wakeForRetry(false);
+      if (!quitting) return;
+      quitting.abort();
+      // run() reports the outcome; this only waits for the processes to be gone.
+      await installing?.then(
+        () => {},
+        () => {}
+      );
     },
   };
 }

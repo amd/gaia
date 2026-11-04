@@ -9,9 +9,10 @@ import { log } from '../utils/logger';
 import type { Schedule, ScheduleResult, ParsedSchedule } from '../types';
 import { parseScheduleInput } from '../services/api';
 import type { MessageKey, Say } from '../i18n/registry';
-import { tEn, useT } from '../i18n/useT';
+import { dateLocale, tEn, useT } from '../i18n/useT';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import './ScheduleManager.css';
 
 /** How long the Delete button waits for its "Confirm?" click. */
@@ -23,8 +24,8 @@ const STATUS_LABEL: Record<Schedule['status'], MessageKey> = {
     cancelled: 'schedules.status.cancelled',
 };
 
-/** Format an ISO date string to a relative or short time. */
-function formatTime(iso: string | null, say: Say, now?: Date): string {
+/** Format an ISO date string to a relative or short time; `locale` formats dates (undefined: the PC's). */
+function formatTime(iso: string | null, say: Say, now?: Date, locale?: string): string {
     if (!iso) return say('schedules.time.never');
     const d = new Date(iso);
     const current = now || new Date();
@@ -46,16 +47,16 @@ function formatTime(iso: string | null, say: Say, now?: Date): string {
     if (mins < 60) return say('time.minutesAgo', { n: mins });
     const hrs = Math.floor(mins / 60);
     if (hrs < 24) return say('time.hoursAgo', { n: hrs });
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleDateString(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 /** Next run as the user's local clock time, plus how far away it is. */
-export function formatNextRun(iso: string | null, now?: Date, say: Say = tEn.bare): string {
+export function formatNextRun(iso: string | null, now?: Date, say: Say = tEn.bare, locale?: string): string {
     if (!iso) return say('schedules.time.never');
-    const relative = formatTime(iso, say, now);
+    const relative = formatTime(iso, say, now, locale);
     const d = new Date(iso);
     if (d.getTime() <= (now || new Date()).getTime()) return relative;
-    const clock = d.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+    const clock = d.toLocaleString(locale, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
     return say('schedules.time.clockIn', { clock, relative });
 }
 
@@ -191,8 +192,8 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
                 <span title={schedule.description}><Clock size={11} /> <bdi>{schedule.description}</bdi></span>
                 <span>{t('schedules.card.runs', { n: schedule.run_count })}</span>
                 {schedule.error_count > 0 && <span>{t('schedules.card.errors', { n: schedule.error_count })}</span>}
-                <span>{t.compose((say) => say('schedules.card.last', { when: formatTime(schedule.last_run_at, say) }))}</span>
-                <span>{t.compose((say) => say('schedules.card.next', { when: formatNextRun(schedule.next_run_at, now, say) }))}</span>
+                <span>{t.compose((say) => say('schedules.card.last', { when: formatTime(schedule.last_run_at, say, undefined, dateLocale(t)) }))}</span>
+                <span>{t.compose((say) => say('schedules.card.next', { when: formatNextRun(schedule.next_run_at, now, say, dateLocale(t)) }))}</span>
             </div>
             {schedule.last_error && (
                 <div className="schedule-card-error">{t('schedules.card.lastFailed', { error: schedule.last_error })}</div>
@@ -232,7 +233,7 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
                         <div className="schedule-results-list">
                             {results.map((r) => (
                                 <div key={r.id} className="schedule-result-item">
-                                    <div className="schedule-result-time">{t.compose((say) => formatTime(r.executed_at, say))}</div>
+                                    <div className="schedule-result-time">{t.compose((say) => formatTime(r.executed_at, say, undefined, dateLocale(t)))}</div>
                                     {r.error ? (
                                         <div className="schedule-result-content schedule-result-error"><bdi>{r.error}</bdi></div>
                                     ) : (
@@ -256,6 +257,7 @@ export function ScheduleManager() {
     useEscapeToClose(true, close);
     const dialogRef = useRef<HTMLDivElement>(null);
     useFocusTrap(dialogRef, true);
+    useDialogFocus(dialogRef, true);
 
     // Create form state
     const [showCreate, setShowCreate] = useState(false);
@@ -389,7 +391,7 @@ export function ScheduleManager() {
                                                 )}
                                                 {parsed.valid && parsed.next_run_at && (
                                                     <div className="schedule-parsed-next">
-                                                        {t('schedules.nextRun', { when: new Date(parsed.next_run_at).toLocaleString() })}
+                                                        {t('schedules.nextRun', { when: new Date(parsed.next_run_at).toLocaleString(dateLocale(t)) })}
                                                     </div>
                                                 )}
                                                 {parsed.valid && (
