@@ -1067,6 +1067,7 @@ for (const locale of ['ar', 'en']) {
         });
         expect(gap).toBeLessThan(16);
         await expect(page.locator('.perm-card-title bdi')).toHaveText('Allow running python?');
+        await expect(page.getByRole('button', { name: /Allow once/ })).toContainText(locale === 'ar' ? 'السماح مرة واحدة' : 'Allow once');
         expect(await audit(page)).toEqual([]);
         await shot(page, `permission-python-${locale}`);
     });

@@ -36,7 +36,7 @@ describe('permission prompt in Arabic', () => {
     it('keeps the code to run left to right, and the details too', () => {
         prompt({ tool: 'run_python', toolLabel: 'running python', toolArgs: { code: CODE } });
         expect(screen.getByTestId('perm-code')).toHaveAttribute('dir', 'ltr');
-        fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+        fireEvent.click(screen.getByRole('button', { name: /Details/ }));
         for (const pre of document.querySelectorAll('pre')) expect(pre, pre.outerHTML).toHaveAttribute('dir', 'ltr');
     });
 
@@ -54,8 +54,43 @@ describe('permission prompt in Arabic', () => {
         const card = screen.getByRole('alertdialog');
         expect(card.querySelector('.perm-card-exact')).toHaveAttribute('dir', 'ltr');
         const codes = [...card.querySelectorAll('code')];
-        expect(codes.map((c) => c.textContent)).toEqual(expect.arrayContaining(['C:\\repo', 'git status']));
+        expect(codes.map((c) => c.textContent)).toContain('C:\\repo');
         for (const c of codes) expect(c, c.outerHTML).toHaveAttribute('dir', 'ltr');
+        // The scope sits in the translated label as its own first-strong isolate, so it keeps its order.
+        expect(screen.getByRole('button', { name: /Always allow/ }).textContent).toContain('\u2068git status\u2069');
+    });
+
+    it('labels its buttons in Arabic, with the English still there to find them by', () => {
+        useNotificationStore.getState().addNotification({
+            id: 'earlier', type: 'permission_request', agentId: 's', sessionId: 's', agentName: 'GAIA',
+            title: '', message: '', timestamp: 0, read: false, dismissed: false, priority: 'high',
+            tool: 'run_shell_command', alwaysScope: 'git status', toolArgs: { command: 'git status' }, response: 'allow',
+        } as GaiaNotification);
+        prompt({
+            tool: 'run_shell_command', toolLabel: 'running a command', alwaysScope: 'git status',
+            toolArgs: { command: 'git status' }, timeoutSeconds: 60,
+        });
+        const arabic = /\p{Script=Arabic}/u;
+        for (const [ar, en] of [['السماح مرة واحدة', 'Allow once'], ['رفض', 'Deny'], ['التفاصيل', 'Details'], ['السماح دائمًا', 'Always allow']]) {
+            const button = screen.getByRole('button', { name: new RegExp(en) });
+            expect(button).toHaveTextContent(ar);
+            expect(button.querySelector('.i18n-gloss')).toHaveTextContent(en);
+        }
+        expect(screen.getByRole('button', { name: /Always allow/ })).toHaveTextContent('git status');
+        expect(document.querySelector('.perm-card-hint')?.textContent).toMatch(arabic);
+        expect(document.querySelector('.perm-card-timer')?.getAttribute('title')).toMatch(arabic);
+    });
+
+    it('labels a path prompt\'s allow button in Arabic', () => {
+        prompt({ tool: PATH_ACCESS_TOOL, title: 'Let GAIA use this folder?', toolArgs: { path: 'C:\\data' } });
+        expect(screen.getByRole('button', { name: /Allow for this chat/ })).toHaveTextContent('السماح في هذه المحادثة');
+    });
+
+    it('labels a long code block\'s toggle in Arabic', () => {
+        const long = Array.from({ length: 20 }, (_, i) => `print(${i})`).join('\n');
+        prompt({ tool: 'run_python', toolLabel: 'running python', toolArgs: { code: long } });
+        fireEvent.click(screen.getByRole('button', { name: /Show all 20 lines/ }));
+        expect(screen.getByRole('button', { name: /Show less/ })).toHaveTextContent('عرض أقل');
     });
 
     it('keeps a relayed command left to right', () => {
