@@ -98,6 +98,10 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **The SPEC names `GAIA_ALLOWED_PATHS` and the 150-step default.** Reading
+  only the SPEC, an integrator could not see that a bad allowlist entry stops
+  the sidecar at startup, or that an omitted `/query` `max_steps` runs 150
+  steps (`FLAGSHIP_MAX_STEPS`; the body or `GAIA_AGENT_MAX_STEPS` still wins).
 - **"Forget everything" forgets everything.** It deleted each memory a plain
   `recall` listed, but that listing holds back sensitive ones, so a saved PIN
   survived while the agent said memory was empty. The next session then rebuilt

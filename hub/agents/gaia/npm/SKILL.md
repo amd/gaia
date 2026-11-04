@@ -279,7 +279,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
 | `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
 | `provider` | no | `"lemonade"` (the default backend) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. When you name it, `model` must agree: under `"claude"` it must be a `claude-*` id, under `"lemonade"` it must not be. A mismatch is a **400**, on a new session or an existing one. Omit it and the `model` decides instead — a `claude-*` id alone reaches Anthropic, any other id runs locally — so there is nothing to mismatch. On a retained `session_id`, naming a different provider switches the session to it in place, onto `model` or, without one, the provider's default model; omitting both leaves the session where it is. |
-| `max_steps` | no | ≥ 1. |
+| `max_steps` | no | ≥ 1. Defaults to **150** (`FLAGSHIP_MAX_STEPS`); a value here, or `GAIA_AGENT_MAX_STEPS`, still wins. |
 
 ```ts
 import { randomUUID } from "node:crypto";
