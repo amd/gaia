@@ -2901,6 +2901,53 @@ def is_cloud_model(model_id: Optional[str]) -> bool:
     return bool(model_id) and model_id in _CLOUD_MODELS
 
 
+def pull_request_body(model_id: str) -> Dict[str, Any]:
+    """JSON body for Lemonade ``POST /pull``.
+
+    Built-ins are name only — a ``recipe`` makes Lemonade read the call as a
+    new registration and 400 (#1655). A ``user.`` model is not registered yet,
+    so the body carries its checkpoint and recipe, plus the labels Lemonade
+    cannot infer (``embedding``, ``mmproj``, ``vision``, ``reasoning``).
+    A gateway model has no weights and raises ``RuntimeError`` before any
+    request. An unknown ``user.`` id raises ``ValueError`` instead of a pull
+    Lemonade answers with HTTP 500.
+
+    Known gateway namespaces (``amd.``, ``fireworks.``) are refused even before
+    the catalog has been read. Any other gateway id is refused once
+    :func:`record_cloud_models` has seen it.
+    """
+    if is_cloud_model(model_id) or cloud_model_provider(model_id):
+        raise RuntimeError(
+            f"'{model_id}' is hosted on a gateway, so there is nothing to "
+            f"download. If it is unavailable, check the gateway connection "
+            f"with `gaia gateway status`."
+        )
+
+    requirement = find_model_requirement(model_id)
+    if requirement is not None and requirement.model_id.startswith("user."):
+        body: Dict[str, Any] = {"model_name": requirement.model_id}
+        body.update(
+            {k: v for k, v in requirement.pull_kwargs().items() if v is not None}
+        )
+        if not body.get("checkpoint") or not body.get("recipe"):
+            raise ValueError(_unknown_user_model_message(model_id))
+        return body
+    if requirement is not None:
+        return {"model_name": requirement.model_id}
+
+    if model_id.lower().startswith("user."):
+        raise ValueError(_unknown_user_model_message(model_id))
+    return {"model_name": model_id}
+
+
+def _unknown_user_model_message(model_id: str) -> str:
+    return (
+        f"Cannot pull custom model '{model_id}': it is not in GAIA's "
+        "model registry, so its checkpoint and recipe are unknown. "
+        "Add it to MODELS in gaia.llm.lemonade_client, or run `gaia init`."
+    )
+
+
 def cloud_model_info(model_id: Optional[str]) -> Optional[Dict[str, Any]]:
     """Discovered capability metadata for a cloud model, or None."""
     if not model_id:

@@ -607,6 +607,8 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       "model": "Qwen3.5-35B-A3B-GGUF"
     }
     ```
+
+    **Response (400):** the model cannot be pulled — it is hosted on a gateway (no weights to download), or it is a `user.` model GAIA has no checkpoint and recipe for. `detail` says which.
   </Accordion>
 
   <Accordion title="GET /api/system/work-in-progress">
