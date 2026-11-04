@@ -33,7 +33,18 @@ def _isolated_home(monkeypatch, tmp_path):
 def _client():
     client = MagicMock()
     client.base_url = "http://127.0.0.1:13305/api/v1"
-    client.health_check.return_value = {"status": "ok"}
+    # /health lists each model at the window it was last loaded with.
+    client.health_check.side_effect = lambda *a, **k: {
+        "status": "ok",
+        "all_models_loaded": [
+            {
+                "model_name": c.args[0],
+                "type": "llm",
+                "recipe_options": {"ctx_size": c.kwargs.get("ctx_size")},
+            }
+            for c in client.load_model.call_args_list
+        ],
+    }
     client.check_model_available.return_value = True
     client.get_required_models.side_effect = lambda agent: (
         LemonadeClient.get_required_models(client, agent)
