@@ -1522,6 +1522,10 @@ async def download_model_endpoint(body: DownloadModelRequest):
     model_name = body.model_name.strip()
     if not model_name:
         raise HTTPException(status_code=400, detail="model_name must not be empty")
+    try:
+        pull_request_body(model_name)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     task = asyncio.create_task(_stream_lemonade_pull(model_name, body.force))
     _background_tasks.add(task)

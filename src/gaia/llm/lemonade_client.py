@@ -2957,8 +2957,10 @@ def pull_request_body(model_id: str) -> Dict[str, Any]:
         if not body.get("checkpoint") or not body.get("recipe"):
             raise ValueError(_unknown_user_model_message(model_id))
         return body
+    if requirement is not None:
+        return {"model_name": requirement.model_id}
 
-    if model_id.startswith("user."):
+    if model_id.lower().startswith("user."):
         raise ValueError(_unknown_user_model_message(model_id))
     return {"model_name": model_id}
 
