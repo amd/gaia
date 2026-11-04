@@ -14,13 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-SCRIPTS = (
-    Path(__file__).resolve().parents[2]
-    / ".claude"
-    / "skills"
-    / "testing-agent-ui-release"
-    / "scripts"
-)
+SCRIPTS = Path(__file__).resolve().parents[2] / "util" / "agent_ui_release"
 
 
 def _load(name: str):

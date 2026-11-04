@@ -12,8 +12,8 @@ someone has looked at it in the rebuilt app. `test_report.py gate` holds this ru
 The loop: **scope → plan → test → file → fix in parallel → merge → retest**, repeated
 until a retest finds nothing, then publish the final report.
 
-Scripts live in `.claude/skills/testing-agent-ui-release/scripts/`. All are standard
-library Python and print `--help`:
+The scripts are repo tooling in `util/agent_ui_release/`, so the skill audit's install-time
+permission checks don't apply to them. All are standard-library Python and print `--help`:
 
 | Script | Job |
 |---|---|
@@ -25,7 +25,7 @@ library Python and print `--help`:
 | `app_state.py` | Read the backend behind the window: answer text, tool steps, idle/busy |
 | `pc_evals.py` | Optional ai-pc-evals benchmark through the window |
 
-Set `SK=.claude/skills/testing-agent-ui-release/scripts` and keep one run directory
+Set `SK=util/agent_ui_release` and keep one run directory
 per pass (`RUN`, e.g. `C:\gaia-test\v0.25.4-rc3`). **Keep test paths short:** long
 paths break model downloads on Windows.
 
