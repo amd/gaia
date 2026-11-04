@@ -114,6 +114,11 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **Text read aloud plays in the Agent UI chat.** `text_to_speech` saved speech
+  to `~/.gaia/tts`, outside the folder the chat plays audio from, so you got a
+  file path instead of a player. Speech with no `output_path` is now saved with
+  generated music and sound effects, under the GAIA home's
+  `cache/audio/generations`, and plays inline (#6500).
 - **Document Q&A says why it couldn't start.** Any startup failure, such as
   an unwritable cache folder or a bad embedder setting, was reported as "RAG not
   installed" and never retried for the session. Only a missing `[rag]` extra

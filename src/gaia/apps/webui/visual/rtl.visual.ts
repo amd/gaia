@@ -284,6 +284,40 @@ test('finished answer', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+/** POST /api/chat/send answers with one "Reading your request" status, then holds the turn open. */
+function holdOnReading(): void {
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (!url.includes('/api/chat/send')) return realFetch(input, init);
+        const event = { type: 'status', status: 'working', phase: 'reading', message: 'Reading your request' };
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+            },
+        });
+        return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+}
+
+for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 'Reading your request']] as const) {
+    test(`live status line while the answer is prepared (${locale})`, async ({ page }) => {
+        await page.addInitScript(holdOnReading);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Summarize the minutes');
+        await box.press('Enter');
+        const line = page.locator('.thinking-indicator').last();
+        await expect(line.locator('.thinking-indicator-text')).toContainText(reading);
+        await page.clock.setFixedTime(NOW.getTime() + 12_000);
+        const seconds = line.locator('.thinking-indicator-elapsed bdi');
+        await expect(seconds).toHaveText(/^\d+s$/);
+        expect(await seconds.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+        await shot(page, `live-status-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 test('documents', async ({ page }) => {
     await open(page);
     await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
@@ -376,6 +410,40 @@ test('session panel with Arabic names', async ({ page }) => {
     const gaps = await arabicNameGaps(page);
     expect(gaps).toHaveLength(2);
     for (const gap of gaps) expect(gap.right, gap.name ?? '').toBeLessThanOrEqual(1);
+    expect(await audit(page)).toEqual([]);
+});
+
+test('a long hyphenated folder path wraps as one unit, below its Arabic label', async ({ page }) => {
+    const path = `C:\\gtest\\h-r6\\${'a-long-folder-name\\'.repeat(4)}.gaia\\documents`;
+    await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {
+        await p.route(`**/api/sessions/${ANSWER_SESSION}/environment`, (route) =>
+            route.fulfill({
+                json: {
+                    session_id: ANSWER_SESSION,
+                    folders: [{ path, kind: 'folder', source: 'gaia_documents', removable: false }],
+                    removed: [], internet: true, enforced: true,
+                },
+            }),
+        );
+    });
+    const el = page.locator('.sp-item-path', { hasText: 'h-r6' });
+    await expect(el).toBeVisible();
+    const layout = await el.evaluate((node) => {
+        const box = node.getBoundingClientRect();
+        const text = document.createRange();
+        text.selectNodeContents(node);
+        const label = document.createRange();
+        label.setStart(node.parentElement!, 0);
+        label.setEndBefore(node);
+        return {
+            lines: new Set([...text.getClientRects()].map((r) => Math.round(r.top))).size,
+            boxes: node.getClientRects().length,
+            labelInside: [...label.getClientRects()].some((r) => r.width > 0 && r.bottom > box.top + 1),
+        };
+    });
+    expect(layout.lines, 'the path should be long enough to wrap').toBeGreaterThan(1);
+    expect(layout.boxes, 'the path splits into pieces around the label').toBe(1);
+    expect(layout.labelInside, 'the label sits between the halves of the path').toBe(false);
     expect(await audit(page)).toEqual([]);
 });
 
