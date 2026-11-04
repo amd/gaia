@@ -3770,19 +3770,23 @@ class MemoryMixin(ProceduralMemoryMixin):
             safe.append(item)
         return safe
 
-    def warm_up(self, progress=None):
+    def warm_up(self, progress=None, cancel=None):
         """Run the deferred memory upkeep here, not in front of the first answer."""
         incognito = getattr(self, "_incognito", False)
         if not incognito:
             self._finish_deferred_memory_init()
         # Upkeep reads existing memories with the chat's model; a private or
         # memory-off agent keeps it pending for its first memory-on turn.
-        if not incognito and getattr(self, "_memory_post_init_pending", False):
+        stopped = cancel is not None and cancel.is_set()
+        pending = getattr(self, "_memory_post_init_pending", False)
+        if not incognito and pending and not stopped:
             if progress:
                 progress("Tidying memory")
             self._memory_post_init_pending = False
             self._run_memory_post_init()
-        return super().warm_up(progress)
+        if cancel is None:
+            return super().warm_up(progress)
+        return super().warm_up(progress, cancel=cancel)
 
     # ------------------------------------------------------------------
     # Hook 2: process_query Override (dynamic context injection)

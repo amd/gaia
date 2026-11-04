@@ -15,7 +15,6 @@ from enum import Enum
 from typing import Any, Dict, Iterator, Optional, Tuple
 
 from gaia.llm.lemonade_client import (
-    CLOUD_RECIPE,
     DEFAULT_CONTEXT_SIZE,
     DEFAULT_MODEL_NAME,
     PROBE_TIMEOUT,
@@ -23,11 +22,14 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
+    LoadedModelMissingError,
     _model_ids_match,
     check_lemonade_version,
     cloud_model_provider,
     fit_ctx_to_free_memory,
+    is_cloud_model_entry,
     is_llm_model_entry,
+    loaded_ctx_size,
     resolve_ctx_size,
     resolve_default_chat_model,
     resolve_effective_ctx_size,
@@ -44,15 +46,6 @@ def _preload_model() -> str:
     chat model, or Gemma when that default is a cloud model (nothing to load)."""
     model = resolve_default_chat_model()
     return DEFAULT_MODEL_NAME if cloud_model_provider(model) else model
-
-
-def _is_cloud_entry(entry: dict) -> bool:
-    """True when a ``loaded_models`` entry is gateway-routed rather than local.
-
-    Checked on both the recipe and the labels because the two Lemonade
-    surfaces that populate this list do not agree on which one they set.
-    """
-    return entry.get("recipe") == CLOUD_RECIPE or "cloud" in (entry.get("labels") or [])
 
 
 #: Seconds between "still waiting" log lines while another preload runs.
@@ -906,7 +899,8 @@ class LemonadeManager:
                         # about chat capacity — and neither does a gateway
                         # model, which is resident nowhere local.
                         llm_models_loaded = any(
-                            is_llm_model_entry(model) and not _is_cloud_entry(model)
+                            is_llm_model_entry(model)
+                            and not is_cloud_model_entry(model)
                             for model in (status.loaded_models or [])
                         )
 
@@ -1090,7 +1084,7 @@ class LemonadeManager:
                 llm_models_loaded = any(
                     # A gateway model is resident nowhere local, so it must
                     # not count as "an LLM is loaded" for context-size decisions.
-                    is_llm_model_entry(model) and not _is_cloud_entry(model)
+                    is_llm_model_entry(model) and not is_cloud_model_entry(model)
                     for model in status.loaded_models
                 )
 
@@ -1128,7 +1122,7 @@ class LemonadeManager:
                     if status.loaded_models is None:
                         status.loaded_models = []
                     llm_models_loaded = any(
-                        is_llm_model_entry(model) and not _is_cloud_entry(model)
+                        is_llm_model_entry(model) and not is_cloud_model_entry(model)
                         for model in status.loaded_models
                     )
 
@@ -1237,7 +1231,7 @@ class LemonadeManager:
         llm_models = [
             m
             for m in status.loaded_models
-            if is_llm_model_entry(m) and not _is_cloud_entry(m)
+            if is_llm_model_entry(m) and not is_cloud_model_entry(m)
         ]
         if not llm_models:
             return None
@@ -1598,7 +1592,7 @@ class LemonadeManager:
         llm_models = [
             m
             for m in status.loaded_models
-            if is_llm_model_entry(m) and not _is_cloud_entry(m)
+            if is_llm_model_entry(m) and not is_cloud_model_entry(m)
         ]
         if not llm_models:
             return False
@@ -1657,7 +1651,18 @@ class LemonadeManager:
             # (now resolvable, since loading forces Lemonade to read the
             # GGUF metadata) so the cached/reported value is honest (#2992).
             new_status = client.get_status()
-            reported_ctx = new_status.context_size or 0
+            if not any(
+                _model_ids_match(m.get("model_name") or m.get("id"), model_id)
+                for m in new_status.loaded_models or []
+            ):
+                raise LoadedModelMissingError(
+                    f"Lemonade at {client.base_url} accepted the load of "
+                    f"{model_id} at ctx_size={requested_ctx}, but its /health "
+                    f"no longer lists {model_id}, so its context window is "
+                    f"unknown. Another load may have evicted it; check the "
+                    f"Lemonade server log (~/.cache/lemonade/server.log)."
+                )
+            reported_ctx = loaded_ctx_size(new_status.loaded_models, model_id) or 0
             new_ceiling = (
                 client.get_model_max_context_window(model_id, status=new_status)
                 or ceiling
@@ -1709,6 +1714,8 @@ class LemonadeManager:
             # loop-breaking assumption otherwise).
             cls._context_size = effective_ctx
             return success
+        except LoadedModelMissingError:
+            raise
         except Exception as e:
             cls._log.warning(f"Auto-reload failed: {e}")
             return False

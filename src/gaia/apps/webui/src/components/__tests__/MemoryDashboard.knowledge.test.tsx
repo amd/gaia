@@ -145,9 +145,9 @@ describe('MemoryDashboard layout contract', () => {
         expect(rule('.mem-stat-cards')).toMatch(/minmax\(0,\s*1fr\)/);
     });
 
-    it('pins row actions to the visible edge of the table', () => {
+    it('pins row actions to the visible edge of the table, in either direction', () => {
         const css = rule('.mem-knowledge-table .mem-actions-cell');
         expect(css).toMatch(/position:\s*sticky/);
-        expect(css).toMatch(/right:\s*0/);
+        expect(css).toMatch(/inset-inline-end:\s*0/);
     });
 });

@@ -4,9 +4,10 @@
 /** The Context & performance panel: measured numbers, "unknown" otherwise, and no polling. */
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ContextPanel } from '../ContextPanel';
-import { ContextMeter } from '../ContextMeter';
+import { ContextMeter, ContextWarning } from '../ContextMeter';
+import { stripIsolates } from '../../i18n/registry';
 import { useChatStore } from '../../stores/chatStore';
 import type { ChatPerformance, ContextUsage, Session, TurnPerformance } from '../../types';
 import * as api from '../../services/api';
@@ -355,5 +356,33 @@ describe('ContextMeter entry point', () => {
         expect(onDetails).toHaveBeenCalledTimes(1);
         expect(screen.queryByRole('dialog', { name: 'Context and performance' })).not.toBeInTheDocument();
         expect(mockedApi.getChatPerformance).not.toHaveBeenCalled();
+    });
+
+    describe('in Arabic', () => {
+        beforeEach(() => act(() => useChatStore.getState().setLocale('ar')));
+        afterEach(() => act(() => useChatStore.getState().setLocale('en')));
+        const text = (el: HTMLElement) => stripIsolates(el.textContent ?? '');
+
+        it('translates the label shown before usage is measured', () => {
+            const { container } = render(<ContextMeter usage={null} unavailable="Not measured yet" />);
+            expect(text(container)).toContain('السياق');
+        });
+
+        it('translates the meter and its popover, keeping the counts left to right', () => {
+            render(<ContextMeter usage={usage({ turns_hidden: 3 })} sessionId="s1" />);
+            const meter = screen.getByRole('button', { name: /السياق ممتلئ بنسبة 18%/ });
+            expect(meter.querySelector('bdi[dir="ltr"]')?.textContent).toBe('18%');
+            fireEvent.click(meter);
+            const popover = text(document.body);
+            for (const ar of ['تعليمات النظام', 'محجوز للرد', 'متاح', 'الأدوار السابقة في نطاق الرؤية: 2', 'والأقدم خارج نطاق الرؤية: 3', 'التفاصيل: السياق والأداء']) {
+                expect(popover).toContain(ar);
+            }
+        });
+
+        it('translates the warning above the composer', () => {
+            const { container } = render(<ContextWarning usage={usage({ at_risk: ['first question', 'second'] })} />);
+            expect(text(container)).toContain('أقدم الأدوار التي قد تخرج من نطاق رؤية النموذج تاليًا (2):');
+            expect(text(container)).toContain('تبقى محفوظة، ويمكنك أن تطلب من GAIA استرجاعها.');
+        });
     });
 });
