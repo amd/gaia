@@ -92,7 +92,11 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   survived while the agent said memory was empty. The next session then rebuilt
   the whole profile, a trip the user had asked it to forget included, from past
   conversations. The new `forget_everything` tool erases all memory and the
-  stored conversations, after the user approves it. A plain `recall` now says
+  stored conversations, after the user approves it, and other open chats stop
+  using what it erased from their next message. Skills GAIA learned for doing
+  tasks are kept, as they are by the Memory page's **Delete all memories**;
+  `gaia skill deltas <skill> --reset` undoes what it learned about a skill. A
+  plain `recall` now says
   how many sensitive entries it held back, and `search_past_conversations`
   leaves out turns that mention something forgotten after they were said.
 - **Deleting a chat removes it from Memory.** The agent filed each Agent UI

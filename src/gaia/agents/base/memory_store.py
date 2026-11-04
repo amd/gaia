@@ -1070,6 +1070,7 @@ class MemoryStore:
         context: str = "global",
         *,
         preserve_full: bool = False,
+        said_at: str | None = None,
     ) -> None:
         """Store one conversation turn.
 
@@ -1080,6 +1081,8 @@ class MemoryStore:
         turn up to 256000 characters, or fail explicitly above that bound.
         Empty or whitespace-only turns are silently skipped — they add no
         signal to conversation history and pollute FTS5 with empty entries.
+        A turn said (``said_at``, ISO) before all of memory was erased is
+        dropped, so a turn still finishing does not refill the log.
         """
         if not content or not content.strip():
             return  # Skip empty turns
@@ -1091,6 +1094,12 @@ class MemoryStore:
             content = content[:MAX_TURN_LENGTH]
         now = _now_iso()
         with self._locked():
+            if self._erased_after_locked(said_at):
+                logger.info(
+                    "[MemoryStore] turn not stored: all memory was erased after "
+                    "it was said"
+                )
+                return
             try:
                 self._conn.execute(
                     "INSERT INTO conversations (session_id, role, content, context, timestamp) "
@@ -2765,8 +2774,13 @@ class MemoryStore:
         error: str | None = None,
         duration_ms: int | None = None,
         executed: bool = True,
+        said_at: str | None = None,
     ) -> None:
-        """Log a tool call to tool_history."""
+        """Log a tool call to tool_history.
+
+        Dropped when its turn was said (``said_at``, ISO) before all of memory
+        was erased.
+        """
         now = _now_iso()
         args_json = _bounded_args_json(args)
         # Truncate the text columns to MAX_FTS_QUERY_LENGTH chars. Tool args,
@@ -2778,6 +2792,13 @@ class MemoryStore:
             error = error[:MAX_FTS_QUERY_LENGTH]
 
         with self._locked():
+            if self._erased_after_locked(said_at):
+                logger.info(
+                    "[MemoryStore] %s call not logged: all memory was erased "
+                    "after its turn was said",
+                    tool_name,
+                )
+                return
             try:
                 self._conn.execute(
                     """
@@ -4561,13 +4582,27 @@ class MemoryStore:
 
     _ERASED_META_KEY = "erased_at"
 
+    def erased_at(self) -> Optional[str]:
+        """When all of memory was last erased (an ISO timestamp), or None."""
+        with self._locked():
+            return self._erased_at_locked()
+
+    def _erased_at_locked(self) -> Optional[str]:
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (self._ERASED_META_KEY,)
+        ).fetchone()
+        return row[0] if row is not None else None
+
     def erased_after(self, said_at: str) -> bool:
         """Whether all of memory was erased at or after *said_at* (an ISO timestamp)."""
         with self._locked():
-            row = self._conn.execute(
-                "SELECT value FROM meta WHERE key = ?", (self._ERASED_META_KEY,)
-            ).fetchone()
-        return row is not None and _as_datetime(row[0]) >= _as_datetime(said_at)
+            return self._erased_after_locked(said_at)
+
+    def _erased_after_locked(self, said_at: Optional[str]) -> bool:
+        if said_at is None:
+            return False
+        erased = self._erased_at_locked()
+        return erased is not None and _as_datetime(erased) >= _as_datetime(said_at)
 
     def clear_all(self) -> Dict:
         """Permanently delete all knowledge, tool history, and conversation data.

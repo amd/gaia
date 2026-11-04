@@ -2311,7 +2311,7 @@ export function MemoryDashboard() {
                                     <div className="mem-setting-info">
                                         <span className="mem-setting-label">Delete all memories</span>
                                         <span className="mem-setting-desc">
-                                            Permanently wipe all knowledge entries, conversation history, and tool logs. This cannot be undone.
+                                            Permanently wipe all knowledge entries, conversation history, and tool logs. Skills GAIA learned for doing tasks are kept. This cannot be undone.
                                         </span>
                                     </div>
                                     {deleteConfirm ? (

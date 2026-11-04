@@ -223,3 +223,108 @@ def test_erasing_again_after_a_blocked_scrub_clears_the_file(store, tmp_path):
     raw = _on_disk(tmp_path)
     for gone in (b"lisbon", b"4821"):
         assert gone not in raw, f"{gone!r} still readable after erasing again"
+
+
+class _AgentBase:
+    def process_query(self, user_input, **kwargs):
+        return self.get_memory_system_prompt()
+
+    def _execute_tool(self, tool_name, tool_args):
+        return {"status": "success", "result": "done"}
+
+    def rebuild_system_prompt(self):
+        pass
+
+
+class _Chat(_Host, _AgentBase):
+    """A chat agent: a turn runs the memory hooks, then reads its prompt."""
+
+
+def _open_chat(store, session_id):
+    chat = _Chat(store, [])
+    chat._memory_session_id = session_id
+    return chat
+
+
+def test_another_open_chat_stops_showing_what_forget_everything_erased(store):
+    store.store(category="fact", content="User's trip to Lisbon is in December")
+    other = _open_chat(store, "s-other")
+    assert "Lisbon" in other.process_query("hi")
+    _open_chat(store, "s-erasing")  # the tool is bound to the chat built last
+
+    assert _tool("forget_everything")()["status"] == "cleared"
+
+    assert "Lisbon" not in other.process_query("what do you know about me?")
+
+
+def test_an_open_chat_stops_showing_what_the_memory_page_erased(
+    store, tmp_path, monkeypatch
+):
+    from gaia.ui.routers import memory as memory_router
+
+    store.store(category="fact", content="User's trip to Lisbon is in December")
+    chat = _open_chat(store, "s-open")
+    assert "Lisbon" in chat.process_query("hi")
+    page_store = MemoryStore(db_path=tmp_path / "memory.db")
+    monkeypatch.setattr(memory_router, "_get_store", lambda: page_store)
+
+    memory_router.clear_all_memory()
+    page_store.close()
+
+    assert "Lisbon" not in chat.process_query("what do you know about me?")
+
+
+def test_a_chat_with_nothing_erased_keeps_its_frozen_prompt(store):
+    store.store(category="fact", content="User's trip to Lisbon is in December")
+    chat = _open_chat(store, "s-open")
+    first = chat.process_query("hi")
+    store.store(category="fact", content="User's dog is called Rex")
+
+    assert chat.process_query("hello again") == first
+
+
+def _rows(store, table):
+    return store._conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+
+
+def test_a_turn_finishing_after_forget_everything_writes_no_history(store):
+    chat = _open_chat(store, "s-busy")
+    chat._turn_said_at = datetime.now().astimezone().isoformat()
+    chat._original_user_input = "Book my trip to Lisbon in December"
+    chat._auto_extract_enabled = False
+
+    assert _tool("forget_everything")()["status"] == "cleared"
+    chat._execute_tool("search_web", {"query": "Lisbon flights December"})
+    chat._after_process_query(
+        "Book my trip to Lisbon in December", "I found three Lisbon flights."
+    )
+
+    assert _rows(store, "conversations") == 0
+    assert _rows(store, "tool_history") == 0
+
+
+def test_a_turn_said_after_forget_everything_is_logged(store):
+    chat = _open_chat(store, "s-new")
+    chat._auto_extract_enabled = False
+    _tool("forget_everything")()
+    chat._turn_said_at = (
+        datetime.now().astimezone() + timedelta(seconds=1)
+    ).isoformat()
+    chat._original_user_input = "Plan a trip to Porto"
+
+    chat._execute_tool("search_web", {"query": "Porto"})
+    chat._after_process_query("Plan a trip to Porto", "Here is a Porto plan.")
+
+    assert _rows(store, "conversations") == 2
+    assert _rows(store, "tool_history") == 1
+
+
+def test_forget_everything_leaves_deleted_chats_deleted(store):
+    _Host(store, [])
+    store.delete_session("s-deleted")
+
+    _tool("forget_everything")()
+    store.store_turn("s-deleted", "user", "a late turn from a deleted chat")
+
+    assert _rows(store, "deleted_sessions") == 1
+    assert _rows(store, "conversations") == 0

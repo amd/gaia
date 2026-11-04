@@ -234,7 +234,9 @@ Searching past conversations doesn't bring a forgotten memory back: a turn said 
 
 ### forget_everything
 
-Erases all of memory: every fact, preference and reminder, sensitive ones included, and the stored past conversations. GAIA asks you to approve it first, because it can't be undone. Chats listed in the sidebar, the current one included, are kept until you delete them there.
+Erases everything GAIA remembered about you and your chats: every fact, preference and reminder, sensitive ones included, and the stored past conversations and tool history. GAIA asks you to approve it first, because it can't be undone. Other open chats stop using the erased memories from their next message.
+
+Two things are kept. Skills GAIA learned for doing tasks ([procedural memory](#procedural-memory-skills) and the adjustments it made to installed skills) stay; `gaia skill deltas <skill> --reset` undoes what it learned about a skill, and [deleting the memory file](#deleting-all-memory) removes all of it. Chats listed in the sidebar, the current one included, stay until you delete them there. **Delete all memories** on the Memory page erases the same things.
 
 ```
 You: "Forget everything you know about me"

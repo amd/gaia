@@ -978,6 +978,8 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         # Step 1: Open/create DB, apply schema migrations
         self._memory_store = MemoryStore(db_path)
+        # An erase from another chat or window shows up as a newer stamp.
+        self._seen_erased_at: Optional[str] = self._memory_store.erased_at()
 
         self._memory_context = context
         self._auto_extract_enabled = True
@@ -3236,6 +3238,24 @@ class MemoryMixin(ProceduralMemoryMixin):
         if hasattr(self, "rebuild_system_prompt"):
             self.rebuild_system_prompt()
 
+    def _drop_memory_erased_elsewhere(self) -> None:
+        """Stop using facts another agent or the Memory page erased.
+
+        Each chat keeps its own frozen memory prompt and vector index, so an
+        erase made anywhere else would otherwise stay visible here until the
+        session ends.
+        """
+        store = getattr(self, "_memory_store", None)
+        if store is None:
+            return
+        erased_at = store.erased_at()
+        if erased_at is None or erased_at == getattr(self, "_seen_erased_at", None):
+            return
+        self._seen_erased_at = erased_at
+        logger.info("[MemoryMixin] memory was erased elsewhere; dropping it here")
+        self._rebuild_faiss_index()
+        self._refresh_stable_memory_prompt()
+
     def _refresh_if_shown(self, knowledge_id: str) -> None:
         """Re-render after an explicit edit, but only if the prompt shows the item.
 
@@ -3773,6 +3793,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             # before the first turn; report failures through the current handler.
             self.report_memory_unavailable()
 
+            self._drop_memory_erased_elsewhere()
+
             # Run deferred LLM startup tasks on first real query (after self.chat
             # exists). Not in a private or memory-off turn: upkeep sends existing
             # memories to this turn's model, so it waits for a memory-on turn.
@@ -3866,6 +3888,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         error=error_msg,
                         duration_ms=duration_ms,
                         executed=True,
+                        said_at=getattr(self, "_turn_said_at", None),
                     )
                     self._auto_store_error(tool_name, error_msg, tool_args)
                     self._note_failure(tool_name, tool_args, error_msg, None)
@@ -3903,6 +3926,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         error=error_msg,
                         duration_ms=duration_ms,
                         executed=check_was_executed(result),
+                        said_at=getattr(self, "_turn_said_at", None),
                     )
 
                     # Auto-store novel errors as knowledge
@@ -4622,8 +4646,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
             else:
                 # A secret refused as a memory must not sit in the searchable log.
+                said_at = getattr(self, "_turn_said_at", None)
                 self._memory_store.store_turn(
-                    session_id, "user", self._mask_credentials(clean_input), context=ctx
+                    session_id,
+                    "user",
+                    self._mask_credentials(clean_input),
+                    context=ctx,
+                    said_at=said_at,
                 )
                 self._memory_store.store_turn(
                     session_id,
@@ -4631,6 +4660,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     self._mask_credentials(response),
                     context=ctx,
                     preserve_full=preserve_full,
+                    said_at=said_at,
                 )
         except Exception as e:
             logger.warning("[MemoryMixin] failed to store conversation: %s", e)
@@ -5463,15 +5493,18 @@ class MemoryMixin(ProceduralMemoryMixin):
                 return {"status": "error", "message": str(e)}
             finally:
                 # The rows may be gone even when the scrub fails; stop using them.
+                mixin._seen_erased_at = mixin._memory_store.erased_at()
                 mixin._rebuild_faiss_index()
                 mixin._refresh_stable_memory_prompt()
             return {
                 "status": "cleared",
                 **cleared,
                 "message": (
-                    "Everything is erased, past conversations included. Chats "
-                    "listed in the sidebar, this one included, are kept until "
-                    "you delete them there."
+                    "Erased everything GAIA remembered about you and your "
+                    "chats, past conversations included. Skills it learned for "
+                    "doing tasks are kept; `gaia skill deltas <skill> --reset` "
+                    "undoes what it learned about a skill. Chats listed in the "
+                    "sidebar, this one included, stay until you delete them there."
                 ),
             }
 

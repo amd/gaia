@@ -387,7 +387,7 @@ offered the scratchpad, email, image-generation or skill-hub tools, so
 **`execute_python_file`**, **`run_python`**, **`notify_desktop`**, which spawns
 a PowerShell child on Windows to draw the notification, **`install_cli`** /
 **`sign_in_cli`**, which install software and sign a CLI in to the user's
-account, and **`forget_everything`**, which erases all memory — and the flagship adds three of its own
+account, and **`forget_everything`**, which erases all memory except learned skills — and the flagship adds three of its own
 (`CONFIRMATION_REQUIRED_TOOLS`): **`install_skill`**, **`capture_skill`**, and
 **`remove_skill`**, because installing or capturing a skill writes third-party
 content under `~/.gaia/skills` and removing one deletes it. A capture that does

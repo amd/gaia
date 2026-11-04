@@ -1125,7 +1125,8 @@ def forget(knowledge_id: str) -> dict:
 @tool
 def forget_everything() -> dict:
     """Erase all of memory, sensitive entries and stored past conversations
-    included. Asks the user first; cannot be undone."""
+    included. Asks the user first; cannot be undone. Learned procedures and
+    skill deltas are kept."""
 
 @tool
 def search_past_conversations(query: str = "", days: int = 0,
