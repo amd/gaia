@@ -692,7 +692,8 @@ def check_setup_status(
                 ],
                 stage="server",
             )
-        if not status.installed:
+        # An older version still running is a version mismatch, not a missing install.
+        if not status.installed and not status.running:
             return SetupStatus(
                 ready=False,
                 reasons=["GAIA's Lemonade Server is not installed"],

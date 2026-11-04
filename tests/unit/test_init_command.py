@@ -1192,6 +1192,28 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertFalse(status.ready)
         self.assertIn("v0.0.1", status.reasons[0])
 
+    def test_older_version_running_before_the_upgrade_is_unpacked(self):
+        """Right after a GAIA upgrade only the old version is on disk; that is
+        a version to replace, not a server that was never installed."""
+        from gaia.installer.init_command import check_setup_status
+        from gaia.version import LEMONADE_VERSION
+
+        running = self._status(
+            installed=False,
+            running=True,
+            version="10.2.0",
+            port=1,
+            pid=2,
+            base_url="http://x/api/v1",
+        )
+        with self._embedded(running):
+            status = check_setup_status(profile="chat")
+
+        self.assertFalse(status.ready)
+        self.assertNotIn("not installed", status.reasons[0])
+        self.assertIn("v10.2.0", status.reasons[0])
+        self.assertIn(f"v{LEMONADE_VERSION}", status.reasons[0])
+
     def test_ready_when_server_up_and_required_models_present(self):
         from gaia.installer.init_command import check_setup_status
 

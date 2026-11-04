@@ -419,6 +419,7 @@ class TestManagerHook:
     def _patch_embedded(self, installed, running):
         embedded = mock.Mock()
         embedded.is_installed.return_value = installed
+        embedded.replaces_older_install.return_value = False
         embedded.status.return_value = _running() if running else _status()
         return mock.patch(
             "gaia.llm.lemonade_embedded.EmbeddedLemonade", return_value=embedded
