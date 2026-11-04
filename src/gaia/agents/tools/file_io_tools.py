@@ -1005,6 +1005,10 @@ class FileIOToolsMixin:
                 new_content: New content to compare
                 context_lines: Number of context lines in diff
 
+            Both sides are compared with LF line endings, so a change that
+            only converts CRLF to LF (or back) reports ``has_changes: False``
+            even though writing ``new_content`` would change the file's bytes.
+
             Returns:
                 Dictionary with diff information
             """
@@ -1016,12 +1020,16 @@ class FileIOToolsMixin:
                 if not is_allowed:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
-                # Read original content
+                # Read original content. A diff is a preview, not a write round
+                # trip, so both sides are compared with LF endings: otherwise a
+                # CRLF file diffed against the model's LF text shows every line
+                # as changed.
                 if os.path.exists(file_path):
-                    with open(file_path, "r", encoding="utf-8", newline="") as f:
+                    with open(file_path, "r", encoding="utf-8") as f:
                         original_content = f.read()
                 else:
                     original_content = ""
+                new_content = new_content.replace("\r\n", "\n")
 
                 # Generate unified diff
                 diff = list(
