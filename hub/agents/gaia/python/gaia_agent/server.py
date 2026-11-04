@@ -1464,6 +1464,9 @@ async def query(request: QueryRequest):
             close_agent(one_shot_agent)
 
     try:
+        warm_up = _startup_warm_up
+        if not warm_up.done.is_set():
+            await asyncio.to_thread(warm_up.note_turn, _turn_model(request))
         kwargs: Dict[str, Any] = {}
         if _effective_provider(request) == _CLAUDE_PROVIDER:
             # ``model`` names a CLAUDE model here, not a Lemonade one — putting
@@ -2207,9 +2210,12 @@ def build_app() -> FastAPI:
         Without this the first turn pays the model load *and* the first pass
         over a large system prompt, which reads as a 60-90s "Getting started"
         hang on a freshly opened chat. Backgrounded so readiness is not
-        delayed, and never fatal — a cold first turn is slow, not broken.
+        delayed, and never fatal — a cold first turn is slow, not broken. A
+        turn on another model stops it (:class:`_StartupWarmUp`).
         """
         _log_caller_auth_state(auth_config)
+        global _startup_warm_up
+        _startup_warm_up = _StartupWarmUp()
         task = asyncio.create_task(asyncio.to_thread(_warmup_blocking))
         # Held so it is not garbage-collected while in flight.
         _app.state.warmup_task = task
@@ -2276,6 +2282,63 @@ def _default_model_is_servable() -> bool:
     return True
 
 
+class _StartupWarmUp:
+    """The start-up warm-up's model, and the switch that stops it for a turn
+    on any other model.
+
+    The model server reads one prompt at a time, so a turn on a cloud or other
+    local model would wait out the whole warm-up, and a warm-up that then loads
+    its model would evict the one that turn uses. A turn on the warmed model
+    leaves it running and reads the prefix it caches.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._model: Optional[str] = None
+        self._turn_models: List[str] = []
+        self.cancel = threading.Event()
+        self.done = threading.Event()
+
+    def aim(self, model: str) -> None:
+        """Record the model the warm-up loads."""
+        with self._lock:
+            self._model = model
+            self._stop_for_another_model()
+
+    def note_turn(self, model: Optional[str]) -> None:
+        """A turn starts on *model*; None is the default, the warm-up's own."""
+        if model is None or self.done.is_set():
+            return
+        with self._lock:
+            self._turn_models.append(model)
+            self._stop_for_another_model()
+
+    def _stop_for_another_model(self) -> None:
+        from gaia.llm.lemonade_client import _model_ids_match
+
+        if self._model is None or self.cancel.is_set():
+            return
+        for model in self._turn_models:
+            if not _model_ids_match(model, self._model):
+                logger.info(
+                    "GAIA sidecar: stopping the warm-up of %s; a turn uses %s",
+                    self._model,
+                    model,
+                )
+                self.cancel.set()
+                return
+
+
+_startup_warm_up = _StartupWarmUp()
+
+
+def _turn_model(request: "QueryRequest") -> Optional[str]:
+    """The model *request* runs on, or None for the sidecar's default."""
+    if _effective_provider(request) == _CLAUDE_PROVIDER:
+        return f"{_CLAUDE_PROVIDER}:{request.model or ''}"
+    return request.model or None
+
+
 def _warmup_blocking() -> None:
     """Make the first real question cheap.
 
@@ -2287,12 +2350,25 @@ def _warmup_blocking() -> None:
     the first question in any session reads it from Lemonade's cache.
 
     Never fatal — a cold first turn is slow, not broken — but a failure is
-    logged as a warning with its cause, not hidden.
+    logged as a warning with its cause, not hidden. Stops as soon as a turn
+    starts on another model (:class:`_StartupWarmUp`).
     """
+    state = _startup_warm_up
+    try:
+        _warm_default_model(state)
+    finally:
+        state.done.set()
+
+
+def _warm_default_model(state: _StartupWarmUp) -> None:
     from gaia_agent.session_registry import build_session_agent
 
+    from gaia.chat.sdk import LLMCallCancelled
+    from gaia.llm.lemonade_client import resolve_default_chat_model
+
     try:
-        if not _default_model_is_servable():
+        state.aim(resolve_default_chat_model())
+        if state.cancel.is_set() or not _default_model_is_servable():
             return
         agent = build_session_agent()
     except Exception as e:  # noqa: BLE001 - reported, and chat still works
@@ -2305,13 +2381,19 @@ def _warmup_blocking() -> None:
         )
         return
     try:
-        result = agent.warm_up()
+        result = agent.warm_up(cancel=state.cancel)
         logger.info(
             "GAIA sidecar: warmed %s in %ss (%s of %s prompt tokens cached)",
             getattr(agent, "model_id", "?"),
             result.get("seconds"),
             result.get("cached_tokens", "?"),
             result.get("prompt_tokens", "?"),
+        )
+    except LLMCallCancelled as e:
+        logger.info(
+            "GAIA sidecar: warm-up of %s stopped for a turn on another model (%s)",
+            getattr(agent, "model_id", "?"),
+            e,
         )
     except Exception as e:  # noqa: BLE001 - reported, and chat still works
         logger.warning(

@@ -116,6 +116,12 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   now says to install it; any other failure names its cause and is tried again
   on the next document request. `list_indexed_documents` returns an error when
   document Q&A is down, like the other document tools, instead of an empty list.
+- **A cloud chat no longer waits for the local model's start-up warm-up.**
+  After a restart, the first message in a Fireworks chat sat for ~47 s while
+  the sidecar read its prompt into the local default model. A turn on any other
+  model now stops that warm-up, so it neither delays the turn nor loads its
+  model over the one the turn uses; a turn on the warmed model still waits for
+  it and reuses its cache (#6582).
 - **The SPEC names `GAIA_ALLOWED_PATHS` and the 150-step default.** Reading
   only the SPEC, an integrator could not see that a bad allowlist entry stops
   the sidecar at startup, or that an omitted `/query` `max_steps` runs 150

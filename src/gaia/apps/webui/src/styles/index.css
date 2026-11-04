@@ -316,6 +316,13 @@ a:hover { text-decoration: underline; }
 
 /* Arabic script needs more room between lines than Latin at the same size. */
 :root[lang="ar"] #root { line-height: 1.7; }
+/* Arabic letters join: tracking set for Latin caps pulls a word apart into separate letters. */
+:root[lang="ar"] #root * { letter-spacing: normal; }
+/* The mono faces have no Arabic; without a sans before `monospace`, Arabic falls to a
+   fixed-width face and its letters come apart. Latin keeps the mono face. */
+:root[lang="ar"] {
+    --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', 'Monaco', 'Segoe UI', 'Noto Sans Arabic', 'Noto Naskh Arabic', Tahoma, monospace;
+}
 .md-content :is(.md-p, .md-li, .md-blockquote, td, th):dir(rtl),
 .composer-input:dir(rtl) {
     line-height: 1.85;
