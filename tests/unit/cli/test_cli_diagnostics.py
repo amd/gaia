@@ -133,3 +133,15 @@ def test_windows_skips_posix_tools(install, monkeypatch):
 
     tools = {cmd[0] for cmd in calls}
     assert tools == {"cmd", "netstat"}
+
+
+def test_bundles_failure_records_but_not_with_no_logs(install):
+    tmp_path, _ = install
+    failures = tmp_path / ".gaia" / "failures"
+    failures.mkdir()
+    (failures / "GF-20261104-192233-3f2a.json").write_text("{}", encoding="utf-8")
+    (failures / "notes.json").write_text("{}", encoding="utf-8")
+
+    assert "failures/GF-20261104-192233-3f2a.json" in _bundle(tmp_path)
+    assert "failures/notes.json" not in _bundle(tmp_path)
+    assert not any(n.startswith("failures/") for n in _bundle(tmp_path, no_logs=True))

@@ -8317,7 +8317,11 @@ Do NOT wrap conversational replies in JSON.
         tally["unreachable"] = True
         tally["failed"] = True
         return "unreachable", self._model_unreachable_answer(
-            conversation, steps_taken, state, retries_used
+            conversation,
+            steps_taken,
+            state,
+            retries_used,
+            record_id=self._save_failure_record(exc),
         )
 
     def _model_unreachable_answer(
@@ -8326,6 +8330,7 @@ Do NOT wrap conversational replies in JSON.
         steps_taken: int,
         state: RetryState,
         step_retries: int,
+        record_id: Optional[str] = None,
     ) -> str:
         """The final answer when the model stayed unreachable through every
         retry: one sentence saying the task is unfinished and what was kept,
@@ -8341,6 +8346,7 @@ Do NOT wrap conversational replies in JSON.
             stopped_responding=True,
             cause=f"{describe_retry_state(state)}{tries}",
             advice=None,
+            record_id=record_id,
         )
 
     def _model_service_label(self) -> Optional[str]:
@@ -8349,6 +8355,33 @@ Do NOT wrap conversational replies in JSON.
         ``None`` when this agent cannot tell; subclasses that know override it.
         """
         return None
+
+    def _save_failure_record(self, exc: BaseException) -> Optional[str]:
+        """Save a local fault record for *exc*; its id, or None when not one.
+
+        Only for calls through Lemonade: the record describes that server (its
+        health, devices, processes and log) and nothing else.
+        """
+        from gaia.llm.failure_record import (
+            is_model_call_failure,
+            is_recordable,
+            record_failure,
+        )
+
+        llm = getattr(getattr(self, "chat", None), "llm_client", None)
+        backend = getattr(llm, "_backend", None)
+        if not isinstance(getattr(backend, "base_url", None), str):
+            return None
+        if not is_model_call_failure(exc) or not is_recordable(exc):
+            return None
+        return record_failure(
+            exc,
+            where="agent_turn",
+            model=getattr(self, "model_id", None),
+            base_url=backend.base_url,
+            api_key=getattr(backend, "api_key", None),
+            agent=type(self).__name__,
+        )
 
     def _model_call_failed_answer(
         self,
@@ -8360,8 +8393,10 @@ Do NOT wrap conversational replies in JSON.
         """The final answer when a model call failed for good mid-turn.
 
         Built from the real failure: the provider's own message when it gave
-        one (split into what happened and what to do), else the raw error.
+        one (split into what happened and what to do), else the raw error;
+        either way followed by the fault record it saved, when it saved one.
         """
+        record_id = self._save_failure_record(exc)
         stalled = False
         cur: Optional[BaseException] = exc
         seen: set = set()
@@ -8381,6 +8416,7 @@ Do NOT wrap conversational replies in JSON.
             stopped_responding=stalled or retry_state_of(exc) is not None,
             cause=cause,
             advice=advice,
+            record_id=record_id,
         )
 
     def _model_failure_answer(
@@ -8391,9 +8427,12 @@ Do NOT wrap conversational replies in JSON.
         stopped_responding: bool,
         cause: str,
         advice: Optional[str],
+        record_id: Optional[str] = None,
     ) -> str:
         """Say the turn is unfinished, why, what already ran, and what next."""
         from collections import Counter
+
+        from gaia.llm.failure_record import record_note
 
         what = "stopped responding" if stopped_responding else "call failed"
         cause = cause.strip().rstrip(".")
@@ -8435,6 +8474,8 @@ Do NOT wrap conversational replies in JSON.
             )
         else:
             lines.append("Send the message again once the service is back.")
+        if record_id:
+            lines.append(record_note(record_id))
         return "\n\n".join(lines)
 
     def _shrink_messages_for_overflow(

@@ -48,6 +48,7 @@ import requests
 from openai import OpenAI
 
 from gaia.env import child_env, load_env
+from gaia.llm import call_ledger
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
@@ -1306,6 +1307,19 @@ def _chosen_ctx_size(model: str, base_url: Optional[str]) -> Optional[int]:
     return tokens
 
 
+def _noted_stream(stream: Generator, noted: Dict[str, Any]) -> Generator:
+    """*stream*, closing its call-ledger entry when it ends, fails or is dropped."""
+    try:
+        yield from stream
+    except GeneratorExit:
+        call_ledger.end(noted, outcome="closed by caller")
+        raise
+    except Exception as e:
+        call_ledger.end(noted, error=e)
+        raise
+    call_ledger.end(noted)
+
+
 def resolve_ctx_size(
     model: Optional[str] = None,
     device: Optional[str] = None,
@@ -1330,21 +1344,31 @@ def resolve_ctx_size(
         # GAIA_CTX_SIZE (applied below) wins, so it can rescue a size that no longer fits.
         pinned = bool(os.environ.get("GAIA_CTX_SIZE", "").strip())
         chosen = None if pinned else _chosen_ctx_size(model, base_url)
+        inputs: Dict[str, Any] = {}
         if chosen is not None:
             # The user's pick is not shrunk to free memory; the load refuses instead.
-            ctx = chosen
+            ctx, how = chosen, "chosen in Settings"
         elif requirement is not None:
-            ctx = fit_ctx_to_free_memory(
-                model, _model_ctx_size(requirement, base_url), base_url
-            )
+            sized = _model_ctx_size(requirement, base_url)
+            ctx = fit_ctx_to_free_memory(model, sized, base_url)
+            how = "sized to this PC's memory, then to memory free now"
+            inputs = {
+                "for_capacity": sized,
+                "after_free_memory": ctx,
+                "min_ctx_size": requirement.min_ctx_size,
+                "scales_with_memory": requirement.scales_with_memory,
+            }
         else:
-            ctx = NPU_CTX_SIZE if runs_on_npu(model) else GPU_CTX_SIZE
+            on_npu = runs_on_npu(model)
+            ctx = NPU_CTX_SIZE if on_npu else GPU_CTX_SIZE
+            how = "NPU default" if on_npu else "GPU default"
     else:
         if device is None:
             from gaia.config import GaiaConfig
 
             device = GaiaConfig.load().default_device
         ctx = profile_ctx_size(device)
+        how = f"{device} profile"
 
     override = os.environ.get("GAIA_CTX_SIZE", "").strip()
     if override:
@@ -1365,6 +1389,10 @@ def resolve_ctx_size(
             "may be truncated. Increase or unset GAIA_CTX_SIZE if replies are empty.",
             ctx,
             DEFAULT_CONTEXT_SIZE,
+        )
+    if model:
+        call_ledger.note_ctx_choice(
+            model, ctx, "GAIA_CTX_SIZE" if override else how, **inputs
         )
     return ctx
 
@@ -5669,10 +5697,25 @@ class LemonadeClient:
                 **kwargs,
             )
 
-        first = self._survive_gaia_lemonade_stop(_call, model)
-        if not stream or not self.follows_gaia_lemonade:
+        noted = call_ledger.begin(
+            "chat",
+            url=f"{getattr(self, 'base_url', None)}/chat/completions",
+            model=model,
+            **call_ledger.chat_shape(
+                messages, tools, max_completion_tokens or max_tokens, stream
+            ),
+        )
+        try:
+            first = self._survive_gaia_lemonade_stop(_call, model)
+        except Exception as e:
+            call_ledger.end(noted, error=e)
+            raise
+        if not stream:
+            call_ledger.end(noted)
             return first
-        return self._stream_surviving_gaia_lemonade_stop(first, _call, model)
+        if self.follows_gaia_lemonade:
+            first = self._stream_surviving_gaia_lemonade_stop(first, _call, model)
+        return _noted_stream(first, noted)
 
     def _chat_completions_once(
         self,
@@ -8518,6 +8561,13 @@ class LemonadeClient:
                 f"loading {model_name}: {e} Check that Lemonade is running "
                 "(`gaia init --check`)."
             ) from e
+        call_ledger.note_memory_check(
+            model_name,
+            window=window,
+            size_gb=requirement.size_gb,
+            fits=None if verdict is None else verdict.fits,
+            reason=None if verdict is None else verdict.reason,
+        )
         if verdict is None:
             self.log.debug(
                 f"Free GPU memory is not reported here; loading {model_name} "
@@ -8753,6 +8803,9 @@ class LemonadeClient:
                 f"{wait}s, or at once if the model's load options change."
             )
 
+        noted = call_ledger.begin(
+            "load", url=url, request=dict(request_data), timeout_s=timeout
+        )
         try:
             if managed_embedder and request_data.get("llamacpp_backend") != "cpu":
                 response = self._post_embedder_load(
@@ -8762,10 +8815,12 @@ class LemonadeClient:
                 response = self._post_load_with_transient_retry(
                     url, request_data, timeout, model_name, load_retries
                 )
+            call_ledger.end(noted)
             self.log.debug(f"Loaded {model_name} successfully: response={response}")
             self.model = model_name
             return response
         except Exception as e:
+            call_ledger.end(noted, error=e)
             original_error = str(e)
 
             # Check if this is a corrupt/incomplete download error

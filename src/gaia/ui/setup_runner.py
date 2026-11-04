@@ -412,6 +412,24 @@ def write_report(record: Dict[str, Any]) -> Path:
     return out
 
 
+def _record_setup_failure(
+    run: "SetupRun", cause: Optional[BaseException]
+) -> Optional[str]:
+    """Save a local fault record for a failed run; its id."""
+    from gaia.llm.failure_record import record_local_failure
+
+    error = SetupError(run.error or "Setup failed")
+    if cause is not None:
+        error.__cause__ = cause
+    return record_local_failure(
+        error,
+        where="setup",
+        kind="setup",
+        model=run.chat_model,
+        extra={"problem": run.problem} if run.problem else None,
+    )
+
+
 def users_lemonade_url() -> Optional[str]:
     """The user's own Lemonade when they chose "Use mine", else None."""
     from gaia.config import GaiaConfigError
@@ -1430,9 +1448,11 @@ class SetupRunner:
 
     def _watch(self, run: SetupRun, proc: subprocess.Popen) -> None:
         """Run the setup thread; an unexpected error fails the run, never strands it."""
+        cause: Optional[BaseException] = None
         try:
             self._pump(run, proc)
         except Exception as e:  # pylint: disable=broad-exception-caught
+            cause = e
             logger.exception("Setup thread failed")
             with self._lock:
                 if run.state in ("running", "verifying"):
@@ -1455,6 +1475,20 @@ class SetupRunner:
                     logger.error(
                         "gaia init (pid %s) did not stop when killed", proc.pid
                     )
+        with self._lock:
+            failed = run.state == "failed"
+        if failed:
+            # Its own thread: the record probes Lemonade for a second or two,
+            # and the runner is free for a retry the moment the run ends.
+            threading.Thread(
+                target=self._record_failure, args=(run, cause), daemon=True
+            ).start()
+
+    def _record_failure(self, run: SetupRun, cause: Optional[BaseException]) -> None:
+        record_id = _record_setup_failure(run, cause)
+        if record_id:
+            with self._lock:
+                run.note(f"Problem report saved as {record_id}")
 
     def _pump(self, run: SetupRun, proc: subprocess.Popen) -> None:
         buf = b""
