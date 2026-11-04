@@ -25,6 +25,7 @@ def make_status(running=True, context_size=32768, loaded_models=None):
         context_size=context_size,
         loaded_models=loaded_models,
         busy=False,
+        version=None,
     )
 
 
