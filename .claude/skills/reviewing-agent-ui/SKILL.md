@@ -26,12 +26,14 @@ dashboard, Scheduled tasks and the model-status popover shipped entirely in Engl
 (#6590, #6591, #6585). Set `GAIA_VISUAL_CHROMIUM` to a Chrome or Edge binary to skip
 downloading Chromium.
 
-`npm test` also runs `src/i18n/__tests__/hardcodedText.test.ts`, which fails when a
-component gains English written straight into JSX (text, `title`, `placeholder`,
-`aria-label`, `alt`). Put the text through `useT`. When you translate strings, lower the
-baseline (`UPDATE_I18N_BASELINE=1 npx vitest run hardcodedText`); raise it only for text
-that stays English in every language, and say why in the PR. It can't see strings built
-in code or sent by the backend, so those still need the screenshot.
+`npm test` also runs `src/gaia/apps/webui/src/i18n/__tests__/hardcodedText.test.ts`,
+which fails when a component gains English written straight into JSX (text, `title`,
+`placeholder`, `aria-label`, `alt`), including both arms of a ternary, the text after
+`&&` or `||`, and template strings. Put the text through `useT`. When you translate
+strings, lower the baseline (`UPDATE_I18N_BASELINE=1 npx vitest run hardcodedText`);
+raise it only for text that stays English in every language, and say why in the PR. It
+can't see strings built in variables or helpers, or sent by the backend, so those still
+need the screenshot.
 
 **Every option on a screen must be one GAIA has proven.** A backend, device, model or
 setting the user can pick is a promise; list only what passed evals on that hardware

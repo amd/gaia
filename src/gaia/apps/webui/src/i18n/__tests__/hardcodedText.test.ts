@@ -28,7 +28,39 @@ function sources(dir: string): string[] {
 
 type Node = { type?: string; [key: string]: unknown };
 
-/** Each English string written straight into JSX: text, a quoted child, or a text attribute. */
+/**
+ * The strings an expression in a text position can render: both arms of a ternary, the
+ * value side of `&&` / `||` / `??`, and template text. Calls such as `t('x')` render
+ * what they return, so they are not followed.
+ */
+function renderedStrings(e: Node | null | undefined): string[] {
+    if (!e) return [];
+    switch (e.type) {
+        case 'Literal':
+            return typeof e.value === 'string' ? [e.value] : [];
+        case 'TemplateLiteral':
+            return [
+                (e.quasis as Node[])
+                    .map((q) => String((q.value as { cooked?: string })?.cooked ?? ''))
+                    .join('${}'),
+            ];
+        case 'ConditionalExpression':
+            return [...renderedStrings(e.consequent as Node), ...renderedStrings(e.alternate as Node)];
+        case 'LogicalExpression':
+            return e.operator === '&&'
+                ? renderedStrings(e.right as Node)
+                : [...renderedStrings(e.left as Node), ...renderedStrings(e.right as Node)];
+        case 'ParenthesizedExpression':
+        case 'TSAsExpression':
+        case 'TSNonNullExpression':
+        case 'TSSatisfiesExpression':
+            return renderedStrings(e.expression as Node);
+        default:
+            return [];
+    }
+}
+
+/** Each English string written straight into JSX: text, a child expression, or a text attribute. */
 function hardcodedText(code: string, file = 'x.tsx'): string[] {
     const found: string[] = [];
     const visit = (node: unknown, inJsx: boolean): void => {
@@ -37,14 +69,16 @@ function hardcodedText(code: string, file = 'x.tsx'): string[] {
         const n = node as Node;
         if (n.type === 'JSXText' && isProse(String(n.value))) found.push(String(n.value).trim());
         if (n.type === 'JSXExpressionContainer' && inJsx) {
-            const e = n.expression as Node;
-            if (e?.type === 'Literal' && typeof e.value === 'string' && isProse(e.value)) found.push(e.value);
+            found.push(...renderedStrings(n.expression as Node).filter(isProse));
         }
         if (n.type === 'JSXAttribute') {
-            const name = (n.name as Node)?.name;
+            const name = String((n.name as Node)?.name);
             const v = n.value as Node | null;
-            if (TEXT_ATTRS.has(String(name)) && v?.type === 'Literal' && isProse(String(v.value))) {
-                found.push(`${String(name)}="${String(v.value)}"`);
+            if (TEXT_ATTRS.has(name)) {
+                const strings = v?.type === 'JSXExpressionContainer'
+                    ? renderedStrings(v.expression as Node)
+                    : renderedStrings(v);
+                for (const s of strings.filter(isProse)) found.push(`${name}="${s}"`);
             }
             return;
         }
@@ -71,6 +105,33 @@ describe('English written straight into JSX', () => {
         const code = `const A = () => <div title="Delete chat" aria-label={t('x')} className="row">
             Saved {n} files {'Try again'} {t('ok')} GAIA <b>NPU</b></div>;`;
         expect(hardcodedText(code)).toEqual(['title="Delete chat"', 'Saved', 'files', 'Try again']);
+    });
+
+    it('finds text inside ternaries, logical expressions and template strings', () => {
+        const code = `const A = () => <div>
+            {busy ? 'Saving' : 'Save'} {err && 'Something failed'} {name || 'Untitled'}
+            {\`Try again\`} {\`\${n} files left\`} {(label as string) ?? 'None yet'}</div>;`;
+        expect(hardcodedText(code)).toEqual([
+            'Saving', 'Save', 'Something failed', 'Untitled', 'Try again', '${} files left', 'None yet',
+        ]);
+    });
+
+    it('finds text attributes written as expressions', () => {
+        const code = `const A = () => <button title={'Delete'} placeholder={\`Search\`}
+            aria-label={x ? 'Open menu' : 'Close menu'} alt={ok && 'Preview'} />;`;
+        expect(hardcodedText(code)).toEqual([
+            'title="Delete"', 'placeholder="Search"', 'aria-label="Open menu"', 'aria-label="Close menu"',
+            'alt="Preview"',
+        ]);
+    });
+
+    it('ignores ids, class names, roles, conditions, calls and all-caps names', () => {
+        const code = `const A = () => <div data-testid={x ? 'save-button' : 'saveButton'}
+            className={busy ? 'row busy' : 'row'} id={'main panel'} key={'Item one'} role={'dialog'}
+            aria-hidden={x ? 'true' : 'false'} title={x ? t('a') : t('b')} aria-label={label}>
+            {isOpen === 'Open state' ? null : <b>{t('ok')}</b>} {x ? 'GAIA' : 'NPU'} {busy && n}
+            {format('Hello there')} {\`\${n}\`} {ok ? <i>{t('y')}</i> : null}</div>;`;
+        expect(hardcodedText(code)).toEqual([]);
     });
 
     it('does not grow in any file', () => {
