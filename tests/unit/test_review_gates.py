@@ -99,7 +99,8 @@ class FakeGh:
             if path.endswith("artifacts?name=review-verdict"):
                 run_id = int(path.split("/runs/")[1].split("/")[0])
                 if run_id in self.expired:
-                    return "true\n"
+                    # A re-run can leave an aged-out copy beside a live one.
+                    return "true\nfalse\n" if run_id in self.artifacts else "true\n"
                 return "false\n" if run_id in self.artifacts else ""
             if "/issues/7/events" in path:
                 return "\n".join(
@@ -212,6 +213,15 @@ def test_an_older_record_does_not_stand_in_for_an_expired_one(verdict, monkeypat
     monkeypatch.setattr(verdict, "_gh", gh)
     verdict.evaluate("amd/gaia", 7)
     assert "state=pending" in gh.status()
+
+
+def test_a_live_artifact_beside_an_expired_one_is_still_read(verdict, monkeypatch):
+    gh = FakeGh(
+        runs=[(1, "2026-01-01T00:00:00Z")], artifacts={1: record()}, expired=[1]
+    )
+    monkeypatch.setattr(verdict, "_gh", gh)
+    verdict.evaluate("amd/gaia", 7)
+    assert "state=failure" in gh.status()
 
 
 def test_another_prs_record_on_the_branch_is_ignored(verdict, monkeypatch):
