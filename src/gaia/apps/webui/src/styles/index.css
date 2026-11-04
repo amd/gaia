@@ -769,12 +769,12 @@ textarea:focus-visible {
 /* A Latin name in a right-to-left UI: dir="auto" makes it truncate at its end,
    and this keeps it on the label's own edge. */
 :root[dir="rtl"] :is(.doc-name, .sb-location-name, .composer-chip-label,
-    .new-chat-folder-name, .sp-item-name, .connection-banner__text)[dir="auto"] {
+    .new-chat-folder-name, .sp-item-name, .connection-banner__text, .schedule-card-name, .schedule-card-prompt)[dir="auto"] {
     text-align: right;
 }
 /* The mirror: an Arabic name in a left-to-right UI stays on the left. */
 :root:not([dir="rtl"]) :is(.doc-name, .sb-location-name, .composer-chip-label,
-    .new-chat-folder-name, .sp-item-name, .connection-banner__text)[dir="auto"] {
+    .new-chat-folder-name, .sp-item-name, .connection-banner__text, .schedule-card-name, .schedule-card-prompt)[dir="auto"] {
     text-align: left;
 }
 /* Windows: minimize, maximize and close sit at the top right. */

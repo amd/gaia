@@ -1,6 +1,8 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { useState } from 'react';
+import { useT } from '../../i18n/useT';
 import { UnsupportedCard } from './UnsupportedCard';
 import { isOptionalString } from './primitiveShared';
 import { resolveMediaSrc } from './mediaSrc';
@@ -36,6 +38,8 @@ export function formatDuration(seconds: number): string {
 }
 
 export function AudioCard({ data }: { data: unknown }) {
+    const t = useT();
+    const [unplayable, setUnplayable] = useState(false);
     if (!isAudioPayload(data)) {
         return <UnsupportedCard variant="invalid" render="audio" data={data} />;
     }
@@ -44,8 +48,9 @@ export function AudioCard({ data }: { data: unknown }) {
     const fileName = data.path ? data.path.split(/[\\/]/).pop() : undefined;
     return (
         <figure className="render-audio">
-            <audio className="render-audio__player" controls preload="metadata" src={src} />
+            <audio className="render-audio__player" controls preload="metadata" src={src} onError={() => setUnplayable(true)} />
             <figcaption className="render-audio__caption">
+                {unplayable && <span className="render-audio__error" role="alert">{t('media.audioUnplayable')}</span>}
                 {data.caption && <span className="render-audio__text">{data.caption}</span>}
                 {(fileName || data.duration_seconds !== undefined) && (
                     <span className="render-audio__meta">
