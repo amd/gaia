@@ -2942,9 +2942,11 @@ def pull_request_body(model_id: str) -> Dict[str, Any]:
 
 def _unknown_user_model_message(model_id: str) -> str:
     return (
-        f"Cannot pull custom model '{model_id}': it is not in GAIA's "
-        "model registry, so its checkpoint and recipe are unknown. "
-        "Add it to MODELS in gaia.llm.lemonade_client, or run `gaia init`."
+        f"Cannot download '{model_id}': GAIA doesn't know where to download "
+        "it from. Add it from its Hugging Face link, then download it: in the "
+        "Agent UI use Settings > Model > Add a model from Hugging Face; in the "
+        "terminal app use /provider, choose Local, then ctrl+a; or run "
+        "`gaia model add <link>`."
     )
 
 

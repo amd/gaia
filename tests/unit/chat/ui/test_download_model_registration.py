@@ -128,7 +128,7 @@ def test_unknown_user_model_is_not_posted(sent, monkeypatch):
     assert sent == []
     progress = system._get_download_progress("user.not-a-real-model")
     assert progress["state"] == "error"
-    assert "not in GAIA's model registry" in progress["message"]
+    assert "Add a model from Hugging Face" in progress["message"]
 
 
 def test_listed_name_without_the_namespace_still_registers_under_it(sent):
