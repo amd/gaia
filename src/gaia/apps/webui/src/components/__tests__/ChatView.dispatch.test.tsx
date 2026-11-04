@@ -107,6 +107,30 @@ describe('ChatView dispatch', () => {
         expect(useChatStore.getState().messageQueues[SESSION.id]?.map((m) => m.text)).toEqual(['second']);
     });
 
+    it('holds the opening message while GAIA starts, then sends it once ready (#6644)', async () => {
+        useChatStore.setState({
+            pendingPrompt: { sessionId: SESSION.id, text: 'first' },
+            systemStatus: { init_state: 'initializing' } as never,
+        });
+
+        await act(async () => {
+            render(<ChatView sessionId={SESSION.id} />);
+            await new Promise((r) => setTimeout(r, 0));
+        });
+
+        expect(mockedApi.sendMessageStream).not.toHaveBeenCalled();
+        expect(useChatStore.getState().pendingPrompt?.text).toBe('first');
+
+        await act(async () => {
+            useChatStore.setState({ systemStatus: { init_state: 'ready' } as never });
+            await new Promise((r) => setTimeout(r, 0));
+        });
+
+        expect(mockedApi.sendMessageStream).toHaveBeenCalledTimes(1);
+        expect(mockedApi.sendMessageStream.mock.calls[0][1]).toBe('first');
+        expect(useChatStore.getState().pendingPrompt).toBeNull();
+    });
+
     it('leaves a message meant for another chat unsent (#5924)', async () => {
         const meant = { sessionId: 'another-chat', text: 'not for this chat' };
         useChatStore.setState({ pendingPrompt: meant });
