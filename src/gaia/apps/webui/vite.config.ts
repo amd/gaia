@@ -27,7 +27,7 @@ function getGaiaVersion(): string {
 const gaiaVersion = getGaiaVersion();
 
 export default defineConfig({
-    plugins: [react({ jsxImportSource: '@gaia/jsx' }), serviceWorkerPlugin(resolve(__dirname, 'src/pwa/sw.js'))],
+    plugins: [react({ jsxImportSource: '@gaia/jsx' }), serviceWorkerPlugin(resolve(__dirname, 'src/pwa/sw.js'), gaiaVersion)],
     resolve: { alias: { '@gaia/jsx': resolve(__dirname, 'src/i18n/jsx') } },
     base: './',
     define: {
