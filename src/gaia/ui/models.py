@@ -708,6 +708,8 @@ class MessageResponse(BaseModel):
     agent_steps: Optional[List[AgentStepResponse]] = None
     stats: Optional[InferenceStatsResponse] = None
     turn_summary: Optional[TurnSummaryResponse] = None
+    # The user's Stop ended this reply before it finished.
+    stopped: bool = False
 
 
 class MessageListResponse(BaseModel):
