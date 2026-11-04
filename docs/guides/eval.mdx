@@ -67,20 +67,52 @@ Unlike unit tests that check individual functions, Agent Eval tests the **full s
   </Step>
 
   <Step title="Start the Agent UI backend">
+    Start the backend from the repository root with the eval switches set. The
+    pre-flight check refuses to run memory and email scenarios without them, and
+    a full benchmark always includes both:
+
     <Tabs>
       <Tab title="CLI">
         ```bash
+        GAIA_MEMORY_ADMIN=1 GAIA_MEMORY_MCP_ALWAYS=1 \
+        GAIA_EVAL_MAILBOX=$PWD/tests/fixtures/gaia/email/eval_inbox.mbox \
         gaia chat --ui
         ```
       </Tab>
       <Tab title="Direct">
         ```bash
+        GAIA_MEMORY_ADMIN=1 GAIA_MEMORY_MCP_ALWAYS=1 \
+        GAIA_EVAL_MAILBOX=$PWD/tests/fixtures/gaia/email/eval_inbox.mbox \
         uv run python -m gaia.ui.server
+        ```
+      </Tab>
+      <Tab title="PowerShell">
+        ```powershell
+        $env:GAIA_MEMORY_ADMIN="1"; $env:GAIA_MEMORY_MCP_ALWAYS="1"
+        $env:GAIA_EVAL_MAILBOX="$PWD\tests\fixtures\gaia\email\eval_inbox.mbox"
+        gaia chat --ui
         ```
       </Tab>
     </Tabs>
 
+    | Variable | Why the eval needs it |
+    |---|---|
+    | `GAIA_MEMORY_ADMIN=1` | Unlocks the memory admin endpoints (`/api/memory/admin/*`) that reset and seed memory between scenarios. Without it, pre-flight stops with a 403 from `/api/memory/admin/seed`. |
+    | `GAIA_MEMORY_MCP_ALWAYS=1` | Exposes the memory tools over MCP whatever the Memory dashboard toggle says. |
+    | `GAIA_EVAL_MAILBOX` | Points the mail tools at the offline fixture mailbox the `gaia_email` scenarios read. |
+
+    Long-term memory is also off by default in the Agent UI. Switch it on in the
+    Memory dashboard, or with:
+
+    ```bash
+    curl -X PUT http://localhost:4200/api/memory/settings \
+      -H 'X-Gaia-UI: 1' -H 'Content-Type: application/json' \
+      -d '{"memory_enabled": true}'
+    ```
+
     The Agent UI backend must be running on `http://localhost:4200` (default).
+    A single scenario or category that touches neither memory nor email runs
+    against a plain `gaia chat --ui`.
   </Step>
 </Steps>
 
@@ -120,6 +152,13 @@ Run all scenarios across every category (91 scenarios in 12 categories at the ti
 ```bash
 gaia eval agent
 ```
+
+<Note>
+  The full benchmark includes the memory and `gaia_email` categories, so it needs a
+  backend started with the eval switches from
+  [Start the Agent UI backend](#prerequisites). Against a plain `gaia chat --ui` it
+  stops at pre-flight before running any scenario.
+</Note>
 
 Every scenario scores the flagship `gaia` agent. That is the `--agent-type`
 default and no scenario pins its own, so a scorecard names one agent and two
