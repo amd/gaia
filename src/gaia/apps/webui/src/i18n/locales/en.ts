@@ -151,6 +151,8 @@ export const enMessages = {
     'composer.reply': 'Reply to GAIA',
     'composer.queueNext': 'Queue your next message',
     'composer.starting': 'GAIA is starting…',
+    'composer.heldLabel': 'Message waiting to send',
+    'composer.heldUntilStarted': 'Sends once GAIA has started.',
     'composer.message': 'Message',
     'composer.attached': 'Attached files',
     'composer.uploading': 'Uploading…',
