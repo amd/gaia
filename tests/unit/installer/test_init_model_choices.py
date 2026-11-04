@@ -145,6 +145,9 @@ def home(tmp_path, monkeypatch):
 @pytest.fixture
 def lemonade(monkeypatch, tmp_path):
     """Point init and the setup plan at a :class:`FakeLemonade`."""
+    # These tests exercise model selection; keep the independent flagship
+    # installation prerequisite satisfied unless a readiness test opts into it.
+    monkeypatch.setattr(InitCommand, "_is_hub_agent_available", lambda *_: True)
     store = tmp_path / "hub"
     store.mkdir()
 

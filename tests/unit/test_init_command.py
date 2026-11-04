@@ -1210,6 +1210,21 @@ class TestCheckSetupStatus(unittest.TestCase):
             "http://localhost:51234/api/v1",
         )
 
+    def test_flagship_models_present_but_agent_missing_is_not_ready(self):
+        from gaia.installer.init_command import InitCommand, check_setup_status
+
+        with (
+            self._embedded(self._running()),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class,
+            patch.object(InitCommand, "_is_hub_agent_available", return_value=False),
+        ):
+            mock_client_class.return_value.check_model_available.return_value = True
+            status = check_setup_status(profile="gaia")
+
+        self.assertFalse(status.ready)
+        self.assertEqual(status.stage, "setup")
+        self.assertEqual(status.reasons, ["The GAIA agent is not installed"])
+
     def test_configured_url_is_checked_instead_of_the_embedded_server(self):
         import os
 

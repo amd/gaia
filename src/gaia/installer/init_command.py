@@ -835,6 +835,15 @@ def check_setup_status(
         models = _describe_models(client, model_ids, downloaded) if load else []
         return SetupStatus(ready=False, reasons=reasons, stage="setup", models=models)
     if not load:
+        if (
+            profile_config.get("agent") in HUB_INSTALL_AGENTS
+            and not InitCommand._is_hub_agent_available(profile_config["agent"])
+        ):
+            return SetupStatus(
+                ready=False,
+                reasons=["The GAIA agent is not installed"],
+                stage="setup",
+            )
         return SetupStatus(ready=True, reasons=[])
 
     if chat_model and not skip_chat_model and not is_embedding_model_id(chat_model):
