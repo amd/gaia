@@ -327,6 +327,8 @@ MS_TOKEN_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
 @pytest.fixture
 def microsoft_provider(monkeypatch):
     monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "test-ms-client")
+    # A secret exported on the developer's machine would change the provider.
+    monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_SECRET", raising=False)
     _registry.clear()
     from gaia.connectors.providers import get as get_provider
 
@@ -663,3 +665,32 @@ class TestRefreshWireEncoding:
         assert form["refresh_token"] == [refresh_token]
         assert form["client_id"] == [client_id]
         assert "client_secret" not in form
+
+    @pytest.mark.parametrize(
+        "secret, sent",
+        [("confidential-secret", ["confidential-secret"]), ("", None)],
+        ids=["secret-configured", "secret-empty"],
+    )
+    @respx.mock
+    async def test_configured_client_secret_rides_in_the_form_body(
+        self, monkeypatch, seeded_connection, secret, sent
+    ):
+        # A confidential client's secret must go in the form body; an empty
+        # one must be omitted, not sent as ``client_secret=``.
+        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_SECRET", secret)
+        _registry.clear()
+        captured = []
+
+        def _capture(req: httpx.Request) -> httpx.Response:
+            captured.append(req)
+            return _ok_token_response(access="fresh")
+
+        respx.post("https://oauth2.googleapis.com/token").mock(side_effect=_capture)
+
+        assert await get_or_refresh("google") == "fresh"
+
+        (req,) = captured
+        assert req.headers["content-type"] == "application/x-www-form-urlencoded"
+        form = parse_qs(req.content.decode(), keep_blank_values=True)
+        assert form.get("client_secret") == sent
+        assert form["refresh_token"] == ["seed-refresh-token"]
