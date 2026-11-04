@@ -18,7 +18,8 @@ class ParsedInsights(NamedTuple):
     """The usable insights, and whether part of the reply could not be read.
 
     ``incomplete`` is ``True`` when the array stopped parsing before its
-    closing ``]``, whether the reply was cut off or an item was malformed.
+    closing ``]`` (the reply was cut off or an item was malformed), or when an
+    item was dropped for having no usable ``content``.
     """
 
     insights: List[Dict[str, Any]]
@@ -78,21 +79,32 @@ def parse_inferred_insights(raw_response: str) -> ParsedInsights:
         )
     cleaned = _strip_fences(raw_response)
     try:
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        # Text around an otherwise whole array, or an array that stops
-        # parsing part-way (cut off, or a malformed item).
-        items, closed = _complete_objects(cleaned)
-        salvaged = [i for i in items if _is_insight(i)]
-        if not salvaged:
-            raise ValueError(
-                f"the model's reply is not a valid JSON array of insights ({e})"
-            ) from e
-        return ParsedInsights(salvaged, incomplete=not closed)
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            # Text around an otherwise whole array, or an array that stops
+            # parsing part-way (cut off, or a malformed item).
+            items, closed = _complete_objects(cleaned)
+            salvaged = [i for i in items if _is_insight(i)]
+            if not salvaged:
+                raise ValueError(
+                    f"the model's reply is not a valid JSON array of insights ({e})"
+                ) from e
+            return ParsedInsights(
+                salvaged, incomplete=not closed or len(salvaged) < len(items)
+            )
+    except RecursionError as e:
+        raise ValueError("the model's reply is nested too deeply to parse") from e
 
     if not isinstance(parsed, list):
         raise ValueError(
             "the model's reply is JSON but not an array of insights "
             f"(got {type(parsed).__name__})"
         )
-    return ParsedInsights([i for i in parsed if _is_insight(i)], incomplete=False)
+    insights = [i for i in parsed if _is_insight(i)]
+    if parsed and not insights:
+        raise ValueError(
+            f"none of the {len(parsed)} item(s) in the model's reply has a "
+            "non-empty text `content`"
+        )
+    return ParsedInsights(insights, incomplete=len(insights) < len(parsed))

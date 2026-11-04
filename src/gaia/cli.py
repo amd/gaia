@@ -8471,10 +8471,12 @@ def _bootstrap_infer():
     try:
         insights, incomplete = parse_inferred_insights(raw_response)
     except ValueError as e:
-        # The reply itself stays out of the terminal: it is unreadable here and
-        # can echo the scanned system data back.
+        # The reply stays out of the terminal and the log (which `gaia
+        # diagnostics` bundles): it can echo the scanned system data back.
         logging.getLogger("gaia.cli").debug(
-            "Unparseable inference reply: %r", raw_response
+            "Unparseable inference reply (%s, %s chars)",
+            type(raw_response).__name__,
+            len(raw_response) if isinstance(raw_response, str) else "n/a",
         )
         print()
         raise RuntimeError(

@@ -11,6 +11,7 @@ echoing the reply.
 """
 
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -70,9 +71,101 @@ def test_text_after_a_whole_array_is_not_reported_as_cut_off():
     assert parsed.incomplete is False
 
 
-def test_items_without_content_are_dropped():
+def test_items_without_content_are_dropped_and_reported():
     reply = json.dumps([ONE, {"content": "   "}, {"confidence": 1.0}, "text", TWO])
-    assert parse_inferred_insights(reply).insights == [ONE, TWO]
+    parsed = parse_inferred_insights(reply)
+    assert parsed.insights == [ONE, TWO]
+    assert parsed.incomplete is True
+
+
+def test_an_empty_array_is_no_insights_not_an_error():
+    assert parse_inferred_insights("[]") == ([], False)
+
+
+def test_an_array_with_no_usable_item_is_an_error():
+    with pytest.raises(ValueError, match="none of the 3"):
+        parse_inferred_insights('[{"content": ""}, {"confidence": 1}, 7]')
+
+
+# --------------------------------------------------------- adversarial parser
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "Likes ] and } and [ in text",
+        'Says "quoted" things',
+        "Ends with a backslash \\",
+        "Unicode été and an emoji \U0001f600",
+        "```fenced inside```",
+    ],
+)
+def test_brackets_quotes_and_escapes_inside_content_survive_a_cut_off(content):
+    first = json.dumps({"content": content})
+    reply = f'[{first}, {{"content": "cut'
+    parsed = parse_inferred_insights(reply)
+    assert parsed.insights == [{"content": content}]
+    assert parsed.incomplete is True
+
+
+def test_nested_values_inside_an_item_do_not_end_the_item_early():
+    item = {"content": "a", "tags": [{"x": "]"}, ["}", "["]], "meta": {"k": "]"}}
+    parsed = parse_inferred_insights(json.dumps([item])[:-1])
+    assert parsed.insights == [item]
+    assert parsed.incomplete is True
+
+
+def test_fences_without_a_language_tag_are_stripped():
+    assert parse_inferred_insights(f"```\n{WHOLE}\n```").insights == [ONE, TWO]
+
+
+def test_a_cut_off_fenced_reply_keeps_the_complete_insights():
+    parsed = parse_inferred_insights(f"```json\n{CUT_OFF}")
+    assert parsed.insights == [ONE, TWO]
+    assert parsed.incomplete is True
+
+
+def test_a_leading_bom_does_not_lose_the_reply():
+    assert parse_inferred_insights("\ufeff" + WHOLE).insights == [ONE, TWO]
+
+
+def test_a_missing_comma_between_items_keeps_both():
+    reply = json.dumps(ONE) + "\n" + json.dumps(TWO)
+    assert parse_inferred_insights(f"[{reply}]").insights == [ONE, TWO]
+
+
+def test_prose_brackets_before_the_array_fail_loudly_not_silently():
+    # The first "[" belongs to prose, so nothing parses; that must be an error.
+    with pytest.raises(ValueError):
+        parse_inferred_insights("Here [as asked]: " + CUT_OFF)
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ['{"insights": [1]}', "42", '"just a string"', "null", "true"],
+)
+def test_whole_json_that_is_not_an_array_is_an_error(reply):
+    with pytest.raises(ValueError, match="not an array"):
+        parse_inferred_insights(reply)
+
+
+def test_a_deeply_nested_reply_is_a_value_error_not_a_crash():
+    with pytest.raises(ValueError, match="nested too deeply"):
+        parse_inferred_insights("[" * 100_000 + "]" * 100_000)
+
+
+def test_a_huge_cut_off_reply_keeps_every_complete_item():
+    items = [{"content": f"insight {n}"} for n in range(20_000)]
+    parsed = parse_inferred_insights(json.dumps(items)[:-30])
+    assert parsed.incomplete is True
+    assert parsed.insights == items[: len(parsed.insights)]
+    assert len(parsed.insights) > 19_990
+
+
+@pytest.mark.parametrize("reply", [b"[]", 0, ["[]"], {"content": "x"}])
+def test_any_non_text_reply_is_an_error(reply):
+    with pytest.raises(ValueError, match="not text"):
+        parse_inferred_insights(reply)
 
 
 @pytest.mark.parametrize(
@@ -199,3 +292,18 @@ def test_a_failed_llm_call_exits_1(run_infer, capsys):
 
 def test_a_whole_reply_still_stores_everything(run_infer):
     assert run_infer(WHOLE) == [ONE["content"], TWO["content"]]
+
+
+def test_an_unusable_reply_is_not_written_to_the_log(run_infer, caplog):
+    # `gaia diagnostics` bundles the log, and the reply can echo scanned data.
+    caplog.set_level(logging.DEBUG)
+    with pytest.raises(SystemExit):
+        run_infer('[{"content": "Visited internal.corp.example 212 tim')
+    assert "internal.corp.example" not in caplog.text
+
+
+def test_an_array_of_unusable_items_exits_1_and_stores_nothing(run_infer, capsys):
+    with pytest.raises(SystemExit) as exc:
+        run_infer('[{"text": "wrong key"}]')
+    assert exc.value.code == 1
+    assert "Nothing was stored" in capsys.readouterr().out
