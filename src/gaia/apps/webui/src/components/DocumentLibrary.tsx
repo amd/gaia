@@ -14,7 +14,7 @@ import { formatSize } from '../utils/format';
 import { examplePath } from '../utils/platform';
 import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
 import type { Document, IndexFolderResponse } from '../types';
-import { useT, type Translate } from '../i18n/useT';
+import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { IndexingProgress } from './IndexingProgress';
 import './DocumentLibrary.css';
 
@@ -84,7 +84,7 @@ function formatTimestamp(isoString: string, t: Translate): string {
         if (diffDay < 7) return t('time.daysAgo', { n: diffDay });
 
         // Older than a week: show date + time
-        return date.toLocaleDateString(undefined, {
+        return date.toLocaleDateString(dateLocale(t), {
             month: 'short',
             day: 'numeric',
             hour: 'numeric',
@@ -96,11 +96,11 @@ function formatTimestamp(isoString: string, t: Translate): string {
 }
 
 /** Format an ISO timestamp as a full local date/time for tooltips. */
-function formatFullTimestamp(isoString: string): string {
+function formatFullTimestamp(isoString: string, t: Translate): string {
     try {
         const date = new Date(isoString);
         if (isNaN(date.getTime())) return '';
-        return date.toLocaleString(undefined, {
+        return date.toLocaleString(dateLocale(t), {
             year: 'numeric',
             month: 'short',
             day: 'numeric',
@@ -520,7 +520,7 @@ export function DocumentLibrary() {
         const status = doc.indexing_status || 'complete';
         const startTime = indexingStartTimes.current.get(doc.id);
         const indexedTime = doc.indexed_at ? formatTimestamp(doc.indexed_at, t) : '';
-        const indexedTimeFull = doc.indexed_at ? formatFullTimestamp(doc.indexed_at) : '';
+        const indexedTimeFull = doc.indexed_at ? formatFullTimestamp(doc.indexed_at, t) : '';
 
         switch (status) {
             case 'indexing':
