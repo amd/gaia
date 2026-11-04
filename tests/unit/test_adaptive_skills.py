@@ -1556,6 +1556,7 @@ class _TaintProbeAgent:
     internet_off = Agent.internet_off
     _execute_tool = Agent._execute_tool
     _resolve_tool_name = Agent._resolve_tool_name
+    _execution_tool_registry = Agent._execution_tool_registry
     _policy_refusal = Agent._policy_refusal
     _tool_requires_confirmation = Agent._tool_requires_confirmation
     _write_target_outside_scope = Agent._write_target_outside_scope
