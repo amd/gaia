@@ -84,6 +84,11 @@ RC_CRITICAL = (
     ),
 )
 
+_NPU_WHY = (
+    "one Agent UI turn on the NPU default model, through GAIA's own Lemonade "
+    "and the gaia-agent sidecar, on Windows and Linux Strix Halo (#6632)"
+)
+
 # Shown on an RC, never waited for or dispatched.
 RC_ADVISORY = (
     Check(
@@ -96,6 +101,7 @@ RC_ADVISORY = (
     ),
     Check("test_gaia_cli_linux.yml"),
     Check("release_train_dryrun.yml", why=_DRY_RUN_WHY),
+    Check("test_npu_agent_chat.yml", why=_NPU_WHY),
 )
 
 # The dry run takes an RC name, so the gate never starts one for a final: run
@@ -110,6 +116,7 @@ FINAL_REQUIRED = (
         remedy_args="-f rc_tag=<the candidate tagged on this commit>",
         why=_DRY_RUN_WHY,
     ),
+    Check("test_npu_agent_chat.yml", why=_NPU_WHY),
 )
 
 # Jobs in publish.yml itself that approve-publish requires on a candidate.
