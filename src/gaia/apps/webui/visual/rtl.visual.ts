@@ -1245,6 +1245,8 @@ for (const locale of ['ar', 'en']) {
             expect(await untranslated(page, '.context-meter-panel')).toEqual([]);
             expect(await untranslated(page, '.context-warning')).toEqual([]);
         }
+    });
+}
 
 test('composer chips stay whole at phone width', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 780 });
