@@ -156,6 +156,13 @@ describe('OutputsSection', () => {
         expect(await screen.findByText(/Couldn't list what this chat produced: disk unreadable/)).toBeInTheDocument();
         expect(screen.queryByText(/Nothing yet/)).not.toBeInTheDocument();
     });
+
+    it('says GAIA cannot be reached instead of the raw "Failed to fetch" (#6588)', async () => {
+        mocked.getOutputs.mockRejectedValue(new TypeError('Failed to fetch'));
+        render(<OutputsSection sessionId={SID} busy={false} onJumpToMessage={() => true} />);
+        expect(await screen.findByText(/Couldn't list what this chat produced: GAIA can't be reached right now/)).toBeInTheDocument();
+        expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument();
+    });
 });
 
 describe('whenText', () => {

@@ -3,7 +3,7 @@
 
 import React, { createContext, useCallback, useContext, useId, useRef, useState, useEffect, useMemo } from 'react';
 import type { Components } from 'react-markdown';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen, Square, FileText } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, FolderOpen, Square, FileText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
@@ -22,6 +22,7 @@ import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
 import { useT, type Translate } from '../i18n/useT';
+import type { MessageKey } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
 import {
     buildCitationIndex, docForToken, findCitations, findPages,
@@ -46,6 +47,8 @@ interface MessageBubbleProps {
     onResend?: (message: Message) => void;
     /** More message actions, before Copy (e.g. Retry with…). */
     extraActions?: React.ReactNode;
+    /** Shows a labelled Try again under a failed or cut-off reply, which asks the user to press it. */
+    onTryAgain?: () => void;
     /** Total wall-clock latency in ms (time from user message to response completion). */
     latencyMs?: number;
     /** The model's current phase while streaming; null shows "Thinking...". */
@@ -435,21 +438,41 @@ function formatFullTimestamp(iso: string): string {
 /** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
-/** The notices that close a turn cut off before its answer (gaia/ui/restart_recovery.py). */
-const CUT_OFF_NOTICES = [
-    'This answer was interrupted when GAIA closed. Send again to retry.',
-    'This answer was interrupted before it finished. Send again to retry.',
-    'This answer ended before GAIA could save a reply. Send again to retry.',
+/** The notices that close a turn cut off before its answer (gaia/ui/restart_recovery.py), and their translations. */
+const CUT_OFF_NOTICES: ReadonlyArray<readonly [string, MessageKey]> = [
+    ['This answer was interrupted when GAIA closed. Send again to retry.', 'msg.cutOff.interrupted'],
+    ['This answer was interrupted before it finished. Send again to retry.', 'msg.cutOff.cancelled'],
+    ['This answer ended before GAIA could save a reply. Send again to retry.', 'msg.cutOff.noReply'],
 ];
+
+/** restart_recovery.tools_ran_notice, the line the server puts just above a cut-off notice. */
+const TOOLS_RAN_RE = /(?:^|\n\n)Before it stopped, it had started these tools: (.+)\.$/;
+
+export interface CutOff {
+    /** What the turn streamed before it was cut off. */
+    body: string;
+    notice: MessageKey;
+    tools: string | null;
+}
+
+/** A reply the server closed with a cut-off notice, split so the notice shows in the UI's language. */
+export function splitCutOff(content: string): CutOff | null {
+    let text = content.trim();
+    const hit = CUT_OFF_NOTICES.find(([notice]) => text.endsWith(notice));
+    if (!hit) return null;
+    text = text.slice(0, -hit[0].length).trimEnd();
+    const tools = TOOLS_RAN_RE.exec(text);
+    if (tools) text = text.slice(0, tools.index).trimEnd();
+    return { body: text, notice: hit[1], tools: tools ? tools[1] : null };
+}
 
 /** How an assistant turn ended short of an answer, or undefined when it answered. */
 export function turnEnding(content: string, stopState: Message['stopState']): TurnEnding | undefined {
     if (stopState) return 'stopped';
-    const text = content.trim();
-    return CUT_OFF_NOTICES.some((notice) => text.endsWith(notice)) ? 'interrupted' : undefined;
+    return splitCutOff(content) ? 'interrupted' : undefined;
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
     const echo = useMemo(
@@ -462,13 +485,17 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
         : undefined;
+    const cutOff = useMemo(
+        () => (message.role === 'assistant' && !isStreaming ? splitCutOff(message.content) : null),
+        [message.content, message.role, isStreaming],
+    );
     // What the user typed is never agent output — render it verbatim.
     // Memoized because the assistant path runs a brace-depth parser.
     const cleanedContent = useMemo(
         () => (message.role === 'user'
             ? message.content
-            : cleanToolCallContent(message.content, Boolean(isStreaming))),
-        [message.content, message.role, isStreaming],
+            : cleanToolCallContent(cutOff ? cutOff.body : message.content, Boolean(isStreaming))),
+        [message.content, message.role, isStreaming, cutOff],
     );
     const [copied, setCopied] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
@@ -646,6 +673,19 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                         : t('msg.stopped')}
                             </span>
                         </div>
+                    )}
+                    {cutOff && (
+                        <p className="msg-cut-off" role="note">
+                            {t.compose((say) => (cutOff.tools
+                                ? `${say('msg.cutOff.toolsRan', { tools: cutOff.tools })} ${say(cutOff.notice)}`
+                                : say(cutOff.notice)))}
+                        </p>
+                    )}
+                    {onTryAgain && !isStreaming && (
+                        <button type="button" className="msg-try-again" onClick={onTryAgain}>
+                            <RotateCw size={12} aria-hidden="true" />
+                            {t('msg.tryAgain')}
+                        </button>
                     )}
                     {message.role === 'assistant'
                         && !isStreaming
