@@ -488,6 +488,17 @@ def test_a_failed_load_on_the_chosen_backend_says_how_to_undo_it(config_file):
     assert "rocm" in str(err.value)
 
 
+def test_a_failed_load_on_vulkan_does_not_send_the_user_back_to_vulkan(config_file):
+    _saved_before_only_vulkan_was_offered("vulkan")
+    client = _recording_client([], fail_load="vulkan device lost")
+    with pytest.raises(LemonadeClientError) as err:
+        client.load_model("Gemma-4-E4B-it-GGUF", prompt=False, load_retries=0)
+    message = str(err.value)
+    assert "Choose Vulkan" not in message
+    assert "llamacpp_backend vulkan" not in message
+    assert "smaller model" in message
+
+
 # ── the Agent UI endpoints ────────────────────────────────────────────────
 
 

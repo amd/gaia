@@ -3124,6 +3124,15 @@ def _chosen_backend_hint(backend: Optional[str]) -> str:
     """How to undo the user's backend choice, appended to a failed load."""
     if not backend:
         return ""
+    from gaia.config import GaiaConfig
+
+    if backend.lower() in GaiaConfig.TESTED_LLAMACPP_BACKENDS:
+        # Already the tested backend: sending the user back to it goes in a circle.
+        return (
+            f" GAIA ran llama.cpp on {backend}, the GPU backend it has tested, "
+            "and it couldn't load this model. Pick a smaller model in Settings → "
+            "Model, or update your graphics driver."
+        )
     return (
         f" GAIA asked for llama.cpp's {backend} backend, as set in Settings → "
         "Advanced → Model server (llamacpp_backend in ~/.gaia/config.json). "

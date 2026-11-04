@@ -1971,3 +1971,58 @@ def test_gaias_own_console_bar_collapses_too():
     m.add_log("   [━━━━──────]  40%  2.00 GB / 5.00 GB")
     m.add_log("   [━━━━━━────]  60%  3.00 GB / 5.00 GB")
     assert m.log == ["   [━━━━━━────]  60%  3.00 GB / 5.00 GB"]
+
+
+def _check_held_until_cancelled(monkeypatch, result):
+    """A load check that waits for Cancel, then answers *result* (or raises it)."""
+    entered, release = threading.Event(), threading.Event()
+
+    def check(*_a, **_k):
+        entered.set()
+        release.wait(5)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(sr, "check", check)
+    return entered, release
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"ready": False, "reasons": ["Gemma would not load"], "models": []},
+        sr.SetupError("Setup could not be checked (exit 2)."),
+    ],
+    ids=["not-ready", "check-error"],
+)
+def test_a_check_that_ends_after_cancel_leaves_the_run_cancelled(monkeypatch, result):
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    entered, release = _check_held_until_cancelled(monkeypatch, result)
+    runner = sr.SetupRunner()
+    runner.start(False)
+    assert entered.wait(5)
+    assert runner.cancel() is True
+    release.set()
+    runner._thread.join(5)
+    view = runner.status()
+    assert view["state"] == "cancelled"
+    assert view["error"] is None
+
+
+def test_try_again_waits_for_a_cancelled_check_to_finish(monkeypatch):
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    entered, release = _check_held_until_cancelled(
+        monkeypatch, {"ready": False, "reasons": ["late"], "models": []}
+    )
+    runner = sr.SetupRunner()
+    runner.start(False)
+    assert entered.wait(5)
+    runner.cancel()
+    old = runner._thread
+    threading.Timer(0.3, release.set).start()
+    monkeypatch.setattr(sr, "check", lambda *a, **k: {"ready": True})
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    runner.start(False)
+    assert not old.is_alive()
+    assert _wait_done(runner)["state"] == "ready"

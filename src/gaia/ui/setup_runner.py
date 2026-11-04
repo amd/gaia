@@ -43,6 +43,8 @@ AGENT_MISSING = "GAIA's assistant isn't installed on this PC."
 _NOT_READY_EXIT = 1
 _LOAD_FAILED_EXIT = 3
 _UNWRAPPED_COLUMNS = 1000
+#: How long a new start waits for a stopped run's last checks to finish.
+_STOPPING_WAIT_S = 10.0
 
 PHASE_SERVER = "server"
 PHASE_MODELS = "models"
@@ -793,6 +795,7 @@ class SetupRunner:
         self._lock = threading.Lock()
         self._run: Optional[SetupRun] = None
         self._proc: Optional[subprocess.Popen] = None
+        self._thread: Optional[threading.Thread] = None
         self._models: Dict[str, ModelProgress] = {}
         #: model id -> Stop flag of an in-process pull.
         self._pulls: Dict[str, threading.Event] = {}
@@ -872,9 +875,16 @@ class SetupRunner:
                     "LEMONADE_BASE_URL points GAIA at another server, so setup "
                     "can't switch to GAIA's own. Unset it and restart GAIA."
                 )
+        # A cancelled run's checks may still be finishing; they would land on the new run.
+        ending = self._thread
+        over = self._run is None or self._run.state not in ("running", "verifying")
+        if over and ending is not None and ending.is_alive():
+            ending.join(timeout=_STOPPING_WAIT_S)
         with self._lock:
             if self._run is not None and self._run.state in ("running", "verifying"):
                 raise SetupBusy("Setup is already running.")
+            if self._thread is not None and self._thread.is_alive():
+                raise SetupBusy("The last setup is still stopping.")
             if self._pulls:
                 raise SetupBusy(
                     f"{', '.join(self._pulls)} is still downloading. Wait for it "
@@ -927,7 +937,10 @@ class SetupRunner:
             run.note(f"$ {command}")
             proc = self._proc
             view = run.view()
-        threading.Thread(target=self._watch, args=(run, proc), daemon=True).start()
+            self._thread = threading.Thread(
+                target=self._watch, args=(run, proc), daemon=True
+            )
+            self._thread.start()
         return view
 
     def download_model(
@@ -1324,6 +1337,8 @@ class SetupRunner:
             status = check(run.skip_chat_model, load=True)
         except SetupError as e:
             with self._lock:
+                if run.state == "cancelled":
+                    return
                 run.state, run.error = "failed", str(e)
                 run.note(f"Load check failed: {e}")
                 self._settle_models(None, {}, run_failed=True)
@@ -1335,6 +1350,9 @@ class SetupRunner:
             if not m.get("loaded")
         }
         with self._lock:
+            # Cancelled during the check: its results belong to no run any more.
+            if run.state == "cancelled":
+                return
             run.status = status
             for m in loads:
                 outcome = (
