@@ -274,6 +274,40 @@ test('finished answer', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+/** POST /api/chat/send answers with one "Reading your request" status, then holds the turn open. */
+function holdOnReading(): void {
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (!url.includes('/api/chat/send')) return realFetch(input, init);
+        const event = { type: 'status', status: 'working', phase: 'reading', message: 'Reading your request' };
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+            },
+        });
+        return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+}
+
+for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 'Reading your request']] as const) {
+    test(`live status line while the answer is prepared (${locale})`, async ({ page }) => {
+        await page.addInitScript(holdOnReading);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Summarize the minutes');
+        await box.press('Enter');
+        const line = page.locator('.thinking-indicator').last();
+        await expect(line.locator('.thinking-indicator-text')).toContainText(reading);
+        await page.clock.setFixedTime(NOW.getTime() + 12_000);
+        const seconds = line.locator('.thinking-indicator-elapsed bdi');
+        await expect(seconds).toHaveText(/^\d+s$/);
+        expect(await seconds.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+        await shot(page, `live-status-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 test('documents', async ({ page }) => {
     await open(page);
     await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
