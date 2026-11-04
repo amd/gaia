@@ -761,6 +761,8 @@ export const enMessages = {
     'ctx.notMeasured': 'It was not measured.',
     'ctx.meter.aria': 'Context {pct}% full: {used} of {window} tokens',
     'ctx.meter.title': 'How full the model\'s context window is',
+    'ctx.meter.titleCapped': 'How full GAIA\'s context window is: GAIA uses {gaia} of the model\'s {model}',
+    'ctx.meter.capNote': 'GAIA uses {gaia} of the model\'s {model}',
     'ctx.meter.window': 'Context window',
     'ctx.meter.part.system': 'System prompt',
     'ctx.meter.part.tools': 'Tools',

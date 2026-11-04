@@ -761,6 +761,8 @@ const messages: Messages = {
     'ctx.notMeasured': 'لم تُقَس.',
     'ctx.meter.aria': 'السياق ممتلئ بنسبة {pct}%: {used} من {window} رمز',
     'ctx.meter.title': 'مدى امتلاء نافذة سياق النموذج',
+    'ctx.meter.titleCapped': 'مدى امتلاء نافذة السياق التي يستخدمها GAIA: يستخدم ⁦GAIA {gaia}⁩ من أصل نافذة النموذج البالغة {model}',
+    'ctx.meter.capNote': 'يستخدم ⁦GAIA {gaia}⁩ من أصل نافذة النموذج البالغة {model}',
     'ctx.meter.window': 'نافذة السياق',
     'ctx.meter.part.system': 'تعليمات النظام',
     'ctx.meter.part.tools': 'الأدوات',

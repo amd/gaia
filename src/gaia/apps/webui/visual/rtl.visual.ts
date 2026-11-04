@@ -1516,6 +1516,21 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['ar', 'en']) {
+    test(`the context meter names GAIA's window on a cloud model (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({ json: { ...MEASURED_CONTEXT, model_window: 1048576 } }));
+        });
+        await page.locator('button.context-meter').click();
+        const cap = page.locator('.context-meter-cap');
+        await expect(cap).toBeVisible();
+        await expect(cap).toContainText(locale === 'ar' ? 'من أصل نافذة النموذج البالغة' : "of the model's");
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.context-meter-panel')).toEqual([]);
+        await page.screenshot({ path: info.outputPath('context-meter-cloud.png') });
+    });
+}
+
 test('composer chips stay whole at phone width', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 780 });
     await open(page);

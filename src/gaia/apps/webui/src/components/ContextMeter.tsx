@@ -12,7 +12,8 @@ import './ContextMeter.css';
 
 export function formatTokens(n: number): string {
     if (n < 1000) return String(n);
-    return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`;
+    if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`;
+    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
 }
 
 const PARTS = [
@@ -55,6 +56,9 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
     const pct = Math.min(100, Math.round((usage.used / usage.window) * 100));
     const warn = usage.at_risk.length > 0;
     const free = Math.max(0, usage.window - usage.used - usage.reply_reserve);
+    // The meter fills against GAIA's admitted window, which can be far below a cloud model's own.
+    const modelWindow = usage.model_window != null && usage.model_window > usage.window ? usage.model_window : null;
+    const cap = modelWindow ? { gaia: formatTokens(usage.window), model: formatTokens(modelWindow) } : null;
     return (
         <div className="composer-chip-wrap context-meter-wrap">
             <button
@@ -63,8 +67,11 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
                 className={`context-meter${warn ? ' is-warning' : ''}`}
                 onClick={() => setOpen((v) => !v)}
                 aria-expanded={open}
-                aria-label={t('ctx.meter.aria', { pct, used: formatTokens(usage.used), window: formatTokens(usage.window) })}
-                title={t('ctx.meter.title')}
+                aria-label={t.compose((say) => {
+                    const fill = say('ctx.meter.aria', { pct, used: formatTokens(usage.used), window: formatTokens(usage.window) });
+                    return cap ? `${fill} (${say('ctx.meter.capNote', cap)})` : fill;
+                })}
+                title={cap ? t('ctx.meter.titleCapped', cap) : t('ctx.meter.title')}
             >
                 <span className="context-meter-bar" aria-hidden="true"><span style={{ width: `${pct}%` }} /></span>
                 <span className="context-meter-label"><bdi dir="ltr">{pct}%</bdi></span>
@@ -73,6 +80,12 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
                 <div className="context-meter-panel">
                     <div className="context-meter-head">
                         <strong><bdi dir="ltr">{formatTokens(usage.used)}</bdi></strong> {t.bare('ctx.of')} <bdi dir="ltr">{formatTokens(usage.window)}</bdi> {t.bare('ctx.tokensWord')}
+                        {cap && (
+                            <span className="context-meter-cap" title={t('ctx.windowTitle')}>
+                                {' · '}{t.bare('ctx.gaiaUses')} <bdi dir="ltr">{cap.gaia}</bdi>
+                                {' '}{t.bare('ctx.ofModel')} <bdi dir="ltr">{cap.model}</bdi>
+                            </span>
+                        )}
                     </div>
                     <div className="context-meter-stack" aria-hidden="true">
                         {PARTS.map(({ key }) => (
