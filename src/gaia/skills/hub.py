@@ -223,7 +223,6 @@ def search_skills(
                 stem = word[: -len(suffix)] + replacement
                 if len(stem) >= 4:
                     return stem
-                break
         return ""
 
     if words:

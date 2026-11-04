@@ -900,7 +900,7 @@ def _word_search_hub(tmp_path):
 
     hub = fake_hub(tmp_path)
     skills = {
-        "document-brief": "Brief a long document in one page",
+        "document-brief": "Brief a long document or file in one page",
         "inbox-triage": "Triage an email inbox and draft replies",
         "rss-digest": "Summarize new posts from feeds",
         "summarize": "Summarize a document, meeting transcript, or email",
@@ -968,9 +968,12 @@ def test_search_uses_conservative_word_stems_after_exact_match(tmp_path):
     assert search("summaries") == ["rss-digest", "summarize"]
 
 
-def test_search_does_not_stem_short_words(tmp_path):
+def test_search_stems_plural_e_words_and_still_rejects_short_words(tmp_path):
     search = _word_search_hub(tmp_path)
 
+    assert search("files") == ["document-brief"]
+    assert search("notes") == ["transcribe-meeting"]
+    assert search("pages") == ["document-brief"]
     assert search("pdf") == []
     assert search("pr") == []
 
