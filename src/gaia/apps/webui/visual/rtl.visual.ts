@@ -822,8 +822,28 @@ for (const section of ['general', 'permissions', 'skills', 'memory', 'notificati
         await page.locator('.settings-disclosure:not([open]) > summary, .settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
         await page.waitForTimeout(100);
         expect(await untranslated(page)).toEqual([]);
+        expect(await barePaths(page)).toEqual([]);
     });
 }
+
+/**
+ * Paths starting `~/` or `.dir/` on an Arabic screen outside an LTR isolate or `<bdi dir="ltr">`,
+ * where bidi moves the leading punctuation to the far end ("gaia/skills./~").
+ */
+const barePaths = (page: Page): Promise<string[]> =>
+    page.evaluate(() => {
+        const root = document.querySelector('.settings-scroll') as Element;
+        const bare: string[] = [];
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+            const text = n.textContent ?? '';
+            const path = /(?:^|[\s(])(?:~\/|\.[A-Za-z][\w-]*\/)/;
+            if (!path.test(text) || n.parentElement?.closest('bdi[dir="ltr"]')) continue;
+            const stripped = text.replace(/[⁦⁨][^⁦-⁩]*⁩/g, '');
+            if (path.test(stripped)) bare.push(text.trim().slice(0, 60));
+        }
+        return bare;
+    });
 
 /** Schedules with a failed run, a chat to open and a run history; and a "when" GAIA can't read. */
 async function withSchedules(page: Page, schedules: unknown[] = SCHEDULE_ROWS): Promise<void> {
