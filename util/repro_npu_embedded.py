@@ -708,10 +708,9 @@ def run_all(args: argparse.Namespace, spawn: Callable[..., Dict] = run) -> int:
         tar.add(report, arcname="gaia-npu-repro")
     print(summary)
     print(f"Report: {output}")
-    failed = any(
-        v.get("fatal") or any(c.get("ok") is False for c in v.get("cells", []))
-        for v in results
-    )
+    if any(v.get("fatal") for v in results):
+        return 2
+    failed = any(c.get("ok") is False for v in results for c in v.get("cells", []))
     return 1 if failed else 0
 
 
