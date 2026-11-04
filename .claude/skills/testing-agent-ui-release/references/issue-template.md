@@ -34,6 +34,8 @@ model, so the person thinks the switch worked and it didn't.
 </details>
 ```
 
-Labels: `bug`, plus the area label if one exists. `bug` starts the auto-fix workflow
-(see SKILL.md §7). Severity goes in the body, not as an invented label. Add `p1` only
-for critical/high when the repo uses that label.
+Labels: `bug`, the area label if one exists, and a priority: `p1` for critical or high,
+`p2` for medium, `p3` for low. `bug` starts the auto-fix workflow (see SKILL.md §7).
+Milestone: the release under test (`gh issue create --milestone "<title>"`); the release
+skill's pre-tag gate finds open findings by it. #6540 and #6551 were filed without one, so
+nothing tied them to the release; #6572 and #6579 got no priority.
