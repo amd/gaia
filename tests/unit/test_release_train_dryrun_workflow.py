@@ -6,7 +6,7 @@ build workflows must leave every other caller exactly where it was.
 
 The dry run builds every release artifact from a named commit, so it is one
 `npm publish` or one `secrets.` away from shipping a release nobody approved.
-These assertions are the guard rail: a dispatch-only trigger, a read-only token,
+These assertions are the guard rail: a dispatch-or-nightly trigger, a read-only token,
 no environment, no secret, no publish step, and only the build workflows as
 callees. The one write grant (the Agent UI installers) is pinned to the shape
 that keeps it unreachable.
@@ -90,8 +90,61 @@ def _code(text: str) -> str:
     )
 
 
-def test_only_a_maintainer_can_start_it(workflow):
-    assert set(_triggers(workflow)) == {"workflow_dispatch"}
+def test_only_a_maintainer_or_the_nightly_can_start_it(workflow):
+    """Never a push or PR: those run a contributor's code with this cache scope."""
+    assert set(_triggers(workflow)) == {"workflow_dispatch", "schedule"}
+
+
+def test_the_nightly_runs_once_a_day_off_the_hour(workflow):
+    (entry,) = _triggers(workflow)["schedule"]
+    minute, hour, *rest = entry["cron"].split()
+    assert rest == ["*", "*", "*"], entry
+    assert minute.isdigit() and int(minute) != 0, "GitHub drops :00 runs first"
+    assert hour.isdigit(), entry
+
+
+def test_the_rc_tag_is_optional_so_the_nightly_can_derive_it(workflow):
+    spec = _triggers(workflow)["workflow_dispatch"]["inputs"]["rc_tag"]
+    assert spec["required"] is False and spec["default"] == ""
+    run = "\n".join(s.get("run", "") for s in workflow["jobs"]["plan"]["steps"])
+    assert "release_train.py next-tag" in run
+
+
+def test_the_nightly_skips_on_forks(workflow):
+    cond = workflow["jobs"]["plan"]["if"]
+    assert "github.event_name != 'schedule'" in cond
+    assert "github.repository == 'amd/gaia'" in cond
+
+
+GATE = "needs.plan.outputs.build == 'true'"
+
+
+def test_a_commit_that_already_passed_builds_nothing(workflow):
+    """Every job but plan is gated on plan's build output, directly or through
+    an ancestor whose success it requires; else a skipped nightly still builds."""
+    jobs = workflow["jobs"]
+    gated = {n for n, j in jobs.items() if GATE in str(j.get("if", ""))}
+    assert gated, "no job reads the build output"
+    for name, job in jobs.items():
+        if name == "plan" or name in gated:
+            continue
+        needs = job.get("needs", [])
+        needs = [needs] if isinstance(needs, str) else needs
+        cond = str(job.get("if", ""))
+        via = [n for n in needs if n in gated and (not cond or f"needs.{n}." in cond)]
+        assert via, f"{name} can run when the nightly skipped the build"
+        gated.add(name)
+    # A failed plan still wrote build=true before failing; require its success.
+    for name, job in jobs.items():
+        if GATE in str(job.get("if", "")):
+            assert "needs.plan.result == 'success'" in job["if"], name
+
+
+def test_only_plan_holds_the_token_and_only_to_read_runs(workflow):
+    plan = workflow["jobs"]["plan"]
+    assert plan["permissions"] == {"contents": "read", "actions": "read"}
+    users = [s["name"] for s in plan["steps"] if "github.token" in str(s.get("env"))]
+    assert users == ["Skip a commit that already passed"]
 
 
 def test_the_token_is_read_only_by_default(workflow):
@@ -108,7 +161,8 @@ def test_no_secret_is_referenced_or_passed(text, workflow):
     assert not re.search(
         r"\bsecrets\s*[.:\[]", code
     ), "the dry run must not read a secret"
-    assert "GITHUB_TOKEN" not in code and "github.token" not in code
+    assert "GITHUB_TOKEN" not in code
+    assert code.count("github.token") == 1, "only plan may use the run's token"
     for name, job in workflow["jobs"].items():
         assert "secrets" not in job, f"{name} passes secrets to {job.get('uses')}"
 

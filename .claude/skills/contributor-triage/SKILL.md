@@ -200,8 +200,11 @@ RC failed to publish, or (3) the shortlist is empty: this one is the final's can
    out, and note the `main` SHA you are about to test.
 2. **Wait for CI to finish and go green on that exact commit** (`gh run list --commit <sha>`).
    Tagging while main's CI still runs is the mistake that burned an RC before.
-3. **Dry-run the release train** on it: `gh workflow run release_train_dryrun.yml --ref main -f
-   rc_tag=vX.Y.Z-rcN`, and fix forward on `main` until it passes.
+3. **Dry-run the release train** on it. It runs nightly on `main` as the next unused RC, so
+   first look for a passing run of that SHA: `gh run list --workflow release_train_dryrun.yml
+   --commit <sha> --status success`. If there is none, dispatch it: `gh workflow run
+   release_train_dryrun.yml --ref main -f rc_tag=vX.Y.Z-rcN`. Fix forward on `main` until it
+   passes.
 4. **Tag the RC** per [`gaia-release`](../gaia-release/SKILL.md) (ask first unless RC tags are pre-authorized). Watch the publish run to the end; an RC isn't done
    until its release, installers and website entry exist.
 5. **Report what is in it**: PRs since the previous RC, outside contributors first, so the user

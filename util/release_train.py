@@ -10,6 +10,9 @@ it reads the artifacts a build left on disk and writes a manifest.
 
 Subcommands::
 
+    # the next unused RC of the tree's version, from the repo's tags on stdin
+    git ls-remote --tags --refs origin | release_train.py next-tag --target target
+
     # resolve an RC tag against the tree it builds; KEY=VALUE for $GITHUB_OUTPUT
     release_train.py plan --tag v0.25.1-rc2 --target target
 
@@ -188,6 +191,37 @@ def flavors(rc_tag: str, target: Path) -> tuple[Flavor, Flavor]:
             f"whose version.py says {rc.base_version}."
         )
     return Flavor("rc", rc), Flavor("final", parse_tag(f"v{rc.base_version}"))
+
+
+def next_rc_tag(base_version: str, tags: list[str]) -> str:
+    """The first RC of ``base_version`` that no tag in ``tags`` has used yet.
+
+    ``tags`` may be bare names or ``git ls-remote`` lines. A released final
+    means version.py was never bumped past it, which no RC can fix.
+    """
+    highest = 0
+    for raw in tags:
+        name = raw.split()[-1] if raw.split() else ""
+        name = name.removeprefix("refs/tags/")
+        try:
+            rel = parse_tag(name)
+        except ValueError:
+            continue
+        if rel.base_version != base_version:
+            continue
+        if not rel.is_rc:
+            raise VerifyError(
+                f"v{base_version} is already released, but src/gaia/version.py "
+                f"still says {base_version}. Land the next version bump on main "
+                "(src/gaia/version.py), then re-run."
+            )
+        highest = max(highest, rel.rc_number or 0)
+    return f"v{base_version}-rc{highest + 1}"
+
+
+def cmd_next_tag(args: argparse.Namespace) -> int:
+    print(next_rc_tag(core_version(args.target), sys.stdin.read().splitlines()))
+    return 0
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
@@ -1013,6 +1047,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    nxt = sub.add_parser(
+        "next-tag",
+        help="print the next unused RC of the tree's version; tags on stdin",
+    )
+    nxt.add_argument("--target", type=Path, required=True)
+    nxt.set_defaults(func=cmd_next_tag)
 
     plan = sub.add_parser("plan", help="resolve an RC tag against the tree")
     plan.add_argument("--tag", required=True)
