@@ -742,6 +742,11 @@ class ProceduralMemoryMixin:
             logger.info("[MemoryMixin] no chat SDK available; skipping skill synthesis")
             return result
 
+        # An erase can happen from another chat while the distillation call is
+        # in flight. Capture the generation before reading the window; any
+        # later generation invalidates every write derived from that window.
+        erase_count = store.erase_count()
+
         # DETECT — cheap SQL; no LLM, no embedder.  The watermark bounds it to
         # what no previous pass has consumed.
         watermark = since
@@ -806,6 +811,13 @@ class ProceduralMemoryMixin:
                 )
                 break
 
+            if store.erased_since(erase_count):
+                logger.info(
+                    "[MemoryMixin] skill synthesis: memory was erased while "
+                    "distilling; dropping the candidate and stopping the pass"
+                )
+                break
+
             if candidate is None:
                 # SKIP sentinel, malformed, or truncated at the model's output
                 # cap. Marked, so it is not re-attempted every session start.
@@ -834,6 +846,12 @@ class ProceduralMemoryMixin:
 
             # Embed when_to_use (its own corpus).  Embedder failure RE-RAISES.
             vec = self._embed_text(candidate.when_to_use)
+            if store.erased_since(erase_count):
+                logger.info(
+                    "[MemoryMixin] skill synthesis: memory was erased while "
+                    "embedding; dropping the candidate and stopping the pass"
+                )
+                break
             res = reconcile_and_store(
                 candidate,
                 cluster,
