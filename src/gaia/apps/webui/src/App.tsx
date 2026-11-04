@@ -142,6 +142,8 @@ function App() {
     agentsKnownRef.current = agentsKnown;
     // A new chat was refused because the flagship is not installed.
     const [flagshipRefused, setFlagshipRefused] = useState(false);
+    // The setup check found no GAIA agent build for this PC: nothing to install.
+    const [noAgentBuild, setNoAgentBuild] = useState(false);
     const flagshipMissing = flagshipRefused || (agentsKnown && !hasFlagshipAgent(agents));
     const flagshipMissingRef = useRef(flagshipMissing);
     flagshipMissingRef.current = flagshipMissing;
@@ -190,6 +192,7 @@ function App() {
                 }
                 // Read status and chats before showing the app, so it never flashes "lost connection" or "no chats".
                 if (waited > 0) await Promise.all([refreshStatus.current(), reloadSessions.current()]);
+                setNoAgentBuild(!!check.no_agent_build);
                 setSetup(check.ready ? { state: 'ready' } : { state: 'needed', check });
                 return;
             }
@@ -771,7 +774,7 @@ function App() {
                 ))}
                 {/* Model downloads, here when the sidebar that usually shows them is closed or collapsed. */}
                 {(!sidebarOpen || sidebarCollapsed) && <DownloadChip placement="main" />}
-                {flagshipMissing && <FlagshipAgentNotice onInstalled={loadAgents} />}
+                {flagshipMissing && <FlagshipAgentNotice onInstalled={loadAgents} noBuild={noAgentBuild} />}
                 {restoreNotice && (
                     <div className={`app-notice${restoreNotice.ok ? '' : ' is-warning'}`} role="status">
                         <span>{restoreNotice.message}</span>

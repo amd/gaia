@@ -143,3 +143,14 @@ func TestParseStatusKeepsWarnings(t *testing.T) {
 		t.Errorf("status = %+v", st)
 	}
 }
+
+func TestParseStatusReadsNoAgentBuildAndSplitsTheAgentReason(t *testing.T) {
+	st, err := parseStatus(`{"ready": true, "no_agent_build": true, "warnings": ["w"]}`)
+	if err != nil || !st.NoAgentBuild {
+		t.Fatalf("status = %+v err = %v", st, err)
+	}
+	st = Status{Reasons: []string{"No local chat model: x is skipped", AgentReasonPrefix + " -- run: gaia init"}}
+	if got := st.OtherReasons(); len(got) != 1 || got[0] != "No local chat model: x is skipped" {
+		t.Errorf("OtherReasons() = %v", got)
+	}
+}

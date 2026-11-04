@@ -180,6 +180,7 @@ const messages: Messages = {
     'agentNotice.installing': 'جارٍ تثبيت وكيل GAIA… {percent}%',
     'agentNotice.failed': 'تعذّر تثبيت وكيل GAIA: {error}',
     'agentNotice.retry': 'إعادة المحاولة',
+    'agentNotice.noBuild': 'لا يتوفر إصدار من وكيل GAIA لهذا الكمبيوتر بعد، لذا لا تتوفر المحادثة هنا.',
 
     // A message and its actions
     'msg.sent': 'أُرسلت في {time}',

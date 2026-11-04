@@ -69,6 +69,24 @@ type Status struct {
 	AgentMissing bool `json:"agent_missing"`
 	// Warnings are true but no setup step, e.g. no GAIA agent build for this PC.
 	Warnings []string `json:"warnings"`
+	// NoAgentBuild is the hub having no GAIA agent build for this PC: setup
+	// finishes without it, so chat cannot run here.
+	NoAgentBuild bool `json:"no_agent_build"`
+}
+
+// AgentReasonPrefix starts the reason `gaia init --check` gives for a missing
+// GAIA agent.
+const AgentReasonPrefix = "The GAIA agent is not installed"
+
+// OtherReasons is every reason but the missing agent's.
+func (s Status) OtherReasons() []string {
+	var out []string
+	for _, r := range s.Reasons {
+		if !strings.HasPrefix(r, AgentReasonPrefix) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // AgentOnly reports that the GAIA agent is all setup still has to install:

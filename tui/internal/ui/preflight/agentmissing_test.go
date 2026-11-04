@@ -55,3 +55,42 @@ func TestAMissingModelStillReadsAsADownload(t *testing.T) {
 		t.Error("a missing chat model was hidden behind the agent")
 	}
 }
+
+func TestAgentOnlyRowKeepsASkippedChatModelInView(t *testing.T) {
+	skipped := "No local chat model: Gemma-4-E4B-it-GGUF is skipped. Pick another chat model (`gaia init --use-model`) or a cloud provider"
+	st := gaiainit.Status{
+		Stage:        gaiainit.StageSetup,
+		AgentMissing: true,
+		Reasons:      []string{skipped, "The GAIA agent is not installed -- run: gaia init"},
+		Models: []gaiainit.Model{
+			{ID: "user.embeddinggemma-300m-GGUF", Role: "embedding", Downloaded: downloaded(true)},
+		},
+	}
+	row := localRunner{}.agentMissingRow(st)
+
+	if !strings.Contains(row.Detail, skipped) {
+		t.Errorf("detail %q dropped the skipped chat model", row.Detail)
+	}
+	if strings.Count(row.Detail, "GAIA agent is not installed") != 0 {
+		t.Errorf("detail %q repeats the agent reason the line already gives", row.Detail)
+	}
+}
+
+func TestNoAgentBuildIsANoticeNotACleanPass(t *testing.T) {
+	warning := "No GAIA agent build for this PC (linux-arm64) yet, so chat isn't available here."
+	ready := Row{Key: KeyModel, State: StateOK, Line: "Gemma-4-E4B-it-GGUF and the embedder load", Fix: FixRunSetup}
+	row := noAgentBuildRow(ready, gaiainit.Status{Ready: true, NoAgentBuild: true, Warnings: []string{warning}})
+
+	if row.State == StateOK || row.Disposition != status.DispositionNotify {
+		t.Errorf("row = %+v, want a non-blocking notice", row)
+	}
+	if row.Fix != FixNone {
+		t.Errorf("fix = %v; setup cannot install an agent that has no build", row.Fix)
+	}
+	if row.Detail != warning || !strings.Contains(row.Line, "no GAIA agent build") {
+		t.Errorf("line %q / detail %q do not carry the warning", row.Line, row.Detail)
+	}
+	if blocking := row.State != StateOK && row.Disposition != status.DispositionNotify; blocking {
+		t.Error("the notice blocks the launch")
+	}
+}
