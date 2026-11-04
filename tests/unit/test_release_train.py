@@ -458,6 +458,38 @@ def test_plan_prints_github_outputs(capsys):
     assert out["agent_version"] == AGENT
 
 
+@pytest.mark.parametrize(
+    "tags,want",
+    [
+        ([], "v0.30.0-rc1"),
+        (["v0.29.9", "v0.29.9-rc4", "v0.31.0-rc8"], "v0.30.0-rc1"),
+        (["v0.30.0-rc1", "v0.30.0-rc3", "v0.30.0-rc2"], "v0.30.0-rc4"),
+        (["v0.30.0-rc9", "v0.30.0-rc10"], "v0.30.0-rc11"),
+        (
+            ["v0.30.0.1", "agent-pkg-gaia-v0.30.0", "v0.30.0-rc0", "", "junk"],
+            "v0.30.0-rc1",
+        ),
+        (["a1\trefs/tags/v0.30.0-rc2", "b2\trefs/tags/v0.3.0-rc7"], "v0.30.0-rc3"),
+    ],
+)
+def test_next_rc_tag_is_one_past_the_highest_candidate(tags, want):
+    assert rt.next_rc_tag("0.30.0", tags) == want
+
+
+def test_next_rc_tag_refuses_a_version_already_released():
+    with pytest.raises(rt.VerifyError, match="already released.*version bump"):
+        rt.next_rc_tag("0.30.0", ["v0.30.0-rc2", "v0.30.0"])
+
+
+def test_next_tag_reads_ls_remote_and_plan_accepts_it(monkeypatch, capsys):
+    lines = f"aaa\trefs/tags/v{CORE}-rc4\nbbb\trefs/tags/v{CORE}-rc5\n"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(lines))
+    assert rt.main(["next-tag", "--target", str(REPO_ROOT)]) == 0
+    tag = capsys.readouterr().out.strip()
+    assert tag == f"v{CORE}-rc6"
+    rt.flavors(tag, REPO_ROOT)
+
+
 def test_vite_hash_normalisation_keeps_names_apart():
     a = rt.normalise(b'import "./vendor-react-Ab3dE_g1.js"', [])
     assert a == b'import "./vendor-react-#.js"'

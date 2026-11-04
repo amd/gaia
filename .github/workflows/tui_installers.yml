@@ -34,6 +34,11 @@
 # binaries as optional -- release_components.yml publishes the six raw binaries
 # even when an installer leg fails, because install.ps1 and install.sh depend on
 # them.
+#
+# A release calls this twice: once with `installers: false` for the binaries,
+# which need no sidecar, and once with `build_binaries: false` for the packages,
+# which reuse them. The Windows setup then waits only on the binaries, not on
+# the frozen sidecar plus the macOS and Linux packages and their smoke tests.
 
 name: TUI installers
 
@@ -60,6 +65,14 @@ on:
         required: false
         default: true
         type: boolean
+      build_binaries:
+        description: >-
+          Build the six binaries here. false: reuse the tui-binaries artifact
+          (same artifact_prefix) an earlier installers: false call in this run
+          uploaded; binaries_ok is then empty.
+        required: false
+        default: true
+        type: boolean
     outputs:
       binaries_ok:
         description: 'true when all six targets built and the Windows icon check passed.'
@@ -74,6 +87,7 @@ permissions:
 jobs:
   tui-build:
     name: Build TUI binaries
+    if: inputs.build_binaries
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
@@ -184,7 +198,10 @@ jobs:
   tui-installers:
     name: Build installers (${{ matrix.label }})
     needs: tui-build
-    if: inputs.installers
+    if: >-
+      !cancelled() && inputs.installers &&
+      (needs.tui-build.result == 'success' ||
+       (!inputs.build_binaries && needs.tui-build.result == 'skipped'))
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -351,6 +368,9 @@ jobs:
   tui-installers-smoke:
     name: Smoke-test installer (${{ matrix.label }})
     needs: tui-installers
+    # Explicit: with build_binaries false, tui-build's skip would otherwise
+    # skip this through GitHub's implicit success().
+    if: ${{ !cancelled() && needs.tui-installers.result == 'success' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -542,6 +562,8 @@ jobs:
   installers-ok:
     name: All installers verified
     needs: tui-installers-smoke
+    # A matrix job's result is success only when every leg passed.
+    if: ${{ !cancelled() && needs.tui-installers-smoke.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

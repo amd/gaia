@@ -757,17 +757,29 @@ jobs:
   # (installer/tui/linux/README.md). approve-publish requires
   # tui-installers-complete: a release whose terminal packages do not install is
   # not one to publish.
+  # The six binaries need no sidecar, so they build at once; the Windows setup
+  # waits on them, not on the frozen agent plus the macOS and Linux packages.
+  tui-binaries:
+    name: Terminal binaries
+    needs: [validate]
+    uses: ./.github/workflows/tui_installers.yml
+    with:
+      version: ${{ needs.validate.outputs.npm_version }}
+      installers: false
+
   tui-installers:
-    name: Terminal binaries and installers
-    needs: [validate, rc-flagship]
+    name: Terminal installers
+    needs: [validate, rc-flagship, tui-binaries]
     if: >-
       !cancelled() &&
       needs.validate.result == 'success' &&
+      needs.tui-binaries.outputs.binaries_ok == 'true' &&
       (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     uses: ./.github/workflows/tui_installers.yml
     with:
       version: ${{ needs.validate.outputs.npm_version }}
       sidecar: ${{ needs.validate.outputs.is_rc == 'true' && 'artifact' || 'pinned' }}
+      build_binaries: false
 
   # installers_ok means every leg that ran passed its clean-runner install. It
   # does not mean every package exists: tui_installers.yml builds no Intel .pkg
@@ -805,7 +817,7 @@ jobs:
           if [ "${IS_RC}" != "true" ]; then
             if ! python3 installer/tui/artifacts.py publish-args \
                 --version "${VERSION}" --dir dist --exclude-platform win-x64; then
-              echo "::error::the release built no installer named above, so nothing publishes. Fix the 'Terminal binaries and installers' leg and 'Re-run failed jobs'."
+              echo "::error::the release built no installer named above, so nothing publishes. Fix the 'Terminal installers' leg and 'Re-run failed jobs'."
               exit 1
             fi
             exit 0
@@ -825,20 +837,20 @@ jobs:
   # published one, and the same flagship agent the terminal installers wrap.
   windows-setup:
     name: Windows setup
-    needs: [validate, build-desktop-installers, tui-installers, rc-flagship]
+    needs: [validate, build-desktop-installers, tui-binaries, rc-flagship]
     if: >-
       !cancelled() &&
       needs.build-desktop-installers.result == 'success' &&
-      needs.tui-installers.outputs.binaries_ok == 'true' &&
+      needs.tui-binaries.outputs.binaries_ok == 'true' &&
       (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     permissions:
       contents: read
-      actions: read   # this run's windows-installer artifact
+      actions: read   # windows_setup.yml declares it for its publish-run source
     uses: ./.github/workflows/windows_setup.yml
     with:
       version: ${{ needs.validate.outputs.npm_version }}
       sidecar: ${{ needs.validate.outputs.is_rc == 'true' && 'artifact' || 'pinned' }}
-      agent_ui_publish_run_sha: ${{ github.sha }}
+      agent_ui_artifact: windows-installer
 
   # A final does not publish without the setup: its notes promise it. An RC
   # ships without it and its notes say so; this job turns the run red so that
@@ -1034,7 +1046,7 @@ jobs:
       # only as a CI artifact that expires in 14 days, so nothing can install it
       # — install.sh has no URL to fetch and the docs describe a command users
       # cannot obtain.
-      # build-tui's six artifacts only. The run also holds tui-installers'
+      # build-tui's six artifacts only. The run also holds the tui-binaries job's
       # `tui-binaries`, which is the setup's input, not a release asset.
       - name: Download TUI binaries
         uses: actions/download-artifact@v8
@@ -1244,7 +1256,7 @@ jobs:
             [ -s "dist/${f}" ] || missing+=("${f}")
           done < summed.txt
           if [ "${#missing[@]}" -ne 0 ]; then
-            echo "::error::the release is missing terminal installers: ${missing[*]}. Nothing was attached. Re-run the failed 'Terminal binaries and installers' leg, then this job."
+            echo "::error::the release is missing terminal installers: ${missing[*]}. Nothing was attached. Re-run the failed 'Terminal installers' leg, then this job."
             exit 1
           fi
           mapfile -t summed < summed.txt

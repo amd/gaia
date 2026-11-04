@@ -14,13 +14,14 @@
 #
 #   agent_ui_release           a published vX.Y.Z release (PR gate, manual runs)
 #   agent_ui_publish_run_sha   publish.yml's push run for this commit and
-#                              version's tag, which builds the installers before
-#                              its approval gate, so a release does not wait on a
-#                              human. publish.yml passes its own SHA, final or
-#                              RC, and embeds its own build.
+#                              version's tag, taken once its desktop app build
+#                              passed. No caller uses it now: publish.yml passes
+#                              its own windows-installer as agent_ui_artifact.
 #   agent_ui_artifact          an artifact of the caller's own run, holding the
 #                              windows-installer build-installers.yml uploaded
-#                              (the release-train dry run).
+#                              (publish.yml and the release-train dry run). The
+#                              build job reads it directly: there is nothing to
+#                              wait for, so no Linux runner hop in front of it.
 #
 # `artifact_prefix` lets one run build twice (a release candidate and its
 # final-stamped twin) without the artifacts colliding. It defaults to empty,
@@ -88,6 +89,7 @@ jobs:
   # has built the desktop installers, and an idle Windows runner costs more.
   agent-ui-setup:
     name: Fetch the desktop app setup
+    if: inputs.agent_ui_artifact == ''
     runs-on: ubuntu-latest
     timeout-minutes: 75
     permissions:
@@ -99,12 +101,6 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.x'
-
-      - uses: actions/download-artifact@v8
-        if: inputs.agent_ui_artifact != ''
-        with:
-          name: ${{ inputs.agent_ui_artifact }}
-          path: agent-ui-artifact
 
       - uses: actions/cache@v6
         if: inputs.agent_ui_release != ''
@@ -118,34 +114,18 @@ jobs:
           RELEASE: ${{ inputs.agent_ui_release }}
           RELEASE_SHA256: ${{ inputs.agent_ui_release_sha256 }}
           RUN_SHA: ${{ inputs.agent_ui_publish_run_sha }}
-          ARTIFACT: ${{ inputs.agent_ui_artifact }}
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [ -n "${RELEASE}" ] && [ -z "${RUN_SHA}" ] && [ -z "${ARTIFACT}" ]; then
+          if [ -n "${RELEASE}" ] && [ -z "${RUN_SHA}" ]; then
             python installer/tui/fetch_agent_ui_setup.py --release "${RELEASE}" \
               ${RELEASE_SHA256:+--sha256 "${RELEASE_SHA256}"} --out agent-ui
-          elif [ -n "${RUN_SHA}" ] && [ -z "${RELEASE}" ] && [ -z "${ARTIFACT}" ]; then
+          elif [ -n "${RUN_SHA}" ] && [ -z "${RELEASE}" ]; then
             python installer/tui/fetch_agent_ui_setup.py \
               --publish-run-sha "${RUN_SHA}" --version "${VERSION}" \
               --wait-minutes 60 --out agent-ui
-          elif [ -n "${ARTIFACT}" ] && [ -z "${RELEASE}" ] && [ -z "${RUN_SHA}" ]; then
-            # The same name, PE and size checks the other two sources get.
-            python - "${VERSION}" <<'PY'
-          import shutil, sys
-          from pathlib import Path
-          sys.path.insert(0, "installer/tui")
-          from fetch_agent_ui_setup import setup_name, verify
-          version = sys.argv[1]
-          src = Path("agent-ui-artifact") / setup_name(version)
-          if not src.is_file():
-              raise SystemExit(f"the desktop app artifact has no {src.name}")
-          out = Path("agent-ui")
-          out.mkdir(parents=True, exist_ok=True)
-          print(verify(Path(shutil.copy(src, out / src.name)), version))
-          PY
           else
-            echo "::error::name exactly one desktop app source: agent_ui_release, agent_ui_publish_run_sha or agent_ui_artifact (got '${RELEASE}', '${RUN_SHA}' and '${ARTIFACT}')."
+            echo "::error::name exactly one desktop app source: agent_ui_release, agent_ui_publish_run_sha or agent_ui_artifact (got '${RELEASE}', '${RUN_SHA}' and no artifact)."
             exit 1
           fi
 
@@ -159,6 +139,10 @@ jobs:
   build:
     name: Build the Windows setup
     needs: agent-ui-setup
+    if: >-
+      !cancelled() &&
+      (needs.agent-ui-setup.result == 'success' ||
+       (inputs.agent_ui_artifact != '' && needs.agent-ui-setup.result == 'skipped'))
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
@@ -177,9 +161,43 @@ jobs:
           path: bin
 
       - uses: actions/download-artifact@v8
+        if: inputs.agent_ui_artifact == ''
         with:
           name: ${{ inputs.artifact_prefix }}agent-ui-win-setup
           path: agent-ui
+
+      - uses: actions/download-artifact@v8
+        if: inputs.agent_ui_artifact != ''
+        with:
+          name: ${{ inputs.agent_ui_artifact }}
+          path: agent-ui-artifact
+
+      # The same name, PE and size checks the fetched sources get.
+      - name: Check the desktop app setup from this run
+        if: inputs.agent_ui_artifact != ''
+        env:
+          RELEASE: ${{ inputs.agent_ui_release }}
+          RUN_SHA: ${{ inputs.agent_ui_publish_run_sha }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "${RELEASE}${RUN_SHA}" ]; then
+            echo "::error::name exactly one desktop app source: agent_ui_release, agent_ui_publish_run_sha or agent_ui_artifact (got '${RELEASE}', '${RUN_SHA}' and an artifact)."
+            exit 1
+          fi
+          python - "${VERSION}" <<'PY'
+          import shutil, sys
+          from pathlib import Path
+          sys.path.insert(0, "installer/tui")
+          from fetch_agent_ui_setup import setup_name, verify
+          version = sys.argv[1]
+          src = Path("agent-ui-artifact") / setup_name(version)
+          if not src.is_file():
+              raise SystemExit(f"the desktop app artifact has no {src.name}")
+          out = Path("agent-ui")
+          out.mkdir(parents=True, exist_ok=True)
+          print(verify(Path(shutil.copy(src, out / src.name)), version))
+          PY
 
       - uses: actions/download-artifact@v8
         if: inputs.sidecar == 'artifact'
@@ -287,6 +305,9 @@ jobs:
   smoke:
     name: Smoke-test the Windows setup
     needs: build
+    # Explicit: a skipped agent-ui-setup would otherwise skip this through
+    # GitHub's implicit success().
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -315,6 +336,7 @@ jobs:
   ok:
     name: Windows setup verified
     needs: smoke
+    if: ${{ !cancelled() && needs.smoke.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
