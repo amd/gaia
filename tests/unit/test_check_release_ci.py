@@ -111,6 +111,22 @@ def test_the_rc_set_is_exactly_the_agreed_critical_list():
     assert all(c.why for c in crc.RC_CRITICAL)
 
 
+NPU_ROWS = ("NPU agent chat (Windows, cold)", "NPU agent chat (Linux, cold)")
+
+
+@pytest.mark.parametrize("checks", [crc.RC_ADVISORY, crc.FINAL_REQUIRED])
+def test_a_push_run_with_only_the_windows_npu_row_does_not_pass(checks):
+    # A main push starts only the Windows row; the Linux row is skipped.
+    (npu,) = [c for c in checks if c.workflow == "test_npu_agent_chat.yml"]
+    assert npu.jobs == NPU_ROWS
+    jobs = {1: [job(NPU_ROWS[0]), job(NPU_ROWS[1], "skipped")]}
+    v = crc.judge(npu, [run("success")], "amd/gaia", "v1.0.0", _jobs_for(jobs))
+    assert v.state == "failed"
+    jobs = {1: [job(n) for n in NPU_ROWS]}
+    v = crc.judge(npu, [run("success")], "amd/gaia", "v1.0.0", _jobs_for(jobs))
+    assert v.state == "success"
+
+
 def test_a_final_requires_everything_an_rc_sees():
     final = {c.workflow: c for c in crc.FINAL_REQUIRED}
     for c in crc.RC_CRITICAL + crc.RC_ADVISORY:
@@ -284,10 +300,17 @@ def test_an_empty_check_list_is_refused():
 
 
 def test_the_rc5_commit_passes_the_rc_gate_and_fails_the_final_gate():
-    unit = {1: unit_jobs(**{MACOS: ("failure", "completed")})}
+    unit = {
+        1: unit_jobs(**{MACOS: ("failure", "completed")}),
+        2: [job(n) for n in NPU_ROWS],
+    }
 
     def get_runs(w):
-        return [run("failure")] if w == "test_unit.yml" else [run("success")]
+        if w == "test_unit.yml":
+            return [run("failure")]
+        if w == "test_npu_agent_chat.yml":
+            return [run("success", run_id=2)]
+        return [run("success")]
 
     started: list = []
     rc = crc.check(
