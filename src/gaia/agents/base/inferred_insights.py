@@ -11,6 +11,7 @@ because its end is unknown. Only a reply with no usable insight is an error.
 """
 
 import json
+import math
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 
@@ -137,6 +138,6 @@ def normalize_confidence(value: Any) -> Optional[float]:
             return None
     else:
         return None
-    if number != number:  # NaN
+    if math.isnan(number):
         return None
     return max(0.0, min(1.0, number))
