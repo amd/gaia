@@ -588,6 +588,9 @@ function Copy-GaiaCommands {
     if (-not (Test-Path $GAIA_BIN)) {
         New-Item -ItemType Directory -Path $GAIA_BIN -Force | Out-Null
     }
+    # Launchers an earlier upgrade renamed aside; one still running is removed next time.
+    Get-ChildItem -LiteralPath $GAIA_BIN -Filter "*.exe*.old" -File |
+        Remove-Item -Force -ErrorAction SilentlyContinue
     foreach ($name in $GAIA_COMMANDS) {
         $source = "$GAIA_VENV\Scripts\$name.exe"
         $dest = "$GAIA_BIN\$name.exe"
@@ -602,6 +605,12 @@ function Copy-GaiaCommands {
             continue
         }
         try {
+            # A running gaia.exe can't be overwritten but can be renamed.
+            if (Test-Path -LiteralPath $dest) {
+                $aside = "$dest.old"
+                if (Test-Path -LiteralPath $aside) { $aside = "$dest.$PID.old" }
+                Move-Item -LiteralPath $dest -Destination $aside -Force
+            }
             Copy-Item -LiteralPath $source -Destination $dest -Force
         }
         catch {

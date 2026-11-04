@@ -230,7 +230,9 @@ def test_binary_is_installed_as_gaia_tui(sh_text, ps1_text):
 
 def test_path_registration_covers_the_terminal_hub_bin_dir(sh_text, ps1_text):
     """Registering only the venv left gaia-tui installed but unreachable."""
-    assert "$GAIA_VENV/bin:$GAIA_BIN" in sh_text
+    body = _shell_function_body(sh_text, "add_to_path")
+    assert 'path_export="export PATH=\\"\\$PATH:$GAIA_BIN\\""' in body
+    assert 'PATH="$PATH:$GAIA_BIN"' in body
     body = _ps1_function_body(ps1_text, "Get-UpdatedPath")
     assert "$added = @($GAIA_BIN)" in body
 
@@ -271,6 +273,18 @@ def test_ps1_copies_the_commands_before_it_edits_path(ps1_text):
         < main.index("Copy-GaiaCommands")
         < main.index("Add-ToPath")
     )
+
+
+def test_sh_links_exactly_the_packages_console_scripts(sh_text):
+    """$GAIA_BIN is the only directory on PATH (#6603), so every console
+    script the package ships must be linked there or it becomes unreachable."""
+    match = re.search(r'^GAIA_COMMANDS="([^"]+)"$', sh_text, re.MULTILINE)
+    assert match, "GAIA_COMMANDS not found in install.sh"
+    setup_py = (REPO_ROOT / "setup.py").read_text(encoding="utf-8")
+    block = re.search(r'"console_scripts": \[(.*?)\]', setup_py, re.DOTALL)
+    assert block, "console_scripts not found in setup.py"
+    shipped = set(re.findall(r'"([\w-]+) = ', block.group(1)))
+    assert shipped and set(match.group(1).split()) == shipped
 
 
 # ── the core install carries the daemon extras ─────────────────────────────
@@ -1420,6 +1434,28 @@ def _rc_files(home):
     return sorted(p.name for p in home.iterdir() if p.name.startswith("."))
 
 
+# What each installer generation appended; {h} is the home directory.
+_LEGACY_BLOCK = '\n# Added by GAIA installer\nexport PATH="$PATH:{h}/.gaia/venv/bin:{h}/.gaia/bin"\n'
+_VENV_ONLY_BLOCK = (
+    '\n# Added by GAIA installer\nexport PATH="$PATH:{h}/.gaia/venv/bin"\n'
+)
+_CURRENT_BLOCK = '\n# Added by GAIA installer\nexport PATH="$PATH:{h}/.gaia/bin"\n'
+_USER_TEXT = (
+    "# my settings\n"
+    "alias ll='ls -l'\n"
+    'export PATH="$HOME/tools:$PATH"\n'
+    "# a note about /opt/x/.gaia/venv/bin stays\n"
+)
+
+
+def _home_with(tmp_path, files):
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    for name, text in files.items():
+        (home / name).write_text(text.format(h=home), encoding="utf-8")
+    return home
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
 def test_add_to_path_writes_the_zsh_rc_and_is_idempotent(tmp_path):
     result, home = _run_sh_function(
@@ -1430,7 +1466,7 @@ def test_add_to_path_writes_the_zsh_rc_and_is_idempotent(tmp_path):
 
     rc = home / ".zshrc"
     first = rc.read_text(encoding="utf-8")
-    assert ".gaia/venv/bin" in first and ".gaia/bin" in first
+    assert first == _CURRENT_BLOCK.format(h=home)
 
     result, _ = _run_sh_function(
         tmp_path, "OS_NAME=Darwin; add_to_path", {"SHELL": "/bin/zsh"}
@@ -1456,20 +1492,104 @@ def test_add_to_path_does_not_shadow_an_existing_profile_on_macos(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
-def test_add_to_path_upgrades_a_pre_existing_venv_only_export(tmp_path):
-    """Older installs wrote a venv-only export; a line-exact idempotency check
-    would leave the terminal hub off PATH forever."""
-    home = tmp_path / "home"
-    home.mkdir()
-    (home / ".zshrc").write_text(
-        f'export PATH="$PATH:{home}/.gaia/venv/bin"\n', encoding="utf-8"
-    )
+def test_add_to_path_rewrites_the_legacy_venv_line_in_place(tmp_path):
+    """#6603: the old line put the venv's python3 on PATH. It is rewritten
+    where it stands; everything around it is kept byte for byte."""
+    home = _home_with(tmp_path, {".bashrc": _USER_TEXT + _LEGACY_BLOCK + "set -o vi\n"})
+    expected = (_USER_TEXT + _CURRENT_BLOCK + "set -o vi\n").format(h=home)
 
-    result, home = _run_sh_function(
+    for _ in range(2):
+        result, _ = _run_sh_function(
+            tmp_path, "OS_NAME=Linux; add_to_path", {"SHELL": "/bin/bash"}
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (home / ".bashrc").read_text(encoding="utf-8") == expected
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_add_to_path_rewrites_a_pre_0_23_venv_only_export(tmp_path):
+    """The oldest installs wrote the venv alone, without the terminal hub's
+    directory."""
+    home = _home_with(tmp_path, {".zshrc": _USER_TEXT + _VENV_ONLY_BLOCK})
+
+    result, _ = _run_sh_function(
         tmp_path, "OS_NAME=Linux; add_to_path", {"SHELL": "/bin/zsh"}
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert ".gaia/bin" in (home / ".zshrc").read_text(encoding="utf-8")
+    assert (home / ".zshrc").read_text(encoding="utf-8") == (
+        _USER_TEXT + _CURRENT_BLOCK
+    ).format(h=home)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_add_to_path_collapses_stacked_installer_blocks(tmp_path):
+    """A pre-0.23 install followed by a later one left two blocks; both
+    rewrite to the same line, so only the first is kept."""
+    home = _home_with(
+        tmp_path, {".zshrc": _USER_TEXT + _VENV_ONLY_BLOCK + _LEGACY_BLOCK}
+    )
+
+    result, _ = _run_sh_function(
+        tmp_path, "OS_NAME=Linux; add_to_path", {"SHELL": "/bin/zsh"}
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / ".zshrc").read_text(encoding="utf-8") == (
+        _USER_TEXT + _CURRENT_BLOCK
+    ).format(h=home)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_add_to_path_migrates_rc_files_another_shell_wrote(tmp_path):
+    """A user who installed under sh and now runs zsh still has the old line
+    in ~/.profile; it is rewritten though zsh never appends there."""
+    home = _home_with(tmp_path, {".profile": _USER_TEXT + _LEGACY_BLOCK})
+
+    result, _ = _run_sh_function(
+        tmp_path, "OS_NAME=Linux; add_to_path", {"SHELL": "/bin/zsh"}
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / ".profile").read_text(encoding="utf-8") == (
+        _USER_TEXT + _CURRENT_BLOCK
+    ).format(h=home)
+    assert (home / ".zshrc").read_text(encoding="utf-8") == _CURRENT_BLOCK.format(
+        h=home
+    )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_add_to_path_rewrites_through_a_symlinked_rc_file(tmp_path):
+    """Dotfile managers symlink ~/.bashrc; the edit lands in the target and
+    keeps the link and the file's mode."""
+    home = _home_with(tmp_path, {})
+    target = tmp_path / "dotfiles-bashrc"
+    target.write_text((_USER_TEXT + _LEGACY_BLOCK).format(h=home), encoding="utf-8")
+    target.chmod(0o600)
+    (home / ".bashrc").symlink_to(target)
+
+    result, _ = _run_sh_function(
+        tmp_path, "OS_NAME=Linux; add_to_path", {"SHELL": "/bin/bash"}
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / ".bashrc").is_symlink()
+    assert target.read_text(encoding="utf-8") == (_USER_TEXT + _CURRENT_BLOCK).format(
+        h=home
+    )
+    assert target.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_add_to_path_leaves_a_hand_written_line_alone(tmp_path):
+    """Only the exact lines the installer wrote are rewritten."""
+    hand = 'export PATH="{h}/.gaia/venv/bin:{h}/.gaia/bin:$PATH"\n'
+    home = _home_with(tmp_path, {".zshrc": _USER_TEXT + hand})
+
+    result, _ = _run_sh_function(
+        tmp_path, "OS_NAME=Linux; add_to_path", {"SHELL": "/bin/zsh"}
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / ".zshrc").read_text(encoding="utf-8") == (_USER_TEXT + hand).format(
+        h=home
+    )
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
@@ -1480,7 +1600,115 @@ def test_add_to_path_does_not_write_a_file_an_unknown_shell_ignores(tmp_path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert _rc_files(home) == []
-    assert "Add these two directories to your PATH by hand" in result.stdout
+    assert "Add this directory to your PATH by hand" in result.stdout
+    assert f"fish_add_path --append {home}/.gaia/bin" in result.stdout
+    # The venv is named only to warn against adding it.
+    venv_lines = [ln for ln in result.stdout.splitlines() if ".gaia/venv/bin" in ln]
+    assert venv_lines and all("Do not add" in ln for ln in venv_lines)
+
+
+# ── functional: link_gaia_commands and the PATH a new shell gets ───────────
+
+
+def _fake_venv(home, names):
+    venv_bin = home / ".gaia" / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    for name in names:
+        exe = venv_bin / name
+        exe.write_text(f"#!/bin/sh\necho venv-{name}\n", encoding="utf-8")
+        exe.chmod(0o755)
+    return venv_bin
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_link_gaia_commands_links_only_gaias_commands(tmp_path):
+    home = _home_with(tmp_path, {})
+    venv_bin = _fake_venv(
+        home, ("gaia", "gaia-cli", "gaia-mcp", "python", "python3", "uvicorn")
+    )
+    gaia_bin = home / ".gaia" / "bin"
+    gaia_bin.mkdir()
+    (gaia_bin / "gaia-tui").write_text("tui", encoding="utf-8")
+    # A stale link from an earlier run is replaced.
+    (gaia_bin / "gaia").symlink_to(tmp_path / "elsewhere")
+
+    for _ in range(2):
+        result, _ = _run_sh_function(tmp_path, "link_gaia_commands")
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    assert sorted(p.name for p in gaia_bin.iterdir()) == [
+        "gaia",
+        "gaia-cli",
+        "gaia-mcp",
+        "gaia-tui",
+    ]
+    for name in ("gaia", "gaia-cli", "gaia-mcp"):
+        assert os.readlink(gaia_bin / name) == str(venv_bin / name)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_link_gaia_commands_fails_when_a_command_is_missing(tmp_path):
+    home = _home_with(tmp_path, {})
+    _fake_venv(home, ("gaia",))
+
+    result, _ = _run_sh_function(tmp_path, "link_gaia_commands")
+    assert result.returncode != 0
+    assert "gaia-cli is missing" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_link_gaia_commands_never_replaces_a_real_file(tmp_path):
+    home = _home_with(tmp_path, {})
+    _fake_venv(home, ("gaia", "gaia-cli", "gaia-mcp"))
+    gaia_bin = home / ".gaia" / "bin"
+    gaia_bin.mkdir()
+    (gaia_bin / "gaia").write_text("mine", encoding="utf-8")
+
+    result, _ = _run_sh_function(tmp_path, "link_gaia_commands")
+    assert result.returncode != 0
+    assert "not a link to GAIA's venv" in result.stdout
+    assert (gaia_bin / "gaia").read_text(encoding="utf-8") == "mine"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+@pytest.mark.parametrize("rc_text", ["", _LEGACY_BLOCK], ids=["fresh", "upgrade"])
+def test_a_new_shell_finds_gaia_but_not_the_venvs_python(tmp_path, rc_text):
+    """Source the rc file as a new shell does: `gaia` runs through
+    ~/.gaia/bin, and python3 and pip are not GAIA's."""
+    home = _home_with(tmp_path, {".bashrc": _USER_TEXT + rc_text})
+    _fake_venv(home, ("gaia", "gaia-cli", "gaia-mcp", "python3", "pip"))
+
+    result, _ = _run_sh_function(
+        tmp_path,
+        "OS_NAME=Linux; link_gaia_commands && add_to_path",
+        {"SHELL": "/bin/bash"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    probe = subprocess.run(
+        [
+            "sh",
+            "-c",
+            '. "$HOME/.bashrc"; gaia; '
+            "for c in gaia gaia-cli gaia-mcp python3 pip; do "
+            'command -v "$c" || echo "none:$c"; done',
+        ],
+        capture_output=True,
+        text=True,
+        env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+        check=False,
+    )
+    assert probe.returncode == 0, probe.stdout + probe.stderr
+    lines = probe.stdout.splitlines()
+    gaia_bin = home / ".gaia" / "bin"
+    assert lines[:4] == [
+        "venv-gaia",
+        f"{gaia_bin}/gaia",
+        f"{gaia_bin}/gaia-cli",
+        f"{gaia_bin}/gaia-mcp",
+    ]
+    assert len(lines) == 6
+    assert not any(".gaia" in found for found in lines[4:]), lines
 
 
 # ── functional: install.ps1's Add-ToPath against a scratch registry key ────
@@ -1779,6 +2007,39 @@ def test_copy_gaia_commands_leaves_an_identical_launcher_alone(tmp_path):
     result, _ = _copy_commands(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     assert (gaia_bin / "gaia.exe").stat().st_mtime == old
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32" or _PS_EXE is None, reason="needs a running .exe"
+)
+def test_copy_gaia_commands_replaces_a_running_launcher(tmp_path):
+    """An upgrade with the daemon running must not fail on its locked gaia.exe."""
+    scripts = _fake_scripts(tmp_path, ("gaia", "gaia-cli", "gaia-mcp"))
+    gaia_bin = tmp_path / "profile" / ".gaia" / "bin"
+    gaia_bin.mkdir(parents=True)
+    system = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
+    shutil.copyfile(os.path.join(system, "ping.exe"), gaia_bin / "gaia.exe")
+    (gaia_bin / "gaia-cli.exe.old").write_bytes(b"left by an earlier upgrade")
+    running = subprocess.Popen(
+        [str(gaia_bin / "gaia.exe"), "-n", "60", "127.0.0.1"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        result, _ = _copy_commands(tmp_path)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (gaia_bin / "gaia.exe").read_bytes() == (
+            scripts / "gaia.exe"
+        ).read_bytes()
+        assert (gaia_bin / "gaia.exe.old").exists()
+        assert not (gaia_bin / "gaia-cli.exe.old").exists()
+    finally:
+        running.kill()
+        running.wait(timeout=30)
+
+    result, _ = _copy_commands(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not list(gaia_bin.glob("*.old"))
 
 
 @needs_powershell

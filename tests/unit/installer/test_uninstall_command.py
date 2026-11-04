@@ -1684,6 +1684,11 @@ def _installer_block(dirs: str) -> str:
 
 
 def _current_dirs(home: Path) -> str:
+    return str(home / ".gaia" / "bin")
+
+
+def _venv_and_bin_dirs(home: Path) -> str:
+    """What 0.23 up to the #6603 fix wrote; re-running the installer rewrites it."""
     return f"{home / '.gaia' / 'venv' / 'bin'}:{home / '.gaia' / 'bin'}"
 
 
@@ -1746,7 +1751,7 @@ class TestInstallerLeftovers:
         zshrc.write_bytes(
             (_RC_BEFORE + _installer_block(_current_dirs(home)) + _RC_AFTER).encode()
         )
-        # A pre-0.23 venv-only block, then the current block the 0.23 installer
+        # A pre-0.23 venv-only block, then the venv+bin block the 0.23 installer
         # appended because the old one lacked ~/.gaia/bin.
         bashrc = home / ".bashrc"
         bashrc.write_bytes(
@@ -1754,7 +1759,7 @@ class TestInstallerLeftovers:
                 "export A=1\r\n"
                 + _installer_block(_legacy_dirs(home))
                 + "export B=2\n"
-                + _installer_block(_current_dirs(home))
+                + _installer_block(_venv_and_bin_dirs(home))
             ).encode()
         )
         profile = home / ".profile"

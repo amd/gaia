@@ -410,7 +410,7 @@ def _installer_posix_path_dirs(home: Optional[Path] = None) -> set:
 
 
 def _is_installer_export(line: str, allowed_dirs: set) -> bool:
-    """Current (venv/bin + bin) and pre-0.23 (venv/bin only) export shapes."""
+    """Current (bin only), 0.23+ (venv/bin + bin) and pre-0.23 (venv/bin only) shapes."""
     if not (line.startswith(_RC_EXPORT_PREFIX) and line.endswith('"')):
         return False
     dirs = line[len(_RC_EXPORT_PREFIX) : -1].split(":")
