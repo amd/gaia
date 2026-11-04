@@ -417,8 +417,8 @@ jobs:
   # a Strix Halo runner for a day). ADVISORY: `publish` does not need it,
   # so a ~5 h eval, an infrastructure error or an exhausted Claude quota never
   # holds or blocks a release. The job still goes red on a breached quality bar
-  # or an unmeasured scenario (the callee's own gates), and `eval-report` files
-  # that as an issue so a regression is seen, not lost in a long run.
+  # or an unmeasured scenario (the callee's own gates); `eval-report` files an
+  # issue only for the first, so a regression is seen, not lost in a long run.
   # gaia_skills_capture is in the subset despite the cost rule: capture is the
   # one release surface that lands third-party content on a user's disk, so it
   # does not ship on nightly-only coverage.
@@ -431,8 +431,13 @@ jobs:
     secrets: inherit
 
   # Puts the advisory eval's verdict where a maintainer sees it: the run summary
-  # always, and an issue per release when it did not pass (comments on a re-run;
-  # closed by the next release that passes).
+  # always, and the agent's one `eval-failure` issue only when the eval measured
+  # a quality drop (a breached quality bar, or a stable smoke-set scenario that
+  # passed in the baseline and now fails; other flips are "watch" lines in the
+  # summary). A run that measured nothing (no Claude quota, a
+  # category that never ran, a crash) files nothing and says why in the
+  # summary. A clean, complete run closes the open issue.
+  # util/eval_failure_notice.py decides.
   eval-report:
     name: Report the eval result
     needs: [gaia-eval]
@@ -442,62 +447,95 @@ jobs:
     permissions:
       contents: read
       issues: write
+    concurrency:
+      group: eval-failure-issue-agent-gaia
+      cancel-in-progress: false
     steps:
-      - name: Summarise the eval result
-        env:
-          RESULT: ${{ needs.gaia-eval.result }}
-        run: |
-          {
-            echo "### Gaia eval subset (report only): \`${RESULT}\`"
-            echo ""
-            echo "This eval does not gate publishing. The per-category scorecards are in the"
-            echo "\`Gaia eval subset\` job's summary and artifacts."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Check out the auto-issue action
+      - name: Checkout
         uses: actions/checkout@v7
         with:
-          sparse-checkout: .github/actions/auto-issue
           persist-credentials: false
 
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: setup.py
+
+      # compare_scorecards lives in gaia.eval.runner.
+      - name: Install gaia
+        run: pip install -e .
+
+      - name: Download the eval's scorecards
+        uses: actions/download-artifact@v8
+        with:
+          name: gaia-agent-eval
+          path: eval-artifacts
+        # No artifact is reported by the next step as "nothing measured".
+        continue-on-error: true
+
+      # Scenario text and judge output are untrusted: they reach the issue only
+      # through notice/body.md, never through an expression in a script.
+      # EVAL_CATEGORIES must match gaia-eval's `categories` and BASELINE_DIR
+      # test_gaia_agent_eval.yml's; tests/unit/test_auto_issue.py pins both.
+      - name: Decide what this run proved
+        id: notice
+        env:
+          RESULT: ${{ needs.gaia-eval.result }}
+          EVAL_CATEGORIES: 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_skills_capture'
+          BASELINE_DIR: tests/fixtures/eval_baselines/gaia-flagship
+          REF: ${{ github.event_name == 'push' && github.ref_name || format('agent-pkg-gaia-v{0} (dispatch)', inputs.version) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python util/eval_failure_notice.py --target agent-gaia --tier release \
+            --ref "$REF" --run-url "$RUN_URL" \
+            --artifacts-dir eval-artifacts --artifact-name gaia-agent-eval \
+            --categories "$EVAL_CATEGORIES" --baseline-dir "$BASELINE_DIR" \
+            --quality-report eval-artifacts/quality_gate_report.json \
+            --job "scenarios=$RESULT" \
+            --out-dir notice --github-output "$GITHUB_OUTPUT" \
+            --step-summary "$GITHUB_STEP_SUMMARY"
+          echo "This eval does not gate publishing." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Ensure the eval-failure label exists
-        if: needs.gaia-eval.result != 'success'
+        if: steps.notice.outputs.verdict == 'regressed'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh label create eval-failure --repo "$GITHUB_REPOSITORY" --color B60205 \
             --description "Automated eval failure" --force
 
-      # One issue per release; a re-run of the same release comments on it.
-      - name: File (or update) the issue for this release
-        if: needs.gaia-eval.result != 'success'
+      - name: File (or update) the agent regression issue
+        if: steps.notice.outputs.verdict == 'regressed'
         uses: ./.github/actions/auto-issue
         with:
           mode: report
-          key: eval-agent-gaia/${{ github.event_name == 'push' && github.ref_name || format('agent-pkg-gaia-v{0}', inputs.version) }}
-          title: Agent release eval did not pass on ${{ github.event_name == 'push' && github.ref_name || format('agent-pkg-gaia-v{0} (dispatch)', inputs.version) }}
+          key: eval-regression/agent-gaia
+          title: ${{ steps.notice.outputs.title }}
+          body-file: ${{ github.workspace }}/notice/body.md
+          update: edit
           labels: eval-failure
-          body: |
-            The judged eval for `${{ github.event_name == 'push' && github.ref_name || format('agent-pkg-gaia-v{0} (dispatch)', inputs.version) }}` ended `${{ needs.gaia-eval.result }}`. Publishing did not wait for it.
 
-            - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      - name: Close the agent regression issue
+        if: steps.notice.outputs.verdict == 'passed'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: resolve
+          key: eval-regression/agent-gaia
+          note: "The gaia agent release eval passed on `${{ github.event_name == 'push' && github.ref_name || format('agent-pkg-gaia-v{0} (dispatch)', inputs.version) }}` with no regression (run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Closing automatically; reopen if this still needs a look."
 
-            `failure` is either a breached quality bar (a regression to look at before the next
-            release) or a scenario that could not be measured (infrastructure, or no Claude quota).
-            The job summary names which. `cancelled` means nothing was measured.
-
-            A passing re-run, or a later passing release on the same major.minor line, closes this issue.
-
-      # Closes this release's and earlier releases' issues on the same major.minor line only; newer or other lines stay open.
-      - name: Close earlier releases' eval issues
-        if: needs.gaia-eval.result == 'success'
+      # The per-release issues filed before this job named regressions, up to
+      # this release on its major.minor line.
+      - name: Close earlier releases' per-release eval issues
+        if: steps.notice.outputs.verdict == 'passed'
         uses: ./.github/actions/auto-issue
         with:
           mode: resolve
           key-prefix: eval-agent-gaia/
           legacy-title-prefix: "Agent release eval did not pass on "
           up-to-version: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
-          note: "The gaia agent release eval passed on `${{ github.event_name == 'push' && github.ref_name || format('agent-pkg-gaia-v{0} (dispatch)', inputs.version) }}` in run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Closing automatically; reopen if that release's failure still needs a look."
+          note: "The gaia agent release eval passed on `${{ github.event_name == 'push' && github.ref_name || format('agent-pkg-gaia-v{0} (dispatch)', inputs.version) }}` with no regression (run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Closing automatically; reopen if this still needs a look."
 
   # ── Stage 2: native sidecar freeze on every platform ────────────────
   # The matrix lives in build_flagship_sidecar.yml, shared with publish.yml's

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionBanner } from '../ConnectionBanner';
+import { ErrorNotice } from '../settings/ErrorNotice';
 import { useChatStore } from '../../stores/chatStore';
 import type { SystemStatus } from '../../types';
 
@@ -33,8 +34,24 @@ describe('the model server is down', () => {
         const install = 'Lemonade Server is not installed. Run `gaia init` to install it, or set LEMONADE_SERVER_PATH to an existing install.';
         useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: null, start_instruction: install } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
-        expect(container).toHaveTextContent(`The model server isn't running. ${install}`);
+        expect(container).toHaveTextContent("The model server isn't running. Set up models on this PC");
+        expect(container).not.toHaveTextContent('gaia init');
         expect(container).not.toHaveTextContent('stopped');
+    });
+
+    it('offers a way to set up local models when none are installed, and only then', () => {
+        const opened = vi.fn();
+        window.addEventListener('gaia:set-up-local', opened);
+        const install = 'Lemonade Server is not installed. Run `gaia init` to install it.';
+        useChatStore.setState({ systemStatus: { lemonade_running: false, start_instruction: install } as SystemStatus });
+        const { rerender } = render(<ConnectionBanner />);
+        fireEvent.click(screen.getByRole('button', { name: 'Set up local models' }));
+        expect(opened).toHaveBeenCalledTimes(1);
+        window.removeEventListener('gaia:set-up-local', opened);
+
+        act(() => useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: '/usr/bin/lemond' } as SystemStatus }));
+        rerender(<ConnectionBanner />);
+        expect(screen.queryByRole('button', { name: 'Set up local models' })).not.toBeInTheDocument();
     });
 
     it('calls a model server whose health check failed busy, not stopped, and keeps the reason and remedy', () => {
@@ -96,5 +113,23 @@ describe('a slow backend', () => {
         render(<ConnectionBanner backendSlow />);
         expect(screen.getByText(/GAIA is slow to answer/)).toBeInTheDocument();
         expect(screen.queryByText(/Lost the connection/)).toBeNull();
+    });
+});
+
+describe('ErrorNotice with the model server down', () => {
+    const down = 'Lemonade Server not reachable at http://localhost:8000';
+
+    it('says it may clear by itself when a server is installed', () => {
+        useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: '/usr/bin/lemond' } as SystemStatus });
+        render(<ErrorNotice message={down} />);
+        expect(screen.getByRole('alert')).toHaveTextContent('normally starts on its own');
+        expect(screen.queryByRole('button', { name: 'Set up local models' })).not.toBeInTheDocument();
+    });
+
+    it('offers setup, and never promises a server that is not installed will start', () => {
+        useChatStore.setState({ systemStatus: { lemonade_running: false, start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.' } as SystemStatus });
+        render(<ErrorNotice message={down} />);
+        expect(screen.getByRole('alert')).not.toHaveTextContent('normally starts on its own');
+        expect(screen.getByRole('button', { name: 'Set up local models' })).toBeInTheDocument();
     });
 });

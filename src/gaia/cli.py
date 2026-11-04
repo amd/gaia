@@ -2002,6 +2002,8 @@ Examples:
   gaia download --clear-cache
 
 Available agents: chat, bash, talk, rag, vlm, minimal, mcp, sd
+
+Use `gaia download --agent talk` to download the local Kokoro TTS model.
         """,
     )
     download_parser.add_argument(
@@ -2518,7 +2520,7 @@ Examples:
 
 A TUI must already be running with --control-port; this drives THAT session so
 the run is visible on screen. The judge uses your Claude Code login (the
-`claude` CLI), or ANTHROPIC_API_KEY when it is set.
+`claude` CLI) first, then ANTHROPIC_API_KEY.
 """,
     )
     sessions_eval_parser.add_argument(
@@ -6739,6 +6741,12 @@ def handle_email_command(args):
         print(dest)
         sys.exit(0)
 
+    # Every email route relays through the daemon, including autonomy controls.
+    # Check its runtime dependencies before probing Lemonade or making a relay
+    # request, so a base install gets the actionable [api] remedy instead of
+    # "daemon exited early".
+    _check_daemon_deps()
+
     # autonomy: a REST thin client over the daemon relay (#2516) — status/
     # trust/set-level/pause/resume/kill need no LLM at all, and `run` does its
     # own Lemonade check inside the sidecar call, so short-circuit here too.
@@ -9523,7 +9531,7 @@ def _check_daemon_deps():
     missing = missing_daemon_deps()
     if missing:
         print(
-            "❌ `gaia daemon` needs packages not in the base install: "
+            "❌ This command needs the GAIA daemon, whose packages are not in the base install: "
             + ", ".join(missing)
             + '.\n   Install the daemon extras:  pip install "amd-gaia[api]"'
             "  (or [ui], which adds the Agent UI's RAG stack on top)."

@@ -182,6 +182,27 @@ class TestWatermark:
         assert "Rename the screenshots" in prompt
         assert "weekly sales report" not in prompt
 
+    def test_a_consumed_chat_with_newer_work_is_read_again(self, host, store):
+        """An Agent UI chat keeps its id, so work done after it was consumed
+        must re-enter the window instead of being dropped by its mark."""
+        _seed_cluster(store, "chat_", "Triage an inbound support ticket")
+        host._synthesize_skills()
+        assert "chat_0" in store.get_synthesis_marks()
+
+        for i in range(4):
+            store.log_tool_call("chat_0", f"tool_{i}", {"x": i}, "ok", True)
+        window = [
+            s
+            for s in store.iter_sessions(since=store.get_synthesis_watermark())
+            if s["session_id"] == "chat_0"
+        ]
+        assert window, "the newer tool calls fell behind the watermark"
+
+        pending, consumed = host._drop_consumed_episodes(store, window, force=False)
+
+        assert [s["session_id"] for s in pending] == ["chat_0"]
+        assert consumed == set()
+
     def test_watermark_never_moves_backwards(self, host, store):
         """An explicit older `since` cannot re-open consumed history."""
         _seed_cluster(store, "t_", "Triage an inbound support ticket")

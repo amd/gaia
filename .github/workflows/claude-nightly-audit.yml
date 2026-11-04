@@ -16,9 +16,10 @@
 # it names no cadence. Nothing depends on the label's spelling any more: dedup reads the
 # audit-key/audit-cluster markers and searches the whole open backlog, not one label.
 #
-# HUMAN-GATED — NOT an auto-merge bot. The workflow produces *findings*, never
-# commits. To turn an issue into a PR, a maintainer applies the `bug` label and
-# the existing auto-fix job (claude.yml) takes over. No new PR-creation code here.
+# NOT an auto-merge bot. The workflow produces *findings*, never commits. A new issue
+# marked auto-fixable goes straight to the auto-fix job (claude.yml), which opens a PR for
+# a human to review: scripts/audit/promote_autofix.py adds `bug` and dispatches it, capped
+# per run. Anything else waits for a maintainer to add `bug`. No PR-creation code here.
 #
 # ONE ISSUE PER DEFECT, NOT PER LOCATION. A defect spanning 39 files is ONE fix, so it
 # gets ONE issue listing 39 locations. Lenses key findings by ROOT CAUSE (`cluster_key`);
@@ -633,6 +634,8 @@ jobs:
     permissions:
       contents: read
       issues: write
+      # `gh workflow run claude.yml`: the one event a GITHUB_TOKEN may trigger.
+      actions: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -715,8 +718,8 @@ jobs:
 
       # A dry run is only prompt-enforced, and a mode that silently isn't dry is worse
       # than no mode at all. Record the watermark now and check it afterwards.
-      - name: Record the issue watermark (dry run)
-        if: github.event.inputs.dry_run == 'true'
+      - name: Record the issue watermark
+        id: watermark
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -791,7 +794,7 @@ jobs:
             ### (c) FILE ONE issue — 🔴/🟠 only, non-security
             Write the body to a temp file, then
             `gh issue create --repo ${{ github.repository }} --label weekly-audit --title "<title>" --body-file <file>`
-            WITHOUT the `bug` label (humans gate every code change).
+            WITHOUT the `bug` label. A following step adds it to issues marked auto-fixable.
 
             **One issue per DEFECT, listing every location.** A defect the dossier shows at
             39 locations is ONE issue with 39 lines in it, never 39 issues. Its title names
@@ -810,7 +813,7 @@ jobs:
             <summary>🔍 Evidence and locations</summary>
 
             **Severity:** 🔴 high / 🟠 medium   **Lens:** <dimension(s)>
-            **Auto-fixable:** yes — apply `bug` to let auto-fix open the PR  |  no — needs a human
+            **Auto-fixable:** yes — sent to auto-fix, which opens a PR for review  |  no — needs a human
 
             | Where | Evidence |
             |---|---|
@@ -825,6 +828,8 @@ jobs:
             ```
             List up to 20 locations in the table; if there are more, add a final row saying
             how many were elided and where to grep. Set Auto-fixable from `auto_fixable`.
+            Keep that line's wording: the next step reads `**Auto-fixable:** yes` to start
+            auto-fix, so write `no` for anything that needs a design call.
 
             ## Write the run report to `triage-report.md` — NOT to an issue
             A following step appends this file to the run's job summary. **Do not file a
@@ -858,7 +863,7 @@ jobs:
 
             ## Rules
             - No Claude attribution anywhere (no "Generated with", no Co-Authored-By).
-            - Do not open any PR and do not apply the `bug` label.
+            - Do not open any PR and do not apply the `bug` label yourself.
             - Never close any issue.
             - Security is not a dimension here (see claude-security-audit.yml). If a findings
               JSON contains a security issue, omit it rather than disclosing it publicly.
@@ -882,6 +887,17 @@ jobs:
             exit 1
           fi
           echo "✅ Dry run confirmed: no issue created above #$before."
+
+      # Deterministic, and outside the filing prompt, so every auto-fixable issue is handed
+      # over the same way. always(): a synthesis that crashed may already have filed some.
+      - name: Send new auto-fixable issues to auto-fix
+        if: always() && steps.watermark.outcome == 'success' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 scripts/audit/promote_autofix.py --repo "${{ github.repository }}" \
+            --watermark "$(cat .issue-watermark)" --summary "$GITHUB_STEP_SUMMARY"
 
       # The run receipt. This replaces the per-run "Nightly audit — <run-id>" ISSUE that
       # used to be filed: a CI run's bookkeeping belongs in the run, not the tracker.

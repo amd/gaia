@@ -20,6 +20,16 @@ const json* findObject(const json& parent, const char* key) {
     return (it != parent.end() && it->is_object()) ? &*it : nullptr;
 }
 
+// Smallest power of two strictly above both the prompt and the current
+// window; 0 when the server reported neither, so no number is suggested.
+long long suggestedContextWindow(int promptTokens, int nCtx) {
+    const long long floor = std::max(promptTokens, nCtx);
+    if (floor <= 0) return 0;
+    long long window = 1;
+    while (window <= floor) window <<= 1;
+    return window;
+}
+
 // One decoder for every error shape: Lemonade's nested llama-server error,
 // the OpenAI {"error":{"message":..}} object, and a bare {"error":"..."}.
 std::string describeServerError(const json& body) {
@@ -52,12 +62,18 @@ std::string describeServerError(const json& body) {
     if (msg.empty()) msg = stringField(err, "message");
 
     if (msg.find("exceeds the available context size") != std::string::npos) {
-        return "Server context window too small: prompt is " +
-               std::to_string(intField(*inner, "n_prompt_tokens")) +
-               " tokens but server n_ctx=" + std::to_string(intField(*inner, "n_ctx")) +
+        const int promptTokens = intField(*inner, "n_prompt_tokens");
+        const int nCtx = intField(*inner, "n_ctx");
+        const long long window = suggestedContextWindow(promptTokens, nCtx);
+        const std::string target =
+            window > 0 ? "a window of at least " + std::to_string(window) : "a larger window";
+        return "Server context window too small: prompt is " + std::to_string(promptTokens) +
+               " tokens but server n_ctx=" + std::to_string(nCtx) +
                ".\n"
-               "  Reload the model with a larger context via the helper script:\n"
-               "    .\\installer\\scripts\\start-lemonade.ps1 -CtxSize 32768";
+               "  Reload the model with " + target + ": set the GAIA_CONTEXT_SIZE\n"
+               "  environment variable (or AgentConfig::contextSize) and restart the agent;\n"
+               "  it reloads its model at that window. If the model can't go that large,\n"
+               "  shorten the prompt.";
     }
     return msg.empty() ? "LLM server error" : msg;
 }

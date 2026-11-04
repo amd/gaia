@@ -513,6 +513,27 @@ def cloud_model_provider(
     return None
 
 
+#: Lowest ``reasoning_effort`` each cloud model family accepts, matched as a
+#: case-insensitive prefix of the upstream id. Gateways 400 on values a model
+#: doesn't support, so a model missing here gets no ``reasoning_effort`` at all.
+_CLOUD_LOWEST_REASONING_EFFORT = (
+    ("claude-opus-5", "none"),
+    ("deepseek-v4", "none"),
+    ("qwen3.8-flash-next", "low"),
+)
+
+
+def cloud_lowest_reasoning_effort(model_id: Optional[str]) -> Optional[str]:
+    """The lowest ``reasoning_effort`` cloud *model_id* is known to accept, or None."""
+    if not cloud_model_provider(model_id):
+        return None
+    upstream_id = model_id.partition(".")[2].lower()
+    for prefix, effort in _CLOUD_LOWEST_REASONING_EFFORT:
+        if upstream_id.startswith(prefix):
+            return effort
+    return None
+
+
 def _model_ids_match(a: Optional[str], b: Optional[str]) -> bool:
     """Compare two Lemonade model names, tolerating the ``user.`` namespace.
 
@@ -1606,6 +1627,12 @@ class LemonadeStatus:
 
 # Define available models
 MODELS = {
+    # --- Built-in speech model used by the talk profile ---
+    "kokoro-v1": ModelRequirement(
+        model_type=ModelType.TTS,
+        model_id="kokoro-v1",
+        display_name="Kokoro TTS",
+    ),
     # --- Primary model: Gemma 4 E4B (default for all roles) ---
     # ctx_size = 65536 (64K): doubles the prior 32K default. Doc-Q&A flows
     # (RAG retrieval results + history + tool result + system prompt)
@@ -2201,9 +2228,9 @@ AGENT_PROFILES = {
     "talk": AgentProfile(
         name="talk",
         display_name="Talk Agent",
-        models=["gemma-4-e4b"],
+        models=["gemma-4-e4b", "kokoro-v1"],
         min_ctx_size=GPU_CTX_SIZE,
-        description="Voice-enabled chat",
+        description="Voice-enabled chat with local Kokoro speech",
     ),
     "rag": AgentProfile(
         name="rag",

@@ -1,46 +1,55 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""A ``.env``-only ANTHROPIC_API_KEY must not disable subscription auth (#3367)."""
+"""The eval driver's credential: subscription, then the env key, then a .env key."""
 
 import json
-import logging
 import os
 from types import SimpleNamespace
 
 import pytest
 
 import gaia
-from gaia.eval import runner
-from gaia.eval.claude_outage import (
-    QUOTA,
-    claude_account,
-    driver_api_key,
-    switch_to_backup_account,
-)
+from gaia import env as gaia_env
+from gaia.eval import claude_credential, runner
+from gaia.eval.claude_outage import QUOTA, claude_account, switch_to_backup_account
 
 KEY = "ANTHROPIC_API_KEY"
+TOKEN = "CLAUDE_CODE_OAUTH_TOKEN"
+SHELL_KEY = "sk-ant-shell-SECRET"
+DOTENV_KEY = "sk-ant-dotenv-SECRET"
+
+
+@pytest.fixture(autouse=True)
+def _clean(monkeypatch):
+    for name in (KEY, TOKEN, "CLAUDE_CODE_OAUTH_TOKEN_BACKUP", "GAIA_CLAUDE_ACCOUNT"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delitem(gaia._PRE_DOTENV_ENVIRON, KEY, raising=False)
+    monkeypatch.setattr(gaia_env, "_working_dir_credentials", {})
+    monkeypatch.setattr(gaia_env, "_working_dir_credential_files", {})
+    monkeypatch.setattr(gaia_env, "_install_tree_dotenv", lambda: None)
+    monkeypatch.setattr(runner.shutil, "which", lambda _name: "/test/claude")
 
 
 @pytest.fixture
-def key_env(monkeypatch):
-    """Set the key in the shell (pre-.env snapshot), via a .env, or not at all."""
-    monkeypatch.setattr(runner, "_warned_dotenv_api_key", False)
+def logged_out(monkeypatch):
+    monkeypatch.setattr(
+        claude_credential,
+        "_auth_status",
+        lambda _bin, _env: {"loggedIn": False, "authMethod": "none"},
+    )
 
-    def apply(shell=None, current=None):
-        if shell is None:
-            monkeypatch.delitem(gaia._PRE_DOTENV_ENVIRON, KEY, raising=False)
-        else:
-            monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, KEY, shell)
-        if current is None:
-            monkeypatch.delenv(KEY, raising=False)
-        else:
-            monkeypatch.setenv(KEY, current)
 
-    return apply
+def _shell_key(monkeypatch):
+    monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, KEY, SHELL_KEY)
+    monkeypatch.setenv(KEY, SHELL_KEY)
+
+
+def _dotenv_key(monkeypatch, path="/work/project/.env"):
+    monkeypatch.setitem(gaia_env._working_dir_credentials, KEY, DOTENV_KEY)
+    monkeypatch.setitem(gaia_env._working_dir_credential_files, KEY, path)
 
 
 def _launch(tmp_path, mocker):
-    mocker.patch.object(runner.shutil, "which", return_value="/test/claude")
     run = mocker.patch.object(
         runner,
         "_run_driver",
@@ -71,78 +80,105 @@ def _launch(tmp_path, mocker):
     return run.call_args.args[0], run.call_args.kwargs["env"]
 
 
-def test_dotenv_only_key_drops_bare_and_the_key(tmp_path, mocker, key_env, caplog):
-    key_env(shell=None, current="sk-ant-stale-from-dotenv")
-    with caplog.at_level(logging.WARNING, logger="gaia.eval.runner"):
-        cmd, env = _launch(tmp_path, mocker)
+def test_cli_login_beats_an_exported_key(
+    tmp_path, mocker, monkeypatch, claude_login, capsys
+):
+    _shell_key(monkeypatch)
+    cmd, env = _launch(tmp_path, mocker)
     assert "--bare" not in cmd
     # Not passing --bare is not enough: the CLI prefers an inherited key to OAuth.
-    assert env is not None and KEY not in env
-    # Everything else is still inherited.
-    assert env.get("PATH") == os.environ.get("PATH")
-    assert any(".env" in r.getMessage() for r in caplog.records)
-    assert "sk-ant-stale-from-dotenv" not in caplog.text
+    # Booleans, so a failure never prints the environment.
+    dropped_key = env is not None and KEY not in env
+    assert dropped_key
+    same_path = env.get("PATH") == os.environ.get("PATH")
+    assert same_path
+    err = capsys.readouterr().err
+    assert "Claude eval driver: using the Claude Code CLI login" in err
+    assert SHELL_KEY not in err
 
 
-def test_shell_key_keeps_bare_and_inherits(tmp_path, mocker, key_env):
-    key_env(shell="sk-ant-shell", current="sk-ant-shell")
+def test_oauth_token_beats_an_exported_key(tmp_path, mocker, monkeypatch, capsys):
+    _shell_key(monkeypatch)
+    monkeypatch.setenv(TOKEN, "tok-SECRET")
+    cmd, env = _launch(tmp_path, mocker)
+    assert "--bare" not in cmd
+    kept_token_only = KEY not in env and env[TOKEN] == "tok-SECRET"
+    assert kept_token_only
+    err = capsys.readouterr().err
+    assert "using the Claude Code subscription (CLAUDE_CODE_OAUTH_TOKEN)" in err
+    assert "tok-SECRET" not in err and SHELL_KEY not in err
+
+
+def test_exported_key_when_logged_out(
+    tmp_path, mocker, monkeypatch, logged_out, capsys
+):
+    _shell_key(monkeypatch)
+    _dotenv_key(monkeypatch)
     cmd, env = _launch(tmp_path, mocker)
     assert cmd[:3] == ["/test/claude", "-p", "--bare"]
-    assert env is None
+    inherits = env is None
+    assert inherits
+    err = capsys.readouterr().err
+    assert "Claude eval driver: using ANTHROPIC_API_KEY from the environment" in err
+    assert SHELL_KEY not in err and DOTENV_KEY not in err
 
 
-@pytest.mark.parametrize(
-    "shell,current",
-    [
-        (None, None),  # no key anywhere: plain OAuth
-        ("", ""),  # the documented `ANTHROPIC_API_KEY=` workaround
-        ("   ", "   "),  # whitespace is not a key
-        ("sk-ant-shell", None),  # unset in-process since startup
-        ("sk-ant-shell", ""),
-    ],
-)
-def test_no_usable_key_means_no_bare(tmp_path, mocker, key_env, shell, current):
-    key_env(shell=shell, current=current)
+def test_dotenv_key_is_last_and_reaches_the_child(
+    tmp_path, mocker, monkeypatch, logged_out, capsys
+):
+    _dotenv_key(monkeypatch)
     cmd, env = _launch(tmp_path, mocker)
-    assert "--bare" not in cmd
-    assert env is None
+    assert "--bare" in cmd
+    carries_key = env[KEY] == DOTENV_KEY
+    assert carries_key
+    err = capsys.readouterr().err
+    assert "Claude eval driver: using ANTHROPIC_API_KEY from /work/project/.env" in err
+    assert DOTENV_KEY not in err
 
 
-def test_blank_shell_key_does_not_bless_a_dotenv_value(tmp_path, mocker, key_env):
-    # load_dotenv never overrides a set variable, but an in-process rewrite could.
-    key_env(shell="", current="sk-ant-from-somewhere")
-    cmd, env = _launch(tmp_path, mocker)
-    assert "--bare" not in cmd
-    assert KEY not in env
+def test_nothing_usable_raises(tmp_path, mocker, monkeypatch, logged_out):
+    monkeypatch.setenv(KEY, "   ")
+    with pytest.raises(ValueError, match="No Claude credential"):
+        _launch(tmp_path, mocker)
 
 
-def test_warning_is_logged_once_per_process(key_env, caplog):
-    key_env(shell=None, current="sk-ant-dotenv")
-    with caplog.at_level(logging.WARNING, logger="gaia.eval.runner"):
-        runner._driver_auth()
-        runner._driver_auth()
-    assert sum(".env" in r.getMessage() for r in caplog.records) == 1
+def test_message_is_printed_once_per_process(monkeypatch, claude_login, capsys):
+    runner._driver_auth()
+    runner._driver_auth()
+    assert capsys.readouterr().err.count("Claude eval driver: using") == 1
 
 
-def test_account_label_ignores_a_dotenv_key(monkeypatch, key_env):
-    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
-    monkeypatch.delenv("GAIA_CLAUDE_ACCOUNT", raising=False)
-    key_env(shell=None, current="sk-ant-dotenv")
-    assert driver_api_key() == ""
-    assert "API key" not in claude_account()
-    key_env(shell="sk-ant-shell", current="sk-ant-shell")
-    assert driver_api_key() == "sk-ant-shell"
-    assert "API key" in claude_account()
+def test_account_label_names_the_source_not_the_secret(monkeypatch, logged_out):
+    _dotenv_key(monkeypatch)
+    assert claude_account() == "ANTHROPIC_API_KEY from /work/project/.env"
+    _shell_key(monkeypatch)
+    monkeypatch.setenv("GAIA_CLAUDE_ACCOUNT", "primary")
+    assert claude_account() == (
+        "ANTHROPIC_API_KEY from the environment (the primary account)"
+    )
+    monkeypatch.setenv(TOKEN, "tok-SECRET")
+    label = claude_account()
+    assert label.startswith("the Claude Code subscription (CLAUDE_CODE_OAUTH_TOKEN)")
+    assert "SECRET" not in label
 
 
-def test_backup_switch_is_not_blocked_by_a_dotenv_key(monkeypatch, key_env):
-    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok-primary")
+def test_backup_switch_is_not_blocked_by_a_key_the_subscription_beats(monkeypatch):
+    monkeypatch.setenv(TOKEN, "tok-primary")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN_BACKUP", "tok-backup")
     monkeypatch.setenv("GAIA_CLAUDE_ACCOUNT", "primary")
-    key_env(shell=None, current="sk-ant-dotenv")
+    _shell_key(monkeypatch)
     switched = switch_to_backup_account({"kind": QUOTA})
     assert switched and switched["to"] == "secondary"
-    assert os.environ["CLAUDE_CODE_OAUTH_TOKEN"] == "tok-backup"
+    assert os.environ[TOKEN] == "tok-backup"
+
+
+def test_backup_switch_does_not_apply_to_a_key_run(monkeypatch):
+    # No CLI, so the token cannot be used and the run is on the key.
+    monkeypatch.setattr(runner.shutil, "which", lambda _name: None)
+    monkeypatch.setenv(TOKEN, "tok-primary")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN_BACKUP", "tok-backup")
+    _shell_key(monkeypatch)
+    assert switch_to_backup_account({"kind": QUOTA}) is None
 
 
 def test_run_driver_passes_env_to_popen(mocker, tmp_path):

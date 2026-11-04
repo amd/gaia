@@ -1548,15 +1548,27 @@ class EmbeddedLemonade:
         """Ask the recorded instance for its ``/health`` payload.
 
         Returns:
-            ``(recorded, health)``: whether an instance is recorded at all, and
-            its health payload, or None when it did not answer.
+            ``(recorded, health)``: whether a recorded instance is still
+            running, and its health payload, or None when it did not answer.
+            A record whose process has exited counts as no instance.
         """
         state = self._read_state()
         port = state.get("port") if state else None
         api_key = state.get("api_key") if state else None
         if not (port and api_key):
             return False, None
-        return True, self._health(int(port), api_key)
+        health = self._health(int(port), api_key)
+        if health is not None:
+            return True, health
+        pid = state.get("pid")
+        if not pid:
+            return False, None
+        spawned = _SPAWNED.get(int(pid))
+        if spawned is not None and spawned.poll() is not None:
+            return False, None
+        if self._identify(int(pid), int(port), api_key) == OTHER:
+            return False, None
+        return True, None
 
     def current_api_key(self) -> Optional[str]:
         """Return the API key of the recorded instance, if there is one.
