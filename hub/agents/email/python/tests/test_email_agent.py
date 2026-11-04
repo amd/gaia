@@ -567,7 +567,7 @@ def test_llm_chat_respects_lemonade_base_url_override_env(monkeypatch):
         captured_urls.append(url)
         if url == "http://127.0.0.1:9555/api/v1/health":
             resp = MagicMock(status_code=200)
-            resp.json.return_value = {"version": "10.2.0"}
+            resp.json.return_value = {"version": "2026.44.1"}
             return resp
         if url == "http://127.0.0.1:9555/api/v1/system-info":
             # No NPU here — this test is about base_url redirection, not
@@ -607,7 +607,7 @@ def test_llm_chat_respects_lemonade_base_url_explicit_param(monkeypatch):
         captured_urls.append(url)
         if url == "http://127.0.0.1:9555/api/v1/health":
             resp = MagicMock(status_code=200)
-            resp.json.return_value = {"version": "10.2.0"}
+            resp.json.return_value = {"version": "2026.44.1"}
             return resp
         if url == "http://127.0.0.1:9555/api/v1/system-info":
             # No NPU here — this test is about base_url redirection, not
@@ -651,7 +651,7 @@ def test_wrong_model_raises_llm_triage_error(monkeypatch):
     def _fake_get(url, *args, **kwargs):
         if url == f"{probe_base}/health":
             resp = MagicMock(status_code=200)
-            resp.json.return_value = {"version": "10.2.0"}
+            resp.json.return_value = {"version": "2026.44.1"}
             return resp
         if url == f"{probe_base}/system-info":
             # No NPU — this test is about the model-absent path (AC2), not
@@ -699,7 +699,7 @@ def test_wrong_model_check_transport_failure_is_loud(monkeypatch):
     def _fake_get(url, *args, **kwargs):
         if url == f"{probe_base}/health":
             resp = MagicMock(status_code=200)
-            resp.json.return_value = {"version": "10.2.0"}
+            resp.json.return_value = {"version": "2026.44.1"}
             return resp
         if url == f"{probe_base}/system-info":
             # No NPU — this test is about a /models transport failure, not
@@ -748,7 +748,7 @@ def test_model_present_check_tolerant_of_user_dot_prefix(monkeypatch):
     def _fake_get(url, *args, **kwargs):
         if url == f"{probe_base}/health":
             resp = MagicMock(status_code=200)
-            resp.json.return_value = {"version": "10.2.0"}
+            resp.json.return_value = {"version": "2026.44.1"}
             return resp
         if url == f"{probe_base}/system-info":
             # No NPU — this test is about the user.-prefix tolerant match,

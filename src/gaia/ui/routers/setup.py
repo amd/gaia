@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from gaia.logger import get_logger
@@ -26,6 +27,7 @@ from ..setup_plan import (
     choose_chat_model,
 )
 from ..setup_runner import (
+    REPORT_NAME_RE,
     LemonadeOverridden,
     SetupBusy,
     SetupError,
@@ -33,6 +35,7 @@ from ..setup_runner import (
     runner,
     step_labels,
     users_lemonade_url,
+    write_report,
 )
 
 logger = get_logger(__name__)
@@ -47,12 +50,9 @@ _SERVER_DOWN = (
 )
 _PLAN_FAILED = (
     "GAIA couldn't work out the setup plan. Check that the model server is "
-    "running and that ~/.gaia/config.json is valid, then try again. " + _LOG
+    "running, then try again. " + _LOG
 )
-_CHECK_FAILED = (
-    "GAIA couldn't check whether setup is done. Run `gaia init --check` in a "
-    "terminal to see why. " + _LOG
-)
+_CHECK_FAILED = "GAIA couldn't check whether setup is done. Try again. " + _LOG
 _BUSY = (
     "Setup or that model's download is already running. Wait for it or cancel "
     "it, then try again."
@@ -61,10 +61,7 @@ _OVERRIDDEN = (
     "LEMONADE_BASE_URL points GAIA at another server, so setup can't switch to "
     "GAIA's own. Unset it and restart GAIA."
 )
-_START_FAILED = (
-    "Setup couldn't start. Run `gaia init --profile gaia` in a terminal to see "
-    "why. " + _LOG
-)
+_START_FAILED = "Setup couldn't start. Try again. " + _LOG
 
 
 def _plan_error(e: SetupPlanError, unknown_model: str) -> HTTPException:
@@ -144,6 +141,65 @@ def setup_chat_model(body: ChatModelRequest) -> Dict[str, Any]:
             f"{body.model_id} isn't a chat model GAIA knows or one this Lemonade "
             "Server has downloaded. Download it first, then pick it.",
         ) from e
+
+
+class VisionModelRequest(BaseModel):
+    """A model that reads images, or null to go back to GAIA's choice."""
+
+    model_id: Optional[str] = None
+
+
+@router.post("/api/setup/vision-model", dependencies=[Depends(require_ui_header)])
+def setup_vision_model(body: VisionModelRequest) -> Dict[str, Any]:
+    """Pick the model that reads images; returns the new plan."""
+    try:
+        plan_api.choose_vision_model(body.model_id)
+        return build_plan()
+    except SetupPlanError as e:
+        raise _plan_error(e, f"{body.model_id} can't read images.") from e
+
+
+@router.post("/api/setup/report", dependencies=[Depends(require_ui_header)])
+def setup_report() -> Dict[str, Any]:
+    """Bundle setup's record, every GAIA log and a system snapshot for a bug report."""
+    record = runner.report()
+    try:
+        record["plan"] = build_plan()
+    except SetupPlanError as e:
+        # The report is for exactly this: say why the plan couldn't be read.
+        record["plan_error"] = str(e)
+    try:
+        path = write_report(record)
+    except SetupError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    return {"name": path.name, "path": str(path), "size_bytes": path.stat().st_size}
+
+
+@router.get("/api/setup/report/{name}", dependencies=[Depends(require_ui_header)])
+def setup_report_file(name: str) -> FileResponse:
+    """A troubleshooting report written by ``POST /api/setup/report``."""
+    from gaia.home import gaia_home
+
+    path = gaia_home() / name
+    if not REPORT_NAME_RE.fullmatch(name) or not path.is_file():
+        raise HTTPException(status_code=404, detail=f"No report named {name}.")
+    return FileResponse(path, media_type="application/gzip", filename=name)
+
+
+_MODEL_JOBS = ("chat", "vision", "embedding", "speech", "voice", "image_creation")
+
+
+@router.get("/api/setup/needs/{job}", dependencies=[Depends(require_ui_header)])
+def setup_model_need(job: str) -> Dict[str, Any]:
+    """Whether a job needs a model that isn't on this PC, and which."""
+    if job not in _MODEL_JOBS:
+        raise HTTPException(
+            status_code=422, detail=f"job must be one of {', '.join(_MODEL_JOBS)}."
+        )
+    try:
+        return plan_api.model_need(job)
+    except SetupPlanError as e:
+        raise _plan_error(e, _PLAN_FAILED) from e
 
 
 class SkipModelRequest(BaseModel):
@@ -231,7 +287,9 @@ class SetupRunRequest(BaseModel):
     ``keep_trying`` to wait up to two minutes out a dropped connection;
     ``extra_models`` to pull models beside the plan's (the user ticked them);
     ``server_only`` to start the model server and stop, so the models can be
-    chosen against it before anything downloads."""
+    chosen against it before anything downloads;
+    ``upgrade_embedded`` to replace an older embedded server artifact without
+    downloading the existing model cache again."""
 
     skip_chat_model: bool = False
     gaia_lemonade: bool = False
@@ -239,6 +297,7 @@ class SetupRunRequest(BaseModel):
     keep_trying: bool = False
     extra_models: List[str] = []
     server_only: bool = False
+    upgrade_embedded: bool = False
 
 
 @router.post("/api/setup/run")
@@ -248,6 +307,17 @@ def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
     When the selected models need more disk than is free, answers 409
     ``low_disk`` until ``acknowledge_low_disk`` confirms it.
     """
+    if body.server_only and body.upgrade_embedded:
+        raise HTTPException(
+            status_code=422,
+            detail="Choose either server_only or upgrade_embedded, not both.",
+        )
+    if body.upgrade_embedded and body.extra_models:
+        raise HTTPException(
+            status_code=422,
+            detail="upgrade_embedded replaces the server without downloading, "
+            "so it takes no extra_models.",
+        )
     if body.server_only and body.extra_models:
         raise HTTPException(
             status_code=422,
@@ -267,6 +337,7 @@ def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
             not body.gaia_lemonade
             and not body.acknowledge_low_disk
             and not body.server_only
+            and not body.upgrade_embedded
         ):
             warning = plan_api.run_disk_warning(
                 skip_chat_model=body.skip_chat_model, extra_models=extras
@@ -280,6 +351,7 @@ def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
             keep_trying=body.keep_trying,
             extra_models=extras,
             server_only=body.server_only,
+            upgrade_embedded=body.upgrade_embedded,
         )
     except SetupPlanError as e:
         raise _plan_error(e, _PLAN_FAILED) from e

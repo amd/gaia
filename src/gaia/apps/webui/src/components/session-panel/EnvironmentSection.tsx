@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Cloud, File, Folder, FolderPlus, Monitor, ShieldAlert, ShieldCheck, Smartphone, X } from 'lucide-react';
 import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
+import { requestErrorText } from '../../utils/requestErrors';
 import { log } from '../../utils/logger';
 import { useInferencePlace, useModelStore, selectChipModel, displayModelName, UNKNOWN_PLACE_TITLE } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
@@ -38,11 +39,6 @@ const SOURCE_LABEL: Record<ScopeSource, MessageKey> = {
 };
 
 const FILES_SHOWN = 3;
-
-function errorText(err: unknown): string {
-    if (err instanceof api.ApiError) return err.detail || err.message;
-    return err instanceof Error ? err.message : String(err);
-}
 
 function baseName(path: string): string {
     const parts = path.split(/[\\/]/).filter(Boolean);
@@ -99,7 +95,7 @@ function RunsOn({ sessionId, busy }: { sessionId: string; busy: boolean }) {
             })
             .catch((err) => {
                 log.ui.warn('Could not read where the local model runs', err);
-                setError(errorText(err));
+                setError(requestErrorText(err));
             });
     }, [remote]);
     useEffect(load, [load]);
@@ -151,7 +147,7 @@ function Folders({ sessionId }: { sessionId: string }) {
         try {
             await op();
         } catch (err) {
-            setError(errorText(err));
+            setError(requestErrorText(err));
         } finally {
             setBusyPath(null);
         }
@@ -176,7 +172,7 @@ function Folders({ sessionId }: { sessionId: string }) {
                 : <File size={13} className="sp-item-icon" aria-hidden="true" />}
             <div className="sp-item-text">
                 <span className="sp-item-name" dir="auto" title={entry.path}>{baseName(entry.path)}</span>
-                <span className="sp-meta" title={entry.path}>{t(SOURCE_LABEL[entry.source])} · <span dir="ltr">{entry.path}</span></span>
+                <span className="sp-meta" title={entry.path}>{t(SOURCE_LABEL[entry.source])} · <span className="sp-item-path" dir="ltr">{entry.path}</span></span>
             </div>
             {entry.removable && !locked && (
                 <button
@@ -249,7 +245,7 @@ function Internet({ sessionId }: { sessionId: string }) {
         try {
             await change(() => api.setInternet(sessionId, on));
         } catch (err) {
-            setError(errorText(err));
+            setError(requestErrorText(err));
             // Saved even when the running turn couldn't be told, so show what was saved.
             void refresh();
         } finally {
@@ -290,7 +286,7 @@ function PhoneAccess() {
                 setStatus(expectShape(s, (r) => typeof r.active === 'boolean', 'phone access status'));
                 setError(null);
             })
-            .catch((err) => setError(errorText(err)));
+            .catch((err) => setError(requestErrorText(err)));
     }, []);
     useEffect(load, [load]);
     useMobileAccessState(() => { setPending(false); load(); });
@@ -335,7 +331,7 @@ function Permission({ sessionId }: { sessionId: string }) {
             .then((p) => {
                 if (live) setMode(expectShape(p, (r) => typeof r.mode === 'string', 'permission mode').mode);
             })
-            .catch((err) => { if (live) setError(errorText(err)); });
+            .catch((err) => { if (live) setError(requestErrorText(err)); });
         return () => { live = false; };
     }, [sessionId]);
     usePermissionModeEvents(sessionId, setMode);
@@ -348,7 +344,7 @@ function Permission({ sessionId }: { sessionId: string }) {
             setMode(saved);
             announcePermissionMode(sessionId, saved);
         } catch (err) {
-            setError(errorText(err));
+            setError(requestErrorText(err));
         }
     };
 

@@ -20,6 +20,7 @@ from gaia.llm import lemonade_client as lc
 from gaia.llm.lemonade_embedded import EmbeddedLemonade
 from gaia.llm.lemonade_manager import LemonadeManager
 from gaia.llm.providers.lemonade import LemonadeProvider
+from gaia.version import LEMONADE_VERSION
 
 OLD_PORT, OLD_KEY = 41001, "key-before-restart"
 NEW_PORT, NEW_KEY = 41002, "key-after-restart"
@@ -171,6 +172,7 @@ def _serve_status(monkeypatch):
         lc.LemonadeClient,
         "get_status",
         lambda self: lc.LemonadeStatus(
+            version=LEMONADE_VERSION,
             url=self.base_url,
             running=self.base_url == lc.running_embedded_lemonade_url(),
             context_size=65536,

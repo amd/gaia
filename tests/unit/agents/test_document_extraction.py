@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.extraction import MAX_TOKENS as EXTRACTION_MAX_TOKENS
 from gaia.agents.base.extraction import (
     PAGE_CHARS,
     Entry,
@@ -22,6 +23,7 @@ from gaia.agents.base.extraction import (
 )
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+from gaia.llm.lemonade_client import cloud_lowest_reasoning_effort
 from gaia.security import PathValidator
 
 
@@ -1695,3 +1697,113 @@ def test_extraction_tool_reports_a_missing_source_without_asking(
     assert result["status"] == "error"
     assert "not found" in result["error"].lower(), result
     assert asked == []
+
+
+@pytest.mark.parametrize(
+    "model_id, effort",
+    [
+        ("amd.Qwen3.8-Flash-Next", "low"),
+        # Rejects "none"; its accepted values are unknown, so none is sent.
+        ("amd.gpt-5.3-chat", None),
+        ("amd.Claude-Opus-5.5", "none"),
+        ("amd.DeepSeek-V4.1-Flash", "none"),
+        ("fireworks.gemma-4-31b-it", None),
+    ],
+)
+def test_cloud_extraction_sends_only_an_effort_the_model_accepts(
+    agent, tmp_path, model_id, effort
+):
+    (tmp_path / "minutes.txt").write_text("alpha")
+    agent.model_id = model_id
+    agent._extraction_ledger = ExtractionLedger(
+        "List every item in minutes.txt", str(tmp_path)
+    )
+    agent._tool_reported_usage = []
+    agent._register_extraction_tool()
+    sent = []
+    agent.chat.send_messages.side_effect = lambda **kw: sent.append(kw) or MagicMock(
+        text=reply("alpha"), usage={"total_tokens": 10}, stats={}
+    )
+
+    result = agent._tools_registry["extract_document_items"]["function"]("minutes.txt")
+
+    assert result.get("status") != "error", result
+    assert sent
+    for kwargs in sent:
+        assert kwargs.get("reasoning_effort") == effort
+        assert ("reasoning_effort" in kwargs) == (effort is not None)
+        assert "repeat_penalty" not in kwargs
+
+
+def _extract_with(agent, tmp_path, model_id, respond):
+    (tmp_path / "minutes.txt").write_text("alpha")
+    agent.model_id = model_id
+    agent._extraction_ledger = ExtractionLedger(
+        "List every item in minutes.txt", str(tmp_path)
+    )
+    agent._tool_reported_usage = []
+    agent._register_extraction_tool()
+    sent = []
+
+    def send(**kw):
+        sent.append(kw)
+        return respond(kw)
+
+    agent.chat.send_messages.side_effect = send
+    result = agent._tools_registry["extract_document_items"]["function"]("minutes.txt")
+    return result, sent
+
+
+def test_local_model_named_like_a_cloud_family_gets_no_reasoning_effort(
+    agent, tmp_path
+):
+    result, sent = _extract_with(
+        agent,
+        tmp_path,
+        "user.Qwen3.8-Flash-Next-GGUF",
+        lambda kw: MagicMock(text=reply("alpha"), usage={"total_tokens": 10}, stats={}),
+    )
+    assert result.get("status") != "error", result
+    assert sent
+    for kwargs in sent:
+        assert "reasoning_effort" not in kwargs
+        assert kwargs["repeat_penalty"] == 1.0
+
+
+@pytest.mark.parametrize("model_id", ["amd.Qwen3.8-Flash-Next", "amd.gpt-5.3-chat"])
+def test_a_cloud_page_that_exhausts_its_budget_fails_without_a_swapped_effort(
+    agent, tmp_path, model_id
+):
+    result, sent = _extract_with(
+        agent,
+        tmp_path,
+        model_id,
+        lambda kw: MagicMock(
+            text="",
+            finish_reason="length",
+            usage={"completion_tokens": EXTRACTION_MAX_TOKENS},
+            stats={},
+        ),
+    )
+    assert result["status"] == "error", result
+    assert "budget" in result["error"], result
+    # The page's own re-asks keep the effort; none of them swaps in "none".
+    assert sent
+    expected = cloud_lowest_reasoning_effort(model_id)
+    for kwargs in sent:
+        assert kwargs.get("reasoning_effort") == expected
+        assert ("reasoning_effort" in kwargs) == (expected is not None)
+
+
+def test_a_gateway_rejection_surfaces_instead_of_retrying_another_effort(
+    agent, tmp_path
+):
+    def reject(kw):
+        raise RuntimeError(
+            "400 Unexpected reasoning effort low. Supported types are xhigh, medium."
+        )
+
+    result, sent = _extract_with(agent, tmp_path, "amd.Qwen3.8-Flash-Next", reject)
+    assert result["status"] == "error", result
+    assert "reasoning effort" in result["error"], result
+    assert [kw.get("reasoning_effort") for kw in sent] == ["low"]

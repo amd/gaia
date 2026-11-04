@@ -83,6 +83,8 @@
     font-size: 12px;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+    /* Code reads as it runs, even in a right-to-left UI. */
+    text-align: left;
 }
 
 /* The exact line a one-time approval runs: never clipped, never collapsed. */

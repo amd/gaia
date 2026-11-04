@@ -161,6 +161,34 @@ def working_dir_credential_file(name: str) -> Optional[str]:
     return _working_dir_credential_files.get(name)
 
 
+def working_dir_credential(name: str) -> Optional[str]:
+    """*name* as a working-directory ``.env`` supplied it, else None."""
+    return _working_dir_credentials.get(name)
+
+
+def dotenv_credential_file(name: str, value: Optional[str] = None) -> Optional[str]:
+    """The ``.env`` file that supplied *value* for *name*, or None if the shell did.
+
+    *value* defaults to ``os.environ[name]``. Checks the working-directory file
+    (never merged into ``os.environ``) and the one at GAIA's install, which
+    :func:`load_env` merges in.
+    """
+    import gaia  # pylint: disable=import-outside-toplevel
+
+    if value is None:
+        value = os.environ.get(name)
+    if not value:
+        return _working_dir_credential_files.get(name)
+    if gaia.pre_dotenv_env(name) == value:
+        return None
+    if _working_dir_credentials.get(name) == value:
+        return _working_dir_credential_files.get(name)
+    install = _install_tree_dotenv()
+    if install is not None and dotenv.dotenv_values(install).get(name) == value:
+        return str(install)
+    return None
+
+
 def is_internal_secret(name: str) -> bool:
     """True for environment variables that carry GAIA's own credentials."""
     upper = name.upper()

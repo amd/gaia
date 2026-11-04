@@ -315,3 +315,29 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
                     logger.info("sidecar ledger: port %s freed after group-kill", port)
         _write_entries([])
         return killed
+
+
+def reap_after_stop(timeout: float = 5.0) -> "tuple[list[int], list[int]]":
+    """Once the daemon is gone, kill the sidecars it left running.
+
+    A daemon that was terminated, or whose shutdown hung, never ran
+    ``shutdown_all``, so its agents outlive it. Same identity gates as
+    :func:`reap_stale`. Call only when no daemon is running: a live daemon's
+    sidecars pass those gates too.
+
+    Returns ``(killed, survivors)``: the pids reaped, and those of them still
+    alive after *timeout* seconds.
+    """
+    import time
+
+    from gaia.daemon.sidecars.spec import builtin_specs
+
+    killed = reap_stale(builtin_specs())
+    survivors = list(killed)
+    deadline = time.monotonic() + timeout
+    while survivors:
+        survivors = [pid for pid in survivors if _pid_alive(pid)]
+        if not survivors or time.monotonic() >= deadline:
+            break
+        time.sleep(0.1)
+    return killed, survivors

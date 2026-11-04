@@ -23,7 +23,7 @@ npm install -g @amd-gaia/agent-ui
 gaia-ui
 ```
 
-The first time it opens, the app sets itself up: it installs GAIA's local model server, downloads the models and checks they load, with each step shown in the window. No accounts or API keys are needed to run locally.
+The first time it opens, the app checks your PC and suggests a setup, showing which models it will download and how much space they take. Nothing downloads until you choose **Download and start** (or **Customize** to change the models); it then downloads them and checks they load, with each step shown in the window. No accounts or API keys are needed to run locally.
 
 ---
 
@@ -120,6 +120,10 @@ stays in the queue marked **Not sent**, with the reason and **Send again**, and
 the messages after it wait so the order holds. Deleting a chat deletes its
 queued messages; the delete button says how many first.
 
+Deleting a chat, one at a time or with **Settings → Privacy → Delete all chats**,
+also removes its conversation and tool calls from Memory. What GAIA learned about
+you from it stays under **About you** in Memory; the delete confirmation says so.
+
 ### Compare Models on Your Question
 
 To see how another model answers, use **Retry with…** on the latest answer and
@@ -182,8 +186,9 @@ Pick the install path that fits you best:
   <Tab title="Desktop installer (easiest)">
     Prebuilt desktop installers are published on the
     [GitHub Releases page](https://github.com/amd/gaia/releases) alongside
-    each tagged release. They bundle the Electron shell; Lemonade Server and
-    the default model are downloaded automatically on first launch. This is
+    each tagged release. They bundle the Electron shell and Lemonade Server
+    and download no models; on first launch the app asks which models to
+    download. This is
     the simplest path for non-developer end users.
 
     If that first-launch setup fails (for example, too little free memory to
@@ -275,36 +280,78 @@ Pick the install path that fits you best:
       ```
     </Note>
 
-    **First run:** no separate setup command is needed. When the app opens on a
-    PC that is not set up yet, it checks the PC (device, memory, disk), asks
-    where GAIA runs, starts the local model server, and then shows the models
-    it will download before any byte moves: each with its purpose, the size
-    left to download, whether it is already on this PC, and a **Recommended
-    for this PC** mark. Untick any you don't want, tick others, or make a chat
-    model you already have in Lemonade (FLM/NPU included) the default. The
-    total updates against the free space on the drive Lemonade stores models
-    on; a model too big for this PC's memory or a selection too big for the
-    disk gets a warning with the numbers, and you can still go ahead. On an
-    integrated GPU (Strix Halo) where a bigger GPU share would let a larger
-    model run, setup offers to change it, or shows where to change it in AMD
-    Software, and checks the new split after you restart. It skips this step
-    when the larger model isn't one you want: you unticked it, or picked a
-    different chat model. Downloads then show
-    per-model and overall progress with speed and time left; Cancel keeps
-    what finished and what was partly downloaded, and **Retry** or **Resume**
-    continues from there. If one model fails, the ones that already downloaded
-    are kept and checked when you finish setup; only a model that downloaded
-    but won't load is deleted and downloaded again, after you confirm. Tick **Keep trying if the connection drops** to wait
-    out a dropped connection for up to two minutes; otherwise a dropped
-    connection fails at once with Retry. If you choose a Lemonade Server you
-    already run, setup uses it instead of installing GAIA's own. Running
-    `gaia init` yourself beforehand also works.
+    **First run:** no separate setup command is needed. The window opens and
+    GAIA checks the PC by itself: processor, GPU, NPU, memory, disk, its model
+    server and the backends this PC supports. **Check this PC** shows what it
+    found, with links to the models folder and GAIA's data and logs, and opens
+    each check and the full details on request. If a Lemonade Server already
+    runs on the PC, it asks whether to **Install GAIA's own** (the default)
+    or **Use the one I have**. It then recommends a setup, with the reasons, and **Download
+    and start** takes it. Each step's main action is at the bottom right, and
+    the language can be changed from the first screen.
+
+    **Customize** opens the model choices; the steps beside the screen stay
+    the same. **Run on** comes first: **Graphics (GPU)**, which uses llama.cpp
+    on Vulkan, or **Ryzen AI NPU**, which uses FastFlowLM, on a PC whose NPU has
+    the memory for GAIA's NPU model or already has an NPU model. These are the
+    two GAIA has tested. Picking one picks that device's chat model, and the
+    chat list shows only that device's models. Setup keeps llama.cpp on Vulkan
+    when it starts. On an integrated GPU, **Change how memory is split** opens GPU
+    memory from there or from Check this PC. It is optional: unless you pick a
+    new size, GAIA changes nothing. The models are grouped by job, and picking
+    a chat model updates the jobs that depend on it:
+
+    | Job | What you choose |
+    |---|---|
+    | Chat | One model. **Recommended** is what GAIA evaluated as the default for this PC, **Verified** passed GAIA's evaluations, and **Untested** runs at your own risk |
+    | Reading images | Nothing, when the chat model reads images itself. Otherwise Gemma 4 E4B is preselected, and you can pick another or skip it. Off when chat runs on the NPU: the NPU model doesn't read images, so setup says so and downloads nothing for it, and a chat with an image says the image won't be read |
+    | Documents and memory | The embedding model |
+    | Optional extras | Speech to text, text to speech and creating images, off by default. Creating images isn't available with Gemma 4 E4B |
+
+    **What you'll get** shows the result of those choices. A model too big for
+    this PC's memory, or a selection too big for the disk, gets a warning with
+    the numbers, and you can still go ahead.
+
+    **Download** lists everything that comes to this PC, with its size and
+    where it comes from: the model server, the model runtime, Python packages,
+    the GAIA agent and each model. Models show per-model and overall progress
+    with speed and time left. Cancel keeps what finished, and **Retry** or
+    **Resume** continues from there. Tick **Keep trying if the connection
+    drops** to wait out a dropped connection for up to two minutes. Optional
+    extras can be added here too; they are fetched and tested after the rest.
+
+    **Test** runs what you downloaded, because a download doesn't prove it
+    works: the server answers, the chat model loads and answers, the vision
+    model names the colour of a test image, the embedding model makes an
+    embedding, each extra does its job, and GAIA answers one real message,
+    on the cloud model when you chose one.
+    Setup says it's ready only when the required tests pass. A failed test
+    shows the error with **Test again**, **Choose another model** and, for a
+    broken model, an option to download it again. A model that failed for
+    any other reason, such as too little free memory or an empty answer,
+    keeps its file: its **Retry** tests it again without downloading it. A
+    test that doesn't finish in time stops with an error instead of hanging. Running `gaia init`
+    yourself beforehand also works.
+
+    Each step keeps a log, collapsed under it until you open it. **Save a
+    troubleshooting report** on any step saves setup's logs, GAIA's logs and
+    this PC's details in one file. Secrets kept in environment variables are
+    left out, but the logs go in as they are, so look it over before you share
+    it. A copy stays in `~/.gaia`.
+
+    Later, if a job needs a model that isn't on this PC, GAIA says which one,
+    how big it is and where it comes from, and offers **Download and
+    continue**. Your message waits until it's ready.
+
+    **Settings → Setup** lists everything setup chose, each with a link to where
+    you change it, and **Run setup again** goes through it once more. Your
+    models, keys and chats stay.
 
     Every choice can be changed later in **Settings → Model**: the default chat
-    model, **Models on this PC** (tick a skipped model and **Apply** to
-    download it; **Remove** deletes one only after you confirm), **GPU memory**
-    on integrated-GPU PCs, and the downloads in progress, which also show in
-    the sidebar while they run.
+    model and the models on this PC under **Manage downloads and disk space**
+    (tick a skipped model and **Apply** to download it; **Remove** deletes one
+    only after you confirm), **GPU memory** on integrated-GPU PCs, and the
+    downloads in progress, which also show in the sidebar while they run.
   </Tab>
 </Tabs>
 
@@ -466,9 +513,9 @@ as you flip it:
 
 - **Keep running when the window closes**: close hides the window instead of
   quitting.
-- **Start GAIA when you sign in.** On Windows this is the startup entry the
-  installer adds, so it starts on; once you turn it off, an update or reinstall
-  doesn't turn it back on. It also follows Task Manager → Startup apps. On Linux
+- **Start GAIA when you sign in.** Off until you turn it on; an entry an earlier
+  version added stays on, and an update keeps your choice. On Windows it also
+  follows Task Manager → Startup apps. On Linux
   this writes `gaia-agent-ui.desktop` to `$XDG_CONFIG_HOME/autostart` (usually
   `~/.config/autostart`). If the system refuses, or macOS waits for your
   approval in System Settings → Login Items, the switch stays off and says why.
@@ -563,17 +610,18 @@ with `LEMONADE_BASE_URL`: GAIA never unloads its models or stops it.
   transcription, vision, reranking, image or 3D), labelled by its type, with
   its name, backend and context window.
 
-To choose the backend, pick **Auto**, **Vulkan**, **ROCm** or **CPU** under
-*llama.cpp backend for chat models*. Only backends Lemonade can run on this PC
-are listed; one marked "downloads on first use" is fetched by Lemonade the
-first time it loads (ROCm is about 4 GB). The choice applies the next time the
-chat model loads; **Reload chat model now** applies it at once. The embedding
-model keeps its own backend.
+*llama.cpp backend for chat models* offers only the backends GAIA has tested:
+**Vulkan** for the GPU. A chat model on a Ryzen AI NPU runs on FastFlowLM
+instead; choose one with **Change model**, or under **Backend** when you
+Customize setup. A different backend saved earlier still loads and shows here,
+so you can switch it to Vulkan. The choice applies the next time the chat model
+loads; **Reload chat model now** applies it at once. The embedding model keeps
+its own backend.
 
 The same setting from a terminal:
 
 ```bash
-gaia config set llamacpp_backend rocm   # vulkan | rocm | metal | cpu | auto
+gaia config set llamacpp_backend vulkan   # vulkan | auto
 ```
 
 **Change model** opens Settings → Model. To use a different server, set
@@ -763,13 +811,23 @@ Connectors, Memory, Notifications, Privacy and Advanced (model server and
 llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
 back).
 
-**Settings → Model** lists each local model with where it runs, such as
-"GPU · Vulkan" or "NPU · FLM". You don't pick the device: each model is built
-for one. A loaded model shows the device Lemonade reports for it, and says so
-plainly if that isn't the expected one (a GPU model that fell back to the CPU
-runs slowly). Each row also shows whether the model fits this PC, its download
-size and the speed measured here. Models this PC can't run are under **Not
-available on this PC**, with the reason. **Context size** goes up to the
+If you chose a cloud provider during setup and this PC has no model server yet,
+the banner, **Settings → Model** and **Settings → Advanced** offer **Set up local
+models**. It reopens setup on **On this PC**, and **Back to GAIA** leaves it with
+nothing changed. Finishing it switches GAIA to the model it installed.
+
+**Settings → Model** opens on the **Model in use** card: the model, what it runs
+on, **Switch model** for the models ready to use, and **Context size**. Below
+it, models sit in groups you can open and close: **Downloaded**, **Available to
+download** and **Not available on this PC**, with the reason. A search opens
+every group it matches.
+
+Each row shows chips for the device (GPU or NPU), whether it's loaded and
+whether it fits this PC. **Details** has where it runs, such as "GPU · Vulkan"
+or "NPU · FLM", and the speed measured here. You don't pick the device: each
+model is built for one. A loaded model shows the device Lemonade reports for
+it, and says so plainly if that isn't the expected one (a GPU model that fell
+back to the CPU runs slowly). **Context size** goes up to the
 largest window that fits; **Automatic** is GAIA's choice, and a size you pick
 is kept for that model. For a model GAIA has no memory figures for, you can
 pick from 32K up to the window it was trained for. GAIA can't check those fit

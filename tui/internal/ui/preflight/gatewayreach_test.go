@@ -68,3 +68,18 @@ func TestTheFirstRunChooserGreysOutAndRefusesAnUnreachableGateway(t *testing.T) 
 		t.Fatalf("note = %q", m.note)
 	}
 }
+
+// However short the window, the gateway stays listed with why it can't be chosen.
+func TestAnUnreachableGatewayKeepsItsReasonInATightWindow(t *testing.T) {
+	m, _, _ := choosingGate(t, 110, 40)
+	for i := range m.rep.ChatOptions {
+		if m.rep.ChatOptions[i].Provider == "amd" {
+			m.rep.ChatOptions[i].Unavailable = "No network available — can't reach llm-api.amd.com (needs AMD's network or VPN)"
+		}
+	}
+	m.choice = 0
+	lines := strings.Join(m.chooserLines(110, 1), "\n")
+	if !strings.Contains(lines, "AMD LLM Gateway") || !strings.Contains(lines, "No network available") {
+		t.Fatalf("the tight chooser lost the gateway or its reason:\n%s", lines)
+	}
+}

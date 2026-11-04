@@ -66,6 +66,8 @@ try {
     beforeQuit: () => {
       fatalQuitting = true;
     },
+    // The install screen takes focus before anything has proved it can run.
+    holdCrashCount: () => showingInstallScreen,
   }));
 } catch (err) {
   try { process.stderr.write(`[main] safety-net load failed: ${err.message}\n`); } catch { }
@@ -90,6 +92,7 @@ const {
   fetchWorkInProgress,
   installQuitGuard,
   QUIT,
+  quitOnTermSignal,
   RESTART_FOR_UPDATE,
 } = require("./services/quit-guard.cjs");
 const AgentProcessManager = require("./services/agent-process-manager.cjs");
@@ -98,9 +101,9 @@ const KeepAwake = require("./services/keep-awake.cjs");
 const PortManager = require("./services/port-manager.cjs");
 const { isGaiaBackendProcess } = require("./services/backend-orphan.cjs");
 const { showBackendCrashDialog } = require("./services/backend-crash-dialog.cjs");
-const { buildIndexQuery } = require("./services/index-query.cjs");
+const { buildIndexQuery, INSTALL_SCREEN_QUERY } = require("./services/index-query.cjs");
 const backendInstaller = require("./services/backend-installer.cjs");
-const installerProgressDialog = require("./services/backend-installer-progress-dialog.cjs");
+const { createEngineInstall } = require("./services/engine-install.cjs");
 const autoUpdater = require("./services/auto-updater.cjs");
 const agentSeeder = require("./services/agent-seeder.cjs");
 const systemMetrics = require("./services/system-metrics.cjs");
@@ -246,10 +249,11 @@ let backendStderrTail = [];
 let isIntentionalKill = false;
 let mainWindow = null;
 
-// True until createWindow() runs. Guards window-all-closed from firing app.quit()
-// while the backend-installer progress dialog is open (it's the only window during
-// bootstrap, so destroying it would trigger a premature quit — issue #934).
-let isBootstrapping = true;
+// The window shows EngineInstallScreen, not the app, until the backend answers.
+let showingInstallScreen = false;
+
+/** @type {ReturnType<typeof createEngineInstall> | null} */
+let engineInstall = null;
 
 /** @type {TrayManager | null} */
 let trayManager = null;
@@ -283,7 +287,7 @@ let isQuitting = false;
  * orphaned `gaia chat --ui` process. On Windows that process keeps an open
  * handle on `gaia.exe`, so the next upgrade's `uv pip install --refresh` fails
  * with `os error 32` (file in use) — issue #1388. We MUST run this BEFORE the
- * installer (`bootstrapBackend()`), not just before spawning the new backend,
+ * installer (`engineInstall.run()`), not just before spawning the new backend,
  * so the executable can be replaced.
  *
  * The PID is read from ~/.gaia/backend.pid and verified to be a GAIA backend
@@ -330,7 +334,7 @@ async function cleanupOrphanedBackend() {
 /**
  * Start the GAIA Python backend. Expects the backend installer to have
  * already ensured the venv is populated — callers should await
- * `bootstrapBackend()` first.
+ * `engineInstall.run()` first.
  *
  * Returns the ChildProcess, or null if the gaia binary cannot be found
  * (shouldn't happen post-ensureBackend, but we guard just in case).
@@ -377,7 +381,15 @@ async function startBackend() {
       stdio: ["ignore", "pipe", "pipe"],
       // GAIA_APP_PID: GAIA's daemon unloads its models once this app exits
       // and no other GAIA client is using them.
-      env: { ...process.env, GAIA_APP_PID: String(process.pid) },
+      // GAIA_BUNDLED_LEMONADE_DIR: where EmbeddedLemonade.install() finds the
+      // archive this app ships (electron-builder.yml) instead of downloading it.
+      env: {
+        ...process.env,
+        GAIA_APP_PID: String(process.pid),
+        ...(app.isPackaged && {
+          GAIA_BUNDLED_LEMONADE_DIR: path.join(process.resourcesPath, "vendor", "lemonade"),
+        }),
+      },
       detached: false,
       windowsHide: true, // Prevent console window flash on Windows
     }
@@ -563,9 +575,19 @@ function titleDownloadSaveDialogs() {
   session.defaultSession.on("will-download", (_event, item) => {
     item.setSaveDialogOptions({
       title: "Save from GAIA",
-      defaultPath: path.join(app.getPath("downloads"), item.getFilename()),
+      defaultPath: saveFolderFor(item.getFilename()),
     });
   });
+}
+
+// Windows throws when the user's Downloads folder is missing or redirected away; the dialog still lets them pick one.
+function saveFolderFor(filename) {
+  try {
+    return path.join(app.getPath("downloads"), filename);
+  } catch (err) {
+    console.warn(`[GAIA] No Downloads folder to suggest for ${filename}: ${err.message}`);
+    return filename;
+  }
 }
 
 function createWindow() {
@@ -671,8 +693,8 @@ async function loadApp() {
     // renderer (apiBase.ts) validates this value against an allowlist
     // before using it — keep buildIndexQuery in sync with TRUSTED_API_RE.
     const indexPath = path.join(distPath, "index.html");
-    const indexQuery = buildIndexQuery(backendPort);
-    console.log("Loading app from:", indexPath, "api:", indexQuery.api);
+    const indexQuery = showingInstallScreen ? INSTALL_SCREEN_QUERY : buildIndexQuery(backendPort);
+    console.log("Loading app from:", indexPath, "query:", indexQuery);
     // Use pathToFileURL so the file:// URL always has forward slashes on
     // Windows — Chromium 130+ (Electron 40) rejects backslash file URLs
     // that Node's url.format() (used by loadFile) produces on Windows.
@@ -823,34 +845,16 @@ function setupJumpList() {
 
 // ── Backend Bootstrap (Phase A) ───────────────────────────────────────────
 
-/** First install found a Lemonade already running: use it, or install GAIA's own? */
-async function chooseLemonadeInDialog(found, parent) {
-  // Modal to the progress window and in front: otherwise it can open behind
-  // other windows while the install sits at 70% waiting for it.
-  const owner = parent && !parent.isDestroyed() ? parent : null;
-  if (owner) {
-    if (owner.isMinimized()) owner.restore();
-    owner.show();
-    owner.moveTop();
-    owner.focus();
-    // Windows can refuse focus to a background app; the taskbar flash is the hint.
-    if (!owner.isFocused()) owner.flashFrame(true);
+/** A failed install is on screen, even for a launch that started in the tray. */
+function showInstallFailure(err) {
+  // No frontend build to show it in: a source checkout that never ran `npm run build`.
+  if (!findDistPath()) {
+    _fatalHandler(err);
+    return;
   }
-  const box = {
-    type: "question",
-    title: "Lemonade Server found",
-    message: `A Lemonade Server (v${found.version}) is already running at ${found.url}. Use it instead of installing GAIA's own?`,
-    detail: "This avoids running two servers and keeping two copies of each model.",
-    buttons: ["Use my Lemonade", "Install GAIA's own"],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
-  };
-  const { response } = owner
-    ? await dialog.showMessageBox(owner, box)
-    : await dialog.showMessageBox(box);
-  if (owner && !owner.isDestroyed()) owner.flashFrame(false);
-  return response === 0 ? "external" : "gaia";
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : reopenWindow();
+  if (win.isMinimized()) win.restore();
+  win.show();
 }
 
 /** Lets an update fetch its backend before the restart, so the first launch is offline. */
@@ -862,125 +866,9 @@ function updateBackendHooks() {
 }
 
 /** Setup failed after an update: download the version before it and restart into it. */
-async function goBackToPreviousVersion(version) {
-  const progress = installerProgressDialog.createProgressWindow({ revertingTo: version });
-  const ticker = setInterval(() => {
-    const percent = autoUpdater.getState().progress;
-    progress.onProgress("revert-download", percent, `${percent}%`);
-  }, 500);
-  let failed = false;
-  let failure;
-  try {
-    autoUpdater.init(null, { confirmRestart: async () => true, ...updateBackendHooks() });
-    await autoUpdater.revertUpdate();
-  } catch (err) {
-    failed = true;
-    failure = err;
-  } finally {
-    clearInterval(ticker);
-  }
-  if (!failed) return true;
-  progress.close();
-  await dialog.showMessageBox({
-    type: "error",
-    title: "GAIA",
-    message: `GAIA couldn't go back to ${version}.`,
-    detail: `${(failure && failure.message) || failure}\n\nYou can also download it from https://github.com/amd/gaia/releases.`,
-    buttons: ["OK"],
-    noLink: true,
-  });
-  return false;
-}
-
-/**
- * Ensure the Python backend is installed before the main window loads.
- *
- * Shows a borderless progress window while the install runs. On failure,
- * surfaces a retry / manual / quit dialog. Loops until the user either
- * succeeds, chooses manual install, or quits.
- *
- * Returns true if the backend is ready, false if the user chose to quit.
- */
-async function bootstrapBackend() {
-  // Fast-path: if an install is obviously not needed (binary present and
-  // version matches), skip the progress window entirely and go straight to
-  // ensureBackend which will confirm readiness.
-  const existingBin = backendInstaller.findGaiaBin();
-  if (existingBin) {
-    const installedVersion = backendInstaller.getInstalledVersion(existingBin);
-    let expectedVersion = null;
-    try {
-      const pkg = JSON.parse(
-        fs.readFileSync(path.join(__dirname, "package.json"), "utf8")
-      );
-      expectedVersion = pkg.version;
-    } catch {
-      // ignore
-    }
-    if (installedVersion && installedVersion === expectedVersion) {
-      console.log(
-        `[main] GAIA backend already at ${installedVersion} — skipping bootstrap UI`
-      );
-      // Clean up any stale state file so the state machine reflects reality.
-      backendInstaller.setState(backendInstaller.STATES.READY, {
-        version: expectedVersion,
-        installedVersion,
-      });
-      return true;
-    }
-  }
-
-  // Slow path: need to install or upgrade. Show the progress window.
-  let keepTrying = true;
-  while (keepTrying) {
-    const progress = installerProgressDialog.createProgressWindow({
-      updating: Boolean(existingBin),
-    });
-
-    try {
-      await backendInstaller.ensureBackend({
-        onProgress: progress.onProgress,
-        isPackaged: app.isPackaged,
-        chooseLemonade: (found) => chooseLemonadeInDialog(found, progress.window),
-      });
-      progress.close();
-      console.log("[main] Backend bootstrap complete");
-      return true;
-    } catch (err) {
-      progress.close();
-      console.error(
-        `[main] Backend bootstrap failed: ${err && err.message ? err.message : err}`
-      );
-
-      const errorInfo = {
-        message: (err && err.message) || "GAIA install failed.",
-        stage: (err && err.stage) || null,
-        suggestion: (err && err.suggestion) || null,
-        revertTo: autoUpdater.previousVersion(),
-      };
-
-      const choice = await installerProgressDialog.showFailureDialog(
-        null,
-        errorInfo
-      );
-
-      if (choice === "retry") {
-        continue; // loop
-      }
-      if (choice === "revert") {
-        // On success the installer is taking over, so this launch ends.
-        if (await goBackToPreviousVersion(errorInfo.revertTo)) return false;
-        continue;
-      }
-      if (choice === "manual") {
-        // The user was directed to the docs in an external browser. Quit so
-        // they can complete the manual install and restart.
-        return false;
-      }
-      return false; // quit
-    }
-  }
-  return false;
+async function goBackToPreviousVersion() {
+  autoUpdater.init(null, { confirmRestart: async () => true, ...updateBackendHooks() });
+  await autoUpdater.revertUpdate();
 }
 
 // ── gaia:// deep-link install bridge (issue #1725) ──────────────────────────
@@ -1215,10 +1103,7 @@ if (process.platform === "win32") {
 
 app.on("second-instance", (_event, argv, _cwd) => {
   // A second launch happened while we were running. Surface our window
-  // (the user almost certainly wanted to see it). mainWindow may be null
-  // if we're still in the bootstrap phase — in that case the first
-  // instance is already showing the install progress dialog and there's
-  // nothing else to do.
+  // (the user almost certainly wanted to see it).
   if (typeof mainWindow !== "undefined" && mainWindow && !mainWindow.isDestroyed()) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     if (!mainWindow.isVisible()) mainWindow.show();
@@ -1241,6 +1126,34 @@ app.whenReady().then(async () => {
     });
     return;
   }
+
+  // The window, and the tray that keeps a closed one reachable, come before
+  // anything that can take time, so an install runs in plain sight.
+  titleDownloadSaveDialogs();
+  createWindow();
+  initializeServices();
+  engineInstall = createEngineInstall({
+    installer: backendInstaller,
+    ipcMain,
+    shell,
+    getWindow: () => mainWindow,
+    isPackaged: app.isPackaged,
+    onFailed: showInstallFailure,
+    previousVersion: () => autoUpdater.previousVersion(),
+    revert: goBackToPreviousVersion,
+  });
+
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      reopenWindow();
+    } else if (mainWindow) {
+      mainWindow.show();
+    }
+  });
+
+  // Decided before the window has a page, so a current backend never sees this screen.
+  showingInstallScreen = !backendInstaller.isBackendCurrent();
+  if (showingInstallScreen) await loadApp();
 
   // Phase 0: seed bundled agents BEFORE the Python backend starts, so the
   // agent registry sees them on its first discovery pass. Failures here are
@@ -1270,13 +1183,14 @@ app.whenReady().then(async () => {
   // unless that process is gone first (issue #1388).
   await cleanupOrphanedBackend();
 
-  // Phase A: ensure the Python backend is installed BEFORE creating the
-  // main window. The progress dialog owns the UI during this phase.
-  const bootstrapOk = await bootstrapBackend();
-  if (!bootstrapOk) {
-    console.log("[main] Backend bootstrap aborted — quitting");
-    app.quit();
-    return;
+  // Phase A: install or upgrade the Python backend behind EngineInstallScreen.
+  if (showingInstallScreen) {
+    const installed = await engineInstall.run();
+    if (!installed) {
+      console.log("[main] Quit during the backend install");
+      return;
+    }
+    engineInstall.starting();
   }
 
   // Start the Python backend
@@ -1287,14 +1201,9 @@ app.whenReady().then(async () => {
     console.log("[main] Quit during startup — not opening the window");
     return;
   }
-
-  // Create the window (hidden until ready-to-show)
-  titleDownloadSaveDialogs();
-  createWindow();
-  isBootstrapping = false; // progress dialog is gone; window-all-closed may now quit
-
-  // Initialize services (tray, agent manager, notifications)
-  initializeServices();
+  if (trayManager) trayManager.setBackendPort(backendPort);
+  // macOS: the user closed the window during a long install.
+  if (!mainWindow) reopenWindow();
 
   // Phase F: start the auto-updater (non-blocking). First check runs on
   // a 10s delay inside the module so it never competes with app launch.
@@ -1312,8 +1221,8 @@ app.whenReady().then(async () => {
   // Setup Windows Jump List (T11)
   setupJumpList();
 
-  // Show loading state
-  await loadApp();
+  // The install screen stays until the backend answers, then gives way to the app.
+  if (!showingInstallScreen) await loadApp();
 
   // Wait for backend API to be reachable. The bundled frontend
   // (loaded from dist/index.html in the asar) auto-detects when the
@@ -1339,6 +1248,11 @@ app.whenReady().then(async () => {
     }
   }
 
+  if (showingInstallScreen) {
+    showingInstallScreen = false;
+    if (mainWindow) await loadApp();
+  }
+
   // Act on any gaia:// deep link that arrived during bootstrap or via the
   // cold-start command line (issue #1725) — after the backend is listening,
   // because the install gate queries its catalog API.
@@ -1355,14 +1269,6 @@ app.whenReady().then(async () => {
 
   // macOS and Linux: the shutdown is the OS's, so don't ask.
   powerMonitor.on("shutdown", () => quitGuard.allow());
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      reopenWindow();
-    } else if (mainWindow) {
-      mainWindow.show();
-    }
-  });
 }).catch((err) => {
   // Route explicit rejection through the safety-net so the user gets a
   // GAIA-branded dialog and a stack trace in the log (issue #934).
@@ -1372,12 +1278,6 @@ app.whenReady().then(async () => {
 // ── Window-all-closed (C4 fix) ────────────────────────────────────────────
 // Don't quit when window is hidden — tray keeps app alive
 app.on("window-all-closed", () => {
-  // During bootstrap the progress dialog is the only open window. Destroying
-  // it (progress.close()) fires this event before the main window exists, which
-  // would trigger a premature app.quit() that races with the startup sequence
-  // and causes loadURL() to fail with ERR_FAILED (-2) — issue #934.
-  if (isBootstrapping) return;
-
   // If minimize-to-tray is active, the window is just hidden, not closed.
   // Only quit on macOS if the user explicitly quit (Cmd+Q).
   const trayActive = trayManager && trayManager.minimizeToTray;
@@ -1439,10 +1339,13 @@ const quitGuard = installQuitGuard({
   },
 });
 
+quitOnTermSignal({ proc: process, app, guard: quitGuard });
+
 installQuitCleanup({ app, cleanup });
 
 async function cleanup() {
   shutdownStarted = true;
+  const installStopped = engineInstall ? engineInstall.stop() : null;
 
   // Phase F: tear down auto-updater timers and IPC handlers.
   try {
@@ -1465,9 +1368,9 @@ async function cleanup() {
     keepAwake = null;
   }
 
-  // The agents and the backend stop side by side: each waits out its own
-  // grace period, and in series they could overrun the quit's time limit.
-  await Promise.all([stopAgentsForQuit(), stopBackendForQuit()]);
+  // The install, the agents and the backend stop side by side: each waits out
+  // its own grace period, and in series they could overrun the quit's time limit.
+  await Promise.all([installStopped, stopAgentsForQuit(), stopBackendForQuit()]);
 
   // Destroy tray icon
   if (trayManager) {

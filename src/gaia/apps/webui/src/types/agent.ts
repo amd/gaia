@@ -137,9 +137,63 @@ export interface GaiaWindowFrame {
   setColors: (colors: { color: string; symbolColor: string }) => Promise<boolean>;
 }
 
+/** FAILURE_REASONS in services/backend-installer.cjs. */
+export type EngineInstallReason = 'disk' | 'network' | 'tls' | 'locked' | 'daemon';
+
+export interface EngineInstallError {
+  stage: string | null;
+  reason: EngineInstallReason | null;
+  /** The installer's own first line, in English. */
+  message: string;
+  logTail: string[];
+  /** After a failed update: the version GAIA can go back to. */
+  previousVersion?: string | null;
+  /** After a 'locked' failure on Windows: the programs holding GAIA's files, or null when unknown. */
+  lockedBy?: EngineLockHolder[] | null;
+}
+
+/** services/lock-holders.cjs summarizeHolders(): one program holding GAIA's files open. */
+export interface EngineLockHolder {
+  pid: number;
+  /** Executable name, e.g. "gaia.exe". */
+  name: string | null;
+  /** Executable path; null when Windows won't say (another user's or an elevated process). */
+  path: string | null;
+  /** The folder holding its `.gaia`, else its own folder. */
+  folder: string | null;
+  /** A GAIA process outside this app, which the app may close when asked. */
+  isGaia: boolean;
+}
+
+/** services/engine-install.cjs: where the backend install has got to. */
+export interface EngineInstallStatus {
+  phase: 'running' | 'failed';
+  stage: string | null;
+  /** 0-100, or null for a stage with no percent to report. */
+  percent: number | null;
+  message: string;
+  error: EngineInstallError | null;
+}
+
+/** window.gaiaInstall (preload.cjs). */
+export interface GaiaInstallBridge {
+  onProgress: (cb: (status: EngineInstallStatus) => void) => () => void;
+  status: () => Promise<EngineInstallStatus>;
+  /** Resolves false when no failed install is waiting. */
+  retry: () => Promise<boolean>;
+  /** Past a failed agent update only; resolves false for any other failure. */
+  continueWithoutAgentUpdate: () => Promise<boolean>;
+  /** Installs the version before a failed update; the app restarts into it. */
+  revert: () => Promise<boolean>;
+  /** Ends the GAIA processes in error.lockedBy and installs again; false when that isn't on offer. */
+  closeLockingPrograms: () => Promise<boolean>;
+  openLogFile: () => Promise<{ ok: boolean; message: string | null }>;
+}
+
 declare global {
   interface Window {
     gaiaAPI?: GaiaElectronAPI;
     gaiaWindow?: GaiaWindowFrame;
+    gaiaInstall?: GaiaInstallBridge;
   }
 }

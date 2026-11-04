@@ -116,7 +116,7 @@ func TestABackgroundDownloadShowsOnTheStatusLine(t *testing.T) {
 
 	// Tick gpt-oss-20b and apply.
 	for _, k := range []tea.KeyMsg{
-		{Type: tea.KeyDown}, {Type: tea.KeyDown},
+		{Type: tea.KeyDown},
 		{Type: tea.KeySpace, Runes: []rune{' '}},
 		{Type: tea.KeyRunes, Runes: []rune("a")},
 	} {
@@ -237,7 +237,7 @@ func TestAHiddenDownloadThatFailsIsNotCalledFinished(t *testing.T) {
 			m = feedSetup(t, updated.(ChatModel), cmd)
 			var pending tea.Cmd
 			for _, k := range []tea.KeyMsg{
-				{Type: tea.KeyDown}, {Type: tea.KeyDown},
+				{Type: tea.KeyDown},
 				{Type: tea.KeySpace, Runes: []rune{' '}},
 				{Type: tea.KeyRunes, Runes: []rune("a")},
 				{Type: tea.KeyEsc},
@@ -284,7 +284,7 @@ func TestSetupComesBackWithTheChoiceLeft(t *testing.T) {
 	if !strings.Contains(ansi.Strip(m.View()), "[x] embeddinggemma-300m") {
 		t.Fatalf("embedder not ticked to start:\n%s", ansi.Strip(m.View()))
 	}
-	for _, k := range []tea.KeyMsg{{Type: tea.KeyDown}, {Type: tea.KeySpace, Runes: []rune{' '}}, {Type: tea.KeyEsc}} {
+	for _, k := range []tea.KeyMsg{{Type: tea.KeyDown}, {Type: tea.KeyDown}, {Type: tea.KeySpace, Runes: []rune{' '}}, {Type: tea.KeyEsc}} {
 		updated, cmd = m.Update(k)
 		m = feedSetup(t, updated.(ChatModel), cmd)
 	}

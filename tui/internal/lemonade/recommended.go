@@ -35,8 +35,6 @@ type Recommended struct {
 	MMProj     string  `json:"mmproj"`
 	Vision     bool    `json:"vision"`
 	Reasoning  bool    `json:"reasoning"`
-	// MinLemonade is the oldest Lemonade whose llama.cpp can load the model.
-	MinLemonade string `json:"min_lemonade_version"`
 	// MinCtxSize is the window GAIA loads the model with at the least, and
 	// KVBytesPerToken its KV cache per token of window; 0 when the fit rule's
 	// shared margin covers the cache.

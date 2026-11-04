@@ -45,19 +45,9 @@ from gaia.connectors.flow import (
 from gaia.connectors.providers import _registry
 
 
-@pytest.fixture
-def google_provider(monkeypatch):
-    monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
-    _registry.clear()
-    from gaia.connectors.providers import get as get_provider
-
-    return get_provider("google")
-
-
 @pytest.fixture(autouse=True)
-def _no_browser(monkeypatch):
-    """Replace webbrowser.open so tests don't actually launch a browser."""
-    monkeypatch.setattr("webbrowser.open", lambda *_, **__: True)
+def _no_browser(no_browser):
+    """Every flow test runs with the browser launch stubbed (see conftest)."""
 
 
 def _mock_token_endpoint(scope="openid"):

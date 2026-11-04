@@ -21,8 +21,6 @@ type Capacity struct {
 	MemorySource string
 	// DiskFreeGB is negative when Lemonade did not report its model store.
 	DiskFreeGB float64
-	// ServerVersion is Lemonade's own version, "" when it did not say.
-	ServerVersion string
 	// NPUMemoryGB is the system RAM an FLM model loads into: installed RAM
 	// less an APU's GPU carve-out. 0 when Lemonade reports no available NPU.
 	NPUMemoryGB float64
@@ -209,24 +207,13 @@ func gpuCapacityFrom(info systemInfo) (Capacity, error) {
 	return c, fmt.Errorf("Lemonade reported neither GPU memory nor system memory, so GAIA cannot tell which models fit this PC. Update Lemonade and retry")
 }
 
-// Capacity asks Lemonade what this machine can hold, and which Lemonade it is.
+// Capacity asks Lemonade what this machine can hold.
 func (c *Client) Capacity(ctx context.Context) (Capacity, error) {
 	var info systemInfo
 	if err := c.request(ctx, "GET", "/system-info", nil, &info); err != nil {
 		return Capacity{}, err
 	}
-	capacity, err := capacityFrom(info)
-	if err != nil {
-		return capacity, err
-	}
-	var health struct {
-		Version string `json:"version"`
-	}
-	if err := c.request(ctx, "GET", "/health", nil, &health); err != nil {
-		return capacity, err
-	}
-	capacity.ServerVersion = health.Version
-	return capacity, nil
+	return capacityFrom(info)
 }
 
 // versionAtLeast compares Lemonade versions by the leading digits of each part,
@@ -263,19 +250,6 @@ func versionAtLeast(have, want string) bool {
 		}
 	}
 	return true
-}
-
-// SupportsModel mirrors gaia.llm.model_fit.check_server_supports: an unknown
-// server version cannot show support.
-func (c Capacity) SupportsModel(minVersion string) (bool, string) {
-	if minVersion == "" || versionAtLeast(c.ServerVersion, minVersion) {
-		return true, ""
-	}
-	running := "this server's version is unknown"
-	if c.ServerVersion != "" {
-		running = "this server is v" + c.ServerVersion
-	}
-	return false, fmt.Sprintf("needs Lemonade v%s or newer (%s); upgrade it with `gaia init --force-reinstall`", minVersion, running)
 }
 
 // RequiredMemoryGB is the memory a model of sizeGB weights needs to run.

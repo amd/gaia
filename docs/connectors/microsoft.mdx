@@ -130,14 +130,13 @@ You can adjust or revoke grants at any time from the same tile's
 **Per-agent grants** section, or via the CLI:
 
 ```bash
-# Grant an agent read-only Outlook mail access (personal connector)
-gaia connectors grants grant microsoft builtin:chat \
-  --scopes https://graph.microsoft.com/Mail.Read
-
-# Same, for the work/school connector
-gaia connectors grants grant microsoft_work builtin:chat \
+# Grant the flagship read-only Outlook mail access (personal connector)
+gaia connectors grants grant microsoft installed:gaia \
   --scopes https://graph.microsoft.com/Mail.Read
 ```
+
+Mail tools only read the personal `microsoft` connector. A grant on
+`microsoft_work` is stored, but it does not unlock Outlook for the flagship.
 
 The scopes a connection can request are identical for both connectors (they
 share one scope list in the catalog spec) and are listed at

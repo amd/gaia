@@ -479,6 +479,29 @@ func TestMissingCLISetupCheckDoesNotSuggestGaiaInit(t *testing.T) {
 	}
 }
 
+// A terminal-only install has no `gaia` CLI. Pressing enter on a setup step
+// said to run setup in a terminal and showed `gaia init`: the same missing CLI.
+func TestSetupWithoutTheCLINamesTheInstaller(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) { return "", gaiainit.ErrNoCLI })
+
+	for _, kind := range []FixKind{FixInstallServer, FixRunSetup} {
+		d := localRunner{}.Fix(context.Background(), localCfg(), kind, nil).Diagnosis
+		if d.Command != gaiainit.InstallCommand || d.PowerShell != gaiainit.InstallPowerShellCommand {
+			t.Errorf("fix %v suggests %q / %q, want the installers", kind, d.Command, d.PowerShell)
+		}
+		if strings.Contains(d.Command+d.Remedy, "gaia init") || strings.Contains(d.Remedy, "in a terminal") {
+			t.Errorf("fix %v remedy %q points back at the missing CLI", kind, d.Remedy)
+		}
+		// The installer adds gaia to PATH for new shells only, so a re-check here finds nothing.
+		if strings.Contains(d.Remedy, "press r") || !strings.Contains(d.Remedy, "new terminal") {
+			t.Errorf("fix %v remedy %q must send the user to a new terminal", kind, d.Remedy)
+		}
+		if d.Cause == "" || d.Cause[0] < 'A' || d.Cause[0] > 'Z' {
+			t.Errorf("fix %v cause %q must read as a sentence after \"Setup stopped. \"", kind, d.Cause)
+		}
+	}
+}
+
 // Exit 2 is what an installed gaia older than `--check` returns for
 // "unrecognized arguments". Reading it as "not ready" ran a full multi-minute
 // `gaia init` on EVERY launch.
@@ -574,7 +597,31 @@ func TestExitThreeIsARealFailureNotAStep(t *testing.T) {
 	}
 }
 
+// A model the load check could not fit in free memory is not a broken file:
+// the row says so and asks for memory, never a restart or a download.
+func TestALoadShortOfMemorySaysSo(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) { return jsonStub(t, 3, chatShortOfMemoryJSON), nil })
+
+	row := modelRow(localRunner{})
+
+	if row.State != StateFailed || row.Optional {
+		t.Fatalf("a chat model short of memory is %s optional=%v, want a real failure", row.State.Word(), row.Optional)
+	}
+	if strings.Contains(row.Line, "will not load") || !strings.Contains(row.Line, "free memory") {
+		t.Errorf("line = %q, want it to name the memory, not a broken model", row.Line)
+	}
+	if !strings.Contains(row.Detail, "enough free memory") {
+		t.Errorf("detail = %q", row.Detail)
+	}
+	if !strings.Contains(row.Remedy.Action, "free memory") || row.Remedy.Command != "" {
+		t.Errorf("remedy = %+v, want to free memory, with no command", row.Remedy)
+	}
+}
+
 const (
+	chatShortOfMemoryJSON = `{"ready": false, "stage": "load", "reasons": ["x"], "models": [` +
+		`{"id": "Gemma-4-E4B-it-GGUF", "role": "chat", "size_gb": 3.2, "loaded": false, ` +
+		`"error": "Not enough free memory", "kind": "memory"}]}`
 	setupJSON = `{"ready": false, "stage": "setup", "reasons": ["x"], "models": [` +
 		`{"id": "user.embeddinggemma-300m-GGUF", "role": "embedding", "size_gb": 0.3, "loaded": false, "error": null},` +
 		`{"id": "Gemma-4-E4B-it-GGUF", "role": "chat", "size_gb": 3.2, "loaded": false, "error": null}]}`
@@ -927,12 +974,12 @@ func TestAServerThatStopsAnsweringIsAFaultNotAStep(t *testing.T) {
 // A system Lemonade the TUI cannot start itself must not get GAIA's private one
 // started beside it.
 func TestAutoStartLeavesASystemInstallAlone(t *testing.T) {
-	// A legacy CLI install: found, but with no form the TUI may spawn.
-	legacy := fakeHostFor("linux", []string{"lemonade-server"}, nil, map[string]string{})
-	if l := resolveLemonadeWith(legacy); !l.Found || canAutoStart(l) {
+	// A macOS app bundle: found, but with no form the TUI may spawn.
+	appOnly := fakeHostFor("darwin", nil, []string{"/Applications/lemonade-app.app"}, map[string]string{})
+	if l := resolveLemonadeWith(appOnly); !l.Found || canAutoStart(l) {
 		t.Fatalf("fixture is not a found-but-human-only install: %+v", l)
 	}
-	downLemonadeOn(t, legacy)
+	downLemonadeOn(t, appOnly)
 	installEmbedded(t)
 	restore := tryAutoStartLemonade
 	t.Cleanup(func() { tryAutoStartLemonade = restore })

@@ -221,6 +221,18 @@ def _rag_not_available() -> str:
     return f"RAG not available. {missing_extra_hint('rag')}"
 
 
+def _rag_unavailable_message(host: Any) -> str:
+    """Why a document tool cannot run.
+
+    "Install the RAG extra" is only true when the extra failed to import.
+    A config or embedder error keeps its own cause.
+    """
+    error = getattr(host, "_rag_init_error", None)
+    if error is None or isinstance(error, ImportError):
+        return _rag_not_available()
+    return f"RAG failed to start: {type(error).__name__}: {error}"
+
+
 def _embedding_next_step(unreachable: bool, retry: str, busy: bool = False) -> str:
     if busy:
         return (
@@ -356,13 +368,6 @@ def _chunks_have_pages(chunks: List[Dict[str, Any]]) -> bool:
     return any("page" in chunk for chunk in chunks)
 
 
-_MARKER_NOTE = (
-    "A chunk's 'page' is where it starts; text after a '[Page N]' marker inside "
-    "it is on page N, so cite N for facts that follow the marker and the page "
-    "before N for facts ahead of it."
-)
-
-
 def _question_language_note(question: str, chunks: List[Dict[str, Any]]) -> str:
     """Name the question when the chunks could pull the answer into their language."""
     asked = text_scripts(question)
@@ -400,6 +405,42 @@ def _answers_in_question_language(mixin: Any):
     return wrap
 
 
+_SEARCH_AGAIN_NOTE = (
+    "\n\nIf these chunks do not answer the question, do not say so yet: search once "
+    "more with different words (other terms for the same thing, and the question's "
+    "words in the document's language). If that search misses too, say it is not "
+    "in the documents."
+)
+
+
+_NO_TURN = object()
+
+
+def _asks_once_for_another_search(mixin: Any):
+    """Ask for one more search before "not in the document", once per turn.
+
+    Only the turn's first search that returns chunks carries the note, so it
+    buys one extra search and never a chain of them.
+    """
+
+    def wrap(search: Callable[..., Dict[str, Any]]):
+        @functools.wraps(search)
+        def wrapper(*args, **kwargs) -> Dict[str, Any]:
+            result = search(*args, **kwargs)
+            if result.get("status") != "success" or not result.get("chunks"):
+                return result
+            turn = getattr(mixin, "_turn_seq", None)
+            if getattr(mixin, "_search_again_turn", _NO_TURN) == turn:
+                return result
+            mixin._search_again_turn = turn
+            result["instruction"] = result.get("instruction", "") + _SEARCH_AGAIN_NOTE
+            return result
+
+        return wrapper
+
+    return wrap
+
+
 def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
     """How query_documents asks the model to cite: the full path, plus pages if any."""
     instruction = (
@@ -413,9 +454,7 @@ def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
         instruction += (
             "Format: 'According to <absolute_path> (page X):'\n"
             "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
-            "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n"
-            + _MARKER_NOTE
-            + "\n\n"
+            "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n\n"
         )
         if not all_paged:
             instruction += (
@@ -449,8 +488,7 @@ def _file_instruction(file_name: str, num_chunks: int, has_pages: bool) -> str:
         f"Your answer MUST start with: 'According to {file_name}, page X:' where X is the "
         "page number from the chunk's 'page' field.\n\n"
         f"Example: If chunk has 'page': 2, say 'According to {file_name}, page 2:'\n"
-        f"If info from multiple pages, say 'According to {file_name}, pages 2 and 5:'\n"
-        + _MARKER_NOTE
+        f"If info from multiple pages, say 'According to {file_name}, pages 2 and 5:'"
     )
 
 
@@ -499,6 +537,54 @@ def extract_page_from_chunk(
 
 # Markers the extractor writes inside a page, not at its start.
 _IN_PAGE_SECTION = re.compile(r"\s*(?:\*\*Content Extracted|### |\*\*Speaker Notes)")
+
+
+# Text one default-size chunk (~500 tokens) costs the prompt.
+_CHUNK_CHARS = 2000
+
+
+def top_or_whole_index(
+    ranked: List[tuple], candidates: List[str], limit: int, chunk_chars: int
+) -> List[tuple]:
+    """Return the top ``limit`` (chunk, score) pairs, or every candidate when
+    all of them fit in the text ``limit`` full-size chunks would take.
+
+    A rollup over eight one-paragraph reports must see all eight.
+    """
+    if sum(len(chunk) for chunk in candidates) > limit * chunk_chars:
+        return ranked[:limit]
+    seen = {chunk for chunk, _ in ranked}
+    rest = []
+    for chunk in candidates:
+        if chunk not in seen:
+            seen.add(chunk)
+            rest.append((chunk, 0.0))
+    return ranked + rest
+
+
+def split_entries_at_pages(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """*entries* with each page-spanning chunk split, so every 'page' field is true.
+
+    A model cites the field, so a chunk starting on page 22 that runs into page
+    23 would have page 23's facts cited as page 22.
+    """
+    split = []
+    for entry in entries:
+        content, page, start = entry["content"], entry.get("page"), 0
+        for marker in _PAGE_MARKER.finditer(content):
+            if page is None or _IN_PAGE_SECTION.match(content, marker.end()):
+                continue
+            text = content[start : marker.start()].strip()
+            if text:
+                split.append({**entry, "content": text, "page": page})
+            start, page = marker.start(), int(marker.group(1))
+        tail = {**entry, "content": content[start:]}
+        if page is not None:
+            tail["page"] = page
+        split.append(tail)
+    for number, entry in enumerate(split, 1):
+        entry["chunk_id"] = number
+    return split
 
 
 def _page_before(chunk_index, all_chunks, chunk_to_file):
@@ -553,6 +639,7 @@ class RAGToolsMixin:
             atomic=True,
         )
         @_answers_in_question_language(self)
+        @_asks_once_for_another_search(self)
         def query_documents(
             query: str, debug: bool = False  # pylint: disable=unused-argument
         ) -> Dict[str, Any]:
@@ -565,7 +652,12 @@ class RAGToolsMixin:
             """
             rag = _require_rag(self)
             try:
-                # Check if RAG is initialized and has documents
+                # None with no startup error means RAG is off. A recorded failure is an error.
+                if not rag and getattr(self, "_rag_init_error", None) is not None:
+                    return {
+                        "status": "error",
+                        "error": _rag_unavailable_message(self),
+                    }
                 if not rag or not rag.index or len(rag.chunks) == 0:
                     message = self._no_documents_message()
                     return {
@@ -573,6 +665,8 @@ class RAGToolsMixin:
                         "message": message,
                         "instruction": (
                             f"{message} "
+                            "If the user named a folder or file to index, call index_directory "
+                            "or index_document on it now, without asking, then query again. "
                             "For domain-specific questions (HR policies, PTO, remote work, company procedures, "
                             "financial data, project plans, technical specs): use the SMART DISCOVERY WORKFLOW — "
                             "use search_file to find relevant files, index_document to index them, then query_specific_file to answer. "
@@ -802,8 +896,14 @@ class RAGToolsMixin:
                 else:
                     adaptive_max = self.max_chunks  # Default (5) for small docs
 
-                top_chunks = [chunk for chunk, score in sorted_items[:adaptive_max]]
-                top_scores = [score for chunk, score in sorted_items[:adaptive_max]]
+                kept = top_or_whole_index(
+                    sorted_items,
+                    rag.chunks,
+                    adaptive_max,
+                    _CHUNK_CHARS,
+                )
+                top_chunks = [chunk for chunk, score in kept]
+                top_scores = [score for chunk, score in kept]
 
                 # Find the actual chunk indices from the RAG system
                 chunk_indices = []
@@ -850,10 +950,11 @@ class RAGToolsMixin:
                     if _page is not None:
                         _entry["page"] = _page
                     formatted_chunks.append(_entry)
+                formatted_chunks = split_entries_at_pages(formatted_chunks)
 
                 # Update debug info with final chunks
                 if debug_info:
-                    debug_info["final_chunks_returned"] = len(top_chunks)
+                    debug_info["final_chunks_returned"] = len(formatted_chunks)
                     debug_info["score_distribution"] = {
                         "max": float(max(top_scores)) if top_scores else 0,
                         "min": float(min(top_scores)) if top_scores else 0,
@@ -889,9 +990,9 @@ class RAGToolsMixin:
                 # Return chunks for agent to use in answer generation
                 result = {
                     "status": "success",
-                    "message": f"Found {len(top_chunks)} relevant document chunks",
+                    "message": f"Found {len(formatted_chunks)} relevant document chunks",
                     "chunks": formatted_chunks,
-                    "num_chunks": len(top_chunks),
+                    "num_chunks": len(formatted_chunks),
                     "search_keys_used": search_keys,
                     "source_files": matched_source_files,
                     "instruction": _documents_instruction(
@@ -929,6 +1030,7 @@ class RAGToolsMixin:
             timeout=600,
         )
         @_answers_in_question_language(self)
+        @_asks_once_for_another_search(self)
         def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
             """
             Query a specific file for fast, targeted retrieval.
@@ -940,7 +1042,7 @@ class RAGToolsMixin:
                 if not rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 # Debug information collection
@@ -1279,8 +1381,18 @@ class RAGToolsMixin:
                 else:
                     adaptive_max = self.max_chunks  # Default (5) for small docs
 
-                top_chunks = [chunk for chunk, score in sorted_items[:adaptive_max]]
-                top_scores = [score for chunk, score in sorted_items[:adaptive_max]]
+                kept = top_or_whole_index(
+                    sorted_items,
+                    [
+                        rag.chunks[i]
+                        for i in rag.file_to_chunk_indices.get(str(target_file), [])
+                        if i < len(rag.chunks)
+                    ],
+                    adaptive_max,
+                    _CHUNK_CHARS,
+                )
+                top_chunks = [chunk for chunk, score in kept]
+                top_scores = [score for chunk, score in kept]
 
                 # Update debug info with final chunks
                 if debug_info:
@@ -1334,17 +1446,18 @@ class RAGToolsMixin:
                     if _page is not None:
                         _entry["page"] = _page
                     formatted_chunks.append(_entry)
+                formatted_chunks = split_entries_at_pages(formatted_chunks)
 
                 result = {
                     "status": "success",
-                    "message": f"Found {len(top_chunks)} relevant chunks in {Path(target_file).name}",
+                    "message": f"Found {len(formatted_chunks)} relevant chunks in {Path(target_file).name}",
                     "chunks": formatted_chunks,
                     "file": str(target_file),
                     "source_files": [source_path],
                     "auto_indexed": auto_indexed,
                     "instruction": _file_instruction(
                         Path(target_file).name,
-                        len(top_chunks),
+                        len(formatted_chunks),
                         _chunks_have_pages(formatted_chunks),
                     ),
                 }
@@ -1387,7 +1500,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 # Debug information collection
@@ -1557,7 +1670,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 # Before the existence probe, as in read_file.
@@ -1688,12 +1801,8 @@ class RAGToolsMixin:
             try:
                 if not self.rag:
                     return {
-                        "status": "success",
-                        "documents": [],
-                        "count": 0,
-                        "total_chunks": 0,
-                        "total_size_mb": 0,
-                        "message": self._no_documents_message(),
+                        "status": "error",
+                        "error": _rag_unavailable_message(self),
                     }
                 docs = list(self.rag.indexed_files)
 
@@ -1770,7 +1879,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
                 status = self.rag.get_status()
 
@@ -1824,7 +1933,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 matching_files = _match_indexed_files(self.rag.indexed_files, file_path)
@@ -2136,7 +2245,7 @@ references from the section summaries.
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 matching_files = _match_indexed_files(self.rag.indexed_files, file_name)
@@ -2252,7 +2361,7 @@ references from the section summaries.
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 dir_path = _resolve_target(
