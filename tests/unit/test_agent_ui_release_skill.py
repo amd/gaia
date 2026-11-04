@@ -37,7 +37,7 @@ def test_surfaces_ignore_tests_docs_and_ci():
     files = [
         "src/gaia/apps/webui/src/components/ChatView.tsx",
         "src/gaia/apps/webui/src/components/__tests__/ChatView.test.tsx",
-        "docs/guides/agent-ui.mdx",
+        "docs/guides/not-a-real-page.mdx",
         ".github/workflows/x.yml",
         "src/gaia/ui/routers/chat.py",
     ]
