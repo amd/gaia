@@ -1726,6 +1726,8 @@ export const enMessages = {
     'settings.desktop.startMinimized': 'Start in the {tray}',
     'settings.desktop.startMinimizedHint': 'GAIA opens without its window. Use the {tray} icon to show it.',
     'settings.desktop.readFailed': "Couldn't read the desktop settings: {reason}",
+    'settings.desktop.noTray': "Your desktop doesn't show tray icons, so closing the window quits GAIA. On GNOME, turn on the AppIndicator extension, then restart GAIA.",
+    'settings.desktop.noTrayCheckFailed': "GAIA couldn't check whether your desktop shows tray icons, so closing the window quits GAIA.",
     'settings.server.readFailed': 'Could not read which model server GAIA uses',
     'settings.server.usesEnv': 'GAIA uses the Lemonade Server at {url}, set by LEMONADE_BASE_URL.',
     'settings.server.usesYours': 'GAIA uses your Lemonade Server at {url}.',
