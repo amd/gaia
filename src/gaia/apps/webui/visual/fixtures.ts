@@ -137,6 +137,7 @@ const ROUTES: Record<string, unknown> = {
     'POST /system/warm-up': SYSTEM_STATUS.warm_up,
     'GET /setup/check': { ready: true, steps: [] },
     'GET /setup/status': { state: 'idle' },
+    'GET /setup/needs/chat': { job: 'chat', needed: false, model: null, disk_free_gb: null },
     'GET /settings': { custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false },
     'GET /providers': {
         providers: [
