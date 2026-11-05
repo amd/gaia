@@ -2,6 +2,8 @@ package preflight
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -201,6 +203,26 @@ func TestNothingStartsWhenLemonadeLivesOnAnotherMachine(t *testing.T) {
 				t.Error("the row lost its `f` key")
 			}
 		})
+	}
+}
+
+// GAIA's own, chosen in the Agent UI over a LEMONADE_BASE_URL naming another
+// machine: the gate starts GAIA's own, as the agent will use it.
+func TestAnIgnoredLemonadeURLOnAnotherMachineStillStarts(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(cfg, []byte(`{"lemonade_mode":"gaia","lemonade_env_url_ignored":"http://10.20.30.40:13305"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GAIA_CONFIG_FILE", cfg)
+	t.Setenv("GAIA_LEMONADE_EMBEDDED", "")
+	t.Setenv(lemonadeBaseURLEnv, "http://10.20.30.40:13305")
+	if lemonadeElsewhere() {
+		t.Fatal("the ignored address still counts as the user's remote server")
+	}
+	f := newFake()
+	f.attachErr = &daemon.NotRunningError{Path: "/tmp/instance.json"}
+	if m, _ := newAutoModel(t, f); !m.Busy() {
+		t.Error("an ignored LEMONADE_BASE_URL stopped the daemon from starting")
 	}
 }
 

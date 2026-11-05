@@ -5,7 +5,8 @@ import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties }
 import { Activity, Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Clock } from 'lucide-react';
 import { MessageBubble, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
-import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
+import { agentEventToStep } from '../utils/streamSteps';
+import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
 import { ensureModel, modelKnownReady } from '../stores/modelNeededStore';
@@ -53,6 +54,7 @@ import { isPlaceholderTitle } from '../utils/sessionTitle';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
+import { ModelServerDownNotice } from './ModelServerDownNotice';
 import { useChatDraft } from '../hooks/useSavedDraft';
 import { getT, useT } from '../i18n/useT';
 
@@ -109,6 +111,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const setNotificationTypeFilter = useNotificationStore((s) => s.setTypeFilter);
     const pendingPrompt = useChatStore((s) => (s.pendingPrompt?.sessionId === sessionId ? s.pendingPrompt : null));
     const liveStatus = useChatStore((s) => s.liveStatus);
+    const toolStatus = useChatStore(selectToolStatus);
     const awaitingUser = useChatStore((s) => s.awaitingUser);
     // Other events can arrive while a question waits; it still waits on the user.
     const hasLiveQuestion = useChatStore((s) => Object.values(s.liveQuestions).some((q) => q.sessionId === sessionId));
@@ -815,6 +818,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         risk: typeof event.risk === 'string' ? event.risk : undefined,
                         // A relayed agent sends a summary of the call instead of its args.
                         summary: typeof event.summary === 'string' && event.summary ? event.summary : undefined,
+                        pathFollowUp: followUp || undefined,
                         // No timeout from the backend means it waits; don't invent one.
                         timeoutSeconds: event.timeout_seconds,
                     });
@@ -985,6 +989,22 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
+                // Not the answer: it was reasoning (a lone </think>), or was cut off (status; say so).
+                if (event.retracts_answer) {
+                    fullContent = '';
+                    toolOccurredRef.current = false;
+                    streamBufferRef.current = '';
+                    setStreamContent('');
+                    if (event.type === 'status') {
+                        const step = agentEventToStep(
+                            { type: 'status', status: 'warning', message: getT()('live.answerRestarted') } as StreamEvent,
+                            stepIdRef,
+                        );
+                        if (step) addAgentStep(step);
+                        return;
+                    }
+                }
+
                 // One "Thinking" step per turn. appendThinkingContent() appends
                 // inside a single set(), so racing chunks never lose text.
                 if (event.type === 'thinking') {
@@ -1000,46 +1020,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
-                // ── Consolidate status events ────────────────────────────
-                // Working/info status messages are progress indicators.
-                // Consolidate consecutive ones into a single entry.
                 if (event.type === 'status') {
-                    const status = event.status;
-                    const msg = (event.message || '').trim();
-                    if (status === 'history_cut') {
-                        historyNotice = msg || undefined;
+                    if (event.status === 'history_cut') {
+                        historyNotice = (event.message || '').trim() || undefined;
                         setLiveHistoryNotice(historyNotice ?? null);
                         return;
                     }
-                    if (event.phase && msg) useChatStore.getState().setLiveStatus(msg, event.phase);
-                    // The client's own wait notice is not a step of the turn.
-                    if (event.phase === 'waiting') return;
-                    if (isProgressTick(event)) return;
-                    // Skip "Executing <tool>" messages - redundant with tool_start
-                    if (msg.toLowerCase().startsWith('executing ')) return;
-                    if (status === 'working' || status === 'warning' || status === 'info') {
-                        const currentSteps = useChatStore.getState().agentSteps;
-                        const lastStep = currentSteps[currentSteps.length - 1];
-                        // Consolidate with previous status step (but NOT thinking —
-                        // overwriting a thinking step's detail would discard all
-                        // accumulated thinking text).
-                        if (lastStep && lastStep.type === 'status' && lastStep.active) {
-                            updateLastAgentStep({
-                                label: msg || 'Working',
-                                detail: msg,
-                            });
-                            return;
-                        }
-                        // If the last step is thinking, update only the label
-                        // so the summary bar shows the status, but preserve the
-                        // accumulated thinking detail.
-                        if (lastStep && lastStep.type === 'thinking' && lastStep.active) {
-                            updateLastAgentStep({ label: msg || 'Thinking' });
-                            return;
-                        }
-                        const step = agentEventToStep(event, stepIdRef);
-                        if (step) addAgentStep(step);
-                    }
+                    applyStatusEvent(event, stepIdRef);
                     return;
                 }
 
@@ -1113,6 +1100,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         cards: cardsSnapshot.length > 0 ? cardsSnapshot : undefined,
                         stopState,
                         historyNotice,
+                        failure: event.failed ? event.failure : undefined,
                     };
                     if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
                     addMessage(assistantMsg);
@@ -1149,6 +1137,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     ...m,
                                     cards: prev?.cards ?? m.cards,
                                     stopState: m.stopState ?? prevMsgs.find((p) => p.id === m.id)?.stopState,
+                                    failure: m.failure ?? prevMsgs.find((p) => p.id === m.id)?.failure,
                                 };
                             });
                             setMessages(msgs);
@@ -1778,6 +1767,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     onTryAgain={canTryAgain ? () => handleTryAgain(msg) : undefined}
                                     latencyMs={latency}
                                 />
+                                {msg.failure === 'model_server_down' && idx === messages.length - 1 && !busy && (
+                                    <ModelServerDownNotice />
+                                )}
                                 {comparison?.messageId === msg.id && (
                                     <AnswerComparison
                                         original={msg}
@@ -1810,6 +1802,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
                                 cards={isStreaming ? cards : lastCardsRef.current}
                                 liveStatus={isStreaming ? liveStatus : null}
+                                toolStatus={isStreaming ? toolStatus : null}
                                 awaitingUser={isStreaming && (awaitingUser || hasLiveQuestion || hasOpenPrompt)}
                             />
                         </div>

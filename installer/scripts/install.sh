@@ -23,6 +23,9 @@ GAIA_RELEASES_URL="${GAIA_RELEASES_URL%/}"
 # Empty means the latest stable release. A tag pins the whole install to that
 # release (resolve_pin): v0.25.0 or a candidate such as v0.25.1-rc2.
 GAIA_RELEASE_TAG="${GAIA_RELEASE_TAG:-}"
+# 1 installs only the Python CLI: a package (.pkg, .deb, .rpm) owns gaia-tui and
+# gaia-agent, and the terminal runs this at first setup to add the rest.
+GAIA_CLI_ONLY="${GAIA_CLI_ONLY:-}"
 # Set by resolve_pin: the core package spec, and "", "final" or "rc".
 GAIA_PACKAGE_SPEC="amd-gaia[api]"
 PIN_KIND=""
@@ -827,6 +830,27 @@ add_to_path() {
     fi
 }
 
+# Rejects any GAIA_CLI_ONLY value but unset or 1, before anything installs.
+check_cli_only() {
+    case "$GAIA_CLI_ONLY" in
+        ""|1) ;;
+        *)
+            print_error "GAIA_CLI_ONLY='$GAIA_CLI_ONLY' is not valid."
+            echo "  Fix:  set it to 1 to install only the gaia command, or unset it."
+            exit 1
+            ;;
+    esac
+}
+
+show_cli_next_steps() {
+    echo ""
+    print_success "The gaia command is installed in $GAIA_BIN"
+    if [ -n "${RELOAD_FILE:-}" ]; then
+        printf '  New terminals find it. In this one, run: %ssource %s%s\n' "$COLOR_GREEN" "$RELOAD_FILE" "$COLOR_RESET"
+    fi
+    echo ""
+}
+
 # Show next steps
 show_next_steps() {
     echo ""
@@ -870,6 +894,8 @@ main() {
     printf '%s========================================%s\n' "$COLOR_CYAN" "$COLOR_RESET"
     echo ""
 
+    check_cli_only
+
     # Check prerequisites
     detect_environment
     check_download_tool
@@ -890,6 +916,11 @@ main() {
     # Before the terminal hub, so a hard failure there still leaves the Python
     # CLI reachable.
     add_to_path
+
+    if [ "$GAIA_CLI_ONLY" = "1" ]; then
+        show_cli_next_steps
+        return 0
+    fi
 
     # Install the terminal hub binary
     install_tui

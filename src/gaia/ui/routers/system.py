@@ -17,11 +17,13 @@ from pydantic import BaseModel, Field
 
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
+    UnknownUserModelError,
     _is_local_url,
     _model_ids_match,
     cloud_model_provider,
     lemonade_auth_headers,
     pull_request_body,
+    registered_model_ids,
     resolve_effective_ctx_size,
     resolve_lemonade_api_key,
     resolve_lemonade_base_url,
@@ -112,6 +114,35 @@ async def _lemonade_post(
                 )
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("%s failed: %s", log_context, exc)
+
+
+async def _pull_body(model_name: str) -> Dict[str, Any]:
+    """``pull_request_body``, asking Lemonade about a ``user.`` id GAIA didn't add.
+
+    Raises ``RuntimeError`` when the model list can't be read, and whatever
+    ``pull_request_body`` raises when the model can't be pulled.
+    """
+    try:
+        return pull_request_body(model_name)
+    except UnknownUserModelError:
+        pass  # Lemonade may list it by name; ask it before refusing.
+    import httpx  # pylint: disable=import-outside-toplevel
+
+    base_url = resolve_lemonade_base_url()
+    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/models", params={"show_all": "true"}, headers=headers
+            )
+            resp.raise_for_status()
+            registered = registered_model_ids(resp.json())
+    except (httpx.HTTPError, ValueError) as exc:
+        raise RuntimeError(
+            f"Can't download '{model_name}': the local model server didn't "
+            f"say whether it has this model ({exc}). Try again in a moment."
+        ) from exc
+    return pull_request_body(model_name, registered=registered)
 
 
 # ── Download progress tracking ──────────────────────────────────────────────
@@ -284,7 +315,7 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
 
     try:
         try:
-            payload = pull_request_body(model_name)
+            payload = await _pull_body(model_name)
         except (RuntimeError, ValueError) as exc:
             _set_download_progress(
                 model_name,
@@ -438,7 +469,7 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
                             # and we want this stream's TTL eviction to fire
                             # on schedule rather than waiting on the load.
                             load_task = asyncio.create_task(
-                                _auto_load_after_download(model_name)
+                                _auto_load_after_download(payload["model_name"])
                             )
                             _background_tasks.add(load_task)
                             load_task.add_done_callback(_background_tasks.discard)
@@ -1504,7 +1535,7 @@ async def download_model_endpoint(body: DownloadModelRequest):
     if not model_name:
         raise HTTPException(status_code=400, detail="model_name must not be empty")
     try:
-        pull_request_body(model_name)
+        await _pull_body(model_name)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

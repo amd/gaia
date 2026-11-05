@@ -353,14 +353,33 @@ def test_a_superseded_rc_stops_after_approval_before_any_publish(publish):
     assert steps.index(check) == len(steps) - 1
 
 
-def test_nothing_publishes_unless_the_tagged_commit_passed_ci(publish):
+def test_a_final_publishes_only_if_the_tagged_commit_passed_ci(publish):
     gate = publish["ci-green"]
     assert gate["needs"] == "validate"
     assert gate["permissions"]["actions"] == "write"
     assert "check_release_ci.py" in gate["steps"][-1]["run"]
     approve = publish["approve-publish"]
     assert "ci-green" in approve["needs"]
-    assert "needs.ci-green.result == 'success'" in approve["if"]
+    # The only carve-out is an RC, which tests never hold.
+    assert (
+        "(needs.validate.outputs.is_rc == 'true' || "
+        "needs.ci-green.result == 'success')"
+    ) in approve["if"]
+
+
+def test_an_rc_skips_only_the_installer_job_that_tests_the_source(publish):
+    installers = publish["build-desktop-installers"]["with"]
+    assert installers["skip_source_tests"] == (
+        "${{ needs.validate.outputs.is_rc == 'true' }}"
+    )
+    callee = _workflow("build-installers.yml")["jobs"]
+    skipped = [
+        name
+        for name, job in callee.items()
+        if "inputs.skip_source_tests" in str(job.get("if", ""))
+    ]
+    assert skipped == ["custom-agent-mcp-harness"]
+    assert "!inputs.skip_source_tests" in callee["custom-agent-mcp-harness"]["if"]
 
 
 def test_an_rc_github_release_is_a_prerelease(publish):

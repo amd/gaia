@@ -29,6 +29,7 @@ const schedule: Schedule = {
     session_id: 'chat-1',
     schedule_config: null,
     description: 'Every day',
+    description_parts: { kind: 'every', count: 1, unit: 'day', days: null, time: null, start_hour: null, end_hour: null },
     last_error: 'boom',
 };
 

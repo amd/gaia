@@ -980,7 +980,8 @@ describe('Chat App Integration', () => {
     });
 
     it('should have ARIA labels on session actions', () => {
-      expect(sidebarContent).toContain('? `Confirm delete ${session.title} and its ${unsentWords}`');
+      expectTranslated(sidebarContent, "? t.plural('row.confirmDeleteUnsentAria', unsent, { title: session.title })", 'row.confirmDeleteUnsentAria.one', 'Confirm delete {title} and its {n} unsent message');
+      expect(EN_MESSAGES['row.confirmDeleteUnsentAria.other']).toBe('Confirm delete {title} and its {n} unsent messages');
       expectTranslated(sidebarContent, ": t('row.confirmDeleteAria', { title: session.title }))", 'row.confirmDeleteAria', 'Confirm delete {title}');
       expectTranslated(sidebarContent, ": t('row.deleteAria', { title: session.title })}", 'row.deleteAria', 'Delete {title}');
       expectTranslated(sidebarContent, '<nav className="sb-list" id="sb-chat-list" aria-label={t(\'sidebar.recent\')}>', 'sidebar.recent', 'Recent chats');

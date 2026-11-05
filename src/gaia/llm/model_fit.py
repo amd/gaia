@@ -82,6 +82,9 @@ class MachineCapacity:
     disk_free_gb: Optional[float]
     #: System RAM an FLM model loads into, or ``None`` when no NPU is reported.
     npu_memory_gb: Optional[float] = None
+    #: The NPU is this Linux PC's, whose own setup decides whether FastFlowLM
+    #: runs (:func:`npu_problems`); read only when an NPU model is judged.
+    npu_setup_matters: bool = False
 
     @property
     def on_gpu(self) -> bool:
@@ -103,7 +106,24 @@ def npu_capacity(capacity: MachineCapacity) -> Optional[MachineCapacity]:
         memory_source=NPU_RAM,
         disk_free_gb=capacity.disk_free_gb,
         npu_memory_gb=capacity.npu_memory_gb,
+        npu_setup_matters=capacity.npu_setup_matters,
     )
+
+
+def npu_problems(capacity: Optional[MachineCapacity]) -> List[Any]:
+    """What stops a model running on this PC's NPU though it is there."""
+    from gaia.llm import npu_linux
+
+    if capacity is None or not capacity.has_npu or not capacity.npu_setup_matters:
+        return []
+    return npu_linux.problems()
+
+
+def npu_not_ready_reason(capacity: Optional[MachineCapacity]) -> Optional[str]:
+    """:func:`npu_problems` as one predicate ("needs ... set up first: ..."), or None."""
+    from gaia.llm import npu_linux
+
+    return npu_linux.summary(npu_problems(capacity))
 
 
 @dataclass(frozen=True)
@@ -362,12 +382,16 @@ def capacity_from_system_info(info: Dict[str, Any]) -> MachineCapacity:
                 "Update Lemonade (`gaia init`) and retry."
             )
         pool = (ram, SYSTEM_RAM)
+    from gaia.llm import npu_linux
+
     disk, _ = model_store_free_gb(info)
+    npu_gb = _npu_memory_gb(info.get("devices") or {}, ram)
     return MachineCapacity(
         memory_gb=pool[0],
         memory_source=pool[1],
         disk_free_gb=disk,
-        npu_memory_gb=_npu_memory_gb(info.get("devices") or {}, ram),
+        npu_memory_gb=npu_gb,
+        npu_setup_matters=bool(npu_gb) and npu_linux.applies_to(info),
     )
 
 

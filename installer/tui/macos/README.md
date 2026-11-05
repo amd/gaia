@@ -11,6 +11,12 @@ Builds `gaia-<version>-darwin-<arch>.pkg`, which installs two command-line tools
 Nothing else is written, and the package is constrained to the system volume —
 `/usr/local/bin` is not relocatable, so there is no destination to choose.
 
+The `gaia` command that setup runs is not in the package. The first time GAIA
+opens, setup installs it into `~/.gaia` as the user, from the same release, so
+that step needs internet. A postinstall script can't do it: the release workflow
+installs the `.pkg` on a clean runner before that release's Python package is on
+PyPI.
+
 No directory entry for `/usr`, `/usr/local`, `/usr/local/bin` or
 `/usr/local/share` is shipped. Installing one would reset that directory to
 `root:wheel`, which breaks `brew` on an Intel Mac where Homebrew owns

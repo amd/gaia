@@ -184,6 +184,8 @@ The MCP Server acts as an HTTP bridge between external applications and GAIA's n
 | `/llm` | POST | Direct LLM queries (no context) |
 | `/` | POST | JSON-RPC 2.0 endpoint |
 
+Calls take turns on the bridge. If a client disconnects or times out before its reply arrives, the bridge stops that call, so the next caller isn't kept waiting. A `/llm` reply stops mid-answer; a `/chat` call stops while it is still queued or waiting for the model.
+
 ### JSON-RPC Methods
 
 `POST /` speaks MCP over JSON-RPC 2.0, so standard MCP clients (including the official SDKs) can connect to it directly.

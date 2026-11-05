@@ -641,7 +641,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     }
     ```
 
-    **Response (400):** the model cannot be pulled — it is hosted on a gateway (no weights to download), or it is a `user.` model GAIA has no checkpoint and recipe for. `detail` says which, and for an unknown model tells the user to add it from its Hugging Face link: **Settings > Model > Add a model from Hugging Face** in the Agent UI, `/provider` → **Local** → `ctrl+a` in the terminal app, or `gaia model add <link>`. The Agent UI shows `detail` next to the Download button that was pressed.
+    **Response (400):** the model cannot be pulled — it is hosted on a gateway (no weights to download), it is a `user.` model GAIA has no checkpoint and recipe for and Lemonade doesn't list either, or Lemonade's model list couldn't be read to check such a model (`detail` asks the user to try again). A `user.` model Lemonade already lists is pulled by name instead. `detail` says which case applies, and for an unknown model tells the user to add it from its Hugging Face link: **Settings > Model > Add a model from Hugging Face** in the Agent UI, or `/provider` → **Local** → `ctrl+a` in the terminal app. The Agent UI shows `detail` next to the Download button that was pressed.
   </Accordion>
 
   <Accordion title="GET /api/system/work-in-progress">
@@ -675,7 +675,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="POST /api/system/warm-up">
-    Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. It is also skipped when the GAIA agent runs in its daemon sidecar (a Hub install), which warms its own prompt, on a PC with under 24 GB of RAM, where the model loads with the first message instead, and before first-run setup has finished, when it would load a model setup didn't pick. A chat turn on the model being warmed waits for the warm-up and reuses what it cached; a turn on any other model, local or cloud, stops it, so the warm-up never loads over the turn's model. A local turn that arrives while the warm-up is loading its model waits for that load to finish first, since it can't be interrupted and holds the memory the turn's own load needs. Returns the warm-up state, with the `model` it loads and its `device` (`npu`, `gpu` or `cpu`) once known. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
+    Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. It is also skipped when the GAIA agent runs in its daemon sidecar (a Hub install), which warms its own prompt, on a PC with under 24 GB of RAM, where the model loads with the first message instead, and before first-run setup has finished, when it would load a model setup didn't pick. A chat turn on the model being warmed waits for the warm-up and reuses what it cached; a turn on any other model, local or cloud, stops it, so the warm-up never loads over the turn's model. A local turn that arrives while the warm-up is loading its model waits for that load to finish first, since it can't be interrupted and holds the memory the turn's own load needs. An NPU (FastFlowLM) model is only loaded, not primed: FastFlowLM reuses a prompt only when the next request continues it, so the first message reads the prompt either way. Returns the warm-up state, with the `model` it loads and its `device` (`npu`, `gpu` or `cpu`) once known. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
 
     **Response:**
     ```json
@@ -1096,7 +1096,7 @@ Deleting a chat deletes its copies.
 
     | Event type | Fields | Description |
     |------------|--------|-------------|
-    | `done` | `message_id` (int), `content` (string), `turn_summary` (object, optional) | Signals the end of the stream. `message_id` is the database ID of the saved assistant message. `content` is the full response text. `turn_summary` is the turn's sources and data flow (below); it is also saved with the message and returned by the messages endpoint. |
+    | `done` | `message_id` (int), `content` (string), `turn_summary` (object, optional), `failed` (bool, optional), `failure` (string, optional) | Signals the end of the stream. `message_id` is the database ID of the saved assistant message. `content` is the full response text. `turn_summary` is the turn's sources and data flow (below); it is also saved with the message and returned by the messages endpoint. `failed` marks a turn a model failure ended, and `content` then says why. `failure` names a cause the app can fix: `model_server_down` when the local model server took no connection (cloud models go through it too). |
 
     **Example stream** showing a typical multi-step interaction:
     ```
@@ -2492,7 +2492,10 @@ plan and make one set of choices.
     the GiB Lemonade reports, the same way `/api/gpu-memory` converts them, so
     the two read the same number for the same PC),
     `disk` (`path`, `free_gb`, `source`), `disk_warning`, and `skipped_models`.
-    `gaia init --plan --json` prints the same object; its
+    `npu` says whether this PC has an NPU (`present`), whether a model can run
+    on it now (`ready`), and what stops it (`problems`, each `code`, `title`,
+    `fix` and `params`); while it isn't ready, the NPU model's `fit_code` is
+    `npu`. `gaia init --plan --json` prints the same object; its
     [CLI reference](/reference/cli#choosing-models) lists every field.
   </Accordion>
 
@@ -2506,6 +2509,24 @@ plan and make one set of choices.
     this PC; send it again with that field set to use it anyway. **422** when
     the model isn't a chat model GAIA or the server knows; **503** when the
     model server isn't running yet.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/npu/recheck">
+    Reads the NPU's setup afresh, after the user fixed something, instead of
+    the 30-second cached reading. Returns the new plan. **403** without
+    `X-Gaia-UI: 1`.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/npu/memlock-fix">
+    Linux only. Raises the locked-memory limit FastFlowLM needs, for every
+    user on the PC, behind the desktop's own administrator prompt (`pkexec`).
+    It takes effect after a restart. Returns the new plan. **403** over mobile
+    access or from another computer; **409** with `detail` `{"code",
+    "message"}` when the prompt was closed (`cancelled`), not answered
+    (`timeout`) or couldn't be shown (`not_authorized`); **422** on a PC that
+    isn't Linux (`not_linux`) or has no polkit (`no_pkexec`); **500**
+    (`failed`) otherwise. The [NPU guide](/guides/npu) has the steps to do it
+    by hand.
   </Accordion>
 
   <Accordion title="POST /api/setup/vision-model">
@@ -2568,7 +2589,9 @@ plan and make one set of choices.
     false, "acknowledge_low_disk": false, "keep_trying": false,
     "extra_models": [], "server_only": false}`;
     `gaia_lemonade` runs `gaia init --gaia-lemonade`, which sets up and saves
-    GAIA's own server instead of the user's. `keep_trying` waits out a dropped
+    GAIA's own server instead of the user's. When `LEMONADE_BASE_URL` picks the
+    server, it first saves that value as `lemonade_env_url_ignored`, so GAIA
+    ignores the variable until it changes. `keep_trying` waits out a dropped
     connection for up to two minutes before a model fails. `extra_models`
     pulls models the user ticked beside the plan's (`--download-model`), and
     counts them in the disk check; a model nobody has is a **422**.
@@ -2576,8 +2599,7 @@ plan and make one set of choices.
     no load check), so a cold PC can choose its models against the server
     before anything downloads; it takes no `extra_models` and skips the disk
     check, and its status carries `server_only: true`. **409** when setup
-    is already running, or `gaia_lemonade` is asked while `LEMONADE_BASE_URL`
-    picks the server. **409** with `detail` `{"code": "low_disk", "message",
+    is already running. **409** with `detail` `{"code": "low_disk", "message",
     "need_gb", "free_gb", "free_up_gb", "path", "drop", "acknowledge":
     "acknowledge_low_disk"}` when the selected models need more disk than is
     free; `drop` names the one model whose skip makes it fit, when there is
@@ -2598,8 +2620,9 @@ plan and make one set of choices.
     Server" rather than an install. When that server isn't answering, `error`
     says so in one sentence and `problem` carries the next steps: `start` (how
     to start it on this PC, or null), `use_gaia` (setup can switch to GAIA's
-    own), and `switch_hint` (set when `LEMONADE_BASE_URL` picks the server, so
-    only unsetting it switches). The raw error stays in the output lines.
+    own, also over a `LEMONADE_BASE_URL`), and `env_url` (the `LEMONADE_BASE_URL`
+    value that picked the server, which switching ignores from then on, or null).
+    The raw error stays in the output lines.
     `gaia_lemonade` is true for a run switching to GAIA's own, so a retry
     keeps switching. `model_failed` is true when a model's download failed in
     this run: its row already says why, so the run's own `error` adds nothing.
@@ -2707,7 +2730,9 @@ All three routes need the `X-Gaia-UI: 1` header (**403** without it).
   <Accordion title="GET /api/lemonade/target">
     The server GAIA uses now and who chose it: `mode` (`gaia` or `external`),
     `saved_mode` (`null` until someone chooses), `source`, `base_url`,
-    `saved_base_url`, `api_key_stored`, `env_override` (a warning when
+    `saved_base_url`, `api_key_stored`, `env_url_ignored` (the
+    `LEMONADE_BASE_URL` value GAIA's own was chosen over in setup, while the
+    variable still holds it), `env_override` (a warning when
     `LEMONADE_BASE_URL` overrides the setting), `gaia_installed`, `offer` (no
     choice saved and the environment isn't choosing, so the UI should offer the
     switch), and `what_gaia_does`. **409** when the config is unreadable or the
@@ -2728,7 +2753,11 @@ All three routes need the `X-Gaia-UI: 1` header (**403** without it).
     Switch servers. Body: `{"mode": "gaia" | "external", "base_url": "...",
     "api_key": "..."}`; the URL and key are only for `external`. Nothing is
     saved unless the user's server checks out. A running daemon is told to
-    stop (or start) GAIA's own server, and cached agents are dropped. Returns
+    stop (or start) GAIA's own server, and cached agents are dropped. When
+    `LEMONADE_BASE_URL` picks the server, `gaia` also saves that value as
+    `lemonade_env_url_ignored`; if GAIA's own isn't installed yet nothing
+    starts and `gaia_installed` is false, so the Agent UI opens setup to
+    install it. Returns
     the `GET` shape plus `daemon`. **422** when the server can't be used
     (`detail.message`, `detail.status`), including `status: "not_installed"`
     when switching from the user's server to GAIA's own before it is

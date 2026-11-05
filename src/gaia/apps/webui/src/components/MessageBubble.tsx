@@ -54,6 +54,8 @@ interface MessageBubbleProps {
     latencyMs?: number;
     /** The model's current phase while streaming; null shows "Thinking...". */
     liveStatus?: string | null;
+    /** What a running tool's own model calls are doing; shown on that tool's row. */
+    toolStatus?: string | null;
     /** The run is blocked on the user's approval or answer; the indicator says so instead of timing the model. */
     awaitingUser?: boolean;
 }
@@ -473,7 +475,7 @@ export function turnEnding(content: string, stopState: Message['stopState']): Tu
     return splitCutOff(content) ? 'interrupted' : undefined;
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
     const echo = useMemo(
@@ -622,6 +624,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             isActive={agentStepsActive ?? false}
                             running={!!isStreaming}
                             awaitingUser={awaitingUser}
+                            toolStatus={isStreaming ? toolStatus : null}
                             answer={isStreaming ? undefined : cleanedContent}
                             liveLine={isStreaming && (
                                 <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} />

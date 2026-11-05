@@ -274,6 +274,8 @@ def _dispatch_one(
         for key in ("phase", "words", "chars", "queue"):
             if key in event:
                 status[key] = event[key]
+        if event.get("retracts_answer"):
+            status["retracts_answer"] = True
         handler._emit(status)
 
     elif etype == "token":
@@ -284,7 +286,10 @@ def _dispatch_one(
     elif etype == "reasoning":
         delta = event.get("delta", "")
         if delta:
-            handler._emit({"type": "thinking", "content": delta})
+            thinking = {"type": "thinking", "content": delta}
+            if event.get("retracts_answer"):
+                thinking["retracts_answer"] = True
+            handler._emit(thinking)
 
     elif etype == "tool_call":
         tool = str(event.get("tool") or "unknown")
@@ -379,6 +384,8 @@ def _dispatch_one(
         if event.get("failed") is True:
             # The sidecar's turn ended on a model failure; the answer says so.
             out["failed"] = True
+            if isinstance(event.get("failure"), str):
+                out["failure"] = event["failure"]
         # Same top-level fields an in-process answer carries, so the turn's
         # token counts and cost are recorded for a relayed turn too.
         usage = event.get("usage")

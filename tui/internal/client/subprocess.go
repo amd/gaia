@@ -39,6 +39,12 @@ const agentExitGrace = 20 * time.Second
 
 var subprocessLemonadePorts = []string{"13305"}
 
+// markEmbedded reports whether the URL handed to the child is GAIA's own
+// server, which moves port and key when the daemon restarts it.
+func markEmbedded() bool {
+	return lemonade.EnvBaseURL() == "" && lemonade.ReadEmbedded() != nil
+}
+
 // detectLemonadeURL resolves configured and embedded endpoints before probing
 // the default port. An unrelated local server cannot override the private runtime.
 func detectLemonadeURL() string {
@@ -47,7 +53,7 @@ func detectLemonadeURL() string {
 	if lemonade.ExternalModeActive() {
 		return ""
 	}
-	if strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")) != "" || lemonade.ReadEmbedded() != nil {
+	if lemonade.EnvBaseURL() != "" || lemonade.ReadEmbedded() != nil {
 		return lemonade.ResolveBaseURL("")
 	}
 	// GAIA's own server is restarting. A probed port would reach the child as
@@ -351,7 +357,7 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 		cmd.Env = append(os.Environ(), "LEMONADE_BASE_URL="+url)
 		// GAIA's own server moves port and key when the daemon restarts it; the
 		// marker tells the child this URL is that server's, so it follows it.
-		if strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")) == "" && lemonade.ReadEmbedded() != nil {
+		if markEmbedded() {
 			cmd.Env = append(cmd.Env, "GAIA_LEMONADE_EMBEDDED=1")
 		}
 		s.debugf("Lemonade endpoint: %s", url)

@@ -213,8 +213,19 @@ launch_agent_ui() {
   echo $! >"${WORK}/app.pid"
   sleep 10
   kill -0 "$(cat "${WORK}/app.pid")" 2>/dev/null || { tail -n 50 "${LOGS}/app.err"; die "the app exited within 10s of launch"; }
-  [ -f "${GAIA_HOME}/electron-main.log" ] || die "the app is running but wrote no ${GAIA_HOME}/electron-main.log"
+  wait_for_main_log "$(cat "${WORK}/app.pid")" "${GAIA_HOME}/electron-main.log" 50
   echo "launched pid $(cat "${WORK}/app.pid")"
+}
+
+# wait_for_main_log <pid> <log> <seconds>: a cold AppImage mount plus a first
+# fontconfig scan can open the log just past the 10s survival check.
+wait_for_main_log() {
+  local deadline=$(( $(date +%s) + $3 ))
+  while [ ! -f "$2" ]; do
+    kill -0 "$1" 2>/dev/null || { tail -n 50 "${LOGS}/app.err"; die "the app exited without writing $2"; }
+    [ "$(date +%s)" -lt "${deadline}" ] || die "the app is running but wrote no $2 within $(( $3 + 10 ))s of launch"
+    sleep 1
+  done
 }
 
 # First launch installs the Python backend from PyPI before it can serve, so
@@ -267,11 +278,31 @@ app_pids() {
   } | sort -u
 }
 
+# With no Lemonade answering, the app's setup screen starts installing one by
+# itself shortly after launch, and SIGTERM during that run is #6579's case.
+# Quit once it is under way, so every row quits in the same state instead of
+# racing it.
+wait_for_setup_run() {
+  local port state="" deadline=$(( $(date +%s) + 120 ))
+  port="$(grep -oE 'ui-port[ =]+[0-9]+' "${GAIA_HOME}/electron-main.log" | tail -n1 | grep -oE '[0-9]+$' || true)"
+  [ -n "${port}" ] || die "no backend port in ${GAIA_HOME}/electron-main.log"
+  while [ "$(date +%s)" -lt "${deadline}" ]; do
+    state="$(curl -fsS --max-time 5 -H 'X-Gaia-UI: 1' "http://127.0.0.1:${port}/api/setup/status" 2>/dev/null \
+      | "${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin).get("state", ""))' 2>/dev/null || true)"
+    case "${state}" in
+      ''|idle) sleep 1 ;;
+      *) echo "setup is ${state}"; return 0 ;;
+    esac
+  done
+  echo "::warning::the app had not started setup 120 s into the quit phase (last state '${state:-no answer}'); quitting anyway"
+}
+
 # Quit the way the OS does at logout: SIGTERM to the app's main process (the
 # one without a Chromium --type= flag), which runs the app's own quit path and
 # stops the backend. Whatever is still running 30 s later is recorded for the
 # leftovers phase, then killed so the uninstall can proceed.
 stop_agent_ui() {
+  [ "${SETUP_JOURNEY:-}" = "1" ] || wait_for_setup_run
   local p mains=""
   for p in $(pgrep -f "${APP_PATTERN}" || true); do
     ps -o args= -p "${p}" 2>/dev/null | grep -q -- '--type=' || mains="${mains} ${p}"
