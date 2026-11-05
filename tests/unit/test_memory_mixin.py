@@ -3035,7 +3035,7 @@ class TestLLMExtraction:
             valid = extract_host._extract_via_llm("user text", "assistant reply", [])
         applied = extract_host._execute_extraction_operations(valid, [])
 
-        assert applied == 2
+        assert applied.stored == 2
         rows = extract_host._memory_store._conn.execute(
             "SELECT content, domain, entity FROM knowledge"
         ).fetchall()
