@@ -8322,7 +8322,7 @@ Do NOT wrap conversational replies in JSON.
                 )
                 tally["failed"] = True
                 return "unreachable", self._engine_start_failed_answer(
-                    conversation, steps_taken, engine.user_message
+                    conversation, steps_taken, engine
                 )
         state = self._transient_model_failure(exc)
         if state is None:
@@ -8426,22 +8426,22 @@ Do NOT wrap conversational replies in JSON.
         return typed if isinstance(typed, LemonadeEngineStartError) else None
 
     def _engine_start_failed_answer(
-        self, conversation: List[Dict[str, Any]], steps_taken: int, message: str
+        self, conversation: List[Dict[str, Any]], steps_taken: int, engine
     ) -> str:
         """The final answer when GAIA's own model server could not be started.
 
-        Not marked server-down: the front-end's start button would only repeat
-        the start that just failed.
+        *engine* is the :class:`LemonadeEngineStartError`. Not marked
+        server-down: the front-end's start button would only repeat the start
+        that just failed.
         """
-        headline, advice = _split_cause_and_advice(message)
         return self._model_failure_answer(
             conversation,
             steps_taken,
             stopped_responding=False,
-            cause="",
-            advice=advice,
+            cause=engine.reason or "",
+            advice=engine.advice,
             name_service=False,
-            headline=headline.rstrip("."),
+            headline=engine.headline,
         )
 
     def _model_unreachable_answer(

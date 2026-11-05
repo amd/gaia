@@ -15,7 +15,15 @@ import pytest
 import requests
 
 from gaia.agents.base.agent import Agent
-from gaia.daemon.errors import DaemonError, LemonadeNotAnsweringError
+from gaia.daemon import client as daemon_client
+from gaia.daemon.errors import (
+    DaemonBusyError,
+    DaemonLockError,
+    LemonadeNotAnsweringError,
+    LemonadeStartFailedError,
+)
+from gaia.daemon.instance import DaemonInstance
+from gaia.daemon.paths import log_path
 from gaia.llm import lemonade_client as lc
 from gaia.llm.providers.lemonade import (
     LemonadeEngineStartError,
@@ -23,7 +31,12 @@ from gaia.llm.providers.lemonade import (
     classify_lemonade_exception,
 )
 from gaia.llm.retry import RetryState, attach_retry_state
-from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT, TUI_SETUP_HINT, surface_wording
+from gaia.llm.surface_hints import (
+    AGENT_UI_SETUP_HINT,
+    CLI_SETUP_HINT,
+    TUI_SETUP_HINT,
+    surface_wording,
+)
 from gaia.logger import get_logger
 from gaia.ui.sse_handler import SSEOutputHandler
 
@@ -34,6 +47,14 @@ _DAEMON_SAYS = (
     "[WinError 10061] No connection could be made because the target machine "
     "actively refused it"
 )
+
+
+def _start_failed() -> LemonadeStartFailedError:
+    return LemonadeStartFailedError(
+        f"the daemon could not start Lemonade Server: {_DAEMON_SAYS}",
+        reason=_DAEMON_SAYS,
+    )
+
 
 _RETRY_WORDING = ("briefly busy", "try sending the message again")
 
@@ -70,7 +91,7 @@ def _start_failure(daemon_error: Exception) -> BaseException:
 
 class TestTheClientSaysTheEngineCannotStart:
     def test_a_failed_start_is_its_own_error(self):
-        error = _start_failure(DaemonError(_DAEMON_SAYS))
+        error = _start_failure(_start_failed())
         assert isinstance(error, lc.GaiaLemonadeStartError)
         assert "Could not start GAIA's Lemonade Server" in str(error)
 
@@ -80,19 +101,27 @@ class TestTheClientSaysTheEngineCannotStart:
         assert not isinstance(error, lc.GaiaLemonadeStartError)
 
     def test_it_classifies_as_not_retryable_with_the_setup_fix(self):
-        error = _start_failure(DaemonError(_DAEMON_SAYS))
+        error = _start_failure(_start_failed())
         typed = classify_lemonade_exception(error)
         assert isinstance(typed, LemonadeEngineStartError)
         assert typed.retryable is False
         assert TUI_SETUP_HINT in typed.user_message
         assert not any(w in typed.user_message for w in _RETRY_WORDING)
 
+    def test_it_says_why_and_ends_with_the_daemon_log(self):
+        typed = classify_lemonade_exception(_start_failure(_start_failed()))
+        assert typed.reason == _DAEMON_SAYS
+        assert _DAEMON_SAYS in typed.user_message
+        assert typed.user_message.endswith(str(log_path()))
+
     def test_flattened_by_a_wrapper_it_is_still_recognised(self):
         flat = RuntimeError(
             f"Error in send_messages: Could not start GAIA's Lemonade Server: "
-            f"{_DAEMON_SAYS}"
+            f"the daemon could not start Lemonade Server: {_DAEMON_SAYS}"
         )
-        assert isinstance(classify_lemonade_exception(flat), LemonadeEngineStartError)
+        typed = classify_lemonade_exception(flat)
+        assert isinstance(typed, LemonadeEngineStartError)
+        assert typed.reason == _DAEMON_SAYS
 
     def test_a_plain_refused_connection_keeps_the_retry_path(self):
         typed = classify_lemonade_exception(
@@ -100,6 +129,94 @@ class TestTheClientSaysTheEngineCannotStart:
         )
         assert isinstance(typed, LemonadeNetworkError)
         assert typed.retryable is True
+
+
+class _Reply:
+    def __init__(self, status_code: int, detail: str):
+        self.status_code = status_code
+        self.headers = {}
+        self._detail = detail
+
+    def json(self):
+        return {"detail": self._detail}
+
+
+_DAEMON = DaemonInstance(pid=1, port=1, token="t", api_version="1.9")
+
+
+def _ensure_fails(*, attach=None, post=None) -> BaseException:
+    """The client's error when the real ``ensure_lemonade`` meets *attach*
+    (attaching to the daemon) and *post* (its ``/lemonade/ensure`` reply)."""
+    with (
+        patch.object(
+            daemon_client, "start_or_attach", side_effect=attach or (lambda: _DAEMON)
+        ),
+        patch("requests.post", side_effect=post),
+    ):
+        try:
+            _client()._start_gaia_lemonade()
+        except lc.LemonadeClientError as e:
+            return e
+    raise AssertionError("the start did not fail")
+
+
+def _raise(error: BaseException):
+    def _fail(*_, **__):
+        raise error
+
+    return _fail
+
+
+#: Daemon failures that are not a failed start: each keeps its own remedy.
+_NOT_A_FAILED_START = {
+    "busy": dict(
+        attach=_raise(DaemonBusyError("the GAIA daemon is busy. Retry in a moment."))
+    ),
+    "start lock held": dict(
+        attach=_raise(DaemonLockError("could not acquire the daemon start lock"))
+    ),
+    "version out of date": dict(
+        attach=lambda: DaemonInstance(pid=1, port=1, token="t", api_version="1.1")
+    ),
+    "request timed out": dict(
+        post=_raise(requests.exceptions.Timeout("read timed out"))
+    ),
+    "409 not managed": dict(
+        post=lambda *a, **k: _Reply(
+            409,
+            "GAIA's Lemonade Server is not installed. Run `gaia init` to install it.",
+        )
+    ),
+}
+
+
+class TestOnlyTheDaemonsFailedStartIsAnEngineFailure:
+    @pytest.mark.parametrize("case", list(_NOT_A_FAILED_START))
+    def test_other_daemon_failures_keep_their_old_path(self, case):
+        error = _ensure_fails(**_NOT_A_FAILED_START[case])
+        assert type(error) is lc.LemonadeClientError
+        for seen in (error, RuntimeError(f"Error in send_messages: {error}")):
+            assert not isinstance(
+                classify_lemonade_exception(seen), LemonadeEngineStartError
+            )
+
+    def test_busy_keeps_its_retry_wording(self):
+        error = _ensure_fails(**_NOT_A_FAILED_START["busy"])
+        assert "Retry in a moment" in str(error)
+
+    def test_an_outdated_daemon_keeps_its_restart_remedy(self):
+        error = _ensure_fails(**_NOT_A_FAILED_START["version out of date"])
+        assert "gaia daemon restart" in str(error)
+
+    def test_a_failed_ensure_reply_is_an_engine_failure(self):
+        error = _ensure_fails(post=lambda *a, **k: _Reply(503, "lemond exited"))
+        assert isinstance(error, lc.GaiaLemonadeStartError)
+        assert error.reason == "lemond exited"
+        typed = classify_lemonade_exception(error)
+        assert isinstance(typed, LemonadeEngineStartError)
+        assert typed.user_message.startswith(
+            "GAIA's AI engine couldn't start: lemond exited."
+        )
 
 
 class _PlainAgent(Agent):
@@ -156,18 +273,21 @@ def _turn(streaming: bool, error: BaseException):
 
 @pytest.mark.parametrize("streaming", [True, False])
 def test_the_turn_ends_at_once_with_the_setup_fix(streaming):
-    result, events, calls = _turn(streaming, _start_failure(DaemonError(_DAEMON_SAYS)))
+    result, events, calls = _turn(streaming, _start_failure(_start_failed()))
 
     final = [e for e in events if e.get("type") == "answer"][-1]
     text = final["content"]
     assert text == (
-        "GAIA's AI engine couldn't start, so this request is unfinished.\n\n"
+        "GAIA's AI engine couldn't start, so this request is unfinished. "
+        f"{_DAEMON_SAYS[0].upper()}{_DAEMON_SAYS[1:]}.\n\n"
         "Nothing had run yet.\n\n"
-        f"Sending the message again won't help until it is repaired. {TUI_SETUP_HINT}"
+        "Sending the message again won't help until it is repaired. "
+        f"{TUI_SETUP_HINT} Details are in the daemon log at {log_path()}"
     )
     assert not any(w in text for w in _RETRY_WORDING)
-    # The Agent UI shows its own in-app fix, never a command.
-    assert surface_wording(text, "agent_ui").endswith(AGENT_UI_SETUP_HINT)
+    # Each front-end gets its own fix: the Agent UI's in-app one, the CLI's command.
+    assert AGENT_UI_SETUP_HINT in surface_wording(text, "agent_ui")
+    assert CLI_SETUP_HINT in surface_wording(text, "cli")
     assert result["status"] == "failed"
     # One attempt: retrying the step only repeats the daemon's failed start.
     assert calls == 1

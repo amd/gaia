@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Iterator, List, Optional, Tuple, Union
 
 from gaia.llm.local_only import CloudDisabledError
@@ -285,15 +286,38 @@ class LemonadeEngineStartError(LemonadeError):
     """
 
     retryable = False
-    user_message = (
-        "GAIA's AI engine couldn't start. Sending the message again won't help "
-        f"until it is repaired. {TUI_SETUP_HINT}"
-    )
+    headline = "GAIA's AI engine couldn't start"
+
+    def __init__(
+        self,
+        reason: Optional[str] = None,
+        log_file: Optional[Path] = None,
+        payload: Optional[dict] = None,
+    ):
+        if log_file is None:
+            from gaia.daemon.paths import log_path
+
+            log_file = log_path()
+        self.reason = (reason or "").strip().rstrip(".") or None
+        self.log_file = log_file
+        #: What to do; :data:`TUI_SETUP_HINT` stays verbatim for ``surface_wording``.
+        self.advice = (
+            "Sending the message again won't help until it is repaired. "
+            f"{TUI_SETUP_HINT} Details are in the daemon log at {log_file}"
+        )
+        detail = f": {self.reason}" if self.reason else ""
+        super().__init__(
+            user_message=f"{self.headline}{detail}. {self.advice}", payload=payload
+        )
 
 
 #: :class:`~gaia.llm.lemonade_client.GaiaLemonadeStartError`'s wording, once a
-#: wrapper flattened it.
-_ENGINE_START_RE = re.compile(r"could not start gaia's lemonade server", re.IGNORECASE)
+#: wrapper flattened it. Other daemon failures share only its first clause.
+_ENGINE_START_RE = re.compile(
+    r"could not start gaia's lemonade server: "
+    r"the daemon could not start lemonade server: (?P<reason>.+)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 #: How a failed turn names this cause to a front-end, which offers the fix.
 MODEL_SERVER_DOWN = "model_server_down"
@@ -840,7 +864,7 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         if isinstance(cur, LemonadeError):
             return cur
         if isinstance(cur, GaiaLemonadeStartError):
-            return LemonadeEngineStartError()
+            return LemonadeEngineStartError(cur.reason, cur.log_file)
         if isinstance(cur, LemonadeServerDownError):
             return LemonadeServerUnreachableError(str(cur), cur.endpoint)
         if isinstance(cur, LemonadeAuthError):
@@ -887,8 +911,9 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         load_error = _model_load_error(envelope[1], context=raw)
         if load_error is not None:
             return load_error
-    if _ENGINE_START_RE.search(raw):
-        return LemonadeEngineStartError()
+    engine_start = _ENGINE_START_RE.search(raw)
+    if engine_start:
+        return LemonadeEngineStartError(engine_start.group("reason"))
     down = _SERVER_DOWN_RE.search(raw)
     if down:
         return LemonadeServerUnreachableError(down.group(0).strip(), down.group(1))

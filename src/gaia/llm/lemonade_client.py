@@ -3383,8 +3383,14 @@ class GaiaLemonadeStartError(LemonadeClientError):
     """The daemon tried to start GAIA's own server and could not.
 
     Sending the request again repeats the same failed start, so this is not
-    a transient failure: the install needs repairing.
+    a transient failure: the install needs repairing. ``reason`` is what the
+    daemon said went wrong; ``log_file`` is the daemon log with the rest.
     """
+
+    def __init__(self, message: str, reason: str, log_file: Path):
+        super().__init__(message)
+        self.reason = reason
+        self.log_file = log_file
 
 
 class CloudModelUnavailableError(LemonadeClientError):
@@ -4624,11 +4630,18 @@ class LemonadeClient:
 
         Raises:
             GaiaLemonadeNotAnsweringError: it is running but not answering yet.
-            GaiaLemonadeStartError: the daemon could not start it. There is no
-                retry against a system install.
+            GaiaLemonadeStartError: the daemon tried to start it and could not.
+            LemonadeClientError: the daemon could not be asked (unreachable,
+                busy, out of date) or has no server of its own to start. There
+                is no retry against a system install.
         """
         from gaia.daemon.client import ensure_lemonade
-        from gaia.daemon.errors import DaemonError, LemonadeNotAnsweringError
+        from gaia.daemon.errors import (
+            DaemonError,
+            LemonadeNotAnsweringError,
+            LemonadeStartFailedError,
+        )
+        from gaia.daemon.paths import log_path
 
         self.log.info("Asking the GAIA daemon to start GAIA's Lemonade Server...")
         try:
@@ -4639,8 +4652,19 @@ class LemonadeClient:
             )
         except LemonadeNotAnsweringError as e:
             raise GaiaLemonadeNotAnsweringError(str(e)) from e
-        except DaemonError as e:
+        except LemonadeStartFailedError as e:
+            log_file = (
+                Path(self._gaia_daemon_dir) / "daemon.log"
+                if self._gaia_daemon_dir
+                else log_path()
+            )
             raise GaiaLemonadeStartError(
+                f"Could not start GAIA's Lemonade Server: {e}",
+                reason=e.reason,
+                log_file=log_file,
+            ) from e
+        except DaemonError as e:
+            raise LemonadeClientError(
                 f"Could not start GAIA's Lemonade Server: {e}"
             ) from e
         self._point_at_gaia_lemonade(served["base_url"])
