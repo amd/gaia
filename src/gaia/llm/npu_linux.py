@@ -12,7 +12,8 @@ those only when the first model loads.
 The locked-memory limit is what stops GAIA's own Lemonade on a stock desktop
 (#6632): it starts as a child of the user's session, which systemd caps at
 8 MB soft *and* hard, while Lemonade's own service runs with
-``LimitMEMLOCK=infinity``. A process can't raise its hard limit, so the fix is
+``CAP_SYS_RESOURCE``, so FastFlowLM can lift its own limit there. A process
+without that capability can't raise its hard limit, so the fix is
 a one-time administrator step, :func:`apply_memlock_fix`, that lifts the limit
 for user sessions; it takes effect after the PC restarts.
 
