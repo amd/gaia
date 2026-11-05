@@ -1518,17 +1518,21 @@ class TestUpdateMemoryTool:
         assert not any(r["id"] == entry_id for r in results)
 
     def test_update_nonexistent_returns_error(self, mixin_with_tools):
-        """update_memory with bad ID returns error status."""
+        """A miss is a failed call, so the model can't claim the memory changed."""
+        from gaia.agents.base.tool_outcome import tool_result_failed
+        from gaia.ui.sse_handler import tool_result_failed as ui_step_failed
+
         func = mixin_with_tools._registered_tools["update_memory"]["function"]
         result = func(
             knowledge_id=str(uuid.uuid4()),
             content="new content",
         )
-        assert (
-            result.get("status") in ("error", "not_found")
-            or "not found" in str(result).lower()
-            or "error" in str(result).lower()
-        )
+
+        assert result["status"] == "error"
+        assert tool_result_failed(result)
+        assert ui_step_failed(result)
+        assert "recall" in result["message"]
+        assert "Nothing was updated" in result["message"]
 
 
 # ===========================================================================
