@@ -63,6 +63,15 @@ def test_forget_everything_takes_sensitive_rows_and_past_conversations(store):
     assert _tool("search_past_conversations")(query="Lisbon")["count"] == 0
 
 
+def test_forget_everything_reply_names_only_the_lesson_reset_command(store):
+    """No UI clears kept lessons yet, so the reply keeps the one command."""
+    _Host(store, [])
+    message = _tool("forget_everything")()["message"]
+    assert "run `gaia skill deltas <skill> --reset` in a terminal" in message
+    assert message.count("gaia ") == 1
+    assert message.count("`") == 2
+
+
 def test_forget_everything_needs_the_users_approval():
     assert "forget_everything" in TOOLS_REQUIRING_CONFIRMATION
 

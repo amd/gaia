@@ -157,6 +157,7 @@ describe('EngineInstallScreen after a failure', () => {
         ['network', 'Check your internet connection'],
         ['tls', 'company proxy'],
         ['locked', 'restart your PC'],
+        ['daemon', 'background service is still running and has no window to close'],
     ] as const)('names the fix for a %s failure', async (reason, hint) => {
         mountBridge({ ...FAILED, error: { ...ERROR, stage: 'install-package', reason } });
         render(<EngineInstallScreen />);

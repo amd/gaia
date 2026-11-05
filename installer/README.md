@@ -158,7 +158,7 @@ PRs that touch installers, install scripts or the download page, and on demand
 | `posix-journey.sh`, `windows-journey.ps1` | One phase of one row. They refuse to run outside GitHub Actions: they install and remove system packages |
 | `fake_model_server.py` | A stand-in Lemonade, so the terminal can complete one real turn through the installed `gaia-agent` without a model |
 | `resolve_release.py` | Picks the release under test and waits for its assets |
-| `known_failures.json` | Filed installer bugs the journeys hit; each shows as `known #N` instead of failing, and fails again once it stops reproducing |
+| `known_failures.json` | Filed installer bugs the journeys hit; each shows as `known #N` instead of failing, and fails again once it stops reproducing or its issue's release milestone ships |
 | `propose_thresholds.py` | Re-measures install times from recent runs and proposes new thresholds |
 
 ### Install-time thresholds

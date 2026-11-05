@@ -10,6 +10,12 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **A stopped local model server fails the turn at once and is named.** A cloud
+  model's turn used to retry for about three minutes and then blame the cloud
+  provider, though the provider was never reached. A refused connection to the
+  local server now ends the turn within seconds, the answer names that server,
+  and `final` carries `failure: "model_server_down"` so a front-end can offer to
+  start it (SPEC §5.1).
 - **The query stream documents the `reconnecting` status phase.** It is sent
   once while GAIA's own Lemonade Server restarts mid-turn or mid-`/model`
   switch, so integrators can show a live reconnecting line instead of treating
@@ -121,6 +127,12 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **Reasoning no longer shows as the answer when a model sends only `</think>`.**
+  A model whose chat template opens the reasoning block streamed that reasoning
+  as answer text, and the step-limit answer, memory and skill learning read it
+  as part of the reply. The `reasoning` event that follows the tag now carries
+  `retracts_answer: true`; a client drops the `token` text since the last
+  `tool_call` from the answer it has shown.
 - **Text read aloud plays in the Agent UI chat.** `text_to_speech` saved speech
   to `~/.gaia/tts`, outside the folder the chat plays audio from, so you got a
   file path instead of a player. Speech with no `output_path` is now saved with

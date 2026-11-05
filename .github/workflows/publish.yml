@@ -1134,6 +1134,7 @@ jobs:
           expected=(
             "gaia-agent-ui-${v}-x64-setup.exe" "gaia-agent-ui-${v}-x64-setup.exe.blockmap" latest.yml
             "gaia-agent-ui-${v}-arm64.dmg" "gaia-agent-ui-${v}-arm64.dmg.blockmap" latest-mac.yml
+            "gaia-agent-ui-${v}-arm64.zip" "gaia-agent-ui-${v}-arm64.zip.blockmap"
             "gaia-agent-ui-${v}-amd64.deb" "gaia-agent-ui-${v}-x86_64.AppImage" latest-linux.yml
           )
           missing=()
@@ -1145,6 +1146,18 @@ jobs:
             exit 1
           fi
           ls -l "${expected[@]/#/release-assets/}"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # The desktop app updates from these manifests, so every file one names
+      # must be attached as built, or that platform cannot update (#5682).
+      - name: Check the update manifests name only attached files
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pyyaml
+          python util/check_release_assets.py --dir release-assets
 
       - name: Create GitHub Release
         if: needs.validate.outputs.is_rc != 'true'
@@ -1294,7 +1307,59 @@ jobs:
           if [ "${IS_RC}" = "true" ] && [ "${WINDOWS_SETUP_OK}" != "true" ]; then
             args+=(--skip-windows-setup)
           fi
+          python3 -m pip install --quiet pyyaml
           python3 util/check_release_assets.py --repo "${GITHUB_REPOSITORY}" --tag "${TAG_NAME}" "${args[@]}"
+
+  # ── Published vs verified (#6611) ───────────────────────────────────
+  # Report only. Each asset on the release against the SHA-256 the release-train
+  # dry run recorded for this commit and tag. Rebuilt bytes differ today, so
+  # this measures how far the release is from shipping what was verified, and
+  # exercises the lookup promotion will rely on (docs/plans/release-promote.md).
+  # Nothing waits on it; once publish.yml promotes, it becomes a --strict gate.
+  verified-build-report:
+    name: Published vs verified build
+    needs: [validate, github-release, github-release-installers]
+    if: >-
+      !cancelled() &&
+      needs.github-release.result == 'success'
+    # Report only: a GitHub API hiccup here must not turn the Publish run red,
+    # which would hold back a final's release notes (claude.yml waits on success).
+    # Drop this when the report becomes the --strict gate.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read   # the dry run's manifest artifact
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - name: Find the dry run that verified this commit
+        id: locate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          python3 util/release_promote.py locate --repo "${GITHUB_REPOSITORY}" \
+            --sha "${GITHUB_SHA}" --tag "${TAG_NAME}" \
+            --out "${RUNNER_TEMP}/verified" --missing-ok | tee -a "$GITHUB_OUTPUT"
+
+      - name: Compare the release with it
+        if: steps.locate.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+          RUN_URL: ${{ steps.locate.outputs.run_url }}
+        run: |
+          set -euo pipefail
+          python3 util/release_promote.py compare --repo "${GITHUB_REPOSITORY}" \
+            --tag "${TAG_NAME}" --manifest "${RUNNER_TEMP}/verified/release-manifest.json" \
+            --run-url "${RUN_URL}" | tee -a "$GITHUB_STEP_SUMMARY"
 
   # The website builds its download links and release entries from the GitHub
   # releases at deploy time, so a new release only appears after a rebuild.

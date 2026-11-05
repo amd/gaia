@@ -52,7 +52,9 @@ def test_no_loaded_skill_leaves_the_list_untouched():
 def test_the_off_switch_keeps_it_out():
     """Under --no-learned-skills the write refuses, so offering it would only
     spend prompt tokens on a refusal."""
-    agent = _agent(loaded={"transcribe-meeting": SimpleNamespace(tool_names=[])}, learning=False)
+    agent = _agent(
+        loaded={"transcribe-meeting": SimpleNamespace(tool_names=[])}, learning=False
+    )
     assert agent._standing_skill_tools() == []
 
 

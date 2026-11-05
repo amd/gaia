@@ -323,6 +323,9 @@ class TurnTracker:
                     event.get("detail") or json.dumps(event.get("args"), default=str)
                 )
         elif etype == "thinking":
+            if event.get("retracts_answer"):
+                self.raw_content = ""
+                self._tool_since_text = False
             if last.get("type") == "thinking":
                 last["detail"] = _cap(
                     (last.get("detail") or "") + (event.get("content") or ""), 4000

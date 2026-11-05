@@ -6,7 +6,6 @@ import json
 from types import SimpleNamespace
 
 import pytest
-
 from gaia_agent_email import action_store
 from gaia_agent_email.tools.organize_tools import OrganizeToolsMixin, move_to_label_impl
 
@@ -61,9 +60,7 @@ class _FakeAgent(OrganizeToolsMixin, DatabaseMixin):
     def __init__(self, mailbox):
         self.config = SimpleNamespace(debug=False, undo_window_seconds=30)
         self._backends = {"google": mailbox}
-        self._providers = {
-            message_id: "google" for message_id in mailbox.messages
-        }
+        self._providers = {message_id: "google" for message_id in mailbox.messages}
         self._organize_batch_id = "test-batch"
         self._last_archive_batch_id = None
         self.init_db(":memory:")

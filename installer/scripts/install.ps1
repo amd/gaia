@@ -10,6 +10,9 @@ $ErrorActionPreference = "Stop"
 $GAIA_HOME = "$env:USERPROFILE\.gaia"
 $GAIA_VENV = "$GAIA_HOME\venv"
 $GAIA_BIN = "$GAIA_HOME\bin"
+# GAIA's console scripts, copied into $GAIA_BIN. Only $GAIA_BIN goes on PATH:
+# the venv's Scripts also holds python.exe and pip.exe, which would shadow the user's.
+$GAIA_COMMANDS = @("gaia", "gaia-cli", "gaia-mcp")
 $PYTHON_VERSION = "3.12"
 
 # The GAIA Terminal UI binary comes from the GitHub release: publish.yml
@@ -576,40 +579,98 @@ public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wP
         [IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, "Environment", 2, 5000, [ref]$result)
 }
 
+# Copy GAIA's own launchers from the venv into $GAIA_BIN, the one directory on PATH.
+# A copy, not a .cmd shim: Go, Node and Python spawn `gaia` by name, which finds
+# only an .exe. uv's launcher names the venv's python.exe by absolute path, so a
+# copy keeps working after an upgrade rewrites the venv.
+function Copy-GaiaCommands {
+    Write-Step "Adding GAIA commands to $GAIA_BIN..."
+    if (-not (Test-Path $GAIA_BIN)) {
+        New-Item -ItemType Directory -Path $GAIA_BIN -Force | Out-Null
+    }
+    # Launchers an earlier upgrade renamed aside; one still running is removed next time.
+    Get-ChildItem -LiteralPath $GAIA_BIN -Filter "*.exe*.old" -File |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    foreach ($name in $GAIA_COMMANDS) {
+        $source = "$GAIA_VENV\Scripts\$name.exe"
+        $dest = "$GAIA_BIN\$name.exe"
+        if (-not (Test-Path -LiteralPath $source)) {
+            Write-GaiaError "$source is missing after the GAIA package installed."
+            Write-Host "  Fix:  delete $GAIA_VENV and re-run this installer." -ForegroundColor $COLOR_YELLOW
+            throw "GAIA install failed - see the error above."
+        }
+        # Unchanged is the usual re-run, and skipping it lets a running gaia.exe stay.
+        if ((Test-Path -LiteralPath $dest) -and
+            (Get-FileHash -LiteralPath $source).Hash -eq (Get-FileHash -LiteralPath $dest).Hash) {
+            continue
+        }
+        try {
+            # A running gaia.exe can't be overwritten but can be renamed.
+            if (Test-Path -LiteralPath $dest) {
+                $aside = "$dest.old"
+                if (Test-Path -LiteralPath $aside) { $aside = "$dest.$PID.old" }
+                Move-Item -LiteralPath $dest -Destination $aside -Force
+            }
+            Copy-Item -LiteralPath $source -Destination $dest -Force
+        }
+        catch {
+            Write-GaiaError "Could not write $dest`: $_"
+            Write-Host "  Fix:  close any running GAIA (and any tool scanning that" -ForegroundColor $COLOR_YELLOW
+            Write-Host "        folder), then re-run this installer." -ForegroundColor $COLOR_YELLOW
+            throw "GAIA install failed - see the error above."
+        }
+    }
+    Write-Success "GAIA commands ($($GAIA_COMMANDS -join ', ')) are in $GAIA_BIN"
+}
+
+# $Current with $GAIA_BIN added once and the venv's Scripts folder, which earlier
+# installers added, taken out. Every other entry keeps its text and its place.
+function Get-UpdatedPath {
+    param([string]$Current)
+    $legacy = Get-NormalizedPathEntry "$GAIA_VENV\Scripts"
+    $wanted = Get-NormalizedPathEntry $GAIA_BIN
+    # Split/filter first: an empty element (from a trailing ";") is resolved
+    # as the current directory by every process that reads this PATH.
+    $existing = @($Current -split ";" | Where-Object { $_.Trim() })
+    $kept = @($existing | Where-Object { (Get-NormalizedPathEntry $_) -ne $legacy })
+    $added = @()
+    if (@($kept | ForEach-Object { Get-NormalizedPathEntry $_ }) -notcontains $wanted) {
+        $added = @($GAIA_BIN)
+    }
+    return [pscustomobject]@{
+        Value   = (($kept + $added) -join ";")
+        Added   = ($added.Count -gt 0)
+        Removed = ($existing.Count - $kept.Count)
+    }
+}
+
 function Add-ToPath {
     Write-Step "Adding GAIA to PATH..."
 
-    # Both dirs: the venv holds the Python CLI, $GAIA_BIN holds the terminal hub.
-    $wanted = @("$GAIA_VENV\Scripts", $GAIA_BIN)
-
     try {
-        $currentPath = Get-RawUserPath
-        # Split/filter first: an empty element (from a trailing ";") is resolved
-        # as the current directory by every process that reads this PATH.
-        $existing = @($currentPath -split ";" | Where-Object { $_.Trim() })
-        $present = @($existing | ForEach-Object { Get-NormalizedPathEntry $_ })
-        $missing = @($wanted | Where-Object { $present -notcontains (Get-NormalizedPathEntry $_) })
-
-        if ($missing.Count -eq 0) {
+        $update = Get-UpdatedPath -Current (Get-RawUserPath)
+        if (-not $update.Added -and $update.Removed -eq 0) {
             Write-Success "GAIA is already in PATH"
             return
         }
-
-        Set-RawUserPath -Value (($existing + $missing) -join ";")
+        Set-RawUserPath -Value $update.Value
     }
     catch {
         Write-GaiaWarning "Failed to add GAIA to PATH automatically: $_"
-        Write-Host "Please add the following directories to your PATH manually:" -ForegroundColor $COLOR_YELLOW
-        foreach ($dir in $wanted) {
-            Write-Host "  $dir" -ForegroundColor $COLOR_YELLOW
-        }
+        Write-Host "Add this directory to your user PATH by hand:" -ForegroundColor $COLOR_YELLOW
+        Write-Host "  $GAIA_BIN" -ForegroundColor $COLOR_YELLOW
+        Write-Host "Do not add $GAIA_VENV\Scripts: its python.exe would replace yours." -ForegroundColor $COLOR_YELLOW
+        Write-Host "If an earlier GAIA install added it, remove it from your PATH." -ForegroundColor $COLOR_YELLOW
         return
     }
 
-    # Update current session PATH
-    $session = @($env:PATH -split ";" | Where-Object { $_ })
-    $env:PATH = ($session + $missing) -join ";"
-    Write-Success "Added GAIA to PATH"
+    $env:PATH = (Get-UpdatedPath -Current $env:PATH).Value
+    if ($update.Removed -gt 0) {
+        Write-Success "Removed $GAIA_VENV\Scripts from PATH, so your own python and pip come first again"
+    }
+    if ($update.Added) {
+        Write-Success "Added GAIA to PATH"
+    }
 
     # Separate: the PATH is already saved, so a failure here must not say otherwise.
     try {
@@ -688,6 +749,10 @@ function Main {
 
     # Install GAIA
     Install-Gaia -PackageSpec $pin.Spec
+
+    # After every install and upgrade, so an install from before the copies
+    # existed gets them too.
+    Copy-GaiaCommands
 
     # Before the terminal hub, so a hard failure there still leaves the Python
     # CLI reachable.

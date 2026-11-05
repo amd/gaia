@@ -195,6 +195,10 @@ def test_run_passes_keep_trying_through(daemon, monkeypatch):
     assert r.status_code == 200 and r.json() == {"state": "running"}
     assert len(seen) == 1 and seen[0][0] == (False, False)
     assert seen[0][1]["keep_trying"] is True and seen[0][1]["allow_low_disk"] is False
+    # The TUI's setup tests a chat on the model the TUI opens on.
+    from gaia.ui.setup_runner import tui_chat_model
+
+    assert seen[0][1]["chat_model_for"] is tui_chat_model
 
 
 def test_status_is_idle_with_nothing_running(daemon, monkeypatch):

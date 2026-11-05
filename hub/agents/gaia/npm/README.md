@@ -252,8 +252,9 @@ get its own wording; a headless caller omits it. See
 
 **Showing the model's reasoning?** Send `reasoning: true` (contract ≥ 2.22)
 and it arrives as `reasoning` events with a `delta`, apart from `status` lines
-and the answer. Join the deltas as they come. Older binaries reject the field
-with `422`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+and the answer. Join the deltas as they come. One with `retracts_answer: true`
+means the `token` text since the last tool call was reasoning: drop it from the
+answer. Older binaries reject the field with `422`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Showing how full the model's window is?** From contract 2.21 the `final`
 event carries `context`: the window size, the tokens the next call will take,

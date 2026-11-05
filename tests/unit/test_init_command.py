@@ -1453,6 +1453,98 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertTrue(status.ready)
         self.assertEqual(self.hub_fetches, [])
 
+    @staticmethod
+    def _terminal_agent_path():
+        from gaia.home import gaia_home
+
+        name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
+        return gaia_home() / "bin" / name
+
+    def _install_terminal_agent(self, mode=0o755):
+        """What install.sh / install.ps1 leave: the agent in GAIA's bin dir, no sentinel."""
+        path = self._terminal_agent_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\x7fELF")
+        path.chmod(mode)
+        return path
+
+    def test_terminal_installer_agent_is_ready(self):
+        """#6642: install.sh / install.ps1 put the agent in ~/.gaia/bin, not
+        under ~/.gaia/agents, and the TUI runs it from there."""
+        self._remove_flagship()
+        self._install_terminal_agent()
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.ready)
+        self.assertFalse(status.agent_missing)
+        self.assertEqual(status.reasons, [])
+        self.assertEqual(status.warnings, [])
+
+    def test_terminal_installer_agent_never_asks_the_hub(self):
+        self._remove_flagship()
+        self._install_terminal_agent()
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.ready)
+        self.assertEqual(self.hub_fetches, [])
+
+    def test_terminal_installer_agent_still_needs_the_models(self):
+        self._remove_flagship()
+        self._install_terminal_agent()
+        status, _ = self._check_with_models(have=False)
+
+        self.assertEqual(status.stage, "setup")
+        self.assertFalse(status.agent_missing)
+        self.assertNotIn(self.AGENT_MISSING, status.reasons)
+
+    def test_only_the_tui_in_bin_still_needs_the_agent(self):
+        """A terminal install whose agent download failed leaves gaia-tui alone."""
+        from gaia.home import gaia_home
+
+        self._remove_flagship()
+        bin_dir = gaia_home() / "bin"
+        bin_dir.mkdir(parents=True)
+        tui = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
+        (bin_dir / tui).write_bytes(b"x")
+        self.host_key = "darwin-arm64"
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+
+    def test_a_directory_named_like_the_agent_is_not_the_agent(self):
+        self._remove_flagship()
+        self._terminal_agent_path().mkdir(parents=True)
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+
+    @unittest.skipIf(sys.platform == "win32", "Windows has no exec bit")
+    def test_a_non_executable_terminal_agent_is_not_the_agent(self):
+        """A half-written download (no exec bit yet) must not pass as installed."""
+        self._remove_flagship()
+        self._install_terminal_agent(mode=0o644)
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+
+    def test_terminal_agent_outside_this_gaia_home_does_not_count(self):
+        """An isolated GAIA_HOME never borrows another home's agent."""
+        import os
+        import tempfile
+
+        self._remove_flagship()
+        self._install_terminal_agent()
+        other = tempfile.TemporaryDirectory()
+        self.addCleanup(other.cleanup)
+        os.environ["GAIA_HOME"] = other.name
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+
     def _on_a_pc_without_a_build(self):
         self._remove_flagship()
         self.host_key = "linux-arm64"
@@ -3376,3 +3468,75 @@ class TestHardwareChatModel(unittest.TestCase):
         self.assertFalse(status.ready)
         self.assertTrue(any(DEFAULT_MODEL_NAME in r for r in status.reasons))
         self.assertFalse(any(LARGE_DEFAULT_MODEL_NAME in r for r in status.reasons))
+
+
+class TestNpuProfileMemlockOffer(_HubInstallWiringTestBase):
+    """`gaia init --profile npu` only asks Lemonade about memlock when it can
+    prompt on Linux, and a Lemonade that doesn't answer never aborts setup."""
+
+    def _run_npu(self, *, yes, tty, on_linux, system_info):
+        cmd = self._make_cmd("npu")
+        cmd.yes = yes
+        self._patch_common_steps(cmd)
+        install, sentinel = TestHubInstallWiringFlagshipProfile._sentinel_after_install(
+            self
+        )
+        client = MagicMock()
+        client.get_system_info.side_effect = system_info
+        with (
+            patch(
+                "gaia.installer.init_command.importlib.util.find_spec",
+                return_value=None,
+            ),
+            patch(
+                "gaia.hub.catalog.load_index",
+                return_value=_fake_catalog_result(
+                    [{"id": "gaia", "latest_version": "0.1.0"}]
+                ),
+            ),
+            patch("gaia.hub.installer.install", side_effect=install) as mock_install,
+            sentinel,
+            patch("gaia.installer.init_command.stdin_is_tty", return_value=tty),
+            patch("gaia.llm.npu_linux._on_linux", return_value=on_linux),
+            patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client),
+            patch.object(cmd, "_prompt_yes_no", return_value=True),
+            patch("gaia.llm.npu_linux.apply_memlock_fix") as applied,
+            patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            rc = cmd.run()
+        return rc, client, mock_install, applied, mock_stdout.getvalue()
+
+    def test_non_linux_never_asks_lemonade(self):
+        rc, client, mock_install, applied, _ = self._run_npu(
+            yes=False, tty=True, on_linux=False, system_info=AssertionError
+        )
+        self.assertEqual(rc, 0)
+        client.get_system_info.assert_not_called()
+        applied.assert_not_called()
+        mock_install.assert_called_once_with("gaia", trusted=True)
+
+    def test_yes_never_asks_lemonade(self):
+        rc, client, _, applied, _ = self._run_npu(
+            yes=True, tty=True, on_linux=True, system_info=AssertionError
+        )
+        self.assertEqual(rc, 0)
+        client.get_system_info.assert_not_called()
+        applied.assert_not_called()
+
+    def test_unreachable_lemonade_warns_and_setup_continues(self):
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        rc, client, mock_install, applied, out = self._run_npu(
+            yes=False,
+            tty=True,
+            on_linux=True,
+            system_info=LemonadeClientError("Request failed: connection refused"),
+        )
+        out = " ".join(out.split())  # Rich wraps long warnings
+        self.assertEqual(rc, 0)
+        client.get_system_info.assert_called_once()
+        applied.assert_not_called()
+        mock_install.assert_called_once_with("gaia", trusted=True)
+        self.assertIn("locked-memory check is skipped", out)
+        self.assertIn("connection refused", out)
+        self.assertNotIn("Unexpected error", out)

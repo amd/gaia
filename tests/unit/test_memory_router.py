@@ -1054,6 +1054,35 @@ class TestReconcileEndpoint:
         assert resp.status_code == 200
         assert resp.json()["pairs_checked"] == 0
 
+    @pytest.mark.parametrize(
+        "reply, checked",
+        [
+            ('<think>Same claim.</think>{"relationship": "reinforce"}', 1),
+            ("<think>Same claim, so", 0),
+            ('Same claim.</think>{"relationship": "reinforce"}', 1),
+            ('{"relationship": "reinforce"}', 1),
+        ],
+        ids=["paired", "unclosed", "lone-close", "no-tags"],
+    )
+    def test_standalone_reconcile_reads_past_the_reasoning(
+        self, client, test_store, reply, checked
+    ):
+        require_faiss()
+        import numpy as np
+
+        vec = np.ones(768, dtype=np.float32).tobytes()
+        for content in ("alpha fact one", "alpha fact two"):
+            kid = _create_knowledge(client, content)["knowledge_id"]
+            test_store.store_embedding(kid, vec)
+
+        fake_llm = MagicMock()
+        fake_llm.chat.return_value = reply
+        with patch("gaia.llm.create_client", return_value=fake_llm):
+            resp = client.post("/api/memory/reconcile")
+
+        assert resp.status_code == 200
+        assert resp.json()["reinforced"] == checked
+
     def test_a_memory_contradicting_two_others_is_penalised_once(
         self, client, test_store
     ):
@@ -2231,10 +2260,10 @@ class TestPrivilegedAdminWriters:
 class TestStreamInferenceModel:
     """Profile inference runs on the machine's default local chat model."""
 
-    def _stream(self, client, tmp_path, default_model, custom_model=None):
+    def _stream(self, client, tmp_path, default_model, custom_model=None, reply="[]"):
         apps = [{"content": "Installed app: Blender"}]
         fake_llm = MagicMock()
-        fake_llm.chat.return_value = "[]"
+        fake_llm.chat.return_value = reply
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch("sys.platform", "darwin"))
             stack.enter_context(patch("pathlib.Path.home", return_value=tmp_path))
@@ -2289,6 +2318,46 @@ class TestStreamInferenceModel:
         create.assert_not_called()
         assert '"type": "error"' in resp.text
         assert "gaia config set default_model" in resp.text
+
+    def test_a_cut_off_reply_still_streams_its_complete_insights(
+        self, client, tmp_path
+    ):
+        # #3835: local models stop part-way through the array.
+        reply = (
+            '[{"content": "Uses Blender for 3D work", "confidence": 0.9, '
+            '"domain": "personal"}, {"content": "Renders anim'
+        )
+        resp, _create = self._stream(
+            client, tmp_path, default_model="Qwen3.6-35B-A3B-GGUF", reply=reply
+        )
+
+        assert resp.status_code == 200
+        assert '"type": "error"' not in resp.text
+        assert resp.text.count('"type": "insight"') == 1
+        assert "Uses Blender for 3D work" in resp.text
+        assert "incomplete or malformed" in resp.text
+        assert '"total": 1' in resp.text
+
+    def test_word_confidences_are_mapped_and_unusable_ones_skipped(
+        self, client, tmp_path
+    ):
+        # #6637: models sometimes answer "high" instead of a number.
+        reply = json.dumps(
+            [
+                {"content": "Uses Blender for 3D work", "confidence": "HIGH "},
+                {"content": "Likes jazz", "confidence": "very sure"},
+                {"content": "Edits video", "confidence": 0.5},
+            ]
+        )
+        resp, _create = self._stream(
+            client, tmp_path, default_model="Qwen3.6-35B-A3B-GGUF", reply=reply
+        )
+
+        assert resp.status_code == 200
+        assert resp.text.count('"type": "insight"') == 2
+        assert '"confidence": 0.9' in resp.text
+        assert "Skipped insight 'Likes jazz'" in resp.text
+        assert '"total": 2' in resp.text
 
 
 # ===========================================================================

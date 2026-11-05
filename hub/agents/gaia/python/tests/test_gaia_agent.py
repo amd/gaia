@@ -550,8 +550,9 @@ def test_fast_mode_meets_the_conversational_prefill_budget(monkeypatch):
     from pathlib import Path
     from types import SimpleNamespace
 
-    from gaia.agents.base import project_map
     from gaia_agent import chat_agent
+
+    from gaia.agents.base import project_map
 
     home = Path("/home/user")
     monkeypatch.setattr(project_map, "working_directory_line", lambda *_: "")

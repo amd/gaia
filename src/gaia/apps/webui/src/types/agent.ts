@@ -42,6 +42,8 @@ export interface GaiaNotification {
   risk?: string;
   /** The agent's own one-line description of the call, shown when no args came with it. */
   summary?: string;
+  /** A path-access prompt backing the call just allowed, so it reads as a follow-up. */
+  pathFollowUp?: boolean;
   /** For policy_alert type. */
   decision?: string;
   reason?: string;
@@ -138,7 +140,7 @@ export interface GaiaWindowFrame {
 }
 
 /** FAILURE_REASONS in services/backend-installer.cjs. */
-export type EngineInstallReason = 'disk' | 'network' | 'tls' | 'locked';
+export type EngineInstallReason = 'disk' | 'network' | 'tls' | 'locked' | 'daemon';
 
 export interface EngineInstallError {
   stage: string | null;

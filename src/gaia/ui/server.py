@@ -482,6 +482,21 @@ class _ScheduledRuns:
 # ── Application Factory ────────────────────────────────────────────────────
 
 
+def _tripwire_sweep() -> None:
+    try:
+        from gaia.connectors.api import tripwire_check
+
+        tripwire_check()
+        logger.info("connections: tripwire sweep complete")
+    except Exception as e:  # pylint: disable=broad-except
+        logger.warning(
+            "connections: tripwire sweep failed (%s). /api/connections "
+            "endpoints may surface stale-credential errors at first call instead.",
+            e,
+            exc_info=True,
+        )
+
+
 def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -778,25 +793,11 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         logger.info("Connector activation watcher started")
 
         # ── Connections (issue #915) ────────────────────────────────────
-        # Eager tripwire sweep so a rotated OAuth client_id surfaces in
-        # the server logs at boot (and clears stale entries) BEFORE any
-        # SSE client connects. Per plan amendment A3, missing
-        # GAIA_GOOGLE_CLIENT_ID logs a loud warning but does NOT crash
-        # the lifespan — chat/documents/files/tunnel/mcp routers stay
-        # available; only /api/connections returns 503 until the env
-        # var is set.
-        try:
-            from gaia.connectors.api import tripwire_check
-
-            tripwire_check()
-            logger.info("connections: tripwire sweep complete")
-        except Exception as e:  # noqa: BLE001 — defense in depth
-            logger.warning(
-                "connections: tripwire sweep failed (%s); proceeding "
-                "without it. /api/connections endpoints may surface "
-                "stale-credential errors at first call instead.",
-                e,
-            )
+        # Off the startup path: each keychain read can wait on a macOS prompt.
+        # Daemon, so a prompt left open never holds up shutdown.
+        threading.Thread(
+            target=_tripwire_sweep, name="connections-tripwire", daemon=True
+        ).start()
 
         # ── Connectors live-reload (issue #1004) ────────────────────────
         # Wire the McpServerHandler.reload_callback so a Settings →

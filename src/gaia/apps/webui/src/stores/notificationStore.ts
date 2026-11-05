@@ -12,6 +12,8 @@
 import { create } from 'zustand';
 import type { GaiaNotification, NotificationType } from '../types/agent';
 import { confirmTool } from '../services/api';
+import { ref } from '../i18n/registry';
+import { tEn, type Translate } from '../i18n/useT';
 
 // ── Constants ────────────────────────────────────────────────────────────
 
@@ -57,23 +59,49 @@ function pathAccessArgs(args: unknown): { target: string | null; kind: unknown }
  * when nothing exists at the path yet, so a prompt that names no path at all
  * says nothing about whether it exists. `followUp` means it backs a call just allowed.
  */
-export function pathAccessQuestion(args: unknown, followUp = false): string {
+export function pathAccessQuestion(
+  args: unknown,
+  followUp = false,
+  t: Translate = tEn,
+  mark: (path: string) => string = (p) => p,
+): string {
   const { target, kind } = pathAccessArgs(args);
   const what = !target
-    ? 'a file or folder outside this chat'
-    : kind === 'folder'
-      ? `the folder ${target} and everything in it`
-      : kind === 'file' ? `the file ${target}` : `${target}, which doesn't exist yet`;
-  return followUp
-    ? `To do what you just allowed, GAIA also needs ${what}. This chat can't reach it yet. Allow it for this chat?`
-    : `GAIA wants to use ${what}. This chat can't reach it yet. Allow it for this chat?`;
+    ? ref('prompt.path.what.unknown')
+    : ref(kind === 'folder' ? 'prompt.path.what.folder' : kind === 'file' ? 'prompt.path.what.file' : 'prompt.path.what.new', {
+      path: mark(target),
+    });
+  return t(followUp ? 'prompt.path.askAlso' : 'prompt.path.ask', { what });
 }
 
 /** The path-access prompt's heading, in the user's terms rather than the tool's name. */
-export function pathAccessTitle(args: unknown, followUp = false): string {
+export function pathAccessTitle(args: unknown, followUp = false, t: Translate = tEn): string {
   const { kind } = pathAccessArgs(args);
   const noun = kind === 'folder' ? 'folder' : kind === 'file' ? 'file' : 'location';
-  return followUp ? `Also let GAIA use this ${noun}?` : `Let GAIA use this ${noun}?`;
+  return t(`prompt.path.${followUp ? 'titleAlso' : 'title'}.${noun}`);
+}
+
+/**
+ * A permission prompt's heading and question, worded from the call in the UI
+ * language rather than from its stored English title and message.
+ */
+export function permissionPromptText(
+  n: GaiaNotification,
+  t: Translate = tEn,
+  mark: (text: string) => string = (s) => s,
+): { heading: string; question: string } {
+  const args = n.toolArgs ?? {};
+  if (n.tool === PATH_ACCESS_TOOL) {
+    return {
+      heading: pathAccessTitle(args, n.pathFollowUp, t),
+      question: pathAccessQuestion(args, n.pathFollowUp, t, mark),
+    };
+  }
+  const tool = mark(n.toolLabel ?? n.tool ?? '');
+  return {
+    heading: t(n.toolLabel ? 'prompt.title.tool' : 'prompt.title.toolId', { tool }),
+    question: t('prompt.needsOk', { tool }),
+  };
 }
 
 /** `C:\A\b.txt` and `c:/a/b.txt/` compare equal. Picks card wording only; too loose for an access check. */

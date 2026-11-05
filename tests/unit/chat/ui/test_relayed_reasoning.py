@@ -92,3 +92,25 @@ def test_an_empty_piece_shows_nothing():
     relay._dispatch_one(handler, {"type": "reasoning", "delta": ""}, GAIA_PROFILE)
 
     assert handler.event_queue.empty()
+
+
+def test_a_relayed_retraction_takes_the_tokens_back():
+    """The sidecar saw the lone ``</think>``; the host's tokens were reasoning."""
+    handler = SSEOutputHandler()
+    for event in (
+        {"type": "token", "delta": "Weigh the forecast."},
+        {"type": "reasoning", "delta": "Weigh the forecast.", "retracts_answer": True},
+        {"type": "tool_call", "tool": "get_weather", "args": {}},
+    ):
+        relay._dispatch_one(handler, event, GAIA_PROFILE)
+
+    events = []
+    while not handler.event_queue.empty():
+        events.append(handler.event_queue.get_nowait())
+    assert {
+        "type": "thinking",
+        "content": "Weigh the forecast.",
+        "retracts_answer": True,
+    } in events
+    # Already in the thinking step, so it is not narration of the call too.
+    assert not any(e and e.get("type") == "commentary" for e in events)

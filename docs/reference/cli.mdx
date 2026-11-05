@@ -501,7 +501,10 @@ The exit code still says whether setup succeeded.
 device axis explicitly with `gaia init --profile npu`, which swaps the GGUF models for
 their FLM equivalents — the default never switches your backend for you. It installs
 the same flagship agent as a bare `gaia init`, and fails the same way
-when the download server can't be reached.
+when the download server can't be reached. On Linux, when the NPU's 8 MB locked-memory
+limit would stop the model from loading, it offers to raise the limit (it asks for an
+administrator password, and the change applies after a restart). It never asks under
+`--yes` or without a terminal. See [NPU on Linux](/guides/npu#the-locked-memory-limit).
 </Note>
 
 <Note>
@@ -706,12 +709,13 @@ is removed only when it is the app's exact wrapper around this GAIA home's venv;
 </Note>
 
 <Note>
-`--purge` also undoes what the one-line installer set up. It stops a running GAIA daemon
-before deleting its state, removes `~/.gaia/bin` (`gaia-tui`, `gaia-agent`, and the `gaia`
-command links the Linux and macOS installer puts there), and
+`--purge` also undoes what the one-line installer set up. It stops a running GAIA daemon,
+and any agent sidecar it left running, before deleting its state, removes `~/.gaia/bin`
+(`gaia-tui`, `gaia-agent`, the `gaia` command links the Linux and macOS installer puts
+there, and on Windows the `gaia` launchers the installer copies there), and
 removes the installer's PATH entries: the `# Added by GAIA installer` block in
-`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` or `~/.profile`, or the `~\.gaia\venv\Scripts`
-and `~\.gaia\bin` entries on the Windows user PATH. The rest of each file and every
+`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` or `~/.profile`, or the `~\.gaia\bin` entry
+on the Windows user PATH (and `~\.gaia\venv\Scripts`, which earlier installers added). The rest of each file and every
 other PATH entry are left exactly as they were. If you edited the installer's `export PATH`
 line by hand, it is kept and the command tells you to remove it yourself. A `GAIA_HOME`
 other than `~/.gaia` leaves these PATH edits alone, because they still point at `~/.gaia`.
@@ -1794,7 +1798,7 @@ gaia gateway uninstall                # remove the provider
 | `--allow-insecure-http` | `install` | Permit an `http://` gateway. Lemonade refuses to hold a token over plaintext otherwise; only for an on-prem gateway without TLS |
 | `--token` | `auth` | Token value — prefer the prompt, which keeps it out of shell history |
 | `--token-stdin` | `auth` | Read the token from stdin — best for scripts |
-| `--no-remember` | `auth` | Do not store the token; you are asked again after a restart |
+| `--no-remember` | `auth` | Do not store the token, and delete an older stored one; you are asked again after a restart |
 | `--forget` | `logout` | Also delete the stored token |
 | `--model` | `test` | Model to test (default: the active gateway model) |
 
@@ -1889,8 +1893,10 @@ What it does not cover:
   own copy of GAIA, so a cloud model named in a request to it isn't checked. Update
   the agent with `gaia agent install <id>`.
 - A key set in Lemonade's own environment (for example
-  `LEMONADE_FIREWORKS_API_KEY`), or a key a Lemonade you run yourself holds: GAIA's own
-  requests are still refused, but a program talking to Lemonade directly could use it.
+  `LEMONADE_FIREWORKS_API_KEY`), or a key held by a Lemonade you chose (with
+  `LEMONADE_BASE_URL` or `gaia lemonade connect`): GAIA leaves that server's keys alone
+  and its own requests are still refused, but a program talking to Lemonade directly
+  could use it.
   If GAIA can't reach its Lemonade when you turn Local only on, it says so; restart
   Lemonade to drop any key it still holds.
 
@@ -3716,7 +3722,7 @@ gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 |--------|---------|-------------|
 | `start` | — | Start the daemon or attach to the running one (two callers → one daemon), and start GAIA's Lemonade Server if it is installed and stopped. |
 | `status` | — | Print pid / port / uptime and the supervised sidecar list, or report if no daemon is running. |
-| `stop` | — | Shut the daemon down (tree-killing every sidecar, then GAIA's Lemonade Server, whoever started it) and release `~/.gaia/host/instance.json`. With no daemon running it still stops GAIA's Lemonade Server. |
+| `stop` | — | Shut the daemon down (tree-killing every sidecar, then GAIA's Lemonade Server, whoever started it) and release `~/.gaia/host/instance.json`. With no daemon running it still stops GAIA's Lemonade Server. It then stops any sidecar a terminated or crashed daemon left running, and exits 1 naming the pid if the daemon or a sidecar is still alive. It exits 3 when only GAIA's Lemonade Server would not stop, so an installer can tell the two apart. The desktop app runs it before updating its backend and when it is uninstalled. |
 | `restart` | — | `stop` followed by `start`. |
 | `logs` | `--lines`, `--follow` | Print (or stream) the daemon log tail. |
 | `agents` | — | List every registered sidecar agent: id, state, and (when running) mode, pid, port, contract version — never the bearer token. Dev-mode entries also show their source dir; user-mode and stopped entries always report `dev_src_dir: null`. |

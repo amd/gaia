@@ -13,6 +13,10 @@ Builds a `.deb` and an `.rpm` for **x86-64 only**, each containing:
 All files are owned `root:root`. The desktop entry sets `Terminal=true` — this is
 a TUI, so the launcher has to open a terminal for it.
 
+The `gaia` command that setup runs is not in either package. The first time GAIA
+opens, setup installs it into `~/.gaia` as the user, from the same release, so
+that step needs internet.
+
 ## Build it
 
 ```bash

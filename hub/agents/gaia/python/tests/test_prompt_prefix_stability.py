@@ -483,9 +483,7 @@ def test_a_hostile_session_changes_the_tool_list_once(flagship):
     assert len(set(lists[:jump_at])) == 1
     assert len(set(lists[jump_at:])) == 1
     assert _tool_names(model.requests[-1]) == list(agent._tools_registry)
-    assert model.slots == [None] * jump_at + [FULL_TOOLS_SLOT] * (
-        len(lists) - jump_at
-    )
+    assert model.slots == [None] * jump_at + [FULL_TOOLS_SLOT] * (len(lists) - jump_at)
     _assert_each_extends_the_last(model.requests[:jump_at])
     _assert_each_extends_the_last(model.requests[jump_at:])
 
