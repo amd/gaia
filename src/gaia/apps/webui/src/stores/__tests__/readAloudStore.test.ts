@@ -7,10 +7,11 @@ import { useReadAloudStore } from '../readAloudStore';
 
 vi.mock('../../services/api', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../../services/api')>();
-    return { ...actual, speak: vi.fn() };
+    return { ...actual, speak: vi.fn(), getSpeechModel: vi.fn() };
 });
 
 const speak = vi.mocked(api.speak);
+const getSpeechModel = vi.mocked(api.getSpeechModel);
 
 /** Plays instantly, or never ends when `hang` is set, so a test can stop mid-piece. */
 class FakeAudio {
@@ -39,7 +40,9 @@ beforeEach(() => {
     URL.revokeObjectURL = vi.fn();
     speak.mockReset();
     speak.mockImplementation(async (text) => new Blob([text]));
-    useReadAloudStore.setState({ messageId: null, status: null, error: null });
+    getSpeechModel.mockReset();
+    getSpeechModel.mockResolvedValue({ downloaded: true, size_gb: 0.35 });
+    useReadAloudStore.setState({ messageId: null, status: null, error: null, voiceReady: false, downloadGb: null });
 });
 
 afterEach(() => {
@@ -90,6 +93,34 @@ describe('readAloudStore', () => {
         await useReadAloudStore.getState().read('s:1', 'Hello.');
         expect(useReadAloudStore.getState().error).toEqual({ messageId: 's:1', kind, detail: 'Lemonade said no' });
         expect(useReadAloudStore.getState().messageId).toBeNull();
+    });
+
+    it('says the voice model is downloading on a first read, then reads, and checks only once', async () => {
+        getSpeechModel.mockResolvedValue({ downloaded: false, size_gb: 0.35 });
+        let finish: (b: Blob) => void = () => undefined;
+        speak.mockImplementationOnce(() => new Promise<Blob>((r) => { finish = r; }));
+        const reading = useReadAloudStore.getState().read('s:1', 'Hello.');
+        await vi.waitFor(() => expect(useReadAloudStore.getState().status).toBe('downloading'));
+        expect(useReadAloudStore.getState().downloadGb).toBe(0.35);
+        finish(new Blob(['Hello.']));
+        await reading;
+        expect(FakeAudio.played).toHaveLength(1);
+        expect(useReadAloudStore.getState()).toMatchObject({ status: null, downloadGb: null, voiceReady: true });
+        await useReadAloudStore.getState().read('s:2', 'Again.');
+        expect(getSpeechModel).toHaveBeenCalledTimes(1);
+    });
+
+    it('a downloaded voice model reads straight away', async () => {
+        await useReadAloudStore.getState().read('s:1', 'Hello.');
+        expect(FakeAudio.played).toHaveLength(1);
+        expect(useReadAloudStore.getState().downloadGb).toBeNull();
+    });
+
+    it('a failed voice-model check is reported like a failed reading', async () => {
+        getSpeechModel.mockRejectedValue(new api.ApiError('x', 503, 'Lemonade Server is not reachable', null));
+        await useReadAloudStore.getState().read('s:1', 'Hello.');
+        expect(useReadAloudStore.getState().error).toEqual({ messageId: 's:1', kind: 'unreachable', detail: 'Lemonade Server is not reachable' });
+        expect(speak).not.toHaveBeenCalled();
     });
 
     it('a reply with nothing to say requests nothing', async () => {

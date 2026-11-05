@@ -62,6 +62,14 @@ describe('speechPieces', () => {
         expect(pieces.join(' ')).toBe(run);
     });
 
+    it('keeps the first piece short when the reply opens with a long sentence', () => {
+        const opening = Array.from({ length: 80 }, () => 'word').join(' ') + '.';
+        const reply = `${opening} ${long}`;
+        const pieces = speechPieces(reply);
+        expect(pieces[0].length).toBeLessThanOrEqual(FIRST_PIECE_CHARS);
+        expect(pieces.join(' ')).toBe(reply);
+    });
+
     it('splits Arabic text at its question mark too', () => {
         expect(speechPieces('ما هذا؟ هذا اختبار.', 12)).toEqual(['ما هذا؟', 'هذا اختبار.']);
     });

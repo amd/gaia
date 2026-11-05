@@ -988,10 +988,18 @@ Deleting a chat deletes its copies.
     range, and nothing is saved.
   </Accordion>
 
+  <Accordion title="GET /api/speech/model">
+    Whether Lemonade has the `kokoro-v1` voice model on disk:
+    `{"downloaded": bool, "size_gb": float | null}`. The app checks it before
+    its first read so it can say the model is downloading. **503** when
+    Lemonade is unreachable, **502** when Lemonade doesn't list the model.
+  </Accordion>
+
   <Accordion title="POST /api/speech">
     Speak `text` (1–1000 characters) through Lemonade's `kokoro-v1` model and
     return a 16-bit mono `audio/wav`, in the saved voice and speed unless the
-    body names `voice` or `speed`. Pulls the model on first use. **422** for
+    body names `voice` or `speed`. Downloads the model on first use, which the
+    app announces after `GET /api/speech/model`. **422** for
     empty or over-long text or a bad voice or speed, **503** when Lemonade is
     unreachable, **502** when Lemonade can't make the speech; each `detail`
     says why. The app splits a long reply into pieces and plays them back to

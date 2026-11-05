@@ -856,6 +856,7 @@ export const enMessages = {
     'readAloud.read': "Read aloud",
     'readAloud.stop': "Stop reading",
     'readAloud.dismiss': "Dismiss",
+    'readAloud.downloading': "Downloading the voice model through Lemonade, once. Reading starts when it finishes.",
     'readAloud.error.unreachable': "Couldn't read this aloud: the model server isn't answering.",
     'readAloud.error.speech': "Couldn't read this aloud: the model server couldn't make the speech.",
     'readAloud.error.playback': "Couldn't read this aloud: the speech couldn't be played here.",

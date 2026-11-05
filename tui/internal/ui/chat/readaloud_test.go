@@ -356,3 +356,28 @@ func TestLaunchLoadsAutoRead(t *testing.T) {
 		t.Error("read_aloud_auto: true was not loaded")
 	}
 }
+
+func TestRetiringTheChatStopsAReadingInProgress(t *testing.T) {
+	lem := &ttsServer{downloaded: true}
+	playing := make(chan struct{})
+	killed := make(chan struct{})
+	m, _ := readAloudModel(t, "", func(ctx context.Context, _ string) error {
+		close(playing)
+		<-ctx.Done()
+		close(killed)
+		return ctx.Err()
+	})
+	m.lemonadeBaseURL = lem.start(t)
+	m = withReply(m, "Hello there.")
+	next, cmd := m.submit("/read-aloud")
+	m = next.(ChatModel)
+	go func() { cmd() }()
+	<-playing
+
+	m.Retire()
+	select {
+	case <-killed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a reading kept playing after its chat was retired")
+	}
+}

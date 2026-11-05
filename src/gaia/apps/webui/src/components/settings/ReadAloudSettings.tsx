@@ -46,7 +46,8 @@ export function ReadAloudSettings() {
     const save = (change: Parameters<typeof api.updateSpeechSettings>[0]) => {
         setSaving(true);
         setSaveError(null);
-        stop();
+        // A preview in the old voice is stale; a reply playing in the chat is not.
+        if (useReadAloudStore.getState().messageId === PREVIEW_ID) stop();
         api.updateSpeechSettings(change)
             .then(setSettings)
             .catch((err) => setSaveError(errorText(err)))

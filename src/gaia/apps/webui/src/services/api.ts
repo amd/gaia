@@ -277,6 +277,16 @@ export async function updateSpeechSettings(
     return apiFetch<SpeechSettings>('PUT', '/speech/settings', data);
 }
 
+/** Whether Lemonade has the voice model on disk; the first read downloads it if not. */
+export interface SpeechModel {
+    downloaded: boolean;
+    size_gb: number | null;
+}
+
+export async function getSpeechModel(): Promise<SpeechModel> {
+    return apiFetch<SpeechModel>('GET', '/speech/model');
+}
+
 /** Longest text one `/speech` request takes; mirrors MAX_SPEECH_CHARS. */
 export const MAX_SPEECH_CHARS = 1000;
 

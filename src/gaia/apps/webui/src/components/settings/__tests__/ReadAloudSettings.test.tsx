@@ -50,6 +50,18 @@ describe('ReadAloudSettings', () => {
         expect((voice as HTMLSelectElement).value).toBe('af_bella');
     });
 
+    it('changing a setting stops a preview but not a reply being read in the chat', async () => {
+        const stop = vi.fn();
+        useReadAloudStore.setState({ messageId: 's1:7', status: 'playing', stop });
+        render(<ReadAloudSettings />);
+        fireEvent.change(await screen.findByLabelText('Speed'), { target: { value: '150' } });
+        await waitFor(() => expect(mockedApi.updateSpeechSettings).toHaveBeenCalledWith({ speed: 150 }));
+        expect(stop).not.toHaveBeenCalled();
+        useReadAloudStore.setState({ messageId: 'settings:preview' });
+        fireEvent.change(screen.getByLabelText('Speed'), { target: { value: '75' } });
+        expect(stop).toHaveBeenCalled();
+    });
+
     it('saves a new voice, speed and auto-read to the server', async () => {
         render(<ReadAloudSettings />);
         fireEvent.change(await screen.findByLabelText('Voice'), { target: { value: 'bm_george' } });

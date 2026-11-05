@@ -85,6 +85,11 @@
 .msg-actions:has(.msg-read-aloud.is-active) { opacity: 1; }
 .msg-read-aloud.is-active { color: var(--accent); }
 
+.msg-read-aloud-note {
+    margin-block-start: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
 .msg-read-aloud-error {
     display: flex;
     align-items: flex-start;

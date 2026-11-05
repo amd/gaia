@@ -110,6 +110,42 @@ def update_speech_settings(body: SpeechSettingsUpdate) -> SpeechSettings:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+class SpeechModel(BaseModel):
+    """Whether the voice model is on this PC, so a first read can say it downloads."""
+
+    downloaded: bool
+    size_gb: Optional[float] = None
+
+
+def _speech_model() -> SpeechModel:
+    from gaia.audio.lemonade_tts import LemonadeTTSClient, LemonadeTTSError
+
+    client = LemonadeTTSClient()
+    entry = next((m for m in client.catalog() if m.get("id") == client.model), None)
+    if entry is None:
+        raise LemonadeTTSError(
+            f"Lemonade at {client.base_url} has no voice model '{client.model}'. "
+            "Update Lemonade Server, then try again."
+        )
+    size = entry.get("size")
+    return SpeechModel(
+        downloaded=entry.get("downloaded") is True,
+        size_gb=float(size) if isinstance(size, (int, float)) else None,
+    )
+
+
+@router.get("/api/speech/model", response_model=SpeechModel)
+async def get_speech_model() -> SpeechModel:
+    from gaia.audio.lemonade_tts import LemonadeTTSError
+
+    try:
+        return await asyncio.to_thread(_speech_model)
+    except ConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except LemonadeTTSError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
 def _speak(text: str, voice: str, speed: int) -> bytes:
     from gaia.audio.lemonade_tts import LemonadeTTSClient, write_wav
 

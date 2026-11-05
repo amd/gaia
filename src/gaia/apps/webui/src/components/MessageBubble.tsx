@@ -21,7 +21,7 @@ import { localizeLiveStatus } from '../utils/liveStatus';
 import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
-import { ReadAloudButton, ReadAloudError } from './ReadAloudButton';
+import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
@@ -717,6 +717,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
                         <TurnChanges sessionId={message.session_id} messageId={message.id} />
                     )}
+                    {message.role === 'assistant' && <ReadAloudNote messageId={readAloudId} />}
                     {message.role === 'assistant' && <ReadAloudError messageId={readAloudId} />}
                 </div>
             </div>

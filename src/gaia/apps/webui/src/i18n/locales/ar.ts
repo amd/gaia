@@ -856,6 +856,7 @@ const messages: Messages = {
     'readAloud.read': "قراءة بصوت عالٍ",
     'readAloud.stop': "إيقاف القراءة",
     'readAloud.dismiss': "إغلاق",
+    'readAloud.downloading': "جارٍ تنزيل نموذج الصوت عبر Lemonade، مرة واحدة فقط. تبدأ القراءة عند انتهائه.",
     'readAloud.error.unreachable': "تعذّرت قراءة هذا الرد: خادم النماذج لا يستجيب.",
     'readAloud.error.speech': "تعذّرت قراءة هذا الرد: لم يتمكن خادم النماذج من توليد الكلام.",
     'readAloud.error.playback': "تعذّرت قراءة هذا الرد: لا يمكن تشغيل الصوت هنا.",

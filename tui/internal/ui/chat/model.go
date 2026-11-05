@@ -2169,6 +2169,13 @@ func (m *ChatModel) dropCancellingNotice() {
 	}
 }
 
+// Retire stops everything this chat started before it is dropped: the turn
+// and any reading aloud, which would otherwise play on with no way to stop it.
+func (m *ChatModel) Retire() {
+	m.CancelActiveTurn()
+	m.StopReadAloud()
+}
+
 // CancelActiveTurn stops any in-flight turn. The UI owns the per-turn context, so
 // tearing this view down has to cancel it — otherwise the transport keeps
 // streaming into a screen nobody is watching and the agent run stays alive.

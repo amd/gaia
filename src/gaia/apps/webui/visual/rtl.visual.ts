@@ -72,8 +72,8 @@ const audit = (page: Page): Promise<string[]> =>
 
         // An <option> holds plain text, so the English hint in brackets can't be
         // styled quietly there and its brackets scramble in rtl; use t.bare.
-        // The language picker names each language in English on purpose.
-        for (const option of document.querySelectorAll('option:not(#ui-language option)')) {
+        // Language pickers (options tagged with lang) name each language in English on purpose.
+        for (const option of document.querySelectorAll('option:not([lang])')) {
             const text = option.textContent ?? '';
             if (arabic.test(text) && /\([^)]*[A-Za-z]{3,}[^)]*\)/.test(text)) {
                 problems.push(`an <option> carries the English hint: "${text.trim().slice(0, 50)}"`);

@@ -246,8 +246,7 @@ func (m FlagshipModel) BeforeExit() error {
 // that no longer exists.
 func (m FlagshipModel) Close() error {
 	if m.chat != nil {
-		m.chat.CancelActiveTurn()
-		m.chat.StopReadAloud()
+		m.chat.Retire()
 	}
 	if m.chatClient != nil {
 		// Returned, not dropped: app.go prints it, and a wedged agent that
@@ -679,7 +678,7 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	// connection reaching it. clientBox.set below would otherwise overwrite
 	// b.c without closing it (see clientBox's own doc comment).
 	if m.chat != nil {
-		m.chat.CancelActiveTurn()
+		m.chat.Retire()
 		m.chatClient.retire()
 	}
 	m.chatClient.set(c)

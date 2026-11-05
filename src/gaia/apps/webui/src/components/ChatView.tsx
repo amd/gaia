@@ -11,6 +11,7 @@ import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFail
 import { useChatStore } from '../stores/chatStore';
 import { useReadAloudStore } from '../stores/readAloudStore';
 import { readsAloudWhenDone } from '../utils/autoReadAloud';
+import { useReadAloudSettings } from '../hooks/useReadAloudSettings';
 import { ensureModel, modelKnownReady } from '../stores/modelNeededStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -155,18 +156,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         if (cards.length > 0) lastCardsRef.current = [...cards];
     }, [cards]);
     // Auto-read needs the saved choice before the first reply finishes.
-    useEffect(() => {
-        const readAloud = useReadAloudStore.getState();
-        if (readAloud.settings) return;
-        void (async () => {
-            try {
-                const settings = await api.getSpeechSettings();
-                if (settings) readAloud.setSettings(settings);
-            } catch (err) {
-                log.ui.error('Could not load the read-aloud settings; replies will not be read automatically', err);
-            }
-        })();
-    }, []);
+    useReadAloudSettings();
     useEffect(() => {
         if (!isStreaming && prevStreamingRef.current) {
             setStreamEnding(true);
