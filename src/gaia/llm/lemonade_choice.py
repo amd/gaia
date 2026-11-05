@@ -165,7 +165,7 @@ def _raw_env_url() -> Optional[str]:
 
 def _same_env_value(a: Optional[str], b: Optional[str]) -> bool:
     """Same server: the TUI hands its child a bare origin with ``/api/v1`` added."""
-    if not (a and a.strip() and b and b.strip()):
+    if not (isinstance(a, str) and isinstance(b, str) and a.strip() and b.strip()):
         return False
     from gaia.llm.lemonade_client import resolve_lemonade_base_url
 
