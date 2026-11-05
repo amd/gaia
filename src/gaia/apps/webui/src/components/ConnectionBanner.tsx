@@ -141,7 +141,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 {isError ? (
                     <button
                         className="connection-banner__retry"
-                        onClick={() => downloadModel(false, downloadName)}
+                        onClick={() => downloadModel(false, downloadName, true)}
                     >
                         Retry
                     </button>

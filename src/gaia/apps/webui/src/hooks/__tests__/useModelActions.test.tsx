@@ -87,7 +87,7 @@ describe('the download banner Retry', () => {
 
         await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
 
-        expect(mockedApi.downloadModel).toHaveBeenCalledWith('amd.Some-Gateway', false);
+        expect(mockedApi.downloadModel).toHaveBeenCalledWith('amd.Some-Gateway', false, true);
         expect(screen.getByRole('alert')).toHaveTextContent(gateway);
         expect(screen.getByRole('alert')).not.toHaveTextContent('Pull failed earlier.');
     });
