@@ -374,9 +374,13 @@ def check_stdio_handshake(
                 "the event wire -- the TUI reads a stray line as a malformed "
                 "event, so nothing may print to it before the handshake."
             )
+            _kill_tree(proc)
+            _log_stderr_tail(proc)
             return False
         if not isinstance(event, dict) or not event.get("type"):
             log(f"FAIL: the opening event carries no 'type': {event!r}")
+            _kill_tree(proc)
+            _log_stderr_tail(proc)
             return False
         if event["type"] != "status":
             # An 'error' here is the frozen binary failing to build its agent --
@@ -416,6 +420,8 @@ def check_stdio_handshake(
             proc.wait(timeout=60)
         except subprocess.TimeoutExpired:
             log("FAIL: the agent did not exit within 60s of stdin closing")
+            _kill_tree(proc)
+            _log_stderr_tail(proc)
             return False
         log(f"stdio handshake check PASS -- exited {proc.returncode} on stdin close")
         return True
