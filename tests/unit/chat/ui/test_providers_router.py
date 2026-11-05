@@ -26,7 +26,7 @@ from gaia.connectors import credential_wait
 from gaia.connectors.errors import ConnectorsError
 from gaia.llm import cloud_keys
 from gaia.llm import custom_models as cm
-from gaia.llm import lemonade_client
+from gaia.llm import lemonade_client, npu_linux
 from gaia.llm.cloud_keys import CloudKeyError
 from gaia.llm.gateway import (
     DEFAULT_AUTH_HEADER_NAME,
@@ -40,7 +40,7 @@ from gaia.ui.routers import providers
 
 from ...test_custom_models import ARCH_SOURCE, SYSTEM_INFO
 from ...test_custom_models import _repo as repo_payload
-from ...test_npu_linux import linux, linux_system_info, not_set_up  # noqa: F401
+from ...test_npu_linux import MEMLOCK, linux_system_info
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 CLOUD_GO = REPO_ROOT / "tui" / "internal" / "lemonade" / "cloud.go"
@@ -1216,8 +1216,10 @@ _NPU = "gemma4-it-e4b-FLM"
 
 
 @pytest.fixture
-def npu_blocked(lemonade, not_set_up):
+def npu_blocked(lemonade, monkeypatch):
     """Fedora with a Ryzen AI NPU whose locked-memory limit is still 8 MB."""
+    monkeypatch.setattr(npu_linux, "_on_linux", lambda: True)
+    monkeypatch.setattr(npu_linux, "problems", lambda: list(MEMLOCK))
     lemonade.models = [
         *_CATALOG,
         {"id": _NPU, "downloaded": True, "recipe": "flm", "labels": ["tool-calling"]},
