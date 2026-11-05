@@ -65,6 +65,19 @@ const PLAN = {
 
 const PLAN_COLD = { ...PLAN, lemonade: { mode: 'gaia', url: null, reachable: false }, decided_after_server: true, catalog: [] };
 const PLAN_SHORT = { ...PLAN, disk: { ...PLAN.disk, free_gb: 2.1 } };
+// #6632: Linux with an NPU Lemonade reports, but memlock at 8 MB and no access to the device.
+const PLAN_NPU_NOT_READY = {
+    ...PLAN,
+    npu: {
+        present: true,
+        ready: false,
+        problems: [
+            { code: 'access', title: '', fix: '', params: { device: '/dev/accel/accel0', group: 'render' } },
+            { code: 'memlock', title: '', fix: '', params: { limit: '8 MB', fix: 'apply' } },
+            { code: 'runtime', title: '', fix: '', params: { detail: 'flm-real: error while loading shared libraries: libreadline.so.8: cannot open shared object file' } },
+        ],
+    },
+};
 const PLAN_NO_VISION = { ...PLAN, chat_model: { id: MINE.id, user_set: true, size_gb: 0, downloaded: true }, recommended_model: null };
 const PLAN_TOO_BIG = {
     ...PLAN,
@@ -390,6 +403,15 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
+        name: 'models-npu-not-ready',
+        answers: { plan: PLAN_NPU_NOT_READY },
+        reach: async (page) => {
+            await toModels(page);
+            await expect(page.locator('.setup-npu-problems')).toBeVisible();
+            await expect(page.locator('.setup-backend [role="radio"]').nth(1)).toBeDisabled();
+        },
+    },
+    {
         name: 'models-untested-no-vision',
         answers: { plan: PLAN_NO_VISION },
         reach: async (page) => {
@@ -486,7 +508,7 @@ export const SETUP_SCENES: SetupScene[] = [
 ];
 
 /** The screens whose rows wrap: each must hold together in a narrow window too. */
-export const NARROW_SCENES = ['plan', 'check-details', 'models', 'models-long', 'key', 'download-running', 'download-failed', 'test-long', 'ready'];
+export const NARROW_SCENES = ['plan', 'check-details', 'models', 'models-npu-not-ready', 'models-long', 'key', 'download-running', 'download-failed', 'test-long', 'ready'];
 
 export const scene = (name: string): SetupScene => {
     const found = SETUP_SCENES.find((s) => s.name === name);

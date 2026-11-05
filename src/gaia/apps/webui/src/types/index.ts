@@ -1120,6 +1120,20 @@ export interface SetupRunStatus {
     overall?: SetupOverall;
 }
 
+/** One thing between this PC and running a model on its NPU (Linux setup). */
+export interface SetupNpuProblem {
+    code: 'driver' | 'device' | 'firmware' | 'access' | 'memlock' | 'runtime';
+    title: string;
+    fix: string;
+    params: Record<string, string>;
+}
+
+export interface SetupNpuStatus {
+    present: boolean;
+    ready: boolean;
+    problems: SetupNpuProblem[];
+}
+
 /** GET /api/setup/plan: what setup will use and download, before it starts. */
 export interface SetupPlan {
     /** `url` is null while GAIA's own server isn't running: it has no address yet. */
@@ -1141,6 +1155,8 @@ export interface SetupPlan {
     catalog?: SetupCatalogEntry[];
     /** Backends Lemonade reports for this PC. */
     backends?: Array<{ recipe: string; backend: string; state: string | null; version?: string | null; default: boolean }>;
+    /** An NPU Lemonade reports, and what stops a model running on it yet. */
+    npu?: SetupNpuStatus;
     /** What setup found across the stack; null where nothing could find out. */
     system?: SetupSystem;
     /** Everything else setup fetches. */
@@ -1286,6 +1302,8 @@ export interface ProviderModel {
     fits?: boolean | null;
     available?: boolean;
     unavailable_reason?: string | null;
+    /** What stops this NPU model on this PC's NPU (Linux setup), in place of the reason. */
+    npu_problems?: SetupNpuProblem[];
     /** Median tokens/s of its recent turns on this PC. */
     tokens_per_second?: number | null;
     /** An in-flight (or just-finished) download of this model. */

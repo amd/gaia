@@ -2459,7 +2459,10 @@ plan and make one set of choices.
     the GiB Lemonade reports, the same way `/api/gpu-memory` converts them, so
     the two read the same number for the same PC),
     `disk` (`path`, `free_gb`, `source`), `disk_warning`, and `skipped_models`.
-    `gaia init --plan --json` prints the same object; its
+    `npu` says whether this PC has an NPU (`present`), whether a model can run
+    on it now (`ready`), and what stops it (`problems`, each `code`, `title`,
+    `fix` and `params`); while it isn't ready, the NPU model's `fit_code` is
+    `npu`. `gaia init --plan --json` prints the same object; its
     [CLI reference](/reference/cli#choosing-models) lists every field.
   </Accordion>
 
@@ -2473,6 +2476,24 @@ plan and make one set of choices.
     this PC; send it again with that field set to use it anyway. **422** when
     the model isn't a chat model GAIA or the server knows; **503** when the
     model server isn't running yet.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/npu/recheck">
+    Reads the NPU's setup afresh, after the user fixed something, instead of
+    the 30-second cached reading. Returns the new plan. **403** without
+    `X-Gaia-UI: 1`.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/npu/memlock-fix">
+    Linux only. Raises the locked-memory limit FastFlowLM needs, for every
+    user on the PC, behind the desktop's own administrator prompt (`pkexec`).
+    It takes effect after a restart. Returns the new plan. **403** over mobile
+    access or from another computer; **409** with `detail` `{"code",
+    "message"}` when the prompt was closed (`cancelled`), not answered
+    (`timeout`) or couldn't be shown (`not_authorized`); **422** on a PC that
+    isn't Linux (`not_linux`) or has no polkit (`no_pkexec`); **500**
+    (`failed`) otherwise. The [NPU guide](/guides/npu) has the steps to do it
+    by hand.
   </Accordion>
 
   <Accordion title="POST /api/setup/vision-model">
