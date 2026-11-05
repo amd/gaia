@@ -41,10 +41,20 @@ def _is_rate_limit_error(text: str) -> bool:
     )
 
 
-def _run(args: Sequence[str]) -> str:
-    completed = subprocess.run(
-        ["gh", *args], capture_output=True, text=True, check=False
-    )
+_GH_CALL_TIMEOUT_SECONDS = 900
+
+
+def _run(args: Sequence[str], timeout: int = _GH_CALL_TIMEOUT_SECONDS) -> str:
+    try:
+        completed = subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ReleaseError(f"gh {' '.join(args)} timed out after {timeout}s") from exc
     if completed.returncode == 0:
         return completed.stdout
     detail = (completed.stderr or completed.stdout).strip()
