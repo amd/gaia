@@ -52,7 +52,9 @@ class UnknownLogError(ValueError):
 
 def _user_gaia_dir() -> Path:
     # The desktop shell writes here whatever GAIA_HOME says, as `gaia diagnostics` reads it.
-    return Path.home() / ".gaia"
+    from gaia.home import default_gaia_home
+
+    return default_gaia_home()
 
 
 def _newest_first(paths) -> List[Path]:
