@@ -161,15 +161,18 @@ def test_pinned_linux_lemonade_runs_on_ubuntu_24_04(template):
     binaries = _binaries(archive)
     assert set(binaries) == set(BINARIES), f"{name} holds {sorted(binaries)}"
 
-    for binary, elf in sorted(binaries.items()):
-        bad = too_new(symbol_version_needs(elf))
-        assert not bad, (
-            f"Lemonade {LEMONADE_VERSION}'s {binary} in {name} needs "
-            f"{sorted(bad)}, newer than Ubuntu 24.04 provides, so GAIA's engine "
-            "would exit on start for Linux users. Keep the previous "
-            "LEMONADE_VERSION and report it upstream at "
-            "https://github.com/lemonade-sdk/lemonade/issues."
-        )
+    bad = {
+        binary: sorted(too_new(symbol_version_needs(elf)))
+        for binary, elf in sorted(binaries.items())
+    }
+    bad = {binary: needs for binary, needs in bad.items() if needs}
+    assert not bad, (
+        f"Lemonade {LEMONADE_VERSION} in {name} needs {bad}, newer than "
+        "Ubuntu 24.04 provides, so GAIA's engine "
+        "would exit on start for Linux users. Keep the previous "
+        "LEMONADE_VERSION and report it upstream at "
+        "https://github.com/lemonade-sdk/lemonade/issues."
+    )
 
 
 def test_check_catches_the_build_that_broke_linux():
