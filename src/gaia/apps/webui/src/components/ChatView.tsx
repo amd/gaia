@@ -57,6 +57,11 @@ import { setVisibleInterval } from '../utils/visibleInterval';
 import { ModelServerDownNotice } from './ModelServerDownNotice';
 import { useChatDraft } from '../hooks/useSavedDraft';
 import { getT, useT } from '../i18n/useT';
+import { withVoiceTap, type VoiceTurnTap } from '../voice/turnTap';
+import { chatIdle, closeVoice, openVoice, type VoiceHost } from '../voice/controller';
+import { useVoiceStore } from '../stores/voiceStore';
+import { useMediaQuery } from '../hooks/useMediaQuery';
+import { VoiceScreen } from './voice/VoiceScreen';
 
 /** Events that only come after the agent got past a permission prompt. */
 const RESOLVES_PROMPTS = new Set(['tool_start', 'tool_end', 'tool_result']);
@@ -92,6 +97,8 @@ interface SendOptions {
     reconnect?: number;
     /** Opens the chat, so it goes ahead of anything queued. */
     opening?: boolean;
+    /** A voice turn: sent with `reply_style: "voice"`, and its stream is read aloud. The composer is left alone. */
+    voice?: VoiceTurnTap;
 }
 
 export function ChatView({ sessionId }: ChatViewProps) {
@@ -499,15 +506,21 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const fromQueue = options?.queued === true;
         // reconnect=N re-attaches a stream that went silent, replacing the dead one still marked live.
         const reconnect = reattach ? options?.reconnect ?? 0 : 0;
-        const text = (overrideText || input).trim();
-        const hasAttachments = !fromQueue && attach.hasUploaded;
+        const voiceTap = reattach ? undefined : options?.voice;
+        // A voice turn carries only what was said, never the composer's draft.
+        const keepComposer = fromQueue || !!voiceTap;
+        const text = (overrideText || (voiceTap ? '' : input)).trim();
+        const hasAttachments = !keepComposer && attach.hasUploaded;
 
         // User just sent a message — re-pin scroll to the bottom so the
         // new message and streaming response are visible.
         isNearBottomRef.current = true;
 
         const isInitializing = systemStatus?.init_state === 'initializing';
-        const notTaken = (outcome: SendOutcome) => { if (fromQueue) options?.onQueuedOutcome?.(outcome); };
+        const notTaken = (outcome: SendOutcome) => {
+            if (fromQueue) options?.onQueuedOutcome?.(outcome);
+            voiceTap?.error();
+        };
         if (!reattach && retiredAgent) {
             log.chat.warn(`Send blocked: chat ${sessionId} belongs to the retired "${retiredAgent}" agent`);
             notTaken({ kind: 'failed', error: `This chat's "${retiredAgent}" agent was retired, so it cannot take new messages.` });
@@ -518,7 +531,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         if (reattach) {
             // Don't double-attach if a stream is already live in this view.
             if (isStreaming && !reconnect) return;
-        } else if (!fromQueue && (text || hasAttachments) && !isInitializing && (isStreaming || comparingRef.current || waiting)) {
+        } else if (!keepComposer && (text || hasAttachments) && !isInitializing && (isStreaming || comparingRef.current || waiting)) {
             // Its own turn by default: a model handed a message mid-turn may finish without answering it.
             setQueue((q) => messageQueue.enqueue(q, attach.compose(text), 'queued'));
             setInput('');
@@ -535,10 +548,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         // Asked here so a send that was going to be queued or refused asks nothing.
         if (!reattach && !fromQueue && !(modelKnownReady('chat') && (!attach.hasImage || modelKnownReady('vision')))) {
-            if (checkingModelRef.current) return;
+            if (checkingModelRef.current) { voiceTap?.error(); return; }
             checkingModelRef.current = true;
             try {
-                if (!(await ensureModel('chat')) || (attach.hasImage && !(await ensureModel('vision')))) return;
+                if (!(await ensureModel('chat')) || (!voiceTap && attach.hasImage && !(await ensureModel('vision')))) {
+                    voiceTap?.error();
+                    return;
+                }
             } finally {
                 checkingModelRef.current = false;
             }
@@ -548,11 +564,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         let messageText = text;
         let optimisticUser: Message | null = null;
         if (!reattach) {
-            messageText = fromQueue ? text : attach.compose(text);
+            messageText = keepComposer ? text : attach.compose(text);
 
             log.chat.info(`Sending message to session=${sessionId}`, { length: messageText.length, preview: messageText.slice(0, 80) });
 
-            if (!fromQueue) {
+            if (!keepComposer) {
                 setInput('');
                 inputRef.current?.focus();
                 attach.clear();
@@ -1290,7 +1306,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         const controller = reattach
             ? api.attachToRun(sessionId, streamCallbacks)
-            : api.sendMessageStream(sessionId, messageText, streamCallbacks);
+            : voiceTap
+                ? api.sendMessageStream(sessionId, messageText, withVoiceTap(streamCallbacks, voiceTap), undefined, undefined, undefined, undefined, 'voice')
+                : api.sendMessageStream(sessionId, messageText, streamCallbacks);
 
         streamController = controller;
         abortRef.current = controller;
@@ -1298,6 +1316,23 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
+
+    // Voice mode: each utterance is this chat's next message; Stop is the chat's own.
+    const handleStopRef = useRef(handleStop);
+    handleStopRef.current = handleStop;
+    const phone = useMediaQuery('(max-width: 640px)');
+    const voiceOpen = useVoiceStore((s) => s.open && s.sessionId === sessionId);
+    const voiceHost = useMemo<VoiceHost>(() => ({
+        sendTurn: (text, tap) => {
+            if (useChatStore.getState().isStreaming) return false;
+            sendMessageRef.current(text, { voice: tap });
+            return true;
+        },
+        stopTurn: () => handleStopRef.current(),
+    }), []);
+    const openVoiceMode = useCallback(() => openVoice(sessionId, voiceHost, { phone }), [sessionId, voiceHost, phone]);
+    useEffect(() => () => { if (useVoiceStore.getState().sessionId === sessionId) closeVoice(); }, [sessionId]);
+    useEffect(() => { if (!isStreaming) chatIdle(); }, [isStreaming]);
 
     // Re-attach to a turn still running server-side (#1580), whenever this view
     // isn't streaming it: on open, on reload, and after leaving a chat that was
@@ -1823,13 +1858,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 </div>
             )}
 
+            {voiceOpen && <VoiceScreen phone={phone} prompt={<PermissionPrompt sessionId={sessionId} />} />}
+
             <div className="input-area">
                 <div className="input-column">
                     <ExportErrorBar message={exportError} onDismiss={clearExportError} />
                     {lastIsConnectorError && lastMessage && (
                         <ConnectorRetryBanner content={lastMessage.content} onRetry={handleRetryLast} />
                     )}
-                    <PermissionPrompt sessionId={sessionId} />
+                    {!voiceOpen && <PermissionPrompt sessionId={sessionId} />}
                     <ContextWarning usage={contextUsage} />
                     <OfflineNotice sessionId={sessionId} />
                     {pendingPrompt && initializing && (
@@ -1853,6 +1890,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         value={input}
                         onChange={setInput}
                         onSubmit={() => sendMessage()}
+                        onVoice={retiredAgent ? undefined : openVoiceMode}
                         onStop={handleStop}
                         streaming={isStreaming}
                         stopping={stopping}

@@ -569,3 +569,11 @@ async def test_protocol_rejects_frames_when_host_has_mic():
 
     await run_voice_socket(receive, send, make, accepts_mic_frames=False)
     assert sent[0]["code"] == "bad_request"
+
+
+def test_without_tags_keeps_the_summary_as_lead():
+    from gaia.voice.spoken import without_tags
+
+    assert without_tags("<spoken>Done.</spoken>\n\nDetail.") == "Done.\n\nDetail."
+    assert without_tags("Plain answer.") == "Plain answer."
+    assert without_tags("Mentions <spoken> later") == "Mentions <spoken> later"

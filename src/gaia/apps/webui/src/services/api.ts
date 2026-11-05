@@ -657,6 +657,8 @@ export function sendMessageStream(
     onError?: (error: Error) => void,
     agentType?: string,
     device?: string,
+    /** `voice` asks for a spoken summary first; see docs/plans/voice.mdx. */
+    replyStyle?: 'voice',
 ): AbortController {
     // Support both old 3-arg style and new callbacks style
     let callbacks: StreamCallbacks;
@@ -686,6 +688,7 @@ export function sendMessageStream(
             stream: true,
             ...(agentType ? { agent_type: agentType } : {}),
             ...(device ? { device } : {}),
+            ...(replyStyle ? { reply_style: replyStyle } : {}),
         }),
         signal: controller.signal,
     })

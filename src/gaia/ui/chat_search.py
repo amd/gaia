@@ -6,6 +6,8 @@
 import unicodedata
 from typing import Dict, List, Optional, Tuple
 
+from gaia.voice.spoken import without_tags
+
 SNIPPET_BEFORE = 20  # the sidebar shows ~30 chars; keep the hit in view
 SNIPPET_AFTER = 80
 
@@ -41,6 +43,7 @@ def snippet(text: str, needle: str) -> Optional[Dict[str, str]]:
     UI can highlight ``match`` without re-implementing the folding, or None
     when *text* does not contain *needle*.
     """
+    text = without_tags(text)
     folded, origin = _fold_with_map(text)
     at = folded.find(needle)
     if at < 0 or not needle:

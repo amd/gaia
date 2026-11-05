@@ -38,6 +38,7 @@ export interface ApiSchemas {
   DocumentResponse: DocumentResponse;
   DocumentUploadRequest: DocumentUploadRequest;
   DownloadProgress: DownloadProgress;
+  DownloadRequest: DownloadRequest;
   EvalMailboxRequest: EvalMailboxRequest;
   FileEntry: FileEntry;
   FileListResponse: FileListResponse;
@@ -108,6 +109,9 @@ export interface ApiSchemas {
   SetupRunRequest: SetupRunRequest;
   SkipModelRequest: SkipModelRequest;
   SourceInfo: SourceInfo;
+  SpeakRequest: SpeakRequest;
+  SpeechSettings: SpeechSettings;
+  SpeechSettingsUpdate: SpeechSettingsUpdate;
   StartAgentServerRequest: StartAgentServerRequest;
   SystemStatus: SystemStatus;
   TargetRequest: TargetRequest;
@@ -133,6 +137,11 @@ export interface ApiSchemas {
   UserInputRequest: UserInputRequest;
   ValidationError: ValidationError;
   VisionModelRequest: VisionModelRequest;
+  Voice: Voice;
+  VoiceModel: VoiceModel;
+  VoiceSettings: VoiceSettings;
+  VoiceSettingsUpdate: VoiceSettingsUpdate;
+  VoiceStatus: VoiceStatus;
   WarmUpStatus: WarmUpStatus;
   WorkInProgress: WorkInProgress;
   gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
@@ -349,6 +358,7 @@ export interface ChatRequest {
   agent_type?: string | null;
   document_ids?: string[] | null;
   message: string;
+  reply_style?: "text" | "voice";
   session_id: string;
   stream?: boolean;
 }
@@ -493,6 +503,9 @@ export interface DownloadProgress {
   state: string;
   total_bytes?: number;
   total_files?: number;
+}
+export interface DownloadRequest {
+  model: string;
 }
 export interface EvalMailboxRequest {
   attached: boolean;
@@ -1188,6 +1201,31 @@ export interface SkipModelRequest {
   model_id: string;
   skipped?: boolean;
 }
+export interface SpeakRequest {
+  speed?: number | null;
+  text: string;
+  voice?: string | null;
+}
+export interface SpeechSettings {
+  auto: boolean;
+  max_speed?: number;
+  min_speed?: number;
+  speed: number;
+  voice: string;
+  voices: Voice[];
+}
+export interface Voice {
+  accent: string;
+  gender: string;
+  id: string;
+  name: string;
+  quality: string;
+}
+export interface SpeechSettingsUpdate {
+  auto?: boolean | null;
+  speed?: number | null;
+  voice?: string | null;
+}
 export interface StartAgentServerRequest {
   backend_url?: string;
   port?: number;
@@ -1345,6 +1383,42 @@ export interface UserInputRequest {
  */
 export interface VisionModelRequest {
   model_id?: string | null;
+}
+export interface VoiceModel {
+  downloaded: boolean;
+  id: string;
+  purpose: string;
+  size_gb?: number | null;
+}
+export interface VoiceSettings {
+  asr_model?: string;
+  captions?: boolean;
+  language?: string | null;
+  silence_ms?: number;
+  status_updates?: boolean;
+  turn_taking?: string;
+}
+export interface VoiceSettingsUpdate {
+  asr_model?: string | null;
+  captions?: boolean | null;
+  language?: string | null;
+  silence_ms?: number | null;
+  status_updates?: boolean | null;
+  turn_taking?: string | null;
+}
+export interface VoiceStatus {
+  asr_model: string;
+  captions: boolean;
+  error?: string | null;
+  error_code?: string | null;
+  language: string;
+  models?: VoiceModel[];
+  ready: boolean;
+  silence_ms: number;
+  speaks: boolean;
+  status_updates: boolean;
+  tts_model: string;
+  turn_taking: string;
 }
 /**
  * Work that quitting or unloading the model would cut short.

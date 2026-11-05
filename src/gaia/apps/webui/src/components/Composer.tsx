@@ -1,10 +1,13 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
-import { ArrowUp, FileText, Plus, Square, X } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
+import { ArrowUp, AudioLines, FileText, Plus, Square, X } from 'lucide-react';
 import type { UseAttachments } from '../hooks/useAttachments';
+import { useDictation } from '../hooks/useDictation';
 import { useT } from '../i18n/useT';
+import { DictationNotice, MicButton } from './voice/MicButton';
+import { LevelMeter } from './voice/LevelMeter';
 import './Composer.css';
 
 interface ComposerProps {
@@ -27,6 +30,8 @@ interface ComposerProps {
     leftControls?: ReactNode;
     /** Small inline controls before the send button (model). */
     rightControls?: ReactNode;
+    /** Opens voice mode; the send button becomes the voice button while the box is empty. */
+    onVoice?: () => void;
 }
 
 const MAX_INPUT_HEIGHT = 240;
@@ -36,7 +41,7 @@ export const MAX_MESSAGE_CHARS = 100_000;
 
 export function Composer({
     value, onChange, onSubmit, onStop, streaming = false, stopping = false, queueWhileStreaming = false, disabledReason, attachments,
-    placeholder, autoFocus, inputRef, leftControls, rightControls,
+    placeholder, autoFocus, inputRef, leftControls, rightControls, onVoice,
 }: ComposerProps) {
     const t = useT();
     const ownRef = useRef<HTMLTextAreaElement | null>(null);
@@ -50,6 +55,55 @@ export function Composer({
     const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong;
 
     const shownPlaceholder = disabledReason || placeholder || t('composer.placeholder');
+
+    // Dictation: the words go in where the cursor was when it started.
+    const cursorRef = useRef<[number, number] | null>(null);
+    const valueRef = useRef(value);
+    valueRef.current = value;
+    const dictation = useDictation((heard) => {
+        const current = valueRef.current;
+        const [from, to] = cursorRef.current ?? [current.length, current.length];
+        const before = current.slice(0, from);
+        const after = current.slice(to);
+        const lead = before && !/\s$/.test(before) ? ' ' : '';
+        const trail = after && !/^\s/.test(after) ? ' ' : '';
+        const caret = before.length + lead.length + heard.length;
+        onChange(`${before}${lead}${heard}${trail}${after}`);
+        requestAnimationFrame(() => {
+            const el = textareaRef.current;
+            if (!el) return;
+            el.focus();
+            el.setSelectionRange(caret, caret);
+        });
+    });
+    const recording = dictation.state !== 'idle';
+    // Where the cursor last was in the box; clicking the mic moves focus off it.
+    const caretRef = useRef<[number, number] | null>(null);
+    const rememberCaret = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+        caretRef.current = [e.currentTarget.selectionStart, e.currentTarget.selectionEnd];
+    };
+    const startDictation = useCallback(() => {
+        const end = value.length;
+        const [from, to] = caretRef.current ?? [end, end];
+        cursorRef.current = [Math.min(from, end), Math.min(to, end)];
+        dictation.start();
+    }, [dictation, value.length]);
+
+    // Enter or Esc stops dictation; Enter does not send.
+    const stopDictation = dictation.stop;
+    useEffect(() => {
+        if (!recording) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key !== 'Enter' && e.key !== 'Escape') return;
+            e.preventDefault();
+            e.stopPropagation();
+            stopDictation();
+        };
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
+    }, [recording, stopDictation]);
+    const showVoice = !!onVoice && !streaming && !hasContent && !recording;
+    const elapsed = `${Math.floor(dictation.elapsed / 60)}:${String(dictation.elapsed % 60).padStart(2, '0')}`;
 
     // Grow with the text, up to a cap; shrink back when it is cleared.
     // Chrome counts the placeholder in scrollHeight, and a narrow first layout
@@ -89,7 +143,7 @@ export function Composer({
 
     return (
         <div
-            className={`composer${disabled ? ' composer-disabled' : ''}`}
+            className={`composer${disabled ? ' composer-disabled' : ''}${recording ? ' is-recording' : ''}`}
             onDrop={handleDrop}
             onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }}
         >
@@ -115,13 +169,23 @@ export function Composer({
                     ))}
                 </ul>
             )}
+            {recording && (
+                <div className="composer-livebox" dir="auto" aria-live="polite" aria-label={t('dictation.live')}>
+                    {value && <span>{value} </span>}
+                    {dictation.committed && <span>{dictation.committed} </span>}
+                    <span className="composer-livebox-partial">{dictation.partial}</span>
+                    <span className="composer-livebox-cursor" aria-hidden="true" />
+                </div>
+            )}
             <textarea
                 ref={textareaRef}
+                hidden={recording}
                 className="composer-input"
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
                 onKeyDown={handleKeyDown}
                 onPaste={(e) => { attachments.handlePaste(e); }}
+                onSelect={rememberCaret}
                 placeholder={shownPlaceholder}
                 rows={1}
                 disabled={disabled}
@@ -129,6 +193,7 @@ export function Composer({
                 aria-label={t('composer.message')}
                 dir="auto"
             />
+            <DictationNotice dictation={dictation} />
             {tooLong && (
                 <p className="composer-limit-error" role="alert">
                     {t('composer.tooLong', { sent: sentLength.toLocaleString(), max: MAX_MESSAGE_CHARS.toLocaleString() })}
@@ -157,7 +222,14 @@ export function Composer({
                             e.target.value = '';
                         }}
                     />
-                    {leftControls}
+                    <MicButton dictation={dictation} onStart={startDictation} disabled={disabled} />
+                    {recording && (
+                        <span className="composer-rec">
+                            <LevelMeter level={dictation.level} className="composer-rec-wave" />
+                            <bdi dir="ltr" className="composer-rec-time">{elapsed}</bdi>
+                        </span>
+                    )}
+                    {!recording && leftControls}
                 </div>
                 <div className="composer-row-right">
                     {rightControls}
@@ -184,12 +256,23 @@ export function Composer({
                         >
                             <Square size={12} fill="currentColor" />
                         </button>
+                    ) : showVoice ? (
+                        <button
+                            type="button"
+                            className="composer-send is-voice"
+                            onClick={onVoice}
+                            disabled={disabled}
+                            aria-label={t('voice.open')}
+                            title={t('voice.open')}
+                        >
+                            <AudioLines size={16} />
+                        </button>
                     ) : (
                         <button
                             type="button"
                             className="composer-send"
                             onClick={onSubmit}
-                            disabled={!canSend}
+                            disabled={!canSend || recording}
                             aria-label={t('composer.send')}
                             title={t.hint(t('composer.send'), 'Enter')}
                         >

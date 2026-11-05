@@ -1,0 +1,715 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* Voice mode covers the chat it belongs to; the work log slides in beside it. */
+.voice-screen {
+    --vs-line: color-mix(in srgb, var(--border) 55%, transparent);
+    position: absolute;
+    inset: 0;
+    z-index: 30;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 0;
+    background: var(--bg-primary);
+    animation: vs-in var(--duration) var(--ease);
+    transition: grid-template-columns var(--duration-slow) var(--ease);
+}
+
+.voice-screen.has-log {
+    grid-template-columns: minmax(0, 1fr) 340px;
+}
+
+@keyframes vs-in {
+    from { opacity: 0; transform: scale(0.985); }
+}
+
+.vs-main {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    min-width: 0;
+    min-height: 0;
+    padding-block: 16px 26px;
+    padding-inline: 20px;
+}
+
+.vs-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    /* The window's own controls sit in this corner on Windows and Linux. */
+    padding-inline-end: var(--titlebar-controls-w);
+}
+
+.vs-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: var(--radius-full);
+    background: var(--bg-recessed);
+    color: var(--text-secondary);
+    font-size: var(--fs-label);
+    font-weight: 500;
+}
+
+.vs-pill i {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-green);
+}
+
+.vs-acts {
+    display: flex;
+    gap: 6px;
+}
+
+.vs-tbtn,
+.vs-icon-btn {
+    display: inline-grid;
+    place-items: center;
+    min-width: 32px;
+    height: 32px;
+    padding: 0 9px;
+    border-radius: var(--radius-full);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.vs-tbtn:hover:not(:disabled),
+.vs-icon-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.vs-tbtn[aria-pressed="false"] {
+    color: var(--text-muted);
+    text-decoration: line-through;
+}
+
+.vs-tbtn:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+
+.vs-center {
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: 4px;
+    min-height: 0;
+}
+
+.vs-viz {
+    width: 260px;
+    height: 260px;
+    max-width: 100%;
+}
+
+/* The state word; while a state is live a highlight in its colour sweeps across it:
+   a copy of the word in that colour, shown through a moving band. */
+.vs-state {
+    --vs-sheen: var(--text-primary);
+    position: relative;
+    min-height: 26px;
+    color: var(--text-primary);
+    font-size: 17px;
+    font-weight: 500;
+}
+
+.vs-state.is-paused,
+.vs-state.is-ptt_idle {
+    color: var(--text-muted);
+}
+
+.vs-state.is-listening { --vs-sheen: var(--accent-blue); }
+.vs-state.is-thinking,
+.vs-state.is-speaking { --vs-sheen: var(--accent-solid); }
+.vs-state.is-warming { --vs-sheen: var(--border); }
+
+.vs-state.is-live::after {
+    content: attr(data-word) / "";
+    position: absolute;
+    inset: 0;
+    color: var(--vs-sheen);
+    pointer-events: none;
+    -webkit-mask-image: linear-gradient(90deg, transparent 38%, black 50%, transparent 62%);
+    mask-image: linear-gradient(90deg, transparent 38%, black 50%, transparent 62%);
+    -webkit-mask-size: 240% 100%;
+    mask-size: 240% 100%;
+    animation: vs-wash var(--duration-shimmer) var(--ease-linear) infinite;
+}
+
+[dir="rtl"] .vs-state.is-live::after {
+    animation-direction: reverse;
+}
+
+@keyframes vs-wash {
+    from { -webkit-mask-position: 170% 0; mask-position: 170% 0; }
+    to { -webkit-mask-position: -70% 0; mask-position: -70% 0; }
+}
+
+.vs-lower {
+    display: grid;
+    gap: 10px;
+    width: min(560px, 100%);
+    margin: 0 auto;
+}
+
+.vs-prompt {
+    text-align: start;
+}
+
+.vs-note {
+    color: var(--accent);
+    font-size: var(--fs-ui);
+    text-align: center;
+}
+
+.vs-caps {
+    display: grid;
+    align-content: end;
+    gap: 8px;
+    min-height: 104px;
+    text-align: center;
+}
+
+.vs-caps[data-off] {
+    visibility: hidden;
+}
+
+.vs-you {
+    min-height: 21px;
+    color: var(--text-muted);
+    font-size: var(--fs-body);
+}
+
+.vs-you.is-partial {
+    font-style: italic;
+}
+
+.vs-said {
+    min-height: 28px;
+    font-size: 19px;
+    line-height: 1.45;
+    text-wrap: balance;
+}
+
+.vs-w {
+    color: var(--border);
+    transition: color var(--duration-fast) var(--ease);
+}
+
+.vs-w.is-on {
+    color: var(--text-primary);
+}
+
+.vs-ctl {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding-top: 18px;
+}
+
+.vs-big {
+    display: grid;
+    place-items: center;
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: var(--text-primary);
+    color: var(--bg-primary);
+    box-shadow: var(--shadow-md);
+    touch-action: none;
+    transition: transform var(--duration-fast) var(--ease), opacity var(--duration) var(--ease);
+}
+
+.vs-big:active:not(:disabled),
+.vs-big.is-held {
+    transform: scale(0.95);
+}
+
+.vs-big:disabled {
+    opacity: 0.3;
+    cursor: default;
+}
+
+.vs-side {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: var(--bg-recessed);
+    box-shadow: inset 0 0 0 1px var(--vs-line);
+    color: var(--text-secondary);
+}
+
+.vs-side:hover {
+    color: var(--text-primary);
+}
+
+/* What GAIA did. */
+.vs-log {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--bg-card);
+    border-inline-start: 1px solid var(--vs-line);
+}
+
+.vs-log[hidden] {
+    display: none;
+}
+
+.vs-log-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 16px 18px 12px;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.vs-count {
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    background: var(--bg-recessed);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.vs-loglist {
+    display: grid;
+    align-content: start;
+    gap: 14px;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 4px 18px 20px;
+}
+
+.vs-row {
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+    font-size: var(--fs-ui);
+    line-height: 1.5;
+    animation: vs-rise var(--duration-slow) var(--ease);
+}
+
+@keyframes vs-rise {
+    from { opacity: 0; transform: translateY(4px); }
+}
+
+.vs-row-ic {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--bg-recessed);
+    color: var(--text-secondary);
+}
+
+.vs-row.is-user .vs-row-ic {
+    background: var(--accent-blue-dim);
+    color: var(--accent-blue);
+}
+
+.vs-row.is-status .vs-row-ic {
+    background: var(--accent-fill);
+    color: var(--accent);
+}
+
+.vs-row-body {
+    min-width: 0;
+    padding-top: 3px;
+    overflow-wrap: anywhere;
+}
+
+.vs-row.is-user .vs-row-body {
+    color: var(--text-secondary);
+}
+
+.vs-row.is-note .vs-row-body {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.vs-row.is-tool .vs-row-body {
+    padding-top: 0;
+}
+
+.vs-call {
+    display: block;
+    padding: 7px 10px;
+    border-radius: var(--radius-lg);
+    background: var(--bg-recessed);
+}
+
+.vs-call-fn {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+}
+
+.vs-call-st {
+    display: inline-grid;
+    place-items: center;
+    width: 14px;
+}
+
+.vs-call-st .is-ok { color: var(--accent-green); }
+.vs-call-st .is-failed { color: var(--danger); }
+
+.vs-call-args {
+    display: block;
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-size: var(--fs-label);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vs-call-res {
+    display: block;
+    margin-top: 2px;
+    color: var(--accent-green);
+    font-size: var(--fs-label);
+}
+
+.vs-call-res.is-failed {
+    color: var(--danger);
+}
+
+.vs-spin {
+    display: block;
+    width: 11px;
+    height: 11px;
+    border: 1.5px solid var(--border);
+    border-top-color: var(--accent-solid);
+    border-radius: 50%;
+    animation: vs-rot var(--duration-spin) var(--ease-linear) infinite;
+}
+
+@keyframes vs-rot {
+    to { transform: rotate(360deg); }
+}
+
+.vs-result {
+    min-width: 0;
+    padding: 10px;
+    border-radius: var(--radius-xl);
+    background: var(--bg-primary);
+    box-shadow: var(--shadow-sm);
+    font-size: var(--fs-ui);
+    overflow-wrap: anywhere;
+    animation: vs-rise var(--duration-slow) var(--ease);
+}
+
+.vs-result .md-content {
+    font-size: var(--fs-ui);
+}
+
+/* A narrow column: cells wrap between words, never inside a number. */
+.vs-result .md-table-wrap {
+    margin: 0;
+}
+
+.vs-result .md-table {
+    font-size: var(--fs-label);
+}
+
+.vs-result .md-table :is(th, td) {
+    padding: 6px 8px;
+    overflow-wrap: normal;
+}
+
+/* An error in place of the captions: what happened, then the fix. */
+.vs-error {
+    display: grid;
+    gap: 6px;
+    padding: 16px 18px;
+    border-radius: var(--radius-xl);
+    background: var(--bg-card);
+    box-shadow: var(--shadow-sm);
+    text-align: center;
+}
+
+.vs-error p {
+    margin: 0;
+}
+
+.vs-error-title {
+    font-size: var(--fs-body);
+    font-weight: 600;
+}
+
+.vs-error-body {
+    color: var(--text-secondary);
+    font-size: var(--fs-ui);
+}
+
+.vs-error-detail {
+    color: var(--danger);
+    font-size: var(--fs-label);
+}
+
+.vs-error-models {
+    display: grid;
+    gap: 8px;
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.vs-error-models li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 10px;
+    border-radius: var(--radius-lg);
+    background: var(--bg-recessed);
+    text-align: start;
+}
+
+.vs-error-model {
+    display: grid;
+    min-width: 0;
+    font-size: var(--fs-ui);
+}
+
+.vs-error-model-id {
+    justify-self: start;
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vs-error-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.vs-error-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.vs-error-size {
+    opacity: 0.75;
+}
+
+/* Phone: full screen, thumb-reach controls, the work log in a bottom sheet. */
+.voice-screen.is-phone {
+    position: fixed;
+    /* Above the floating sidebar button, below dialogs. */
+    z-index: 60;
+    grid-template-columns: minmax(0, 1fr);
+    padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
+}
+
+.is-phone .vs-main {
+    grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+    padding-block: 10px 30px;
+    padding-inline: 18px;
+}
+
+.is-phone .vs-viz {
+    width: 236px;
+    height: 236px;
+}
+
+.is-phone .vs-caps {
+    min-height: 118px;
+}
+
+.is-phone .vs-said {
+    font-size: 18px;
+}
+
+.vs-logbar {
+    display: inline-flex;
+    align-items: center;
+    justify-self: center;
+    gap: 8px;
+    margin-top: 12px;
+    padding-block: 7px;
+    padding-inline: 14px 10px;
+    border-radius: var(--radius-full);
+    background: var(--bg-recessed);
+    box-shadow: inset 0 0 0 1px var(--vs-line);
+    color: var(--text-secondary);
+    font-size: var(--fs-ui);
+    font-weight: 500;
+}
+
+.vs-logbar .vs-count {
+    background: var(--bg-card);
+}
+
+.is-phone .vs-ctl {
+    justify-content: space-between;
+    padding: 18px 10px 0;
+}
+
+.is-phone .vs-big {
+    width: 76px;
+    height: 76px;
+}
+
+.is-phone .vs-big svg {
+    width: 28px;
+    height: 28px;
+}
+
+.is-phone .vs-side {
+    width: 52px;
+    height: 52px;
+}
+
+.vs-sheet {
+    position: absolute;
+    inset-inline: 0;
+    bottom: 0;
+    z-index: 6;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 78%;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+    border-radius: 26px 26px 0 0;
+    background: var(--bg-card);
+    box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.18);
+    transform: translateY(104%);
+    visibility: hidden;
+    transition: transform var(--duration-slow) var(--ease), visibility 0s var(--ease-linear) var(--duration-slow);
+}
+
+.vs-sheet.is-open {
+    transform: none;
+    visibility: visible;
+    transition: transform var(--duration-slow) var(--ease);
+}
+
+.vs-sheet .vs-log-head {
+    cursor: pointer;
+}
+
+.vs-grab {
+    width: 38px;
+    height: 5px;
+    margin: 8px auto 0;
+    border-radius: 3px;
+    background: var(--border);
+}
+
+.vs-sheet .vs-log-title {
+    padding: 8px 12px 8px 18px;
+}
+
+.vs-sheet .vs-log-title > span:first-child {
+    flex: 1;
+}
+
+.vs-sheet .vs-loglist {
+    padding-bottom: 34px;
+}
+
+.vs-toast {
+    position: absolute;
+    top: calc(env(safe-area-inset-top, 0px) + 50px);
+    inset-inline: 12px;
+    z-index: 7;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 12px;
+    padding-block: 12px;
+    padding-inline: 14px 12px;
+    border-radius: 18px;
+    background: var(--bg-card);
+    box-shadow: var(--shadow-md);
+    color: var(--text-secondary);
+    font-size: var(--fs-ui);
+    line-height: 1.45;
+    animation: vs-rise var(--duration-slow) var(--ease);
+}
+
+.vs-toast button {
+    padding: 7px 13px;
+    border-radius: var(--radius-full);
+    background: var(--text-primary);
+    color: var(--bg-primary);
+    font-size: 12.5px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+/* A narrow desktop window: the log moves under the shape. */
+@media (max-width: 860px) {
+    .voice-screen:not(.is-phone) {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr) 0;
+    }
+
+    .voice-screen.has-log:not(.is-phone) {
+        grid-template-rows: minmax(0, 1fr) 36%;
+    }
+
+    .voice-screen:not(.is-phone) .vs-log {
+        border-inline-start: 0;
+        border-top: 1px solid var(--vs-line);
+    }
+
+    .voice-screen:not(.is-phone) .vs-viz {
+        width: 132px;
+        height: 132px;
+    }
+
+    .voice-screen:not(.is-phone) .vs-caps {
+        min-height: 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .voice-screen,
+    .vs-row,
+    .vs-result,
+    .vs-toast,
+    .vs-big,
+    .vs-sheet {
+        animation: none;
+        transition: none;
+    }
+
+    .vs-state.is-live::after {
+        display: none;
+    }
+
+    .vs-spin {
+        animation: none;
+    }
+}

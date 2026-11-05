@@ -26,8 +26,8 @@ function errorText(err: unknown): string {
     return err instanceof api.ApiError ? err.detail || err.message : String(err);
 }
 
-/** The voice and speed replies are read in, and whether every reply is read. */
-export function ReadAloudSettings() {
+/** The voice and speed replies are read in, and whether every reply is read. `embedded`: a group inside Settings › Voice. */
+export function ReadAloudSettings({ embedded = false }: { embedded?: boolean } = {}) {
     const t = useT();
     const settings = useReadAloudStore((s) => s.settings);
     const setSettings = useReadAloudStore((s) => s.setSettings);
@@ -54,10 +54,12 @@ export function ReadAloudSettings() {
     };
 
     if (loadError) {
+        const failed = <p className="settings-error" role="alert">{t('readAloud.settings.loadFailed', { reason: loadError })}</p>;
+        if (embedded) return failed;
         return (
             <div className="settings-pane">
                 <h2 className="settings-pane-title">{t('settings.section.voice')}</h2>
-                <p className="settings-error" role="alert">{t('readAloud.settings.loadFailed', { reason: loadError })}</p>
+                {failed}
             </div>
         );
     }
@@ -66,8 +68,8 @@ export function ReadAloudSettings() {
     }
 
     return (
-        <div className="settings-pane">
-            <h2 className="settings-pane-title">{t('settings.section.voice')}</h2>
+        <div className={embedded ? 'voice-settings-fields' : 'settings-pane'}>
+            {!embedded && <h2 className="settings-pane-title">{t('settings.section.voice')}</h2>}
             <p className="settings-pane-lede">{t('readAloud.settings.lede')}</p>
 
             <div className="settings-field">

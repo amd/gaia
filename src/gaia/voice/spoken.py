@@ -122,6 +122,16 @@ def _partial_suffix(text: str, tag: str) -> int:
     return 0
 
 
+def without_tags(answer: str) -> str:
+    """*answer* as text: a leading spoken block becomes its own first paragraph."""
+    if OPEN not in answer:
+        return answer
+    spoken, detail, missing = split_spoken(answer)
+    if missing:
+        return answer
+    return f"{spoken}\n\n{detail}".strip()
+
+
 def split_spoken(answer: str) -> Tuple[str, str, bool]:
     """Split a whole answer: ``(spoken, detail, missing)``."""
     splitter = SpokenSplitter()
