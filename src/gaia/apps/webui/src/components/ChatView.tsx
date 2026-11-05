@@ -10,6 +10,7 @@ import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
 import { useReadAloudStore } from '../stores/readAloudStore';
+import { readsAloudWhenDone } from '../utils/autoReadAloud';
 import { ensureModel, modelKnownReady } from '../stores/modelNeededStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -1113,7 +1114,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
                     addMessage(assistantMsg);
                     const readAloud = useReadAloudStore.getState();
-                    if (readAloud.settings?.auto && !stopState && content && !isErrorContent(content)) {
+                    if (readAloud.settings?.auto && readsAloudWhenDone(assistantMsg)) {
                         void readAloud.read(`${sessionId}:${assistantMsg.id}`, cleanToolCallContent(content));
                     }
                 }

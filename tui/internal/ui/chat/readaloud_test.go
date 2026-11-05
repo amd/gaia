@@ -136,7 +136,7 @@ func TestReadAloudAndVoiceRunLocallyNeverAsQuestions(t *testing.T) {
 func TestVoiceRefusesBadValuesNamingWhatIsAllowed(t *testing.T) {
 	m, path := readAloudModel(t, "", noPlay)
 	for q, want := range map[string]string{
-		"/voice xx_nobody":    "af_bella",
+		"/voice xx_nobody":    "Type /voice to see them all",
 		"/voice speed 20":     "50 to 200",
 		"/voice speed 201":    "50 to 200",
 		"/voice speed fast":   "50 to 200",
