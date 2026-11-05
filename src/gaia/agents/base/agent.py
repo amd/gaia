@@ -3510,6 +3510,17 @@ Do NOT wrap conversational replies in JSON.
                 }
             extraction_chat = self._make_extraction_chat()
             usage_sink = self._tool_reported_usage
+            page_line = []
+
+            def progress(page, total):
+                page_line[:] = [f"Reading page {page} of {total}…"]
+                self.console.report_phase("reading", page_line[0])
+
+            def back_on_page():
+                if page_line:
+                    self.console.report_phase("reading", page_line[0])
+
+            self._watch_tool_model_calls(extraction_chat, back_on_page)
 
             def check():
                 raise_if_cancelled()
@@ -3585,6 +3596,7 @@ Do NOT wrap conversational replies in JSON.
                     ask,
                     check,
                     fields,
+                    progress,
                 )
             finally:
                 ledger.lock.release()
@@ -4993,32 +5005,53 @@ Do NOT wrap conversational replies in JSON.
             provider.reasoning_progress = self._report_reasoning_progress
         backend = getattr(provider, "_backend", None)
         if backend is not None and hasattr(backend, "model_load_listener"):
-
-            def _on_load(model: str, state: str) -> None:
-                if state == "loaded":
-                    self.console.report_phase(phase, reading)
-                elif state == "downloading":
-                    self.console.report_phase(
-                        "downloading_model", f"Downloading {model}"
-                    )
-                elif state in ("reconnecting", "starting_server"):
-                    if self._turn_model_retries.get("server_stopped"):
-                        self.console.report_phase(
-                            "model_restart", SERVER_RESTARTING_MESSAGE
-                        )
-                    elif state == "reconnecting":
-                        self.console.report_phase("reconnecting", RECONNECTING_MESSAGE)
-                    else:
-                        self.console.report_phase(
-                            "model_restart", SERVER_STARTING_MESSAGE
-                        )
-                else:
-                    self.console.report_phase(
-                        "loading_model", f"Loading {model} into memory"
-                    )
-
-            backend.model_load_listener = _on_load
+            backend.model_load_listener = self._model_load_listener(
+                lambda: self.console.report_phase(phase, reading),
+                lambda: self._turn_model_retries.get("server_stopped"),
+            )
         self.console.report_phase(phase, reading)
+
+    def _model_load_listener(
+        self, on_loaded: Callable[[], None], server_stopped: Callable[[], Any]
+    ) -> Callable[[str, str], None]:
+        """A ``LemonadeClient.model_load_listener`` that puts each wait on the live line.
+
+        *server_stopped* says whether GAIA's own server is known to have
+        stopped under a call, which turns a reconnect into the restart status.
+        """
+
+        def _on_load(model: str, state: str) -> None:
+            if state == "loaded":
+                on_loaded()
+            elif state == "downloading":
+                self.console.report_phase("downloading_model", f"Downloading {model}")
+            elif state in ("reconnecting", "starting_server"):
+                if server_stopped():
+                    self.console.report_phase(
+                        "model_restart", SERVER_RESTARTING_MESSAGE
+                    )
+                elif state == "reconnecting":
+                    self.console.report_phase("reconnecting", RECONNECTING_MESSAGE)
+                else:
+                    self.console.report_phase("model_restart", SERVER_STARTING_MESSAGE)
+            else:
+                self.console.report_phase(
+                    "loading_model", f"Loading {model} into memory"
+                )
+
+        return _on_load
+
+    def _watch_tool_model_calls(self, chat: Any, on_loaded: Callable[[], None]) -> None:
+        """Put a tool's own model calls (its private *chat*) on the live line.
+
+        The server answered this turn before the tool ran, so a reconnect
+        inside the tool means GAIA's server stopped under it.
+        """
+        backend = getattr(getattr(chat, "llm_client", None), "_backend", None)
+        if backend is not None and hasattr(backend, "model_load_listener"):
+            backend.model_load_listener = self._model_load_listener(
+                on_loaded, lambda: True
+            )
 
     def _report_tool_call_progress(self, tool: str, chars: int) -> None:
         self.console.report_phase(

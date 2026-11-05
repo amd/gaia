@@ -10,6 +10,12 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **A long document extraction says which page it is on and when the model
+  server restarts.** It ran for minutes with no live status, and a server
+  that stopped under it showed nothing until the extraction resumed. It now
+  sends phase `reading` before each page ("Reading page 4 of 12…"), and a
+  server that stops under any tool's own model calls gets the same
+  `model_restart` status as one that stops mid-reply.
 - **The first message on the NPU model no longer waits out the warm-up.**
   After a restart, the first "hello" on `gemma4-it-e4b-FLM` waited ~30 s while
   the sidecar read its ~19K-token prompt, then spent another ~35 s reading it

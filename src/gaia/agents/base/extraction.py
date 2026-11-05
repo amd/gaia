@@ -539,12 +539,14 @@ def _shared(first, second):
     return max(0, min(first[1], second[1]) - max(first[0], second[0]))
 
 
-def extract_pages(source, request, ask, check_cancelled, fields=()):
+def extract_pages(source, request, ask, check_cancelled, fields=(), progress=None):
+    """*progress*, when given, is called as ``(page, total)`` before each model call."""
     started = time.monotonic()
     entries = {}
     members = {}
     pages = 0
-    for core in range(0, max(1, len(source)), PAGE_CHARS):
+    cores = range(0, max(1, len(source)), PAGE_CHARS)
+    for core in cores:
         check_cancelled()
         if time.monotonic() - started > MAX_SECONDS:
             raise ValueError("Extraction time budget exhausted")
@@ -591,6 +593,8 @@ def extract_pages(source, request, ask, check_cancelled, fields=()):
                                 {name: "string value, or not stated" for name in fields}
                             ),
                         )
+                    if progress is not None:
+                        progress(pages + 1, len(cores))
                     reply = ask(schema_system, json.dumps(payload, ensure_ascii=False))
                     check_cancelled()
                     if time.monotonic() - started > MAX_SECONDS:
@@ -972,7 +976,7 @@ class ExtractionLedger:
                 )
         return "\n\n".join(parts)
 
-    def run(self, path, read, ask, check_cancelled, fields=None):
+    def run(self, path, read, ask, check_cancelled, fields=None, progress=None):
         path = self.key(path)
         self.enabled = True
         self.sources.add(path)
@@ -1011,7 +1015,7 @@ class ExtractionLedger:
             # or failed retry. Publication happens only after all pages succeed.
             self.results.pop(path, None)
             entries, pages = extract_pages(
-                source, self.query, ask, check_cancelled, self.fields
+                source, self.query, ask, check_cancelled, self.fields, progress
             )
             check_cancelled()
             self.results[path] = (entries, pages, digest)
