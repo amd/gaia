@@ -201,8 +201,6 @@ const messages: Messages = {
     'composer.privateOnTitle': 'تفعيل المحادثة الخاصة. لن تُحفظ في الذاكرة.',
     'composer.privateOff': 'إيقاف المحادثة الخاصة',
     'composer.privateOffTitle': 'إيقاف المحادثة الخاصة. لن تُحفظ هذه المحادثة في الذاكرة.',
-    'composer.heldLabel': 'رسالة بانتظار الإرسال',
-    'composer.heldUntilStarted': 'تُرسل بعد أن يبدأ GAIA.',
 
     // Notice when the GAIA agent is missing
     'agentNotice.missing': 'وكيل GAIA غير مثبّت، لذا لا يمكن بدء محادثات جديدة بعد.',
