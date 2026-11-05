@@ -3487,7 +3487,9 @@ Do NOT wrap conversational replies in JSON.
 
     def _register_extraction_tool(self):
         def extract_document_items(
-            file_path: str, fields: Optional[List[str]] = None
+            file_path: str,
+            fields: Optional[List[str]] = None,
+            terms: Optional[List[str]] = None,
         ) -> dict:
             """Extract EVERY requested item from a text document, page by page.
 
@@ -3499,6 +3501,10 @@ Do NOT wrap conversational replies in JSON.
             Args:
                 file_path: Source text file permitted in this session.
                 fields: Requested field names; each entry must include every field.
+                terms: Words every wanted item must contain, with their variants
+                    (["code", "error"] for "sections that mention a code").
+                    Only pages containing one are read, which is far faster.
+                    Omit when an item could be worded without any of them.
             """
             from gaia.agents.base.tools import raise_if_cancelled
 
@@ -3592,6 +3598,7 @@ Do NOT wrap conversational replies in JSON.
                     check,
                     fields,
                     progress,
+                    terms,
                 )
             finally:
                 ledger.lock.release()
@@ -3649,11 +3656,12 @@ Do NOT wrap conversational replies in JSON.
                 "requires_confirmation": gated,
             }
             if name == "extract_document_items":
-                entry["parameters"]["fields"] = {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "required": False,
-                }
+                for parameter in ("fields", "terms"):
+                    entry["parameters"][parameter] = {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "required": False,
+                    }
             self._tool_overrides[name] = entry
             if self._instance_tools is not None:
                 self._instance_tools[name] = entry
