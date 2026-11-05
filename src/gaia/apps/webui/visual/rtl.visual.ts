@@ -923,23 +923,39 @@ async function withSchedules(page: Page, schedules: unknown[] = SCHEDULE_ROWS): 
         ] },
     }));
     await page.route('**/api/schedules/parse', (route) => route.fulfill({
-        json: { interval_seconds: 0, time_of_day: null, start_hour: null, end_hour: null, days_of_week: null, description: "25:00 isn't a time — use 0:00–23:59.", next_run_at: null, valid: false },
+        json: route.request().postDataJSON().input === 'every 2m'
+            ? { interval_seconds: 120, time_of_day: null, start_hour: null, end_hour: null, days_of_week: null, description: 'Every 2 minutes', description_parts: { ...NO_PARTS, kind: 'every', count: 2, unit: 'minute' }, next_run_at: new Date(NOW.getTime() + 120_000).toISOString(), valid: true }
+            : { interval_seconds: 0, time_of_day: null, start_hour: null, end_hour: null, days_of_week: null, description: "25:00 isn't a time — use 0:00–23:59.", description_parts: null, next_run_at: null, valid: false },
     }));
 }
+
+const NO_PARTS = { kind: 'every', count: null, unit: null, days: null, time: null, start_hour: null, end_hour: null };
 
 const SCHEDULE_ROW = {
     id: 's1', name: 'Morning brief', interval_seconds: 86_400, prompt: 'Summarize my unread email and calendar for today',
     status: 'active', created_at: null, last_run_at: new Date(NOW.getTime() - 7 * 60_000).toISOString(),
     next_run_at: new Date(NOW.getTime() + 17 * 60_000).toISOString(), last_result: '3 new items', run_count: 9, error_count: 1,
-    session_id: 'chat-1', schedule_config: null, description: 'Daily at 8:00 AM', last_error: 'The model server stopped.',
+    session_id: 'chat-1', schedule_config: null, description: 'Weekdays at 8:00 AM', last_error: 'The model server stopped.',
+    description_parts: { ...NO_PARTS, kind: 'days', days: [0, 1, 2, 3, 4], time: '08:00' },
 };
-const SCHEDULE_ROWS = [SCHEDULE_ROW, { ...SCHEDULE_ROW, id: 's2', name: 'Weekly budget check-in', status: 'paused', next_run_at: null, error_count: 0, last_error: null, session_id: null, description: 'Every Monday at 9:00 AM' }];
+const SCHEDULE_ROWS = [
+    SCHEDULE_ROW,
+    {
+        ...SCHEDULE_ROW, id: 's2', name: 'Weekly budget check-in', status: 'paused', next_run_at: null, error_count: 0, last_error: null, session_id: null,
+        description: 'Every Monday, Wednesday at 9:00 AM', description_parts: { ...NO_PARTS, kind: 'days', days: [0, 2], time: '09:00' },
+    },
+    {
+        ...SCHEDULE_ROW, id: 's3', name: 'Inbox sweep', last_error: null, error_count: 0, session_id: null,
+        description: 'Every 2 hours, 8:00 AM - 6:00 PM, weekdays',
+        description_parts: { ...NO_PARTS, kind: 'window', count: 2, unit: 'hour', start_hour: 8, end_hour: 18, days: [0, 1, 2, 3, 4] },
+    },
+];
 
 /** Titles, labels and placeholders in the schedules dialog that carry no Arabic. */
 const untranslatedAttributes = (page: Page): Promise<string[]> =>
     page.locator('.schedule-modal').evaluate((root) =>
         [root.closest('[role="dialog"]')!, ...root.querySelectorAll('[title], [aria-label], [placeholder]')].flatMap((el) =>
-            ['aria-label', 'placeholder', ...(el.closest('.schedule-card-meta') ? [] : ['title'])]
+            ['aria-label', 'placeholder', 'title']
                 .map((a) => el.getAttribute(a) ?? '')
                 .filter((v) => /[A-Za-z]{3}/.test(v) && !/[؀-ۿ]/.test(v))));
 
@@ -977,6 +993,14 @@ for (const locale of ['ar', 'en']) {
             await page.locator('.schedule-modal .btn-primary').click();
             await expect(page.locator('.schedule-nl-input')).toBeVisible();
             await check(page, 'form-empty');
+        });
+
+        test('new schedule with a "when" GAIA can read', async ({ page }) => {
+            await openSchedules(page, []);
+            await page.locator('.schedule-modal .btn-primary').click();
+            await page.locator('.schedule-nl-input').fill('every 2m');
+            await expect(page.locator('.schedule-parsed-preview.valid')).toBeVisible();
+            await check(page, 'form-valid');
         });
 
         test('new schedule with a "when" GAIA cannot read', async ({ page }) => {

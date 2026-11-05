@@ -688,6 +688,20 @@ export interface MCPServerStatus {
 
 // ── Scheduled Tasks ──────────────────────────────────────────────────────
 
+/** When a schedule runs, as data the UI words in its own language. */
+export interface ScheduleDescription {
+    /** every: count + unit, optional days; window: that plus start/end hour; days: named days, optional time; daily: a time. */
+    kind: 'every' | 'window' | 'days' | 'daily';
+    count: number | null;
+    unit: 'second' | 'minute' | 'hour' | 'day' | 'week' | null;
+    /** 0 = Monday … 6 = Sunday. */
+    days: number[] | null;
+    /** "HH:MM", 24-hour. */
+    time: string | null;
+    start_hour: number | null;
+    end_hour: number | null;
+}
+
 /** A recurring scheduled task. */
 export interface Schedule {
     id: string;
@@ -704,8 +718,9 @@ export interface Schedule {
     session_id: string | null;
     /** Parsed natural-language schedule as JSON; null for plain-interval schedules. */
     schedule_config: string | null;
-    /** When it runs, e.g. "Weekdays at 8:00 AM" — the same words the form preview shows. */
+    /** When it runs in English, e.g. "Weekdays at 8:00 AM"; the UI words `description_parts` instead. */
     description: string;
+    description_parts: ScheduleDescription;
     /** The last run's error; null when it succeeded. */
     last_error: string | null;
     /** A run is in flight right now, timed or Run now. */
@@ -729,6 +744,8 @@ export interface ParsedSchedule {
     end_hour: number | null;
     days_of_week: number[] | null;
     description: string;
+    /** Null when the input was rejected; `description` then says what to fix. */
+    description_parts?: ScheduleDescription | null;
     next_run_at: string | null;
     /** IANA zone the times are in. */
     timezone?: string | null;
