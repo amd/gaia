@@ -446,6 +446,8 @@ export interface Message {
     failed?: boolean;
     /** Client-side: the raw error, to recognize the server's saved copy of this failure. */
     failureText?: string;
+    /** Client-side: the cause a failed turn named (`done.failure`), for its fix. */
+    failure?: string;
     /** Set when this turn pushed older turns out of the model's view. */
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */
@@ -896,6 +898,10 @@ export interface StreamEvent {
     message_id?: number;
     /** On `done`: the user's Stop ended this run (absent when it completed normally). */
     cancelled?: boolean;
+    /** On `done`: a model failure ended this run. */
+    failed?: boolean;
+    /** On a failed `done`: a cause the UI offers a fix for. */
+    failure?: 'model_server_down' | string;
     /** On `followup_taken`: the message the running turn took. */
     text?: string;
     /** On `followup_returned`: messages the turn ended without taking. */

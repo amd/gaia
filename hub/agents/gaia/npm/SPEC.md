@@ -496,6 +496,14 @@ call, with that call's token counts and speed. The Agent UI turns it into the
 Context panel's "Under the hood" figures. A run that timed nothing
 carries none, and older binaries never send it, so read it only when present.
 
+A `final` with `failed: true` ends a turn a model call broke; its `answer` says
+what was and wasn't done. When the cause is one a front-end can fix, `failure`
+names it. `"model_server_down"` means the local model server took no
+connection. Cloud models go through that server too, so the provider was never
+reached; the turn fails at once instead of retrying, and its `answer` names the
+server, not the provider. Offer to start the server. Older binaries never send
+`failure`, so read it only when present.
+
 ### 5.2 `session_id` and agent retention
 
 `POST /v1/gaia/query` accepts an optional `session_id` in the request body.

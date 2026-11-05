@@ -648,6 +648,7 @@ class SSEOutputHandler(OutputHandler):
         self._turn_metrics: Optional[Dict[str, Any]] = None
         # Set by mark_turn_failed; the next answer event carries ``failed``.
         self._turn_failed = False
+        self._turn_failure: Optional[str] = None
         # The answer this turn already put on the wire. A transport that ends
         # the turn on it cancels the run, so the run reads it back from here.
         self.delivered_answer: str = ""
@@ -1148,9 +1149,10 @@ class SSEOutputHandler(OutputHandler):
         """Stash the sealed turn record for the answer event that follows."""
         self._turn_metrics = record
 
-    def mark_turn_failed(self) -> None:
+    def mark_turn_failed(self, failure: Optional[str] = None) -> None:
         """The answer that follows ends a turn a model failure cut short."""
         self._turn_failed = True
+        self._turn_failure = failure
 
     def print_final_answer(
         self,
@@ -1225,6 +1227,9 @@ class SSEOutputHandler(OutputHandler):
         if self._turn_failed:
             self._turn_failed = False
             event["failed"] = True
+            if self._turn_failure:
+                event["failure"] = self._turn_failure
+            self._turn_failure = None
         self.delivered_answer = event["content"] or ""
         self._emit(event)
 
