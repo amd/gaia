@@ -3379,6 +3379,14 @@ class GaiaLemonadeNotAnsweringError(LemonadeClientError):
     """GAIA's own server is up but not answering yet; the daemon left it be."""
 
 
+class GaiaLemonadeStartError(LemonadeClientError):
+    """The daemon tried to start GAIA's own server and could not.
+
+    Sending the request again repeats the same failed start, so this is not
+    a transient failure: the install needs repairing.
+    """
+
+
 class CloudModelUnavailableError(LemonadeClientError):
     """A cloud provider answered 404 for the requested model.
 
@@ -4616,7 +4624,7 @@ class LemonadeClient:
 
         Raises:
             GaiaLemonadeNotAnsweringError: it is running but not answering yet.
-            LemonadeClientError: the daemon could not start it. There is no
+            GaiaLemonadeStartError: the daemon could not start it. There is no
                 retry against a system install.
         """
         from gaia.daemon.client import ensure_lemonade
@@ -4632,7 +4640,7 @@ class LemonadeClient:
         except LemonadeNotAnsweringError as e:
             raise GaiaLemonadeNotAnsweringError(str(e)) from e
         except DaemonError as e:
-            raise LemonadeClientError(
+            raise GaiaLemonadeStartError(
                 f"Could not start GAIA's Lemonade Server: {e}"
             ) from e
         self._point_at_gaia_lemonade(served["base_url"])

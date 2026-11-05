@@ -19,6 +19,7 @@ from ..lemonade_client import (
     DEFAULT_MODEL_NAME,
     KV_CACHE_SHARED_PHRASES,
     CloudModelUnavailableError,
+    GaiaLemonadeStartError,
     LemonadeAuthError,
     LemonadeClient,
     LemonadeClientError,
@@ -275,6 +276,24 @@ class LemonadeServerUnreachableError(LemonadeNetworkError):
         self.endpoint = endpoint
         super().__init__(user_message=user_message)
 
+
+class LemonadeEngineStartError(LemonadeError):
+    """GAIA's own model server is down and the daemon could not start it.
+
+    Not :class:`LemonadeNetworkError`: the daemon's reason often quotes
+    refused connections, but resending repeats the same failed start.
+    """
+
+    retryable = False
+    user_message = (
+        "GAIA's AI engine couldn't start. Sending the message again won't help "
+        f"until it is repaired. {TUI_SETUP_HINT}"
+    )
+
+
+#: :class:`~gaia.llm.lemonade_client.GaiaLemonadeStartError`'s wording, once a
+#: wrapper flattened it.
+_ENGINE_START_RE = re.compile(r"could not start gaia's lemonade server", re.IGNORECASE)
 
 #: How a failed turn names this cause to a front-end, which offers the fix.
 MODEL_SERVER_DOWN = "model_server_down"
@@ -820,6 +839,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         seen.add(id(cur))
         if isinstance(cur, LemonadeError):
             return cur
+        if isinstance(cur, GaiaLemonadeStartError):
+            return LemonadeEngineStartError()
         if isinstance(cur, LemonadeServerDownError):
             return LemonadeServerUnreachableError(str(cur), cur.endpoint)
         if isinstance(cur, LemonadeAuthError):
@@ -866,6 +887,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         load_error = _model_load_error(envelope[1], context=raw)
         if load_error is not None:
             return load_error
+    if _ENGINE_START_RE.search(raw):
+        return LemonadeEngineStartError()
     down = _SERVER_DOWN_RE.search(raw)
     if down:
         return LemonadeServerUnreachableError(down.group(0).strip(), down.group(1))
