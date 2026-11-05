@@ -40,6 +40,18 @@ describe('PermissionPrompt', () => {
         expect(screen.getByRole('alertdialog').querySelector('.perm-card-detail code')?.textContent).toContain(path);
     });
 
+    it('keeps the double spaces in a path it shows', () => {
+        const path = 'C:\\gtest\\run-rc11\\fx\\Team Docs  -  AMD Shared\\budget.txt';
+        useNotificationStore.getState().addNotification(request({
+            tool: PATH_ACCESS_TOOL, toolArgs: { path, kind: 'file' },
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        const card = screen.getByRole('alertdialog');
+        const shown = [...card.querySelectorAll('code, bdi[dir="ltr"]')].filter((el) => el.textContent === path);
+        expect(shown.length).toBeGreaterThan(0);
+        for (const el of shown) expect(getComputedStyle(el).whiteSpace).toBe('pre-wrap');
+    });
+
     it('shows short code whole, with no expand control', () => {
         useNotificationStore.getState().addNotification(request({
             tool: 'run_python', toolArgs: { code: 'print(1)\nprint(2)' },
