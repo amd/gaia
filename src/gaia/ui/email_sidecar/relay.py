@@ -284,7 +284,10 @@ def _dispatch_one(
     elif etype == "reasoning":
         delta = event.get("delta", "")
         if delta:
-            handler._emit({"type": "thinking", "content": delta})
+            thinking = {"type": "thinking", "content": delta}
+            if event.get("retracts_answer"):
+                thinking["retracts_answer"] = True
+            handler._emit(thinking)
 
     elif etype == "tool_call":
         tool = str(event.get("tool") or "unknown")

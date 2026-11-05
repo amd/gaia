@@ -9,8 +9,7 @@ import {
     requiresFreshConsent,
     repeatedAllowCount,
     PATH_ACCESS_TOOL,
-    pathAccessQuestion,
-    pathAccessTitle,
+    permissionPromptText,
     type PermissionDecision,
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -139,15 +138,8 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const relayed = !hasArgs && COMMAND_SUMMARY_TOOLS.has(notification.tool ?? '')
         ? splitCommandSummary(notification.summary ?? '')
         : null;
-    // Worded here from the call, not the stored English title, so it reads in the UI language.
     const isPath = notification.tool === PATH_ACCESS_TOOL;
-    const toolName = markLtr(notification.toolLabel ?? notification.tool ?? '');
-    const heading = isPath
-        ? pathAccessTitle(args, notification.pathFollowUp, t)
-        : t(notification.toolLabel ? 'prompt.title.tool' : 'prompt.title.toolId', { tool: toolName });
-    const question = isPath
-        ? pathAccessQuestion(args, notification.pathFollowUp, t, markLtr)
-        : t('prompt.needsOk', { tool: toolName });
+    const { heading, question } = permissionPromptText(notification, t, markLtr);
 
     // Take focus from the composer so its Enter can't land on a button here.
     useEffect(() => { cardRef.current?.focus({ preventScroll: true }); }, []);

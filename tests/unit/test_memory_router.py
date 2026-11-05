@@ -1054,6 +1054,35 @@ class TestReconcileEndpoint:
         assert resp.status_code == 200
         assert resp.json()["pairs_checked"] == 0
 
+    @pytest.mark.parametrize(
+        "reply, checked",
+        [
+            ('<think>Same claim.</think>{"relationship": "reinforce"}', 1),
+            ("<think>Same claim, so", 0),
+            ('Same claim.</think>{"relationship": "reinforce"}', 1),
+            ('{"relationship": "reinforce"}', 1),
+        ],
+        ids=["paired", "unclosed", "lone-close", "no-tags"],
+    )
+    def test_standalone_reconcile_reads_past_the_reasoning(
+        self, client, test_store, reply, checked
+    ):
+        require_faiss()
+        import numpy as np
+
+        vec = np.ones(768, dtype=np.float32).tobytes()
+        for content in ("alpha fact one", "alpha fact two"):
+            kid = _create_knowledge(client, content)["knowledge_id"]
+            test_store.store_embedding(kid, vec)
+
+        fake_llm = MagicMock()
+        fake_llm.chat.return_value = reply
+        with patch("gaia.llm.create_client", return_value=fake_llm):
+            resp = client.post("/api/memory/reconcile")
+
+        assert resp.status_code == 200
+        assert resp.json()["reinforced"] == checked
+
     def test_a_memory_contradicting_two_others_is_penalised_once(
         self, client, test_store
     ):

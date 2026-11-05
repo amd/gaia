@@ -25,7 +25,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from gaia.agents.base.memory import MemoryMixin
+from gaia.agents.base.memory import STABLE_MEMORY_PROMPT_CHARS, MemoryMixin
 from gaia.agents.base.memory_store import MemoryStore
 from gaia.agents.base.system_context import (
     collect_system_info as _real_collect_system_info,
@@ -2118,10 +2118,10 @@ class TestIntegrationScenarios:
 
 
 class TestSystemPromptSizeCap:
-    """get_memory_system_prompt() must never exceed 4000 chars."""
+    """get_memory_system_prompt() must never exceed its hard cap."""
 
     def test_system_prompt_within_size_limit(self, mixin_host):
-        """System prompt is always ≤ 4000 + len(truncation marker) chars."""
+        """System prompt is always ≤ the cap + len(truncation marker) chars."""
         store = mixin_host.memory_store
         # Store 10 preferences each near max content size
         for i in range(10):
@@ -2141,9 +2141,9 @@ class TestSystemPromptSizeCap:
             )
 
         prompt = mixin_host.get_memory_system_prompt()
-        # 4000 chars hard cap + room for the truncation marker itself
+        # Hard cap + room for the truncation marker itself
         _MARKER = "\n... (memory truncated)"
-        assert len(prompt) <= 4000 + len(_MARKER)
+        assert len(prompt) <= STABLE_MEMORY_PROMPT_CHARS + len(_MARKER)
 
     def test_memories_that_do_not_fit_are_counted_not_cut(self, mixin_host):
         """A memory too long for the cap is left out whole, and the prompt says so."""
@@ -2160,7 +2160,7 @@ class TestSystemPromptSizeCap:
         assert "(10 more stored memories are not listed here" in prompt
         assert "p0word299" not in prompt
         assert "memory truncated" not in prompt
-        assert len(prompt) <= 4000
+        assert len(prompt) <= STABLE_MEMORY_PROMPT_CHARS
 
     def test_system_prompt_has_instructions_when_no_memory(self, mixin_host):
         """System prompt includes memory instructions even with no user memories."""
@@ -6275,3 +6275,97 @@ class TestSideRequestsDisableThinking:
         kwargs = host.chat.send_messages.call_args.kwargs
         assert kwargs["chat_template_kwargs"] == _NO_THINKING
         assert kwargs["id_slot"] == SIDE_SLOT
+
+
+# ===========================================================================
+# Side requests read the answer, never the reasoning before it
+# ===========================================================================
+
+
+def _with_reasoning(shape, answer):
+    """*answer* as a reasoning model may send it; ``unclosed`` was cut off."""
+    return {
+        "paired": f"<think>Weigh it up.</think>{answer}",
+        "unclosed": "<think>Weigh it up, then",
+        "lone-close": f"Weigh it up.</think>{answer}",
+        "no-tags": answer,
+    }[shape]
+
+
+_SHAPES = ["paired", "unclosed", "lone-close", "no-tags"]
+
+
+class TestSideRequestsDropReasoning:
+    """A lone ``</think>`` used to leave the reasoning in front of the JSON."""
+
+    @pytest.fixture
+    def host(self, tmp_path):
+        class Host(MemoryMixin, FakeAgent):
+            pass
+
+        host = Host()
+        with _mock_v2_init_context():
+            host.init_memory(db_path=tmp_path / "side_reasoning.db", context="global")
+        host._embedder = _make_mock_embedder()
+        return host
+
+    @pytest.mark.parametrize("shape", _SHAPES)
+    def test_extraction(self, host, shape):
+        fact = "User ships on Fridays"
+        ops = [{"op": "add", "category": "fact", "content": fact, "grounded": "user"}]
+        reply = _with_reasoning(shape, json.dumps(ops))
+        host.chat = _chat_for("Gemma-4-E4B-it-GGUF", reply)
+
+        result = host._extract_via_llm("I ship on Fridays", "Noted.", [])
+
+        expected = [] if shape == "unclosed" else [fact]
+        assert [op["content"] for op in result] == expected
+
+    @pytest.mark.parametrize("shape", _SHAPES)
+    def test_consolidation(self, host, shape):
+        sid = f"side-reason-{uuid.uuid4().hex[:8]}"
+        ts = _past_iso(20)
+        store = host._memory_store
+        for i in range(6):
+            content = f"Reasoning consolidation turn {i} {sid}"
+            store.store_turn(sid, "user" if i % 2 == 0 else "assistant", content)
+            with store._lock:
+                store._conn.execute(
+                    "UPDATE conversations SET timestamp = ? "
+                    "WHERE session_id = ? AND content = ?",
+                    (ts, sid, content),
+                )
+                store._conn.commit()
+        summary = '{"summary": "Talked shop", "knowledge": []}'
+        host.chat = _chat_for("Gemma-4-E4B-it-GGUF", _with_reasoning(shape, summary))
+
+        result = host.consolidate_old_sessions()
+
+        assert result["consolidated"] == (0 if shape == "unclosed" else 1)
+
+    @pytest.mark.parametrize("shape", _SHAPES)
+    def test_reconciliation(self, host, shape):
+        from gaia.agents.base.memory import _embedding_to_blob
+
+        require_faiss()
+        vec = np.ones(host._embedding_dim, dtype=np.float32)
+        items = [
+            {
+                "id": item_id,
+                "embedding": _embedding_to_blob(vec),
+                "content": f"User deploys on Fridays ({item_id})",
+                "created_at": "2026-01-01T00:00:00",
+                "metadata": {},
+            }
+            for item_id in ("k-a", "k-b")
+        ]
+        host._faiss_index = MagicMock(ntotal=2)
+        reply = _with_reasoning(shape, '{"relationship": "reinforce"}')
+        host.chat = _chat_for("Gemma-4-E4B-it-GGUF", reply)
+
+        with patch.object(
+            host._memory_store, "get_items_for_reconciliation", return_value=items
+        ):
+            result = host.reconcile_memory()
+
+        assert result["reinforced"] == (0 if shape == "unclosed" else 1)

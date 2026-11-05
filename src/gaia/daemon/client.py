@@ -601,7 +601,10 @@ def _daemon_env(drop: tuple = ()) -> dict:
             os.path.abspath(entry) if entry else entry
             for entry in env["PYTHONPATH"].split(os.pathsep)
         )
-    return env
+    from gaia.llm.lemonade_choice import child_lemonade_env
+
+    # It and every sidecar it spawns would otherwise inherit an ignored address.
+    return child_lemonade_env(env)
 
 
 def _is_spawned_daemon(registered_pid: int, spawned_pid: int) -> bool:

@@ -977,6 +977,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
+                // A lone </think> showed the text streamed since the last tool was reasoning.
+                if (event.type === 'thinking' && event.retracts_answer) {
+                    fullContent = '';
+                    toolOccurredRef.current = false;
+                    streamBufferRef.current = '';
+                    setStreamContent('');
+                }
+
                 // One "Thinking" step per turn. appendThinkingContent() appends
                 // inside a single set(), so racing chunks never lose text.
                 if (event.type === 'thinking') {

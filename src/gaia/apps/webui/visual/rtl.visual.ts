@@ -277,13 +277,15 @@ test('finished answer', async ({ page }) => {
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';
+/** A business OneDrive folder; markdown used to eat the `\` before `_drafts`. */
+const MULTI_SPACE_PATH = 'C:\\Users\\test\\OneDrive - AMD\\_drafts\\plan.md';
 
 async function withSpacedPaths(page: Page): Promise<void> {
     await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
         route.fulfill({
             json: {
                 messages: [
-                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: `Summarize ${SPACED_PATH} for me`, created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: `Summarize ${SPACED_PATH} and ${MULTI_SPACE_PATH} for me`, created_at: NOW.toISOString(), rag_sources: null },
                     { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: `Done. I saved the summary to ${SPACED_ANSWER_PATH}.`, created_at: NOW.toISOString(), rag_sources: null },
                 ],
             },
@@ -295,7 +297,7 @@ for (const locale of ['ar', 'en']) {
     test(`a path with spaces is one chip in the question and the answer (${locale})`, async ({ page }, info) => {
         await open(page, `#${ANSWER_SESSION}`, locale, withSpacedPaths);
         const chips = page.locator('.file-path-link');
-        await expect(chips).toHaveText([SPACED_PATH, SPACED_ANSWER_PATH]);
+        await expect(chips).toHaveText([SPACED_PATH, MULTI_SPACE_PATH, SPACED_ANSWER_PATH]);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath('spaced-paths.png') });
     });
@@ -1185,7 +1187,32 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
-test('a keyboard user can reach and open a section, and sees where focus is', async ({ page }) => {
+for (const locale of ['ar', 'en']) {
+    test(`a server LEMONADE_BASE_URL picks offers GAIA's own and names no command (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await p.route('**/api/lemonade/target', (route) => route.fulfill({
+                json: {
+                    mode: 'external', saved_mode: null, source: 'env', base_url: 'http://127.0.0.1:59999/api/v1', saved_base_url: null,
+                    api_key_stored: false, gaia_installed: true, offer: false, env_override: null, env_url_ignored: null, what_gaia_does: '',
+                },
+            }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="advanced"]').click();
+        const section = page.locator('section[aria-label]').filter({ has: page.locator('.model-override-desc[role="status"]') }).last();
+        const disclosure = page.locator('.settings-disclosure').filter({ has: section });
+        if (!(await disclosure.getAttribute('open'))) await disclosure.locator('> summary').click();
+        await expect(section.locator('.setting-actions .btn-secondary')).toBeVisible();
+        await expect(section).not.toContainText(/unset|restart GAIA|gaia init|gaia config/i);
+        await section.scrollIntoViewIfNeeded();
+        await shot(page, `advanced-${locale}-env-server`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+test('a keyboard user can reach and open a section, and sees where focus is'
+, async ({ page }) => {
     await open(page, '', 'en', withSettingsPanes);
     await page.getByRole('button', { name: /Settings/ }).first().click();
     await page.getByRole('dialog').locator('[data-section="advanced"]').click();
@@ -1283,6 +1310,7 @@ for (const locale of ['ar', 'en']) {
             test(s.name, async ({ page }) => {
                 await open(page, '', locale, (p) => withSetup(p, s.answers));
                 await s.reach(page);
+                await shot(page, `setup-${locale}-${s.name}`);
                 expect(await audit(page)).toEqual([]);
             });
         }

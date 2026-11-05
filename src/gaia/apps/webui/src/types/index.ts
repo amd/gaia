@@ -911,6 +911,8 @@ export interface StreamEvent {
     message?: string;
     /** Model phase on a status event: reading, loading_model, reasoning, tool_call, … */
     phase?: string;
+    /** On `thinking`: the answer text streamed since the last tool was this reasoning; drop it. */
+    retracts_answer?: boolean;
     step?: number;
     total?: number;
     tool?: string;
@@ -1055,8 +1057,8 @@ export interface SetupProblem {
     start: string | null;
     /** Setup can switch to GAIA's own server instead. */
     use_gaia: boolean;
-    /** Set when it can't switch from here (LEMONADE_BASE_URL), and what does. */
-    switch_hint: string | null;
+    /** The address set outside the app (LEMONADE_BASE_URL) that picked this server; switching ignores it. */
+    env_url?: string | null;
 }
 
 export interface SetupDevice {
@@ -1200,11 +1202,13 @@ export interface LemonadeTarget {
     mode: LemonadeMode;
     /** null until the user (or `gaia init`) has chosen. */
     saved_mode: LemonadeMode | null;
-    /** `env` means LEMONADE_BASE_URL chose it, so the UI cannot change it. */
+    /** `env` means LEMONADE_BASE_URL chose it; switching to GAIA's own overrides it. */
     source: 'env' | 'config' | 'gaia';
     base_url: string | null;
     saved_base_url: string | null;
     api_key_stored: boolean;
+    /** The LEMONADE_BASE_URL value GAIA's own was chosen over, while it still holds. */
+    env_url_ignored?: string | null;
     gaia_installed: boolean;
     /** Nobody has chosen yet: offer a Lemonade found running. */
     offer: boolean;

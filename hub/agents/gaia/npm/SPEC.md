@@ -416,8 +416,12 @@ replays as text only. Pre-2.25 binaries `422` `turns`.
 `reasoning` (contract ≥ 2.22), when `true`, streams the model's reasoning as
 `reasoning` events, `{ "type": "reasoning", "delta": "…" }`, so a client can
 show it apart from `status` lines and from the answer's `token`s. Each delta
-keeps its own spacing: join them as they arrive. Without the field, reasoning
-folds into `status` lines as before. Pre-2.22 binaries `422` it.
+keeps its own spacing: join them as they arrive. A model whose chat template
+opens the reasoning block sends only its closing `</think>`, so its reasoning
+streams as `token`s until that tag arrives; the `reasoning` event that follows
+carries `"retracts_answer": true`, and the client drops the `token` text since
+the last `tool_call` from the answer. Without the field, reasoning folds into
+`status` lines as before. Pre-2.22 binaries `422` it.
 
 ```json
 {

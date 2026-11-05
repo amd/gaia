@@ -6,6 +6,7 @@
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -33,6 +34,7 @@ from gaia.agents.base.memory_store import (
     check_memory_content,
     is_about_user,
 )
+from gaia.llm.reasoning import strip_reasoning
 from gaia.ui.memory_settings import MEMORY_ENABLED_KEY, memory_enabled
 
 from ..database import ChatDatabase
@@ -948,14 +950,10 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
             )
             if hasattr(raw, "__iter__") and not isinstance(raw, str):
                 raw = "".join(raw)
-            raw = raw.strip()
-            # Strip <think> blocks from reasoning models
-            import re as _re
-
-            raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
+            raw = strip_reasoning(raw)
             if raw.startswith("```"):
-                raw = _re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = _re.sub(r"\s*```$", "", raw).strip()
+                raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                raw = re.sub(r"\s*```$", "", raw).strip()
             try:
                 classification = json.loads(raw)
                 relationship = classification.get("relationship", "neutral")

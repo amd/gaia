@@ -3468,3 +3468,75 @@ class TestHardwareChatModel(unittest.TestCase):
         self.assertFalse(status.ready)
         self.assertTrue(any(DEFAULT_MODEL_NAME in r for r in status.reasons))
         self.assertFalse(any(LARGE_DEFAULT_MODEL_NAME in r for r in status.reasons))
+
+
+class TestNpuProfileMemlockOffer(_HubInstallWiringTestBase):
+    """`gaia init --profile npu` only asks Lemonade about memlock when it can
+    prompt on Linux, and a Lemonade that doesn't answer never aborts setup."""
+
+    def _run_npu(self, *, yes, tty, on_linux, system_info):
+        cmd = self._make_cmd("npu")
+        cmd.yes = yes
+        self._patch_common_steps(cmd)
+        install, sentinel = TestHubInstallWiringFlagshipProfile._sentinel_after_install(
+            self
+        )
+        client = MagicMock()
+        client.get_system_info.side_effect = system_info
+        with (
+            patch(
+                "gaia.installer.init_command.importlib.util.find_spec",
+                return_value=None,
+            ),
+            patch(
+                "gaia.hub.catalog.load_index",
+                return_value=_fake_catalog_result(
+                    [{"id": "gaia", "latest_version": "0.1.0"}]
+                ),
+            ),
+            patch("gaia.hub.installer.install", side_effect=install) as mock_install,
+            sentinel,
+            patch("gaia.installer.init_command.stdin_is_tty", return_value=tty),
+            patch("gaia.llm.npu_linux._on_linux", return_value=on_linux),
+            patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client),
+            patch.object(cmd, "_prompt_yes_no", return_value=True),
+            patch("gaia.llm.npu_linux.apply_memlock_fix") as applied,
+            patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            rc = cmd.run()
+        return rc, client, mock_install, applied, mock_stdout.getvalue()
+
+    def test_non_linux_never_asks_lemonade(self):
+        rc, client, mock_install, applied, _ = self._run_npu(
+            yes=False, tty=True, on_linux=False, system_info=AssertionError
+        )
+        self.assertEqual(rc, 0)
+        client.get_system_info.assert_not_called()
+        applied.assert_not_called()
+        mock_install.assert_called_once_with("gaia", trusted=True)
+
+    def test_yes_never_asks_lemonade(self):
+        rc, client, _, applied, _ = self._run_npu(
+            yes=True, tty=True, on_linux=True, system_info=AssertionError
+        )
+        self.assertEqual(rc, 0)
+        client.get_system_info.assert_not_called()
+        applied.assert_not_called()
+
+    def test_unreachable_lemonade_warns_and_setup_continues(self):
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        rc, client, mock_install, applied, out = self._run_npu(
+            yes=False,
+            tty=True,
+            on_linux=True,
+            system_info=LemonadeClientError("Request failed: connection refused"),
+        )
+        out = " ".join(out.split())  # Rich wraps long warnings
+        self.assertEqual(rc, 0)
+        client.get_system_info.assert_called_once()
+        applied.assert_not_called()
+        mock_install.assert_called_once_with("gaia", trusted=True)
+        self.assertIn("locked-memory check is skipped", out)
+        self.assertIn("connection refused", out)
+        self.assertNotIn("Unexpected error", out)

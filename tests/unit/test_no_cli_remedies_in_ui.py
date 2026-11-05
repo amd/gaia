@@ -36,7 +36,7 @@ CLI_ONLY_MODULES = {
 
 # Modules still to reword, on less-travelled paths. Shrink this, never grow it.
 PENDING_MODULES = {
-    "llm/lemonade_choice.py": "#6676 is rewriting this file; reword after (#6703)",
+    "llm/lemonade_choice.py": "#6703",
     "llm/lemonade_embedded.py": "#6703",
     "llm/lemonade_supervisor.py": "#6703",
     # The webui reads "gaia init" in the start hint as "show the Set up button"
@@ -66,11 +66,6 @@ ALLOWED = {
     ("ui/routers/chat.py", "gaia eval agent"): "an env var only the eval sets",
     ("ui/routers/sessions.py", "gaia hub install"): "an agent id the app never lists",
     ("ui/security.py", "gaia eval agent"): "an override only the eval sends",
-    # Lines #6686 rewords; left alone here to keep the two diffs apart.
-    ("ui/setup_plan.py", "or `gaia config set default_model"): "#6686",
-    ("llm/lemonade_client.py", "check the gateway connection"): "#6686",
-    ("llm/lemonade_client.py", "`gaia model add <link>`"): "#6686",
-    ("en.ts", "or run `gaia init` in a terminal"): "#6686",
     # Still to reword, on less-travelled paths (#6703).
     ("llm/gateway.py", "re-run `gaia gateway install`"): "#6703",
     ("llm/lemonade_client.py", "stop it with `gaia kill`"): "#6703",
