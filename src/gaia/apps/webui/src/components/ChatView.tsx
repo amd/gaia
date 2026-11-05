@@ -58,6 +58,8 @@ import { getT, useT } from '../i18n/useT';
 /** Events that only come after the agent got past a permission prompt. */
 const RESOLVES_PROMPTS = new Set(['tool_start', 'tool_end', 'tool_result']);
 const RECONNECTING_PREFIX = 'Connection lost. Reconnecting';
+// Live phases that are the call's own label or the client's wait notice, not the call's progress.
+const CALL_LABEL_PHASES = new Set(['tool', 'waiting']);
 
 /** How long Stop waits for the server's closing `done` before the client closes the turn itself. */
 export const STOP_GRACE_MS = 15_000;
@@ -108,6 +110,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const setNotificationTypeFilter = useNotificationStore((s) => s.setTypeFilter);
     const pendingPrompt = useChatStore((s) => (s.pendingPrompt?.sessionId === sessionId ? s.pendingPrompt : null));
     const liveStatus = useChatStore((s) => s.liveStatus);
+    // A phase sent while a call runs comes from that call's own model calls, not the turn's.
+    const toolStatus = useChatStore((s) => (s.livePhase && !CALL_LABEL_PHASES.has(s.livePhase) ? s.liveStatus : null));
     const awaitingUser = useChatStore((s) => s.awaitingUser);
     // Other events can arrive while a question waits; it still waits on the user.
     const hasLiveQuestion = useChatStore((s) => Object.values(s.liveQuestions).some((q) => q.sessionId === sessionId));
@@ -1811,6 +1815,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
                                 cards={isStreaming ? cards : lastCardsRef.current}
                                 liveStatus={isStreaming ? liveStatus : null}
+                                toolStatus={isStreaming ? toolStatus : null}
                                 awaitingUser={isStreaming && (awaitingUser || hasLiveQuestion || hasOpenPrompt)}
                             />
                         </div>

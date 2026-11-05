@@ -10,6 +10,12 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **A long document extraction says which page it is on and when the model
+  server restarts.** It ran for minutes with no live status, and a server
+  that stopped under it showed nothing until the extraction resumed. It now
+  sends phase `reading` before each page ("Reading page 4 of 12…"), and a
+  server that stops under any tool's own model calls gets the same
+  `model_restart` status as one that stops mid-reply.
 - **A reply cut off by a model-server restart is taken back, not swapped.**
   When GAIA's model server stopped part-way through a reply, the stream sat
   on the half-written text for minutes, then a different reply silently
