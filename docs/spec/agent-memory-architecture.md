@@ -1120,8 +1120,8 @@ def update_memory(knowledge_id: str, content: str = "",
 
 @tool
 def forget(knowledge_id: str) -> dict:
-    """Remove one memory entry by ID (from recall). To erase all of memory,
-    call forget_everything instead."""
+    """Remove one memory by ID (from recall). To erase all memory, use
+    forget_everything."""
 
 @tool
 def forget_everything() -> dict:

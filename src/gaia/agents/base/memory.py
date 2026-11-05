@@ -5500,7 +5500,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         @tool
         def forget(knowledge_id: str) -> dict:
-            """Remove one memory entry by ID (from recall). To erase all of memory, call forget_everything instead."""
+            """Remove one memory by ID (from recall). To erase all memory, use forget_everything."""
             if (gone := _store_gone()) is not None:
                 return gone
             try:
@@ -5524,7 +5524,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         @tool
         def forget_everything() -> dict:
-            """Erase all of memory in one call: every fact, preference and reminder, sensitive ones included, and the stored past conversations. Use when the user says 'forget everything about me', 'delete all my data' or 'wipe your memory'; for one topic use forget. The user approves it first; it cannot be undone."""
+            """Erase all of memory in one call: every fact, preference and reminder, sensitive ones included, and stored past conversations. Use for 'forget everything about me' or 'delete all my data'; for one topic use forget. Cannot be undone."""
             if (gone := _store_gone()) is not None:
                 return gone
             try:

@@ -2,7 +2,7 @@ id: mem_forget_everything_whole
 name: "Memory — 'Forget Everything You Know About Me' Runs forget_everything"
 category: gaia_memory
 severity: critical
-tags: [t1_basic, local_blocked_no_embedder]
+tags: [t1_basic, usability, local_blocked_no_embedder]
 description: |
   The user asks the agent to forget everything it knows about them. The
   agent must call forget_everything (gated tools are auto-approved in the
