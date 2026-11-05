@@ -365,9 +365,13 @@ export async function withConnectors(page: Page, connectors: unknown[] = CONNECT
     });
 }
 
-/** The Electron bridges the browser lacks, so desktop-only settings render. */
-export async function withDesktopBridges(page: Page, update: Record<string, unknown> = {}): Promise<void> {
-    await page.addInitScript((state) => {
+/** The Electron bridges the browser lacks, so desktop-only settings render. `host` is the tray-host check's answer. */
+export async function withDesktopBridges(
+    page: Page,
+    update: Record<string, unknown> = {},
+    host: { available: boolean; reason: string | null } = { available: true, reason: null },
+): Promise<void> {
+    await page.addInitScript(({ state, host }) => {
         const tray = { minimizeToTray: true, startOnLogin: false, startMinimized: false };
         const status = {
             status: 'idle', version: null, progress: 0, releaseNotes: null, error: null, currentVersion: '0.25.4',
@@ -378,13 +382,13 @@ export async function withDesktopBridges(page: Page, update: Record<string, unkn
         const stub: unknown = new Proxy(function stub() {}, { get: (_, key) => (key === 'then' ? undefined : stub), apply: () => stub });
         const withStubs = (real: object) => new Proxy(real, { get: (t, key) => (key in t ? t[key as keyof typeof t] : stub) });
         Object.assign(window, {
-            gaiaAPI: withStubs({ tray: withStubs({ getConfig: async () => ({ tray }), setConfig: async () => ({ tray }) }) }),
+            gaiaAPI: withStubs({ tray: withStubs({ getConfig: async () => ({ tray, host }), setConfig: async () => ({ tray, host }) }) }),
             gaiaUpdater: {
                 getStatus: same, check: same, onStatusChange: () => () => {}, listReleases: async () => [], installVersion: same,
                 resumeUpdates: same, setAutoUpdate: same, setIncludePrereleases: same, downloadUpdate: same, restart: same,
             },
         });
-    }, update);
+    }, { state: update, host });
 }
 
 /** Pick the theme before the app's first paint, the way a returning user would. */
