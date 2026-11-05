@@ -8311,10 +8311,22 @@ Do NOT wrap conversational replies in JSON.
         if self._console_cancelled():
             # Stop pressed during the client's backoff: it gave up on purpose.
             return "cancelled", None
+        tally = self._turn_model_retries
+        # A stop seen mid-turn keeps its restart path; this is a failed first start.
+        if not tally["server_stopped"]:
+            engine = self._engine_start_failure(exc)
+            if engine is not None:
+                logger.error("GAIA's model server could not be started: %s", exc)
+                self.error_history.append(
+                    {"step": steps_taken, "error": str(exc), "type": "llm_engine_start"}
+                )
+                tally["failed"] = True
+                return "unreachable", self._engine_start_failed_answer(
+                    conversation, steps_taken, engine
+                )
         state = self._transient_model_failure(exc)
         if state is None:
             return None, None
-        tally = self._turn_model_retries
         tally["request_retries"] += state.retries
         stopped = self._gaia_server_stopped()
         if stopped:
@@ -8400,6 +8412,36 @@ Do NOT wrap conversational replies in JSON.
                 "The model server stopped while answering, and GAIA could not "
                 "restart it"
             ),
+        )
+
+    @staticmethod
+    def _engine_start_failure(exc: BaseException):
+        """The typed error when *exc* is GAIA's server failing to start, else None."""
+        from gaia.llm.providers.lemonade import (
+            LemonadeEngineStartError,
+            classify_lemonade_exception,
+        )
+
+        typed = classify_lemonade_exception(exc)
+        return typed if isinstance(typed, LemonadeEngineStartError) else None
+
+    def _engine_start_failed_answer(
+        self, conversation: List[Dict[str, Any]], steps_taken: int, engine
+    ) -> str:
+        """The final answer when GAIA's own model server could not be started.
+
+        *engine* is the :class:`LemonadeEngineStartError`. Not marked
+        server-down: the front-end's start button would only repeat the start
+        that just failed.
+        """
+        return self._model_failure_answer(
+            conversation,
+            steps_taken,
+            stopped_responding=False,
+            cause=engine.reason or "",
+            advice=engine.advice,
+            name_service=False,
+            headline=engine.headline,
         )
 
     def _model_unreachable_answer(
