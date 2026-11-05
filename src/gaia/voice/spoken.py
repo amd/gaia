@@ -83,6 +83,13 @@ class SpokenSplitter:
             self._pending = ""
         return out
 
+    def reset(self) -> None:
+        """A tool step started: what came before was narration, not the answer."""
+        self._state = "start"
+        self._pending = ""
+        self.spoken = []
+        self.missing = False
+
     def finish(self) -> List[Tuple[str, str]]:
         """Flush what is left when the answer ends."""
         out: List[Tuple[str, str]] = []

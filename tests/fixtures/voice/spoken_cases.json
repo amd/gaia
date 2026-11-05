@@ -1,0 +1,61 @@
+{
+  "about": "The <spoken> split every implementation must agree on: Python (gaia.voice.spoken), TypeScript (webui) and Go (TUI). Feed each string of `stream` in order; an object {\"reset\": true} means a tool step started, so text before it was narration. Each implementation also replays every case one character at a time. `detail` is the detail text after the last reset, trimmed. `missing` is true when the answer after the last reset has no <spoken> block.",
+  "cases": [
+    {
+      "name": "block then detail",
+      "stream": ["<spoken>It's done. Three files.</spoken>\n\nDetail **here**."],
+      "spoken": "It's done. Three files.",
+      "detail": "Detail **here**.",
+      "missing": false
+    },
+    {
+      "name": "no block",
+      "stream": ["Just an answer."],
+      "spoken": "",
+      "detail": "Just an answer.",
+      "missing": true
+    },
+    {
+      "name": "leading whitespace",
+      "stream": ["  \n", "<spoken>Hi.</spoken>", " Rest."],
+      "spoken": "Hi.",
+      "detail": "Rest.",
+      "missing": false
+    },
+    {
+      "name": "unclosed block",
+      "stream": ["<spoken>Half said"],
+      "spoken": "Half said",
+      "detail": "",
+      "missing": false
+    },
+    {
+      "name": "tag-like text",
+      "stream": ["<spo is not a tag"],
+      "spoken": "",
+      "detail": "<spo is not a tag",
+      "missing": true
+    },
+    {
+      "name": "narration, tool, then answer",
+      "stream": ["Let me look in Downloads.", {"reset": true}, "<spoken>Found two invoices.</spoken>\nThey total $410."],
+      "spoken": "Found two invoices.",
+      "detail": "They total $410.",
+      "missing": false
+    },
+    {
+      "name": "spaces inside the block collapse",
+      "stream": ["<spoken>One\n  two</spoken>"],
+      "spoken": "One two",
+      "detail": "",
+      "missing": false
+    },
+    {
+      "name": "empty answer",
+      "stream": [""],
+      "spoken": "",
+      "detail": "",
+      "missing": true
+    }
+  ]
+}

@@ -64,6 +64,69 @@ class DownloadRequest(BaseModel):
     model: str
 
 
+class VoiceSettings(BaseModel):
+    language: Optional[str] = None
+    asr_model: str = "auto"
+    turn_taking: str = "hands_free"
+    silence_ms: int = 500
+    status_updates: bool = True
+    captions: bool = True
+
+
+class VoiceSettingsUpdate(BaseModel):
+    language: Optional[str] = None
+    asr_model: Optional[str] = None
+    turn_taking: Optional[str] = None
+    silence_ms: Optional[int] = None
+    status_updates: Optional[bool] = None
+    captions: Optional[bool] = None
+
+
+_SETTING_KEYS = {
+    "language": "voice_language",
+    "asr_model": "voice_asr_model",
+    "turn_taking": "voice_turn_taking",
+    "silence_ms": "voice_silence_ms",
+    "status_updates": "voice_status_updates",
+    "captions": "voice_captions",
+}
+
+
+def _settings(config: GaiaConfig) -> VoiceSettings:
+    return VoiceSettings(
+        **{field: getattr(config, key) for field, key in _SETTING_KEYS.items()}
+    )
+
+
+@router.get("/api/voice/settings", response_model=VoiceSettings)
+def get_voice_settings() -> VoiceSettings:
+    """The listening and voice-mode settings, shared with the TUI."""
+    return _settings(_config())
+
+
+@router.put("/api/voice/settings", response_model=VoiceSettings)
+def update_voice_settings(body: VoiceSettingsUpdate) -> VoiceSettings:
+    """Save any of the voice settings; the others keep their value.
+
+    ``language: ""`` goes back to following the app's language.
+    """
+    values = {}
+    try:
+        for field, key in _SETTING_KEYS.items():
+            value = getattr(body, field)
+            if value is None:
+                continue
+            values[key] = GaiaConfig._coerce(key, value)
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    if not values:
+        return _settings(_config())
+    try:
+        return _settings(GaiaConfig.save_keys(values))
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 def _config() -> GaiaConfig:
     try:
         return GaiaConfig.load()

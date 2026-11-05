@@ -6,6 +6,7 @@ session, against an in-process fake of Lemonade's realtime WebSocket."""
 import asyncio
 import base64
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -69,6 +70,38 @@ def test_splitter_spoken_never_leaks_tag_fragment():
     pieces += s.feed("ken>rest")
     assert s.spoken_text == "Hi there"
     assert [t for c, t in pieces if c == "detail"] == ["rest"]
+
+
+_CASES = json.loads(
+    (Path(__file__).parents[2] / "fixtures" / "voice" / "spoken_cases.json").read_text(
+        encoding="utf-8"
+    )
+)["cases"]
+
+
+def _run_case(stream, by_char):
+    s = SpokenSplitter()
+    detail = []
+    for item in stream:
+        if isinstance(item, dict):
+            s.reset()
+            detail = []
+            continue
+        parts = list(item) if by_char else [item]
+        for part in parts:
+            detail += [t for c, t in s.feed(part) if c == "detail"]
+    detail += [t for c, t in s.finish() if c == "detail"]
+    return s.spoken_text, "".join(detail).strip(), s.missing
+
+
+@pytest.mark.parametrize("case", _CASES, ids=[c["name"] for c in _CASES])
+@pytest.mark.parametrize("by_char", [False, True])
+def test_shared_spoken_cases(case, by_char):
+    assert _run_case(case["stream"], by_char) == (
+        case["spoken"],
+        case["detail"],
+        case["missing"],
+    )
 
 
 # ---------------------------------------------------------------- chunker
