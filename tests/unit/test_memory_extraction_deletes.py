@@ -126,6 +126,23 @@ class TestAForgetTurnErasesOnlyWhatWasForgotten:
 
         assert store.get_item(memories["cat"]) is not None
 
+    def test_a_failed_forget_does_not_block_the_delete(self, store, memories):
+        """A made-up id erases nothing, so extraction's delete still applies."""
+        host = _Host(store, [_delete(memories["shellfish"])])
+        host.queued_calls = [
+            (
+                "forget",
+                {"knowledge_id": "made-up-id"},
+                {"status": "error", "message": "No memory has id 'made-up-id'."},
+            )
+        ]
+
+        host.process_query("Forget that I'm allergic to shellfish.")
+
+        assert store.get_item(memories["shellfish"]) is None
+        assert store.get_item(memories["tea"]) is not None
+        assert store.get_item(memories["cat"]) is not None
+
 
 class TestADeleteMustBeOneTheTurnContradicts:
     def test_a_delete_for_an_id_the_model_was_not_shown_is_dropped(self, store):
@@ -146,16 +163,26 @@ class TestADeleteMustBeOneTheTurnContradicts:
 
         assert store.get_item(memories["tea"]) is not None
 
-    def test_a_contradicted_memory_is_forgotten_and_logged(
+    def test_a_delete_sharing_one_common_word_is_dropped(self, store, memories):
+        """A delete sharing only "favourite" with the message is not applied."""
+        host = _Host(store, [_delete(memories["tea"], "contradicted")])
+
+        host.process_query("My favourite coffee is a flat white")
+
+        assert store.get_item(memories["tea"]) is not None
+
+    def test_a_contradicted_memory_is_deleted_not_forgotten_and_logged(
         self, store, memories, caplog
     ):
+        """Replaced, not forgotten: old chats about the cat stay searchable."""
         host = _Host(store, [_delete(memories["cat"], "the cat was rehomed")])
 
         with caplog.at_level(logging.INFO, logger="gaia.agents.base.memory"):
             host.process_query("I don't have a cat any more, Pixel-9R was rehomed")
 
         assert store.get_item(memories["cat"]) is None
-        assert _forgotten(store) == ["User's cat is called Pixel-9R"]
+        assert _forgotten(store) == []
+        assert not store.mentions_forgotten("My cat is called Pixel-9R")
         assert memories["cat"] in caplog.text
         assert "0 stored, 0 updated, 1 deleted" in caplog.text
 

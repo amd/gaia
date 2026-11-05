@@ -2194,9 +2194,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             user_forgot: The user's own forget ran this turn. No delete is
                 kept then: the tool already erased what the user named.
 
-        A delete is kept only for an item the model was shown whose words the
-        user's message repeats, so a model that reads "forget X" cannot point
-        it at another memory.
+        A delete is kept only for an item the model was shown that shares two
+        content words with the user's message (one, if the item has only one),
+        so a model that reads "forget X" cannot point it at another memory.
 
         Returns:
             List of operation dicts with 'op' field.
@@ -2412,9 +2412,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                         why = "the user's own forget ran this turn"
                     elif target is None:
                         why = "it was not among the memories the model was shown"
-                    elif not content_stems(
-                        str(target.get("content", ""))
-                    ) & content_stems(user_input):
+                    elif len(
+                        (named := content_stems(str(target.get("content", ""))))
+                        & content_stems(user_input)
+                    ) < min(2, len(named)):
                         why = "the user's message does not mention it"
                     else:
                         valid_ops.append(op)
@@ -2588,7 +2589,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         ADD → store() + embed
         UPDATE → store new + supersede old
-        DELETE → forget(), so it lands in ``forgotten`` like the user's own
+        DELETE → delete(): newer information replaced it, the user didn't forget it
 
         Args:
             operations: Validated ops from ``_extract_via_llm``.
@@ -2707,7 +2708,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         raise ValueError(
                             "Extraction cannot delete privileged memory rows"
                         )
-                    if store.forget(kid):
+                    if store.delete(kid):
                         self._faiss_remove(kid)
                         applied.deleted += 1
                         # Id only: the row may be sensitive and gaia.log is shared.
@@ -3917,9 +3918,15 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         # Skip logging for memory tools
         if tool_name in _MEMORY_TOOLS:
-            if tool_name in ("forget", "forget_everything"):
+            result = super()._execute_tool(tool_name, tool_args)
+            # Only a forget that erased something stands in for extraction's delete.
+            if (
+                tool_name in ("forget", "forget_everything")
+                and isinstance(result, dict)
+                and result.get("status") in ("removed", "cleared")
+            ):
                 self._turn_forgot = True
-            return super()._execute_tool(tool_name, tool_args)
+            return result
 
         # Log non-memory tools
         start = time.time()
