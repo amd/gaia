@@ -76,6 +76,10 @@ class _Piece:
     queued_at: float = field(default_factory=time.monotonic)
 
 
+def _realtime_listener(*args, **kwargs) -> RealtimeListener:
+    return RealtimeListener(*args, **kwargs)
+
+
 class VoiceSession:
     """One live session. Create, :meth:`start`, feed, then :meth:`close`."""
 
@@ -97,9 +101,7 @@ class VoiceSession:
         self._synth = synthesizer
         self._catalog = catalog
         # Looked up at call time so tests can stand in a fake recognizer.
-        self._listener_factory = listener_factory or (
-            lambda *a, **kw: RealtimeListener(*a, **kw)
-        )
+        self._listener_factory = listener_factory or _realtime_listener
         self._listener: Optional[RealtimeListener] = None
         self._reader: Optional[asyncio.Task] = None
         self._speaker: Optional[asyncio.Task] = None
@@ -240,8 +242,6 @@ class VoiceSession:
                 await self._emit(event)
         except VoiceError as e:
             await self._emit(e.to_event())
-        except asyncio.CancelledError:
-            raise
 
     async def _warm_tts(self) -> None:
         try:

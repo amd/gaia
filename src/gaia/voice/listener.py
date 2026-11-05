@@ -92,21 +92,24 @@ class RealtimeListener:
                 headers=self.target.headers,
                 timeout=aiohttp.ClientTimeout(total=CONNECT_TIMEOUT),
             ) as response:
-                if response.status == 401:
-                    raise VoiceError(
-                        "lemonade_unreachable",
-                        "Lemonade rejected GAIA's API key, so voice can't start.",
-                    )
-                response.raise_for_status()
-                health = await response.json()
-        except VoiceError:
-            raise
+                status = response.status
+                health = await response.json() if status < 400 else {}
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             raise VoiceError(
                 "lemonade_unreachable",
                 f"Lemonade Server isn't reachable at {self.target.origin}.",
                 detail=str(e),
             ) from e
+        if status == 401:
+            raise VoiceError(
+                "lemonade_unreachable",
+                "Lemonade rejected GAIA's API key, so voice can't start.",
+            )
+        if status >= 400:
+            raise VoiceError(
+                "lemonade_unreachable",
+                f"Lemonade at {self.target.origin} answered {status} to a health check.",
+            )
         await self._load_model()
         url = realtime_url(self.target, health, self.model)
         try:

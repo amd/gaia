@@ -228,7 +228,8 @@ func (m *ChatModel) StopReadAloud() {
 
 // autoReadAloud reads a reply that has just finished, when auto-read is on.
 func (m ChatModel) autoReadAloud(reply string) (ChatModel, tea.Cmd) {
-	if !m.readAloudAuto {
+	// Voice mode speaks its own summary; reading the whole reply too would talk over it.
+	if !m.readAloudAuto || m.voice != nil {
 		return m, nil
 	}
 	pieces := speech.Pieces(reply, speech.MaxPieceChars)

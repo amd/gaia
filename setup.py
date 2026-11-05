@@ -211,6 +211,10 @@ setup(
             # _check_daemon_deps refuses to start without it. Also core; kept
             # here so [api] alone still names every daemon dep.
             "psutil>=5.9.0",
+            # uvicorn serves WebSockets (the TUI's voice socket) only with this.
+            "websockets>=12.0",
+            # The daemon records the mic and plays speech for TUI voice mode.
+            "sounddevice",
         ],
         "ui": [
             "fastapi>=0.115.0",
