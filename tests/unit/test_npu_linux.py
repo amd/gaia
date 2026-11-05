@@ -209,6 +209,20 @@ class TestFastFlowLMsOwnCheck:
         assert npu_linux.validate(flm) == []
         assert run.call_args.args[0] == [str(flm), "validate", "--json"]
 
+    def test_flm_is_judged_at_the_hard_limit_not_our_soft_one(self, monkeypatch):
+        order = []
+        monkeypatch.setattr(
+            npu_linux, "raise_memlock_soft_limit", lambda: order.append("raise")
+        )
+        monkeypatch.setattr(
+            npu_linux.subprocess,
+            "run",
+            lambda *a, **k: order.append("flm")
+            or subprocess.CompletedProcess([], 0, json.dumps(validate_json()), ""),
+        )
+        assert npu_linux.validate(Path("/opt/flm/flm")) == []
+        assert order == ["raise", "flm"]
+
     def test_memlock_too_low_as_flm_1_0_7_reports_it(self, monkeypatch):
         # Captured from the Linux Strix Halo runner (#6632): bytes, as a string.
         out = "[Linux]  Kernel: 7.0.0-27-generic\n" + json.dumps(
