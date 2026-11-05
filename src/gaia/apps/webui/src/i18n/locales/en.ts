@@ -2156,7 +2156,7 @@ export const enMessages = {
     'mem.rel.inDays': 'in {n}d',
     'mem.cat.fact': 'Fact',
     'mem.cat.preference': 'Preference',
-    'mem.cat.error': 'Error',
+    'mem.cat.error': 'Learned by GAIA',
     'mem.cat.skill': 'Skill',
     'mem.cat.note': 'Note',
     'mem.cat.reminder': 'Reminder',

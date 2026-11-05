@@ -37,6 +37,7 @@ from gaia.agents.tools.file_monitor_tools import FileToolsMixin
 from gaia.agents.tools.rag_tools import RAGToolsMixin
 from gaia.agents.tools.shell_tools import ShellToolsMixin
 from gaia.security import PathValidator
+from gaia.version import get_package_version
 
 
 class _ToolBase:
@@ -186,7 +187,10 @@ class TestRefusalsAreNotStored:
             "which is not on PATH."
         ]
         assert rows[0]["source"] == "error_auto"
-        assert rows[0]["metadata"] == {"operation": "load_skill coding"}
+        assert rows[0]["metadata"] == {
+            "operation": "load_skill coding",
+            "gaia_version": get_package_version(),
+        }
 
 
 class TestSuccessRetiresOnlyTheSameOperation:

@@ -101,6 +101,7 @@ from gaia.llm.retry import (
     current_retry_listener,
     model_retry_notices,
 )
+from gaia.version import get_package_version
 
 if TYPE_CHECKING:
     from gaia.agents.base.bootstrap import BootstrapResult
@@ -1039,6 +1040,14 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         # Step 9, before the embedder: a degraded session still needs an id.
         self._memory_session_id = session_id or str(uuid4())
+
+        if not incognito:
+            try:
+                self._retire_errors_from_other_versions()
+            except Exception as e:
+                logger.warning(
+                    "[MemoryMixin] could not drop errors from older versions: %s", e
+                )
 
         self._memory_embedder_pending = False
         if incognito:
@@ -4065,6 +4074,22 @@ class MemoryMixin(ProceduralMemoryMixin):
         "gateway timeout",
     )
 
+    #: Errors with nothing to learn: no detail, or a name the model made up once.
+    _UNLEARNABLE_ERROR_PATTERNS: ClassVar[tuple] = tuple(
+        re.compile(p, re.IGNORECASE)
+        for p in (
+            # Bare, or behind a "tool_name: " prefix.
+            r"^(?:\w+:\s*)?\W*unknown error\W*$",
+            r"\bno such (?:table|column)\b",
+        )
+    )
+
+    @classmethod
+    def _is_unlearnable_error(cls, error_msg: str) -> bool:
+        """True when *error_msg* gives a later turn nothing to act on."""
+        text = (error_msg or "").strip()
+        return not text or any(p.search(text) for p in cls._UNLEARNABLE_ERROR_PATTERNS)
+
     @classmethod
     def _is_transient_error(cls, error_msg: str) -> bool:
         """True when *error_msg* describes a passing condition, not a rule."""
@@ -4333,6 +4358,27 @@ class MemoryMixin(ProceduralMemoryMixin):
             # This turn began before the user erased all of memory.
             or (turn_erase_count is not None and store.erased_since(turn_erase_count))
         )
+
+    def _retire_errors_from_other_versions(self) -> None:
+        """Drop tool-recorded errors that another GAIA version saw.
+
+        The tool's wording or behavior may have changed since, and a stale
+        copy keeps steering turns; a real error is re-learned when it recurs.
+        """
+        if self._automatic_writes_off():
+            return
+        current = get_package_version()
+        for entry in self._memory_store.get_by_category(
+            "error", context=None, limit=STABLE_MEMORY_FETCH_LIMIT
+        ):
+            if entry.get("source") != "error_auto":
+                continue
+            if (entry.get("metadata") or {}).get("gaia_version") != current:
+                self._memory_store.delete(entry["id"])
+                logger.debug(
+                    "[MemoryMixin] dropped an error recorded by another version: %s",
+                    str(entry.get("content", ""))[:80],
+                )
 
     def _forget_errors_for_operation(self, tool_name: str, tool_args: Any) -> None:
         """Drop stored errors for an operation once it has worked again.
@@ -4648,7 +4694,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         if self._automatic_writes_off():
             return
         try:
-            if not error_msg or not error_msg.strip():
+            if self._is_unlearnable_error(error_msg):
                 return
             if isinstance(result, dict) and not check_was_executed(result):
                 logger.debug(
@@ -4672,7 +4718,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                 source="error_auto",
                 context=self._memory_context,
                 confidence=0.5,
-                metadata={"operation": self._operation_key(tool_name, tool_args)},
+                metadata={
+                    "operation": self._operation_key(tool_name, tool_args),
+                    "gaia_version": get_package_version(),
+                },
             )
             self._embed_and_index(kid, error_content, "tool-error memory")
             logger.debug("[MemoryMixin] auto-stored error: %s", error_content[:80])
@@ -5137,6 +5186,15 @@ class MemoryMixin(ProceduralMemoryMixin):
                     "status": "error",
                     "message": (
                         f"Invalid category. Use: {sorted(EXTRACTABLE_CATEGORIES)}"
+                    ),
+                }
+
+            if category == "error" and MemoryMixin._is_unlearnable_error(fact):
+                return {
+                    "status": "skipped",
+                    "message": (
+                        "Not stored — this error names no cause a later turn "
+                        "could act on."
                     ),
                 }
 

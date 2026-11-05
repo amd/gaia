@@ -2156,7 +2156,7 @@ const messages: Messages = {
     'mem.rel.inDays': 'بعد {n} ي',
     'mem.cat.fact': 'معلومة',
     'mem.cat.preference': 'تفضيل',
-    'mem.cat.error': 'خطأ',
+    'mem.cat.error': 'تعلّمه GAIA',
     'mem.cat.skill': 'مهارة',
     'mem.cat.note': 'ملاحظة',
     'mem.cat.reminder': 'تذكير',
