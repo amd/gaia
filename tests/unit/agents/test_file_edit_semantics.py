@@ -278,6 +278,79 @@ class TestUniqueReplacement:
 
 
 # ============================================================================
+# 4b. A REPLACEMENT THAT REPEATS THE SURROUNDING FILE IS REFUSED
+# ============================================================================
+
+SHOPPING = "Shopping list\n- milk\n- bread\n- eggs\n"
+
+
+@pytest.fixture
+def shopping_file(tmp_path) -> Path:
+    path = tmp_path / "shopping.txt"
+    path.write_text(SHOPPING, encoding="utf-8")
+    return path
+
+
+class TestRepeatedSurroundingLines:
+    """A whole intended file passed as new_content for one line must not splice in (#6747)."""
+
+    def test_whole_file_as_new_content_is_refused(self, edit_tool, shopping_file):
+        edit_tool.read(shopping_file)
+        result = edit_tool(
+            shopping_file,
+            "- milk",
+            "Shopping list\n- oat milk\n- bread\n- eggs\n- apples",
+        )
+        assert result["status"] == "error"
+        assert "write_file" in result["error"]
+        assert set(result["repeated_lines"]) == {"Shopping list", "- bread", "- eggs"}
+        assert "current_content" in result
+        assert shopping_file.read_text(encoding="utf-8") == SHOPPING
+
+    def test_the_scoped_edit_still_lands(self, edit_tool, shopping_file):
+        if edit_tool.tool_name == "edit_python_file":
+            pytest.skip("a shopping list is not valid Python")
+        edit_tool.read(shopping_file)
+        result = edit_tool(shopping_file, "- milk", "- oat milk")
+        assert result["status"] == "success"
+        result = edit_tool(shopping_file, "- eggs\n", "- eggs\n- apples\n")
+        assert result["status"] == "success"
+        assert shopping_file.read_text(encoding="utf-8") == (
+            "Shopping list\n- oat milk\n- bread\n- eggs\n- apples\n"
+        )
+
+
+class TestRepeatedLinesNarrowness:
+    """Only several repeated neighbour lines trip the guard."""
+
+    def test_one_repeated_neighbour_line_is_allowed(self):
+        content = "a = 1\nb = 2\nc = 3\n"
+        updated, error = apply_unique_replacement("f", content, "b = 2", "a = 1\nb = 9")
+        assert error is None
+        assert updated == "a = 1\na = 1\nb = 9\nc = 3\n"
+
+    def test_repeated_punctuation_lines_are_allowed(self):
+        content = "if x {\n}\n}\nfoo()\n}\n"
+        _, error = apply_unique_replacement("f", content, "foo()", "}\n}\nfoo()\n}")
+        assert error is None
+
+    def test_lines_also_in_old_content_are_not_counted(self):
+        content = "head\nalpha\nbeta\ntail\n"
+        _, error = apply_unique_replacement(
+            "f", content, "alpha\nbeta", "alpha\nbeta\ngamma"
+        )
+        assert error is None
+
+    def test_repeated_following_lines_are_refused(self):
+        content = "one\ntwo\nthree\nfour\n"
+        _, error = apply_unique_replacement(
+            "f", content, "one", "uno\ntwo\nthree\nfour"
+        )
+        assert error is not None
+        assert error["repeated_lines"] == ["two", "three", "four"]
+
+
+# ============================================================================
 # 5. THE IMPLEMENTATIONS CANNOT DIVERGE
 # ============================================================================
 

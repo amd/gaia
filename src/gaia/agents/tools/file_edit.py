@@ -19,6 +19,8 @@ unlocked.
   the count and the line of each, not a first-match replacement — the model
   cannot tell a wrong-region edit from the one it asked for, and neither can
   the human reading the diff.
+- ``new_content`` must not repeat several lines from just outside the match;
+  that is a whole file passed for one line, and splicing it duplicates them.
 - A rejected edit carries the file's current content around the region the
   caller was aiming at, so the retry lands without a separate re-read.
 """
@@ -46,6 +48,9 @@ MAX_REPORTED_MATCHES = 5
 
 # Ceiling on a returned excerpt, so a rejection cannot flood the context window.
 MAX_EXCERPT_CHARS = 4000
+
+# Longest run of neighbouring lines checked for duplication in new_content.
+_MAX_RUN = 50
 
 # Similarity a line needs against the probe line to anchor a not-found excerpt.
 _ANCHOR_THRESHOLD = 0.6
@@ -328,6 +333,55 @@ def _describe_matches(current_content: str, offsets: List[int]) -> List[Dict[str
     return described
 
 
+def _is_substantive(line: str) -> bool:
+    return any(ch.isalnum() for ch in line)
+
+
+def _contains_run(haystack: List[str], run: List[str]) -> bool:
+    width = len(run)
+    return any(haystack[i : i + width] == run for i in range(len(haystack) - width + 1))
+
+
+def _longest_contained_run(
+    new_lines: List[str], neighbours: List[str], from_end: bool
+) -> List[str]:
+    """The longest run of ``neighbours`` nearest the match that ``new_lines`` contains."""
+    best: List[str] = []
+    for width in range(1, min(len(neighbours), len(new_lines), _MAX_RUN) + 1):
+        run = neighbours[-width:] if from_end else neighbours[:width]
+        if not _contains_run(new_lines, run):
+            break
+        best = run
+    return best
+
+
+def _repeated_neighbour_lines(
+    current_content: str, offset: int, old_content: str, new_content: str
+) -> List[str]:
+    """Substantive lines next to the match that ``new_content`` would duplicate.
+
+    Catches a model passing the whole intended file as ``new_content`` for a
+    one-line ``old_content``. A single repeated line (``}``, a blank, one
+    common statement) is a normal edit, so fewer than two are not reported.
+    """
+    old_lines = {ln.strip() for ln in old_content.splitlines()}
+    new_lines = [ln.strip() for ln in new_content.splitlines()]
+    # Whole lines only: a partial line shares the match's line and isn't outside it.
+    before = [ln.strip() for ln in current_content[:offset].split("\n")[:-1]]
+    after = current_content[offset + len(old_content) :].split("\n")
+    if not old_content.endswith("\n"):
+        after = after[1:]
+    after = [ln.strip() for ln in after]
+
+    repeated = []
+    for run in (
+        _longest_contained_run(new_lines, before, from_end=True),
+        _longest_contained_run(new_lines, after, from_end=False),
+    ):
+        repeated.extend(ln for ln in run if _is_substantive(ln) and ln not in old_lines)
+    return repeated if len(repeated) >= 2 else []
+
+
 def _error(
     message: str, file_path: str, match_count: int, extra: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -439,6 +493,21 @@ def apply_unique_replacement(
         )
 
     offset = offsets[0]
+    repeated = _repeated_neighbour_lines(
+        current_content, offset, old_content, new_content
+    )
+    if repeated:
+        return None, _error(
+            f"new_content repeats {len(repeated)} lines that sit outside "
+            f"old_content in {file_path} (for example {repeated[0]!r}), so the "
+            "edit would duplicate them — nothing was written. new_content "
+            "replaces only old_content: pass just the changed text, or use "
+            "write_file to replace the whole file.",
+            file_path,
+            1,
+            {"repeated_lines": repeated, **_excerpt(current_content, old_content)},
+        )
+
     updated = (
         current_content[:offset]
         + new_content
