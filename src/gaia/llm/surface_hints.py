@@ -7,6 +7,9 @@ answers the TUI, the Agent UI and headless service callers alike), so LLM
 errors carry the TUI's advice and each other front-end swaps those exact
 sentences for its own with :func:`surface_wording`. Keep every TUI string here
 a whole sentence or a phrase that reads correctly after the swap.
+
+``gaia init`` speaks to a terminal, so its lines carry ``CLI_*`` advice that
+the Agent UI's setup log swaps for the app's own.
 """
 
 #: How a TUI user picks another model.
@@ -108,8 +111,18 @@ CLI_WEDGED_SERVER_HINT = (
     "restarts it on the next query."
 )
 
+#: How a user who skipped the default vision model gets it later. Printed by
+#: ``gaia init``; the Agent UI's setup log shows the app's version.
+CLI_VISION_DOWNLOAD_HINT = (
+    "To ask about images, download it (~6 GB) with `gaia download --agent vlm`."
+)
+AGENT_UI_VISION_DOWNLOAD_HINT = (
+    "To ask about images later, tick it under Settings > Model (a ~6 GB download)."
+)
+
 _SWAPS = {
     "agent_ui": (
+        (CLI_VISION_DOWNLOAD_HINT, AGENT_UI_VISION_DOWNLOAD_HINT),
         (TUI_SERVER_RESTART_HINT, AGENT_UI_SERVER_RESTART_HINT),
         (TUI_MODEL_SWITCH_HINT, AGENT_UI_MODEL_SWITCH_HINT),
         (TUI_PROVIDER_AUTH_HINT, AGENT_UI_PROVIDER_AUTH_HINT),
