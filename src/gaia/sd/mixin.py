@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base.file_snapshots import SnapshotError, before_change
-from gaia.agents.tools.path_access import image_file_error, read_access_error
+from gaia.agents.tools import path_access
 from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
@@ -321,7 +321,7 @@ class SDToolsMixin:
                 model must already be downloaded in Lemonade. The output is saved
                 beside generated images and is never silently downloaded.
                 """
-                refusal = read_access_error(self, image_path)
+                refusal = path_access.read_access_error(self, image_path)
                 if refusal:
                     return refusal
                 source = Path(image_path).expanduser()
@@ -420,10 +420,10 @@ class SDToolsMixin:
     ) -> tuple[Optional[Path], Optional[Dict[str, Any]]]:
         """Check read scope and resolve one local source image."""
         path = Path(image_path).expanduser()
-        denied = read_access_error(self, path)
+        denied = path_access.read_access_error(self, path)
         if denied:
             return None, denied
-        invalid = image_file_error(path, image_path)
+        invalid = path_access.image_file_error(path, image_path)
         if invalid:
             return None, invalid
         try:
@@ -540,7 +540,7 @@ class SDToolsMixin:
         n: int = 1,
     ) -> Dict[str, Any]:
         """Vary *image_path* through Lemonade and save each result as a PNG."""
-        refusal = read_access_error(self, image_path)
+        refusal = path_access.read_access_error(self, image_path)
         if refusal:
             return refusal
         try:
@@ -978,7 +978,7 @@ class SDToolsMixin:
         # Both prompt and model can originate in a tool call: neither may
         # introduce path segments or control whitespace into an output name.
         safe_prompt = re.sub(r"\s+", "_", re.sub(r"[^\w\s-]", "", prompt[:40]).strip())
-        safe_model = re.sub(r"\s+", "_", re.sub(r"[^\w\s-]", "", model[:80]).strip())
+        safe_model = re.sub(r"\.{2,}|[^A-Za-z0-9_.-]", "_", model[:80])
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # Content hash: two fast Turbo runs of one prompt land in the same second.
         digest = hashlib.sha256(image_bytes).hexdigest()[:8]
