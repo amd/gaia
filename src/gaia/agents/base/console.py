@@ -20,6 +20,11 @@ from gaia.agents.base.tool_grants import (
     path_argument,
 )
 from gaia.agents.base.tools import get_tool_display_name
+from gaia.agents.base.write_safety import (
+    has_hidden_part,
+    is_too_broad_folder,
+    lands_where_code_runs,
+)
 from gaia.llm.surface_hints import surface_wording
 
 logger = logging.getLogger(__name__)
@@ -191,21 +196,14 @@ def edit_is_inside(target: str, roots: Tuple[str, ...]) -> bool:
     A home folder or drive root is never a workspace: started there, every
     file the user owns would be "inside".
     """
-    roots = tuple(r for r in roots if not _too_broad_to_be_a_workspace(r))
+    roots = tuple(r for r in roots if not is_too_broad_folder(r))
     if not roots:
         return False
     try:
         resolved = os.path.realpath(target)
     except (OSError, ValueError):
         return False
-    parts = {part.lower() for part in resolved.replace("\\", "/").split("/")}
-    if ".git" in parts:
-        return False
-    parent = os.path.normcase(os.path.dirname(resolved))
-    for entry in os.environ.get("PATH", "").split(os.pathsep):
-        if entry and os.path.normcase(os.path.realpath(entry)) == parent:
-            return False
-    if _shadows_a_program(resolved):
+    if lands_where_code_runs(resolved):
         return False
     for root in roots:
         real_root = os.path.realpath(root)
@@ -217,25 +215,8 @@ def edit_is_inside(target: str, roots: Tuple[str, ...]) -> bool:
         except ValueError:
             continue  # different drives on Windows
         inside = os.path.relpath(resolved, real_root).replace("\\", "/").split("/")
-        return not any(part.startswith(".") and part != "." for part in inside)
+        return not has_hidden_part(inside)
     return False
-
-
-def _too_broad_to_be_a_workspace(root: str) -> bool:
-    """A home folder or a drive root holds everything the user owns."""
-    real = os.path.normcase(os.path.realpath(root))
-    home = os.path.normcase(os.path.realpath(os.path.expanduser("~")))
-    return real == home or os.path.dirname(real) == real
-
-
-def _shadows_a_program(path: str) -> bool:
-    """On Windows, cmd.exe looks in the current folder before ``PATH``, so a
-    ``git.bat`` written into the workspace runs instead of git."""
-    if os.name != "nt":
-        return False
-    stem, ext = os.path.splitext(os.path.basename(path))
-    pathext = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").lower().split(";")
-    return ext.lower() in pathext and shutil.which(stem) is not None
 
 
 def terminal_is_interactive() -> bool:
@@ -490,6 +471,13 @@ class OutputHandler(ABC):
         the same thing in words for clients that only show text. Optional.
         """
 
+    def restart_answer(self, message: str) -> None:
+        """The reply streamed so far was cut off and the step starts over.
+
+        A front-end that drew the partial reply drops it and shows *message*
+        in its place, so the new reply never silently replaces it. Optional.
+        """
+
     def pause_progress(self):
         """Pause progress indicator, remembering state for later resume. Optional — default no-op."""
         ...
@@ -524,9 +512,12 @@ class OutputHandler(ABC):
         """
         ...
 
-    def mark_turn_failed(self) -> None:
+    def mark_turn_failed(self, failure: Optional[str] = None) -> None:
         """The next :meth:`print_final_answer` ends a turn a model failure cut
-        short, so a console can report the turn as failed. Optional — no-op."""
+        short, so a console can report the turn as failed. Optional — no-op.
+
+        *failure* names a cause a front-end can offer a fix for
+        (``"model_server_down"``), or is None."""
 
     def print_turn_metrics(  # pylint: disable=unused-argument
         self, record: Dict[str, Any]

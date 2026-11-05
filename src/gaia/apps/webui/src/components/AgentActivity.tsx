@@ -40,6 +40,7 @@ import { log } from '../utils/logger';
 import { StepResult } from './LongContent';
 import { isMessageKey, ref, type MessageKey, type MessageRef } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
+import { localizeLiveStatus } from '../utils/liveStatus';
 import './AgentActivity.css';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -97,6 +98,7 @@ const TOOL_ICON: Record<string, LucideIcon> = {
     remember: Brain,
     update_memory: Brain,
     forget: Brain,
+    forget_everything: Brain,
     search_past_conversations: Brain,
     request_user_input: MessageCircleQuestionMark,
     // Skills
@@ -470,12 +472,14 @@ interface AgentActivityProps {
     awaitingUser?: boolean;
     /** What the model is doing between steps; drawn at the end of the timeline while no row is live. */
     liveLine?: React.ReactNode;
+    /** What the running call's own model calls are doing (page progress, a server restart); shown on its row. */
+    toolStatus?: string | null;
     /** The turn's answer, so a note it repeats is not shown twice. */
     answer?: string;
 }
 
 /** The turn as a timeline: the agent's notes in full, the steps between them folded once done. */
-export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, answer }: AgentActivityProps) {
+export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, toolStatus = null, answer }: AgentActivityProps) {
     const t = useT();
     const [openGroups, setOpenGroups] = useState<Map<number, boolean>>(new Map());
     const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
@@ -490,6 +494,9 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
     // While the turn runs, the latest plan stays in view as a live checklist.
     const livePlan = running ? [...displaySteps].reverse().find((s) => s.type === 'plan' && s.planSteps?.length) : undefined;
     const liveRow = running && displaySteps.some((s) => s.active && s.type !== 'status');
+    const statusRowId = running && toolStatus
+        ? [...displaySteps].reverse().find((s) => s.type === 'tool' && s.active)?.id
+        : undefined;
     const filtering = !!toolNameFilter || statusFilter !== 'all';
 
     const toggleTool = useCallback((id: number) => {
@@ -523,6 +530,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                     isExpanded={expandedTools.has(step.id)}
                     now={now}
                     awaitingUser={running && awaitingUser}
+                    status={step.id === statusRowId ? toolStatus : null}
                     onToggle={() => toggleTool(step.id)}
                 />
             );
@@ -800,14 +808,17 @@ interface FlowToolCardProps {
     now: number;
     /** The turn is waiting on the user (an approval or a question). */
     awaitingUser?: boolean;
+    /** Live line from this running call's own model calls; replaces its label. */
+    status?: string | null;
 }
 
-function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }: FlowToolCardProps) {
+function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, status = null }: FlowToolCardProps) {
     const t = useT();
     const Icon = getToolMeta(step.tool, step).icon;
     // A call held for the user's answer hasn't started, so it neither runs nor times.
     const waiting = !!step.active && awaitingUser;
-    const line = waiting ? t('activity.waiting') : toolRowText(step, t);
+    const live = !waiting && !!step.active && status ? localizeLiveStatus(t, status) : '';
+    const line = waiting ? t('activity.waiting') : live || toolRowText(step, t);
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
     const failure = step.success === false && step.result ? step.result : '';
@@ -824,7 +835,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }:
                 onClick={onToggle}
                 aria-expanded={isExpanded}
                 title={
-                    waiting
+                    waiting || live
                         ? toolRowText(step, t)
                         : step.narration && step.narration !== line ? step.narration : undefined
                 }

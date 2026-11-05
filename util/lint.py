@@ -46,6 +46,12 @@ EXCLUDE_DIRS = (
     ".git,__pycache__,venv,.venv,.mypy_cache,.tox,.eggs,_build,buck-out,node_modules"
 )
 LINT_DIRS = [SRC_DIR, TEST_DIR]
+# The hub packages GAIA ships. Formatted like the core; flake8 doesn't cover
+# them yet, as their findings need fixing by hand.
+HUB_DIRS = sorted(p.as_posix() for p in Path("hub/agents").glob("*/python")) + [
+    "hub/skills"
+]
+FORMAT_DIRS = LINT_DIRS + HUB_DIRS
 
 
 def run_command(cmd: list[str], check: bool = False) -> tuple[int, str]:
@@ -118,7 +124,7 @@ def check_black(fix: bool = False) -> CheckResult:
     print("-" * 40)
 
     if fix:
-        cmd = uvx("black", *LINT_DIRS, "--config", "pyproject.toml")
+        cmd = uvx("black", *FORMAT_DIRS, "--config", "pyproject.toml")
         print(f"[CMD] {' '.join(cmd)}")
         exit_code, output = run_command(cmd)
 
@@ -143,7 +149,7 @@ def check_black(fix: bool = False) -> CheckResult:
             return CheckResult("Code Formatting (Black)", True, False, 0, output)
     else:
         cmd = uvx(
-            "black", "--check", "--diff", *LINT_DIRS, "--config", "pyproject.toml"
+            "black", "--check", "--diff", *FORMAT_DIRS, "--config", "pyproject.toml"
         )
 
     print(f"[CMD] {' '.join(cmd)}")
@@ -192,7 +198,7 @@ def check_isort(fix: bool = False) -> CheckResult:
     print("-" * 40)
 
     if fix:
-        cmd = uvx("isort", *LINT_DIRS, "--settings-path", "pyproject.toml")
+        cmd = uvx("isort", *FORMAT_DIRS, "--settings-path", "pyproject.toml")
         print(f"[CMD] {' '.join(cmd)}")
         exit_code, output = run_command(cmd)
 
@@ -218,7 +224,7 @@ def check_isort(fix: bool = False) -> CheckResult:
             "isort",
             "--check-only",
             "--diff",
-            *LINT_DIRS,
+            *FORMAT_DIRS,
             "--settings-path",
             "pyproject.toml",
         )
@@ -878,7 +884,7 @@ def count_python_files() -> tuple[int, int]:
     total_files = 0
     total_lines = 0
 
-    for dir_name in LINT_DIRS:
+    for dir_name in FORMAT_DIRS:
         dir_path = Path(dir_name)
         if dir_path.exists():
             for py_file in dir_path.rglob("*.py"):
@@ -904,7 +910,7 @@ def print_summary(results: list[CheckResult]) -> int:
     print("[STATS] Project Statistics:")
     print(f"   - Python Files: {total_files}")
     print(f"   - Lines of Code: {total_lines:,}")
-    print(f"   - Directories: {', '.join(LINT_DIRS)}")
+    print(f"   - Directories: {', '.join(FORMAT_DIRS)}")
 
     # Build results
     pass_count = 0

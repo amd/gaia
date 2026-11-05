@@ -284,37 +284,66 @@ class FileSearchToolsMixin:
         error, not a first-match replacement: picking one would edit a region
         the caller never named while reporting success. Matching nothing is an
         error too, and carries the file's current content so the retry needs
-        no separate read. The semantics live in `gaia.agents.tools.file_edit`,
+        no separate read.
+
+        new_content replaces old_content only; to rewrite the whole file, use
+        write_file. An edit whose new_content repeats lines from just outside
+        old_content (a run above, a run below, or the line above first and the
+        line below last, two or more lines in all) is refused, because
+        splicing it in would leave those lines twice. The error lists them in
+        `repeated_lines`; to keep them in new_content, include them in
+        old_content too. A single echoed line and lines of punctuation such as
+        closing braces may repeat.
+
+        A `.py` edit that would turn a file with valid syntax into one without
+        is refused too. The semantics live in `gaia.agents.tools.file_edit`,
         shared by every edit tool.
 
         Args:
             file_path: File to edit
             old_content: Exact text to find and replace; must be unique in the
                 file — include surrounding lines until it is
-            new_content: Replacement text
+            new_content: Text that replaces old_content only, not the whole file
 
         Returns:
             {
                 "status": "success",
+                "operation": "edit_file",
                 "file_path": str,
                 "old_size": int,   # chars before edit
                 "new_size": int,   # chars after edit
+                "after": str,      # the edited lines as they now read, with context
+                "after_start_line": int,
+                "after_end_line": int,
                 "diff": str,       # unified diff
                 "backup_path": str # only when a backup was created; under
                                    # ~/.gaia/cache/backups/, never beside the file
                                    # (owner-only; newest five per file kept)
             }
 
-            On a match rejection:
+            On a match rejection (nothing written):
             {
                 "status": "error",
+                "operation": "edit_file",
                 "error": str,           # names the cause and the fix
+                "file_path": str,
                 "match_count": int,     # 0 = not found, >1 = ambiguous
                 "match_lines": [int],   # ambiguous only
+                "matches": [dict],      # ambiguous only: line + surrounding context
+                "repeated_lines": [str], # repeated-context only
                 "current_content": str, # excerpt around the target region
                 "current_content_start_line": int,
                 "current_content_end_line": int,
                 "current_content_total_lines": int
+            }
+
+            On a Python syntax refusal (nothing written):
+            {
+                "status": "error",
+                "operation": "edit_file",
+                "error": str,
+                "syntax_errors": [str],
+                "file_path": str
             }
 
             On a read-first refusal:

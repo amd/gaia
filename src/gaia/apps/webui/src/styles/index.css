@@ -316,6 +316,13 @@ a:hover { text-decoration: underline; }
 
 /* Arabic script needs more room between lines than Latin at the same size. */
 :root[lang="ar"] #root { line-height: 1.7; }
+/* Arabic letters join: tracking set for Latin caps pulls a word apart into separate letters. */
+:root[lang="ar"] #root * { letter-spacing: normal; }
+/* The mono faces have no Arabic; without a sans before `monospace`, Arabic falls to a
+   fixed-width face and its letters come apart. Latin keeps the mono face. */
+:root[lang="ar"] {
+    --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', 'Monaco', 'Segoe UI', 'Noto Sans Arabic', 'Noto Naskh Arabic', Tahoma, monospace;
+}
 .md-content :is(.md-p, .md-li, .md-blockquote, td, th):dir(rtl),
 .composer-input:dir(rtl) {
     line-height: 1.85;
@@ -335,7 +342,8 @@ a:hover { text-decoration: underline; }
     letter-spacing: normal;
     text-transform: none;
     overflow-wrap: break-word;
-    color: oklch(from currentColor max(l, 0.5) c h);
+    /* 0.49, not 0.5: the brass label on a hovered primary button needs it for 4.5:1. */
+    color: oklch(from currentColor max(l, 0.49) c h);
 }
 [data-theme="dark"] .i18n-gloss.i18n-gloss {
     color: oklch(from currentColor min(l, 0.8) c h);
@@ -400,6 +408,8 @@ textarea:focus-visible {
 }
 .btn-primary { background: var(--accent-fill); color: var(--accent-fill-text); }
 .btn-primary:hover { background: var(--accent-fill-hover); }
+/* Lightened, the English fell to 4.46:1 on the hover fill. */
+.btn-primary .i18n-gloss.i18n-gloss { color: inherit; }
 .btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); }
 .btn-secondary:hover { background: var(--bg-active); }
 .btn-danger { background: var(--danger-dim); color: var(--danger); }
@@ -759,18 +769,26 @@ textarea:focus-visible {
 /* A Latin name in a right-to-left UI: dir="auto" makes it truncate at its end,
    and this keeps it on the label's own edge. */
 :root[dir="rtl"] :is(.doc-name, .sb-location-name, .composer-chip-label,
-    .new-chat-folder-name, .sp-item-name, .connection-banner__text)[dir="auto"] {
+    .new-chat-folder-name, .sp-item-name, .connection-banner__text, .schedule-card-name, .schedule-card-prompt)[dir="auto"] {
     text-align: right;
 }
 /* The mirror: an Arabic name in a left-to-right UI stays on the left. */
 :root:not([dir="rtl"]) :is(.doc-name, .sb-location-name, .composer-chip-label,
-    .new-chat-folder-name, .sp-item-name, .connection-banner__text)[dir="auto"] {
+    .new-chat-folder-name, .sp-item-name, .connection-banner__text, .schedule-card-name, .schedule-card-prompt)[dir="auto"] {
     text-align: left;
 }
 /* Windows: minimize, maximize and close sit at the top right. */
+:root[data-titlebar="overlay"] {
+    --titlebar-controls-w: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+}
 :root[data-titlebar="overlay"] .task-header {
     min-height: var(--titlebar-h);
-    padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px);
+    padding-right: calc(var(--titlebar-controls-w) + 12px);
+}
+/* Notices above the chat header end before the controls, so their actions stay clickable. */
+:root[data-titlebar="overlay"]:not([dir="rtl"]) .main-content > :is(.app-notice, .connection-banner, .download-chip.is-main) {
+    inline-size: auto;
+    margin-right: calc(var(--titlebar-controls-w) + 8px);
 }
 /* macOS: the traffic lights sit at the top left, over the sidebar's first row. */
 :root[data-titlebar="mac"] .sb-top {
@@ -782,7 +800,7 @@ textarea:focus-visible {
     padding-right: 12px;
 }
 :root[data-titlebar="overlay"][dir="rtl"] .sb-top {
-    padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px);
+    padding-right: calc(var(--titlebar-controls-w) + 12px);
 }
 :root[data-titlebar="mac"][dir="rtl"] .sb-top {
     padding-left: 10px;

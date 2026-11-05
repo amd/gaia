@@ -3,21 +3,442 @@
 
 .setup {
     flex: 1;
-    overflow-y: auto;
-    --setup-pad-block: 48px;
-    padding: var(--setup-pad-block) 16px;
+    display: flex;
+    min-height: 0;
     background: var(--bg-primary);
 }
 
+.setup-rail {
+    flex: 0 0 240px;
+    padding: 32px 16px;
+    overflow-y: auto;
+    border-inline-end: 1px solid var(--border);
+    background: var(--bg-secondary);
+}
+
+.setup-rail-title {
+    margin-block-end: 16px;
+    margin-inline-start: 8px;
+    color: var(--text-primary);
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.setup-rail-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    list-style: none;
+}
+
+.setup-rail-step {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    inline-size: 100%;
+    min-block-size: 40px;
+    padding: 6px 8px;
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-size: 14px;
+    text-align: start;
+}
+
+button.setup-rail-step:hover {
+    background: var(--bg-hover);
+}
+
+.setup-rail-step.is-current,
+.setup-rail-step.is-active {
+    color: var(--text-primary);
+}
+
+/* The step on screen, which is where setup is unless the user went back. */
+.setup-rail-step.is-shown {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.setup-rail-num {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    inline-size: 24px;
+    block-size: 24px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-full);
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.setup-rail-step.is-done .setup-rail-num {
+    border-color: var(--accent-green);
+    color: var(--accent-green);
+}
+
+.setup-rail-step.is-current .setup-rail-num,
+.setup-rail-step.is-active .setup-rail-num {
+    border-color: var(--accent-light);
+    color: var(--accent);
+}
+
+.setup-rail-step.is-failed .setup-rail-num {
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
+/* The scrolling page, then one bar that holds every screen's actions. */
+.setup-pane {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-inline-size: 0;
+    min-block-size: 0;
+}
+
+.setup-footer {
+    flex: none;
+    border-block-start: 1px solid var(--border);
+    background: var(--bg-primary);
+}
+
+/* The bar keeps its height when a step has no actions, so the page never jumps. */
+.setup-footer {
+    min-block-size: 61px;
+}
+
+/* Back at the start, the step's main action at the end, on every screen. */
+.setup-footer-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    max-inline-size: 720px;
+    margin-inline: auto;
+    padding: 12px 24px;
+}
+
+.setup-footer-row > .btn-secondary:first-child {
+    margin-inline-end: auto;
+}
+
+/* A long label wraps inside its button rather than running off the window. */
+.setup-footer-row > button {
+    max-inline-size: 100%;
+    white-space: normal;
+}
+
+@media (max-width: 480px) {
+    .setup-footer-row {
+        padding: 10px 12px;
+    }
+
+    .setup-footer-row > button {
+        flex: 1 1 0;
+    }
+}
+
 .setup-inner {
-    max-width: 620px;
-    margin: 0 auto;
+    --setup-pad-block: 48px;
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 14px;
+    min-inline-size: 0;
+    max-inline-size: 720px;
+    margin-inline: auto;
+    padding: var(--setup-pad-block) 24px;
+    overflow-y: auto;
+}
+
+.setup-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px 16px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+}
+
+.setup-hero {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 20px 22px;
+    border: 1px solid var(--accent-light);
+    border-radius: var(--radius-lg);
+}
+
+.setup-eyebrow {
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.setup-hero-title {
+    color: var(--text-primary);
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.setup-facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+}
+
+.setup-facts div {
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+}
+
+.setup-facts dt {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.setup-facts dd {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.setup-reasons {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-inline-start: 20px;
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.setup-bar-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.setup-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-block-start: 4px;
+    list-style: none;
+}
+
+.setup-result {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 2px 8px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.setup-result:not(:has(> svg)) {
+    grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.setup-result.is-done svg,
+.setup-result.is-passed svg {
+    color: var(--accent-green);
+}
+
+.setup-result.is-failed svg {
+    color: var(--danger);
+}
+
+.setup-result-label {
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+
+.setup-result-model {
+    color: var(--text-secondary);
+}
+
+.setup-result-value {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.setup-result-error {
+    grid-column: 2 / -1;
+    color: var(--danger);
+    overflow-wrap: anywhere;
+}
+
+.setup-failure {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 14px;
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-lg);
+    color: var(--text-primary);
+    font-size: 14px;
+}
+
+.setup-contents {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    list-style: none;
+}
+
+.setup-content {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    font-size: 13px;
+}
+
+.setup-content-icon {
+    padding-block-start: 2px;
+    color: var(--text-muted);
+}
+
+.setup-content.is-done .setup-content-icon {
+    color: var(--accent-green);
+}
+
+.setup-content.is-failed .setup-content-icon {
+    color: var(--danger);
+}
+
+.setup-content-failure {
+    grid-column: 2 / -1;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    color: var(--danger);
+}
+
+.setup-content-failure pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.setup-content-main,
+.setup-content-side {
+    display: flex;
+    flex-direction: column;
+}
+
+.setup-content-side {
+    align-items: flex-end;
+    color: var(--text-secondary);
+}
+
+.setup-content-name {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.setup-content-note,
+.setup-content-from {
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+}
+
+.setup-disclosure summary {
+    color: var(--text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.setup-disclosure .setup-contents {
+    margin-block-start: 10px;
+}
+
+.setup-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.setup-key-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-inline-start: 20px;
+    color: var(--text-primary);
+    font-size: 14px;
+}
+
+.setup-ok {
+    color: var(--accent-green);
+}
+
+.setup-content-name {
+    display: block;
+}
+
+/* Doubled with .btn-secondary, whose nowrap would push a long model name out. */
+.btn-secondary.setup-wrap-btn {
+    max-inline-size: 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
+}
+
+.setup-failed-extra {
+    color: var(--accent-yellow);
+    font-size: 13px;
+}
+
+@media (max-width: 720px) {
+    .setup {
+        flex-direction: column;
+        min-inline-size: 0;
+        max-inline-size: 100%;
+    }
+
+    .setup-inner {
+        inline-size: 100%;
+        max-inline-size: 100%;
+        box-sizing: border-box;
+        padding-inline: 16px;
+    }
+
+    .setup-rail {
+        flex: 0 0 auto;
+        min-inline-size: 0;
+        max-inline-size: 100%;
+        box-sizing: border-box;
+        padding: 12px 16px;
+        border-inline-end: 0;
+        border-block-end: 1px solid var(--border);
+    }
+
+    .setup-rail-title {
+        display: none;
+    }
+
+    .setup-rail-list {
+        flex-direction: row;
+        overflow-x: auto;
+    }
+
+    .setup-rail-step {
+        white-space: nowrap;
+    }
 }
 
 .setup-title {
     color: var(--text-primary);
     font-size: 22px;
     font-weight: 600;
+}
+
+.setup-close {
+    align-self: flex-start;
 }
 
 .setup-lede {
@@ -187,10 +608,29 @@
     min-width: 200px;
 }
 
+/* Drawn like the download bars: the done part in the accent, the rest a pale track. */
 .setup-progress {
-    width: 100%;
-    height: 6px;
-    accent-color: var(--accent-solid);
+    inline-size: 100%;
+    block-size: 6px;
+    appearance: none;
+    border: none;
+    border-radius: var(--radius-full);
+    overflow: hidden;
+    background: var(--bg-tertiary);
+}
+
+.setup-progress::-webkit-progress-bar {
+    background: var(--bg-tertiary);
+}
+
+.setup-progress::-webkit-progress-value {
+    border-radius: var(--radius-full);
+    background: var(--accent);
+}
+
+.setup-progress::-moz-progress-bar {
+    border-radius: var(--radius-full);
+    background: var(--accent);
 }
 
 .setup-log {
@@ -211,6 +651,10 @@
 
 .setup-log-toggle svg.is-open {
     transform: rotate(90deg);
+}
+
+[dir="rtl"] .setup-log-toggle svg:not(.is-open) {
+    transform: scaleX(-1);
 }
 
 .setup-log-pre {
@@ -286,4 +730,433 @@
 
 .setup-hint .spin {
     vertical-align: -2px;
+}
+
+.setup-done .start-card-part {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+}
+
+.setup-logs {
+    margin-top: 16px;
+}
+
+.setup-report {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    margin-top: 20px;
+}
+
+/* Doubled with .btn-secondary, whose nowrap would push the gloss out of the button. */
+.btn-secondary.setup-report-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-inline-size: 100%;
+    white-space: normal;
+    text-align: start;
+}
+
+.setup-report-button svg {
+    flex-shrink: 0;
+}
+
+.setup-report-button > span {
+    min-inline-size: 0;
+}
+
+.setup-stepnav {
+    margin-top: 20px;
+}
+
+/* What setup found: the facts that decide setup, where things are kept, then the rest. */
+.found {
+    display: grid;
+    gap: 14px;
+}
+
+.found-glance {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px 24px;
+    margin: 0;
+}
+
+.found-paths {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 20px;
+    padding-block-start: 12px;
+    border-block-start: 1px solid var(--border);
+}
+
+.found-open {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+}
+
+/* All details: three short groups, one item per row, label beside value. */
+.found-details {
+    display: grid;
+    gap: 6px;
+}
+
+.found-group {
+    margin: 8px 0 0;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.found-group:first-child {
+    margin-block-start: 0;
+}
+
+.found-list {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+}
+
+.found-list .found-row {
+    grid-template-columns: 9.5rem minmax(0, 1fr);
+    gap: 12px;
+    align-items: baseline;
+}
+
+.found-list .found-row dt {
+    font-size: 13px;
+}
+
+.found-sub {
+    display: block;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+/* A narrow window scrolls the table inside the card rather than widening it. */
+.found-table-wrap {
+    max-inline-size: 100%;
+    overflow-x: auto;
+}
+
+.found-table {
+    inline-size: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.found-table th,
+.found-table td {
+    padding: 3px 12px 3px 0;
+    text-align: start;
+    font-weight: 400;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+
+.found-table tbody th {
+    inline-size: 9.5rem;
+}
+
+.found-table td:last-child {
+    color: var(--text-secondary);
+}
+
+/* Words wrap; names, versions and sizes stay whole. */
+.found-table td:not(:has(bdi)) {
+    white-space: normal;
+}
+
+.found-table td.is-installed {
+    color: var(--accent-green);
+}
+
+@media (max-width: 520px) {
+    .found-list .found-row {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+    }
+
+    .found-table th,
+    .found-table td {
+        white-space: normal;
+    }
+}
+
+.found-row {
+    display: grid;
+    align-content: start;
+    gap: 2px;
+    min-inline-size: 0;
+}
+
+.found-row dt {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.found-row dd {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
+.found-glance dd {
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.found-muted {
+    color: var(--text-muted);
+    font-weight: 400;
+}
+
+.found-chip {
+    display: inline-block;
+    margin-inline-start: 6px;
+    padding: 0 6px;
+    border-radius: var(--radius-full);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    vertical-align: 1px;
+}
+
+.found-more {
+    justify-self: start;
+}
+
+.found-warnings {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--accent-yellow);
+    font-size: 13px;
+}
+
+/* Back and Next at the top of every step. */
+.setup-topnav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-block-end: 12px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+/* The language, at the end of the step bar on every screen. */
+.setup-language {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-inline-start: auto;
+    color: var(--text-secondary);
+}
+
+.setup-language select {
+    padding: 3px 6px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 12.5px;
+}
+
+/* Quiet arrows: no fill until hovered. */
+.setup-arrow {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: 26px;
+    block-size: 26px;
+    border-radius: var(--radius-full);
+    color: var(--text-secondary);
+    transition: background-color var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+
+.setup-arrow:hover:not(:disabled),
+.setup-arrow:focus-visible {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.setup-arrow:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+[dir="rtl"] .setup-arrow svg {
+    transform: scaleX(-1);
+}
+
+.setup-topnav .link-btn {
+    margin-inline-start: auto;
+}
+
+.found-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Quiet until wanted: no fill, muted, full strength on hover or focus. */
+.found-copy {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: 24px;
+    block-size: 24px;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    opacity: 0.7;
+    transition: opacity var(--duration-fast) var(--ease), background-color var(--duration-fast) var(--ease);
+}
+
+.found-copy:hover,
+.found-copy:focus-visible {
+    opacity: 1;
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.found-copied {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+/* Each step slides in from the side it comes from: forward from the end of the
+   line, back from its start, which right to left flips. */
+.setup-stage {
+    --step-from: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-inline-size: 0;
+    animation: setup-step-in var(--duration-slow) var(--ease) both;
+}
+
+.setup-stage.is-back {
+    --step-from: -24px;
+}
+
+[dir="rtl"] .setup-stage {
+    --step-from: -24px;
+}
+
+[dir="rtl"] .setup-stage.is-back {
+    --step-from: 24px;
+}
+
+@keyframes setup-step-in {
+    from {
+        opacity: 0;
+        transform: translateX(var(--step-from));
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.setup-rail-step {
+    transition: background-color var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .setup-stage {
+        animation: none;
+    }
+}
+
+/* A narrow window: a check's value goes under its label instead of squeezing it. */
+@media (max-width: 520px) {
+    .setup-result {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .setup-result:not(:has(> svg)) {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .setup-result > .setup-result-value {
+        grid-column: -2;
+        justify-self: start;
+        color: var(--text-muted);
+    }
+}
+
+/* Each download's own log, behind a quiet chevron at the end of its row. */
+.dl-log-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: 24px;
+    block-size: 24px;
+    margin-inline-start: 2px;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    transition: background-color var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+
+.dl-log-toggle:hover,
+.dl-log-toggle:focus-visible {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.dl-log-toggle svg {
+    transition: transform var(--duration-fast) var(--ease);
+}
+
+.dl-log-toggle svg.is-open {
+    transform: rotate(90deg);
+}
+
+[dir="rtl"] .dl-log-toggle svg:not(.is-open) {
+    transform: scaleX(-1);
+}
+
+.dl-log {
+    max-block-size: 180px;
+    margin: 6px 0 0;
+    padding: 8px 10px;
+    overflow: auto;
+    background: var(--bg-code);
+    color: var(--text-code);
+    border-radius: var(--radius-md);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* A check waiting on the user's answer: a question, in the accent, never a spinner. */
+.setup-result.is-question {
+    color: var(--text-primary);
+}
+
+.setup-result.is-question svg,
+.setup-result.is-question .setup-result-value {
+    color: var(--accent);
+}
+
+.found-link {
+    display: block;
+    margin-block-start: 2px;
+    font-size: 12px;
+    font-weight: 400;
 }

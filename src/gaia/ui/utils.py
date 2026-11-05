@@ -277,6 +277,7 @@ def message_to_response(msg: dict) -> MessageResponse:
         agent_steps=agent_steps,
         stats=stats,
         turn_summary=turn_summary,
+        stopped=bool(msg.get("stopped")),
     )
 
 
@@ -348,8 +349,7 @@ def sanitize_document_path(user_path: str) -> Path:
             ),
             "audio": (
                 {".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a", ".opus"},
-                "Audio files are not supported for indexing. "
-                "Tip: GAIA has a separate voice/talk mode — try `gaia talk` from the CLI.",
+                "Audio files are not supported for indexing.",
             ),
             "archive": (
                 {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".tgz"},
@@ -714,8 +714,7 @@ def ensure_document_path_allowed(raw: Path) -> str:
     denied = (
         f"GAIA can only read documents under "
         f"{_describe_roots(roots)}, and {raw} is outside them. Check the path "
-        f"is right. If it is, move or copy it under one of those folders, "
-        f"or add its folder to {DOCUMENT_ROOTS_ENV} and restart GAIA."
+        f"is right. If it is, move or copy it under one of those folders."
     )
     abs_raw = Path(os.path.abspath(str(raw)))
     if not any(abs_raw.is_relative_to(root) for root in roots):

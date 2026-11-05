@@ -140,6 +140,59 @@ func TestMissingCLIIsClassifiedSeparately(t *testing.T) {
 	}
 }
 
+// isolateCLIHome gives Binary an empty PATH and a fresh home, and returns the
+// installer's link folder in it.
+func isolateCLIHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("PATH", t.TempDir())
+	return filepath.Join(home, ".gaia", "bin")
+}
+
+// A terminal started before the installer edited the shell's startup file has
+// a PATH without ~/.gaia/bin, though the CLI is right there.
+func TestBinaryFindsTheInstallersLinkOffPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX executable bit")
+	}
+	dir := isolateCLIHome(t)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "gaia")
+	if err := os.WriteFile(want, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Binary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("Binary() = %q, want %q", got, want)
+	}
+}
+
+func TestBinaryWithNoCLIAnywhereIsErrNoCLI(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX executable bit")
+	}
+	dir := isolateCLIHome(t)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Not executable: a leftover file is not a CLI that can run setup.
+	if err := os.WriteFile(filepath.Join(dir, "gaia"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Binary(); !errors.Is(err, ErrNoCLI) {
+		t.Fatalf("Binary() error = %v, want ErrNoCLI", err)
+	}
+}
+
 // The TUI never loads the browser Agent UI, and that build step only runs in a
 // source checkout — where it failed on a missing type package and took the
 // whole run's exit code with it, AFTER Lemonade and both models had installed.
@@ -150,6 +203,9 @@ func TestRunArgsSkipTheBrowserUIBuild(t *testing.T) {
 		args := RunArgs(claude)
 		if !slices.Contains(args, "--skip-webui-build") {
 			t.Errorf("RunArgs(%v) = %v; missing --skip-webui-build", claude, args)
+		}
+		if !slices.Contains(args, "--skip-pip-extras") {
+			t.Errorf("RunArgs(%v) = %v; the TUI's setup must not pip-install", claude, args)
 		}
 	}
 }

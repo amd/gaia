@@ -267,6 +267,10 @@ def pytest_configure(config):  # noqa: D103 — pytest hook
         "embedded_start: let LemonadeManager.start_embedded_if_stopped run "
         "(its own dependencies must be mocked)",
     )
+    config.addinivalue_line(
+        "markers",
+        "npu_host_probe: let gaia.llm.npu_linux read this machine's NPU setup",
+    )
 
 
 _REAL_START_EMBEDDED = {}
@@ -363,6 +367,68 @@ _EMBEDDED_ACTIONS = (
     "unload_models",
     "uninstall",
 )
+
+
+_REAL_WHICH = shutil.which
+
+
+@pytest.fixture(autouse=True)
+def _no_npu_host_probe(request, monkeypatch):
+    """Judge an NPU in a ``/system-info`` payload by the payload alone.
+
+    On a Linux runner the real checks would read that machine's sysfs, which
+    has no NPU, and turn every test NPU into one that isn't set up. Opt a test
+    in with @pytest.mark.npu_host_probe.
+    """
+    from gaia.llm import npu_linux
+
+    npu_linux.forget()
+    if request.node.get_closest_marker("npu_host_probe"):
+        return
+    monkeypatch.setattr(npu_linux, "problems", lambda: [])
+
+
+@pytest.fixture(autouse=True)
+def _no_real_claude_login(monkeypatch):
+    """Hide the developer's real ``claude`` CLI and login from credential choice.
+
+    CI has no ``claude``, so by default no test sees one and no login. A test
+    that stubs ``shutil.which`` sees its stub; one that needs a login uses the
+    ``claude_login`` fixture.
+    """
+    from gaia.eval import claude_credential
+
+    monkeypatch.setattr(
+        claude_credential,
+        "_claude_bin",
+        lambda: None if shutil.which is _REAL_WHICH else shutil.which("claude"),
+    )
+    monkeypatch.setattr(
+        claude_credential,
+        "_auth_status",
+        lambda _bin, _env: {"loggedIn": False, "authMethod": "none"},
+    )
+    monkeypatch.setattr(claude_credential, "_login_cache", {})
+    monkeypatch.setattr(claude_credential, "_announced", set())
+
+
+@pytest.fixture
+def claude_login(monkeypatch):
+    """A ``claude`` CLI on PATH, logged in to a subscription."""
+    from gaia.eval import claude_credential
+
+    def which(name, *args, **kwargs):
+        if name == "claude":
+            return "/usr/bin/claude"
+        return _REAL_WHICH(name, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "which", which)
+    monkeypatch.setattr(
+        claude_credential,
+        "_auth_status",
+        lambda _bin, _env: {"loggedIn": True, "authMethod": "claude.ai"},
+    )
+    return "/usr/bin/claude"
 
 
 @pytest.fixture(scope="session", autouse=True)

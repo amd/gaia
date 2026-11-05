@@ -40,6 +40,7 @@ EXEMPT = {
     "src/gaia/agents/base/server.py": "serves /v1/chat/completions; makes no outbound call",
     "src/gaia/mcp/mcp_bridge.py": "documents GAIA's own API endpoint; no outbound AI call",
     "src/gaia/api/__init__.py": "the OpenAI client appears only in a docstring example",
+    "src/gaia/eval/claude_credential.py": "`claude auth status` reads local state only; no model call",
 }
 
 GUARD = re.compile(r"\blocal_only\b|_refuse_unless_local\(")

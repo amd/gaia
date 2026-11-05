@@ -2,78 +2,19 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Check, Info, Loader2 } from 'lucide-react';
+import { AlertTriangle, Check, Loader2 } from 'lucide-react';
 import { useT } from '../i18n/useT';
-import type { GpuMemoryStatus, PreflightReport, SetupPlan } from '../types';
-import { ChecklistLoading, ModelChecklist, SelectionSummary, tooBigText } from './setup/ModelChecklist';
+import type { GpuMemoryStatus, SetupPlan } from '../types';
+import { JobModels } from './setup/JobModels';
+import { ChecklistLoading, SelectionSummary, tooBigText } from './setup/ModelChecklist';
 import { formatSize } from './setup/format';
 import { Reveal } from './setup/Reveal';
+import { SetupFooter } from './setup/SetupFooter';
 import { gpuGbAtSetting, restartLine } from './setup/GpuMemoryPanel';
 import {
-    catalogOf, chooseChat, isEmbedding, isVision, pendingDownloads, shortfall, toggle, recommendedSelection,
+    catalogOf, isEmbedding, isVision, pendingDownloads, resolveVision, shortfall, recommendedSelection,
     type Selection,
 } from './setup/selection';
-
-/** One line of the system check: what was found, or that it is checked later. */
-function CheckRow({ label, value, ok }: { label: string; value: string; ok: boolean }) {
-    return (
-        <li className={`setup-check-row${ok ? ' is-ok' : ''}`}>
-            {ok ? <Check size={13} aria-hidden="true" /> : <Info size={13} aria-hidden="true" />}
-            <span className="setup-check-label">{label}</span>
-            <span className="setup-check-value">{value}</span>
-        </li>
-    );
-}
-
-/** Lemonade reports the devices, so before it runs they are not known yet. */
-export function deviceKnown(hw: PreflightReport): boolean {
-    return !!hw.gpu_name || !!hw.npu_detected || hw.lemonade_running;
-}
-
-function deviceText(hw: PreflightReport): { value: string; ok: boolean } {
-    const parts = [hw.gpu_name, hw.npu_detected ? 'Ryzen AI NPU' : null].filter(Boolean);
-    if (parts.length) return { value: parts.join(' · '), ok: true };
-    if (!deviceKnown(hw)) return { value: 'Checked once the model server is running', ok: false };
-    return { value: 'No GPU or NPU reported; models run on the CPU', ok: false };
-}
-
-/** Device, memory and disk, read the moment setup opens. */
-export function SystemCheck({ hardware, error }: { hardware: PreflightReport | null; error: string | null }) {
-    if (error) return <p className="setup-hint">This PC&rsquo;s hardware couldn&rsquo;t be read ({error}). Setup still checks it as it goes.</p>;
-    if (!hardware) {
-        return (
-            <p className="setup-hint" role="status">
-                <Loader2 size={13} className="spin" aria-hidden="true" /> Checking this PC…
-            </p>
-        );
-    }
-    const device = deviceText(hardware);
-    // Before a model server runs, the NPU can't be asked about yet; the Device row says so.
-    const warnings = hardware.lemonade_running
-        ? hardware.warnings
-        : hardware.warnings.filter((w) => !/\bNPU\b/.test(w));
-    return (
-        <>
-            <ul className="setup-check" aria-label="This PC">
-                <CheckRow label="Device" value={device.value} ok={device.ok} />
-                <CheckRow
-                    label="Memory"
-                    value={hardware.ram_gb != null ? `${hardware.ram_gb} GB` : 'Not reported'}
-                    ok={hardware.ram_gb != null}
-                />
-                <CheckRow
-                    label="Disk"
-                    value={hardware.disk_free_gb != null ? `${Math.round(hardware.disk_free_gb)} GB free` : 'Not reported'}
-                    ok={hardware.disk_free_gb != null && hardware.compatible}
-                />
-            </ul>
-            {!hardware.compatible && hardware.blockers.length > 0 && (
-                <p className="setup-error" role="alert">{hardware.blockers.join(' ')}</p>
-            )}
-            {warnings.length > 0 && <p className="setup-hint">{warnings.join(' ')}</p>}
-        </>
-    );
-}
 
 interface ModelsStepProps {
     plan: SetupPlan | null;
@@ -86,7 +27,6 @@ interface ModelsStepProps {
     cloud: boolean;
     keepTrying: boolean;
     onKeepTrying: (on: boolean) => void;
-    labelledBy: string;
     onBack: () => void;
     /** `acknowledgeLowDisk`: the user pressed Continue anyway past a disk shortfall. */
     onContinue: (acknowledgeLowDisk: boolean) => void;
@@ -100,7 +40,7 @@ interface ModelsStepProps {
  */
 export function ModelsStep({
     plan, planError, onRetryPlan, onUseRecommended, selection, onSelection, cloud, keepTrying, onKeepTrying,
-    labelledBy, onBack, onContinue, busy, error,
+    onBack, onContinue, busy, error,
 }: ModelsStepProps) {
     const t = useT();
     const listRef = useRef<HTMLDivElement>(null);
@@ -145,13 +85,13 @@ export function ModelsStep({
         return (
             <div className="setup-present" role="status">
                 <p><Check size={14} aria-hidden="true" /> {t('setup.models.allPresent')}</p>
-                <div className="setup-row">
+                <button type="button" className="link-btn" onClick={() => setChanging(true)}>{t('setup.models.change')}</button>
+                <SetupFooter>
                     <button type="button" className="btn-secondary" onClick={onBack} disabled={busy}>{t('setup.back')}</button>
                     <button type="button" className="btn-primary" onClick={() => onContinue(false)} disabled={busy}>
                         {busy && <Loader2 size={13} className="spin" aria-hidden="true" />} {t('setup.finish')}
                     </button>
-                    <button type="button" className="link-btn" onClick={() => setChanging(true)}>{t('setup.models.change')}</button>
-                </div>
+                </SetupFooter>
                 {error && <p className="setup-error" role="alert">{error}</p>}
             </div>
         );
@@ -159,16 +99,8 @@ export function ModelsStep({
 
     return (
         <div className="setup-models" ref={listRef}>
-            <p className="setup-hint">{cloud ? t('setup.models.cloudLede') : t('setup.models.lede')}</p>
-            <ModelChecklist
-                plan={plan}
-                selection={selection}
-                onToggle={(id, on) => onSelection(toggle(selection, catalog, id, on))}
-                onDefaultChat={(id) => onSelection(chooseChat(selection, catalog, id))}
-                labelledBy={labelledBy}
-                cloud={cloud}
-                disabled={busy}
-            />
+            <p className="setup-hint">{t('setup.job.lede')}</p>
+            <JobModels plan={plan} selection={selection} onSelection={onSelection} disabled={busy} />
             {!cloud && (
                 <button type="button" className="link-btn setup-reset" onClick={() => onSelection(recommendedSelection(plan))} disabled={busy}>
                     {t('setup.models.resetRecommended')}
@@ -185,7 +117,7 @@ export function ModelsStep({
                 </Reveal>
                 {big.length > 0 && <span className="visually-hidden">{big.map((e) => tooBigText(e, t)).join(' ')}</span>}
                 {error && <p className="setup-error" role="alert">{error}</p>}
-                <div className="setup-row setup-nav">
+                <SetupFooter>
                     <button type="button" className="btn-secondary" onClick={onBack} disabled={busy}>{t('setup.back')}</button>
                     <button
                         type="button"
@@ -196,7 +128,7 @@ export function ModelsStep({
                     >
                         {busy && <Loader2 size={13} className="spin" aria-hidden="true" />} {continueLabel}
                     </button>
-                </div>
+                </SetupFooter>
             </div>
         </div>
     );
@@ -214,7 +146,8 @@ export function ReadySummary({ plan, chatModel, gpu }: ReadyProps) {
     if (!plan?.catalog) return null;
     const catalog = plan.catalog;
     const name = (id: string | null) => (id ? catalog.find((e) => e.id === id)?.name ?? id : null);
-    const vision = catalog.find((e) => isVision(e) && e.gaia_model);
+    const visionId = resolveVision(catalog, { ticked: new Set(), unticked: new Set(), chatChosen: false, defaultChat: chatModel, vision: plan.vision_model ?? null });
+    const vision = catalog.find((e) => e.id === visionId) ?? catalog.find((e) => isVision(e) && e.gaia_model);
     const docs = catalog.find((e) => isEmbedding(e) && e.downloaded);
     const skipped = catalog.filter((e) => e.gaia_model && e.planned && e.skipped);
     const pending = gpu?.pending;

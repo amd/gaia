@@ -43,7 +43,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 from gaia.daemon.constants import (
     DAEMON_SUPERVISION_ENABLED_VALUE,
@@ -282,6 +282,8 @@ class AgentSidecarManager:
         # deletes. Per spawn: a reap revokes it, and this manager may start again.
         self.mint_keychain_secret: Optional[Callable[[], str]] = None
         self._keychain_secret_path: Optional[Path] = None
+        # LEMONADE_BASE_URL and GAIA_LEMONADE_EMBEDDED as the sidecar got them.
+        self._spawned_lemonade: Tuple[Optional[str], Optional[str]] = (None, None)
 
     @property
     def mode(self) -> str:
@@ -292,6 +294,13 @@ class AgentSidecarManager:
                 f"{_VALID_MODES}. There is no fallback — set it explicitly."
             )
         return m
+
+    @property
+    def uses_ignored_lemonade(self) -> bool:
+        """It was spawned with a ``LEMONADE_BASE_URL`` GAIA now ignores."""
+        from gaia.llm.lemonade_choice import is_ignored_env_value
+
+        return is_ignored_env_value(*self._spawned_lemonade)
 
     @property
     def is_running(self) -> bool:
@@ -525,7 +534,15 @@ class AgentSidecarManager:
         # them. Delivery leg (0600 file vs deprecated bare env) is negotiated
         # pre-spawn (#2149), before the log opens so a refusal leaks nothing.
         # Not child_env(): a sidecar is GAIA itself and must receive its credentials.
-        spawn_env = {**os.environ, **(popen_kwargs.pop("env", None) or {})}
+        from gaia.llm.lemonade_choice import child_lemonade_env
+
+        spawn_env = child_lemonade_env(
+            {**os.environ, **(popen_kwargs.pop("env", None) or {})}
+        )
+        self._spawned_lemonade = (
+            spawn_env.get("LEMONADE_BASE_URL"),
+            spawn_env.get("GAIA_LEMONADE_EMBEDDED"),
+        )
         self._apply_secret_delivery(spawn_env)
         # OAuth forward-out (#2154): when the spec declares a forwarded-mode
         # channel, boot the sidecar reading DAEMON-forwarded access tokens

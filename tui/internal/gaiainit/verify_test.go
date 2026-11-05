@@ -68,7 +68,7 @@ func TestDescribeNamesEachPhase(t *testing.T) {
 		text  string
 	}{
 		{"Step 1/5: Starting Lemonade Server...", PhaseServer, "Starting the local model server"},
-		{"   Downloading Lemonade Server v2026.44.1...", PhaseServer, "Downloading the local model server"},
+		{"   Downloading Lemonade Server v2026.45.3...", PhaseServer, "Downloading the local model server"},
 		{"Step 2/5: Downloading models for 'gaia' profile...", PhaseModels, "Downloading the models"},
 		{"   Downloading: user.embeddinggemma-300m-GGUF", PhaseModels, "Downloading user.embeddinggemma-300m-GGUF"},
 		{"Step 5/5: Verifying setup...", PhaseFinish, "Checking that the models load"},
@@ -102,5 +102,55 @@ func TestTheScannerDeliversEachProgressRedraw(t *testing.T) {
 	want := []string{"[==--] 10% (1 MB/5 MB)", "[====] 100% (5 MB/5 MB)", "✓ Installed"}
 	if !slices.Equal(got, want) {
 		t.Errorf("lines = %q, want %q", got, want)
+	}
+}
+
+func TestAgentOnlyWhenEveryModelIsAlreadyDownloaded(t *testing.T) {
+	const models = `"models": [{"id": "e", "role": "embedding", "downloaded": %s},` +
+		` {"id": "c", "role": "chat", "downloaded": true}]`
+	cases := []struct {
+		name, json string
+		want       bool
+	}{
+		{"agent only", `{"ready": false, "stage": "setup", "agent_missing": true, ` +
+			strings.Replace(models, "%s", "true", 1) + `}`, true},
+		{"a model is missing too", `{"ready": false, "stage": "setup", "agent_missing": true, ` +
+			strings.Replace(models, "%s", "false", 1) + `}`, false},
+		{"older gaia says nothing about the agent", `{"ready": false, "stage": "setup", ` +
+			strings.Replace(models, "%s", "true", 1) + `}`, false},
+		{"no models described", `{"ready": false, "stage": "setup", "agent_missing": true, "models": []}`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st, err := parseStatus(tc.json)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := st.AgentOnly(); got != tc.want {
+				t.Errorf("AgentOnly() = %v, want %v for %+v", got, tc.want, st)
+			}
+		})
+	}
+}
+
+func TestParseStatusKeepsWarnings(t *testing.T) {
+	st, err := parseStatus(`{"ready": true, "stage": null, "reasons": [], "models": [], ` +
+		`"agent_missing": false, "warnings": ["No GAIA agent build for this PC (linux-arm64) yet"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Ready || st.AgentMissing || len(st.Warnings) != 1 {
+		t.Errorf("status = %+v", st)
+	}
+}
+
+func TestParseStatusReadsNoAgentBuildAndSplitsTheAgentReason(t *testing.T) {
+	st, err := parseStatus(`{"ready": true, "no_agent_build": true, "warnings": ["w"]}`)
+	if err != nil || !st.NoAgentBuild {
+		t.Fatalf("status = %+v err = %v", st, err)
+	}
+	st = Status{Reasons: []string{"No local chat model: x is skipped", AgentReasonPrefix + " -- run: gaia init"}}
+	if got := st.OtherReasons(); len(got) != 1 || got[0] != "No local chat model: x is skipped" {
+		t.Errorf("OtherReasons() = %v", got)
 	}
 }

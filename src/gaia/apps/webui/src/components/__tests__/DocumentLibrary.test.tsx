@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DocumentLibrary } from '../DocumentLibrary';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import type { Document } from '../../types';
+import { stripIsolates } from '../../i18n/registry';
+import { ARABIC_MONTH, ENGLISH_MONTH, resetUiLocale, setUiLocale } from '../../test/dates';
 
 vi.mock('../../services/api');
 
@@ -63,6 +65,26 @@ it('closes on Escape', async () => {
     fireEvent.keyDown(document, { key: 'Escape' });
 
     expect(useChatStore.getState().showDocLibrary).toBe(false);
+});
+
+/** A focused button outside the dialog, standing in for the control that opened it. */
+function focusTrigger(): HTMLButtonElement {
+    const trigger = document.createElement('button');
+    trigger.textContent = 'Open';
+    document.body.appendChild(trigger);
+    trigger.focus();
+    return trigger;
+}
+
+it('takes focus when it opens and gives it back when it closes', async () => {
+    const trigger = focusTrigger();
+    const { unmount } = render(<DocumentLibrary />);
+    await screen.findByText('broken.pdf');
+
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+    unmount();
+    expect(trigger).toHaveFocus();
+    trigger.remove();
 });
 
 describe('DocumentLibrary with no chat open', () => {
@@ -186,7 +208,7 @@ describe('DocumentLibrary says where documents go', () => {
 
     it('explains a file outside the readable folders without asking for a bug report', async () => {
         mockedApi.uploadDocumentByPath.mockRejectedValue(Object.assign(
-            new Error('GAIA can only read documents under C:\\Users\\u. Move or copy the file there, or add its folder to GAIA_DOCUMENT_ROOTS and restart GAIA.'),
+            new Error('GAIA can only read documents under C:\\Users\\u. Move or copy the file there.'),
             { httpStatus: 403 },
         ));
         render(<DocumentLibrary />);
@@ -448,5 +470,26 @@ describe('DocumentLibrary chunk counts', () => {
 
         expect(screen.getByText('5 chunks')).toBeTruthy();
         expect(screen.getByText(/· 5 chunks$/)).toBeTruthy();
+    });
+});
+
+describe('DocumentLibrary dates follow the interface language', () => {
+    afterEach(resetUiLocale);
+
+    it('shows when an older document was indexed in Arabic, inline and in the tooltip', async () => {
+        setUiLocale('ar');
+        mockedApi.listDocuments.mockResolvedValue({
+            documents: [{ ...COMPLETE_DOC, indexed_at: '2025-03-14T10:00:00Z' }],
+            total: 1,
+            total_size_bytes: 2048,
+            total_chunks: 5,
+        });
+        const { container } = render(<DocumentLibrary />);
+        await screen.findByText('good.pdf');
+        const stamp = container.querySelector('.doc-timestamp')!;
+        for (const text of [stamp.textContent ?? '', stamp.getAttribute('title') ?? '']) {
+            expect(stripIsolates(text)).toMatch(ARABIC_MONTH);
+            expect(stripIsolates(text)).not.toMatch(ENGLISH_MONTH);
+        }
     });
 });

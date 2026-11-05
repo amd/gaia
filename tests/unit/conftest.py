@@ -121,6 +121,14 @@ def _forget_crashed_loads(monkeypatch):
     monkeypatch.setattr(lemonade_client, "_CRASHED_LOADS", {})
 
 
+@pytest.fixture(autouse=True)
+def _forget_engine_start_failure(monkeypatch):
+    """A failed start one test staged must not fail the next test's model call."""
+    from gaia.llm import lemonade_client
+
+    monkeypatch.setattr(lemonade_client, "_ENGINE_START_FAILURE", None)
+
+
 #: The home this run started with; a test that moves it keeps ``<its home>/.gaia``.
 _RUN_HOME = Path.home()
 
@@ -182,6 +190,24 @@ def _isolate_daemon_home(tmp_path_factory):
     """
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_DAEMON_HOME", str(tmp_path_factory.mktemp("daemon-home")))
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_real_agent_turn():
+    """Stop setup's test turn starting a daemon and the assistant's program.
+
+    Session-wide because a setup run's thread can outlive its test, past any
+    per-test mock. Tests of the turn itself call ``.real``.
+    """
+    from gaia.ui import setup_runner
+
+    def no_agent_turn(model_id=None):
+        return None
+
+    no_agent_turn.real = setup_runner._agent_turn_problem
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(setup_runner, "_agent_turn_problem", no_agent_turn)
         yield
 
 

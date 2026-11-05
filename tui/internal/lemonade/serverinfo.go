@@ -84,7 +84,7 @@ func describeEntry(e loadedEntry, defaultBackend string) *LoadedModel {
 		m.Backend = "remote"
 		return m
 	}
-	// Any field may be absent or of an unexpected type on an older Lemonade.
+	// Which options are present depends on the recipe.
 	var opts struct {
 		CtxSize json.Number `json:"ctx_size"`
 		Backend any         `json:"llamacpp_backend"`

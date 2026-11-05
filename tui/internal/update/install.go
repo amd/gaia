@@ -205,7 +205,37 @@ func installerAsset(r Release, kind Kind) (Asset, error) {
 			return a, nil
 		}
 	}
-	return Asset{}, fmt.Errorf("GAIA %s has no %s installer for this machine — pick another release at %s", r.Tag, kind, ReleasesPage)
+	// Releases before the installers existed (v0.25.3 and older) publish none.
+	if _, ok := r.Asset(installerSums); !ok {
+		return Asset{}, fmt.Errorf("GAIA %s came out before GAIA had a %s installer, so this install can't switch to it — pick a newer release at %s", r.Tag, kind.label(), ReleasesPage)
+	}
+	return Asset{}, fmt.Errorf("GAIA %s has no %s installer for this machine — pick another release at %s", r.Tag, kind.label(), ReleasesPage)
+}
+
+// label names kind the way a person would.
+func (k Kind) label() string {
+	switch k {
+	case KindWindowsSetup:
+		return "Windows setup"
+	case KindMacPkg:
+		return "macOS package"
+	case KindDeb:
+		return ".deb package"
+	case KindRpm:
+		return ".rpm package"
+	}
+	return string(k)
+}
+
+// installFile is the file installing r on this machine needs from the release.
+func installFile(r Release, kind Kind) (Asset, error) {
+	if kind != "" && kind != KindScript {
+		return installerAsset(r, kind)
+	}
+	if a, ok := r.Asset(tuiBinary()); ok {
+		return a, nil
+	}
+	return Asset{}, fmt.Errorf("GAIA %s has no %s for this machine — pick another release at %s", r.Tag, tuiBinary(), ReleasesPage)
 }
 
 // NewPlan checks that tag can be installed here, before the TUI exits for it.
@@ -214,15 +244,42 @@ func NewPlan(r Release, pin bool) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	if kind != KindScript {
-		if _, err := installerAsset(r, kind); err != nil {
-			return Plan{}, err
-		}
-		if _, ok := r.Asset(installerSums); !ok {
-			return Plan{}, fmt.Errorf("GAIA %s publishes no %s, so its installer cannot be verified — pick another release at %s", r.Tag, installerSums, ReleasesPage)
-		}
+	if _, err := installFile(r, kind); err != nil {
+		return Plan{}, err
+	}
+	sums := installerSums
+	if kind == KindScript {
+		sums = tuiSums
+	}
+	if _, ok := r.Asset(sums); !ok {
+		return Plan{}, fmt.Errorf("GAIA %s publishes no %s, so it cannot be verified — pick another release at %s", r.Tag, sums, ReleasesPage)
 	}
 	return Plan{Tag: r.Tag, Kind: kind, Release: r, Pin: pin}, nil
+}
+
+// PlanTag plans an exact-version install, which stays pinned, once its file is
+// known to be up: failing here keeps GAIA open instead of closing it for nothing.
+func PlanTag(ctx context.Context, tag string) (Plan, error) {
+	r, err := GetRelease(ctx, tag)
+	if err != nil {
+		return Plan{}, err
+	}
+	p, err := NewPlan(r, true)
+	if err != nil {
+		return Plan{}, err
+	}
+	file, err := installFile(r, p.Kind)
+	if err != nil {
+		return Plan{}, err
+	}
+	up, err := uploaded(ctx, file)
+	if err != nil {
+		return Plan{}, err
+	}
+	if !up {
+		return Plan{}, fmt.Errorf("GAIA %s is still publishing: %s is not up yet — try again in a few minutes, or pick another release at %s", tag, file.Name, ReleasesPage)
+	}
+	return p, nil
 }
 
 var (
@@ -272,22 +329,73 @@ func RunPending(ctx context.Context, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("GAIA %s was not installed: %w", p.Tag, err)
 	}
-	if p.Kind == KindWindowsSetup {
-		// The setup is still open, so whether it finishes is unknown here;
-		// pinning now would pause updates for a version that may never land.
-		if p.Pin {
-			fmt.Fprintln(stdout, "Not pinned: if you keep GAIA "+p.Tag+", run /update auto off so it stays put.")
+	result := Awaiting{Tag: p.Tag, Pin: p.Pin}
+	// Going back is not an update to undo.
+	if Newer(p.Tag, Current) {
+		result.Previous = TagFor(Current)
+	}
+	// These installers hand off to a window whose outcome only the next launch
+	// knows; applying the pin now would pause updates for what may never land.
+	if p.Kind == KindWindowsSetup || p.Kind == KindMacPkg {
+		if err := writeKey(awaitingKey, result); err != nil {
+			return fmt.Errorf("GAIA %s is installing, but its settings were not saved: %w", p.Tag, err)
 		}
 		return nil
 	}
-	pin := ""
-	if p.Pin {
-		pin = p.Tag
+	if err := land(result); err != nil {
+		return fmt.Errorf("GAIA %s installed, but its settings were not saved: %w", p.Tag, err)
 	}
-	// An unpinned install (/update now) also drops an older pin, or later
-	// checks would say updates are paused for a version no longer running.
-	if err := SetPin(pin); err != nil {
-		return fmt.Errorf("GAIA %s installed, but the pin setting was not saved: %w", p.Tag, err)
+	return nil
+}
+
+// scriptCommand downloads the one-line installer into dir and returns the
+// command that runs it pinned to tag.
+func scriptCommand(ctx context.Context, dir, tag string) (*exec.Cmd, error) {
+	var cmd *exec.Cmd
+	if goos == "windows" {
+		script := filepath.Join(dir, "install.ps1")
+		if err := download(ctx, installPS1URL, script); err != nil {
+			return nil, err
+		}
+		cmd = exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script)
+	} else {
+		script := filepath.Join(dir, "install.sh")
+		if err := download(ctx, installSHURL, script); err != nil {
+			return nil, err
+		}
+		cmd = exec.CommandContext(ctx, "sh", script)
+	}
+	cmd.Env = append(os.Environ(), "GAIA_RELEASE_TAG="+tag)
+	return cmd, nil
+}
+
+// CanInstallCLI reports whether InstallCLI works on this OS: install.ps1 has
+// no CLI-only mode.
+func CanInstallCLI() bool { return goos != "windows" }
+
+// InstallCLI installs the `gaia` Python CLI from this build's release, for an
+// install whose package (.pkg, .deb, .rpm) carries only the binaries. It runs
+// the one-line installer in its CLI-only mode and writes its output to out.
+func InstallCLI(ctx context.Context, out io.Writer) error {
+	if !CanInstallCLI() {
+		return fmt.Errorf("the GAIA command line can't be installed on its own on %s", goos)
+	}
+	if IsDevBuild() {
+		return fmt.Errorf("this is an unreleased build of GAIA (%s), so there is no release to take the command line from", Current)
+	}
+	dir, err := os.MkdirTemp("", "gaia-cli-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	cmd, err := scriptCommand(ctx, dir, TagFor(Current))
+	if err != nil {
+		return err
+	}
+	cmd.Env = append(cmd.Env, "GAIA_CLI_ONLY=1")
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("the installer stopped (%w)", err)
 	}
 	return nil
 }
@@ -300,21 +408,10 @@ func runScript(ctx context.Context, tag string, stdout, stderr io.Writer) error 
 	}
 	defer os.RemoveAll(dir)
 
-	var cmd *exec.Cmd
-	if goos == "windows" {
-		script := filepath.Join(dir, "install.ps1")
-		if err := download(ctx, installPS1URL, script); err != nil {
-			return err
-		}
-		cmd = exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script)
-	} else {
-		script := filepath.Join(dir, "install.sh")
-		if err := download(ctx, installSHURL, script); err != nil {
-			return err
-		}
-		cmd = exec.CommandContext(ctx, "sh", script)
+	cmd, err := scriptCommand(ctx, dir, tag)
+	if err != nil {
+		return err
 	}
-	cmd.Env = append(os.Environ(), "GAIA_RELEASE_TAG="+tag)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, stdout, stderr
 
 	// Windows will not overwrite a running .exe but will rename one, so move

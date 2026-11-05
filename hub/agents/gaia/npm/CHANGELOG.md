@@ -14,6 +14,66 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   the daemon starts the sidecar, the daemon now reads saved keys for it. A sidecar
   started without the daemon still reads the keychain itself. Requires a daemon
   and agent from this release or later.
+- **"Every section that mentions X" no longer reads the whole document.**
+  Listing the one section of a 37 KB manual that names a code took ~18 min on
+  the NPU, because extraction sent all 10 pages through the model twice.
+  `extract_document_items` now takes `terms`: only pages containing one of
+  them reach the model, so that question makes 2 model calls instead of 20,
+  and the inventory says which words it screened by.
+- **A long document extraction says which page it is on and when the model
+  server restarts.** It ran for minutes with no live status, and a server
+  that stopped under it showed nothing until the extraction resumed. It now
+  sends phase `reading` before each page ("Reading page 4 of 12…"), and a
+  server that stops under any tool's own model calls gets the same
+  `model_restart` status as one that stops mid-reply.
+- **The first message on the NPU model no longer waits out the warm-up.**
+  After a restart, the first "hello" on `gemma4-it-e4b-FLM` waited ~30 s while
+  the sidecar read its ~19K-token prompt, then spent another ~35 s reading it
+  again, because FastFlowLM reuses a prompt only when the next request
+  continues it. On an NPU model the warm-up now only loads the model, so that
+  first answer starts ~30 s sooner.
+- **A reply cut off by a model-server restart is taken back, not swapped.**
+  When GAIA's model server stopped part-way through a reply, the stream sat
+  on the half-written text for minutes, then a different reply silently
+  replaced it. A `status` with phase `answer_restart` and
+  `retracts_answer: true` now tells the client to drop the cut-off text, phase
+  `model_restart` is the live line while the daemon restarts the server, and
+  a server that does not come back ends the turn with
+  `failure: "model_server_down"`.
+- **A stopped local model server fails the turn at once and is named.** A cloud
+  model's turn used to retry for about three minutes and then blame the cloud
+  provider, though the provider was never reached. A refused connection to the
+  local server now ends the turn within seconds, the answer names that server,
+  and `final` carries `failure: "model_server_down"` so a front-end can offer to
+  start it (SPEC §5.1).
+- **The query stream documents the `reconnecting` status phase.** It is sent
+  once while GAIA's own Lemonade Server restarts mid-turn or mid-`/model`
+  switch, so integrators can show a live reconnecting line instead of treating
+  it as an unknown phase.
+- **Images are not read while chat runs on the NPU.** The NPU model doesn't
+  read images, and loading Gemma next to it would mean a 6 GB download, so
+  `analyze_image` and `answer_question_about_image` answer with why they
+  can't read the image and how to switch to the GPU.
+- **Images are read by the model setup chose, not always Gemma.** The image
+  tools loaded Gemma 4 E4B by name, so a PC running Qwen3.6, which reads images
+  itself, was asked to download Gemma on its first image question. They now use
+  `vision_model` from setup, else the chat model when it reads images, else
+  Gemma, the same rule document scans use. Requires the `gaia` Python CLI with
+  `resolve_default_vision_model` (the release that ships first-run setup in the
+  Agent UI).
+- **Reading text aloud no longer downloads a voice model mid-chat.**
+  `text_to_speech` used to pull Kokoro on first use; it now stops and asks you
+  to run `gaia download --agent talk` first. It also takes a `speed` (0.5-2.0),
+  defaults to the `af_bella` voice, writes only `.wav` files, and reads long
+  text in sentence-sized pieces joined into one file.
+- **Needs Lemonade Server 2026.44.1 or newer.** `GET /v1/gaia/init` reports
+  `min_version: "2026.44.1"` (was `10.2.0`) and answers not-ready on anything
+  older. Its `hint` no longer tells you to run `gaia init --force-reinstall`:
+  GAIA upgrades its own Lemonade when its daemon next starts it (`gaia daemon
+  restart` does that now), and a Lemonade you
+  run yourself is pointed at https://lemonade-server.ai. This hint needs the
+  `gaia` CLI from the same release; the release that ships it raises the
+  `amd-gaia` floor.
 - **A project's `.env` can only supply the Claude API key.** The sidecar reads
   `ANTHROPIC_API_KEY` from a `.env` in its working directory, for its own
   Claude calls, and ignores every other name there with one warning. Settings
@@ -86,6 +146,65 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **Reasoning no longer shows as the answer when a model sends only `</think>`.**
+  A model whose chat template opens the reasoning block streamed that reasoning
+  as answer text, and the step-limit answer, memory and skill learning read it
+  as part of the reply. The `reasoning` event that follows the tag now carries
+  `retracts_answer: true`; a client drops the `token` text since the last
+  `tool_call` from the answer it has shown.
+- **Text read aloud plays in the Agent UI chat.** `text_to_speech` saved speech
+  to `~/.gaia/tts`, outside the folder the chat plays audio from, so you got a
+  file path instead of a player. Speech with no `output_path` is now saved with
+  generated music and sound effects, under the GAIA home's
+  `cache/audio/generations`, and plays inline (#6500).
+- **Document Q&A says why it couldn't start.** Any startup failure, such as
+  an unwritable cache folder or a bad embedder setting, was reported as "RAG not
+  installed" and never retried for the session. Only a missing `[rag]` extra
+  now says to install it; any other failure names its cause and is tried again
+  on the next document request. `list_indexed_documents` returns an error when
+  document Q&A is down, like the other document tools, instead of an empty list.
+- **A cloud chat no longer waits for the local model's start-up warm-up.**
+  After a restart, the first message in a Fireworks chat sat for ~47 s while
+  the sidecar read its prompt into the local default model. A turn on any other
+  model now stops that warm-up, so it neither delays the turn nor loads its
+  model over the one the turn uses; a turn on the warmed model still waits for
+  it and reuses its cache (#6582).
+- **The start-up warm-up loads the model you picked, not the setup default.**
+  After a restart, a chat on the NPU model waited ~50 s: the sidecar warmed the
+  GPU model setup chose, which evicted the NPU model, and the turn then evicted
+  it back at a smaller window. The warm-up now follows `last_model` (else
+  `default_model`), loads only inside the step a turn on another model can stop,
+  and, like the Agent UI, skips on a PC under 24 GB of memory.
+- **The SPEC names `GAIA_ALLOWED_PATHS` and the 150-step default.** Reading
+  only the SPEC, an integrator could not see that a bad allowlist entry stops
+  the sidecar at startup, or that an omitted `/query` `max_steps` runs 150
+  steps (`FLAGSHIP_MAX_STEPS`; the body or `GAIA_AGENT_MAX_STEPS` still wins).
+- **"Forget everything" works on Gemma 4 E4B.** The model ran no tool and told
+  the user GAIA had no delete-all, because the only forget rule it read
+  deleted one memory at a time. It now calls `forget_everything` for "forget
+  everything about me" or "delete all my data", keeps per-item `forget` for one
+  topic, and never claims GAIA can't do what one of its tools does (#6701).
+- **"Forget everything" forgets everything.** It deleted each memory a plain
+  `recall` listed, but that listing holds back sensitive ones, so a saved PIN
+  survived while the agent said memory was empty. The next session then rebuilt
+  the whole profile, a trip the user had asked it to forget included, from past
+  conversations. The new `forget_everything` tool erases all memory and the
+  stored conversations, after the user approves it. Other open chats stop
+  using what it erased from their next message, and a turn or background
+  summary still running when it ran can't write it back. Skills GAIA learned for doing
+  tasks are kept, as they are by the Memory page's **Delete all memories**;
+  `gaia skill deltas <skill> --reset` undoes what it learned about a skill. A
+  plain `recall` now says
+  how many sensitive entries it held back, and `search_past_conversations`
+  leaves out turns that mention something forgotten after they were said.
+- **Deleting a chat removes it from Memory.** The agent filed each Agent UI
+  chat's turns and tool calls under a random id, so a deleted chat stayed
+  readable in full under Memory > Advanced > Conversation history. It now
+  files them under the chat's id, and deleting the chat deletes them; what
+  GAIA learned about you stays under About you, and the Agent UI's delete
+  confirmation says so. A turn
+  still finishing when its chat is deleted files nothing, and skill learning
+  keeps reading work done in a chat after it was first learned from (#5931).
 - **Skill messages give commands that work and say what really happens.**
   Installing a skill the agent already bundles now says the bundled copy is
   the one that loads, instead of telling the model to load the install. The

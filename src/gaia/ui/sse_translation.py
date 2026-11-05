@@ -16,10 +16,12 @@ This module is the reusable translation layer (spec §6): a **total,
 source-exhaustive** mapping from the handler's vocabulary onto the canonical
 event types —
 
-    status | token | tool_call | tool_result | needs_confirmation
+    status | token | reasoning | tool_call | tool_result | needs_confirmation
           | needs_input | final | error
 
-— terminated by exactly one ``final`` or ``error``. It is dependency-light (this
+The optional ``reasoning`` event is emitted only when requested by a
+contract-compatible caller; otherwise thinking folds to ``status``. The stream is
+terminated by exactly one ``final`` or ``error``. It is dependency-light (this
 module plus the stdlib-only :mod:`gaia.ui.event_narration`) so it unit-tests
 without Lemonade, a mailbox, or a live agent, and so the OpenAPI export stays
 cheap.
@@ -118,6 +120,8 @@ SUMMARY_VIEW_KEYS = (
     "file_path",
     "image_path",
     "audio_path",
+    # How many chunks ``index_document`` stored, for the Document library.
+    "num_chunks",
     # A ``search_web`` result's hits, so a relayed turn can cite them.
     "sources",
 )
@@ -367,7 +371,12 @@ class CanonicalTranslator:
         message = str(event.get("message", ""))
         if event.get("channel") == DEBUG_CHANNEL:
             return self._debug_status(message)
-        out = self._user_status(message)
+        if event.get("retracts_answer"):
+            # Never deduplicated: each one takes back the text since the last.
+            self._last_status = message
+            out = [{"type": "status", "message": message, "retracts_answer": True}]
+        else:
+            out = self._user_status(message)
         phase = event.get("phase")
         if out and isinstance(phase, str) and phase:
             out[0]["phase"] = phase
@@ -391,7 +400,12 @@ class CanonicalTranslator:
         if self._reasoning:
             # Pieces carry their own spacing, so they go out as they came.
             delta = str(event.get("content", ""))
-            return [{"type": "reasoning", "delta": delta}] if delta else []
+            if not delta:
+                return []
+            out: Dict[str, Any] = {"type": "reasoning", "delta": delta}
+            if event.get("retracts_answer"):
+                out["retracts_answer"] = True
+            return [out]
         # Reasoning narration folds to status, NOT token (token is answer text the
         # UI commits to the message). See spec §6.2 / Q1.
         content = str(event.get("content", "")).strip()
@@ -492,6 +506,8 @@ class CanonicalTranslator:
         if event.get("failed"):
             # The answer explains a turn a model failure ended; not a result.
             final["failed"] = True
+            if isinstance(event.get("failure"), str):
+                final["failure"] = event["failure"]
         return [final]
 
     def _on_agent_error(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:

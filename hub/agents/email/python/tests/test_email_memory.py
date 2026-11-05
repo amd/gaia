@@ -67,7 +67,14 @@ class _MinimalCalendarBackend:
 # ---------------------------------------------------------------------------
 
 _MEMORY_TOOL_NAMES = frozenset(
-    {"remember", "recall", "update_memory", "forget", "search_past_conversations"}
+    {
+        "remember",
+        "recall",
+        "update_memory",
+        "forget",
+        "forget_everything",
+        "search_past_conversations",
+    }
 )
 
 EMBEDDING_DIM = 768
@@ -180,7 +187,7 @@ class TestMemoryToolsRegistered:
             registered = set(_TOOL_REGISTRY.keys())
             # Spot-check an email-specific tool
             assert "list_inbox" in registered, "email tool list_inbox missing"
-            # And all 5 memory tools
+            # And all 6 memory tools
             assert _MEMORY_TOOL_NAMES.issubset(registered), (
                 f"Memory tools not a subset of registry. Missing: "
                 f"{_MEMORY_TOOL_NAMES - registered}"
@@ -628,13 +635,11 @@ class TestMemoryDegradedStateNotice:
         monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
         model_not_found = RuntimeError(
             "Embedding failed: Error generating embeddings: Request failed "
-            "with status 404: {\"error\":{\"code\":\"model_not_found\","
-            "\"message\":\"Model 'user.embeddinggemma-300m-GGUF' was not "
+            'with status 404: {"error":{"code":"model_not_found",'
+            '"message":"Model \'user.embeddinggemma-300m-GGUF\' was not '
             'found."}}'
         )
-        with patch(
-            "gaia.agents.base.console.AgentConsole.print_warning"
-        ) as mock_warn:
+        with patch("gaia.agents.base.console.AgentConsole.print_warning") as mock_warn:
             agent = _build_agent_with_failing_embedder(tmp_path, model_not_found)
         try:
             # (1) surfaced where the user is — not just logged.
@@ -654,9 +659,7 @@ class TestMemoryDegradedStateNotice:
         finally:
             agent.close_db()
 
-    def test_service_unreachable_produces_different_notice(
-        self, tmp_path, monkeypatch
-    ):
+    def test_service_unreachable_produces_different_notice(self, tmp_path, monkeypatch):
         """A genuinely unreachable Lemonade produces a DIFFERENT message than
         the model-not-pulled case — the remedies aren't interchangeable."""
         monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
@@ -669,9 +672,7 @@ class TestMemoryDegradedStateNotice:
             "Embedding failed: Error generating embeddings: "
             "Connection refused (localhost:13305)"
         )
-        with patch(
-            "gaia.agents.base.console.AgentConsole.print_warning"
-        ) as mock_warn:
+        with patch("gaia.agents.base.console.AgentConsole.print_warning") as mock_warn:
             agent = _build_agent_with_failing_embedder(tmp_path, connection_refused)
         try:
             mock_warn.assert_called_once()
@@ -690,9 +691,7 @@ class TestMemoryDegradedStateNotice:
 
     def test_available_embedder_emits_no_notice(self, tmp_path):
         """When the embedder is reachable, no degraded-state notice fires."""
-        with patch(
-            "gaia.agents.base.console.AgentConsole.print_warning"
-        ) as mock_warn:
+        with patch("gaia.agents.base.console.AgentConsole.print_warning") as mock_warn:
             agent = _build_agent(tmp_path)
         try:
             mock_warn.assert_not_called()

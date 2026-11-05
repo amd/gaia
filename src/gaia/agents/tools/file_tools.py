@@ -33,6 +33,7 @@ from gaia.agents.tools.document_text import (
     with_small_limit_warning,
 )
 from gaia.agents.tools.file_edit import (
+    after_excerpt,
     apply_unique_replacement,
     file_read_record,
     read_first_preflight,
@@ -1912,7 +1913,8 @@ class FileSearchToolsMixin:
 
             old_content must match exactly one location. Zero or several matches
             are errors that carry the file's current content, so a retry does not
-            need a separate read.
+            need a separate read. new_content replaces old_content only; to
+            rewrite the whole file, use write_file.
 
             Security checks performed:
             1. Path allowlist validation (PathValidator)
@@ -2062,6 +2064,7 @@ class FileSearchToolsMixin:
                     "file_path": str(resolved_path),
                     "old_size": len(current_content),
                     "new_size": len(updated_content),
+                    **after_excerpt(current_content, updated_content),
                     "diff": diff,
                 }
                 if backup_path:

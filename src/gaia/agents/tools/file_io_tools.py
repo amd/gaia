@@ -29,6 +29,7 @@ from gaia.agents.tools.document_text import (
 )
 from gaia.agents.tools.edit_impact import edit_impact
 from gaia.agents.tools.file_edit import (
+    after_excerpt,
     apply_unique_replacement,
     file_read_record,
     read_first_preflight,
@@ -749,7 +750,7 @@ class FileIOToolsMixin:
             Args:
                 file_path: Path to the file to edit
                 old_content: Content to find and replace; must be unique in the file
-                new_content: New content to insert
+                new_content: Text that replaces old_content only, not the whole file
                 backup: Whether to create a backup
                 dry_run: Whether to only simulate the edit
 
@@ -1005,6 +1006,10 @@ class FileIOToolsMixin:
                 new_content: New content to compare
                 context_lines: Number of context lines in diff
 
+            Both sides are compared with LF line endings, so a change that
+            only converts CRLF to LF (or back) reports ``has_changes: False``
+            even though writing ``new_content`` would change the file's bytes.
+
             Returns:
                 Dictionary with diff information
             """
@@ -1016,12 +1021,16 @@ class FileIOToolsMixin:
                 if not is_allowed:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
-                # Read original content
+                # Read original content. A diff is a preview, not a write round
+                # trip, so both sides are compared with LF endings: otherwise a
+                # CRLF file diffed against the model's LF text shows every line
+                # as changed.
                 if os.path.exists(file_path):
-                    with open(file_path, "r", encoding="utf-8", newline="") as f:
+                    with open(file_path, "r", encoding="utf-8") as f:
                         original_content = f.read()
                 else:
                     original_content = ""
+                new_content = new_content.replace("\r\n", "\n")
 
                 # Generate unified diff
                 diff = list(
@@ -1298,7 +1307,8 @@ class FileIOToolsMixin:
             Args:
                 file_path: Path to the file to edit.
                 old_content: Exact text to replace; must be unique in the file.
-                new_content: Text to put in its place.
+                new_content: Only the text that replaces old_content, never
+                    the whole file; for that, use write_file.
                 project_dir: Project root for resolving a relative file_path.
             """
             try:
@@ -1428,6 +1438,7 @@ class FileIOToolsMixin:
                         if (syntax_error := _python_syntax_error(path, updated_content))
                         else {}
                     ),
+                    **after_excerpt(current_content, updated_content),
                     "diff": diff,
                 }
                 if backup_path:

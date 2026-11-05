@@ -54,25 +54,45 @@ export function markTitleBar(): void {
     if (kind && kind !== 'native') document.documentElement.dataset.titlebar = kind;
 }
 
-const scrimOpen = () => document.querySelector('.modal-overlay, .settings-overlay') !== null;
+/** Every backdrop that dims the whole window, the strip under the window controls included. */
+const SCRIMS = '.settings-overlay, .modal-overlay, .model-needed-overlay, .confirm-overlay, .version-picker-overlay, .cp-overlay';
 
-/** `color` seen through the modal scrim, which can't reach the native window controls. */
-function underScrim(color: string, scrim: string): string {
-    const [r, g, b, alpha] = (scrim.match(/[\d.]+/g) ?? []).map(Number);
-    const base = color.match(/^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i);
-    if (!base || alpha === undefined) return color;
-    const mix = (channel: number, over: number) =>
-        Math.round(channel * (1 - alpha) + over * alpha).toString(16).padStart(2, '0');
-    return `#${mix(parseInt(base[1], 16), r)}${mix(parseInt(base[2], 16), g)}${mix(parseInt(base[3], 16), b)}`;
+const scrims = (): Element[] => [...document.querySelectorAll(SCRIMS)];
+
+/** `[r, g, b, alpha]` of a hex or rgb() color, in the forms the build and the browser write. */
+function channels(color: string): [number, number, number, number] {
+    const value = color.trim();
+    const hex = value.match(/^#([\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/i)?.[1];
+    if (hex) {
+        const pairs = hex.length <= 4 ? [...hex].map((d) => d + d) : hex.match(/../g)!;
+        const [r, g, b, a = 'ff'] = pairs;
+        return [parseInt(r, 16), parseInt(g, 16), parseInt(b, 16), parseInt(a, 16) / 255];
+    }
+    const fn = value.match(/^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:\s*[,/]\s*([\d.]+)(%?))?\s*\)$/i);
+    if (fn) {
+        const alpha = fn[4] === undefined ? 1 : Number(fn[4]) / (fn[5] ? 100 : 1);
+        return [Number(fn[1]), Number(fn[2]), Number(fn[3]), alpha];
+    }
+    throw new Error(`Title bar: cannot read the color "${color}"; use a hex or rgb() value in src/styles/index.css.`);
+}
+
+/** `base` seen through each scrim in turn, as the `#rrggbb` the native window controls accept. */
+export function colorUnderScrims(base: string, scrimColors: string[]): string {
+    let [r, g, b] = channels(base);
+    for (const scrim of scrimColors) {
+        const [sr, sg, sb, alpha] = channels(scrim);
+        [r, g, b] = [r + (sr - r) * alpha, g + (sg - g) * alpha, b + (sb - b) * alpha];
+    }
+    return `#${[r, g, b].map((c) => Math.round(c).toString(16).padStart(2, '0')).join('')}`;
 }
 
 /** Repaint the window controls as a modal opens and closes. */
 export function watchTitleBarScrim(): void {
     if (window.gaiaWindow?.titleBar !== 'overlay') return;
-    let open = scrimOpen();
+    let open = scrims().length;
     new MutationObserver(() => {
-        if (scrimOpen() === open) return;
-        open = !open;
+        if (scrims().length === open) return;
+        open = scrims().length;
         syncTitleBar();
     }).observe(document.body, { childList: true, subtree: true });
 }
@@ -88,10 +108,11 @@ export function syncTitleBar(): void {
     const canvas = tokens.getPropertyValue('--bg-primary').trim();
     // Right to left, the controls sit over the sidebar instead of the canvas.
     const behind = root.dir === 'rtl' ? tokens.getPropertyValue('--bg-sidebar').trim() : canvas;
-    const color = scrimOpen() ? underScrim(behind, tokens.getPropertyValue('--bg-modal-overlay')) : behind;
-    const symbolColor = tokens.getPropertyValue('--text-primary').trim();
-    if (window.gaiaWindow?.titleBar === 'overlay' && color && symbolColor) {
-        window.gaiaWindow.setColors({ color, symbolColor }).catch((err: unknown) => {
+    const text = tokens.getPropertyValue('--text-primary').trim();
+    if (window.gaiaWindow?.titleBar === 'overlay' && behind && text) {
+        const dims = scrims().map((el) => getComputedStyle(el).backgroundColor);
+        const colors = { color: colorUnderScrims(behind, dims), symbolColor: colorUnderScrims(text, dims) };
+        window.gaiaWindow.setColors(colors).catch((err: unknown) => {
             console.error('syncTitleBar: the desktop window controls did not take the colors', err);
         });
     }

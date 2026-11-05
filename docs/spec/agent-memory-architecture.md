@@ -1017,7 +1017,7 @@ Described in the System Prompt Architecture section above. Two methods:
 
 ```python
 # Memory tools that should NOT be logged to tool_history (avoids noise/recursion)
-_MEMORY_TOOLS = {"remember", "recall", "update_memory", "forget", "search_past_conversations"}
+_MEMORY_TOOLS = {"remember", "recall", "update_memory", "forget", "forget_everything", "search_past_conversations"}
 
 def _execute_tool(self, tool_name: str, tool_args: dict) -> Any:
     """Override Agent._execute_tool() to auto-log every tool call.
@@ -1120,7 +1120,15 @@ def update_memory(knowledge_id: str, content: str = "",
 
 @tool
 def forget(knowledge_id: str) -> dict:
-    """Remove a specific memory entry by ID."""
+    """Remove one memory by ID (from recall). To erase all memory, use
+    forget_everything."""
+
+@tool
+def forget_everything() -> dict:
+    """Erase all of memory in one call, sensitive entries and stored past
+    conversations included. Use for "forget everything about me" or "delete
+    all my data"; one topic goes through forget. Asks the user first; cannot
+    be undone. Learned procedures and skill deltas are kept."""
 
 @tool
 def search_past_conversations(query: str = "", days: int = 0,
@@ -1146,7 +1154,7 @@ def search_past_conversations(query: str = "", days: int = 0,
 - `forget_memory` -> **`forget`**
 - `search_conversations` -> **`search_past_conversations`**
 
-The CRUD operations map cleanly: `remember` = create, `recall` = read, `update_memory` = update, `forget` = delete. Plus `search_past_conversations` for conversation history.
+The CRUD operations map cleanly: `remember` = create, `recall` = read, `update_memory` = update, `forget` = delete. Plus `search_past_conversations` for conversation history, and `forget_everything` — the one memory tool that asks for confirmation — for an explicit "forget everything".
 
 ---
 

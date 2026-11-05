@@ -24,7 +24,7 @@
  *   - Auto-update is OFF by default (`autoUpdate` in ~/.gaia/update-config.json,
  *     shared with the Terminal UI). Off, a found update is only offered: the
  *     renderer's "Update now" calls downloadUpdate(). On, it downloads silently.
- *   - On `update-downloaded`, show a native dialog: "Update ready — restart?"
+ *   - On `update-downloaded`, the chip offers the restart; nothing interrupts
  *   - Renderer integration via IPC channel `gaia:update:status`
  *   - Disabled entirely via GAIA_DISABLE_UPDATE=1 env var (CI / dev / corp)
  *   - Rollback: listReleases() → installVersion(tag) → pin persisted to
@@ -38,6 +38,7 @@
  *   - listReleases()          → fetch available releases from GitHub
  *   - installVersion(tag)     → downgrade/install a specific tagged release
  *   - clearPin()              → resume auto-updates (clear the version pin)
+ *   - revertUpdate()          → go back to the version before the last update
  *   - setAutoUpdate(enabled)  → persist the auto-update preference
  *   - downloadUpdate()        → download the offered update ("Update now")
  *   - restartToInstall()      → restart into a downloaded update
@@ -56,6 +57,8 @@
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const crypto = require("crypto");
+const zlib = require("zlib");
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -70,13 +73,6 @@ const UPDATE_CONFIG_PATH = path.join(os.homedir(), ".gaia", "update-config.json"
 // that split is the A6/A7 resolution (#1724).
 const DEFAULT_CHANNEL = "latest";
 
-// per_page=100 is the GitHub API max for a single page; we fetch broadly so
-// draft/prerelease/platform filtering still yields a full page of installable
-// releases before the display cap below. >100 releases would need pagination
-// (follow the Link rel="next" header). Not built yet.
-const GITHUB_API_RELEASES =
-  "https://api.github.com/repos/amd/gaia/releases?per_page=100";
-
 // The picker shows only the N most-recent installable releases (rolling back
 // more than a few versions is rare). Older versions stay reachable via the
 // "browse all on GitHub" link in the picker, so this display cap never makes a
@@ -84,21 +80,47 @@ const GITHUB_API_RELEASES =
 const MAX_RELEASES_SHOWN = 10;
 
 const RELEASES_PAGE = "https://github.com/amd/gaia/releases";
+const RELEASE_DOWNLOADS = `${RELEASES_PAGE}/download`;
+
+// The atom feed and download URLs don't count against the REST API's 60
+// anonymous calls an hour, which one busy network can use up for everyone.
+const RELEASES_ATOM = `${RELEASES_PAGE}.atom`;
+const PICKER_FEED_PAGES = 3;
+
+// Where a restart notes the update it started: a silent install that fails
+// shows nothing, so the next launch is what finds out.
+const INSTALL_ATTEMPT_PATH = path.join(os.homedir(), ".gaia", "update-attempt.json");
+const PREVIOUS_VERSION_KEY = "previousAppVersion";
+const LAUNCHES_SINCE_UPDATE_KEY = "launchesSinceUpdate";
+// Same cap as the TUI's sumsAtOnce, to go easy on proxies.
+const RELEASE_CHECKS_AT_ONCE = 8;
+// A backend that dies weeks after an update isn't the update's fault.
+const START_FAILURE_REVERT_LAUNCHES = 3;
+
+// The installer removes the old version before unpacking the new one.
+const MIN_INSTALL_FREE_BYTES = 1024 * 1024 * 1024;
 
 // A black-holed connection must fail, not leave "Checking…" up forever.
 const GITHUB_TIMEOUT_MS = 20 * 1000;
 
-/**
- * GET the release list within GITHUB_TIMEOUT_MS. Resolves to the parsed JSON;
- * rejects with `.kind` set to "timeout", "network", "http" (with `.status`)
- * or "garbled", so each caller can word its own message.
- */
-async function _fetchReleases() {
-  let resp;
+/** The generic feed for one release's assets. */
+function _releaseFeed(tag, extra = {}) {
+  return {
+    provider: "generic",
+    url: `${RELEASE_DOWNLOADS}/${tag}/`,
+    // GitHub answers multi-range requests 501, which loses the delta download.
+    useMultipleRangeRequest: false,
+    ...extra,
+  };
+}
+
+/** fetch() with a timeout; rejects with `.kind` "timeout" or "network". */
+async function _githubFetch(url, options = {}) {
   try {
-    resp = await fetch(GITHUB_API_RELEASES, {
-      headers: { Accept: "application/vnd.github+json", "User-Agent": "GAIA-Agent-UI" },
+    return await fetch(url, {
+      headers: { "User-Agent": "GAIA-Agent-UI" },
       signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+      ...options,
     });
   } catch (err) {
     const timedOut = err && (err.name === "TimeoutError" || err.name === "AbortError");
@@ -106,17 +128,147 @@ async function _fetchReleases() {
       kind: timedOut ? "timeout" : "network",
     });
   }
-  if (!resp.ok) {
-    throw Object.assign(new Error(`HTTP ${resp.status}`), { kind: "http", status: resp.status });
+}
+
+/**
+ * A delta update diffs the installer electron-updater cached at install time
+ * against the new one, using the running version's blockmap. It guesses that
+ * blockmap's URL by swapping version strings inside the new one, which misses
+ * every release candidate's tag ("v0.25.4-rc3" holds no "0.25.4-rc.3"), and a
+ * fresh install has no blockmap cached. Without one the update downloads in
+ * full, so fetch it from the running version's own release ahead of time.
+ */
+async function _seedInstalledBlockmap() {
+  if (process.platform !== "win32" || typeof autoUpdaterRef.getOrCreateDownloadHelper !== "function") {
+    return;
   }
+  const version = state.currentVersion;
+  const { cacheDir } = await autoUpdaterRef.getOrCreateDownloadHelper();
+  const installer = path.join(cacheDir, "installer.exe");
+  const blockmap = path.join(cacheDir, "current.blockmap");
+  const seededFor = path.join(cacheDir, "gaia-blockmap-version");
+  if (!version || !fs.existsSync(installer)) return;
+  const seeded = _readText(seededFor);
+  if (seeded === `${version}:not-this-release`) return;
+  if (fs.existsSync(blockmap) && seeded === version) return;
+
+  const base = `${RELEASE_DOWNLOADS}/${_tagForVersion(version)}`;
+  const manifest = await _githubFetch(`${base}/${_platformManifest()}`);
+  if (!manifest.ok) throw _httpError(manifest.status);
+  const yml = await manifest.text();
+  const file = /^path:\s*(\S+)/m.exec(yml);
+  const sha512 = /^sha512:\s*(\S+)/m.exec(yml);
+  if (!file || !sha512) throw new Error(`${_platformManifest()} for ${version} names no installer`);
+  // The cached installer must be this release's, or the diff comes out wrong.
+  if ((await _sha512File(installer)) !== sha512[1]) {
+    log("info", `The cached installer isn't GAIA ${version}'s release file: the next update downloads in full`);
+    fs.writeFileSync(seededFor, `${version}:not-this-release`);
+    return;
+  }
+  const resp = await _githubFetch(`${base}/${file[1]}.blockmap`);
+  if (!resp.ok) throw _httpError(resp.status);
+  const data = Buffer.from(await resp.arrayBuffer());
+  JSON.parse(zlib.gunzipSync(data).toString());
+  fs.writeFileSync(blockmap, data);
+  fs.writeFileSync(seededFor, version);
+  log("info", `Cached GAIA ${version}'s blockmap, so the next update downloads only what changed`);
+}
+
+function _readText(file) {
   try {
-    return await resp.json();
-  } catch (err) {
-    const timedOut = err && (err.name === "TimeoutError" || err.name === "AbortError");
-    throw Object.assign(new Error((err && err.message) || String(err)), {
-      kind: timedOut ? "timeout" : "garbled",
+    return fs.readFileSync(file, "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+
+function _sha512File(file) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha512");
+    fs.createReadStream(file)
+      .on("error", reject)
+      .on("data", (chunk) => hash.update(chunk))
+      .on("end", () => resolve(hash.digest("base64")));
+  });
+}
+
+function _httpError(status) {
+  return Object.assign(new Error(`HTTP ${status}`), { kind: "http", status });
+}
+
+/** One page of releases.atom as [{tag_name, published_at, html_url, prerelease}]. */
+async function _fetchFeedPage(after) {
+  const url = after ? `${RELEASES_ATOM}?after=${encodeURIComponent(after)}` : RELEASES_ATOM;
+  const resp = await _githubFetch(url);
+  if (!resp.ok) throw _httpError(resp.status);
+  const xml = await resp.text();
+  if (!xml.includes("<feed")) {
+    throw Object.assign(new Error("not an atom feed"), { kind: "garbled" });
+  }
+  const releases = [];
+  for (const [, entry] of xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)) {
+    const id = /<id>[^<]*\/([^/<]+)<\/id>/.exec(entry);
+    if (!id) continue;
+    const updated = /<updated>([^<]+)<\/updated>/.exec(entry);
+    releases.push({
+      tag_name: id[1],
+      published_at: updated ? updated[1] : null,
+      html_url: `${RELEASES_PAGE}/tag/${id[1]}`,
+      prerelease: id[1].includes("-"),
     });
   }
+  return releases;
+}
+
+/**
+ * The newest releases from the atom feed, plus the newest final release, which
+ * a run of candidates can push off the feed's first page. Rejects with `.kind`
+ * set to "timeout", "network", "http" (with `.status`) or "garbled", so each
+ * caller can word its own message.
+ */
+async function _fetchReleases(pages = 1) {
+  const releases = [];
+  let after = null;
+  for (let page = 0; page < pages; page++) {
+    const batch = await _fetchFeedPage(after);
+    releases.push(...batch);
+    if (batch.length === 0) break;
+    after = batch[batch.length - 1].tag_name;
+  }
+  const latest = await _githubFetch(`${RELEASES_PAGE}/latest/download/${_platformManifest()}`);
+  if (latest.ok) {
+    const version = /^version:\s*(\S+)/m.exec(await latest.text());
+    const tag = version && `v${version[1].replace(/^v/, "")}`;
+    if (tag && !releases.some((r) => r.tag_name === tag)) {
+      releases.push({
+        tag_name: tag,
+        published_at: null,
+        html_url: `${RELEASES_PAGE}/tag/${tag}`,
+        prerelease: false,
+      });
+    }
+  } else if (latest.status !== 404) {
+    throw _httpError(latest.status);
+  }
+  return releases;
+}
+
+/**
+ * Whether `tag` carries this platform's manifest and the installer it names.
+ * A release is listed before its assets finish uploading, and macOS manifests
+ * can name a zip that was never attached, so the file itself is checked.
+ */
+async function _releaseHasUpdate(tag) {
+  const base = `${RELEASE_DOWNLOADS}/${tag}`;
+  const manifest = await _githubFetch(`${base}/${_platformManifest()}`);
+  if (manifest.status === 404) return false;
+  if (!manifest.ok) throw _httpError(manifest.status);
+  const path = /^path:\s*(\S+)/m.exec(await manifest.text());
+  if (!path) return false;
+  const installer = await _githubFetch(`${base}/${path[1]}`, { method: "HEAD" });
+  if (installer.status === 404) return false;
+  if (!installer.ok) throw _httpError(installer.status);
+  return true;
 }
 
 /** The user-facing sentence for a _fetchReleases failure while `doing`. */
@@ -163,6 +315,8 @@ const state = {
   error: null,
   currentVersion: null,
   pinnedVersion: null,
+  previousVersion: null,
+  startFailed: false,
   autoUpdate: false,
   // Offer release candidates too; off by default. A release-candidate build
   // is offered newer candidates without it.
@@ -170,12 +324,43 @@ const state = {
   // update-config.json could not be read; kept apart from `error` so a later
   // check's status never hides it.
   configError: null,
+  // The last restart didn't install; stays until an install works.
+  installFailed: null,
+  // Why the last unasked check or download failed; Settings shows it quietly.
+  lastCheckError: null,
+  // The update has downloaded and its backend is being fetched before the restart.
+  preparing: false,
 };
 
 let mainWindowRef = null;
 /** Asks before an update restart would cut off running work (set by init). */
 let confirmRestartRef = null;
+// Put the update's backend in the local cache before the restart (set by init).
+let prefetchBackendRef = null;
+let isBackendPrefetchedRef = null;
 let checkInProgress = false;
+// True while a check nobody asked for runs, so its failure stays out of the UI.
+let backgroundCheck = false;
+// The last check was asked for, so the download it starts may report failure.
+let askedCheck = false;
+// A routine check is running with this version already downloaded.
+let heldDownloadVersion = null;
+// The downloaded update was given up on, so quitting must not install it.
+let abandonedDownload = false;
+// The silent install failed, so the next try shows the installer's window.
+let wizardNextInstall = false;
+// Picking a version asks for the restart too, so no second click is needed.
+let restartWhenDownloaded = false;
+// Settles once the restart a picked version asked for has run or been refused.
+let pendingRestart = null;
+let restartRefusal = null;
+// Settles once the last update-downloaded is handled, prefetch and restart
+// included. electron-updater doesn't wait for its listeners, so callers do.
+let downloadHandled = null;
+// Bumped when a download is given up on, so a prefetch that outlives it can tell.
+let downloadEpoch = 0;
+// A prefetch per version, so a repeat download waits on it instead of racing it.
+const prefetching = new Map();
 // The user asked for this download, so it may install on quit with auto-update off.
 let installRequested = false;
 // The file was unreadable at launch, so a pin it holds was never loaded.
@@ -275,10 +460,7 @@ function _refreshPreferences() {
       log("info", `Settings file readable again — honouring its pin to ${pin}`);
       setState({ pinnedVersion: pin });
       if (autoUpdaterRef) {
-        autoUpdaterRef.setFeedURL({
-          provider: "generic",
-          url: `https://github.com/amd/gaia/releases/download/${pin}/`,
-        });
+        autoUpdaterRef.setFeedURL(_releaseFeed(pin));
       }
     }
   }
@@ -288,7 +470,8 @@ function _refreshPreferences() {
 function _applyInstallPolicy() {
   if (!autoUpdaterRef) return;
   autoUpdaterRef.autoDownload = state.autoUpdate && !state.pinnedVersion;
-  autoUpdaterRef.autoInstallOnAppQuit = state.autoUpdate || installRequested;
+  autoUpdaterRef.autoInstallOnAppQuit =
+    (state.autoUpdate || installRequested) && !abandonedDownload && !wizardNextInstall && !state.preparing;
   autoUpdaterRef.allowPrerelease = _prereleasesAllowed();
 }
 
@@ -312,6 +495,42 @@ function _prereleasesAllowed() {
 
 function _savePin(pinnedVersion) {
   _writeConfig({ pinnedVersion });
+}
+
+/**
+ * An error the UI shows in the user's language: `code` names the message
+ * update.err.<code> and `params` fills it. The message is the English, for logs.
+ */
+function _userError(code, params, message) {
+  return Object.assign(new Error(message), { code, params: params || {} });
+}
+
+// Marks an error message as a coded one, for the renderer to translate.
+const USER_ERROR_MARK = "gaia-update-error:";
+
+// Codes the UI has an update.err.<code> message for; any other code is a cause.
+const USER_ERROR_CODES = new Set([
+  "checkBusy",
+  "configBusy",
+  "diskSpace",
+  "downloadFailed",
+  "failedWith",
+  "noEarlier",
+  "noInstaller",
+  "offline",
+  "pinFailed",
+  "saveFailed",
+]);
+
+function _isUserCode(code) {
+  return USER_ERROR_CODES.has(code);
+}
+
+/** IPC keeps only an error's message, so the code travels inside it. */
+function _forRenderer(err) {
+  if (!err || !_isUserCode(err.code)) return err;
+  const { code, params, note } = err;
+  return new Error(`${USER_ERROR_MARK}${JSON.stringify({ code, params, note, message: err.message })}`);
 }
 
 /**
@@ -414,7 +633,9 @@ function _withConfigLock(fn) {
             `${path.dirname(UPDATE_CONFIG_PATH)}.`
         );
       }
-      throw new Error(
+      throw _userError(
+        "configBusy",
+        {},
         `${UPDATE_CONFIG_PATH} is busy (another GAIA app holds ${lock}) — try again in a moment.`
       );
     }
@@ -508,6 +729,19 @@ function _platformManifest() {
   return process.arch === "arm64" ? "latest-linux-arm64.yml" : "latest-linux.yml";
 }
 
+/** GAIA releases on this install's channel, newest first. */
+function _channelReleases(releases) {
+  const allowPrerelease = _prereleasesAllowed();
+  return releases
+    .filter(
+      (r) =>
+        TAG_RE.test(r.tag_name || "") &&
+        !Number.isNaN(_compareVersions(r.tag_name, "0.0.0")) &&
+        (allowPrerelease || !r.prerelease)
+    )
+    .sort((a, b) => _compareVersions(b.tag_name, a.tag_name));
+}
+
 /**
  * Point the feed at the newest GitHub release on this install's channel that
  * carries this platform's installer and update manifest; returns its tag.
@@ -515,31 +749,19 @@ function _platformManifest() {
  * NO_CHANNEL state, when no release has an update for this platform.
  */
 async function _applyGithubFeed() {
-  const allowPrerelease = _prereleasesAllowed();
-  let releases;
+  const manifest = _platformManifest();
+  let tag = null;
   try {
-    releases = await _fetchReleases();
+    for (const release of _channelReleases(await _fetchReleases())) {
+      if (await _releaseHasUpdate(release.tag_name)) {
+        tag = release.tag_name;
+        break;
+      }
+    }
   } catch (err) {
     throw new Error(_releasesErrorMessage(err, "check for updates"));
   }
-  if (!Array.isArray(releases)) {
-    throw new Error(
-      `GitHub sent a response GAIA couldn't read when it tried to check for updates (not a list) — try again later, or see ${RELEASES_PAGE}.`
-    );
-  }
-  const manifest = _platformManifest();
-  const candidates = releases.filter(
-    (r) =>
-      r &&
-      !r.draft &&
-      TAG_RE.test(r.tag_name || "") &&
-      !Number.isNaN(_compareVersions(r.tag_name, "0.0.0")) &&
-      (allowPrerelease || !r.prerelease) &&
-      _releaseHasPlatformAsset(r) &&
-      Array.isArray(r.assets) &&
-      r.assets.some((a) => a && a.name === manifest)
-  );
-  if (candidates.length === 0) {
+  if (!tag) {
     const error =
       `No GAIA release publishes a desktop update for this platform yet (it needs ${manifest} ` +
       `and its installer), so GAIA can't update itself here — download an installer from ${RELEASES_PAGE}.`;
@@ -547,13 +769,7 @@ async function _applyGithubFeed() {
     log("warn", error);
     return null;
   }
-  candidates.sort((a, b) => _compareVersions(b.tag_name, a.tag_name));
-  const tag = candidates[0].tag_name;
-  autoUpdaterRef.setFeedURL({
-    provider: "generic",
-    url: `https://github.com/amd/gaia/releases/download/${tag}/`,
-    channel: DEFAULT_CHANNEL,
-  });
+  autoUpdaterRef.setFeedURL(_releaseFeed(tag, { channel: DEFAULT_CHANNEL }));
   log("info", `Update feed set from GitHub: ${tag}`);
   return tag;
 }
@@ -585,23 +801,6 @@ function getState() {
 
 function isDisabled() {
   return process.env.GAIA_DISABLE_UPDATE === "1";
-}
-
-// ── Platform asset detection ─────────────────────────────────────────────────
-
-function _platformAssetPattern() {
-  if (process.platform === "win32") return /setup\.exe$/i;
-  if (process.platform === "darwin") return /\.zip$/i;
-  // Linux: AppImage (deb is apt-managed, electron-updater can't downgrade it)
-  return process.arch === "arm64" ? /(arm64|aarch64)\.AppImage$/i : /(x86_64|amd64)\.AppImage$/i;
-}
-
-function _releaseHasPlatformAsset(release) {
-  const pattern = _platformAssetPattern();
-  return (
-    Array.isArray(release.assets) &&
-    release.assets.some((a) => a && a.name && pattern.test(a.name))
-  );
 }
 
 // ── listReleases ──────────────────────────────────────────────────────────────
@@ -637,42 +836,34 @@ async function listReleases() {
     }
   }
 
-  let releases;
+  let installable;
   try {
-    releases = await _fetchReleases();
+    // Twice the display cap, so releases with no update here still fill the list.
+    const candidates = _channelReleases(await _fetchReleases(PICKER_FEED_PAGES)).slice(
+      0,
+      MAX_RELEASES_SHOWN * 2
+    );
+    const ready = await _mapLimited(candidates, RELEASE_CHECKS_AT_ONCE, (r) =>
+      _releaseHasUpdate(r.tag_name)
+    );
+    installable = candidates.filter((_, i) => ready[i]).slice(0, MAX_RELEASES_SHOWN);
   } catch (err) {
     return { error: _releasesErrorMessage(err, "list releases") };
   }
-  if (!Array.isArray(releases)) {
+
+  return installable.map((r) => {
+    const tag = r.tag_name;
+    // Version is tag without leading 'v'
+    const version = tag.startsWith("v") ? tag.slice(1) : tag;
     return {
-      error: `GitHub sent a response GAIA couldn't read when it tried to list releases (not a list) — try again later, or see ${RELEASES_PAGE}.`,
+      version,
+      tag,
+      date: r.published_at,
+      notesUrl: r.html_url,
+      isCurrent: currentVersion ? _compareVersions(version, currentVersion) === 0 : false,
+      isPinned: pinnedVersion ? tag === pinnedVersion : false,
     };
-  }
-
-  const result = releases
-    .filter(
-      (r) =>
-        !r.draft &&
-        (allowPrerelease || !r.prerelease) &&
-        _releaseHasPlatformAsset(r)
-    )
-    .map((r) => {
-      const tag = r.tag_name || "";
-      // Version is tag without leading 'v'
-      const version = tag.startsWith("v") ? tag.slice(1) : tag;
-      return {
-        version,
-        tag,
-        date: r.published_at || null,
-        notesUrl: r.html_url || null,
-        isCurrent: currentVersion ? version === currentVersion : false,
-        isPinned: pinnedVersion ? tag === pinnedVersion : false,
-      };
-    });
-
-  // Cap to the most-recent installable releases; older ones remain reachable
-  // via the "browse all on GitHub" link in the picker.
-  return result.slice(0, MAX_RELEASES_SHOWN);
+  });
 }
 
 // ── installVersion ────────────────────────────────────────────────────────────
@@ -686,7 +877,7 @@ async function listReleases() {
  * folder lets electron-updater treat it as an available update.
  *
  * Persists the version pin BEFORE starting the download so that even if the
- * user dismisses the restart dialog, the pin is already in place for AC2.
+ * user puts off the restart, the pin is already in place for AC2.
  *
  * @param {string} tag  The git tag, e.g. "v0.20.0"
  */
@@ -702,7 +893,9 @@ async function installVersion(tag) {
     );
   }
   if (checkInProgress) {
-    throw new Error(
+    throw _userError(
+      "checkBusy",
+      {},
       "An update check is already in progress — try again in a moment."
     );
   }
@@ -718,22 +911,23 @@ async function installVersion(tag) {
     _savePin(tag);
   } catch (err) {
     const msg = (err && err.message) || String(err);
-    throw new Error(
+    if (err && err.code === "configBusy") throw err;
+    throw _userError(
+      "pinFailed",
+      { path: UPDATE_CONFIG_PATH, reason: msg },
       `Failed to persist version pin — rollback aborted: ${msg}`
     );
   }
-  setState({ pinnedVersion: tag });
+  setState({ pinnedVersion: tag, previousVersion: null, startFailed: false });
   // A pin always stops background downloads; this one is downloaded below.
   installRequested = true;
+  restartWhenDownloaded = true;
   _applyInstallPolicy();
 
   checkInProgress = true;
   try {
     autoUpdaterRef.allowDowngrade = true;
-    autoUpdaterRef.setFeedURL({
-      provider: "generic",
-      url: `https://github.com/amd/gaia/releases/download/${tag}/`,
-    });
+    autoUpdaterRef.setFeedURL(_releaseFeed(tag));
 
     // Known limitation: the generic/tagged feed + allowDowngrade stay set
     // until clearPin(). While pinned, autoDownload=false (set at init) keeps
@@ -746,25 +940,41 @@ async function installVersion(tag) {
 
     // Targeted check → update-available. autoDownload is off (default, and
     // always while pinned), so download explicitly; update-downloaded then
-    // prompts the restart.
+    // restarts into it.
     await autoUpdaterRef.checkForUpdates();
     if (state.status !== STATES.AVAILABLE) {
-      throw new Error(
+      throw _userError(
+        "noInstaller",
+        { tag, url: RELEASES_PAGE },
         `GAIA ${tag} has no installer for this platform at its release feed` +
           (state.error ? `: ${state.error}` : ".") +
-          " Download it from https://github.com/amd/gaia/releases instead."
+          ` Download it from ${RELEASES_PAGE} instead.`
       );
     }
     setState({ status: STATES.DOWNLOADING, progress: 0, error: null });
+    downloadHandled = null;
     await autoUpdaterRef.downloadUpdate();
   } catch (err) {
+    restartWhenDownloaded = false;
     // Don't leave the app pinned to a version that never installed.
     const pinNote = _restorePinAfterFailedInstall(previousPin, tag);
     const msg = (err && err.message) || String(err);
     setState({ status: STATES.ERROR, error: msg });
-    throw new Error(`${msg} ${pinNote}`);
+    // A coded cause keeps its code; any other shows its own text.
+    const coded = err && _isUserCode(err.code);
+    throw Object.assign(new Error(`${msg} ${pinNote.message}`), {
+      code: coded ? err.code : "failedWith",
+      params: coded ? err.params : { reason: msg },
+      note: { code: pinNote.code, params: pinNote.params },
+    });
   } finally {
     checkInProgress = false;
+  }
+  await downloadHandled;
+  if (restartRefusal) {
+    const refusal = restartRefusal;
+    restartRefusal = null;
+    throw refusal;
   }
 }
 
@@ -775,21 +985,22 @@ function _restorePinAfterFailedInstall(previousPin, failedTag) {
   } catch (err) {
     // The file still pins failedTag; say so rather than claim otherwise.
     log("error", "Failed to restore the pin after a failed install:", err && err.message);
-    return (
-      `The pin to ${failedTag} could not be undone in ${UPDATE_CONFIG_PATH} ` +
-      `(${(err && err.message) || err}) — fix that file, then use Unpin in Settings → General → Updates.`
-    );
+    const reason = (err && err.message) || String(err);
+    return {
+      code: "pinStuck",
+      params: { tag: failedTag, path: UPDATE_CONFIG_PATH, reason },
+      message:
+        `The pin to ${failedTag} could not be undone in ${UPDATE_CONFIG_PATH} ` +
+        `(${reason}) — fix that file, then use Unpin in Settings → General → Updates.`,
+    };
   }
   if (!previousPin) {
     clearPin();
-    return "Updates are not paused.";
+    return { code: "notPaused", params: {}, message: "Updates are not paused." };
   }
   setState({ pinnedVersion: previousPin });
-  autoUpdaterRef.setFeedURL({
-    provider: "generic",
-    url: `https://github.com/amd/gaia/releases/download/${previousPin}/`,
-  });
-  return `Still pinned to ${previousPin}.`;
+  autoUpdaterRef.setFeedURL(_releaseFeed(previousPin));
+  return { code: "stillPinned", params: { tag: previousPin }, message: `Still pinned to ${previousPin}.` };
 }
 
 // ── clearPin / resumeUpdates ──────────────────────────────────────────────────
@@ -810,8 +1021,9 @@ function clearPin() {
   } catch (err) {
     log("warn", "Failed to clear pin file:", err && err.message);
   }
-  setState({ pinnedVersion: null });
+  setState({ pinnedVersion: null, previousVersion: previousVersion() });
   installRequested = false;
+  if (state.status === STATES.DOWNLOADED) _abandonDownload();
 
   if (autoUpdaterRef) {
     _applyInstallPolicy();
@@ -837,8 +1049,12 @@ async function setAutoUpdate(enabled) {
   try {
     _writeConfig({ autoUpdate: enabled });
   } catch (err) {
-    throw new Error(
-      `Couldn't save the auto-update setting to ${UPDATE_CONFIG_PATH}: ${(err && err.message) || err}`
+    if (err && err.code === "configBusy") throw err;
+    const reason = (err && err.message) || String(err);
+    throw _userError(
+      "saveFailed",
+      { path: UPDATE_CONFIG_PATH, reason },
+      `Couldn't save the auto-update setting to ${UPDATE_CONFIG_PATH}: ${reason}`
     );
   }
   setState({ autoUpdate: enabled });
@@ -861,18 +1077,322 @@ async function setIncludePrereleases(enabled) {
   try {
     _writeConfig({ includePrereleases: enabled });
   } catch (err) {
-    throw new Error(
-      `Couldn't save the release-candidate setting to ${UPDATE_CONFIG_PATH}: ${(err && err.message) || err}`
+    if (err && err.code === "configBusy") throw err;
+    const reason = (err && err.message) || String(err);
+    throw _userError(
+      "saveFailed",
+      { path: UPDATE_CONFIG_PATH, reason },
+      `Couldn't save the release-candidate setting to ${UPDATE_CONFIG_PATH}: ${reason}`
     );
   }
   setState({ includePrereleases: enabled });
   if (autoUpdaterRef) {
     autoUpdaterRef.allowPrerelease = _prereleasesAllowed();
   }
+  const offered = state.status === STATES.DOWNLOADED || state.status === STATES.AVAILABLE;
+  if (offered && _isPrereleaseVersion(state.version) && !_prereleasesAllowed()) {
+    _abandonDownload();
+  }
   log("info", `Release-candidate updates ${enabled ? "enabled" : "disabled"}`);
 }
 
-/** "Update now": download the update a check found; the restart dialog follows. */
+/** Stop offering the current update, and don't let a quit install it. */
+function _abandonDownload() {
+  log("info", `No longer offering GAIA ${state.version}`);
+  abandonedDownload = true;
+  downloadEpoch += 1;
+  installRequested = false;
+  restartWhenDownloaded = false;
+  setState({ status: STATES.IDLE, version: null, progress: 0, releaseNotes: null });
+  _applyInstallPolicy();
+}
+
+/** Promise.all over items, with at most `limit` calls in flight. */
+async function _mapLimited(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+function _readJsonFile(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8")) || {};
+  } catch (err) {
+    if (err && err.code !== "ENOENT") log("warn", `Couldn't read ${file}:`, err.message);
+    return {};
+  }
+}
+
+function _runningVersion() {
+  if (state.currentVersion) return state.currentVersion;
+  // eslint-disable-next-line global-require
+  return require("electron").app.getVersion();
+}
+
+/**
+ * The older version a bad update can go back to, or null. Works before init():
+ * a backend that won't set up stops the launch before the updater starts.
+ * A pin means the version was chosen, so there's nothing to undo.
+ */
+function previousVersion() {
+  if (isDisabled()) return null;
+  const running = _runningVersion();
+  const config = _readJsonFile(UPDATE_CONFIG_PATH);
+  if (config.pinnedVersion) return null;
+  const attempt = _readJsonFile(INSTALL_ATTEMPT_PATH);
+  const earlier = attempt.from && attempt.from !== running ? attempt.from : config[PREVIOUS_VERSION_KEY];
+  return earlier && _compareVersions(earlier, running) < 0 ? earlier : null;
+}
+
+/** "0.25.4-rc.2" → "v0.25.4-rc2": candidate builds carry a dot their tags don't. */
+function _tagForVersion(version) {
+  return `v${version.replace(/-rc\.(\d+)$/, "-rc$1")}`;
+}
+
+/**
+ * Go back to the version before the last update. Pins it, so the update that
+ * went wrong isn't reinstalled, and resolves once the restart has run or been
+ * refused (state then says why).
+ */
+async function revertUpdate() {
+  const version = previousVersion();
+  if (!version) {
+    throw _userError(
+      "noEarlier",
+      { url: RELEASES_PAGE },
+      `There is no earlier GAIA version to go back to on this PC. Pick one in Settings → General → Updates, or download it from ${RELEASES_PAGE}.`
+    );
+  }
+  log("info", `Going back to GAIA ${version}`);
+  const tag = _tagForVersion(version);
+  const { startFailed } = state;
+  try {
+    await installVersion(tag);
+  } catch (err) {
+    // A refused restart leaves the pin and the download: neither may outlive it.
+    if (state.pinnedVersion === tag) clearPin();
+    setState({ startFailed });
+    throw err;
+  }
+}
+
+/** True for the first few launches after an update landed, the only time a failed start blames it. */
+function _updateIsRecent() {
+  // An attempt from the running version is a failed install, not an update.
+  const { from } = _readJsonFile(INSTALL_ATTEMPT_PATH);
+  if (from && from !== _runningVersion()) return true;
+  const launches = _readJsonFile(UPDATE_CONFIG_PATH)[LAUNCHES_SINCE_UPDATE_KEY];
+  return Number.isInteger(launches) && launches <= START_FAILURE_REVERT_LAUNCHES;
+}
+
+/** The app opened soon after an update but its backend didn't come up: offer the way back. */
+function reportStartFailure() {
+  const previous = previousVersion();
+  if (previous && _updateIsRecent()) setState({ startFailed: true, previousVersion: previous });
+}
+
+/** Count this launch toward the window in which a failed start offers to go back. */
+function _countLaunchSinceUpdate() {
+  const config = _readJsonFile(UPDATE_CONFIG_PATH);
+  const launches = config[LAUNCHES_SINCE_UPDATE_KEY];
+  if (!config[PREVIOUS_VERSION_KEY] || !Number.isInteger(launches)) return;
+  if (launches > START_FAILURE_REVERT_LAUNCHES) return;
+  try {
+    _writeConfig({ [LAUNCHES_SINCE_UPDATE_KEY]: launches + 1 });
+  } catch (err) {
+    log("warn", "Couldn't count this launch since the update:", err && err.message);
+  }
+}
+
+/** A slow backend came up after all, so there's nothing to offer a way back from. */
+function clearStartFailure() {
+  if (state.startFailed) setState({ startFailed: false });
+}
+
+/** Note the install a quit is about to start, for the next launch to judge. */
+function _recordInstallAttempt() {
+  try {
+    fs.mkdirSync(path.dirname(INSTALL_ATTEMPT_PATH), { recursive: true });
+    fs.writeFileSync(
+      INSTALL_ATTEMPT_PATH,
+      JSON.stringify({ from: state.currentVersion, target: state.version })
+    );
+  } catch (err) {
+    log("warn", "Couldn't note the update attempt:", err && err.message);
+  }
+}
+
+/** Running the version an install was meant to replace means it failed. */
+function _readInstallOutcome() {
+  let attempt;
+  try {
+    attempt = JSON.parse(fs.readFileSync(INSTALL_ATTEMPT_PATH, "utf8"));
+  } catch (err) {
+    if (err && err.code !== "ENOENT") {
+      log("warn", "Couldn't read the last update attempt:", err.message);
+      return;
+    }
+    _countLaunchSinceUpdate();
+    return;
+  }
+  if (attempt.from !== state.currentVersion) {
+    try {
+      _writeConfig({ [PREVIOUS_VERSION_KEY]: attempt.from, [LAUNCHES_SINCE_UPDATE_KEY]: 1 });
+    } catch (err) {
+      // The attempt file stays, so previousVersion() still knows the way back.
+      log("warn", "Couldn't save the previous version:", err && err.message);
+      return;
+    }
+    fs.rmSync(INSTALL_ATTEMPT_PATH, { force: true });
+    return;
+  }
+  wizardNextInstall = true;
+  state.installFailed = { target: attempt.target, from: attempt.from };
+  // Never stay pinned to a version that didn't land.
+  if (state.pinnedVersion === _tagForVersion(attempt.target)) {
+    try {
+      _savePin(null);
+      state.pinnedVersion = null;
+    } catch (err) {
+      log("warn", "Couldn't clear the pin to the failed install:", err && err.message);
+    }
+  }
+  log("error", `GAIA ${attempt.target} didn't install; still on ${attempt.from}`);
+  // Report the failure once: a stale attempt would keep install-on-quit off for good.
+  try {
+    fs.rmSync(INSTALL_ATTEMPT_PATH, { force: true });
+  } catch (err) {
+    log("warn", "Couldn't clear the failed update attempt:", err && err.message);
+  }
+}
+
+/** The quit path's check: a quit can't wait for the async one. */
+function _diskTooFullToInstall() {
+  try {
+    const stats = fs.statfsSync(os.homedir());
+    return stats.bavail * stats.bsize < MIN_INSTALL_FREE_BYTES;
+  } catch (err) {
+    log("warn", "Couldn't read free disk space:", err && err.message);
+    return false;
+  }
+}
+
+/** Refuse a restart the installer can't finish, while the app still works. */
+async function _requireInstallSpace() {
+  let free;
+  try {
+    const stats = await fs.promises.statfs(os.homedir());
+    free = stats.bavail * stats.bsize;
+  } catch (err) {
+    log("warn", "Couldn't read free disk space:", err && err.message);
+    return;
+  }
+  if (free < MIN_INSTALL_FREE_BYTES) {
+    const mb = Math.round(free / (1024 * 1024));
+    throw _userError(
+      "diskSpace",
+      { need: "1 GB", free: `${mb} MB` },
+      `GAIA needs about 1 GB free to install this update, and this disk has ` +
+        `${mb} MB. Free some space, then restart from the update chip.`
+    );
+  }
+}
+
+/**
+ * Setup on the next launch needs PyPI unless the backend was prefetched, so
+ * restarting offline would leave no working app until the connection returns.
+ * Only a PC with no network at all counts: probing a host would block people
+ * behind proxies.
+ */
+function _isOffline() {
+  return Boolean(electronApi && electronApi.net && !electronApi.net.isOnline());
+}
+
+function _backendCached() {
+  return Boolean(isBackendPrefetchedRef && state.version && isBackendPrefetchedRef(state.version));
+}
+
+function _requireNetwork() {
+  if (_isOffline() && !_backendCached()) {
+    throw _userError(
+      "offline",
+      {},
+      "GAIA needs the internet to finish this update. Connect, then restart from the update chip."
+    );
+  }
+}
+
+/**
+ * Fetch the update's backend while the app still runs. A failure only means the
+ * first launch downloads it instead, as without a prefetch, so it is logged and
+ * the restart keeps its internet check.
+ */
+async function _prefetchBackend(version) {
+  if (!prefetchBackendRef || !version) return;
+  if (isBackendPrefetchedRef && isBackendPrefetchedRef(version)) return;
+  if (!prefetching.has(version)) {
+    prefetching.set(
+      version,
+      Promise.resolve()
+        .then(() => prefetchBackendRef(version))
+        .finally(() => prefetching.delete(version))
+    );
+  }
+  try {
+    await prefetching.get(version);
+  } catch (err) {
+    log("warn", `Couldn't fetch the backend for ${version} ahead of the restart:`, err && err.message);
+  }
+}
+
+/** An update finished downloading: fetch its backend, then offer the restart. */
+async function _onDownloaded(info) {
+  abandonedDownload = false;
+  const version = (info && info.version) || state.version;
+  const epoch = downloadEpoch;
+  if (prefetchBackendRef) {
+    // electron-updater has armed install-on-quit; a quit now would skip the checks below.
+    setState({ status: STATES.DOWNLOADING, version, progress: 100, preparing: true });
+    _applyInstallPolicy();
+    await _prefetchBackend(version);
+    if (epoch !== downloadEpoch) {
+      setState({ preparing: false });
+      _applyInstallPolicy();
+      log("info", `GAIA ${version} was given up on while its backend was fetched`);
+      return;
+    }
+  }
+  setState({
+    status: STATES.DOWNLOADED,
+    version,
+    progress: 100,
+    preparing: false,
+    error: null,
+    lastCheckError: null,
+  });
+  _applyInstallPolicy();
+  log("info", `Update downloaded: ${version}`);
+
+  // The chip offers the restart. Picking a version already asked for one.
+  if (restartWhenDownloaded) {
+    restartWhenDownloaded = false;
+    // The download stays on offer: the chip can restart once this is cleared up.
+    pendingRestart = restartToInstall().catch((err) => {
+      log("warn", "Restart refused:", err && err.message);
+      restartRefusal = err;
+    });
+    await pendingRestart;
+  }
+}
+
+/** "Update now": download the update a check found; the chip then offers the restart. */
 async function downloadUpdate() {
   if (!autoUpdaterRef) {
     throw new Error("downloadUpdate called before auto-updater was initialised");
@@ -893,7 +1413,11 @@ async function downloadUpdate() {
     installRequested = false;
     _applyInstallPolicy();
     setState({ status: STATES.ERROR, error: message });
-    throw new Error(`Downloading GAIA ${state.version || ""} failed: ${message}`);
+    throw _userError(
+      "downloadFailed",
+      { version: state.version || "", reason: message },
+      `Downloading GAIA ${state.version || ""} failed: ${message}`
+    );
   }
 }
 
@@ -902,17 +1426,26 @@ async function restartToInstall() {
   if (!autoUpdaterRef || state.status !== STATES.DOWNLOADED) {
     throw new Error(`No downloaded update to install (status: ${state.status}).`);
   }
+  await _requireInstallSpace();
+  _requireNetwork();
   if (!(await confirmRestartRef())) {
     log("info", "Restart put off: work is still running — will install on next quit");
     return;
   }
-  log("info", "User chose to restart from the update chip — calling quitAndInstall");
-  autoUpdaterRef.quitAndInstall(false, true);
+  log("info", "User chose to restart — calling quitAndInstall");
+  _recordInstallAttempt();
+  // Silent: the installer wizard would otherwise wait for clicks. Force-run
+  // brings the app straight back.
+  autoUpdaterRef.quitAndInstall(!wizardNextInstall, true);
 }
 
 // ── Core check ───────────────────────────────────────────────────────────────
 
-async function checkForUpdates() {
+/**
+ * Check for an update. A `background` check that fails only logs and waits for
+ * the next one: nobody asked for it, and nothing is wrong with the app.
+ */
+async function checkForUpdates({ background = false } = {}) {
   if (isDisabled()) {
     setState({ status: STATES.DISABLED });
     log("info", "Update check skipped — GAIA_DISABLE_UPDATE=1");
@@ -937,7 +1470,11 @@ async function checkForUpdates() {
     return;
   }
   checkInProgress = true;
-  setState({ status: STATES.CHECKING, error: null });
+  backgroundCheck = background;
+  askedCheck = !background;
+  // A routine check may replace the restart the chip offers, never remove it.
+  heldDownloadVersion = background && state.status === STATES.DOWNLOADED ? state.version : null;
+  if (!heldDownloadVersion) setState({ status: STATES.CHECKING, error: null });
   try {
     // No configured feed: aim at the newest GitHub release on this channel,
     // re-read every check so a new release is found.
@@ -947,14 +1484,36 @@ async function checkForUpdates() {
     log("info", "Checking for updates...");
     await autoUpdaterRef.checkForUpdates();
   } catch (err) {
-    setState({
-      status: STATES.ERROR,
-      error: (err && err.message) || String(err),
-    });
-    log("error", "Update check failed:", err && err.message);
+    _recordFailure("Update check failed:", err);
   } finally {
     checkInProgress = false;
+    backgroundCheck = false;
+    heldDownloadVersion = null;
   }
+}
+
+/** Show a failure the user asked to hear about; otherwise note it and go idle. */
+function _recordFailure(what, err) {
+  const message = (err && err.message) || String(err);
+  // electron-updater starts an automatic download without awaiting it, so the
+  // failure can land before any progress and after the check has returned.
+  const autoDownloading =
+    !installRequested &&
+    !askedCheck &&
+    (state.status === STATES.DOWNLOADING ||
+      (state.status === STATES.AVAILABLE && state.autoUpdate));
+  if (heldDownloadVersion) {
+    setState({ status: STATES.DOWNLOADED, version: heldDownloadVersion, lastCheckError: message });
+    log("warn", `${what} ${message} — keeping the downloaded update`);
+    return;
+  }
+  if (backgroundCheck || autoDownloading) {
+    setState({ status: STATES.IDLE, progress: 0, error: null, lastCheckError: message, preparing: false });
+    log("warn", `${what} ${message} — will try again at the next check`);
+    return;
+  }
+  setState({ status: STATES.ERROR, error: message });
+  log("error", what, message);
 }
 
 function scheduleNextCheck() {
@@ -964,7 +1523,7 @@ function scheduleNextCheck() {
   }
   scheduledTimeout = setTimeout(async () => {
     try {
-      await checkForUpdates();
+      await checkForUpdates({ background: true });
     } catch (err) {
       log("error", "Scheduled check threw:", err && err.message);
     }
@@ -976,22 +1535,30 @@ function scheduleNextCheck() {
 
 function wireAutoUpdaterEvents() {
   autoUpdaterRef.on("checking-for-update", () => {
-    setState({ status: STATES.CHECKING });
+    if (!heldDownloadVersion) setState({ status: STATES.CHECKING });
   });
 
   autoUpdaterRef.on("update-available", (info) => {
     const releaseNotes =
       typeof info.releaseNotes === "string" ? info.releaseNotes : null;
+    if (heldDownloadVersion && info.version === heldDownloadVersion) {
+      setState({ status: STATES.DOWNLOADED, lastCheckError: null });
+      return;
+    }
     setState({
       status: STATES.AVAILABLE,
       version: info.version || null,
       releaseNotes,
       error: null,
+      lastCheckError: null,
     });
     log("info", `Update available: ${info.version}`);
   });
 
   autoUpdaterRef.on("update-not-available", (info) => {
+    // A release withdrawn since it downloaded must not install on quit.
+    if (heldDownloadVersion) _abandonDownload();
+    downloadEpoch += 1;
     // Reset to idle so the UI hides any stale "available" chip.
     setState({
       status: STATES.IDLE,
@@ -999,6 +1566,7 @@ function wireAutoUpdaterEvents() {
       progress: 0,
       releaseNotes: null,
       error: null,
+      lastCheckError: null,
     });
     log("info", `No update available (current ${info && info.version})`);
   });
@@ -1014,79 +1582,29 @@ function wireAutoUpdaterEvents() {
     });
   });
 
-  autoUpdaterRef.on("update-downloaded", async (info) => {
-    setState({
-      status: STATES.DOWNLOADED,
-      version: (info && info.version) || state.version,
-      progress: 100,
-      error: null,
-    });
-    log("info", `Update downloaded: ${info && info.version}`);
-
-    if (!electronApi || !electronApi.dialog) {
-      log("warn", "No dialog available — skipping restart prompt");
-      return;
-    }
-    try {
-      const isRollback =
-        state.pinnedVersion !== null &&
-        info &&
-        info.version;
-      const title = isRollback ? "Roll back ready" : "Update ready";
-      const message = isRollback
-        ? `GAIA ${info.version} is ready to install.`
-        : `GAIA ${info && info.version ? info.version : ""} has been downloaded.`;
-      const detail = isRollback
-        ? `The app will restart into v${info.version}. Your chat history will be preserved.`
-        : "Restart the app to apply the update. Your chat history will be preserved.";
-
-      const choice = await electronApi.dialog.showMessageBox(
-        mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null,
-        {
-          type: "info",
-          buttons: ["Restart now", "Later"],
-          defaultId: 0,
-          cancelId: 1,
-          title,
-          message,
-          detail,
-        }
-      );
-      if (choice && choice.response === 0) {
-        // quitAndInstall starts the installer at once, so ask about running
-        // work here; the quit that follows doesn't ask again.
-        if (!(await confirmRestartRef())) {
-          log("info", "Restart put off: work is still running — will install on next quit");
-          return;
-        }
-        log("info", "User chose to restart — calling quitAndInstall");
-        autoUpdaterRef.quitAndInstall(false, true);
-      } else {
-        log("info", "User deferred restart — will install on next quit");
-      }
-    } catch (err) {
-      const message = (err && err.message) || String(err);
-      log("error", "Failed to show restart dialog:", message);
-      electronApi.dialog.showErrorBox(
-        "GAIA update",
-        `GAIA couldn't finish asking about the update restart: ${message}\n\n` +
-          "The update installs the next time you quit GAIA."
-      );
-    }
+  autoUpdaterRef.on("update-downloaded", (info) => {
+    // Set before anything waits, so installVersion sees the restart it asked for.
+    downloadHandled = _onDownloaded(info);
+    return downloadHandled;
   });
 
   autoUpdaterRef.on("error", (err) => {
-    setState({
-      status: STATES.ERROR,
-      error: (err && err.message) || String(err),
-    });
-    log("error", "electron-updater error:", err && err.message);
+    _recordFailure("electron-updater error:", err);
   });
 }
 
 function registerIpcHandlers() {
   if (ipcHandlersRegistered || !electronApi || !electronApi.ipcMain) return;
-  const { ipcMain } = electronApi;
+  const ipcMain = {
+    handle: (channel, fn) =>
+      electronApi.ipcMain.handle(channel, async (...args) => {
+        try {
+          return await fn(...args);
+        } catch (err) {
+          throw _forRenderer(err);
+        }
+      }),
+  };
 
   ipcMain.handle("gaia:update:get-status", () => getState());
   ipcMain.handle("gaia:update:check", async () => {
@@ -1100,16 +1618,22 @@ function registerIpcHandlers() {
     await installVersion(tag);
     return getState();
   });
+  ipcMain.handle("gaia:update:revert", async () => {
+    await revertUpdate();
+    return getState();
+  });
   ipcMain.handle("gaia:update:resume", async () => {
     clearPin();
     return getState();
   });
   ipcMain.handle("gaia:update:set-auto-update", async (_event, enabled) => {
     await setAutoUpdate(enabled);
+    if (enabled) await checkForUpdates();
     return getState();
   });
   ipcMain.handle("gaia:update:set-include-prereleases", async (_event, enabled) => {
     await setIncludePrereleases(enabled);
+    if (enabled) await checkForUpdates();
     return getState();
   });
   ipcMain.handle("gaia:update:download", async () => {
@@ -1132,6 +1656,7 @@ function unregisterIpcHandlers() {
     "gaia:update:check",
     "gaia:update:list-releases",
     "gaia:update:install-version",
+    "gaia:update:revert",
     "gaia:update:resume",
     "gaia:update:set-auto-update",
     "gaia:update:set-include-prereleases",
@@ -1162,6 +1687,10 @@ function unregisterIpcHandlers() {
  * @param {() => Promise<boolean>} options.confirmRestart - Whether "Restart now"
  *   may go ahead; asked before the installer starts. Required: without it an
  *   update restart would silently cut off a running answer.
+ * @param {(version: string) => Promise<void>} [options.prefetchBackend] - Fetch
+ *   the backend `version` needs before the restart, so its first launch is offline.
+ * @param {(version: string) => boolean} [options.isBackendPrefetched] - Whether
+ *   that fetch finished, so a restart no longer needs the internet.
  */
 function init(mainWindow, options = {}) {
   if (typeof options.confirmRestart !== "function") {
@@ -1171,11 +1700,15 @@ function init(mainWindow, options = {}) {
   }
   mainWindowRef = mainWindow || null;
   confirmRestartRef = options.confirmRestart;
+  if (options.prefetchBackend) {
+    prefetchBackendRef = options.prefetchBackend;
+    isBackendPrefetchedRef = options.isBackendPrefetched;
+  }
 
-  // Disabled path — short-circuit BEFORE touching any Electron APIs so
-  // this works in plain Node tests where require('electron') returns a
-  // string and the electron-updater singleton throws on access.
+  // Disabled path — short-circuit before electron-updater, whose singleton
+  // throws on access in plain Node tests.
   if (isDisabled()) {
+    _initDisabled();
     setState({ status: STATES.DISABLED });
     log("info", "Auto-updater disabled via GAIA_DISABLE_UPDATE=1");
     return;
@@ -1220,10 +1753,11 @@ function init(mainWindow, options = {}) {
       dialog: electron.dialog,
       ipcMain: electron.ipcMain,
       app: electron.app,
+      net: electron.net,
     };
     autoUpdaterRef = electronUpdater.autoUpdater;
     // The Terminal UI may have turned auto-update off since the last check.
-    electron.app.on("before-quit", _refreshPreferences);
+    electron.app.on("before-quit", _onBeforeQuit);
 
     // Record the running version for getState() / listReleases().
     try {
@@ -1231,6 +1765,8 @@ function init(mainWindow, options = {}) {
     } catch {
       // ignore
     }
+    _readInstallOutcome();
+    state.previousVersion = previousVersion();
   } catch (err) {
     log("error", "Failed to load electron-updater:", err && err.message);
     setState({
@@ -1272,10 +1808,11 @@ function init(mainWindow, options = {}) {
   }
 
   // Point the updater at the configured R2 generic feed (#1724), or at GitHub
-  // releases when none is configured. When a pin is active, installVersion()
-  // owns the feed (rollback path), so skip.
+  // releases when none is configured. A pin stays on its own release's feed.
   let feedReady = true;
-  if (!savedPin) {
+  if (state.pinnedVersion) {
+    autoUpdaterRef.setFeedURL(_releaseFeed(state.pinnedVersion));
+  } else {
     feedReady = _applyForwardFeed();
   }
 
@@ -1289,7 +1826,12 @@ function init(mainWindow, options = {}) {
   // First check after CHECK_DELAY_MS, then every CHECK_INTERVAL_MS.
   initialCheckTimeout = setTimeout(async () => {
     try {
-      await checkForUpdates();
+      await _seedInstalledBlockmap();
+    } catch (err) {
+      log("warn", "Couldn't cache the installed version's blockmap; the next update downloads in full:", err && err.message);
+    }
+    try {
+      await checkForUpdates({ background: true });
     } catch (err) {
       log("error", "Initial check threw:", err && err.message);
     }
@@ -1300,6 +1842,45 @@ function init(mainWindow, options = {}) {
     "info",
     `Auto-updater initialized; first check in ${CHECK_DELAY_MS}ms`
   );
+}
+
+/**
+ * Settings still needs the running version and the disabled status, so record
+ * the one and answer the status request. Plain Node's require("electron") is a
+ * path string, so a missing app or ipcMain leaves the updater as it is.
+ */
+function _initDisabled() {
+  let electron;
+  try {
+    // eslint-disable-next-line global-require
+    electron = require("electron");
+  } catch (err) {
+    log("warn", "Electron unavailable — Settings can't show the running version:", err && err.message);
+    return;
+  }
+  if (!electron || !electron.app || !electron.ipcMain) return;
+  electronApi = { app: electron.app, ipcMain: electron.ipcMain, dialog: electron.dialog, net: electron.net };
+  state.currentVersion = electron.app.getVersion() || null;
+  if (!ipcHandlersRegistered) {
+    electron.ipcMain.handle("gaia:update:get-status", () => getState());
+    ipcHandlersRegistered = true;
+  }
+}
+
+function _onBeforeQuit(event) {
+  _refreshPreferences();
+  if (state.status !== STATES.DOWNLOADED || !autoUpdaterRef || !autoUpdaterRef.autoInstallOnAppQuit) {
+    return;
+  }
+  // The chip's checks, for an install nobody clicks.
+  if ((_isOffline() && !_backendCached()) || _diskTooFullToInstall()) {
+    log("info", "Can't finish an install now: leaving the update for a later quit");
+    autoUpdaterRef.autoInstallOnAppQuit = false;
+    return;
+  }
+  // The quit guard kept the app open, so nothing is installing.
+  if (event && event.defaultPrevented) return;
+  _recordInstallAttempt();
 }
 
 /** Tear down timers and IPC handlers. Safe to call multiple times. */
@@ -1313,7 +1894,7 @@ function destroy() {
     scheduledTimeout = null;
   }
   unregisterIpcHandlers();
-  if (electronApi) electronApi.app.removeListener("before-quit", _refreshPreferences);
+  if (electronApi) electronApi.app.removeListener("before-quit", _onBeforeQuit);
   mainWindowRef = null;
   // Keep `initialized` true — calling init() again after destroy() is not a
   // supported lifecycle and we'd need to re-wire electron-updater events
@@ -1327,10 +1908,16 @@ module.exports = {
   getState,
   listReleases,
   installVersion,
+  previousVersion,
+  revertUpdate,
+  reportStartFailure,
+  clearStartFailure,
   clearPin,
   setAutoUpdate,
   setIncludePrereleases,
   downloadUpdate,
   restartToInstall,
   STATES,
+  // For tests: init() runs it on a timer.
+  _seedInstalledBlockmap,
 };

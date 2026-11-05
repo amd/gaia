@@ -273,7 +273,7 @@ class TestExtractionPath:
                 ],
                 existing_items=[],
             )
-            assert applied == 1
+            assert applied.stored == 1
             assert _contents(agent._memory_store) == ["Uses Postgres 16"]
         finally:
             agent._memory_store.close()

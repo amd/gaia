@@ -8,7 +8,8 @@ Hooks into the Agent lifecycle at 3 points:
 2. Tool execution wrapper (_execute_tool) — auto-logs calls + learns from errors
 3. Post-query storage (_after_process_query) — stores conversations + LLM extraction
 
-Provides 5 LLM-facing tools: remember, recall, update_memory, forget, search_past_conversations.
+Provides 6 LLM-facing tools: remember, recall, update_memory, forget, forget_everything,
+search_past_conversations.
 Valid categories: fact, preference, error, skill, note, reminder, system.
 
 v2 additions:
@@ -66,6 +67,7 @@ import numpy as np
 
 from gaia.agents.base import turn_metrics
 from gaia.agents.base.console import SilentConsole
+from gaia.agents.base.history import MEMORY_CONTEXT_HEADER
 from gaia.agents.base.memory_store import (
     CONSOLIDATION_MIN_TURNS,
     EXTRACTABLE_CATEGORIES,
@@ -74,6 +76,7 @@ from gaia.agents.base.memory_store import (
     MAX_EXTRACTION_TURN_LENGTH,
     VALID_CATEGORIES,
     MemoryContentError,
+    MemoryScrubError,
     content_stems,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
@@ -92,6 +95,7 @@ from gaia.llm.lemonade_client import (
     configured_lemonade_url,
     find_model_requirement,
 )
+from gaia.llm.reasoning import strip_reasoning
 from gaia.llm.retry import (
     current_cancel_check,
     current_retry_listener,
@@ -276,8 +280,9 @@ TURN_RECALL_MIN_FIELD = 8
 TURN_RECALL_FIELD_SIZE = 200
 
 #: Size cap on the stable memory section, instructions included
-#: (4000 chars ≈ 1000 tokens).
-STABLE_MEMORY_PROMPT_CHARS = 4000
+#: (4250 chars ≈ 1060 tokens). Grow it with the instructions, so they never
+#: take room from the user's memories.
+STABLE_MEMORY_PROMPT_CHARS = 4250
 #: Rows read per category when filling that section; the size cap decides
 #: how many are shown.
 STABLE_MEMORY_FETCH_LIMIT = 200
@@ -535,6 +540,20 @@ class _ExtractionJob:
     #: When the user said it (ISO). A memory forgotten after this moment is
     #: not stored from this turn, even though the job runs later.
     said_at: Optional[str] = None
+    #: ``MemoryStore.erase_count()`` when the turn began; an erase since drops
+    #: what the job would store.
+    erase_count: Optional[int] = None
+    #: The user's own forget or forget_everything ran in this turn.
+    user_forgot: bool = False
+
+
+@dataclass
+class _ExtractionCounts:
+    """What one extraction job changed in memory, by kind."""
+
+    stored: int = 0
+    updated: int = 0
+    deleted: int = 0
 
 
 # ============================================================================
@@ -618,7 +637,14 @@ Item B (stored {date_b}): {content_b}"""
 
 # Memory tools that should NOT be logged to tool_history
 _MEMORY_TOOLS = frozenset(
-    {"remember", "recall", "update_memory", "forget", "search_past_conversations"}
+    {
+        "remember",
+        "recall",
+        "update_memory",
+        "forget",
+        "forget_everything",
+        "search_past_conversations",
+    }
 )
 
 #: Guards the one-time creation of each instance's extraction bookkeeping.
@@ -879,7 +905,8 @@ class MemoryMixin(ProceduralMemoryMixin):
     - Hybrid search: FAISS vector + BM25 FTS5 + RRF fusion
     - Conversation consolidation for old sessions
     - Background memory reconciliation for conflict detection
-    - 5 CRUD tools for the LLM (remember, recall, update_memory, forget, search_past_conversations)
+    - 6 tools for the LLM (remember, recall, update_memory, forget, forget_everything,
+      search_past_conversations)
     """
 
     def init_memory(
@@ -888,6 +915,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         context: str = "global",
         embedding_model: Optional[str] = None,
         incognito: bool = False,
+        session_id: Optional[str] = None,
     ) -> None:
         """Initialize the memory subsystem (v2 startup sequence).
 
@@ -913,6 +941,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                 loaded until memory is actually used — a turn with memory back
                 on, a ``recall``, or a dashboard reconcile/consolidate — so a
                 session that never uses memory never pays for it.
+            session_id: Id to file this session's conversation turns under.
+                The Agent UI passes its chat id so deleting the chat can
+                delete them. Defaults to a fresh random id.
 
         Does not raise when the embedding service is unreachable: it logs a
         warning and degrades to a memory-disabled session (``memory_store`` is
@@ -955,7 +986,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._recalled_skill_prompt = ""
             self._recalled_skills = []
             self._memory_post_init_pending = False
-            self._memory_session_id = str(uuid4())
+            self._memory_session_id = session_id or str(uuid4())
             self._reminders_surfaced = set()
             self._reminder_last_turn_at = None
             return
@@ -964,6 +995,8 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         # Step 1: Open/create DB, apply schema migrations
         self._memory_store = MemoryStore(db_path)
+        # An erase from another chat or window shows up as a higher count.
+        self._seen_erase_count: Optional[int] = self._memory_store.erase_count()
 
         self._memory_context = context
         self._auto_extract_enabled = True
@@ -1005,7 +1038,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         self._reminder_last_turn_at: Optional[float] = None
 
         # Step 9, before the embedder: a degraded session still needs an id.
-        self._memory_session_id = str(uuid4())
+        self._memory_session_id = session_id or str(uuid4())
 
         self._memory_embedder_pending = False
         if incognito:
@@ -1202,8 +1235,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             else:
                 logger.warning(
                     "[MemoryMixin] Lemonade embedding service unreachable — "
-                    "memory v2 disabled for this session (start lemonade-server "
-                    "and reload to enable). Reason: %s",
+                    "memory v2 disabled for this session (start GAIA's model "
+                    "server and reload to enable). Reason: %s",
                     e,
                 )
             # Tear down the partially-built state so no later code path tries
@@ -2138,6 +2171,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         assistant_response: str,
         existing_items: List[Dict],
         tool_record: Optional[List[Dict]] = None,
+        user_forgot: bool = False,
     ) -> List[Dict]:
         """Mem0-style extraction: conversation + existing memory → operations.
 
@@ -2157,6 +2191,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             existing_items: Top-10 relevant existing knowledge items.
             tool_record: This turn's tool calls, from ``_record_tool_call``;
                 checked against, never shown to the model.
+            user_forgot: The user's own forget ran this turn. No delete is
+                kept then: the tool already erased what the user named.
+
+        A delete is kept only for an item the model was shown that shares two
+        content words with the user's message (one, if the item has only one),
+        so a model that reads "forget X" cannot point it at another memory.
 
         Returns:
             List of operation dicts with 'op' field.
@@ -2241,9 +2281,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             response = outcome["response"]
             raw_text = response.text if hasattr(response, "text") else str(response)
-            # The streamed reply wraps reasoning in <think>, unclosed when the
-            # budget ran out mid-thought; what is left is the answer.
-            raw_text = re.sub(r"<think>.*?(</think>|$)", "", raw_text, flags=re.DOTALL)
+            raw_text = strip_reasoning(raw_text)
             if (
                 getattr(response, "finish_reason", None) == "length"
                 and not raw_text.strip()
@@ -2366,7 +2404,27 @@ class MemoryMixin(ProceduralMemoryMixin):
                         continue
                     valid_ops.append(op)
                 elif op_type == "delete" and "knowledge_id" in op:
-                    valid_ops.append(op)
+                    kid = op["knowledge_id"]
+                    target = next(
+                        (i for i in existing_items if i.get("id") == kid), None
+                    )
+                    if user_forgot:
+                        why = "the user's own forget ran this turn"
+                    elif target is None:
+                        why = "it was not among the memories the model was shown"
+                    elif len(
+                        (named := content_stems(str(target.get("content", ""))))
+                        & content_stems(user_input)
+                    ) < min(2, len(named)):
+                        why = "the user's message does not mention it"
+                    else:
+                        valid_ops.append(op)
+                        continue
+                    logger.info(
+                        "[MemoryMixin] extraction: not deleting memory %s, %s",
+                        kid,
+                        why,
+                    )
                 # noop is excluded from output per spec
 
             # Grounding fails closed, so a model that ignores the field stores
@@ -2525,12 +2583,13 @@ class MemoryMixin(ProceduralMemoryMixin):
         existing_items: List[Dict],
         context: Optional[str] = None,
         said_at: Optional[str] = None,
-    ) -> int:
+        erase_count: Optional[int] = None,
+    ) -> _ExtractionCounts:
         """Execute the operations returned by _extract_via_llm().
 
         ADD → store() + embed
         UPDATE → store new + supersede old
-        DELETE → delete()
+        DELETE → delete(): newer information replaced it, the user didn't forget it
 
         Args:
             operations: Validated ops from ``_extract_via_llm``.
@@ -2540,15 +2599,23 @@ class MemoryMixin(ProceduralMemoryMixin):
                 a context switch mid-extraction cannot misfile the result.
             said_at: When the turn was said. A memory the user forgot after
                 that is not stored again from it.
+            erase_count: ``MemoryStore.erase_count()`` when the turn began.
+                Once memory is erased since, nothing more is applied.
 
         Returns:
-            How many operations were applied.
+            How many memories were stored, updated and deleted.
         """
         store = self._memory_store
         target_context = context if context is not None else self._memory_context
-        applied = 0
-
+        applied = _ExtractionCounts()
         for op in operations:
+            # Per op: an erase can land between two writes of the same job.
+            if store.erased_since(erase_count):
+                logger.info(
+                    "[MemoryMixin] extraction: not stored, the user erased all "
+                    "memory after this turn began"
+                )
+                return applied
             try:
                 op_type = op["op"]
 
@@ -2588,7 +2655,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         source="llm_extract",
                         context=target_context,
                     )
-                    applied += 1
+                    applied.stored += 1
                     self._embed_and_index(new_id, op["content"], "extracted memory")
 
                 elif op_type == "update":
@@ -2624,7 +2691,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         source="llm_extract",
                         context=target_context,
                     )
-                    applied += 1
+                    applied.updated += 1
                     # Only supersede when store() actually created a new row.
                     # Dedup can collapse near-identical content back into old_id,
                     # which would point superseded_by at the row itself and hide
@@ -2636,9 +2703,21 @@ class MemoryMixin(ProceduralMemoryMixin):
 
                 elif op_type == "delete":
                     kid = op["knowledge_id"]
-                    store.delete(kid)
-                    self._faiss_remove(kid)
-                    applied += 1
+                    target = store.get_item(kid)
+                    if target and target["category"] not in EXTRACTABLE_CATEGORIES:
+                        raise ValueError(
+                            "Extraction cannot delete privileged memory rows"
+                        )
+                    if store.delete(kid):
+                        self._faiss_remove(kid)
+                        applied.deleted += 1
+                        # Id only: the row may be sensitive and gaia.log is shared.
+                        logger.info(
+                            "[MemoryMixin] extraction deleted memory %s (%s), "
+                            "contradicted by this turn",
+                            kid,
+                            target["category"],
+                        )
 
             except Exception as e:
                 logger.warning(
@@ -2760,6 +2839,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                     )
                     return result
                 try:
+                    # Before reading: an erase from here on drops this window.
+                    erase_count = store.erase_count()
                     # Oldest first — get_history() returns the NEWEST turns.
                     turns = store.get_unconsolidated_turns(
                         session_id, limit=CONSOLIDATION_WINDOW_TURNS
@@ -2816,15 +2897,19 @@ class MemoryMixin(ProceduralMemoryMixin):
                     raw_text = (
                         response.text if hasattr(response, "text") else str(response)
                     )
-                    raw_text = re.sub(
-                        r"<think>.*?</think>", "", raw_text, flags=re.DOTALL
-                    )
-                    raw_text = raw_text.strip()
+                    raw_text = strip_reasoning(raw_text)
                     if raw_text.startswith("```"):
                         raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
                         raw_text = re.sub(r"\s*```$", "", raw_text)
 
                     data = json.loads(raw_text)
+                    if store.erased_since(erase_count):
+                        logger.info(
+                            "[MemoryMixin] consolidation: memory was erased "
+                            "while session %s was summarised; nothing stored",
+                            session_id[:8],
+                        )
+                        return result
 
                     # Store summary as a note
                     summary = data.get("summary", "")
@@ -2837,7 +2922,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                             session_id[:8],
                         )
                         summary = ""
-                    if summary:
+                    if summary and not store.erased_since(erase_count):
                         summary_id = store.store(
                             category="note",
                             content=summary,
@@ -2890,6 +2975,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                                 str(ki["content"])[:80],
                             )
                             continue
+                        if store.erased_since(erase_count):
+                            return result
                         if _copied_from_material(
                             str(ki["content"]), user_said, assistant_said
                         ):
@@ -3095,8 +3182,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
 
                 raw_text = response.text if hasattr(response, "text") else str(response)
-                raw_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
-                raw_text = raw_text.strip()
+                raw_text = strip_reasoning(raw_text)
                 if raw_text.startswith("```"):
                     raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
                     raw_text = re.sub(r"\s*```$", "", raw_text)
@@ -3216,6 +3302,24 @@ class MemoryMixin(ProceduralMemoryMixin):
         if hasattr(self, "rebuild_system_prompt"):
             self.rebuild_system_prompt()
 
+    def _drop_memory_erased_elsewhere(self) -> None:
+        """Stop using facts another agent or the Memory page erased.
+
+        Each chat keeps its own frozen memory prompt and vector index, so an
+        erase made anywhere else would otherwise stay visible here until the
+        session ends.
+        """
+        store = getattr(self, "_memory_store", None)
+        if store is None:
+            return
+        erase_count = store.erase_count()
+        if erase_count == getattr(self, "_seen_erase_count", 0):
+            return
+        self._seen_erase_count = erase_count
+        logger.info("[MemoryMixin] memory was erased elsewhere; dropping it here")
+        self._rebuild_faiss_index()
+        self._refresh_stable_memory_prompt()
+
     def _refresh_if_shown(self, knowledge_id: str) -> None:
         """Re-render after an explicit edit, but only if the prompt shows the item.
 
@@ -3315,9 +3419,13 @@ class MemoryMixin(ProceduralMemoryMixin):
             "- 'Show my journal' → recall(category='note', domain='journal')\n"
             "- 'What reminders?' → recall(category='reminder')\n"
             "- Info changed → recall() old item, then update_memory()\n"
-            "- User wants to forget → recall() then forget(). Forgotten info is off-limits\n"
-            "  for the rest of the session, even though it is still in the chat: never\n"
-            "  repeat it or anything computed from it; offer to redo it if they re-share.\n"
+            "- Forget one topic ('everything about Sam') → recall() then forget() each id.\n"
+            "  Forgotten info is off-limits for the rest of the session, even though it\n"
+            "  is still in the chat: never repeat it or anything computed from it; offer\n"
+            "  to redo it if they re-share.\n"
+            "- 'Forget everything you know about me' / 'delete all my data' →\n"
+            "  forget_everything(), one call. Never say GAIA can't; if not run, point\n"
+            "  to Memory › Advanced › Delete all memories.\n"
             "- 'As I told you…' / 'you forgot X' → check with recall() or\n"
             "  search_past_conversations(). Nothing found (and not forgotten at their\n"
             "  own request) → say plainly it was never mentioned. Don't apologise or\n"
@@ -3642,7 +3750,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         if recalled:
             lines.append(recalled)
 
-        return "[GAIA Memory Context]\n" + "\n\n".join(lines)
+        return MEMORY_CONTEXT_HEADER + "\n" + "\n\n".join(lines)
 
     def _read_scope(self) -> Optional[str]:
         """The context automatic reads filter on, or None for every context.
@@ -3713,19 +3821,23 @@ class MemoryMixin(ProceduralMemoryMixin):
             safe.append(item)
         return safe
 
-    def warm_up(self, progress=None):
+    def warm_up(self, progress=None, cancel=None):
         """Run the deferred memory upkeep here, not in front of the first answer."""
         incognito = getattr(self, "_incognito", False)
         if not incognito:
             self._finish_deferred_memory_init()
         # Upkeep reads existing memories with the chat's model; a private or
         # memory-off agent keeps it pending for its first memory-on turn.
-        if not incognito and getattr(self, "_memory_post_init_pending", False):
+        stopped = cancel is not None and cancel.is_set()
+        pending = getattr(self, "_memory_post_init_pending", False)
+        if not incognito and pending and not stopped:
             if progress:
                 progress("Tidying memory")
             self._memory_post_init_pending = False
             self._run_memory_post_init()
-        return super().warm_up(progress)
+        if cancel is None:
+            return super().warm_up(progress)
+        return super().warm_up(progress, cancel=cancel)
 
     # ------------------------------------------------------------------
     # Hook 2: process_query Override (dynamic context injection)
@@ -3753,6 +3865,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             # before the first turn; report failures through the current handler.
             self.report_memory_unavailable()
 
+            # First, so an erase landing anywhere in this turn keeps it out of
+            # memory; a forget in this turn postdates it.
+            self._turn_said_at = datetime.now().astimezone().isoformat()
+            store = getattr(self, "_memory_store", None)
+            self._turn_erase_count = store.erase_count() if store else None
+
             # Run deferred LLM startup tasks on first real query (after self.chat
             # exists). Not in a private or memory-off turn: upkeep sends existing
             # memories to this turn's model, so it waits for a memory-on turn.
@@ -3763,13 +3881,15 @@ class MemoryMixin(ProceduralMemoryMixin):
                 with turn_metrics.pre_turn_span(self, "memory_post_init"):
                     self._run_memory_post_init()
 
+            # After upkeep, which can take long enough for an erase to land.
+            self._drop_memory_erased_elsewhere()
+
             # Save original so _after_process_query stores the clean user text
             self._original_user_input = user_input
-            # Before this turn's tools run: a forget in this turn postdates it.
-            self._turn_said_at = datetime.now().astimezone().isoformat()
             self._turn_failures = {}
             self._turn_lessons = []
             self._turn_tool_record = []
+            self._turn_forgot = False
             self._memory_turn_query = user_input
 
             # Recall procedures for this goal (RECALL) from the clean goal,
@@ -3798,7 +3918,15 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         # Skip logging for memory tools
         if tool_name in _MEMORY_TOOLS:
-            return super()._execute_tool(tool_name, tool_args)
+            result = super()._execute_tool(tool_name, tool_args)
+            # Only a forget that erased something stands in for extraction's delete.
+            if (
+                tool_name in ("forget", "forget_everything")
+                and isinstance(result, dict)
+                and result.get("status") in ("removed", "cleared")
+            ):
+                self._turn_forgot = True
+            return result
 
         # Log non-memory tools
         start = time.time()
@@ -3846,6 +3974,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         error=error_msg,
                         duration_ms=duration_ms,
                         executed=True,
+                        erase_count=getattr(self, "_turn_erase_count", None),
                     )
                     self._auto_store_error(tool_name, error_msg, tool_args)
                     self._note_failure(tool_name, tool_args, error_msg, None)
@@ -3883,6 +4012,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         error=error_msg,
                         duration_ms=duration_ms,
                         executed=check_was_executed(result),
+                        erase_count=getattr(self, "_turn_erase_count", None),
                     )
 
                     # Auto-store novel errors as knowledge
@@ -4195,9 +4325,13 @@ class MemoryMixin(ProceduralMemoryMixin):
         Checked by every automatic writer itself, not only its callers: a
         private chat or memory-off must hold whichever path reaches it.
         """
+        store = getattr(self, "_memory_store", None)
+        turn_erase_count = getattr(self, "_turn_erase_count", None)
         return (
             getattr(self, "_incognito", False)
-            or getattr(self, "_memory_store", None) is None
+            or store is None
+            # This turn began before the user erased all of memory.
+            or (turn_erase_count is not None and store.erased_since(turn_erase_count))
         )
 
     def _forget_errors_for_operation(self, tool_name: str, tool_args: Any) -> None:
@@ -4602,8 +4736,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
             else:
                 # A secret refused as a memory must not sit in the searchable log.
+                erase_count = getattr(self, "_turn_erase_count", None)
                 self._memory_store.store_turn(
-                    session_id, "user", self._mask_credentials(clean_input), context=ctx
+                    session_id,
+                    "user",
+                    self._mask_credentials(clean_input),
+                    context=ctx,
+                    erase_count=erase_count,
                 )
                 self._memory_store.store_turn(
                     session_id,
@@ -4611,6 +4750,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     self._mask_credentials(response),
                     context=ctx,
                     preserve_full=preserve_full,
+                    erase_count=erase_count,
                 )
         except Exception as e:
             logger.warning("[MemoryMixin] failed to store conversation: %s", e)
@@ -4641,6 +4781,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 read_scope=self._read_scope(),
                 said_at=getattr(self, "_turn_said_at", None)
                 or datetime.now().astimezone().isoformat(),
+                erase_count=getattr(self, "_turn_erase_count", None),
+                user_forgot=getattr(self, "_turn_forgot", False),
             )
         )
 
@@ -4814,19 +4956,29 @@ class MemoryMixin(ProceduralMemoryMixin):
                 if not _is_lesson(item)
             ]
             operations = self._extract_via_llm(
-                job.user_input, job.assistant_response, existing, job.tool_record
+                job.user_input,
+                job.assistant_response,
+                existing,
+                job.tool_record,
+                user_forgot=job.user_forgot,
             )
             applied = (
                 self._execute_extraction_operations(
-                    operations, existing, context=job.context, said_at=job.said_at
+                    operations,
+                    existing,
+                    context=job.context,
+                    said_at=job.said_at,
+                    erase_count=job.erase_count,
                 )
                 if operations
-                else 0
+                else _ExtractionCounts()
             )
             logger.info(
-                "[MemoryMixin] extraction finished: %d memor%s stored in %.1fs",
-                applied,
-                "y" if applied == 1 else "ies",
+                "[MemoryMixin] extraction finished: %d stored, %d updated, "
+                "%d deleted in %.1fs",
+                applied.stored,
+                applied.updated,
+                applied.deleted,
                 time.monotonic() - started,
             )
         except LLMCallCancelled:
@@ -4900,7 +5052,7 @@ class MemoryMixin(ProceduralMemoryMixin):
     # ------------------------------------------------------------------
 
     def register_memory_tools(self) -> None:
-        """Register the 5 memory tools with the agent's tool registry.
+        """Register the 6 memory tools with the agent's tool registry.
 
         Call this from _register_tools() in your agent subclass.
 
@@ -5123,6 +5275,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 return gone
             time_to = _normalize_time_to(time_to)
             _recall_t0 = time.perf_counter()
+            withheld = 0
             unfiltered = not any(
                 [query, category, domain, context, entity, time_from, time_to]
             )
@@ -5248,6 +5401,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                     (time.perf_counter() - _db_t0) * 1000,
                 )
                 results = page.get("items", [])
+                if unfiltered:
+                    withheld = mixin._memory_store.get_all_knowledge(
+                        context=context or None, sensitive=True, limit=1
+                    ).get("total", 0)
 
             total_ms = (time.perf_counter() - _recall_t0) * 1000
             logger.info(
@@ -5273,6 +5430,14 @@ class MemoryMixin(ProceduralMemoryMixin):
                 "has_more": len(results) == limit,  # hint: call again with offset+limit
                 "results": results,
             }
+            if withheld:
+                # Unsaid, "forget everything" left these behind and reported done.
+                found["sensitive_withheld"] = withheld
+                found["note"] = (
+                    f"{withheld} sensitive entr{'y' if withheld == 1 else 'ies'} "
+                    "not listed. Recall with any filter (for example a category "
+                    "or a time range) to see them, e.g. to forget them."
+                )
             if not results:
                 found["message"] = (
                     "Nothing saved matches. Text read from files, pages or tools "
@@ -5393,11 +5558,19 @@ class MemoryMixin(ProceduralMemoryMixin):
                 if content_truncated:
                     result["note"] = "content was truncated to 2000 chars"
                 return result
-            return {"status": "not_found", "knowledge_id": knowledge_id}
+            return {
+                "status": "error",
+                "knowledge_id": knowledge_id,
+                "message": (
+                    f"No memory has id '{knowledge_id}'. Nothing was updated. "
+                    "Call recall to get the ids of the matching memories, then "
+                    "update each id. Don't tell the user it was updated."
+                ),
+            }
 
         @tool
         def forget(knowledge_id: str) -> dict:
-            """Remove a specific memory entry by ID."""
+            """Remove one memory by ID (from recall). To erase all memory, use forget_everything."""
             if (gone := _store_gone()) is not None:
                 return gone
             try:
@@ -5417,7 +5590,43 @@ class MemoryMixin(ProceduralMemoryMixin):
                         "though it is still in the chat history."
                     ),
                 }
-            return {"status": "not_found", "knowledge_id": knowledge_id}
+            # An error, not a status: a miss read as success tells the user it's gone.
+            return {
+                "status": "error",
+                "knowledge_id": knowledge_id,
+                "message": (
+                    f"No memory has id '{knowledge_id}'. Nothing was erased. "
+                    "Call recall to get the ids of the matching memories, then "
+                    "forget each id. Don't tell the user it was erased."
+                ),
+            }
+
+        @tool
+        def forget_everything() -> dict:
+            """Erase all of memory in one call: every fact, preference and reminder, sensitive ones included, and stored past conversations. Use for 'forget everything about me' or 'delete all my data'; for one topic use forget. Cannot be undone."""
+            if (gone := _store_gone()) is not None:
+                return gone
+            try:
+                cleared = mixin._memory_store.clear_all()
+            except MemoryScrubError as e:
+                return {"status": "error", "message": str(e)}
+            finally:
+                # The rows may be gone even when the scrub fails; stop using them.
+                mixin._seen_erase_count = mixin._memory_store.erase_count()
+                mixin._rebuild_faiss_index()
+                mixin._refresh_stable_memory_prompt()
+            return {
+                "status": "cleared",
+                **cleared,
+                "message": (
+                    "Erased everything GAIA remembered about you and your "
+                    "chats, past conversations included. Lessons it learned for "
+                    "doing tasks with its skills are kept. To clear them, run "
+                    "`gaia skill deltas <skill> --reset` in a terminal. Chats "
+                    "listed in the sidebar, this one included, stay until you "
+                    "delete them there."
+                ),
+            }
 
         @tool
         def search_past_conversations(
@@ -5507,11 +5716,37 @@ class MemoryMixin(ProceduralMemoryMixin):
                     filtered.append(r)
                 results = filtered[:limit]
 
+            # A turn said before the user forgot something it mentions would
+            # hand the forgotten memory straight back.
+            store = mixin._memory_store
+            kept = [
+                r
+                for r in results
+                if not store.mentions_forgotten(
+                    r.get("content", ""), said_before=r.get("timestamp") or None
+                )
+            ]
+            hidden = len(results) - len(kept)
+            results = kept
             if results:
-                return {
+                found = {
                     "status": "found",
                     "count": len(results),
                     "results": self._redact_credentials(results),
+                }
+                if hidden:
+                    found["forgotten_hidden"] = hidden
+                return found
+            if hidden:
+                return {
+                    "status": "empty",
+                    "count": 0,
+                    "results": [],
+                    "forgotten_hidden": hidden,
+                    "message": (
+                        f"{hidden} matching turn(s) mention something the user "
+                        "asked GAIA to forget, so they are not shown."
+                    ),
                 }
             earlier_turns = mixin._memory_store.count_conversation_turns(
                 exclude_session=getattr(mixin, "_memory_session_id", None)
@@ -5534,7 +5769,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 "message": message,
             }
 
-        logger.info("[MemoryMixin] registered 5 memory tools (v2)")
+        logger.info("[MemoryMixin] registered 6 memory tools (v2)")
 
     # ------------------------------------------------------------------
     # Session Management

@@ -9,6 +9,7 @@
 import { act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../api';
+import { refreshActiveRuns } from '../activeRuns';
 import { useChatStore } from '../../stores/chatStore';
 import * as messageQueue from '../../utils/messageQueue';
 import type { QueuedMessage } from '../../utils/messageQueue';
@@ -17,6 +18,7 @@ import {
     QUEUE_BUSY_WAIT_MS,
     claimView,
     dispatchNext,
+    idleByPoll,
     markActivity,
     resetQueueDispatch,
     sendInBackground,
@@ -143,6 +145,28 @@ describe('a chat left while it was answering', () => {
     });
 });
 
+describe('GAIA cannot be reached (#6588)', () => {
+    it('sends nothing while it is unreachable, and sends once it says the chat is idle', async () => {
+        const { send, calls } = manualSender();
+        markActivity(A, 1_000);
+        poll([A], 1_001);
+        queue(A, ['follow-up', 'queued']);
+        stop = startQueueDispatcher(send);
+
+        mockedApi.getActiveRuns.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+        await refreshActiveRuns();
+        await flush();
+
+        expect(useChatStore.getState().runningSessionIds).toEqual([]);
+        expect(idleByPoll(A)).toBe(false);
+        expect(calls).toHaveLength(0);
+        expect(states(A)).toEqual([['follow-up', 'queued']]);
+
+        await refreshActiveRuns();
+        expect(calls.map((c) => c.text)).toEqual(['follow-up']);
+    });
+});
+
 describe('a message added to a reply that ended with nobody watching', () => {
     it('goes out next if the reply never read it, and is not resent if it did', async () => {
         const { send, calls } = manualSender();
@@ -185,6 +209,13 @@ describe('a message added to a reply that ended with nobody watching', () => {
         queue(A, ['d', 'delivered']);
         await dispatchNext(A, manualSender().send, () => true);
         expect(states(A)).toEqual([['d', 'delivered']]);
+    });
+
+    it('drops a queue when the chat was deleted before its outcome was read', async () => {
+        mockedApi.getFollowUpOutcome.mockRejectedValue(Object.assign(new Error('gone'), { httpStatus: 404 }));
+        queue(A, ['orphaned', 'delivered'], ['after', 'queued']);
+        await dispatchNext(A, manualSender().send, () => true);
+        expect(useChatStore.getState().messageQueues[A]).toBeUndefined();
     });
 
     it('waits while its offer to the reply is still in flight', async () => {

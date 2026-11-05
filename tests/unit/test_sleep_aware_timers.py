@@ -189,6 +189,8 @@ def test_a_request_the_pc_slept_through_keeps_its_retry_budget(pc):
 
     client = LemonadeClient(base_url="http://127.0.0.1:1/api/v1")
     client._retry_sleep = lambda _s: None
+    # Up again after the wake; only the connection the sleep held was dropped.
+    client._server_accepts_connections = lambda: True
     attempts = []
 
     def call():

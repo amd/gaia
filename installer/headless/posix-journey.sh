@@ -4,7 +4,7 @@
 #
 # One phase of one installer journey on macOS or Linux:
 #
-#   posix-journey.sh <download|install|upgrade|launch|health|preflight|quit|uninstall|leftovers>
+#   posix-journey.sh <download|install|upgrade|launch|health|setup|preflight|quit|uninstall|leftovers>
 #
 # It installs and uninstalls system packages, writes under /usr and /Applications,
 # and deletes the sandbox home it creates. It refuses to run anywhere but a
@@ -20,6 +20,8 @@
 #   PKG_DIR       (rebuilt packages) where this run's rebuilt packages are
 #   PREV_PKG_DIR  (tui-deb-upgrade) where the previous version's package is
 #   TUI_PLATFORM  (tui-pkg) darwin-arm64 | darwin-x64
+#   SETUP_JOURNEY 1 when the row runs the setup phase: the app starts against
+#                 a fake Lemonade with nothing downloaded
 #
 # Bash 3.2 compatible: it runs on the macOS system bash.
 
@@ -102,18 +104,20 @@ pkg_suffix() {
 }
 
 # ── The fake model server and the TUI checks ─────────────────────────────────
-start_fake() {
+run_fake() {
   rm -f "${WORK}/fake.port"
-  # The flagship profile's models (INIT_PROFILES in src/gaia/installer/
-  # init_command.py) and the larger default a big machine picks, as downloaded.
-  "${PYTHON}" "${HERE}/fake_model_server.py" --port-file "${WORK}/fake.port" \
-    --log "${LOGS}/fake-requests.jsonl" --model Gemma-4-E4B-it-GGUF \
-    --model user.embeddinggemma-300m-GGUF --model Qwen3.6-35B-A3B-GGUF \
-    >"${LOGS}/fake-server.log" 2>&1 &
+  nohup "${PYTHON}" "${HERE}/fake_model_server.py" --port-file "${WORK}/fake.port" \
+    --log "${LOGS}/fake-requests.jsonl" "$@" >"${LOGS}/fake-server.log" 2>&1 &
   echo $! >"${WORK}/fake.pid"
   for _ in $(seq 1 150); do [ -s "${WORK}/fake.port" ] && break; sleep 0.2; done
   [ -s "${WORK}/fake.port" ] || { cat "${LOGS}/fake-server.log"; die "the fake model server did not start"; }
   FAKE_URL="http://127.0.0.1:$(cat "${WORK}/fake.port")/api/v1"
+}
+# The flagship profile's models (INIT_PROFILES in src/gaia/installer/
+# init_command.py) and the larger default a big machine picks, as downloaded.
+start_fake() {
+  run_fake --model Gemma-4-E4B-it-GGUF --model user.embeddinggemma-300m-GGUF \
+    --model Qwen3.6-35B-A3B-GGUF
 }
 stop_fake() { kill "$(cat "${WORK}/fake.pid" 2>/dev/null)" 2>/dev/null || true; }
 
@@ -194,9 +198,13 @@ launch_agent_ui() {
   local cmd
   cmd="$(agent_ui_cmd)"
   [ -x "${cmd}" ] || die "${cmd} is not there to launch"
-  # gaia init downloads Lemonade and several GB of models; that needs hardware
-  # and is covered elsewhere. Everything up to a serving backend is under test.
+  # These rows install a published release; one before #5629 runs gaia init
+  # (several GB of models) on first launch. Later apps ignore the variable.
   export GAIA_SKIP_GAIA_INIT=1
+  if [ "${SETUP_JOURNEY:-}" = "1" ]; then
+    run_fake --catalog
+    export LEMONADE_BASE_URL="${FAKE_URL}"
+  fi
   if [ "${OS}" = "Linux" ]; then
     nohup xvfb-run --auto-servernum "${cmd}" >"${LOGS}/app.out" 2>"${LOGS}/app.err" &
   else
@@ -205,8 +213,19 @@ launch_agent_ui() {
   echo $! >"${WORK}/app.pid"
   sleep 10
   kill -0 "$(cat "${WORK}/app.pid")" 2>/dev/null || { tail -n 50 "${LOGS}/app.err"; die "the app exited within 10s of launch"; }
-  [ -f "${GAIA_HOME}/electron-main.log" ] || die "the app is running but wrote no ${GAIA_HOME}/electron-main.log"
+  wait_for_main_log "$(cat "${WORK}/app.pid")" "${GAIA_HOME}/electron-main.log" 50
   echo "launched pid $(cat "${WORK}/app.pid")"
+}
+
+# wait_for_main_log <pid> <log> <seconds>: a cold AppImage mount plus a first
+# fontconfig scan can open the log just past the 10s survival check.
+wait_for_main_log() {
+  local deadline=$(( $(date +%s) + $3 ))
+  while [ ! -f "$2" ]; do
+    kill -0 "$1" 2>/dev/null || { tail -n 50 "${LOGS}/app.err"; die "the app exited without writing $2"; }
+    [ "$(date +%s)" -lt "${deadline}" ] || die "the app is running but wrote no $2 within $(( $3 + 10 ))s of launch"
+    sleep 1
+  done
 }
 
 # First launch installs the Python backend from PyPI before it can serve, so
@@ -232,6 +251,23 @@ wait_agent_ui_health() {
   case "${got}" in *"${PEP440}"*) ;; *) die "the backend the app installed is '${got}', expected ${PEP440}" ;; esac
 }
 
+# First-run setup through the installed app's own UI, which has been talking to
+# the fake since it launched. HOME is the sandbox, so the browser stays in WORK.
+setup_journey() {
+  local port
+  port="$(grep -oE 'ui-port[ =]+[0-9]+' "${GAIA_HOME}/electron-main.log" | tail -n1 | grep -oE '[0-9]+$' || true)"
+  [ -n "${port}" ] || die "no backend port in ${GAIA_HOME}/electron-main.log"
+  (
+    cd "${REPO}/src/gaia/apps/webui"
+    export PLAYWRIGHT_BROWSERS_PATH="${WORK}/playwright-browsers"
+    npm ci --ignore-scripts
+    npx playwright install --with-deps chromium
+    GAIA_E2E_BASE_URL="http://127.0.0.1:${port}" GAIA_E2E_SCREENS="${LOGS}/setup-screens" \
+      npx playwright test -c e2e/playwright.config.ts --project=en
+  ) || die "setup did not finish through the installed app; its Playwright report is above"
+  stop_fake
+}
+
 # The app's own processes and the backend it started.
 app_pids() {
   {
@@ -242,11 +278,31 @@ app_pids() {
   } | sort -u
 }
 
+# With no Lemonade answering, the app's setup screen starts installing one by
+# itself shortly after launch, and SIGTERM during that run is #6579's case.
+# Quit once it is under way, so every row quits in the same state instead of
+# racing it.
+wait_for_setup_run() {
+  local port state="" deadline=$(( $(date +%s) + 120 ))
+  port="$(grep -oE 'ui-port[ =]+[0-9]+' "${GAIA_HOME}/electron-main.log" | tail -n1 | grep -oE '[0-9]+$' || true)"
+  [ -n "${port}" ] || die "no backend port in ${GAIA_HOME}/electron-main.log"
+  while [ "$(date +%s)" -lt "${deadline}" ]; do
+    state="$(curl -fsS --max-time 5 -H 'X-Gaia-UI: 1' "http://127.0.0.1:${port}/api/setup/status" 2>/dev/null \
+      | "${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin).get("state", ""))' 2>/dev/null || true)"
+    case "${state}" in
+      ''|idle) sleep 1 ;;
+      *) echo "setup is ${state}"; return 0 ;;
+    esac
+  done
+  echo "::warning::the app had not started setup 120 s into the quit phase (last state '${state:-no answer}'); quitting anyway"
+}
+
 # Quit the way the OS does at logout: SIGTERM to the app's main process (the
 # one without a Chromium --type= flag), which runs the app's own quit path and
 # stops the backend. Whatever is still running 30 s later is recorded for the
 # leftovers phase, then killed so the uninstall can proceed.
 stop_agent_ui() {
+  [ "${SETUP_JOURNEY:-}" = "1" ] || wait_for_setup_run
   local p mains=""
   for p in $(pgrep -f "${APP_PATTERN}" || true); do
     ps -o args= -p "${p}" 2>/dev/null | grep -q -- '--type=' || mains="${mains} ${p}"
@@ -268,11 +324,21 @@ stop_agent_ui() {
   kill -9 $(app_pids) 2>/dev/null || true
 }
 
+# The daemon the backend started outlives the app by design, and keeps the
+# agent sidecar it supervises running, so stop it the way a user would.
+stop_daemon() {
+  local gaia="${GAIA_HOME}/venv/bin/gaia"
+  if [ ! -x "${gaia}" ]; then echo "no ${gaia}: the app installed no backend, so no daemon"; return 0; fi
+  local rc=0
+  "${gaia}" daemon stop || rc=$?
+  [ "${rc}" -eq 0 ] || die "\`gaia daemon stop\` exited ${rc}"
+}
+
 assert_gone() { for p in "$@"; do [ ! -e "${p}" ] || die "left behind: ${p}"; done; }
 
 no_gaia_processes() {
   local left
-  left="$(pgrep -fl 'gaia-desktop|gaia-tui|gaia-agent|\.gaia/venv/bin/gaia' || true)"
+  left="$(pgrep -fl 'gaia-desktop|gaia-tui|gaia-agent|\.gaia/venv/bin/|-m gaia\.daemon' || true)"
   [ -z "${left}" ] || die "still running after uninstall: ${left}"
 }
 
@@ -373,9 +439,13 @@ install)
       fi
       # Exactly the documented `curl ... | sh`, with the script from this checkout.
       sh <"${REPO}/installer/scripts/install.sh"
-      for f in "${GAIA_HOME}/venv/bin/gaia" "${GAIA_HOME}/bin/gaia-tui" "${GAIA_HOME}/bin/gaia-agent"; do
+      for f in "${GAIA_HOME}/venv/bin/gaia" "${GAIA_HOME}/bin/gaia" "${GAIA_HOME}/bin/gaia-mcp" "${GAIA_HOME}/bin/gaia-tui" "${GAIA_HOME}/bin/gaia-agent"; do
         [ -x "${f}" ] || die "install.sh finished but ${f} is not there"
       done
+      # #6603: the venv's python3 must not reach the user's PATH.
+      if grep -Fs "${GAIA_HOME}/venv/bin" "${HOME}/.bashrc" "${HOME}/.bash_profile" "${HOME}/.profile" "${HOME}/.zshrc"; then
+        die "install.sh put ${GAIA_HOME}/venv/bin on PATH in a shell startup file"
+      fi
       ;;
     *) die "no install for ${KIND}" ;;
   esac
@@ -409,15 +479,18 @@ launch)
 health)
   case "${KIND}" in
     agent-ui-dmg|agent-ui-deb|appimage) wait_agent_ui_health ;;
-    install-sh) PATH="${GAIA_HOME}/bin:${GAIA_HOME}/venv/bin:${PATH}" one_shot ;;
+    install-sh) PATH="${GAIA_HOME}/bin:${PATH}" one_shot ;;
     *) one_shot ;;
   esac
   ;;
+
+setup) setup_journey ;;
 
 preflight) preflight_no_lemonade ;;
 
 quit)
   stop_agent_ui
+  stop_daemon
   if [ -s "${WORK}/quit-leftovers" ]; then
     finding "processes outlived the app's quit by 30 s (killed to continue): $(tr '\n' ';' <"${WORK}/quit-leftovers")"
   fi

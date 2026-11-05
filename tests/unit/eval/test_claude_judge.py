@@ -88,7 +88,37 @@ class TestClaudeClientInit:
         client = ClaudeClient(model="claude-sonnet-4-6")
         assert client.model == "claude-sonnet-4-6"
         assert client.api_key == "test-key-123"
+
         mock_anthropic.Anthropic.assert_called_once()
+
+    @pytest.mark.parametrize("from_dotenv", [False, True])
+    def test_says_which_key_it_uses_without_showing_it(
+        self, monkeypatch, capsys, from_dotenv
+    ):
+        import gaia
+        from gaia import env as gaia_env
+
+        secret = "sk-ant-api03-SHOULD-NOT-PRINT"
+        monkeypatch.setattr(gaia_env, "_install_tree_dotenv", lambda: None)
+        monkeypatch.setattr(gaia_env, "_working_dir_credentials", {})
+        monkeypatch.setattr(gaia_env, "_working_dir_credential_files", {})
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        if from_dotenv:
+            gaia_env._working_dir_credentials["ANTHROPIC_API_KEY"] = secret
+            gaia_env._working_dir_credential_files["ANTHROPIC_API_KEY"] = "/p/.env"
+        else:
+            monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, "ANTHROPIC_API_KEY", secret)
+            monkeypatch.setenv("ANTHROPIC_API_KEY", secret)
+        monkeypatch.setattr("gaia.eval.claude.anthropic", _make_mock_anthropic())
+        monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", MagicMock())
+
+        from gaia.eval.claude import ClaudeClient
+
+        assert ClaudeClient().api_key == secret
+        err = capsys.readouterr().err
+        where = "/p/.env" if from_dotenv else "the environment"
+        assert f"Claude judge: using ANTHROPIC_API_KEY from {where}" in err
+        assert secret not in err and secret[-8:] not in err
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +465,8 @@ class TestJudgeFactoryTemperature:
         """
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        # A CLI login comes before the key, so take the CLI off PATH.
+        monkeypatch.setattr("gaia.eval.claude_credential.shutil.which", lambda _: None)
 
     def test_action_item_quality_sends_no_temperature(self, monkeypatch):
         spy = MagicMock()

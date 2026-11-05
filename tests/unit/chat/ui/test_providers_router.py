@@ -26,7 +26,7 @@ from gaia.connectors import credential_wait
 from gaia.connectors.errors import ConnectorsError
 from gaia.llm import cloud_keys
 from gaia.llm import custom_models as cm
-from gaia.llm import lemonade_client
+from gaia.llm import lemonade_client, npu_linux
 from gaia.llm.cloud_keys import CloudKeyError
 from gaia.llm.gateway import (
     DEFAULT_AUTH_HEADER_NAME,
@@ -40,6 +40,7 @@ from gaia.ui.routers import providers
 
 from ...test_custom_models import ARCH_SOURCE, SYSTEM_INFO
 from ...test_custom_models import _repo as repo_payload
+from ...test_npu_linux import MEMLOCK, linux_system_info
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 CLOUD_GO = REPO_ROOT / "tui" / "internal" / "lemonade" / "cloud.go"
@@ -743,7 +744,7 @@ def test_connect_old_lemonade_409(client, lemonade, keys):
     lemonade.answers[("POST", "install")] = (404, {})
     resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
     assert resp.status_code == 409
-    assert "Update Lemonade" in resp.json()["detail"]
+    assert "oldest version GAIA supports" in resp.json()["detail"]
     assert "cloud/auth" not in lemonade.paths()
 
 
@@ -1209,6 +1210,172 @@ def test_a_picked_npu_model_is_the_model_after_a_restart(client, lemonade, keys,
     assert body["restore"]["status"] == "restored"
     assert body["model"] == npu
     assert db.get_setting("custom_model") == npu
+
+
+_NPU = "gemma4-it-e4b-FLM"
+
+
+@pytest.fixture
+def npu_blocked(lemonade, monkeypatch):
+    """Fedora with a Ryzen AI NPU whose locked-memory limit is still 8 MB."""
+    monkeypatch.setattr(npu_linux, "_on_linux", lambda: True)
+    monkeypatch.setattr(npu_linux, "problems", lambda: list(MEMLOCK))
+    lemonade.models = [
+        *_CATALOG,
+        {"id": _NPU, "downloaded": True, "recipe": "flm", "labels": ["tool-calling"]},
+    ]
+    lemonade.answers[("GET", "system-info")] = (200, linux_system_info())
+    return lemonade
+
+
+def test_settings_lists_the_blocked_npu_model_as_unavailable(client, npu_blocked):
+    models = client.get("/api/providers/local/models").json()["models"]
+    row = next(m for m in models if m["id"] == _NPU)
+    assert row["available"] is False
+    assert "8 MB" in row["unavailable_reason"]
+
+
+def test_select_refuses_a_model_settings_lists_as_unavailable(
+    client, npu_blocked, keys, db
+):
+    """The Settings list said the NPU couldn't run; Use must not pick it anyway."""
+    resp = client.post("/api/providers/select", json={"model": _NPU})
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert "locked-memory limit" in detail and "8 MB" in detail
+    assert db.get_setting("custom_model") is None
+    assert not config_mod.GAIA_CONFIG_FILE.exists()
+
+
+def test_restore_does_not_bring_back_a_model_that_cannot_run(
+    client, npu_blocked, keys, db
+):
+    _write_config({"last_model": _NPU})
+    body = client.get("/api/providers/active").json()
+    assert body["restore"]["status"] == "failed"
+    message = body["restore"]["message"]
+    assert "locked-memory limit" in message and "8 MB" in message
+    assert db.get_setting("custom_model") is None
+
+
+def test_local_unavailable_reason_matches_the_settings_list(npu_blocked):
+    assert "8 MB" in providers.local_unavailable_reason(_NPU)
+    assert providers.local_unavailable_reason("Qwen3-4B-GGUF") is None
+
+
+def test_a_loaded_npu_model_is_never_reported_unrunnable(npu_blocked):
+    npu_blocked.answers[("GET", "health")] = (
+        200,
+        {"all_models_loaded": [{"model_name": _NPU, "recipe": "flm"}]},
+    )
+    assert providers.local_unavailable_reason(_NPU) is None
+
+
+_QWEN_35B = "Qwen3.6-35B-A3B-GGUF"
+_PC_16GB = {
+    "Physical Memory": "16.00 GB",
+    "devices": {},
+    "model_storage": {"free_bytes": 900e9},
+    "recipes": {
+        "llamacpp": {"backends": {"vulkan": {"state": "installed"}}},
+    },
+}
+
+
+@pytest.fixture
+def qwen_on_16gb(lemonade):
+    """Qwen3.6 35B downloaded on a 16 GB PC: it may not fit, but llama.cpp runs."""
+    lemonade.models = [
+        *_CATALOG,
+        {"id": _QWEN_35B, "downloaded": True, "recipe": "llamacpp", "labels": []},
+    ]
+    lemonade.answers[("GET", "system-info")] = (200, _PC_16GB)
+    return lemonade
+
+
+def test_settings_still_flags_a_model_that_may_not_fit_in_memory(client, qwen_on_16gb):
+    models = client.get("/api/providers/local/models").json()["models"]
+    row = next(m for m in models if m["id"] == _QWEN_35B)
+    assert row["fits"] is False
+    assert "needs about" in row["unavailable_reason"]
+
+
+def test_select_does_not_refuse_a_model_that_only_may_not_fit_in_memory(
+    client, qwen_on_16gb, keys, db
+):
+    """A memory estimate is a caveat to accept, never a refusal."""
+    resp = client.post("/api/providers/select", json={"model": _QWEN_35B})
+    assert resp.status_code == 200, resp.text
+    assert db.get_setting("custom_model") == _QWEN_35B
+    assert _config()["last_model"] == _QWEN_35B
+
+
+def test_restore_brings_back_a_model_that_only_may_not_fit_in_memory(
+    client, qwen_on_16gb, keys, db
+):
+    _write_config({"last_model": _QWEN_35B})
+    body = client.get("/api/providers/active").json()
+    assert body["restore"]["status"] == "restored"
+    assert db.get_setting("custom_model") == _QWEN_35B
+
+
+def test_select_refuses_a_model_no_backend_here_can_run(client, qwen_on_16gb, keys, db):
+    qwen_on_16gb.answers[("GET", "system-info")] = (
+        200,
+        {**_PC_16GB, "unavailable_recipes": ["llamacpp"]},
+    )
+    resp = client.post("/api/providers/select", json={"model": _QWEN_35B})
+    assert resp.status_code == 409
+    assert "cannot run llamacpp models" in resp.json()["detail"]
+    assert db.get_setting("custom_model") is None
+
+
+def test_an_npu_model_that_only_may_not_fit_is_not_refused(lemonade, monkeypatch):
+    """A ready NPU with less RAM than the model's estimate: a caveat, not a refusal."""
+    monkeypatch.setattr(npu_linux, "_on_linux", lambda: False)
+    lemonade.models = [
+        {"id": _NPU, "downloaded": True, "recipe": "flm", "labels": ["tool-calling"]}
+    ]
+    info = linux_system_info(flm_state="installed")
+    info["Physical Memory"] = "4.00 GB"
+    lemonade.answers[("GET", "system-info")] = (200, info)
+    (row,) = [
+        r
+        for r in providers._annotate_local(
+            providers._list_models(providers.LOCAL, offer_optional=False),
+            preferred_backend=None,
+            speeds={},
+        )[0]
+        if r["id"] == _NPU
+    ]
+    assert row["fits"] is False
+    assert providers.local_unavailable_reason(_NPU) is None
+
+
+def test_a_pc_without_an_npu_refuses_an_npu_model(lemonade):
+    lemonade.models = [
+        {"id": _NPU, "downloaded": True, "recipe": "flm", "labels": ["tool-calling"]}
+    ]
+    lemonade.answers[("GET", "system-info")] = (
+        200,
+        {**_PC_16GB, "unavailable_recipes": ["flm"]},
+    )
+    assert "cannot run flm models" in providers.local_unavailable_reason(_NPU)
+
+
+def test_restore_waits_when_lemonade_answers_system_info_with_a_5xx(
+    client, qwen_on_16gb, keys, db
+):
+    """A server error is not an answer about the model: ask again, don't fail."""
+    _write_config({"last_model": _QWEN_35B})
+    qwen_on_16gb.answers[("GET", "system-info")] = (500, {})
+    body = client.get("/api/providers/active").json()
+    assert body["restore"]["status"] == "pending"
+    assert db.get_setting("custom_model") is None
+    qwen_on_16gb.answers[("GET", "system-info")] = (200, _PC_16GB)
+    assert client.get("/api/providers/active").json()["restore"]["status"] == (
+        "restored"
+    )
 
 
 def test_select_supersedes_a_failed_restore_notice(client, lemonade, keys, db):

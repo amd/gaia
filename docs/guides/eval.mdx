@@ -34,15 +34,16 @@ Unlike unit tests that check individual functions, Agent Eval tests the **full s
 
   <Step title="Authenticate Claude">
     The benchmark uses Claude to drive and judge each scenario. A Claude Code login
-    (`claude`, then `/login`) is enough. To use an API key instead, export it in the
-    shell:
+    (`claude`, then `/login`) is enough, and it wins over any API key. Without one,
+    export an API key in the shell:
 
     ```bash
     export ANTHROPIC_API_KEY=sk-ant-...
     ```
 
-    The scenario driver ignores an `ANTHROPIC_API_KEY` that only a `.env` file sets,
-    so a stale key in a parent directory can't override a working login.
+    A key in a `.env` file is used only when there is no login and no exported key.
+    The run prints which credential it uses, for example
+    `Claude eval driver: using the Claude Code CLI login`.
   </Step>
 
   <Step title="Install Claude Code CLI">
@@ -66,20 +67,55 @@ Unlike unit tests that check individual functions, Agent Eval tests the **full s
   </Step>
 
   <Step title="Start the Agent UI backend">
+    Start the backend from the repository root with the eval switches set. The
+    pre-flight check refuses to run memory, email and scripted-user scenarios
+    without them, and a full benchmark always includes all three:
+
     <Tabs>
       <Tab title="CLI">
         ```bash
+        GAIA_MEMORY_ADMIN=1 GAIA_EVAL_SCRIPTED_USER=1 \
+        GAIA_EVAL_MAILBOX=$PWD/tests/fixtures/gaia/email/eval_inbox.mbox \
         gaia chat --ui
         ```
       </Tab>
       <Tab title="Direct">
         ```bash
+        GAIA_MEMORY_ADMIN=1 GAIA_EVAL_SCRIPTED_USER=1 \
+        GAIA_EVAL_MAILBOX=$PWD/tests/fixtures/gaia/email/eval_inbox.mbox \
         uv run python -m gaia.ui.server
+        ```
+      </Tab>
+      <Tab title="PowerShell">
+        ```powershell
+        $env:GAIA_MEMORY_ADMIN="1"; $env:GAIA_EVAL_SCRIPTED_USER="1"
+        $env:GAIA_EVAL_MAILBOX="$PWD\tests\fixtures\gaia\email\eval_inbox.mbox"
+        gaia chat --ui
         ```
       </Tab>
     </Tabs>
 
+    | Variable | Why the eval needs it |
+    |---|---|
+    | `GAIA_MEMORY_ADMIN=1` | Unlocks the memory admin endpoints (`/api/memory/admin/*`) that reset and seed memory between scenarios. Without it, pre-flight stops with a 403 from `/api/memory/admin/seed`. |
+    | `GAIA_EVAL_SCRIPTED_USER=1` | Lets a scenario script a user who declines commands (`setup.decline_commands`). Without it, pre-flight stops with a 403 from `/api/eval/scripted-user`. |
+    | `GAIA_EVAL_MAILBOX` | Points the mail tools at the offline fixture mailbox the `gaia_email` scenarios read. |
+
+    Memory scenarios also need long-term memory switched on. It is on by
+    default; if you turned it off, switch it back on in the Memory dashboard,
+    or with:
+
+    ```bash
+    curl -X PUT http://localhost:4200/api/memory/settings \
+      -H 'X-Gaia-UI: 1' -H 'Content-Type: application/json' \
+      -d '{"memory_enabled": true}'
+    ```
+
     The Agent UI backend must be running on `http://localhost:4200` (default).
+    A scenario that touches neither memory nor email and sets no
+    `decline_commands` runs against a plain `gaia chat --ui`. The eval's own MCP
+    server already gets `GAIA_MEMORY_MCP_ALWAYS=1` from `eval/mcp-config.json`, so
+    the backend does not need it.
   </Step>
 </Steps>
 
@@ -119,6 +155,17 @@ Run all scenarios across every category (91 scenarios in 12 categories at the ti
 ```bash
 gaia eval agent
 ```
+
+<Note>
+  The full benchmark includes memory, `gaia_email` and scripted-user scenarios, so it
+  needs a backend started with the eval switches from
+  [Start the Agent UI backend](#prerequisites). Against a plain `gaia chat --ui` it
+  stops at pre-flight before running any scenario. Passing pre-flight does not make
+  a local run match CI: the `gaia_*` categories also rely on a fixture hub, a fixture
+  web server and auto-approved tools that pre-flight does not check. To reproduce a
+  CI lane's scores, run `python util/run_eval_lane.py --lane <lane>`, which sets the
+  backend up the way CI does.
+</Note>
 
 Every scenario scores the flagship `gaia` agent. That is the `--agent-type`
 default and no scenario pins its own, so a scorecard names one agent and two
@@ -338,11 +385,13 @@ gaia eval agent --output-format markdown
 
 ### Which Claude account pays
 
-The judged evals (email drafting, action items, briefings, `gaia eval sessions`, retrieval) and PDF corpus generation choose their Claude transport the way `gaia eval agent` does:
+Every eval that calls Claude (`gaia eval agent`, `gaia eval tasks`, email drafting, action items, briefings, `gaia eval sessions`, retrieval) and PDF corpus generation uses the first of these, and prints which one, never any part of the key or token:
 
-- **`ANTHROPIC_API_KEY` set:** the Messages API, billed per token to that console account.
-- **Otherwise:** your Claude Code subscription, through `claude -p`. The CLI's own login is enough. Where no interactive login is possible (CI), set `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. A subscription token is not an API key, so never export it as `ANTHROPIC_API_KEY`.
-- **Neither** (no key and no `claude` on `PATH`): the run stops with an error naming both options. It never falls back to a weaker scorer.
+1. **Your Claude Code subscription**, through `claude -p`: `CLAUDE_CODE_OAUTH_TOKEN`, or the CLI's own login (checked with `claude auth status`). Where no interactive login is possible (CI), set `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. A subscription token is not an API key, so never export it as `ANTHROPIC_API_KEY`.
+2. **`ANTHROPIC_API_KEY` from the environment:** the Messages API, billed per token to that console account.
+3. **`ANTHROPIC_API_KEY` from a `.env` file**, the same way.
+
+With none of them, the run stops with an error naming all three. It never falls back to a weaker scorer.
 
 On the subscription path, token counts and `total_cost_usd` come from the CLI's JSON output. The cost is the list price of those tokens, not money spent. Token counting (`count_tokens`) and inline PDF analysis exist only on the API path.
 

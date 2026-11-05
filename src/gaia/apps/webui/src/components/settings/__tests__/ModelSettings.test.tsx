@@ -43,7 +43,7 @@ beforeEach(() => {
     useModelStore.setState({ active: LOCAL_ACTIVE, error: null, restoreNotice: null });
     mockedApi.getCloudPrices.mockResolvedValue({ provider: 'fireworks', models: [], source: null, note: 'Prices are set by the organization that runs the gateway.' });
     mockedApi.getSpending.mockResolvedValue({
-        month: '2026-10', total_usd: 0, turns: 0, unpriced_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price',
+        month: '2026-10', total_usd: 0, turns: 0, unpriced_turns: 0, unreported_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price',
     });
     useChatStore.setState({ systemStatus: null, settingsProvider: null });
     withProviders(fireworks());

@@ -42,8 +42,8 @@ function describeBusy(work) {
 const GAIA_DIR = path.join(os.homedir(), ".gaia");
 const CONFIG_PATH = path.join(GAIA_DIR, "tray-config.json");
 const LINUX_AUTOSTART_FILE = "gaia-agent-ui.desktop";
-// The Run value the Windows installer writes (installer/nsis/installer.nsh,
-// ${PRODUCT_NAME}); the switch owns that same entry, command line included.
+// The Run value this switch owns; the installer removes it on uninstall
+// (installer/nsis/installer.nsh, ${PRODUCT_NAME}) and earlier ones wrote it.
 const WIN_LOGIN_ITEM_NAME = "GAIA";
 const WIN_LOGIN_ITEM_ARGS = ["--minimized"];
 
@@ -200,6 +200,9 @@ class TrayManager {
 
     this._iconSpec = ICON_SPECS[process.platform] || ICON_SPECS.linux;
 
+    /** Whether the desktop shows tray icons; on Linux unknown (null) until setHost(). */
+    this._host = process.platform === "linux" ? null : { available: true, reason: null };
+
     /** @type {Map<string, Electron.NativeImage>} One image per tray state, built on first use. */
     this._icons = new Map();
 
@@ -330,14 +333,37 @@ class TrayManager {
     return this._notificationCount || 0;
   }
 
-  /** @returns {boolean} Whether minimize-to-tray is enabled. */
+  /** @returns {boolean} Whether closing hides the window: switched on, and a tray to find it in. */
   get minimizeToTray() {
-    return this.config.tray.minimizeToTray;
+    return this.config.tray.minimizeToTray && this.trayHost.available;
   }
 
-  /** @returns {boolean} Whether app should start minimized. */
+  /** @returns {boolean} Whether app should start minimized, which also needs a tray. */
   get startMinimized() {
-    return this.config.tray.startMinimized;
+    return this.config.tray.startMinimized && this.trayHost.available;
+  }
+
+  /** @returns {{available: boolean, reason: null | "checking" | "no-host" | "check-failed"}} */
+  get trayHost() {
+    return this._host || { available: false, reason: "checking" };
+  }
+
+  /** Record what tray-host.cjs found; until then a Linux window is never hidden. */
+  setHost(host) {
+    if (!isPlainObject(host) || typeof host.available !== "boolean") {
+      throw new TypeError("TrayManager.setHost expects {available: boolean, reason}");
+    }
+    this._host = { available: host.available, reason: host.available ? null : host.reason };
+    if (!host.available) {
+      console.log(
+        `[tray] No tray icon host (${host.reason}: ${host.detail || "no detail"}); closing the window quits GAIA`
+      );
+    }
+  }
+
+  /** The saved config plus the tray host, which Settings needs and nothing saves. */
+  _configReply() {
+    return { ...this.config, host: this.trayHost };
   }
 
   /** @returns {boolean} Whether app should start on login. */
@@ -722,7 +748,7 @@ class TrayManager {
     });
 
     ipcMain.handle("tray:get-config", () => {
-      return this.config;
+      return this._configReply();
     });
 
     ipcMain.handle("tray:set-config", (_event, cfg) => {
@@ -750,7 +776,7 @@ class TrayManager {
       }
 
       if (tray === null && agents === null) {
-        return this.config;
+        return this._configReply();
       }
       const loginChanged =
         tray !== null && tray.startOnLogin !== this.config.tray.startOnLogin;
@@ -774,15 +800,20 @@ class TrayManager {
       }
       this.config = next;
 
-      return this.config;
+      return this._configReply();
     });
+  }
+
+  /** The tray exists before the backend does; its port is known once it starts. */
+  setBackendPort(port) {
+    this._backendPort = port;
   }
 
   /**
    * Line the sign-in switch up with what the OS will actually do. Call once
-   * at startup. Until the user sets the switch, the OS decides it (the
-   * Windows installer turns sign-in start on). Once they turn it off, an
-   * entry that came back (a reinstall or update rewrites it) is removed again.
+   * at startup. Until the user sets the switch, the OS decides it. Once they
+   * turn it off, an entry that came back (an earlier installer wrote it) is
+   * removed again.
    */
   syncLoginItem() {
     // A dev build's exe is electron itself; never touch the installed app's entry.
@@ -824,8 +855,8 @@ class TrayManager {
   }
 
   /**
-   * Register or remove GAIA as a login item. On Windows that is the same Run
-   * value the installer writes, launched into the tray; elsewhere "Start in
+   * Register or remove GAIA as a login item. On Windows that is the Run value
+   * the uninstaller removes, launched into the tray; elsewhere "Start in
    * the tray" decides whether that launch shows the window.
    * @throws {Error} When the OS refused; the caller's save is skipped.
    */

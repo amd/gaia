@@ -91,6 +91,7 @@ export interface ApiSchemas {
   RetryWithRequest: RetryWithRequest;
   RunningAnswer: RunningAnswer;
   RunningIndexJob: RunningIndexJob;
+  ScheduleDescription: ScheduleDescription;
   ScheduleListResponse: ScheduleListResponse;
   ScheduleResponse: ScheduleResponse;
   ScheduleResultsResponse: ScheduleResultsResponse;
@@ -131,6 +132,7 @@ export interface ApiSchemas {
   UpdateSessionRequest: UpdateSessionRequest;
   UserInputRequest: UserInputRequest;
   ValidationError: ValidationError;
+  VisionModelRequest: VisionModelRequest;
   WarmUpStatus: WarmUpStatus;
   WorkInProgress: WorkInProgress;
   gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
@@ -773,6 +775,7 @@ export interface MessageResponse {
   role: string;
   session_id: string;
   stats?: InferenceStatsResponse | null;
+  stopped?: boolean;
   turn_summary?: TurnSummaryResponse | null;
 }
 /**
@@ -919,6 +922,7 @@ export interface ParseScheduleRequest {
 export interface ParseScheduleResponse {
   days_of_week?: number[] | null;
   description: string;
+  description_parts?: ScheduleDescription | null;
   end_hour?: number | null;
   interval_seconds: number;
   next_run_at?: string | null;
@@ -926,6 +930,27 @@ export interface ParseScheduleResponse {
   time_of_day?: string | null;
   timezone?: string | null;
   valid: boolean;
+}
+/**
+ * When a schedule runs, as data the UI words in its own language.
+ *
+ * ``every``: count + unit, optional days. ``window``: that plus start/end
+ * hour. ``days``: named days, optional time. ``daily``: a time each day.
+ */
+export interface ScheduleDescription {
+  count?: number | null;
+  /**
+   * 0=Monday … 6=Sunday
+   */
+  days?: number[] | null;
+  end_hour?: number | null;
+  kind: "every" | "window" | "days" | "daily";
+  start_hour?: number | null;
+  /**
+   * "HH:MM", 24-hour
+   */
+  time?: string | null;
+  unit?: ("second" | "minute" | "hour" | "day" | "week") | null;
 }
 /**
  * ``ask`` prompts for every gated tool; ``full_access`` runs them unasked.
@@ -1010,6 +1035,7 @@ export interface ScheduleListResponse {
 export interface ScheduleResponse {
   created_at?: string | null;
   description: string;
+  description_parts: ScheduleDescription;
   error_count?: number;
   id: string;
   interval_seconds: number;
@@ -1145,7 +1171,9 @@ export interface SettingsUpdateRequest {
  * ``keep_trying`` to wait up to two minutes out a dropped connection;
  * ``extra_models`` to pull models beside the plan's (the user ticked them);
  * ``server_only`` to start the model server and stop, so the models can be
- * chosen against it before anything downloads.
+ * chosen against it before anything downloads;
+ * ``upgrade_embedded`` to replace an older embedded server artifact without
+ * downloading the existing model cache again.
  */
 export interface SetupRunRequest {
   acknowledge_low_disk?: boolean;
@@ -1154,6 +1182,7 @@ export interface SetupRunRequest {
   keep_trying?: boolean;
   server_only?: boolean;
   skip_chat_model?: boolean;
+  upgrade_embedded?: boolean;
 }
 export interface SkipModelRequest {
   model_id: string;
@@ -1312,11 +1341,18 @@ export interface UserInputRequest {
   value: string;
 }
 /**
+ * A model that reads images, or null to go back to GAIA's choice.
+ */
+export interface VisionModelRequest {
+  model_id?: string | null;
+}
+/**
  * Work that quitting or unloading the model would cut short.
  */
 export interface WorkInProgress {
   answers: RunningAnswer[];
   indexing: RunningIndexJob[];
+  setup?: boolean;
 }
 export interface Gaia_Ui_Routers_Setup__DownloadModelRequest {
   acknowledge_low_disk?: boolean;

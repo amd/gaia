@@ -19,7 +19,8 @@ executableName: gaia-desktop       # Actual binary name — must NOT collide wit
                                    # could find /usr/bin/gaia-desktop instead of the venv's
                                    # Python gaia binary.
                                    # Affects: .app/Contents/MacOS/gaia-desktop, gaia-desktop.exe,
-                                   # /usr/bin/gaia-desktop, deb package name, AppImage binary name
+                                   # /usr/bin/gaia-desktop, and the AppImage binary name.
+                                   # The Debian package name is configured separately below.
 copyright: Copyright © 2026 Advanced Micro Devices, Inc.
 
 directories:
@@ -70,6 +71,13 @@ extraResources:
   # inside the mounted AppImage is <resources>/vendor/uv/linux-x64/uv.
   - from: build/vendor/uv
     to: vendor/uv
+    filter:
+      - "**/*"
+  # Pinned embeddable Lemonade archive for this platform, fetched and verified
+  # by installer/scripts/fetch_lemonade_embeddable.py. main.cjs points the
+  # backend at it, so first-run setup unpacks it instead of downloading it.
+  - from: build/vendor/lemonade
+    to: vendor/lemonade
     filter:
       - "**/*"
   # Third-party licence notices for the libraries the app bundles.
@@ -140,7 +148,7 @@ nsis:
   uninstallerSidebar: ../../../../installer/nsis/installer-sidebar.bmp
   uninstallDisplayName: ${productName}
   license: ../../../../LICENSE.md
-  include: ../../../../installer/nsis/installer.nsh
+  include: nsis/installer.nsh
   # Respect §5 — keep user data by default. The uninstaller wizard / the
   # `gaia uninstall --purge` command handle data removal when the user opts in.
   deleteAppDataOnUninstall: false
@@ -242,6 +250,9 @@ linux:
       StartupWMClass: gaia-desktop
 
 deb:
+  # Keep the desktop package installable alongside the terminal package,
+  # which intentionally remains named `gaia`.
+  packageName: gaia-desktop
   depends:
     - libnotify4
     - libnss3
@@ -259,6 +270,10 @@ deb:
     - "--after-install=../../../../installer/debian/postinst"
     - "--before-remove=../../../../installer/debian/prerm"
     - "--after-remove=../../../../installer/debian/postrm"
+    # Earlier releases shipped this package as `gaia`; Replaces lets it take
+    # over those files. No Breaks/Conflicts: the terminal package is also `gaia`,
+    # on the same version numbers, and must stay installed alongside.
+    - "--replaces=gaia"
 
 appImage:
   artifactName: gaia-agent-ui-${version}-${arch}.${ext}
