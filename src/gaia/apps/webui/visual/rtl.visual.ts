@@ -1518,10 +1518,42 @@ for (const locale of ['ar', 'en']) {
             return range.getClientRects()[0].left - el.getBoundingClientRect().left;
         });
         expect(gap).toBeLessThan(16);
-        await expect(page.locator('.perm-card-title bdi')).toHaveText('Allow running python?');
+        const title = page.locator('.perm-card-title');
+        if (locale === 'ar') await expect(title).toContainText('هل تسمح بـ');
+        else await expect(title).toHaveText('Allow running python?');
+        await expect(title.locator('bdi[dir="ltr"]').first()).toHaveText('running python');
         await expect(page.getByRole('button', { name: /Allow once/ })).toContainText(locale === 'ar' ? 'السماح مرة واحدة' : 'Allow once');
         expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre')).toEqual([]);
         await shot(page, `permission-python-${locale}`);
+    });
+}
+
+const PATH_PROMPT = [{
+    type: 'permission_request', tool: 'allow_path_access', tool_label: 'allowing path access', confirm_id: 'c-path',
+    args: { path: 'C:\\Users\\you\\Documents\\sales_data_2025.csv', kind: 'file' },
+}];
+
+for (const locale of ['ar', 'en']) {
+    test(`a path-access prompt asks in the UI language, the path left to right (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, PATH_PROMPT);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('summarize my sales data');
+        await page.keyboard.press('Enter');
+        const title = page.locator('.perm-card-title');
+        await expect(title).toBeVisible();
+        const question = page.locator('.perm-card-question');
+        if (locale === 'ar') {
+            await expect(title).toContainText('هل تسمح لـ GAIA باستخدام هذا الملف؟');
+            await expect(question).toContainText('يريد GAIA استخدام الملف');
+        } else {
+            await expect(title).toHaveText('Let GAIA use this file?');
+            await expect(question).toContainText("GAIA wants to use the file");
+        }
+        await expect(question.locator('bdi[dir="ltr"]').first()).toHaveText('C:\\Users\\you\\Documents\\sales_data_2025.csv');
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre')).toEqual([]);
+        await shot(page, `permission-path-${locale}`);
     });
 }
 
