@@ -85,6 +85,7 @@ const _inSafeMode = _crashCount >= SAFE_MODE_THRESHOLD;
 
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
+const { probeTrayHost } = require("./services/tray-host.cjs");
 const { appIconPath, appUserModelId } = require("./services/app-icon.cjs");
 const {
   attachWindowGuards,
@@ -257,6 +258,8 @@ let engineInstall = null;
 
 /** @type {TrayManager | null} */
 let trayManager = null;
+/** Settles once the tray knows whether this desktop shows tray icons. */
+let trayHostReady = null;
 
 /** @type {AgentProcessManager | null} */
 let agentProcessManager = null;
@@ -666,15 +669,20 @@ function createWindow() {
   // Show window when ready (unless --minimized or startMinimized config)
   mainWindow.once("ready-to-show", () => {
     console.log("[main] ready-to-show fired");
-    const shouldStartMinimized =
-      startMinimized || (trayManager && trayManager.startMinimized);
+    Promise.resolve(trayHostReady).then(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      // Never start hidden where no tray icon would bring the window back.
+      const canHide = Boolean(trayManager && trayManager.trayHost.available);
+      const shouldStartMinimized =
+        canHide && (startMinimized || trayManager.startMinimized);
 
-    if (!shouldStartMinimized) {
-      console.log("[main] mainWindow.show() called");
-      mainWindow.show();
-    } else {
-      console.log("[main] Starting minimized to tray");
-    }
+      if (!shouldStartMinimized) {
+        console.log("[main] mainWindow.show() called");
+        mainWindow.show();
+      } else {
+        console.log("[main] Starting minimized to tray");
+      }
+    });
   });
 
   return mainWindow;
@@ -782,6 +790,14 @@ function initializeServices() {
     reopenWindow: () => reopenWindow(),
   });
   trayManager.create();
+  trayHostReady = probeTrayHost()
+    .then((host) => {
+      if (trayManager) trayManager.setHost(host);
+    })
+    .catch((err) => {
+      // The host stays unknown, so closing quits instead of hiding.
+      console.error(`[main] Could not record the tray host: ${err.message}`);
+    });
   try {
     trayManager.syncLoginItem();
   } catch (err) {

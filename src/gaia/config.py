@@ -167,6 +167,10 @@ class GaiaConfig:
         lemonade_base_url: The user's Lemonade Server, for ``external`` mode.
         lemonade_api_key_stored: Its API key is in the OS credential store.
             The key itself is never written here.
+        lemonade_env_url_ignored: The ``LEMONADE_BASE_URL`` value the person
+            chose GAIA's own server over in the Agent UI. While the variable
+            still holds it, GAIA ignores the variable (and ``LEMONADE_API_KEY``
+            with it); any other value applies again.
         lemonade_idle_timeout_minutes: Stop GAIA's own Lemonade Server once no
             GAIA process has held it, and it has served no request, for this
             many minutes, so its memory goes back to the system. 0 keeps it
@@ -210,6 +214,7 @@ class GaiaConfig:
     lemonade_mode: Optional[str] = None
     lemonade_base_url: Optional[str] = None
     lemonade_api_key_stored: bool = False
+    lemonade_env_url_ignored: Optional[str] = None
     lemonade_idle_timeout_minutes: int = 15
     llamacpp_backend: Optional[str] = None
     context_sizes: Dict[str, int] = field(default_factory=dict)

@@ -664,6 +664,8 @@ def test_streaming_lease_is_held_through_a_retried_attempt(monkeypatch, first_at
     observed: List[Tuple[str, bool]] = []
     during_backoff: List[bool] = []
     client._retry_sleep = lambda s: during_backoff.append(broker_client.holding_lease())
+    # The server is up; only this one attempt's connection failed.
+    client._server_accepts_connections = lambda: True
     stall = _Stalls(observed)
     first = stall if first_attempt == "stall" else _RefusesConnection()
     _install_fake_openai(monkeypatch, [first, _Yields(observed)])

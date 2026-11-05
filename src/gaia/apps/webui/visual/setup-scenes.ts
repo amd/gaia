@@ -65,12 +65,28 @@ const PLAN = {
 
 const PLAN_COLD = { ...PLAN, lemonade: { mode: 'gaia', url: null, reachable: false }, decided_after_server: true, catalog: [] };
 const PLAN_SHORT = { ...PLAN, disk: { ...PLAN.disk, free_gb: 2.1 } };
+// #6632: Linux with an NPU Lemonade reports, but memlock at 8 MB and no access to the device.
+const PLAN_NPU_NOT_READY = {
+    ...PLAN,
+    npu: {
+        present: true,
+        ready: false,
+        problems: [
+            { code: 'access', title: '', fix: '', params: { device: '/dev/accel/accel0', group: 'render' } },
+            { code: 'memlock', title: '', fix: '', params: { limit: '8 MB', fix: 'apply' } },
+            { code: 'runtime', title: '', fix: '', params: { detail: 'flm-real: error while loading shared libraries: libreadline.so.8: cannot open shared object file' } },
+        ],
+    },
+};
 const PLAN_NO_VISION = { ...PLAN, chat_model: { id: MINE.id, user_set: true, size_gb: 0, downloaded: true }, recommended_model: null };
 const PLAN_TOO_BIG = {
     ...PLAN,
     chat_model: { id: QWEN_ID, user_set: true, size_gb: 23.3, downloaded: false },
     catalog: CATALOG.map((e) => (e.id === QWEN_ID ? { ...e, planned: true, selected: true } : e)),
 };
+// Lemonade sees the NPU, but FastFlowLM can't run on this PC (#6632).
+const NPU_UNUSABLE = { fits: false, fit_code: 'npu', fit_reason: 'needs an AMD Ryzen AI NPU and its driver' };
+const PLAN_NPU_UNUSABLE = { ...PLAN, catalog: CATALOG.map((e) => (e.recipe === 'flm' ? { ...e, ...NPU_UNUSABLE } : e)) };
 const PLAN_LONG = {
     ...PLAN,
     chat_model: { id: QWEN_ID, user_set: true, size_gb: 23.3, downloaded: false },
@@ -122,6 +138,15 @@ const RUN_ROW_FAILED = {
     ],
     overall: { bytes_done: 9.93e9, bytes_total: 29.6e9, speed_bps: 0, eta_s: null, percent: 33, failed: 1 },
 };
+// The models came down, then reading the candidate's own agent build timed out.
+const RUN_AGENT_COMPONENT_FAILED = {
+    ...RUN, state: 'failed',
+    components: { server: 'done', backend: 'done', agent: 'failed' },
+    component_kinds: { agent: 'transient' },
+    error: "`gaia init --profile gaia` failed (exit 1): GAIA 0.25.4rc11 is release candidate v0.25.4-rc11, which installs the GAIA agent built from its own commit. Could not read https://github.com/amd/gaia/releases/download/v0.25.4-rc11/gaia-agent-release.json (tried 3 times): HTTPSConnectionPool(host='github.com', port=443): Read timed out. (read timeout=30)",
+    models: [row(EMBED_ID, ['embedding'], 'ready', 330e6, 330e6), row(GEMMA_ID, ['chat', 'vision'], 'ready', 5.97e9, 5.97e9)],
+    overall: { bytes_done: 6.3e9, bytes_total: 6.3e9, speed_bps: 0, eta_s: null, percent: 100, failed: 0 },
+};
 const RUN_LONG = {
     ...RUN,
     models: [row(QWEN_ID, ['chat', 'vision'], 'downloading', 7.6e9, 23.3e9)],
@@ -154,6 +179,15 @@ const RUN_OPTIONAL_FAILED = {
         test('agent', 'running'),
     ],
 };
+const NPU_CHAT_FAILED = "Gemma 4 E4B NPU loads on this PC's NPU, but GAIA's test chat on it got no answer. Test again, or choose another chat model. The setup report has the details.";
+const RUN_AGENT_FAILED = {
+    ...RUN, state: 'failed', error: NPU_CHAT_FAILED, models: DONE_ROWS,
+    tests: [
+        test('server', 'passed', { seconds: 1 }),
+        test('chat', 'passed', { subject: NPU.id, seconds: 9 }),
+        test('agent', 'failed', { subject: NPU.id, kind: 'agent', error: NPU_CHAT_FAILED, seconds: 31 }),
+    ],
+};
 const RUN_READY = { ...RUN, state: 'ready', text: 'GAIA is ready', models: DONE_ROWS.map((m) => ({ ...m, state: 'ready' })) };
 
 const SERVER_RUNNING = { state: 'running', server_only: true, text: 'Starting the local model server', steps: [], log_tail: [] };
@@ -162,7 +196,7 @@ const SERVER_FAILED = {
     error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
     problem: {
         kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-        start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true, switch_hint: null,
+        start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true,
     },
 };
 
@@ -352,6 +386,15 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
+        name: 'models-npu-unusable',
+        answers: { plan: PLAN_NPU_UNUSABLE },
+        reach: async (page) => {
+            await toModels(page);
+            await expect(page.locator('.setup-backend [role="radio"]')).toHaveCount(1);
+            await expect(page.locator('.setup-backend .setup-hint')).toBeVisible();
+        },
+    },
+    {
         name: 'models',
         reach: async (page) => {
             await toModels(page);
@@ -366,6 +409,15 @@ export const SETUP_SCENES: SetupScene[] = [
             await toModels(page);
             await page.locator('.setup-backend [role="radio"]').nth(1).click();
             await expect(page.locator('.mc-job p.setup-hint[role="note"]')).toBeVisible();
+        },
+    },
+    {
+        name: 'models-npu-not-ready',
+        answers: { plan: PLAN_NPU_NOT_READY },
+        reach: async (page) => {
+            await toModels(page);
+            await expect(page.locator('.setup-npu-problems')).toBeVisible();
+            await expect(page.locator('.setup-backend [role="radio"]').nth(1)).toBeDisabled();
         },
     },
     {
@@ -421,6 +473,11 @@ export const SETUP_SCENES: SetupScene[] = [
         reach: (page) => expect(page.locator('.dl-row.is-failed')).toBeVisible(),
     },
     {
+        name: 'download-agent-failed',
+        answers: { status: RUN_AGENT_COMPONENT_FAILED },
+        reach: (page) => expect(page.locator('.setup-content.is-failed .setup-content-failure button')).toBeVisible(),
+    },
+    {
         name: 'download-long',
         answers: { status: RUN_LONG, plan: PLAN_LONG },
         reach: (page) => expect(page.locator('.dl-row').first()).toBeVisible(),
@@ -447,6 +504,12 @@ export const SETUP_SCENES: SetupScene[] = [
         reach: (page) => expect(page.locator('.setup-footer .btn-primary.setup-wrap-btn')).toBeVisible(),
     },
     {
+        // The real chat ran on the chosen NPU model and got no answer: the row names it.
+        name: 'test-failed-agent',
+        answers: { status: RUN_AGENT_FAILED },
+        reach: (page) => expect(page.locator('.setup-result.is-failed .setup-result-model')).toBeVisible(),
+    },
+    {
         name: 'test-long',
         answers: { status: RUN_TEST_LONG, plan: PLAN_LONG },
         reach: (page) => expect(page.locator('.setup-result-error')).toBeVisible(),
@@ -459,7 +522,7 @@ export const SETUP_SCENES: SetupScene[] = [
 ];
 
 /** The screens whose rows wrap: each must hold together in a narrow window too. */
-export const NARROW_SCENES = ['plan', 'check-details', 'models', 'models-long', 'key', 'download-running', 'download-failed', 'test-long', 'ready'];
+export const NARROW_SCENES = ['plan', 'check-details', 'models', 'models-npu-not-ready', 'models-long', 'key', 'download-running', 'download-failed', 'download-agent-failed', 'test-long', 'ready'];
 
 export const scene = (name: string): SetupScene => {
     const found = SETUP_SCENES.find((s) => s.name === name);

@@ -242,12 +242,21 @@ function attachWindowGuards(win, { app, guard, getTray, isQuitting, platform, re
  *
  * @param {{proc: NodeJS.Process, app: Electron.App,
  *   guard: ReturnType<typeof installQuitGuard>, logger?: {log: Function}}} deps
+ * @returns {Promise<void>} Settles once the handler is back on top of Electron's.
  */
 function quitOnTermSignal({ proc, app, guard, logger = console }) {
   proc.on("SIGTERM", () => {
     logger.log("[main] SIGTERM: quitting without asking about running work");
     guard.allow();
     app.quit();
+  });
+  // Electron installs its own SIGTERM handler after the main script runs, and
+  // it replaces Node's, so the listener above never fires. Re-adding every
+  // listener once ready makes Node install its handler again, over Electron's.
+  return app.whenReady().then(() => {
+    const listeners = proc.listeners("SIGTERM");
+    proc.removeAllListeners("SIGTERM");
+    for (const listener of listeners) proc.on("SIGTERM", listener);
   });
 }
 

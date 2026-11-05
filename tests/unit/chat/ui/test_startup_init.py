@@ -286,3 +286,25 @@ def test_boot_preload_never_waits_on_the_broker_for_a_cloud_model(app):
     assert job.status == JobStatus.DONE
     assert leases == []
     lemonade.load_model.assert_not_called()
+
+
+def test_startup_does_not_wait_on_saved_sign_in_check(monkeypatch):
+    """A keychain read stuck on a macOS prompt must not stop the server answering."""
+    import threading
+
+    import gaia.connectors.api as connectors_api
+
+    answered = threading.Event()
+    gave_up = threading.Event()
+
+    def _stuck_on_keychain_prompt():
+        if not answered.wait(timeout=10):
+            gave_up.set()
+
+    monkeypatch.setattr(connectors_api, "tripwire_check", _stuck_on_keychain_prompt)
+
+    with TestClient(create_app(db_path=":memory:")) as c:
+        assert c.get("/api/health").status_code == 200
+        answered.set()
+
+    assert not gave_up.is_set()

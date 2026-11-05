@@ -204,6 +204,12 @@ class SidecarRegistry:
             lock_digest = self._check_binary_lock(
                 agent_id, spec, mode, manager, binary_lock_sha256, binary_lock_path
             )
+            if manager.is_running and manager.uses_ignored_lemonade:
+                # GAIA's own was chosen over the LEMONADE_BASE_URL it got.
+                logger.info(
+                    "daemon: restarting agent '%s' on GAIA's own Lemonade", agent_id
+                )
+                self._stop_locked(agent_id, manager)
             if manager.is_running:
                 # Attaching without an explicit mode is not a mode request —
                 # only an explicit, differing mode conflicts (compared against

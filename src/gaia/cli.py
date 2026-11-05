@@ -199,7 +199,7 @@ def initialize_lemonade_for_agent(
                 quiet=quiet, host=host, port=port, model=model
             )
     except LemonadeClientError as e:
-        print(f"❌ Error: {e}", file=sys.stderr)
+        print(f"❌ Error: {_cli_wording(e)}", file=sys.stderr)
         return False, None
 
     if not success:
@@ -231,6 +231,13 @@ def _lemonade_answers(base_url: str | None = None) -> bool:
     else:
         client = LemonadeClient(keep_alive=True, verbose=False)
     return _probe(client)
+
+
+def _cli_wording(e: BaseException) -> str:
+    """*e*'s message with the apps' advice swapped for the CLI's commands."""
+    from gaia.llm.surface_hints import surface_wording
+
+    return surface_wording(str(e), "cli")
 
 
 def _cli_error_text(e: BaseException) -> str:
@@ -7253,9 +7260,20 @@ def _handle_network_policy(action, value) -> None:
         for key, model in cleared:
             print(f"   Cleared {key} (was {model}): it is a cloud model.")
         print(f"   GAIA now uses {resolve_default_chat_model()} by default.")
-    from gaia.llm.cloud_keys import CloudKeyError, drop_runtime_keys
+    from gaia.llm.cloud_keys import (
+        CloudKeyError,
+        drop_runtime_keys,
+        users_lemonade_url,
+    )
 
     try:
+        users_url = users_lemonade_url()
+        if users_url:
+            print(
+                f"   Left your Lemonade Server at {users_url} as is: any cloud "
+                "keys it holds stay there, and GAIA won't send it cloud requests."
+            )
+            return
         dropped = drop_runtime_keys()
     except CloudKeyError as e:
         print(
@@ -7363,7 +7381,7 @@ def _warn_if_default_model_unavailable(model_id: str) -> None:
     try:
         failure = GatewayState.load().unavailable(model_id)
     except GatewayError as e:
-        print(f"⚠️  {e}", file=sys.stderr)
+        print(f"⚠️  {_cli_wording(e)}", file=sys.stderr)
         return
     if failure:
         print(
@@ -7446,7 +7464,7 @@ def _claude_route_sends_another_token(token):
     except GatewayError as e:
         print(
             f"⚠️  Claude gateway models (amd.Claude-*) send the token from GAIA, "
-            f"not Lemonade, and GAIA has none: {e}",
+            f"not Lemonade, and GAIA has none: {_cli_wording(e)}",
             file=sys.stderr,
         )
         return False
@@ -7475,7 +7493,7 @@ def _test_gateway_claude(model, source, prompt):
         client = create_client("lemonade", model=model)
         content = client.chat([{"role": "user", "content": prompt}], max_tokens=256)
     except (GatewayError, RuntimeError, ImportError) as e:
-        print(f"❌ Testing {model} failed: {e}", file=sys.stderr)
+        print(f"❌ Testing {model} failed: {_cli_wording(e)}", file=sys.stderr)
         sys.exit(1)
     print(content)
     usage = client.get_last_usage() or {}
@@ -7858,12 +7876,12 @@ def handle_gateway_command(args):
             return
 
     except GatewayError as e:
-        print(f"❌ {e}", file=sys.stderr)
+        print(f"❌ {_cli_wording(e)}", file=sys.stderr)
         sys.exit(1)
     except LemonadeClientError as e:
         # `models` and `test` go through LemonadeClient, which raises its own
         # type. Letting it escape printed a traceback instead of the message.
-        print(f"❌ {e}", file=sys.stderr)
+        print(f"❌ {_cli_wording(e)}", file=sys.stderr)
         sys.exit(1)
     except ConnectorsError as e:
         # The credential store raises this for an unusable backend, and `logout
@@ -8360,7 +8378,11 @@ def _bootstrap_infer():
     reading it.
     """
     from gaia.agents.base.discovery import SystemDiscovery
-    from gaia.agents.base.inferred_insights import parse_inferred_insights
+    from gaia.agents.base.inferred_insights import (
+        DEFAULT_CONFIDENCE,
+        normalize_confidence,
+        parse_inferred_insights,
+    )
     from gaia.agents.base.memory_store import MemoryStore
 
     print("\n=== GAIA Memory — AI Profile Inference ===")
@@ -8579,9 +8601,16 @@ def _bootstrap_infer():
     try:
         for i, insight in enumerate(insights, 1):
             content = insight["content"].strip()[:200]
-            confidence = float(insight.get("confidence", 0.7))
+            raw_confidence = insight.get("confidence", DEFAULT_CONFIDENCE)
+            confidence = normalize_confidence(raw_confidence)
+            if confidence is None:
+                print(
+                    f"  ({i}/{len(insights)}) Skipped: confidence "
+                    f"{raw_confidence!r} is not a number or low/medium/high: {content}"
+                )
+                skipped += 1
+                continue
             domain = insight.get("domain", "general")
-            confidence = max(0.0, min(1.0, confidence))
 
             print(f"  ({i}/{len(insights)}) [{confidence:.0%}] {content}")
             try:
@@ -10411,6 +10440,12 @@ def handle_lemonade_choice_command(args):
             else:
                 print("GAIA uses its own Lemonade Server")
                 print("   to use one you run: gaia lemonade connect <url>")
+            if info["env_url_ignored"]:
+                print(
+                    f"   LEMONADE_BASE_URL={info['env_url_ignored']} is ignored: "
+                    "GAIA's own was chosen over it in the app. A different value "
+                    "applies again."
+                )
             return
 
         if action == "detect":

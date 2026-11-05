@@ -416,8 +416,23 @@ replays as text only. Pre-2.25 binaries `422` `turns`.
 `reasoning` (contract ≥ 2.22), when `true`, streams the model's reasoning as
 `reasoning` events, `{ "type": "reasoning", "delta": "…" }`, so a client can
 show it apart from `status` lines and from the answer's `token`s. Each delta
-keeps its own spacing: join them as they arrive. Without the field, reasoning
-folds into `status` lines as before. Pre-2.22 binaries `422` it.
+keeps its own spacing: join them as they arrive. A model whose chat template
+opens the reasoning block sends only its closing `</think>`, so its reasoning
+streams as `token`s until that tag arrives; the `reasoning` event that follows
+carries `"retracts_answer": true`, and the client drops the `token` text since
+the last `tool_call` from the answer. Without the field, reasoning folds into
+`status` lines as before. Pre-2.22 binaries `422` it.
+
+A reply can also be taken back without `reasoning`. When GAIA's model server
+stops part-way through a reply (or the connection drops), the step is sent
+again, and a `status` with `"phase": "answer_restart"` and
+`"retracts_answer": true` comes first: the client drops the `token` text
+since the last `tool_call` and shows the status `message` in its place. While
+the daemon restarts the server, `status` lines carry `"phase":
+"model_restart"`. If it is not back within the retries, `final` carries
+`failure: "model_server_down"`. A tool's own model calls report the same
+restart, and `extract_document_items` sends `"phase": "reading"` before each
+page's call ("Reading page 4 of 12…").
 
 ```json
 {
@@ -495,6 +510,14 @@ and tool seconds and its model call count; `conversation` holds one
 call, with that call's token counts and speed. The Agent UI turns it into the
 Context panel's "Under the hood" figures. A run that timed nothing
 carries none, and older binaries never send it, so read it only when present.
+
+A `final` with `failed: true` ends a turn a model call broke; its `answer` says
+what was and wasn't done. When the cause is one a front-end can fix, `failure`
+names it. `"model_server_down"` means the local model server took no
+connection. Cloud models go through that server too, so the provider was never
+reached; the turn fails at once instead of retrying, and its `answer` names the
+server, not the provider. Offer to start the server. Older binaries never send
+`failure`, so read it only when present.
 
 ### 5.2 `session_id` and agent retention
 

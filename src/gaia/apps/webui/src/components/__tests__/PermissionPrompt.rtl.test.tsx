@@ -9,6 +9,7 @@ import { PermissionPrompt } from '../PermissionPrompt';
 import { useNotificationStore, PATH_ACCESS_TOOL } from '../../stores/notificationStore';
 import { useChatStore } from '../../stores/chatStore';
 import type { GaiaNotification } from '../../types/agent';
+import { stripIsolates } from '../../i18n/registry';
 
 const CODE = 'p = r"C:\\Users\\you\\notes.txt"\nt = open(p, encoding="utf-8").read()';
 
@@ -40,10 +41,12 @@ describe('permission prompt in Arabic', () => {
         for (const pre of document.querySelectorAll('pre')) expect(pre, pre.outerHTML).toHaveAttribute('dir', 'ltr');
     });
 
-    it('isolates the English title so its question mark stays at its end', () => {
+    it('asks in Arabic, the tool kept left to right', () => {
         prompt({ tool: 'run_python', toolLabel: 'running python', toolArgs: { code: CODE } });
         const title = screen.getByRole('heading');
-        expect(title.querySelector('bdi')).toHaveTextContent(/^Allow running python\?$/);
+        expect(title.textContent).toMatch(/^⁧?هل تسمح بـ/);
+        expect(title.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^running python$/);
+        expect(stripIsolates(title.querySelector('.i18n-gloss')!.textContent!)).toBe('(Allow running python?)');
     });
 
     it('keeps a shell command, its folder and its always-allow scope left to right', () => {
@@ -98,14 +101,13 @@ describe('permission prompt in Arabic', () => {
         expect(screen.getByRole('alertdialog').querySelector('.perm-card-exact')).toHaveAttribute('dir', 'ltr');
     });
 
-    it('keeps a path left to right and the English question whole', () => {
-        prompt({
-            tool: PATH_ACCESS_TOOL, title: 'Let GAIA use this folder?',
-            message: 'GAIA wants to use the folder C:\\data. Allow it for this chat?',
-            toolArgs: { path: 'C:\\data\\reports' },
-        });
+    it('asks about a path in Arabic, the path kept left to right', () => {
+        prompt({ tool: PATH_ACCESS_TOOL, toolArgs: { path: 'C:\\data\\reports', kind: 'folder' } });
         const card = screen.getByRole('alertdialog');
         expect(card.querySelector('.perm-card-detail code')).toHaveAttribute('dir', 'ltr');
-        expect(screen.getByRole('heading').querySelector('bdi')).toHaveTextContent(/^Let GAIA use this folder\?$/);
+        expect(screen.getByRole('heading')).toHaveTextContent('هل تسمح لـ GAIA باستخدام هذا المجلد؟');
+        const question = card.querySelector('.perm-card-question')!;
+        expect(question).toHaveTextContent('يريد GAIA استخدام المجلد');
+        expect(question.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^C:\\data\\reports$/);
     });
 });

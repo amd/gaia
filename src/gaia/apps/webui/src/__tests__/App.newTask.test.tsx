@@ -93,7 +93,7 @@ beforeEach(() => {
     useChatStore.setState({
         sessions: [], currentSessionId: null, messages: [], agents: [], pendingPrompt: null,
         draftPermissionMode: 'ask', defaultPermissionMode: 'ask', showMemoryDashboard: false, showSchedules: false, settingsSection: null,
-        draftDocumentIds: [], draftPrivate: false,
+        draftDocumentIds: [], draftPrivate: false, locale: 'en',
     });
 });
 
@@ -425,6 +425,20 @@ describe('first-run setup', () => {
 
         await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
         await waitFor(() => expect(mocked.startSetup).toHaveBeenCalledTimes(2));
+    });
+
+    it('a failed update names no command and reads in Arabic, its fallback reason too', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        mocked.checkSetup.mockResolvedValue({ ready: false, stage: 'upgrade', steps: [] });
+        mocked.startSetup.mockResolvedValue({ state: 'running', upgrade_embedded: true } as never);
+        mocked.getSetupStatus.mockImplementation(async () => (mocked.startSetup.mock.calls.length
+            ? { state: 'cancelled' } as never
+            : { state: 'idle' }));
+        render(<App />);
+
+        const notice = await screen.findByText(/تعذّر على GAIA تحديث خادم النماذج المحلي/);
+        expect(notice.textContent).toContain('توقّف التحديث قبل أن يكتمل.');
+        expect(notice.textContent).not.toMatch(/gaia init|The update stopped/);
     });
 
     /** This suite has no plan to choose from, so setup offers its own model set. */

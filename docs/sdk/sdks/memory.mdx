@@ -170,7 +170,7 @@ No memories stored yet. Start building your knowledge base by remembering what t
 - Excludes items where `superseded_by IS NOT NULL` (only current/active items)
 - Covers preferences, facts, skills, errors, reminders and notes; lessons have their own section, and session summaries (consolidation notes) are left out because their dated history would contradict newer facts — they stay recallable. A reminder whose due day has passed is left to the upcoming/overdue path, and a reminder shows its due date
 - Most recently confirmed first (the store is read in that order, not by confidence), so a fact that changed outranks the one it replaced
-- No per-category limit: the categories take turns, one item each, until the 4000-char cap (`STABLE_MEMORY_PROMPT_CHARS`, instructions included) is full. An item too long for what is left is skipped whole, and a closing line says how many were left out so the model knows to `recall` them
+- No per-category limit: the categories take turns, one item each, until the 4250-char cap (`STABLE_MEMORY_PROMPT_CHARS`, instructions included) is full. An item too long for what is left is skipped whole, and a closing line says how many were left out so the model knows to `recall` them
 - Confidence scores are not shown, so the model doesn't discount a true fact that was extracted rather than stated
 
 ### get_memory_dynamic_context()
@@ -385,6 +385,7 @@ def _extract_via_llm(
     assistant_response: str,
     existing_items: List[Dict],
     tool_record: Optional[List[Dict]] = None,
+    user_forgot: bool = False,
 ) -> List[Dict]:
 ```
 
@@ -398,6 +399,8 @@ Sends the conversation turn and existing memory to the LLM, which returns a JSON
 | `noop` | Information already captured — not included in output | — |
 
 The extraction fetches top-10 relevant existing items first via `_hybrid_search()`, so the LLM can see what already exists and decide whether to add, update, delete, or do nothing. This replaces v1's regex-based heuristic extraction.
+
+A `delete` is kept only when the turn contradicts that memory, so a model that reads "forget X" cannot point it at another one. It is dropped when the user's own `forget` or `forget_everything` removed something this turn (`user_forgot`; a forget that failed doesn't count), when its id was not among the items the model was shown, or when the memory shares fewer than two content words with the user's message (`content_stems`; one, if the memory has only one). A kept delete refuses `system`/`profile`/`permission` rows and goes through `MemoryStore.delete()`, not `forget()`: the memory was replaced, not forgotten, so older chats about it stay searchable. Each dropped or applied delete is logged by id, never by content.
 
 Memory holds what is true about the **user**, not the subject of the conversation. `grounded` must be `"user"` (the user said it about themselves); an op grounded in anything else is dropped. A document's contents, a search result, the weather, or the assistant's answer are not facts about the user, and stored as one they are replayed in every later chat as if the user had said them (#5027).
 
@@ -418,7 +421,7 @@ Extraction runs **after** the turn returns, not before it. `_after_process_query
 | `EXTRACTION_EXIT_WAIT_S` | 15 | How long a drain waits before giving up and saying the turn's facts were not stored |
 | `EXTRACTION_IDLE_S` | 3 | Quiet time after the last user turn before a queued job starts |
 
-**It yields to the user.** A queued job does not start while a user turn is running, or until `EXTRACTION_IDLE_S` has passed since the last one ended. A queue that reaches `EXTRACTION_QUEUE_MAX` starts at once instead, so holding never drops a turn. Extraction shares the local model with the conversation, so a job started the moment a turn ended made a quick follow-up queue behind it. A job already running when a user turn starts is stopped (#5022): its model call streams with `AgentSDK.send_messages(cancel=...)`, the new turn sets the event, the stream is closed so the server stops generating, nothing partial is stored, and the job goes back to the front of the queue to rerun once the user is idle. A flush from `wait_for_memory_extraction` is never stopped. Its model call is kept out of the turn's metrics (`AgentSDK.side_request()`), so a turn's recorded stats are its own.
+**It yields to the user.** A queued job does not start while a user turn is running, or until `EXTRACTION_IDLE_S` has passed since the last one ended. A queue that reaches `EXTRACTION_QUEUE_MAX` starts at once instead, so holding never drops a turn. Extraction shares the local model with the conversation, so a job started the moment a turn ended made a quick follow-up queue behind it. A job already running when a user turn starts is stopped (#5022): its model call streams with `AgentSDK.send_messages(cancel=...)`, the new turn sets the event, and the stream is closed (on the NPU it is read to its end instead, for up to 60 s, because FastFlowLM restarts when a reply is cut off). A job cancelled while it still waits for the model is never sent. Nothing partial is stored, and the job goes back to the front of the queue to rerun once the user is idle. A flush from `wait_for_memory_extraction` is never stopped. Its model call is kept out of the turn's metrics (`AgentSDK.side_request()`), so a turn's recorded stats are its own.
 
 One extraction thread per agent. Each job freezes the turn's text and context at turn end, so mutating the agent afterwards cannot change what gets extracted.
 
@@ -1123,7 +1126,7 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | `_backfill_embeddings(limit)` | Embed items missing embeddings |
 | `_hybrid_search(query, ...)` | Vector + BM25 search fused by RRF |
 | `_classify_query_complexity(query)` | Returns adaptive top_k: 3, 5, or 10 |
-| `_extract_via_llm(user_input, assistant_response, existing_items, tool_record)` | Mem0-style extraction: ADD/UPDATE/DELETE/NOOP |
+| `_extract_via_llm(user_input, assistant_response, existing_items, tool_record, user_forgot)` | Mem0-style extraction: ADD/UPDATE/DELETE/NOOP |
 | `consolidate_old_sessions(max_sessions)` | Distill old sessions to durable knowledge |
 | `reconcile_memory(max_pairs)` | Detect and resolve contradictory/reinforcing facts |
 

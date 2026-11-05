@@ -495,7 +495,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((state) => {
             if (!(requestId in state.liveQuestions)) return state;
             const { [requestId]: _closed, ...rest } = state.liveQuestions;
-            return { liveQuestions: rest };
+            // The agent stops waiting once its question is answered or expires.
+            return { liveQuestions: rest, awaitingUser: false };
         }),
     closeSessionQuestions: (sessionId) =>
         set((state) => {

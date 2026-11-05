@@ -26,6 +26,7 @@ except ImportError:
 
 from ..base_client import LLMClient
 from ..local_only import assert_provider_permitted
+from ..surface_hints import TUI_MODEL_SWITCH_HINT
 from .lemonade import _NATIVE_TC_KEY
 
 logger = logging.getLogger(__name__)
@@ -1191,8 +1192,9 @@ class GatewayClaudeProvider(ClaudeProvider):
 
         if gateway.gateway_claude_upstream_id(model) is None:
             raise ValueError(
-                f"{model!r} is not an AMD gateway Claude model. Pass an "
-                f"'{gateway.GATEWAY_PROVIDER}.Claude-*' id from `gaia gateway models`."
+                f"{model!r} is not an AMD gateway Claude model: its id must "
+                f"start with '{gateway.GATEWAY_PROVIDER}.Claude-'. "
+                f"{TUI_MODEL_SWITCH_HINT}"
             )
         # Before the base URL, so Local only is what a blocked user is told.
         assert_provider_permitted(self._DESTINATION)
@@ -1268,7 +1270,7 @@ class GatewayClaudeProvider(ClaudeProvider):
             raise RuntimeError(
                 f"{where} did not answer within {self._timeout:g}s, so the request "
                 "timed out. The gateway was reached but is slow or overloaded; "
-                "retry in a minute, and check `gaia gateway status` if it persists."
+                "retry in a minute."
             ) from exc
         if isinstance(exc, sdk.APIConnectionError):
             raise RuntimeError(
@@ -1304,11 +1306,9 @@ class GatewayClaudeProvider(ClaudeProvider):
         if status in (400, 404) and "not found" in str(exc.message).lower():
             raise RuntimeError(
                 f"{where} has no deployment of {self._gateway_model} "
-                f"(HTTP {status}): {exc.message}. Run `gaia gateway models` and "
-                "pick a deployed Claude model."
+                f"(HTTP {status}): {exc.message}. {TUI_MODEL_SWITCH_HINT}"
             ) from exc
         raise RuntimeError(
-            f"{where} returned HTTP {status}: {exc.message}. Check "
-            "`gaia gateway status`; if it persists, see "
-            "https://amd-gaia.ai/docs/guides/llm-gateway."
+            f"{where} returned HTTP {status}: {exc.message}. Retry in a minute; "
+            "if it persists, see https://amd-gaia.ai/docs/guides/llm-gateway."
         ) from exc

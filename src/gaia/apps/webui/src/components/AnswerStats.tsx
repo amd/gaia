@@ -2,16 +2,15 @@
 // SPDX-License-Identifier: MIT
 
 import { useState } from 'react';
-import { bracketParts, pluralKey, ref, type MessageKey, type Param, type Say } from '../i18n/registry';
+import { pluralKey, ref, type MessageKey, type Param, type Say } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
 import type { InferenceStats } from '../types';
+import { MarkedText, markLtr as marked } from './MarkedText';
 import './AnswerStats.css';
 
 /** Marks a number with its unit, so the renderer can keep it left to right. */
 type Mark = (text: string) => string;
 const plain: Mark = (text) => text;
-const marked: Mark = (text) => `\uE000${text}\uE001`;
-const MARKED = /\uE000([^\uE001]*)\uE001/;
 
 /** `40200` -> "40 s", `400` -> "under a second", `95000` -> "1 min 35 s". */
 export function spokenDuration(ms: number, say: Say = tEn.bare, mark: Mark = plain): string {
@@ -124,18 +123,6 @@ export function exactStats(
     return lines;
 }
 
-/** Text with each marked number in its own left-to-right `<bdi>`. */
-function Marked({ text }: { text: string }) {
-    return <>{text.split(MARKED).map((piece, i) => (i % 2 ? <bdi dir="ltr" key={i}>{piece}</bdi> : piece))}</>;
-}
-
-/** A composed line, its bracketed English set apart as the quieter gloss. */
-function Line({ text }: { text: string }) {
-    const [own, english] = bracketParts(text);
-    if (english === undefined) return <Marked text={own} />;
-    return <><Marked text={own} />{' '}<small className="i18n-gloss" lang="en"><Marked text={english} /></small></>;
-}
-
 /** The answer footer in plain words; a click shows the exact numbers. */
 export function AnswerStats({ latencyMs, stats, ended }: { latencyMs?: number; stats?: InferenceStats; ended?: TurnEnding }) {
     const t = useT();
@@ -153,10 +140,10 @@ export function AnswerStats({ latencyMs, stats, ended }: { latencyMs?: number; s
                     title={exactStats(latencyMs, stats, t).join('\n')}
                     onClick={() => setOpen((v) => !v)}
                 >
-                    {summary ? <Line text={summary} /> : t('answer.details')}
+                    {summary ? <MarkedText text={summary} /> : t('answer.details')}
                 </button>
             </span>
-            {open && exact.map((line) => <span key={line}><Line text={line} /></span>)}
+            {open && exact.map((line) => <span key={line}><MarkedText text={line} /></span>)}
         </>
     );
 }

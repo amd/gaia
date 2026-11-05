@@ -59,6 +59,11 @@ it runs) — so there is nothing to unzip and nothing to `chmod`.
 | Linux x64 (Debian/Ubuntu) | `gaia_<version>_amd64.deb` | `sudo dpkg -i gaia_<version>_amd64.deb` | `/usr/bin` |
 | Linux x64 (Fedora/RHEL) | `gaia-<version>.x86_64.rpm` | `sudo dnf install ./gaia-<version>.x86_64.rpm` | `/usr/bin` |
 
+On macOS and Linux the package carries only those two binaries. The first time you
+open GAIA, setup installs the rest of GAIA (its Python part, the `gaia` command) into
+`~/.gaia`. That takes about two minutes and needs internet. The one-line installer
+(`curl -fsSL https://amd-gaia.ai/install.sh | sh`) installs it up front instead.
+
 On Windows this is the one GAIA installer: on **Choose Components**, tick
 **Terminal** — and the desktop app too, if you want both. [Install GAIA](/guides/install)
 covers the choice and silent installs (`/S /COMPONENTS=tui`).
@@ -378,8 +383,8 @@ these sentences read the same as in the Agent UI. `Esc` leaves, which cancels th
 A download isn't proof it works, so the last part runs each job for real: the
 model server answers, the chat model loads and answers, the vision model names a
 test image's colour, the embedder makes an embedding, each extra you ticked does
-its job, and GAIA answers one real chat. Each test shows as a row, and setup is
-ready only when the ones it needs have passed.
+its job, and GAIA answers one real chat on the model your chat will open on. Each
+test shows as a row, and setup is ready only when the ones it needs have passed.
 
 ```
   Testing everything                                 step 3 of 3 · part 3 of 3

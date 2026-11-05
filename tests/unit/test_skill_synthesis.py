@@ -448,6 +448,22 @@ class TestDistillCluster:
         assert skill is not None
         assert skill.name == "triage-support-ticket"
 
+    @pytest.mark.parametrize(
+        "reply, distils",
+        [
+            (f"<think>Weigh it.</think>\n{_INTERMEDIATE_MD}", True),
+            (f"<think>Weigh it, then\n{_INTERMEDIATE_MD}", False),
+            (f"Weigh it.</think>\n{_INTERMEDIATE_MD}", True),
+            (_INTERMEDIATE_MD, True),
+        ],
+        ids=["paired", "unclosed", "lone-close", "no-tags"],
+    )
+    def test_reasoning_never_reaches_the_parser(self, reply, distils):
+        skill = distill_cluster(_cluster(), _llm_returning(reply))
+        assert (skill is not None) is distils
+        if distils:
+            assert skill.name == "triage-support-ticket"
+
     def test_skip_output_returns_none(self):
         assert distill_cluster(_cluster(), _llm_returning("SKIP")) is None
 

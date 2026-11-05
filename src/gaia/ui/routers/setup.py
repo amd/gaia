@@ -18,8 +18,11 @@ from pydantic import BaseModel
 from gaia.logger import get_logger
 
 from .. import setup_plan as plan_api
-from ..security import require_ui_header
+from ..database import ChatDatabase
+from ..dependencies import get_db
+from ..security import require_local_pc, require_ui_header
 from ..setup_plan import (
+    CantRunHere,
     ServerNotRunning,
     SetupPlanError,
     UnknownModel,
@@ -28,9 +31,9 @@ from ..setup_plan import (
 )
 from ..setup_runner import (
     REPORT_NAME_RE,
-    LemonadeOverridden,
     SetupBusy,
     SetupError,
+    agent_ui_chat_model,
     check,
     runner,
     step_labels,
@@ -57,10 +60,6 @@ _BUSY = (
     "Setup or that model's download is already running. Wait for it or cancel "
     "it, then try again."
 )
-_OVERRIDDEN = (
-    "LEMONADE_BASE_URL points GAIA at another server, so setup can't switch to "
-    "GAIA's own. Unset it and restart GAIA."
-)
 _START_FAILED = "Setup couldn't start. Try again. " + _LOG
 
 
@@ -71,6 +70,9 @@ def _plan_error(e: SetupPlanError, unknown_model: str) -> HTTPException:
         return HTTPException(status_code=503, detail=_SERVER_DOWN)
     if isinstance(e, UnknownModel):
         return HTTPException(status_code=422, detail=unknown_model)
+    if isinstance(e, CantRunHere):
+        # Our own sentence: the model and Lemonade's reason, nothing internal.
+        return HTTPException(status_code=409, detail=str(e))
     return HTTPException(status_code=503, detail=_PLAN_FAILED)
 
 
@@ -78,8 +80,6 @@ def _run_error(e: SetupError) -> HTTPException:
     logger.exception("Setup could not start")
     if isinstance(e, SetupBusy):
         return HTTPException(status_code=409, detail=_BUSY)
-    if isinstance(e, LemonadeOverridden):
-        return HTTPException(status_code=409, detail=_OVERRIDDEN)
     return HTTPException(status_code=500, detail=_START_FAILED)
 
 
@@ -109,6 +109,42 @@ def setup_plan() -> Dict[str, Any]:
         return build_plan()
     except SetupPlanError as e:
         raise _plan_error(e, _PLAN_FAILED) from e
+
+
+@router.post("/api/setup/npu/recheck", dependencies=[Depends(require_ui_header)])
+def setup_npu_recheck() -> Dict[str, Any]:
+    """Read the NPU's setup afresh, after the user fixed something; returns the plan."""
+    from gaia.llm import npu_linux
+
+    npu_linux.forget()
+    return setup_plan()
+
+
+# Starts a root step on this PC, so only someone at this PC may ask for it.
+@router.post(
+    "/api/setup/npu/memlock-fix",
+    dependencies=[Depends(require_ui_header), Depends(require_local_pc)],
+)
+def setup_npu_memlock_fix() -> Dict[str, Any]:
+    """Raise the locked-memory limit FastFlowLM needs, behind the desktop's own
+    administrator prompt; returns the plan. It applies after a restart."""
+    from gaia.llm import npu_linux
+
+    try:
+        npu_linux.apply_memlock_fix()
+    except npu_linux.MemlockFixError as e:
+        logger.warning("NPU memlock fix not applied (%s): %s", e.code, e)
+        status = {
+            "cancelled": 409,
+            "timeout": 409,
+            "not_authorized": 409,
+            "not_linux": 422,
+            "no_pkexec": 422,
+        }.get(e.code, 500)
+        raise HTTPException(
+            status_code=status, detail={"code": e.code, "message": str(e)}
+        ) from e
+    return setup_plan()
 
 
 def _confirm(warning: Dict[str, Any]) -> HTTPException:
@@ -301,12 +337,19 @@ class SetupRunRequest(BaseModel):
 
 
 @router.post("/api/setup/run")
-def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
+def setup_run(
+    body: SetupRunRequest, db: ChatDatabase = Depends(get_db)
+) -> Dict[str, Any]:
     """Start ``gaia init --profile gaia --yes``; follow it with ``/api/setup/status``.
 
     When the selected models need more disk than is free, answers 409
     ``low_disk`` until ``acknowledge_low_disk`` confirms it.
     """
+    return start_run(body, lambda run: agent_ui_chat_model(db, run))
+
+
+def start_run(body: SetupRunRequest, chat_model_for) -> Dict[str, Any]:
+    """Start setup for an app whose chat opens on ``chat_model_for()``."""
     if body.server_only and body.upgrade_embedded:
         raise HTTPException(
             status_code=422,
@@ -332,15 +375,17 @@ def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
     except SetupPlanError as e:
         raise _plan_error(e, _PLAN_FAILED) from e
     try:
-        # Switching to GAIA's own server: the user's server's disk is moot.
+        # Switching to GAIA's own server: the user's server is moot.
         if (
             not body.gaia_lemonade
-            and not body.acknowledge_low_disk
             and not body.server_only
             and not body.upgrade_embedded
         ):
             warning = plan_api.run_disk_warning(
-                skip_chat_model=body.skip_chat_model, extra_models=extras
+                skip_chat_model=body.skip_chat_model,
+                extra_models=extras,
+                check_disk=not body.acknowledge_low_disk,
+                check_chat_model=True,
             )
             if warning:
                 raise _confirm(warning)
@@ -352,6 +397,7 @@ def setup_run(body: SetupRunRequest) -> Dict[str, Any]:
             extra_models=extras,
             server_only=body.server_only,
             upgrade_embedded=body.upgrade_embedded,
+            chat_model_for=chat_model_for,
         )
     except SetupPlanError as e:
         raise _plan_error(e, _PLAN_FAILED) from e

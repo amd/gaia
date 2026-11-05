@@ -1624,7 +1624,9 @@ def _run_capturing_subprocess(host, command):
 
     def fake_popen(args, **kwargs):
         seen["args"] = args
-        seen["shell"] = kwargs.get("shell", False)
+        seen["shell"] = kwargs.get("shell", False) or (
+            shell_module._CMD_TEXT_ENV in (kwargs.get("env") or {})
+        )
         return _FakeProcess()
 
     def fake_pipeline(segments, modes, envs, cwd, timeout, waiter=None):
