@@ -79,9 +79,7 @@ def _b64(text: str) -> str:
     return base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii").rstrip("=")
 
 
-def _msg(
-    msg_id: str, *, subject: str, sender: str, body: str
-) -> Dict[str, Any]:
+def _msg(msg_id: str, *, subject: str, sender: str, body: str) -> Dict[str, Any]:
     """An unlabeled message with no automated-sender/promo keyword match --
     the heuristic cannot commit, so it always escalates to the classifier.
     """

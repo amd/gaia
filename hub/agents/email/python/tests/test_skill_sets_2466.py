@@ -30,14 +30,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
-
-from gaia.connectors.providers.microsoft import (
-    ACCOUNT_TYPE_PERSONAL,
-    ACCOUNT_TYPE_WORK,
-)
-from gaia.skills import SkillManager
-from gaia.skills.errors import SkillSetError
-
 from gaia_agent_email.agent import (
     ACCOUNT_TYPE_SKILL_SETS,
     EmailTriageAgent,
@@ -49,6 +41,13 @@ from gaia_agent_email.config import (
     ConfigurationError,
     EmailAgentConfig,
 )
+
+from gaia.connectors.providers.microsoft import (
+    ACCOUNT_TYPE_PERSONAL,
+    ACCOUNT_TYPE_WORK,
+)
+from gaia.skills import SkillManager
+from gaia.skills.errors import SkillSetError
 
 _PKG_ROOT = Path(__file__).resolve().parents[1]
 _MANIFEST = _PKG_ROOT / "gaia-agent.yaml"
@@ -212,7 +211,9 @@ def test_bundled_skills_are_instruction_only(tmp_path):
         )
 
 
-def test_declared_tools_required_all_exist_in_the_agents_registry(tmp_path, monkeypatch):
+def test_declared_tools_required_all_exist_in_the_agents_registry(
+    tmp_path, monkeypatch
+):
     """A skill whose recipe names a tool this agent lacks cannot be executed."""
     agent = _build_agent(tmp_path, monkeypatch)
     manager = _isolated_manager(tmp_path)
@@ -508,9 +509,7 @@ def test_a_gmail_only_mailbox_resolves_the_default_set(
     The default set must then apply *explicitly* — a work mailbox must never be
     silently treated as personal because the signal was missing.
     """
-    monkeypatch.setattr(
-        "gaia_agent_email.config.get_connection", lambda provider: None
-    )
+    monkeypatch.setattr("gaia_agent_email.config.get_connection", lambda provider: None)
     agent = _build_agent(tmp_path, monkeypatch)
 
     assert agent.config.resolve_account_type() is None
@@ -614,8 +613,8 @@ def test_the_whole_post_tool_turn_fits_the_window_with_skills_loaded(
     """
     from gaia_agent_email.config import DEFAULT_INBOX_SCAN_CEILING
     from gaia_agent_email.context_budget import (
-        CONTEXT_TARGET_TOKENS,
         _RESPONSE_RESERVE_TOKENS,
+        CONTEXT_TARGET_TOKENS,
         envelope_budget_tokens,
         estimate_tokens,
         estimate_tokens_json,
@@ -684,17 +683,16 @@ def test_the_bundled_skill_bodies_stay_within_their_prompt_budget(
     more than ~1,500 tokens starves the bulk-triage result envelope on the
     16K-ctx hardware this agent targets.
     """
-    from gaia.hub.manifest import parse as parse_manifest
     from gaia_agent_email.context_budget import estimate_tokens
+
+    from gaia.hub.manifest import parse as parse_manifest
 
     manager = _isolated_manager(tmp_path)
     bodies = {s.name: manager.load(s.name).body for s in manager.list_skills()}
     sets = parse_manifest(EmailTriageAgent.SKILL_MANIFEST).skill_sets
 
     for name in sets.set_names:
-        cost = sum(
-            estimate_tokens(bodies[ref.name]) for ref in sets.skills_for(name)
-        )
+        cost = sum(estimate_tokens(bodies[ref.name]) for ref in sets.skills_for(name))
         assert cost <= 1500, (
             f"skill set {name!r} costs ~{cost} prompt tokens, over the 1500 cap "
             "— trim the SKILL.md bodies or shrink the set"

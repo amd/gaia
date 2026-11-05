@@ -2439,7 +2439,7 @@ def recommend_npu_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
     not_ready = npu_not_ready_reason(npu)
     if not_ready:
         raise ModelFitError(
-            f"This PC's NPU can't run models yet. {not_ready} Run `gaia init` "
+            f"The NPU model {not_ready}. Run `gaia init` "
             "without `--profile npu` to use the GPU meanwhile, or see "
             "https://amd-gaia.ai/docs/guides/npu#linux."
         )

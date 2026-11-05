@@ -896,9 +896,7 @@ def test_calendar_view_returns_truncation_signal(client, fake_calendar, monkeypa
             "nextPageToken": "page-2",
         },
     )
-    monkeypatch.setattr(
-        email_routes, "resolve_calendar_backend", lambda: fake_calendar
-    )
+    monkeypatch.setattr(email_routes, "resolve_calendar_backend", lambda: fake_calendar)
 
     resp = client.get("/v1/email/calendar/events")
 
@@ -1965,6 +1963,7 @@ def test_calendar_create_bad_event_after_gate_is_400(client, monkeypatch):
 #     conditional posture: bearer OR none, since the gate no-ops when the
 #     sidecar has no token configured (local dev).
 # ---------------------------------------------------------------------------
+
 
 def test_spec_declares_bearer_security_scheme(spec):
     schemes = spec["components"]["securitySchemes"]
