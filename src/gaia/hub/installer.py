@@ -30,6 +30,7 @@ Safety properties (CLAUDE.md — fail loudly, no silent fallbacks):
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import math
@@ -1688,7 +1689,13 @@ def _install_source(
     rc_source = None
     if version is None:
         try:
-            rc_source = prerelease_mod.flagship_source(agent_id, fetcher=fetcher)
+            rc_fetcher = fetcher
+            if fetcher is catalog_mod.fetch_bytes:
+                rc_fetcher = functools.partial(
+                    catalog_mod.fetch_bytes,
+                    timeout=prerelease_mod.MANIFEST_READ_TIMEOUT_SECONDS,
+                )
+            rc_source = prerelease_mod.flagship_source(agent_id, fetcher=rc_fetcher)
         except prerelease_mod.PrereleaseFlagshipError as exc:
             raise InstallError(str(exc)) from exc
     if rc_source is not None:

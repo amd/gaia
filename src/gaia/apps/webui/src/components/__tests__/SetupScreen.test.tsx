@@ -867,6 +867,28 @@ describe('SetupScreen: downloading', () => {
         expect(list.getByText("AI engine").closest('li')).toHaveTextContent('Ready');
     });
 
+    it('says why a component failed on its row and reruns setup from a Retry there', async () => {
+        const error = '`gaia init --profile gaia` failed (exit 1): GAIA 0.25.4rc11 is release candidate v0.25.4-rc11, which installs the GAIA agent built from its own commit. '
+            + "Could not read https://github.com/amd/gaia/releases/download/v0.25.4-rc11/gaia-agent-release.json: HTTPSConnectionPool(host='github.com', port=443): Read timed out. (read timeout=10)";
+        const stopped = runStatus([
+            progress({ id: EMBED.id, roles: ['embedding'], state: 'ready', bytes_done: 0.3e9, bytes_total: 0.3e9 }),
+            progress({ id: QWEN.id, state: 'ready', bytes_done: 23.3e9, bytes_total: 23.3e9 }),
+        ], { state: 'failed', error, components: { server: 'done', backend: 'done', agent: 'failed' }, component_kinds: { agent: 'transient' } });
+        mockedApi.getSetupPlan.mockResolvedValue({ ...COLD_BIG(), components: COMPONENTS });
+        mockedApi.startSetup.mockResolvedValue(stopped);
+        await startLocal();
+        const list = within(await screen.findByRole('region', { name: 'Everything being set up' }));
+        const agent = list.getByText('GAIA assistant').closest('li') as HTMLElement;
+        expect(agent).toHaveTextContent('GAIA assistant: the download timed out or the connection dropped. Check your internet, then retry.');
+        expect(within(agent).getByText(/Read timed out/).closest('details')).not.toHaveAttribute('open');
+        // One clearly named way on, not an unlabelled "Finish setup".
+        expect(screen.queryByRole('button', { name: /Finish setup/ })).not.toBeInTheDocument();
+        expect(screen.queryByText(/Setup stopped before it could check/)).not.toBeInTheDocument();
+        const calls = mockedApi.startSetup.mock.calls.length;
+        fireEvent.click(within(agent).getByRole('button', { name: 'Retry GAIA assistant' }));
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(calls + 1));
+    });
+
     it('retries a failed model from where it stopped, and can skip it', async () => {
         const failed = runStatus([
             progress({ id: EMBED.id, roles: ['embedding'], state: 'ready', bytes_done: 0.3e9, bytes_total: 0.3e9 }),
