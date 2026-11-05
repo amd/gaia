@@ -423,7 +423,9 @@ _CONFIRM_RESPONSES = {
     409: {"description": "The run has no pending tool confirmation."},
 }
 _CONNECTOR_ERRORS = {
-    401: {"description": "Mailbox authentication is missing, revoked, or needs renewal."},
+    401: {
+        "description": "Mailbox authentication is missing, revoked, or needs renewal."
+    },
     403: {"description": "The mailbox connection lacks the required permission."},
     500: {"description": "The mailbox connector failed unexpectedly."},
     503: {
