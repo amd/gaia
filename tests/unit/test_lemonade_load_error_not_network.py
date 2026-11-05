@@ -59,6 +59,21 @@ FLM_LOAD_ERROR = {
 
 GENERIC_500 = {"error": {"message": "The request fails unexpectedly"}}
 
+#: FLM's memlock failure as Lemonade words it: the driver page is appended to
+#: every validation failure, though the driver is not the problem here.
+FLM_MEMLOCK_ERROR = {
+    "error": {
+        "code": "model_load_error",
+        "message": (
+            f"Failed to load model '{FLM_MODEL}': FLM NPU validation failed: "
+            "Memlock limits are too low\n"
+            f"Visit {DRIVER_URL} for driver installation instructions."
+        ),
+        "type": "model_load_error",
+    }
+}
+MEMLOCK_GUIDE = "https://amd-gaia.ai/docs/guides/npu#the-locked-memory-limit"
+
 
 def _assert_flm_load_failure(classified):
     assert isinstance(classified, LemonadeModelLoadError)
@@ -224,6 +239,54 @@ def test_a_backend_that_crashed_at_start_may_load_next_time():
     assert isinstance(classified, LemonadeModelLoadError)
     assert classified.retryable is True
     assert "send the message again" in classified.user_message
+
+
+def _assert_memlock_points_at_gaias_guide(classified):
+    assert isinstance(classified, LemonadeModelLoadError)
+    assert classified.retryable is False
+    message = classified.user_message
+    assert "FLM NPU validation failed: Memlock limits are too low." in message
+    assert f"{MEMLOCK_GUIDE}." in message
+    # The driver page is not the fix for a memlock failure.
+    assert DRIVER_URL not in message
+    assert "Lemonade's help for this error" not in message
+    assert classified.help_url is None
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["requests", "openai-sdk"])
+def test_memlock_failure_points_at_gaias_npu_guide(make_client, stream):
+    with FakeServer([_json(500, FLM_MEMLOCK_ERROR)] * 3) as server:
+        client = make_client(server.port)
+        with pytest.raises(LemonadeClientError) as raised:
+            _chat(client, stream)
+    classified = classify_lemonade_exception(raised.value)
+    _assert_memlock_points_at_gaias_guide(classified)
+    assert classified.model_id == FLM_MODEL
+    assert len(server.requests) == 1
+
+
+def test_memlock_failure_without_a_model_prefix_points_at_the_guide():
+    """The body as a repro captured it: ``type`` only, no prefix or driver link."""
+    body = {
+        "error": {
+            "type": "model_load_error",
+            "message": "FLM NPU validation failed: Memlock limits are too low.",
+        }
+    }
+    err, is_err = _classify_lemonade_response(body, FLM_MODEL)
+    assert is_err is True
+    assert MEMLOCK_GUIDE in err.user_message
+    assert "Lemonade's help for this error" not in err.user_message
+
+
+def test_a_driver_failure_keeps_lemonades_driver_page():
+    classified = classify_lemonade_exception(
+        LemonadeClientError(
+            f"Request failed with status 500: {json.dumps(FLM_LOAD_ERROR)}"
+        )
+    )
+    assert f"Lemonade's help for this error: {DRIVER_URL}." in classified.user_message
+    assert MEMLOCK_GUIDE not in classified.user_message
 
 
 # ── other 5xx: the server answered, so never "couldn't reach" ─────────────

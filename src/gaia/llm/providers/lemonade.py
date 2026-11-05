@@ -431,6 +431,10 @@ MODEL_LOAD_ERROR_CODES = frozenset(
 )
 
 _URL_RE = re.compile(r"https?://[^\s'\"<>()\[\]]+")
+# Lemonade appends its NPU driver page to every FLM validation failure; for a
+# memlock failure the driver is fine and the fix is GAIA's locked-memory step.
+_MEMLOCK_RE = re.compile(r"\bmemlock\b", re.IGNORECASE)
+NPU_MEMLOCK_GUIDE_URL = "https://amd-gaia.ai/docs/guides/npu#the-locked-memory-limit"
 _LOAD_PREFIX_RE = re.compile(
     r"^failed to load(?: model)? ['\"`]?([^'\"`:\s]+)['\"`]?(?: on \S+)?\s*:\s*",
     re.IGNORECASE,
@@ -479,6 +483,7 @@ class LemonadeModelLoadError(LemonadeError):
         log_hint: Optional[str] = None,
         payload: Optional[dict] = None,
         crashed_at_start: bool = False,
+        fix_hint: Optional[str] = None,
     ):
         self.model_id = model_id
         self.reason = reason
@@ -499,7 +504,9 @@ class LemonadeModelLoadError(LemonadeError):
                 "that is fixed."
             ),
         ]
-        if help_url:
+        if fix_hint:
+            parts.append(fix_hint)
+        elif help_url:
             parts.append(f"Lemonade's help for this error: {help_url}.")
         parts.append(TUI_MODEL_SWITCH_HINT)
         if log_hint:
@@ -661,10 +668,17 @@ def _model_load_error(
         wrapper = _WRAPPER_MODEL_RE.search(context)
         model = wrapper.group(1) if wrapper else None
     reason, urls = _plain_reason(message)
+    memlock = bool(_MEMLOCK_RE.search(message))
     return LemonadeModelLoadError(
         model_id=model,
         reason=reason,
-        help_url=urls[0] if urls else None,
+        help_url=None if memlock else (urls[0] if urls else None),
+        fix_hint=(
+            "The NPU needs a higher locked-memory limit; GAIA's NPU guide shows "
+            f"how to raise it: {NPU_MEMLOCK_GUIDE_URL}."
+            if memlock
+            else None
+        ),
         log_hint=lemonade_log_hint(),
         payload=payload,
         crashed_at_start=bool(
