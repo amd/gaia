@@ -15,7 +15,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 from urllib.parse import urlparse
 
 from gaia.agents.base.verification import EXECUTED_KEY
@@ -287,6 +287,25 @@ class TurnLedger:
             if isinstance(path, str) and os.path.isabs(path):
                 paths.append(path)
         return paths
+
+    def indexed_documents(self) -> List[Tuple[str, int]]:
+        """``(path, chunks)`` for each file ``index_document`` indexed this turn.
+
+        The path is the tool's resolved one; a call whose result names none
+        (it failed, or it is still indexing in the background) is left out.
+        """
+        found: Dict[str, int] = {}
+        for call in self._finished():
+            data = call["data"]
+            if call["tool"] != "index_document" or not call["success"]:
+                continue
+            if not isinstance(data, dict) or data.get("status") != "success":
+                continue
+            path = data.get("file_path")
+            if isinstance(path, str) and os.path.isabs(path):
+                chunks = data.get("num_chunks")
+                found[path] = chunks if isinstance(chunks, int) else 0
+        return list(found.items())
 
     def _produced(self) -> List[Dict[str, Any]]:
         """Things the turn made besides files: images, indexed documents,
