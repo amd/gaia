@@ -817,6 +817,7 @@ class TestInitOffersTheFix:
         client = MagicMock()
         client.get_system_info.return_value = info
         monkeypatch.setattr(lemonade_client, "LemonadeClient", lambda **kw: client)
+        monkeypatch.setattr(npu_linux, "_on_linux", lambda: True)
         checked = MagicMock(return_value=list(MEMLOCK))
         monkeypatch.setattr(npu_linux, "check", checked)
         applied = MagicMock()
@@ -826,6 +827,18 @@ class TestInitOffersTheFix:
         cmd._offer_memlock_fix_for_npu_profile()
         checked.assert_called_once_with(info)
         applied.assert_called_once()
+
+    @pytest.mark.parametrize("kwargs", [{"yes": True}, {"tty": False}])
+    def test_profile_npu_asks_nothing_unattended(self, monkeypatch, kwargs):
+        from gaia.llm import lemonade_client
+
+        client = MagicMock()
+        monkeypatch.setattr(lemonade_client, "LemonadeClient", lambda **kw: client)
+        monkeypatch.setattr(npu_linux, "_on_linux", lambda: True)
+        cmd = self.init(monkeypatch, **kwargs)
+        cmd.verbose = False
+        cmd._offer_memlock_fix_for_npu_profile()
+        client.get_system_info.assert_not_called()
 
     def test_a_refused_prompt_is_reported(self, monkeypatch):
         def refuse():

@@ -2381,6 +2381,9 @@ class InitCommand:
         from gaia.llm import npu_linux
         from gaia.llm.lemonade_client import LemonadeClient
 
+        # Nobody to ask: the fit check that follows says what is missing.
+        if self.yes or not stdin_is_tty() or not npu_linux._on_linux():
+            return
         info = LemonadeClient(verbose=self.verbose).get_system_info()
         self._offer_memlock_fix(npu_linux.check(info))
 
