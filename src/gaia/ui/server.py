@@ -85,6 +85,7 @@ from .routers import spending as spending_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
 from .routers import voice as voice_router_mod
+from .routers import phone as phone_router_mod
 from .security import UIRequestGuardMiddleware
 from .tunnel import TunnelManager
 from .utils import ALLOWED_EXTENSIONS as _ALLOWED_EXTENSIONS  # noqa: F401
@@ -963,6 +964,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(providers_router_mod.router)
     app.include_router(speech_router_mod.router)
     app.include_router(voice_router_mod.router)
+    app.include_router(phone_router_mod.router)
     app.include_router(spending_router_mod.router)
     app.include_router(skills_router_mod.router)
     app.include_router(hub_router_mod.router)
