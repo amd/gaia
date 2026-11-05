@@ -64,6 +64,11 @@ def custody_db_path() -> Path:
     return host_dir() / "custody.db"
 
 
+def phone_db_path() -> Path:
+    """The phone book, phone settings and alert history (``gaia.phone``)."""
+    return host_dir() / "phone.db"
+
+
 def ensure_host_dir() -> Path:
     """Create ``host_dir()`` if missing (``0700`` on POSIX, first-touch only)
     and return it.

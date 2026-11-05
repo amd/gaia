@@ -260,6 +260,15 @@ def _build_deregister(
     return _deregister
 
 
+def _build_phone():
+    """The phone service over its own store in the host directory."""
+    from gaia.daemon.paths import phone_db_path
+    from gaia.phone.service import KeyringSecrets, PhoneService
+    from gaia.phone.store import PhoneStore
+
+    return PhoneService(PhoneStore(phone_db_path()), KeyringSecrets())
+
+
 def run(host: str = HOST) -> None:
     """Start the daemon and serve until shutdown. Blocks."""
     from gaia.logger import configure
@@ -306,6 +315,7 @@ def run(host: str = HOST) -> None:
     # registry can mint each sidecar's custody secret at spawn. The custody
     # callback URL is the daemon's own loopback address.
     custody_store = CustodyStore(custody_db_path())
+    phone = _build_phone()
     custody_auth = CustodyAuth()
     custody_base_url = f"http://{host}:{port}"
 
@@ -348,6 +358,7 @@ def run(host: str = HOST) -> None:
     from gaia.daemon.lemonade import EmbeddedLemonadeOwner
 
     lemonade_owner = EmbeddedLemonadeOwner(owner_pid=pid)
+    lemonade_owner.on_health = phone.note_health
 
     # The front ends using it: unload its models when the last app closes, and
     # stop it after the configured idle time with nobody connected.
@@ -435,6 +446,7 @@ def run(host: str = HOST) -> None:
         lemonade=lemonade,
         lemonade_owner=lemonade_owner,
         lemonade_clients=lemonade_clients,
+        phone=phone,
     )
 
     config = uvicorn.Config(

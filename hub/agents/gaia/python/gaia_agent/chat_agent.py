@@ -77,6 +77,7 @@ from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
+    AlertToolsMixin,
     AudioGenerationToolsMixin,
     AudioToolsMixin,
     BrowserToolsMixin,
@@ -455,6 +456,7 @@ class ChatAgent(
     AudioToolsMixin,
     AudioGenerationToolsMixin,
     WaitToolsMixin,
+    AlertToolsMixin,
     ReasoningEffortToolsMixin,
     MCPClientMixin,
 ):
@@ -3219,6 +3221,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     # - FileSearchToolsMixin (shared): File and directory search across drives
     # - FileIOToolsMixin (file_io_tools.py): read_file, write_file, edit_file (3 generic tools only)
     # - WaitToolsMixin (wait_tools.py): sleep, to wait out a rate limit
+    # - AlertToolsMixin (alert_tools.py): alert_owner, when phone alerts allow it
     # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from <gaia_home>/mcp_servers.json)
 
     def _register_external_tools_conditional(self) -> None:
@@ -3227,6 +3230,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         Per §10.3 of the agent capabilities plan: only register tools if their
         backend is reachable. Prevents LLM from repeatedly calling tools that always fail.
         """
+        # Only under the daemon with "Agents may alert me" on; see alert_tools.
+        self.register_alert_tools()
+
         import shutil
 
         from gaia.agents.base.tools import tool

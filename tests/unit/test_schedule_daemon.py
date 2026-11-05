@@ -448,3 +448,32 @@ class TestResolveInput:
         sched = Schedule(name="s", cron="* * * * *", skill="sk")
         with pytest.raises(NotImplementedError, match="cannot run skills yet"):
             runner.resolve_input(sched)
+
+
+class TestFailureAlerts:
+    """A failed run raises the "scheduled job failed" phone alert."""
+
+    def test_a_failed_recurring_run_raises_an_alert(self, tmp_path, monkeypatch):
+        from gaia.phone import client as phone_client
+
+        sched = _make_schedule("backup")
+        store = _store_with(tmp_path, sched)
+
+        def boom(_schedule):
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(runner, "fire", boom)
+        daemon._job(sched, store)
+        [(path, body)] = phone_client.sent
+        assert path == "/alerts" and body["source"] == "schedule"
+        assert body["rule_key"] == "schedule:backup"
+        assert "disk full" in body["reason"]
+
+    def test_a_good_run_raises_nothing(self, tmp_path, monkeypatch):
+        from gaia.phone import client as phone_client
+
+        sched = _make_schedule("backup")
+        store = _store_with(tmp_path, sched)
+        monkeypatch.setattr(runner, "fire", lambda _s: "ok")
+        daemon._job(sched, store)
+        assert phone_client.sent == []

@@ -92,6 +92,7 @@ def create_app(
     lemonade=None,
     lemonade_owner=None,
     lemonade_clients=None,
+    phone=None,
 ):
     """Build the FastAPI app bound to this daemon's identity.
 
@@ -130,6 +131,10 @@ def create_app(
     mounts ``POST /daemon/v1/lemonade/ensure``, which starts GAIA's embedded
     Lemonade Server if it is stopped and returns where it listens.
 
+    *phone* (a :class:`gaia.phone.service.PhoneService`) mounts
+    ``/daemon/v1/phone/*`` and, with custody, ``/host/v1/alerts``, and runs the
+    alert loop for the app's lifetime. ``None`` leaves phone unmounted.
+
     *lemonade_clients* (a :class:`gaia.daemon.lemonade_clients.LemonadeClients`,
     given with *lemonade_owner*) mounts ``/daemon/v1/lemonade/clients``, where
     front ends register while they use GAIA's Lemonade and release on exit.
@@ -141,9 +146,14 @@ def create_app(
     async def lifespan(_app):
         if on_startup is not None:
             on_startup()
+        if phone is not None:
+            phone.start()
         try:
             yield
         finally:
+            if phone is not None:
+                await phone.stop()
+                phone.store.close()
             if on_shutdown is not None:
                 on_shutdown()
 
@@ -365,5 +375,10 @@ def create_app(
             "create_app requires custody_auth AND custody_store together to "
             "mount /host/v1; got only one. Pass both, or neither."
         )
+
+    if phone is not None:
+        from gaia.phone.routes import build_phone_router
+
+        app.include_router(build_phone_router(require_token, phone, custody_auth))
 
     return app

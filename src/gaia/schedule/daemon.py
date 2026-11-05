@@ -62,13 +62,25 @@ def _job(schedule: Schedule, store: ScheduleStore) -> None:
             return
         schedule = current
         runner.fire(schedule)
-    except Exception:
+    except Exception as e:
         log.exception("schedule %r failed", schedule.name)
+        _alert_failure(schedule, e)
         return
     store.mark_run(
         schedule.name,
         datetime.now(timezone.utc).isoformat(),
         next_run=next_fire_time(schedule.cron),
+    )
+
+
+def _alert_failure(schedule: Schedule, error: Exception) -> None:
+    """Raise the "scheduled job failed" phone alert; the rule decides the rest."""
+    from gaia.phone.client import raise_alert
+
+    raise_alert(
+        "schedule",
+        reason=f"{schedule.name}: {type(error).__name__}: {error}"[:500],
+        rule_key=f"schedule:{schedule.name}",
     )
 
 
@@ -80,8 +92,10 @@ def run_one_shot(schedule: Schedule, store: ScheduleStore) -> str:
     """
     try:
         output = runner.fire(schedule)
-    except BaseException:
+    except BaseException as e:
         _finish_one_shot(schedule, store, ok=False)
+        if isinstance(e, Exception):
+            _alert_failure(schedule, e)
         raise
     _finish_one_shot(schedule, store, ok=True)
     return output
