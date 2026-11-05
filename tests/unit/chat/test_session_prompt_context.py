@@ -145,6 +145,34 @@ def test_other_front_ends_get_no_scheduled_tasks_line(gaia_docs, surface):
         agent.__del__()
 
 
+def _unsupported_line(prompt: str) -> str:
+    [line] = [ln for ln in prompt.splitlines() if ln.startswith("**UNSUPPORTED:**")]
+    return line.split("—")[0].lower()
+
+
+@pytest.mark.parametrize("surface", [None, "tui", "agent_ui"])
+def test_scheduling_is_never_both_unsupported_and_offered(gaia_docs, surface):
+    agent = _build(allowed_paths=[str(gaia_docs)], surface=surface)
+    try:
+        prompt = agent._get_system_prompt()
+    finally:
+        agent.__del__()
+
+    offered = "Scheduled tasks" in prompt
+    assert offered == (surface == "agent_ui")
+    assert ("scheduling" in _unsupported_line(prompt)) != offered
+
+
+def test_email_is_not_unsupported_when_email_tools_are_registered(gaia_docs):
+    agent = _build(allowed_paths=[str(gaia_docs)])
+    try:
+        assert "email" in _unsupported_line(agent._get_system_prompt())
+        agent._instance_tools["list_inbox"] = {}
+        assert "email" not in _unsupported_line(agent._get_system_prompt())
+    finally:
+        agent.__del__()
+
+
 def test_in_process_agent_ui_chats_say_they_are_the_agent_ui():
     from gaia.ui import _chat_helpers
 
