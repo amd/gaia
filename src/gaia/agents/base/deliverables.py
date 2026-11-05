@@ -643,12 +643,32 @@ def _basename(path: str) -> str:
     return re.split(r"[\\/]", path.rstrip("\\/"))[-1].lower()
 
 
-#: Tools whose output is a result they computed, not text they found.
-_COMPUTE_TOOLS = ("query_data",)
+#: Tools whose output can be a result they computed, and the argument holding
+#: the code that would show the computation.
+_COMPUTE_TOOLS = {"run_python": "code", "query_data": "query"}
+_PY_ARITHMETIC = re.compile(
+    r"[\w)\]]\s*(?:\*\*?|/|\+|-)\s*[\w(\[]"
+    r"|\b(?:sum|mean|prod|round|agg|groupby|cumsum|nlargest|nsmallest)\s*\(",
+    re.I,
+)
+_STRING_LITERAL = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"")
+_SQL_STAR = re.compile(r"\bselect\s+(?:\w+\.)?\*|\(\s*\*\s*\)", re.I)
+_SQL_ARITHMETIC = re.compile(
+    r"\b(?:sum|avg|total|round)\s*\(|[\w)]\s*(?:\*|/|\+|-)\s*[\w(]", re.I
+)
 
 
-def _computed(name: str) -> bool:
-    return _has(name, _EXEC_WORDS) or name in _COMPUTE_TOOLS
+def _computed(record: Dict[str, Any]) -> bool:
+    """*record* ran code that does arithmetic; a script that only prints a
+    file, or a ``SELECT *``, echoes figures rather than computing them."""
+    arg = _COMPUTE_TOOLS.get(_name(record))
+    code = (record.get("args") or {}).get(arg) if arg else None
+    if not isinstance(code, str):
+        return False
+    code = _STRING_LITERAL.sub("''", code)
+    if arg == "query":
+        return bool(_SQL_ARITHMETIC.search(_SQL_STAR.sub(" ", code)))
+    return bool(_PY_ARITHMETIC.search(code))
 
 
 def _evidence_texts(
@@ -686,7 +706,7 @@ def _evidence_texts(
             for name_ in written
         ):
             continue
-        texts.append((evidence_text(record, code_literals=True), _computed(name)))
+        texts.append((evidence_text(record, code_literals=True), _computed(record)))
     return texts
 
 
@@ -930,14 +950,27 @@ def file_findings(
         return []
     written = {_basename(path) for path in files}
     found = [(_spelled_out(t), c) for t, c in _evidence_texts(records, written)]
-    texts = [t for t, _ in found] + [_spelled_out(t) for t in inputs]
+    input_texts = [_spelled_out(t) for t in inputs]
+    texts = [t for t, _ in found] + input_texts
     query = _spelled_out(query or "")
     context = _spelled_out(context or "")
     # "27W", "8GB": a unit glued to its number still shows the number.
     general = _Corpus(_GLUED_UNIT.sub(r"\1 \2", "\n".join([context, query] + texts)))
-    # An amount a script or query computed sources a money figure; a "60 Hz"
-    # it printed still doesn't.
-    computed = [_UNIT.sub(" ", t) for t, c in found if c]
+    # An amount a script or query computed sources a money figure; one it
+    # echoed from a file the turn read, or a "60 Hz", still doesn't.
+    seen = {
+        _number(n)
+        for t in [context] + [t for t, c in found if not c] + input_texts
+        for n in _ANY_NUMBER.findall(t)
+    }
+    computed = [
+        _ANY_NUMBER.sub(
+            lambda m: " " if _number(m.group(0)) in seen else m.group(0),
+            _UNIT.sub(" ", t),
+        )
+        for t, c in found
+        if c
+    ]
     money = _Corpus(
         "\n".join([query] + [_money_evidence(t) for t in [context] + texts] + computed)
     )

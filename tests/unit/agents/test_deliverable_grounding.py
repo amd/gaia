@@ -328,6 +328,38 @@ def test_a_unit_a_script_printed_is_still_not_a_price():
     assert _check(_md(table), records)
 
 
+ECHOED_SHEET = "CM5 datasheet\nRefresh rate up to 60\nPSU rated 27 watts peak\n"
+ECHOED_TABLE = "| Item | Unit price |\n|---|---|\n| CM5 | 60 |\n| PSU | 27 |\n"
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        _run_python("print(open('cm5-datasheet.txt').read())", ECHOED_SHEET),
+        _rec(
+            "run_shell_command",
+            {"command": "cat cm5.txt"},
+            {"status": "success", "stdout": ECHOED_SHEET},
+        ),
+        _rec(
+            "query_data",
+            {"query": "SELECT * FROM specs"},
+            {"status": "success", "result": ECHOED_SHEET},
+        ),
+    ],
+    ids=["python-print", "shell-cat", "select-star"],
+)
+def test_a_file_a_tool_echoed_is_not_a_price(record):
+    assert _check(_md(ECHOED_TABLE), [record])
+
+
+def test_a_computing_script_that_also_echoes_a_read_file_does_not_source_it():
+    code = "print(open('cm5.txt').read())\nprint(40 * price)"
+    records = [_read("cm5.txt", ECHOED_SHEET), _run_python(code, ECHOED_SHEET)]
+
+    assert _check(_md(ECHOED_TABLE), records)
+
+
 def test_a_scratchpad_query_result_is_a_source():
     records = [
         _rec(
