@@ -530,6 +530,7 @@ def pull_model(probe_base: str, model_id: str) -> None:
     from gaia.llm.lemonade_client import (
         lemonade_auth_headers,
         pull_request_body,
+        registered_model_ids,
         resolve_lemonade_api_key,
     )
 
@@ -547,11 +548,7 @@ def pull_model(probe_base: str, model_id: str) -> None:
             timeout=(PROBE_CONNECT_TIMEOUT, PROBE_READ_TIMEOUT),
         )
         listing.raise_for_status()
-        registered = [
-            m["id"]
-            for m in listing.json().get("data", [])
-            if isinstance(m.get("id"), str)
-        ]
+        registered = registered_model_ids(listing.json())
         payload = pull_request_body(model_id, registered=registered)
 
     resp = requests.post(

@@ -149,6 +149,71 @@ def test_user_model_registered_in_lemonade_directly_pulls_by_name(sent):
     assert sent == [{"model_name": "user.My-Own-GGUF", "stream": True, "force": True}]
 
 
+def test_user_model_lemonade_lists_without_its_prefix_pulls_by_name(sent):
+    """``/models`` lists it bare; the pull is name only, under ``user.``."""
+    _REGISTERED.append("My-Own-GGUF")
+    asyncio.run(system._stream_lemonade_pull("user.my-own-gguf", False))
+    assert sent == [{"model_name": "user.My-Own-GGUF", "stream": True}]
+
+
+def test_auto_load_after_the_pull_uses_the_name_lemonade_listed(monkeypatch):
+    """A miscased request must not pull one id and then load another."""
+    loaded = []
+
+    class _Done:
+        status_code = 200
+
+        async def aiter_text(self):
+            yield 'event: complete\ndata: {"file_index": 1, "total_files": 1}\n\n'
+
+    class _DoneStream:
+        async def __aenter__(self):
+            return _Done()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def stream(self, method, url, json=None, headers=None):
+            loaded.append(("pull", json["model_name"]))
+            return _DoneStream()
+
+        async def get(self, url, params=None, headers=None):
+            return httpx.Response(
+                200,
+                json={"data": [{"id": "My-Own-GGUF"}]},
+                request=httpx.Request("GET", url),
+            )
+
+    async def _load(model_name):
+        loaded.append(("load", model_name))
+
+    async def _keep(_model_name):
+        return None
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(system, "_auto_load_after_download", _load)
+    monkeypatch.setattr(system, "_download_progress", {})
+    monkeypatch.setattr(system, "_evict_progress_after_ttl", _keep)
+
+    async def _run():
+        await system._stream_lemonade_pull("user.my-own-gguf", False)
+        await asyncio.sleep(0)
+
+    asyncio.run(_run())
+    assert loaded == [("pull", "user.My-Own-GGUF"), ("load", "user.My-Own-GGUF")]
+    assert system._get_download_progress("user.my-own-gguf")["state"] == "complete"
+
+
 def test_listed_name_without_the_namespace_still_registers_under_it(sent):
     """Lemonade lists a registered user model without ``user.``."""
     asyncio.run(system._stream_lemonade_pull("ggml-gpt-oss-20b-MXFP4-GGUF", False))

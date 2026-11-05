@@ -2961,9 +2961,11 @@ def pull_request_body(model_id: str, registered: Iterable[str] = ()) -> Dict[str
     cannot infer (``embedding``, ``mmproj``, ``vision``, ``reasoning``).
     A gateway model has no weights and raises ``RuntimeError`` before any
     request. A ``user.`` id GAIA doesn't know goes out name only when it is in
-    *registered* (ids from Lemonade's ``/models?show_all=true``), since
-    Lemonade already holds its checkpoint; otherwise it raises ``ValueError``
-    instead of a pull Lemonade answers with HTTP 500.
+    *registered* (see :func:`registered_model_ids`), since Lemonade already
+    holds its checkpoint; otherwise it raises ``ValueError`` instead of a pull
+    Lemonade answers with HTTP 500. Lemonade lists such a model without its
+    ``user.`` prefix, so the match ignores it and the body keeps the prefix
+    with Lemonade's casing.
 
     Known gateway namespaces (``amd.``, ``fireworks.``) are refused even before
     the catalog has been read. Any other gateway id is refused once
@@ -2990,10 +2992,29 @@ def pull_request_body(model_id: str, registered: Iterable[str] = ()) -> Dict[str
 
     if model_id.lower().startswith("user."):
         for name in registered:
-            if name.lower() == model_id.lower():
-                return {"model_name": name}
+            if _model_ids_match(name, model_id):
+                bare = (
+                    name[len("user.") :] if name.lower().startswith("user.") else name
+                )
+                return {"model_name": f"user.{bare}"}
         raise ValueError(_unknown_user_model_message(model_id))
     return {"model_name": model_id}
+
+
+def registered_model_ids(listing: Any) -> List[str]:
+    """Model ids from a Lemonade ``GET /models?show_all=true`` JSON body.
+
+    Entries that aren't objects with a string ``id`` are skipped. Raises
+    ``ValueError`` when the body has no ``data`` list.
+    """
+    data = listing.get("data") if isinstance(listing, dict) else None
+    if not isinstance(data, list):
+        raise ValueError(
+            f"Lemonade's model list has no 'data' list (got {type(listing).__name__})"
+        )
+    return [
+        m["id"] for m in data if isinstance(m, dict) and isinstance(m.get("id"), str)
+    ]
 
 
 def _unknown_user_model_message(model_id: str) -> str:

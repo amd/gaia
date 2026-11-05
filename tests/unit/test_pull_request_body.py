@@ -87,6 +87,32 @@ def test_user_model_lemonade_already_registered_is_pulled_by_name_only():
     assert body == {"model_name": "user.My-Own-Model"}
 
 
+@pytest.mark.parametrize(
+    "requested", ["user.My-Own-GGUF", "user.my-own-gguf", "USER.MY-OWN-GGUF"]
+)
+def test_user_model_lemonade_lists_without_its_prefix_is_pulled_by_name(requested):
+    """``/models`` drops the ``user.`` prefix; the pull keeps it in Lemonade's casing."""
+    body = pull_request_body(requested, registered=["My-Own-GGUF"])
+    assert body == {"model_name": "user.My-Own-GGUF"}
+    assert not body.keys() & _REGISTRATION_KEYS
+
+
+def test_registered_match_is_whole_name_not_a_prefix():
+    with pytest.raises(ValueError, match="Add a model from Hugging Face"):
+        pull_request_body("user.My-Own", registered=["My-Own-GGUF"])
+
+
+def test_registered_model_ids_skips_entries_that_are_not_objects():
+    listing = {"data": ["My-Own-GGUF", None, 7, {"id": 3}, {}, {"id": "Bare-GGUF"}]}
+    assert lc.registered_model_ids(listing) == ["Bare-GGUF"]
+
+
+@pytest.mark.parametrize("listing", [[], None, "x", {}, {"data": None}, {"data": {}}])
+def test_registered_model_ids_raises_on_a_body_without_a_data_list(listing):
+    with pytest.raises(ValueError, match="no 'data' list"):
+        lc.registered_model_ids(listing)
+
+
 def test_user_model_missing_from_registered_still_raises():
     with pytest.raises(ValueError, match="Add a model from Hugging Face"):
         pull_request_body("user.not-a-real-model", registered=["user.other"])
@@ -141,6 +167,7 @@ class _FakeAsyncClient:
 
     calls: list = []
     registered: list = []
+    listing = None  # raw JSON body; overrides ``registered`` when set
 
     def __init__(self, *a, **kw):
         pass
@@ -155,11 +182,10 @@ class _FakeAsyncClient:
         import httpx
 
         _FakeAsyncClient.calls.append((url, params))
-        return httpx.Response(
-            200,
-            json={"data": [{"id": i} for i in _FakeAsyncClient.registered]},
-            request=httpx.Request("GET", url),
-        )
+        listing = _FakeAsyncClient.listing
+        if listing is None:
+            listing = {"data": [{"id": i} for i in _FakeAsyncClient.registered]}
+        return httpx.Response(200, json=listing, request=httpx.Request("GET", url))
 
 
 @pytest.fixture
@@ -168,6 +194,7 @@ def lemonade_models(monkeypatch):
 
     _FakeAsyncClient.calls = []
     _FakeAsyncClient.registered = []
+    _FakeAsyncClient.listing = None
     monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
     return _FakeAsyncClient
 
@@ -217,3 +244,25 @@ def test_pull_body_names_the_registered_model_lemonade_listed(lemonade_models):
 def test_pull_body_skips_the_listing_for_a_model_gaia_knows(lemonade_models):
     asyncio.run(system._pull_body(lc.DEFAULT_MODEL_NAME))
     assert lemonade_models.calls == []
+
+
+def test_pull_body_matches_the_bare_name_lemonade_lists(lemonade_models):
+    lemonade_models.listing = {"data": ["junk", None, {"id": "My-Own-GGUF"}]}
+    body = asyncio.run(system._pull_body("user.my-own-gguf"))
+    assert body == {"model_name": "user.My-Own-GGUF"}
+
+
+@pytest.mark.parametrize("listing", [["My-Own-GGUF"], {"models": []}, {"data": "x"}])
+def test_download_endpoint_400s_when_the_model_list_cannot_be_read(
+    listing, monkeypatch, lemonade_models
+):
+    """An unreadable list is a 400 naming Lemonade, not a 500 from a bad lookup."""
+    lemonade_models.listing = listing
+    started = []
+    monkeypatch.setattr(system, "_stream_lemonade_pull", lambda *a: started.append(a))
+    req = system.DownloadModelRequest(model_name="user.My-Own-GGUF")
+    with pytest.raises(HTTPException) as err:
+        asyncio.run(system.download_model_endpoint(req))
+    assert err.value.status_code == 400
+    assert "model list from Lemonade" in err.value.detail
+    assert started == []

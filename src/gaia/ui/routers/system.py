@@ -22,6 +22,7 @@ from gaia.llm.lemonade_client import (
     cloud_model_provider,
     lemonade_auth_headers,
     pull_request_body,
+    registered_model_ids,
     resolve_effective_ctx_size,
     resolve_lemonade_api_key,
     resolve_lemonade_base_url,
@@ -135,14 +136,13 @@ async def _pull_body(model_name: str) -> Dict[str, Any]:
                 f"{base_url}/models", params={"show_all": "true"}, headers=headers
             )
             resp.raise_for_status()
-            data = resp.json().get("data", [])
+            registered = registered_model_ids(resp.json())
     except (httpx.HTTPError, ValueError) as exc:
         raise RuntimeError(
             f"Cannot download '{model_name}': the model list from Lemonade at "
             f"{base_url} could not be read ({exc}). Check that Lemonade is "
             "running, then try again."
         ) from exc
-    registered = [m["id"] for m in data if isinstance(m.get("id"), str)]
     return pull_request_body(model_name, registered=registered)
 
 
@@ -470,7 +470,7 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
                             # and we want this stream's TTL eviction to fire
                             # on schedule rather than waiting on the load.
                             load_task = asyncio.create_task(
-                                _auto_load_after_download(model_name)
+                                _auto_load_after_download(payload["model_name"])
                             )
                             _background_tasks.add(load_task)
                             load_task.add_done_callback(_background_tasks.discard)

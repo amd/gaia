@@ -104,6 +104,29 @@ def test_a_user_model_registered_in_lemonade_directly_is_pulled_by_name():
     assert post.call_args.kwargs["json"] == {"model_name": "user.My-Own-GGUF"}
 
 
+def test_a_user_model_lemonade_lists_without_its_prefix_is_pulled_by_name():
+    """``/models`` lists it bare; non-object entries are skipped, not a crash."""
+    with patch("requests.post") as post, patch("requests.get") as get:
+        post.return_value.raise_for_status.return_value = None
+        get.return_value.raise_for_status.return_value = None
+        get.return_value.json.return_value = {
+            "data": [None, "x", {"id": "My-Own-GGUF"}]
+        }
+        pull_model(BASE, "user.my-own-gguf")
+    payload = post.call_args.kwargs["json"]
+    assert payload == {"model_name": "user.My-Own-GGUF"}
+    assert "recipe" not in payload and "checkpoint" not in payload
+
+
+def test_an_unreadable_model_list_raises_value_error():
+    with patch("requests.post") as post, patch("requests.get") as get:
+        get.return_value.raise_for_status.return_value = None
+        get.return_value.json.return_value = ["My-Own-GGUF"]
+        with pytest.raises(ValueError, match="no 'data' list"):
+            pull_model(BASE, "user.My-Own-GGUF")
+    assert post.call_count == 0
+
+
 def test_a_known_user_model_does_not_list_models_first():
     with patch("requests.post") as post, patch("requests.get") as get:
         post.return_value.raise_for_status.return_value = None
