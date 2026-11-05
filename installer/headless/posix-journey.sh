@@ -213,8 +213,19 @@ launch_agent_ui() {
   echo $! >"${WORK}/app.pid"
   sleep 10
   kill -0 "$(cat "${WORK}/app.pid")" 2>/dev/null || { tail -n 50 "${LOGS}/app.err"; die "the app exited within 10s of launch"; }
-  [ -f "${GAIA_HOME}/electron-main.log" ] || die "the app is running but wrote no ${GAIA_HOME}/electron-main.log"
+  wait_for_main_log "$(cat "${WORK}/app.pid")" "${GAIA_HOME}/electron-main.log" 50
   echo "launched pid $(cat "${WORK}/app.pid")"
+}
+
+# wait_for_main_log <pid> <log> <seconds>: a cold AppImage mount plus a first
+# fontconfig scan can open the log just past the 10s survival check.
+wait_for_main_log() {
+  local deadline=$(( $(date +%s) + $3 ))
+  while [ ! -f "$2" ]; do
+    kill -0 "$1" 2>/dev/null || { tail -n 50 "${LOGS}/app.err"; die "the app exited without writing $2"; }
+    [ "$(date +%s)" -lt "${deadline}" ] || die "the app is running but wrote no $2 within $(( $3 + 10 ))s of launch"
+    sleep 1
+  done
 }
 
 # First launch installs the Python backend from PyPI before it can serve, so
