@@ -1344,13 +1344,18 @@ reads captured output rather than re-executing a potentially state-changing tool
 ### Exhaustive document extraction
 
 For explicit requests to list every item in a text document, the agent offers
-`extract_document_items(file_path, fields=None)`. It reads a permission-checked
+`extract_document_items(file_path, fields=None, terms=None)`. It reads a permission-checked
 snapshot and processes 4,000-character pages sequentially, each widened by up to
 600 characters of overlap on either side, with an additional omission check per
 page. Each call has isolated context and no tools. Requested fields, written in
 the request as `fields: name, reps, cue` or passed as the `fields` list, must
 appear on every extracted entry; missing source facts are marked as not stated.
 A `fields` list that differs from the request's is rejected rather than merged.
+When every wanted item must contain a word ("every section that mentions a
+code"), `terms` lists it and its variants; only pages containing one, ignoring
+case and line breaks, reach the model, and the result's `coverage` and the
+inventory name the terms. When no page mentions any of them, the call fails as
+incomplete rather than reporting nothing found.
 
 The framework retains entries with exact source quotations and character spans,
 checks the source fingerprint again before completion, and appends the accumulated

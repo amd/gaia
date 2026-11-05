@@ -29,6 +29,7 @@ from gaia.agents.tools.document_text import (
 )
 from gaia.agents.tools.edit_impact import edit_impact
 from gaia.agents.tools.file_edit import (
+    after_excerpt,
     apply_unique_replacement,
     file_read_record,
     read_first_preflight,
@@ -749,7 +750,7 @@ class FileIOToolsMixin:
             Args:
                 file_path: Path to the file to edit
                 old_content: Content to find and replace; must be unique in the file
-                new_content: New content to insert
+                new_content: Text that replaces old_content only, not the whole file
                 backup: Whether to create a backup
                 dry_run: Whether to only simulate the edit
 
@@ -1306,7 +1307,8 @@ class FileIOToolsMixin:
             Args:
                 file_path: Path to the file to edit.
                 old_content: Exact text to replace; must be unique in the file.
-                new_content: Text to put in its place.
+                new_content: Only the text that replaces old_content, never
+                    the whole file; for that, use write_file.
                 project_dir: Project root for resolving a relative file_path.
             """
             try:
@@ -1436,6 +1438,7 @@ class FileIOToolsMixin:
                         if (syntax_error := _python_syntax_error(path, updated_content))
                         else {}
                     ),
+                    **after_excerpt(current_content, updated_content),
                     "diff": diff,
                 }
                 if backup_path:
