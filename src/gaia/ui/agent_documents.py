@@ -155,7 +155,10 @@ def add_indexed_documents(
 
 
 @functools.lru_cache(maxsize=512)
-def _hash_at(path: str, mtime_ns: int, size: int) -> str:
+def _hash_at(
+    path: str, mtime_ns: int, size: int  # pylint: disable=unused-argument
+) -> str:
+    """Hash *path*; ``mtime_ns`` and ``size`` only key the cache, so an edit re-reads."""
     return compute_file_hash(Path(path))
 
 
