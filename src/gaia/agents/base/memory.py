@@ -5516,7 +5516,16 @@ class MemoryMixin(ProceduralMemoryMixin):
                         "though it is still in the chat history."
                     ),
                 }
-            return {"status": "not_found", "knowledge_id": knowledge_id}
+            # An error, not a status: a miss read as success tells the user it's gone.
+            return {
+                "status": "error",
+                "knowledge_id": knowledge_id,
+                "message": (
+                    f"No memory has id '{knowledge_id}'. Nothing was erased. "
+                    "Call recall to get the ids of the matching memories, then "
+                    "forget each id. Don't tell the user it was erased."
+                ),
+            }
 
         @tool
         def forget_everything() -> dict:
