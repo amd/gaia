@@ -19,9 +19,10 @@ unlocked.
   the count and the line of each, not a first-match replacement — the model
   cannot tell a wrong-region edit from the one it asked for, and neither can
   the human reading the diff.
-- ``new_content`` must not repeat the lines just outside ``old_content``.
-  That is a whole-file rewrite squeezed into one span, and splicing it in
-  would leave those lines twice.
+- ``new_content`` must not repeat the lines just outside ``old_content``,
+  above, below, or one from each side at its edges. That is a whole-file
+  rewrite squeezed into one span, and splicing it in would leave those lines
+  twice.
 - A rejected edit carries the file's current content around the region the
   caller was aiming at, so the retry lands without a separate re-read.
 """
@@ -51,10 +52,10 @@ MAX_REPORTED_MATCHES = 5
 MAX_EXCERPT_CHARS = 4000
 
 # Neighbouring lines on each side checked for a repeat inside new_content.
-NEIGHBOUR_LINES = 3
+NEIGHBOUR_LINES = 50
 
-# A repeated neighbour run must be at least this many lines and characters,
-# so closing braces and separators can recur legitimately.
+# The repeats from both sides together must reach this many lines and
+# characters, so a single echoed line or a run of braces can recur legitimately.
 MIN_REPEATED_LINES = 2
 MIN_REPEATED_CHARS = 8
 
@@ -351,22 +352,49 @@ def _contains_run(lines: List[str], run: List[str]) -> bool:
     return any(lines[i : i + width] == run for i in range(len(lines) - width + 1))
 
 
+def _nearest_run(new_lines: List[str], neighbours: List[str], above: bool) -> List[str]:
+    """The longest run of ``neighbours`` next to the match that ``new_lines`` has."""
+    best: List[str] = []
+    for width in range(1, min(len(neighbours), len(new_lines)) + 1):
+        run = neighbours[-width:] if above else neighbours[:width]
+        if not _contains_run(new_lines, run):
+            break
+        best = run
+    # A lone echoed line counts only where a paste puts it: at the edge.
+    if len(best) == 1 and new_lines[0 if above else -1] != best[0]:
+        return []
+    return best
+
+
 def _repeated_neighbours(
     current_content: str, offset: int, old_content: str, new_content: str
 ) -> List[str]:
-    """Lines just outside the matched span that ``new_content`` repeats."""
+    """Lines just outside the matched span that ``new_content`` repeats.
+
+    Each side counts its longest run that starts next to the match, so one
+    line echoed from above plus one from below is caught as well as a run.
+    """
     new_lines = _nonblank(new_content)
-    old_lines = _nonblank(old_content)
-    before = _nonblank(current_content[:offset])[-NEIGHBOUR_LINES:]
-    after = _nonblank(current_content[offset + len(old_content) :])[:NEIGHBOUR_LINES]
-    repeated: List[str] = []
-    for run in (before, after):
-        if len(run) < MIN_REPEATED_LINES:
-            continue
-        if sum(len(line) for line in run) < MIN_REPEATED_CHARS:
-            continue
-        if _contains_run(new_lines, run) and not _contains_run(old_lines, run):
-            repeated.extend(run)
+    old_lines = set(_nonblank(old_content))
+    # Whole lines only: the rest of a line the match starts or ends inside is
+    # part of the match's own line, not a neighbour.
+    head, _, _ = current_content[:offset].rpartition("\n")
+    rest = current_content[offset + len(old_content) :]
+    tail = rest if old_content.endswith("\n") else rest.partition("\n")[2]
+    runs = (
+        _nearest_run(new_lines, _nonblank(head)[-NEIGHBOUR_LINES:], above=True),
+        _nearest_run(new_lines, _nonblank(tail)[:NEIGHBOUR_LINES], above=False),
+    )
+    repeated = [
+        line
+        for run in runs
+        for line in run
+        if line not in old_lines and any(ch.isalnum() for ch in line)
+    ]
+    if len(repeated) < MIN_REPEATED_LINES:
+        return []
+    if sum(len(line) for line in repeated) < MIN_REPEATED_CHARS:
+        return []
     return repeated
 
 
@@ -502,8 +530,9 @@ def apply_unique_replacement(
             f"new_content repeats lines that sit outside old_content in "
             f"{file_path} (listed in `repeated_lines`) — nothing was written, "
             "because the file would end up with those lines twice. Pass only "
-            "the text that replaces old_content, or use write_file to replace "
-            "the whole file.",
+            "the text that replaces old_content. If those lines belong in "
+            "new_content, add them to old_content too, so they are replaced "
+            "instead of copied. To replace the whole file, use write_file.",
             file_path,
             1,
             {"repeated_lines": repeated, **_excerpt(current_content, old_content)},
