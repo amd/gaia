@@ -1547,9 +1547,9 @@ def stream_inference(include_browser: bool = Query(False)):
                         "type": "error",
                         "message": (
                             f"Profile inference runs only on a local model, but "
-                            f"the default model is the cloud model '{model}'. Set "
-                            "a local one with `gaia config set default_model "
-                            "<model>` and try again."
+                            f"the default model is the cloud model '{model}'. "
+                            "Open Settings > Setup, press Run setup again and "
+                            "choose a local chat model, then try again."
                         ),
                     }
                 )

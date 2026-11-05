@@ -1187,7 +1187,32 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
-test('a keyboard user can reach and open a section, and sees where focus is', async ({ page }) => {
+for (const locale of ['ar', 'en']) {
+    test(`a server LEMONADE_BASE_URL picks offers GAIA's own and names no command (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await p.route('**/api/lemonade/target', (route) => route.fulfill({
+                json: {
+                    mode: 'external', saved_mode: null, source: 'env', base_url: 'http://127.0.0.1:59999/api/v1', saved_base_url: null,
+                    api_key_stored: false, gaia_installed: true, offer: false, env_override: null, env_url_ignored: null, what_gaia_does: '',
+                },
+            }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="advanced"]').click();
+        const section = page.locator('section[aria-label]').filter({ has: page.locator('.model-override-desc[role="status"]') }).last();
+        const disclosure = page.locator('.settings-disclosure').filter({ has: section });
+        if (!(await disclosure.getAttribute('open'))) await disclosure.locator('> summary').click();
+        await expect(section.locator('.setting-actions .btn-secondary')).toBeVisible();
+        await expect(section).not.toContainText(/unset|restart GAIA|gaia init|gaia config/i);
+        await section.scrollIntoViewIfNeeded();
+        await shot(page, `advanced-${locale}-env-server`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+test('a keyboard user can reach and open a section, and sees where focus is'
+, async ({ page }) => {
     await open(page, '', 'en', withSettingsPanes);
     await page.getByRole('button', { name: /Settings/ }).first().click();
     await page.getByRole('dialog').locator('[data-section="advanced"]').click();
@@ -1285,6 +1310,7 @@ for (const locale of ['ar', 'en']) {
             test(s.name, async ({ page }) => {
                 await open(page, '', locale, (p) => withSetup(p, s.answers));
                 await s.reach(page);
+                await shot(page, `setup-${locale}-${s.name}`);
                 expect(await audit(page)).toEqual([]);
             });
         }

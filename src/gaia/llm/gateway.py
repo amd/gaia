@@ -54,6 +54,7 @@ from gaia.llm.local_only import (
     local_only_key_message,
 )
 from gaia.llm.retry import http_body_text
+from gaia.llm.surface_hints import TUI_GATEWAY_KEY_HINT, TUI_MODEL_SWITCH_HINT
 from gaia.logger import get_logger
 from gaia.version import LEMONADE_MIN_VERSION
 
@@ -358,7 +359,7 @@ def clear_default_model_if(model_id: Optional[str]) -> bool:
         # operation that triggered it.
         raise GatewayError(
             f"Removed the gateway model but could not clear GAIA's default "
-            f"model ({e}). Run `gaia config set default_model <id>` to fix it."
+            f"model ({e}). {TUI_MODEL_SWITCH_HINT}"
         ) from e
 
 
@@ -588,7 +589,7 @@ STORED_TOKEN_SOURCE = "OS credential store"
 _TOKEN_SOURCE_LABELS = {
     GATEWAY_ENV_VAR: f"{GATEWAY_ENV_VAR} from GAIA's environment",
     "GAIA_GATEWAY_TOKEN": "GAIA_GATEWAY_TOKEN from GAIA's environment",
-    STORED_TOKEN_SOURCE: "the token `gaia gateway auth` stored in the OS credential store",
+    STORED_TOKEN_SOURCE: "the gateway key GAIA stored in the OS credential store",
 }
 
 
@@ -621,9 +622,8 @@ def resolve_gateway_token_with_source() -> tuple[str, str]:
     if token and token.strip():
         return token.strip(), STORED_TOKEN_SOURCE
     raise GatewayError(
-        f"No AMD LLM gateway token found, and Claude gateway models need one "
-        f"in GAIA's own process. Run `gaia gateway auth` (without "
-        f"--no-remember) to store it in the OS credential store, or set "
+        f"No AMD LLM gateway key found, and Claude gateway models need one "
+        f"saved where GAIA itself can read it. {TUI_GATEWAY_KEY_HINT} Or set "
         f"{GATEWAY_ENV_VAR} or GAIA_GATEWAY_TOKEN in GAIA's environment. "
         f"See https://amd-gaia.ai/docs/guides/llm-gateway."
     )
@@ -714,8 +714,8 @@ def explain_rejected_token(
     *status* is Lemonade's gateway auth state, or None when it couldn't be read.
     """
     generic = (
-        f"Run `gaia gateway auth` with a current token, or update "
-        f"{GATEWAY_ENV_VAR} / GAIA_GATEWAY_TOKEN if you set one."
+        f"{TUI_GATEWAY_KEY_HINT} If you set {GATEWAY_ENV_VAR} or "
+        f"GAIA_GATEWAY_TOKEN, update it too."
     )
     if not source:
         return generic
@@ -737,8 +737,7 @@ def explain_rejected_token(
     if status.runtime_key_set:
         return (
             f"{used} If other gateway models still work, the token Lemonade holds "
-            f"is current and GAIA's has gone stale. Run `gaia gateway auth` with "
-            f"the current token, which updates both."
+            f"is current and GAIA's has gone stale. {TUI_GATEWAY_KEY_HINT}"
         )
     return f"{used} {generic}"
 

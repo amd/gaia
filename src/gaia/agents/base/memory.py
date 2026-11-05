@@ -67,6 +67,7 @@ import numpy as np
 
 from gaia.agents.base import turn_metrics
 from gaia.agents.base.console import SilentConsole
+from gaia.agents.base.history import MEMORY_CONTEXT_HEADER
 from gaia.agents.base.memory_store import (
     CONSOLIDATION_MIN_TURNS,
     EXTRACTABLE_CATEGORIES,
@@ -3699,7 +3700,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         if recalled:
             lines.append(recalled)
 
-        return "[GAIA Memory Context]\n" + "\n\n".join(lines)
+        return MEMORY_CONTEXT_HEADER + "\n" + "\n\n".join(lines)
 
     def _read_scope(self) -> Optional[str]:
         """The context automatic reads filter on, or None for every context.

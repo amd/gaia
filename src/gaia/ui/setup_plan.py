@@ -829,17 +829,15 @@ def choose_vision_model(model_id: Optional[str]) -> None:
 
 def _job_model(job: str) -> Optional[str]:
     """The model *job* would load now, or None when no local model is involved."""
-    from gaia.config import GaiaConfig
     from gaia.llm.lemonade_client import (
         DEFAULT_EMBEDDING_MODEL,
         cloud_model_provider,
-        resolve_default_chat_model,
+        resolve_chat_model,
         resolve_default_vision_model,
     )
 
     if job == model_choice.ROLE_CHAT:
-        config = GaiaConfig.load()
-        model = config.last_model or resolve_default_chat_model()
+        model = resolve_chat_model()
         cloud = model.startswith("claude-") or cloud_model_provider(model)
         return None if cloud else model
     if job == model_choice.ROLE_VISION:

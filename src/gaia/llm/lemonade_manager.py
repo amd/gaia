@@ -29,6 +29,7 @@ from gaia.llm.lemonade_client import (
     fit_ctx_to_free_memory,
     is_cloud_model_entry,
     is_llm_model_entry,
+    lemonade_log_hint,
     loaded_ctx_size,
     resolve_ctx_size,
     resolve_default_chat_model,
@@ -38,6 +39,7 @@ from gaia.llm.lemonade_client import (
     runs_on_npu,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
+from gaia.llm.surface_hints import surface_wording
 from gaia.logger import get_logger
 
 
@@ -392,7 +394,7 @@ class LemonadeManager:
         except LemonadeClientError as e:
             cls._log.error("%s", e)
             if not quiet:
-                print(f"❌ {e}", file=sys.stderr)
+                print(f"❌ {surface_wording(str(e), 'cli')}", file=sys.stderr)
             return False
         return True
 
@@ -533,8 +535,7 @@ class LemonadeManager:
             f"To fix: run `gaia init` to install and load {_preload_model()}, or "
             f"load an LLM yourself "
             f"({describe_start_hint(min_context_size).instruction}).\n"
-            f"See the Lemonade server log for details "
-            f"(typical path: ~/.cache/lemonade/server.log)."
+            f"{lemonade_log_hint(base_url)}"
         )
         cls._log.warning(message)
         if not quiet:
@@ -1415,7 +1416,11 @@ class LemonadeManager:
         except LemonadeStartError as e:
             cls._log.error("Could not start the local model server: %s", e)
             if not quiet:
-                print(f"\n❌ {e}", file=sys.stderr, flush=True)
+                print(
+                    f"\n❌ {surface_wording(str(e), 'cli')}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             return False
         finally:
             lock.acquire()
@@ -1531,8 +1536,7 @@ class LemonadeManager:
                 f"To recover manually: stop the running server, then restart it "
                 f"({describe_start_hint(requested_ctx).instruction}) and "
                 f"re-run your GAIA command.\n"
-                f"See the Lemonade server log for details "
-                f"(typical path: ~/.cache/lemonade/server.log)."
+                f"{lemonade_log_hint(client.base_url)}"
             ) from e
         finally:
             lock.acquire()
@@ -1659,8 +1663,8 @@ class LemonadeManager:
                     f"Lemonade at {client.base_url} accepted the load of "
                     f"{model_id} at ctx_size={requested_ctx}, but its /health "
                     f"no longer lists {model_id}, so its context window is "
-                    f"unknown. Another load may have evicted it; check the "
-                    f"Lemonade server log (~/.cache/lemonade/server.log)."
+                    f"unknown. Another load may have evicted it. "
+                    f"{lemonade_log_hint(client.base_url)}"
                 )
             reported_ctx = loaded_ctx_size(new_status.loaded_models, model_id) or 0
             new_ceiling = (

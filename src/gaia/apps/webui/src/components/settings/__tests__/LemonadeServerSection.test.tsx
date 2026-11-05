@@ -5,9 +5,13 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LemonadeServerSection } from '../LemonadeServerSection';
 import * as api from '../../../services/api';
+import { useChatStore } from '../../../stores/chatStore';
 import type { LemonadeTarget } from '../../../types';
 
 vi.mock('../../../services/api');
+
+const runSetupAgain = vi.fn();
+const closeSettings = vi.fn();
 
 const mockedApi = vi.mocked(api);
 
@@ -23,9 +27,28 @@ const MINE: LemonadeTarget = {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    useChatStore.setState({ runSetupAgain, closeSettings });
 });
 
 describe('LemonadeServerSection', () => {
+    it('says when the address set outside the app is ignored, and how to use it again', async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue({ ...OWN, env_url_ignored: 'http://127.0.0.1:59999/api/v1' });
+        render(<LemonadeServerSection />);
+
+        expect(await screen.findByText('GAIA uses its own Lemonade Server.')).toBeInTheDocument();
+        expect(screen.getByText(
+            "GAIA ignores the address set outside the app (http://127.0.0.1:59999/api/v1) because you chose GAIA's own. Change that address to use it again.",
+        )).toBeInTheDocument();
+    });
+
+    it('says nothing about an outside address when none is ignored', async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue({ ...OWN, env_url_ignored: null });
+        render(<LemonadeServerSection />);
+
+        expect(await screen.findByText('GAIA uses its own Lemonade Server.')).toBeInTheDocument();
+        expect(screen.queryByText(/GAIA ignores the address/)).not.toBeInTheDocument();
+    });
+
     it("switches from GAIA's own to the user's server and never shows the key back", async () => {
         mockedApi.getLemonadeTarget.mockResolvedValue(OWN);
         mockedApi.setLemonadeTarget.mockResolvedValue({ ...MINE, daemon: null });
@@ -86,14 +109,40 @@ describe('LemonadeServerSection', () => {
         expect(screen.getByText('GAIA uses its own Lemonade Server.')).toBeInTheDocument();
     });
 
-    it('is read-only when LEMONADE_BASE_URL chooses the server', async () => {
-        mockedApi.getLemonadeTarget.mockResolvedValue({ ...MINE, source: 'env', base_url: 'http://box:13305/api/v1' });
+    it("offers GAIA's own when LEMONADE_BASE_URL chooses the server, and names no command (#6671)", async () => {
+        const ENV = { ...MINE, source: 'env', base_url: 'http://box:13305/api/v1' } as const;
+        mockedApi.getLemonadeTarget.mockResolvedValue(ENV);
+        mockedApi.setLemonadeTarget.mockResolvedValue({ ...OWN, env_url_ignored: 'http://box:13305/api/v1', daemon: null });
         render(<LemonadeServerSection />);
 
         expect(await screen.findByText(/http:\/\/box:13305\/api\/v1/)).toBeInTheDocument();
-        expect(screen.getByText(/Unset/)).toHaveTextContent('Unset LEMONADE_BASE_URL and restart GAIA to change this here.');
+        expect(screen.queryByText(/unset|restart GAIA/i)).not.toBeInTheDocument();
         expect(screen.queryByLabelText('Lemonade Server address')).not.toBeInTheDocument();
-        expect(screen.queryByRole('button', { name: /Use GAIA.s own/ })).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: /Use GAIA.s own/ }));
+        await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith({ mode: 'gaia' }));
+        expect(await screen.findByText('GAIA uses its own Lemonade Server.')).toBeInTheDocument();
+        expect(runSetupAgain).not.toHaveBeenCalled();
+    });
+
+    it("opens setup to install GAIA's own when it isn't installed yet", async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue({ ...MINE, source: 'env', gaia_installed: false });
+        mockedApi.setLemonadeTarget.mockResolvedValue({ ...OWN, gaia_installed: false, daemon: null });
+        render(<LemonadeServerSection />);
+
+        fireEvent.click(await screen.findByRole('button', { name: /Use GAIA.s own/ }));
+        await waitFor(() => expect(runSetupAgain).toHaveBeenCalledWith(true));
+        expect(closeSettings).toHaveBeenCalled();
+    });
+
+    it('says why when the switch over LEMONADE_BASE_URL fails', async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue({ ...MINE, source: 'env' });
+        mockedApi.setLemonadeTarget.mockRejectedValue(new Error("GAIA could not switch to its own Lemonade Server: boom Nothing was changed."));
+        render(<LemonadeServerSection />);
+
+        fireEvent.click(await screen.findByRole('button', { name: /Use GAIA.s own/ }));
+        const alert = await screen.findByRole('alert');
+        expect(alert).toHaveTextContent('Not switched');
+        expect(alert).toHaveTextContent('Nothing was changed.');
     });
 
     it('says when it cannot read the current server', async () => {
