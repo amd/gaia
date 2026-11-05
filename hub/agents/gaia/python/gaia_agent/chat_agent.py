@@ -1551,8 +1551,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         lacking = ["cloud storage", "file conversion", "live collaboration"]
         if not self._offers_scheduling():
             lacking.insert(0, "scheduling")
-        if not FEATURE_TOOLS["email"] & set(self._tools_registry):
-            lacking.insert(0, "email")
+        # The email tools only read mail, so sending stays unsupported either way.
+        reads_email = bool(FEATURE_TOOLS["email"] & set(self._tools_registry))
+        lacking.insert(0, "sending email" if reads_email else "email")
         unsupported = f"**UNSUPPORTED:** {', '.join(lacking).capitalize()} — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md ."
         if "web_browse" in spec.tool_groups:
             unsupported += " Web browsing IS supported via `search_web` / `fetch_page` / `download_file`."

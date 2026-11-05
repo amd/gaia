@@ -163,12 +163,18 @@ def test_scheduling_is_never_both_unsupported_and_offered(gaia_docs, surface):
     assert ("scheduling" in _unsupported_line(prompt)) != offered
 
 
-def test_email_is_not_unsupported_when_email_tools_are_registered(gaia_docs):
+def test_only_sending_email_is_unsupported_when_email_tools_are_registered(
+    gaia_docs,
+):
+    """The email tools read mail; the prompt must not claim they send it."""
     agent = _build(allowed_paths=[str(gaia_docs)])
     try:
-        assert "email" in _unsupported_line(agent._get_system_prompt())
+        without = _unsupported_line(agent._get_system_prompt())
+        assert without.startswith("**unsupported:** email,")
+        assert "sending email" not in without
         agent._instance_tools["list_inbox"] = {}
-        assert "email" not in _unsupported_line(agent._get_system_prompt())
+        with_tools = _unsupported_line(agent._get_system_prompt())
+        assert with_tools.startswith("**unsupported:** sending email,")
     finally:
         agent.__del__()
 
