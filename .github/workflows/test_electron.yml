@@ -623,15 +623,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb
 
-      - name: DIAG the guard on main
-        continue-on-error: true
-        run: |
-          git fetch -q --depth=1 origin main
-          git show FETCH_HEAD:src/gaia/apps/webui/services/quit-guard.cjs > "${RUNNER_TEMP}/old-guard.cjs"
-          export GAIA_QUIT_GUARD="${RUNNER_TEMP}/old-guard.cjs"
-          if [ "${RUNNER_OS}" = Linux ]; then xvfb-run -a node --test tests/electron/sigterm-electron.test.mjs
-          else node --test tests/electron/sigterm-electron.test.mjs; fi
-
       - name: SIGTERM quits without the quit question
         run: |
           if [ "${RUNNER_OS}" = Linux ]; then
