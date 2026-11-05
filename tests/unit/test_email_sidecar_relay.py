@@ -34,6 +34,7 @@ import pytest
 
 pytestmark = pytest.mark.allow_network
 
+from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT  # noqa: E402
 from gaia.ui.email_sidecar import relay  # noqa: E402 - expected to fail (red phase)
 from gaia.ui.email_sidecar.errors import (  # noqa: E402
     SidecarError,
@@ -736,15 +737,7 @@ class TestSidecarHTTPErrorDetail:
         assert len(agent_errors) == 1
         assert agent_errors[0]["content"] == detail
 
-    def test_connection_shaped_http_error_detail_gains_hint(self, monkeypatch):
-        from gaia.llm import lemonade_launcher
-
-        start = "To start it now, run: gaia lemonade embedded start"
-        monkeypatch.setattr(
-            lemonade_launcher,
-            "describe_start_hint",
-            lambda ctx_size=None: lemonade_launcher.StartHint(instruction=start),
-        )
+    def test_connection_shaped_http_error_detail_gains_hint(self):
         handler = _FakeHandler()
         detail = "502 local LLM triage failed: connection refused"
         proxy = _ScriptedProxy(
@@ -756,8 +749,26 @@ class TestSidecarHTTPErrorDetail:
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
         assert agent_errors[0]["content"] == (
-            f"{detail}{relay.LEMONADE_CONNECTION_HINT} {start}"
+            f"{detail}{relay.LEMONADE_CONNECTION_HINT} {APP_SERVER_DOWN_HINT}"
         )
+        assert "gaia " not in agent_errors[0]["content"]
+
+    def test_a_detail_that_names_the_setup_repair_gains_no_hint(self):
+        from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT
+
+        handler = _FakeHandler()
+        detail = (
+            "GAIA's AI engine couldn't start: lemond timed out. Sending the "
+            f"message again won't help until it is repaired. {AGENT_UI_SETUP_HINT}"
+        )
+        proxy = _ScriptedProxy(
+            lambda: _RaisingIterator(
+                SidecarHTTPError(503, detail, path="/v1/gaia/query")
+            )
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert agent_errors[0]["content"] == detail
 
     def test_404_http_error_still_shows_version_upgrade_message(self):
         handler = _FakeHandler()

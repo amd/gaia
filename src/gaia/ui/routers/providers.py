@@ -32,6 +32,7 @@ from gaia.llm.local_only import (
     cloud_blocked,
     local_only_key_message,
 )
+from gaia.llm.surface_hints import APP_RESTART_HINT
 from gaia.logger import get_logger
 
 from ..database import ChatDatabase
@@ -139,11 +140,9 @@ def _lemonade(
             allow_redirects=False,
         )
     except requests.RequestException as e:
-        from gaia.llm.lemonade_launcher import describe_start_hint
-
+        logger.warning("Model server at %s not reachable: %s", base, e)
         raise ProviderError(
-            f"The local model server is not reachable at {base} ({e}). "
-            f"{describe_start_hint().instruction}",
+            f"The local model server is not reachable at {base}. {APP_RESTART_HINT}",
             status=503,
         ) from e
     try:

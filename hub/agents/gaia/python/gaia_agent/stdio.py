@@ -1371,38 +1371,31 @@ def _configure_logging(real_stdout, *, dev: bool) -> "Path":
     return Path(path)
 
 
+def model_server_failure(exc: BaseException) -> Optional[Any]:
+    """The classified model-server failure behind *exc*, or None when unrelated.
+
+    An Anthropic outage also says "connection refused"/"max retries"; blaming
+    the model server would point the user at the wrong backend.
+    """
+    from gaia.llm.providers.lemonade import classify_lemonade_exception
+
+    text = f"{type(exc).__name__}: {exc}".lower()
+    if "anthropic" in text or type(exc).__module__.startswith("anthropic"):
+        return None
+    return classify_lemonade_exception(exc)
+
+
 def _terminal_error(exc: BaseException) -> Dict[str, Any]:
     """Actionable copy for a run-killing exception.
 
-    Lemonade being unreachable is the common failure and its raw urllib3 repr
-    tells a user nothing, so it gets named copy with the fix. Anything else is
-    surfaced verbatim — a generic 'something went wrong' would hide the one
-    detail that makes a bug reportable.
+    A model-server failure gets its classified wording, which names the fix.
+    Anything else is surfaced verbatim — a generic 'something went wrong' would
+    hide the one detail that makes a bug reportable.
     """
-    text = f"{type(exc).__name__}: {exc}"
-    lowered = text.lower()
-    # An Anthropic outage also says "connection refused"/"max retries" — the
-    # Lemonade remediation would point at the wrong backend, so skip it.
-    is_anthropic = "anthropic" in lowered or type(exc).__module__.startswith(
-        "anthropic"
-    )
-    if not is_anthropic and any(
-        s in lowered
-        for s in (
-            "connection refused",
-            "max retries",
-            "failed to establish",
-            "newconnectionerror",
-        )
-    ):
-        return {
-            "type": "error",
-            "detail": (
-                f"Local Lemonade Server is not reachable. {start_advice()} "
-                f"(underlying error: {text})"
-            ),
-        }
-    return {"type": "error", "detail": text}
+    typed = model_server_failure(exc)
+    if typed is not None:
+        return {"type": "error", "detail": typed.user_message}
+    return {"type": "error", "detail": f"{type(exc).__name__}: {exc}"}
 
 
 def _memory_dump_event(agent: Any) -> Dict[str, Any]:
@@ -1686,13 +1679,30 @@ def run_warm_up(agent: Any, out) -> None:
             progress=lambda message: _write({"type": "status", "message": message}, out)
         )
     except Exception as exc:  # noqa: BLE001 - reported to the user, not hidden
-        logger.warning("Warm-up failed: %s", exc, exc_info=True)
-        event = _terminal_error(exc)
-        event["detail"] = (
-            "Could not get the model ready ahead of time — chat still works, but "
-            f"the first answer will take longer. {event['detail']}"
+        from gaia.llm.providers.lemonade import (
+            LemonadeEngineStartError,
+            LemonadeServerUnreachableError,
         )
-        _write(event, out)
+
+        logger.warning("Warm-up failed: %s", exc, exc_info=True)
+        typed = model_server_failure(exc)
+        # A chat turn's advice ("resend the query") does not fit a warm-up.
+        if isinstance(
+            typed, (LemonadeEngineStartError, LemonadeServerUnreachableError)
+        ):
+            reason = typed.user_message
+        else:
+            reason = f"{type(exc).__name__}: {exc}"
+        _write(
+            {
+                "type": "error",
+                "detail": (
+                    "Could not get the model ready ahead of time — chat still "
+                    f"works, but the first answer will take longer. {reason}"
+                ),
+            },
+            out,
+        )
         return
     logger.info("Warm-up finished in %ss", result.get("seconds"))
     _write({"type": "final", "answer": WARMED_UP}, out)

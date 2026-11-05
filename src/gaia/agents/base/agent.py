@@ -2623,6 +2623,10 @@ Do NOT wrap conversational replies in JSON.
             if cloud_model_provider(model_id):
                 # The local manager preloads a chat model even on an idle server.
                 probe_client = LemonadeClient(base_url=base_url, verbose=False)
+                # Ask the daemon for GAIA's engine, never probe the default port.
+                probe_client.current_base_url()
+                if resolve_after_start:
+                    base_url = probe_client.base_url
                 try:
                     probe_client.health_check()
                 except LemonadeUnresponsiveError:

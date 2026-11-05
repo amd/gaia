@@ -40,7 +40,11 @@ from gaia.llm.providers.lemonade import (
     LemonadeModelUnavailableError,
     classify_lemonade_exception,
 )
-from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT, APP_RESTART_HINT
+from gaia.llm.surface_hints import (
+    AGENT_UI_SETUP_HINT,
+    APP_RESTART_HINT,
+    APP_SERVER_DOWN_HINT,
+)
 from gaia.security import (
     BLOCKED_DIRECTORIES,
     AllowedPathsEnvError,
@@ -3125,7 +3129,6 @@ async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str
         resolve_lemonade_api_key,
         resolve_lemonade_base_url,
     )
-    from gaia.llm.lemonade_launcher import describe_start_hint
     from gaia.llm.lemonade_manager import LemonadeManager
 
     base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
@@ -3138,7 +3141,7 @@ async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str
         logger.warning("Empty-answer health check of %s failed: %s", base_url, e)
         return (
             f"No answer came back because Lemonade Server at {base_url} isn't "
-            f"responding. {describe_start_hint().instruction}"
+            f"responding. {APP_SERVER_DOWN_HINT}"
         )
     if resp.status_code in (401, 403):
         # Running, so the start hint would be wrong; the key is what to fix.
@@ -3150,8 +3153,7 @@ async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str
     if not isinstance(health, dict):
         return (
             f"No answer came back because Lemonade Server at {base_url} failed "
-            f"its health check (HTTP {resp.status_code}). "
-            f"{describe_start_hint().instruction}"
+            f"its health check (HTTP {resp.status_code}). {APP_SERVER_DOWN_HINT}"
         )
     if not model_id or cloud_model_provider(model_id):
         return None

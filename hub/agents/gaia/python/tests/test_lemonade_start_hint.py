@@ -80,14 +80,14 @@ def test_init_hint_never_names_the_removed_cli_unpatched(monkeypatch):
     assert "Start it with `lemonade-server serve`" not in hint
 
 
-def test_server_run_error_names_the_host_start_instruction(start_hint):
+def test_server_run_error_is_classified_with_no_command(start_hint):
     detail = server_mod._terminal_error_detail(
         ConnectionError("Max retries exceeded ... Connection refused")
     )
 
-    assert _REMOVED_CLI not in detail
-    assert f"{_INSTRUCTION}. See {server_mod._DOCS_URL}" in detail
-    assert "Connection refused" in detail
+    assert "local LLM" in detail
+    assert _INSTRUCTION not in detail
+    assert "Max retries" not in detail
 
 
 def _fake_agent():

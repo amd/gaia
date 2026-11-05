@@ -18,6 +18,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT
 from gaia.ui import _chat_helpers
 from gaia.ui._chat_helpers import (
     _EMPTY_MODEL_ANSWER_MSG,
@@ -482,10 +483,6 @@ def _probe(model_id, handler):
             "httpx.AsyncClient",
             lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
         ),
-        patch(
-            "gaia.llm.lemonade_launcher.describe_start_hint",
-            return_value=MagicMock(instruction="START-HINT"),
-        ),
     ):
         return asyncio.run(_empty_answer_backend_problem(model_id))
 
@@ -511,13 +508,13 @@ class TestEmptyAnswerBackendProblem:
         problem = _probe("Gemma-4-E4B-it-GGUF", refuse)
         assert _BASE in problem
         assert "isn't responding" in problem
-        assert problem.endswith("START-HINT")
-        assert "lemonade-server serve" not in problem
+        assert problem.endswith(APP_SERVER_DOWN_HINT)
+        assert "gaia " not in problem
 
     def test_unhealthy_status_names_the_http_code(self):
         problem = _probe("M-GGUF", lambda request: httpx.Response(503))
         assert "HTTP 503" in problem
-        assert problem.endswith("START-HINT")
+        assert problem.endswith(APP_SERVER_DOWN_HINT)
 
     @pytest.mark.parametrize("status", [401, 403])
     def test_a_rejected_key_names_the_key_not_a_start_hint(self, status):

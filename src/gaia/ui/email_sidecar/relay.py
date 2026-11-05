@@ -48,6 +48,7 @@ from typing import Any, Callable, ContextManager, Dict, List, Optional
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL
+from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT, APP_SERVER_DOWN_HINT
 from gaia.logger import get_logger
 from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, RelayProfile
@@ -102,11 +103,14 @@ _CONNECTION_SHAPED_RE = re.compile(
 def _augment_error_detail(detail: str, profile: RelayProfile = EMAIL_PROFILE) -> str:
     """Append (never substitute) an actionable hint to connection-shaped
     error text — boundary translation, not a fallback: the original detail
-    is preserved verbatim at the front."""
-    if profile.lemonade_hint and _CONNECTION_SHAPED_RE.search(detail):
-        from gaia.llm.lemonade_launcher import describe_start_hint
-
-        return f"{detail}{profile.lemonade_hint} {describe_start_hint().instruction}"
+    is preserved verbatim at the front. Text that already names the setup
+    repair is left alone: resending would not help it."""
+    if (
+        profile.lemonade_hint
+        and AGENT_UI_SETUP_HINT not in detail
+        and _CONNECTION_SHAPED_RE.search(detail)
+    ):
+        return f"{detail}{profile.lemonade_hint} {APP_SERVER_DOWN_HINT}"
     return detail
 
 
