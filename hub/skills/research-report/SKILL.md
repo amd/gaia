@@ -54,10 +54,12 @@ re-fetching the web.
   nothing; if a query comes back empty, rephrase once, then say so rather than
   inventing results.
 - Prefer primary sources (documentation, filings, the project's own site) over
-  aggregators. `search_web` lists them first and marks them `[primary source]`.
+  aggregators.
 - A "latest version" or "newest release" claim must come from the project's own
-  releases or changelog page, fetched with `fetch_page`. News articles lag behind
-  releases; if no result is primary, search for the releases page before answering.
+  releases or changelog page, fetched with `fetch_page`. On a version or release
+  search, `search_web` lists the project's own pages first and marks them
+  `[primary source]`; if none is, search for the releases page before answering,
+  because news articles lag behind releases.
 
 ## Fork this
 

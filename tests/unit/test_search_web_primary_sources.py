@@ -10,6 +10,7 @@ import pytest
 from gaia.agents.tools.browser_tools import (
     _RELEASE_NO_PRIMARY_NOTE,
     _RELEASE_PRIMARY_NOTE,
+    PRIMARY_SOURCE_MARKER,
     BrowserToolsMixin,
     _is_primary_source,
     _is_release_query,
@@ -114,13 +115,19 @@ class TestIsPrimarySource:
             "https://www.phoronix.com/news/AMD-Lemonade-11.5",
             "https://alternativeto.net/software/lemonade-server/",
             "https://github.com/someone/unrelated-tool",
+            "https://github.com/someone/lemonade-memes",
+            "https://github.com/",
             "https://pypi.org/project/other/",
+            "https://pypi.org/search/?q=lemonade",
             "not a url",
             "",
         ],
     )
     def test_news_aggregators_and_other_projects(self, url):
         assert not _is_primary_source(url, self.words)
+
+    def test_repository_named_exactly_after_the_project(self):
+        assert _is_primary_source("https://github.com/someone/lemonade", self.words)
 
     def test_whole_label_parts_only(self):
         words = frozenset({"python"})
@@ -157,10 +164,26 @@ class TestSearchWebOutput:
         assert "[primary source]" not in out
         assert _RELEASE_NO_PRIMARY_NOTE in out
 
-    def test_other_questions_get_no_release_note(self, search_web):
-        out = search_web("best lemonade recipe", [NEWS, AGGREGATOR])
+    def test_other_questions_keep_search_order_untagged(self, search_web):
+        site = {"title": "Boston weather", "url": "https://www.boston.com/weather"}
+        out = search_web("weather in boston today", [NEWS, site])
+        assert "[primary source]" not in out
+        assert out.index("1. AMD Lemonade 11.5 Released") < out.index(
+            "2. Boston weather"
+        )
         assert _RELEASE_PRIMARY_NOTE not in out
         assert _RELEASE_NO_PRIMARY_NOTE not in out
         assert out.endswith(
             "Use fetch_page(url) to read the full content of any result."
         )
+
+
+def test_agent_ui_source_titles_drop_the_marker(search_web):
+    from gaia.ui.turn_summary import search_hits
+
+    out = search_web(RELEASE_QUERY, [NEWS, RELEASES])
+    assert PRIMARY_SOURCE_MARKER in out
+    assert search_hits(out)[0] == {
+        "title": RELEASES["title"],
+        "url": RELEASES["url"],
+    }

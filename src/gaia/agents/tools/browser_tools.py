@@ -168,25 +168,24 @@ def _search_unavailable_result(
     }
 
 
-#: Hosts where a project publishes its own code, releases or packages; a result
-#: there is primary only when its path names the project.
-_PROJECT_HOSTS = frozenset(
-    {
-        "github.com",
-        "gitlab.com",
-        "codeberg.org",
-        "bitbucket.org",
-        "sourceforge.net",
-        "pypi.org",
-        "npmjs.com",
-        "crates.io",
-        "pkg.go.dev",
-        "hub.docker.com",
-        "nuget.org",
-        "rubygems.org",
-        "huggingface.co",
-    }
+#: Appended to a result's title line; the Agent UI strips it from source titles.
+PRIMARY_SOURCE_MARKER = " [primary source]"
+
+#: Hosts whose first path segment is the owner and second is the repository.
+_REPO_HOSTS = frozenset(
+    {"github.com", "gitlab.com", "codeberg.org", "bitbucket.org", "huggingface.co"}
 )
+
+#: Package registries, keyed by host, with the path prefix before the name.
+_REGISTRY_PREFIXES = {
+    "pypi.org": ("project",),
+    "npmjs.com": ("package",),
+    "crates.io": ("crates",),
+    "rubygems.org": ("gems",),
+    "nuget.org": ("packages",),
+    "pkg.go.dev": (),
+    "sourceforge.net": ("projects",),
+}
 
 #: Query words that describe the question, not the thing it is about.
 _GENERIC_QUERY_WORDS = frozenset(
@@ -282,13 +281,24 @@ def _is_primary_source(url: str, project_words: frozenset) -> bool:
         return False
     parts = urlsplit(url)
     host = (parts.hostname or "").lower().removeprefix("www.")
-    if host in _PROJECT_HOSTS:
-        segments = [s for s in parts.path.lower().split("/") if s][:3]
-        words = {w for s in segments for w in re.split(r"[-_.]", s)}
-    else:
-        # Whole label parts only, so "realpython.com" is not python's own site.
-        labels = host.split(".")[:-1]
-        words = {w for label in labels for w in label.split("-")}
+    segments = [s for s in parts.path.lower().split("/") if s]
+    if host in _REPO_HOSTS:
+        # The owner names the project, or the repository is exactly its name:
+        # someone's "climate-memes" repo is not climate's own page.
+        if not segments:
+            return False
+        owner = set(segments[0].split("-"))
+        repo = segments[1] if len(segments) > 1 else ""
+        return not project_words.isdisjoint(owner) or repo in project_words
+    if host in _REGISTRY_PREFIXES:
+        prefix = _REGISTRY_PREFIXES[host]
+        if segments[: len(prefix)] != list(prefix) or len(segments) <= len(prefix):
+            return False
+        name = segments[len(prefix)]
+        return not project_words.isdisjoint(re.split(r"[-_.]", name))
+    # Whole label parts only, so "realpython.com" is not python's own site.
+    labels = host.split(".")[:-1]
+    words = {w for label in labels for w in label.split("-")}
     return not project_words.isdisjoint(words)
 
 
@@ -649,12 +659,11 @@ class BrowserToolsMixin:
             """Search the web and return results with titles, URLs, and snippets.
 
             Uses DuckDuckGo to find relevant web pages. Returns titles, URLs, and
-            brief descriptions, with the subject's own site, repository or
-            package page listed first and marked [primary source]. Use
-            fetch_page to read the full content of any result. For a latest
-            version or release question, fetch the project's own releases or
-            changelog page and answer from it: snippets and news articles go
-            stale.
+            brief descriptions. Use fetch_page to read the full content of any
+            result. For a version or release question, the project's own site,
+            repository or package page is listed first and marked [primary
+            source]: fetch its releases or changelog page and answer from it,
+            since snippets and news articles go stale.
 
             Args:
                 query: Search query string
@@ -713,16 +722,23 @@ class BrowserToolsMixin:
             lines = [f'Web search results for: "{query}"', ""]
             if source_note:
                 lines[1:1] = [source_note]
-            ranked = _rank_by_source(results, query)
+            # Only release questions: on everyday searches a shared word
+            # ("boston" in boston.com) does not make a site the subject's own.
+            release_query = _is_release_query(query)
+            ranked = (
+                _rank_by_source(results, query)
+                if release_query
+                else [(r, False) for r in results]
+            )
             for i, (result, primary) in enumerate(ranked, 1):
-                marker = " [primary source]" if primary else ""
+                marker = PRIMARY_SOURCE_MARKER if primary else ""
                 lines.append(f"{i}. {result['title']}{marker}")
                 lines.append(f"   {result['url']}")
                 if result.get("snippet"):
                     lines.append(f"   {result['snippet']}")
                 lines.append("")
 
-            if _is_release_query(query):
+            if release_query:
                 any_primary = any(primary for _, primary in ranked)
                 lines.append(
                     _RELEASE_PRIMARY_NOTE if any_primary else _RELEASE_NO_PRIMARY_NOTE
