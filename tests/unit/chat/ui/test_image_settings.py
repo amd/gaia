@@ -289,6 +289,23 @@ def test_an_image_without_a_named_model_uses_the_saved_settings(tmp_path):
     )
 
 
+def test_naming_the_saved_model_keeps_the_saved_size_and_steps(tmp_path):
+    # The image skill has the agent pass list_sd_models' default by name.
+    GaiaConfig.save_keys(
+        {"image_model": "Z-Image-Turbo", "image_size": "1280x720", "image_steps": 12}
+    )
+    host = _sd_host(tmp_path, follow=True)
+    host._generate_image("a lighthouse", model="Z-Image-Turbo")
+    sent = host.sd_client.generate_image.call_args.kwargs
+    assert (sent["model"], sent["size"], sent["steps"]) == (
+        "Z-Image-Turbo",
+        "1280x720",
+        12,
+    )
+    host._generate_image("a lighthouse", model="Z-Image-Turbo", size="512x512")
+    assert host.sd_client.generate_image.call_args.kwargs["size"] == "512x512"
+
+
 def test_a_named_model_keeps_its_own_defaults(tmp_path):
     GaiaConfig.save_keys(
         {"image_model": "Z-Image-Turbo", "image_size": "1280x720", "image_steps": 12}

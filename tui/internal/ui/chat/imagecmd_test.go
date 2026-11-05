@@ -284,7 +284,7 @@ func TestAnImageCardIsRememberedWithoutASecondLine(t *testing.T) {
 func TestTheImagePathIsATerminalLink(t *testing.T) {
 	path := "/home/u/.gaia/cache/sd/images/my cat.png"
 	m := newTestChat(t)
-	m.noteCreatedImage("", imageResult(path).Data)
+	m.noteCreatedImage("generate_image", "", imageResult(path).Data)
 	msg := m.messages[len(m.messages)-1]
 	out := m.renderMessage(&msg, nil)
 	if !strings.Contains(out, osc8Prefix+fileURL(runtime.GOOS, path)+osc8Sep+path+osc8Close) {
@@ -358,7 +358,7 @@ func TestImageOpenOpensTheLastImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, _, _ := imageModel(t, "")
-	m.noteCreatedImage("", imageResult(path).Data)
+	m.noteCreatedImage("generate_image", "", imageResult(path).Data)
 	m = runImage(t, m, "/image open")
 	if want := imageOpenArgv(runtime.GOOS, path); !reflect.DeepEqual(*started, want) {
 		t.Errorf("started %q, want %q", *started, want)
@@ -401,7 +401,7 @@ func TestClickingTheImageLineOpensIt(t *testing.T) {
 	}
 	m, _, _ := imageModel(t, "")
 	m.resize()
-	m.noteCreatedImage("", imageResult(path).Data)
+	m.noteCreatedImage("generate_image", "", imageResult(path).Data)
 	m.updateViewport()
 	row := -1
 	for i := 0; i < m.height; i++ {
@@ -455,5 +455,19 @@ func TestImageSaysNothingOfAChatModelThatCreatesImages(t *testing.T) {
 	m = runImage(t, m, "/image")
 	if got := lastStatus(t, m); strings.Contains(got, "too small") {
 		t.Errorf("status warns about a model that creates images:\n%s", got)
+	}
+}
+
+func TestAnImageTheAgentOnlyLookedAtIsNotCreated(t *testing.T) {
+	photo := filepath.Join(t.TempDir(), "holiday.jpg")
+	for _, tool := range []string{"analyze_image", "answer_question_about_image"} {
+		data, _ := json.Marshal(map[string]any{"status": "success", "image_path": photo, "description": "a beach"})
+		m := feed(t, newTestChat(t),
+			event.CanonicalToolCallEvent{Type: "tool_call", Tool: tool},
+			event.CanonicalToolResultEvent{Type: "tool_result", Tool: tool, Data: data},
+		)
+		if m.lastImagePath != "" || hasStatus(m) {
+			t.Errorf("%s: the photo it read was recorded as created (%q)", tool, m.lastImagePath)
+		}
 	}
 }

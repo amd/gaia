@@ -301,9 +301,18 @@ func createdImagePath(render string, data json.RawMessage) string {
 	return path
 }
 
+// imageCreatingTools write a new image; the vision tools also return the
+// image_path they read, which is the user's own file.
+var imageCreatingTools = map[string]bool{
+	"generate_image": true, "edit_image": true, "upscale_image": true, "create_image_variation": true,
+}
+
 // noteCreatedImage remembers an image the agent created for /image open, and
 // says where it is unless an image card already does.
-func (m *ChatModel) noteCreatedImage(render string, data json.RawMessage) {
+func (m *ChatModel) noteCreatedImage(tool, render string, data json.RawMessage) {
+	if !imageCreatingTools[tool] {
+		return
+	}
 	path := createdImagePath(render, data)
 	if path == "" {
 		return

@@ -659,7 +659,8 @@ class SDToolsMixin:
 
         # Apply instance defaults first
         saved = self._saved_image_settings()
-        if saved and not model:
+        # Naming the saved model, as list_sd_models suggests, keeps its saved size and steps.
+        if saved and (not model or model == saved["model"]):
             model = saved["model"]
             size = size or saved["size"]
             steps = steps if steps is not None else saved["steps"]
