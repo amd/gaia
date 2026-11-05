@@ -443,6 +443,9 @@ export function ModelSettings() {
                                     )}
                                 </div>
                             )}
+                            {provider.key_source && !connected && !provider.error && !replacingKey && (
+                                <p className="settings-hint">{t('settings.key.notConnectedHint', { name: provider.name })}</p>
+                            )}
                             {provider.error && <p className="settings-error" role="alert">{provider.error}</p>}
                         </form>
                     )}

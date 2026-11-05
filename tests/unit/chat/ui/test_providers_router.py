@@ -301,6 +301,129 @@ def test_stored_key_replay_failure_is_reported_on_the_provider(client, lemonade,
     assert "500" in fw["error"]
 
 
+# ── A key GAIA has, on a Lemonade with no Fireworks registered ─────────────
+
+ENV_KEY = "fw_test_000_env_key_not_real"
+
+
+@pytest.fixture(autouse=True)
+def _no_fireworks_env(monkeypatch):
+    """The developer's own FIREWORKS_API_KEY must not leak into these tests."""
+    for name in ("FIREWORKS_API_KEY", "LEMONADE_FIREWORKS_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def replay(monkeypatch, lemonade, keys):
+    """ensure_authenticated that hands over whatever key *recall* gives, as the real one does."""
+    handed = []
+
+    def ensure(provider, client=None, recall=None):
+        keys["ensure"].append(provider)
+        key = recall() if recall else None
+        if key:
+            handed.append(key)
+            lemonade.cloud[provider].update(
+                runtime_key_set=True, models_discovered=True
+            )
+        return bool(key)
+
+    monkeypatch.setattr(cloud_keys, "ensure_authenticated", ensure)
+    return handed
+
+
+def test_env_key_with_no_provider_registered_is_connected_at_startup(
+    client, lemonade, keys, replay, monkeypatch
+):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    resp = client.get("/api/providers")
+    fw = resp.json()["providers"][1]
+    install = lemonade.call("POST", "install")["json"]
+    assert install["provider"] == "fireworks"
+    assert install["base_url"] == "https://api.fireworks.ai/inference/v1"
+    assert replay == [ENV_KEY]
+    assert fw["models_discovered"] is True
+    assert fw["key_source"] == "environment"
+    assert fw["env_var"] == "FIREWORKS_API_KEY"
+    assert fw["key_hint"] is None
+    assert ENV_KEY not in resp.text
+
+
+def test_stored_key_with_no_provider_registered_is_connected_at_startup(
+    client, lemonade, keys, replay
+):
+    keys["stored"]["fireworks"] = KEY
+    resp = client.get("/api/providers")
+    fw = resp.json()["providers"][1]
+    assert lemonade.call("POST", "install")["json"]["provider"] == "fireworks"
+    assert replay == [KEY]
+    assert fw["models_discovered"] is True
+    assert KEY not in resp.text
+
+
+def test_a_stored_key_wins_over_the_environment(
+    client, lemonade, keys, replay, monkeypatch
+):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    keys["stored"]["fireworks"] = KEY
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert replay == [KEY]
+    assert fw["key_source"] == "lemonade"
+
+
+def test_no_key_anywhere_registers_nothing(client, lemonade, keys, replay):
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert "install" not in lemonade.paths("POST")
+    assert keys["ensure"] == []
+    assert fw["key_source"] is None
+
+
+def test_an_env_key_is_not_registered_on_a_remote_lemonade(
+    client, lemonade, keys, replay, monkeypatch
+):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    monkeypatch.setattr(providers, "_base_url", lambda: "http://10.0.0.5:13305/api/v1")
+    monkeypatch.setattr(providers, "_cloud_entry", lambda p: lemonade.cloud.get(p))
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert lemonade.calls == []
+    assert replay == []
+    assert "not on this PC" in fw["error"]
+
+
+def test_an_env_key_is_not_registered_on_the_users_own_server(
+    client, lemonade, keys, replay, monkeypatch
+):
+    from gaia.llm import lemonade_choice
+
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    monkeypatch.setattr(lemonade_choice, "is_users_server", lambda url: True)
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert "install" not in lemonade.paths("POST")
+    assert replay == []
+    assert "does not change your server's setup" in fw["error"]
+
+
+def test_a_key_that_finds_no_models_says_so(client, lemonade, keys, monkeypatch):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    keys["ensure_result"] = False
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert fw["models_discovered"] is False
+    assert "FIREWORKS_API_KEY" in fw["error"]
+    assert "no models" in fw["error"]
+    assert ENV_KEY not in fw["error"]
+
+
+def test_connect_blank_key_uses_the_env_key(
+    client, lemonade, keys, replay, monkeypatch
+):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    lemonade.cloud["fireworks"] = {"name": "fireworks"}
+    resp = client.post("/api/providers/fireworks/connect", json={})
+    assert resp.status_code == 200, resp.text
+    assert replay == [ENV_KEY]
+    assert resp.json()["key_source"] == "environment"
+
+
 # ── A keychain read the OS holds for permission (#5570) ────────────────────
 
 
