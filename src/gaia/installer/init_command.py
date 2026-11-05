@@ -462,8 +462,8 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
             not_ready = npu_not_ready_reason(capacity)
             if not_ready:
                 raise ModelFitError(
-                    f"default_model {model_id} runs on the NPU, which can't run "
-                    f"models yet. {not_ready} Then re-run `gaia init`, or choose "
+                    f"default_model {model_id} runs on the NPU. The NPU model "
+                    f"{not_ready}. Then re-run `gaia init`, or choose "
                     "a GPU model with `gaia config set default_model <id>`."
                 )
         verdict = check_fit(
