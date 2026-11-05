@@ -501,7 +501,10 @@ The exit code still says whether setup succeeded.
 device axis explicitly with `gaia init --profile npu`, which swaps the GGUF models for
 their FLM equivalents — the default never switches your backend for you. It installs
 the same flagship agent as a bare `gaia init`, and fails the same way
-when the download server can't be reached.
+when the download server can't be reached. On Linux, when the NPU's 8 MB locked-memory
+limit would stop the model from loading, it offers to raise the limit (it asks for an
+administrator password, and the change applies after a restart). It never asks under
+`--yes` or without a terminal. See [NPU on Linux](/guides/npu#the-locked-memory-limit).
 </Note>
 
 <Note>
