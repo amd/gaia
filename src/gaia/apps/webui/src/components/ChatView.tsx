@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
+import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Clock } from 'lucide-react';
 import { MessageBubble, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
@@ -51,6 +51,7 @@ import { isPlaceholderTitle } from '../utils/sessionTitle';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
+import { ModelServerDownNotice } from './ModelServerDownNotice';
 import { useChatDraft } from '../hooks/useSavedDraft';
 import { getT, useT } from '../i18n/useT';
 
@@ -311,14 +312,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const mountedRef = useRef(true);
     // Left pendingPrompt, not yet sent.
     const openingRef = useRef(false);
+    const initializing = systemStatus?.init_state === 'initializing';
     useEffect(() => {
         mountedRef.current = true;
         return () => { mountedRef.current = false; };
     }, []);
     useEffect(() => {
         const pending = pendingPrompt?.text;
-        // Wait for the history load, or it would replace the message just sent.
-        if (!pending || useChatStore.getState().isLoadingMessages) return;
+        // Wait for the history load, or it would replace the message just sent;
+        // and for GAIA to start, or the send would refuse a message already taken.
+        if (!pending || useChatStore.getState().isLoadingMessages || initializing) return;
         useChatStore.getState().setPendingPrompt(null);
         openingRef.current = true;
         // A timer, not rAF: rAF never fires while the window is hidden, and
@@ -327,7 +330,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             openingRef.current = false;
             if (mountedRef.current) sendMessageRef.current(pending, { opening: true });
         }, 0);
-    }, [pendingPrompt, isLoadingMessages]);
+    }, [pendingPrompt, isLoadingMessages, initializing]);
 
     // Auto-scroll (throttled) — scrolls at most once per 100ms while
     // streaming, and also schedules a trailing scroll so the final chunk
@@ -803,6 +806,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         risk: typeof event.risk === 'string' ? event.risk : undefined,
                         // A relayed agent sends a summary of the call instead of its args.
                         summary: typeof event.summary === 'string' && event.summary ? event.summary : undefined,
+                        pathFollowUp: followUp || undefined,
                         // No timeout from the backend means it waits; don't invent one.
                         timeoutSeconds: event.timeout_seconds,
                     });
@@ -1101,6 +1105,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         cards: cardsSnapshot.length > 0 ? cardsSnapshot : undefined,
                         stopState,
                         historyNotice,
+                        failure: event.failed ? event.failure : undefined,
                     };
                     if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
                     addMessage(assistantMsg);
@@ -1137,6 +1142,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     ...m,
                                     cards: prev?.cards ?? m.cards,
                                     stopState: m.stopState ?? prevMsgs.find((p) => p.id === m.id)?.stopState,
+                                    failure: m.failure ?? prevMsgs.find((p) => p.id === m.id)?.failure,
                                 };
                             });
                             setMessages(msgs);
@@ -1754,6 +1760,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     onTryAgain={canTryAgain ? () => handleTryAgain(msg) : undefined}
                                     latencyMs={latency}
                                 />
+                                {msg.failure === 'model_server_down' && idx === messages.length - 1 && !busy && (
+                                    <ModelServerDownNotice />
+                                )}
                                 {comparison?.messageId === msg.id && (
                                     <AnswerComparison
                                         original={msg}
@@ -1847,6 +1856,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <PermissionPrompt sessionId={sessionId} />
                     <ContextWarning usage={contextUsage} />
                     <OfflineNotice sessionId={sessionId} />
+                    {pendingPrompt && initializing && (
+                        <ul className="queued-messages" aria-label={t('composer.heldLabel')} aria-live="polite">
+                            <li className="queued-message is-queued">
+                                <Clock size={12} aria-hidden="true" />
+                                <span className="queued-message-text" title={pendingPrompt.text}>{pendingPrompt.text}</span>
+                                <span className="queued-message-state">{t('composer.heldUntilStarted')}</span>
+                            </li>
+                        </ul>
+                    )}
                     <QueuedMessages
                         items={queue}
                         onRemove={(id) => setQueue((q) => messageQueue.remove(q, id))}

@@ -10,6 +10,12 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **A stopped local model server fails the turn at once and is named.** A cloud
+  model's turn used to retry for about three minutes and then blame the cloud
+  provider, though the provider was never reached. A refused connection to the
+  local server now ends the turn within seconds, the answer names that server,
+  and `final` carries `failure: "model_server_down"` so a front-end can offer to
+  start it (SPEC §5.1).
 - **The query stream documents the `reconnecting` status phase.** It is sent
   once while GAIA's own Lemonade Server restarts mid-turn or mid-`/model`
   switch, so integrators can show a live reconnecting line instead of treating

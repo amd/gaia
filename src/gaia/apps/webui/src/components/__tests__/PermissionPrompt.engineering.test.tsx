@@ -19,7 +19,10 @@ it.each(['share_engineering_context', 'append_engineering_context', 'approve_eng
         useNotificationStore.getState().addNotification({ id: 'decision', type: 'permission_request', agentId: 'session', sessionId: 'session', agentName: 'GAIA', title: 'Review selected context', message: 'Share with configured provider', timestamp: 1, read: false, dismissed: false, priority: 'high', tool, toolArgs: { context: 'private sample' }, alwaysScope: tool });
         render(<PermissionPrompt sessionId="session" />);
         expect(screen.queryByRole('button', { name: /Always allow/ })).not.toBeInTheDocument();
-        expect(screen.getByText('Share with configured provider')).toBeInTheDocument();
+        // The card words its own question; the stored English message is for the notification list.
+        expect(screen.getByRole('alertdialog')).toHaveTextContent(tool === 'allow_path_access'
+            ? "GAIA wants to use a file or folder outside this chat. This chat can't reach it yet. Allow it for this chat?"
+            : `GAIA needs your OK before ${tool}.`);
         fireEvent.click(screen.getByRole('button', { name: 'Details' }));
         expect(screen.getByText(/private sample/)).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: tool === 'allow_path_access' ? 'Allow for this chat' : 'Allow once' }));

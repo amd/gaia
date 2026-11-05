@@ -233,7 +233,46 @@ def test_path_registration_covers_the_terminal_hub_bin_dir(sh_text, ps1_text):
     body = _shell_function_body(sh_text, "add_to_path")
     assert 'path_export="export PATH=\\"\\$PATH:$GAIA_BIN\\""' in body
     assert 'PATH="$PATH:$GAIA_BIN"' in body
-    assert '@("$GAIA_VENV\\Scripts", $GAIA_BIN)' in ps1_text
+    body = _ps1_function_body(ps1_text, "Get-UpdatedPath")
+    assert "$added = @($GAIA_BIN)" in body
+
+
+def test_ps1_puts_only_gaia_bin_on_path(ps1_text):
+    """The venv's Scripts holds python.exe and pip.exe; on PATH they shadow
+    the user's own Python."""
+    # The venv is named only to take it out, or to warn against adding it.
+    update = _ps1_function_body(ps1_text, "Get-UpdatedPath")
+    assert [ln.strip() for ln in update.splitlines() if "$GAIA_VENV" in ln] == [
+        '$legacy = Get-NormalizedPathEntry "$GAIA_VENV\\Scripts"'
+    ]
+    add = _ps1_function_body(ps1_text, "Add-ToPath")
+    venv_lines = [ln for ln in add.splitlines() if "$GAIA_VENV" in ln]
+    assert venv_lines and all(
+        "Do not add" in ln or "Removed" in ln for ln in venv_lines
+    ), venv_lines
+
+
+def test_ps1_copies_exactly_the_packages_console_scripts(ps1_text):
+    """$GAIA_BIN is the only directory on PATH, so every console script the
+    package ships must be copied there or it becomes unreachable."""
+    match = re.search(r"^\$GAIA_COMMANDS = @\(([^)]*)\)\r?$", ps1_text, re.MULTILINE)
+    assert match, "$GAIA_COMMANDS not found in install.ps1"
+    listed = set(re.findall(r'"([\w-]+)"', match.group(1)))
+    setup_py = (REPO_ROOT / "setup.py").read_text(encoding="utf-8")
+    block = re.search(r'"console_scripts": \[(.*?)\]', setup_py, re.DOTALL)
+    assert block, "console_scripts not found in setup.py"
+    shipped = set(re.findall(r'"([\w-]+) = ', block.group(1)))
+    assert shipped and listed == shipped
+
+
+def test_ps1_copies_the_commands_before_it_edits_path(ps1_text):
+    """A failed copy must leave the old PATH, which still reaches `gaia`."""
+    main = _ps1_function_body(ps1_text, "Main")
+    assert (
+        main.index("Install-Gaia ")
+        < main.index("Copy-GaiaCommands")
+        < main.index("Add-ToPath")
+    )
 
 
 def test_sh_links_exactly_the_packages_console_scripts(sh_text):
@@ -923,6 +962,65 @@ def test_install_tui_fails_when_github_is_unreachable(tmp_path):
     assert result.returncode != 0
     assert "Could not find the GAIA release" in result.stdout + result.stderr
     assert not installed.exists()
+
+
+# ── functional: GAIA_CLI_ONLY, for a package that already owns the binaries ──
+
+_MAIN_STEPS = (
+    "detect_environment",
+    "check_download_tool",
+    "resolve_pin",
+    "install_uv",
+    "install_gaia",
+    "link_gaia_commands",
+    "add_to_path",
+    "install_tui",
+    "install_flagship_agent",
+)
+
+
+def _run_main_with_stubbed_steps(tmp_path, cli_only):
+    stubs = "; ".join(f'{step}() {{ echo "STEP {step}"; }}' for step in _MAIN_STEPS)
+    return _run_sh_function(
+        tmp_path, f"{stubs}; main", {"GAIA_CLI_ONLY": cli_only}, shell="dash"
+    )[0]
+
+
+def _steps_run(result):
+    return [
+        line.split(" ", 1)[1]
+        for line in result.stdout.splitlines()
+        if line.startswith("STEP ")
+    ]
+
+
+@posix_only
+@pytest.mark.skipif(shutil.which("dash") is None, reason="needs dash")
+def test_cli_only_installs_the_cli_and_leaves_the_packaged_binaries(tmp_path):
+    result = _run_main_with_stubbed_steps(tmp_path, "1")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _steps_run(result) == list(_MAIN_STEPS[:-2])
+
+
+@posix_only
+@pytest.mark.skipif(shutil.which("dash") is None, reason="needs dash")
+def test_without_cli_only_main_still_installs_everything(tmp_path):
+    result = _run_main_with_stubbed_steps(tmp_path, "")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _steps_run(result) == list(_MAIN_STEPS)
+
+
+@posix_only
+@pytest.mark.skipif(shutil.which("dash") is None, reason="needs dash")
+@pytest.mark.parametrize("value", ["true", "yes", "0", "2"])
+def test_a_bad_cli_only_value_is_refused_before_anything_installs(tmp_path, value):
+    result = _run_main_with_stubbed_steps(tmp_path, value)
+
+    assert result.returncode != 0
+    assert "GAIA_CLI_ONLY" in result.stdout + result.stderr
+    assert _steps_run(result) == []
 
 
 # ── functional: the flagship sidecar is optional, but never unverified ──────
@@ -1759,11 +1857,7 @@ def test_ps1_add_to_path_keeps_unexpanded_entries(tmp_path, scratch_env_key):
     assert kind == winreg.REG_EXPAND_SZ
     entries = value.split(";")
     assert entries[:2] == [r"%USERPROFILE%\tools", r"%LOCALAPPDATA%\other"]
-    profile = tmp_path / "profile"
-    assert entries[2:] == [
-        str(profile / ".gaia" / "venv" / "Scripts"),
-        str(profile / ".gaia" / "bin"),
-    ]
+    assert entries[2:] == [str(tmp_path / "profile" / ".gaia" / "bin")]
 
 
 @needs_windows_registry
@@ -1787,7 +1881,7 @@ def test_ps1_add_to_path_recognises_an_unexpanded_gaia_entry(tmp_path, scratch_e
     """An entry written with %USERPROFILE% names the same directory."""
     import winreg
 
-    seeded = r"%USERPROFILE%\.gaia\venv\Scripts;%USERPROFILE%\.gaia\bin\;"
+    seeded = r"%USERPROFILE%\tools;%USERPROFILE%\.gaia\bin\;"
     _seed_user_path(scratch_env_key, seeded, winreg.REG_EXPAND_SZ)
 
     result = _run_add_to_path(tmp_path, scratch_env_key, times=2)
@@ -1805,7 +1899,7 @@ def test_ps1_add_to_path_is_idempotent(tmp_path, scratch_env_key):
     _run_add_to_path(tmp_path, scratch_env_key, times=2)
 
     value, _ = _read_user_path(scratch_env_key)
-    assert len(value.split(";")) == 3
+    assert len(value.split(";")) == 2
 
 
 @needs_windows_registry
@@ -1825,4 +1919,224 @@ def test_ps1_add_to_path_a_failed_broadcast_still_reports_the_saved_path(
     assert "PATH saved, but Windows could not be notified" in result.stdout
     assert "Add-Type blocked" in result.stdout
     value, _ = _read_user_path(scratch_env_key)
-    assert len(value.split(";")) == 3
+    assert len(value.split(";")) == 2
+
+
+@needs_windows_registry
+def test_ps1_add_to_path_moves_an_earlier_install_off_the_venv(
+    tmp_path, scratch_env_key
+):
+    """An install from before this fix had the venv's Scripts on PATH; a
+    re-run takes it off, keeps every other entry as written, and tells
+    Windows so new terminals pick it up."""
+    import winreg
+
+    seeded = (
+        r"%USERPROFILE%\tools;%USERPROFILE%\.gaia\venv\Scripts;"
+        r"%USERPROFILE%\.gaia\bin;D:\py\venv\Scripts"
+    )
+    _seed_user_path(scratch_env_key, seeded, winreg.REG_EXPAND_SZ)
+
+    first = _run_add_to_path(
+        tmp_path, scratch_env_key, broadcast="Write-Host 'BROADCAST'"
+    )
+    assert "so your own python and pip come first again" in first.stdout
+    assert "BROADCAST" in first.stdout
+    assert _read_user_path(scratch_env_key) == (
+        r"%USERPROFILE%\tools;%USERPROFILE%\.gaia\bin;D:\py\venv\Scripts",
+        winreg.REG_EXPAND_SZ,
+    )
+
+    second = _run_add_to_path(
+        tmp_path, scratch_env_key, broadcast="Write-Host 'BROADCAST'"
+    )
+    assert "GAIA is already in PATH" in second.stdout
+    assert "BROADCAST" not in second.stdout
+
+
+# ── functional: Get-UpdatedPath on plain strings, no registry ──────────────
+
+
+def _updated_paths(tmp_path, currents):
+    """Run install.ps1's Get-UpdatedPath on each string; return its results."""
+    cases = ", ".join("'" + c.replace("'", "''") + "'" for c in currents)
+    snippet = (
+        '$GAIA_BIN = "$GAIA_HOME\\bin"\n'
+        f"$out = @(@({cases}) | ForEach-Object {{ Get-UpdatedPath -Current $_ }})\n"
+        "Write-Output ('JSON:' + (ConvertTo-Json -InputObject $out -Compress))\n"
+    )
+    result, _ = _run_ps1(tmp_path, "http://127.0.0.1:1", snippet)
+    assert result.returncode == 0, result.stdout + result.stderr
+    line = next(ln for ln in result.stdout.splitlines() if ln.startswith("JSON:"))
+    return json.loads(line[len("JSON:") :])
+
+
+@needs_powershell
+def test_get_updated_path_cases(tmp_path):
+    gaia_bin = f"{tmp_path / 'profile'}\\.gaia\\bin"
+    venv = r"%USERPROFILE%\.gaia\venv\Scripts"
+    cases = [
+        # (current, expected value, added, removed)
+        (r"C:\tools;%LOCALAPPDATA%\x", rf"C:\tools;%LOCALAPPDATA%\x;{gaia_bin}", 1, 0),
+        # 0.23 up to this fix: venv and bin.
+        (
+            rf"C:\tools;{venv};%USERPROFILE%\.gaia\bin",
+            r"C:\tools;%USERPROFILE%\.gaia\bin",
+            0,
+            1,
+        ),
+        # Pre-0.23: the venv alone, quoted, with a trailing slash, twice.
+        (rf'"{venv}\";C:\tools;{venv.upper()}', rf"C:\tools;{gaia_bin}", 1, 2),
+        # Look-alikes and other venvs are the user's.
+        (
+            rf"{venv}2;D:\py\venv\Scripts",
+            rf"{venv}2;D:\py\venv\Scripts;{gaia_bin}",
+            1,
+            0,
+        ),
+        # Already current; empty elements are dropped, never kept as ".".
+        (rf"C:\tools;;{gaia_bin}\;", "C:\\tools;" + gaia_bin + "\\", 0, 0),
+        ("", gaia_bin, 1, 0),
+    ]
+
+    results = _updated_paths(tmp_path, [c[0] for c in cases])
+
+    for (current, value, added, removed), got in zip(cases, results):
+        assert got == {
+            "Value": value,
+            "Added": bool(added),
+            "Removed": removed,
+        }, current
+
+
+# ── functional: Copy-GaiaCommands against a fake venv ───────────────────────
+
+
+def _fake_scripts(tmp_path, names):
+    scripts = tmp_path / "profile" / ".gaia" / "venv" / "Scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (scripts / f"{name}.exe").write_bytes(f"launcher-{name}".encode())
+    return scripts
+
+
+def _copy_commands(tmp_path, extra=""):
+    snippet = '$GAIA_BIN = "$GAIA_HOME\\bin"\nCopy-GaiaCommands\n' + extra
+    result, _ = _run_ps1(tmp_path, "http://127.0.0.1:1", snippet)
+    return result, tmp_path / "profile" / ".gaia" / "bin"
+
+
+@needs_powershell
+def test_copy_gaia_commands_copies_only_gaias_commands(tmp_path):
+    scripts = _fake_scripts(
+        tmp_path, ("gaia", "gaia-cli", "gaia-mcp", "python", "pip", "uvicorn")
+    )
+    gaia_bin = tmp_path / "profile" / ".gaia" / "bin"
+    gaia_bin.mkdir(parents=True)
+    (gaia_bin / "gaia-tui.exe").write_bytes(b"tui")
+    # A launcher from an older install is replaced.
+    (gaia_bin / "gaia.exe").write_bytes(b"stale")
+
+    for _ in range(2):
+        result, _ = _copy_commands(tmp_path)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    assert sorted(p.name for p in gaia_bin.iterdir()) == [
+        "gaia-cli.exe",
+        "gaia-mcp.exe",
+        "gaia-tui.exe",
+        "gaia.exe",
+    ]
+    for name in ("gaia", "gaia-cli", "gaia-mcp"):
+        assert (gaia_bin / f"{name}.exe").read_bytes() == (
+            scripts / f"{name}.exe"
+        ).read_bytes()
+    assert (gaia_bin / "gaia-tui.exe").read_bytes() == b"tui"
+
+
+@needs_powershell
+def test_copy_gaia_commands_leaves_an_identical_launcher_alone(tmp_path):
+    """A re-run must not rewrite a gaia.exe that may be running."""
+    _fake_scripts(tmp_path, ("gaia", "gaia-cli", "gaia-mcp"))
+    result, gaia_bin = _copy_commands(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    old = 1_000_000_000
+    os.utime(gaia_bin / "gaia.exe", (old, old))
+
+    result, _ = _copy_commands(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (gaia_bin / "gaia.exe").stat().st_mtime == old
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32" or _PS_EXE is None, reason="needs a running .exe"
+)
+def test_copy_gaia_commands_replaces_a_running_launcher(tmp_path):
+    """An upgrade with the daemon running must not fail on its locked gaia.exe."""
+    scripts = _fake_scripts(tmp_path, ("gaia", "gaia-cli", "gaia-mcp"))
+    gaia_bin = tmp_path / "profile" / ".gaia" / "bin"
+    gaia_bin.mkdir(parents=True)
+    system = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
+    shutil.copyfile(os.path.join(system, "ping.exe"), gaia_bin / "gaia.exe")
+    (gaia_bin / "gaia-cli.exe.old").write_bytes(b"left by an earlier upgrade")
+    running = subprocess.Popen(
+        [str(gaia_bin / "gaia.exe"), "-n", "60", "127.0.0.1"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        result, _ = _copy_commands(tmp_path)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (gaia_bin / "gaia.exe").read_bytes() == (
+            scripts / "gaia.exe"
+        ).read_bytes()
+        assert (gaia_bin / "gaia.exe.old").exists()
+        assert not (gaia_bin / "gaia-cli.exe.old").exists()
+    finally:
+        running.kill()
+        running.wait(timeout=30)
+
+    result, _ = _copy_commands(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not list(gaia_bin.glob("*.old"))
+
+
+@needs_powershell
+def test_copy_gaia_commands_fails_when_a_command_is_missing(tmp_path):
+    _fake_scripts(tmp_path, ("gaia",))
+
+    result, _ = _copy_commands(tmp_path)
+    assert result.returncode != 0
+    assert "gaia-cli.exe is missing" in result.stdout
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32" or _PS_EXE is None, reason="resolves .exe on PATH"
+)
+@pytest.mark.parametrize("legacy", [False, True], ids=["fresh", "upgrade"])
+def test_a_new_terminal_finds_gaia_but_not_the_venvs_python(tmp_path, legacy):
+    """Resolve commands on the PATH install.ps1 computes, as a new terminal
+    would: `gaia` is the copy in ~\\.gaia\\bin; python and pip are not GAIA's."""
+    scripts = _fake_scripts(tmp_path, ("gaia", "gaia-cli", "gaia-mcp", "python", "pip"))
+    system = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
+    current = f"{system};{scripts}" if legacy else system
+    extra = (
+        f"$env:PATH = (Get-UpdatedPath -Current '{current}').Value\n"
+        "foreach ($c in 'gaia', 'gaia-cli', 'gaia-mcp', 'python', 'pip') {\n"
+        '  $found = Get-Command "$c.exe" -CommandType Application '
+        "-ErrorAction SilentlyContinue | Select-Object -First 1\n"
+        "  Write-Output \"RESOLVED:$c=$(if ($found) { $found.Source } else { 'none' })\"\n"
+        "}\n"
+    )
+    result, gaia_bin = _copy_commands(tmp_path, extra)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    resolved = dict(
+        ln[len("RESOLVED:") :].split("=", 1)
+        for ln in result.stdout.splitlines()
+        if ln.startswith("RESOLVED:")
+    )
+    for name in ("gaia", "gaia-cli", "gaia-mcp"):
+        assert resolved[name].lower() == str(gaia_bin / f"{name}.exe").lower()
+    for name in ("python", "pip"):
+        assert ".gaia" not in resolved[name], resolved

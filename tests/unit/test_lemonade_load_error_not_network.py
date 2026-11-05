@@ -31,6 +31,7 @@ from gaia.llm.providers.lemonade import (
     LemonadeModelLoadError,
     LemonadeNetworkError,
     LemonadeServerError,
+    LemonadeServerUnreachableError,
     _classify_lemonade_response,
     classify_lemonade_exception,
 )
@@ -184,7 +185,9 @@ def test_agent_answer_carries_the_load_reason():
         "_model_failure_answer",
     ):
         setattr(agent, name, getattr(Agent, name).__get__(agent))
+    agent._model_server_down = Agent._model_server_down
     agent._model_service_label = lambda: "Lemonade on this machine"
+    agent._turn_model_retries = {}
 
     exc = LemonadeClientError(
         f"Request failed with status 500: {json.dumps(FLM_LOAD_ERROR)}"
@@ -196,6 +199,8 @@ def test_agent_answer_carries_the_load_reason():
     assert FLM_MODEL in answer
     assert "Couldn't reach" not in answer
     assert "fail the same way" in answer
+    # The server answered, so the turn is not flagged as a down server.
+    assert "server_down" not in agent._turn_model_retries
 
 
 def test_response_dict_with_load_code_is_a_load_failure():
@@ -249,11 +254,11 @@ def test_502_from_a_crashed_backend_says_the_server_answered(make_client):
     assert "(HTTP 502)" in classified.user_message
 
 
-# ── no HTTP response at all stays a network error ─────────────────────────
+# ── no HTTP response at all: the server is down ───────────────────────────
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["requests", "openai-sdk"])
-def test_connection_refused_is_still_a_network_error(make_client, stream):
+def test_connection_refused_says_the_server_is_down(make_client, stream):
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -262,8 +267,13 @@ def test_connection_refused_is_still_a_network_error(make_client, stream):
     with pytest.raises((LemonadeClientError, requests.ConnectionError)) as raised:
         _chat(client, stream)
     classified = classify_lemonade_exception(raised.value)
+    # Still a connectivity failure, but a resend fails until the server starts.
+    assert isinstance(classified, LemonadeServerUnreachableError)
     assert isinstance(classified, LemonadeNetworkError)
-    assert classified.retryable is True
+    assert classified.retryable is False
+    assert f"127.0.0.1:{port}" in classified.user_message
+    assert "isn't answering" in classified.user_message
+    assert not isinstance(classified, (LemonadeServerError, LemonadeModelLoadError))
 
 
 # ── the log a remedy points at ────────────────────────────────────────────
@@ -292,21 +302,28 @@ def test_an_installed_server_is_not_given_a_guessed_path(monkeypatch):
 
 
 def test_a_bare_error_body_with_only_a_message_keeps_its_detail():
-    """Newer OpenAI SDKs pass the error object as ``body`` and drop it from str()."""
+    """openai 3.x hands over only the inner error object and drops it from str()."""
+    import httpx
+    import openai
 
-    class _SDKError(Exception):
-        status_code = 500
-        body = {"message": "The request fails unexpectedly"}
+    request = httpx.Request("POST", "http://127.0.0.1:13305/api/v1/chat/completions")
+    # The exact shape openai 3.46 raises for Lemonade's ``{"error": {"message": ...}}``.
+    sdk_error = openai.InternalServerError(
+        "Error code: 500 - The request fails unexpectedly",
+        response=httpx.Response(500, request=request),
+        body={"message": "The request fails unexpectedly"},
+    )
+    assert sdk_error.status_code == 500
+    assert "{" not in str(sdk_error)
 
-    try:
+    with pytest.raises(LemonadeClientError) as raised:
         try:
-            raise _SDKError("Error code: 500 - The request fails unexpectedly")
-        except _SDKError as inner:
+            raise sdk_error
+        except openai.InternalServerError as inner:
             raise LemonadeClientError(
                 "Streaming chat completion failed (HTTP 500)"
             ) from inner
-    except LemonadeClientError as e:
-        classified = classify_lemonade_exception(e)
+    classified = classify_lemonade_exception(raised.value)
     assert isinstance(classified, LemonadeServerError)
     assert classified.user_message.startswith(
         "The local LLM server answered with an error (HTTP 500): "

@@ -22,6 +22,7 @@ from ..lemonade_client import (
     LemonadeAuthError,
     LemonadeClient,
     LemonadeClientError,
+    LemonadeServerDownError,
     active_profile_ctx_size,
     is_tool_calling_model,
     lemonade_log_hint,
@@ -235,6 +236,39 @@ class LemonadeNetworkError(LemonadeError):
         "Couldn't reach the local LLM. It may be loading or briefly busy "
         "— try sending the message again."
     )
+
+
+class LemonadeServerUnreachableError(LemonadeNetworkError):
+    """Nothing accepts a connection at the Lemonade address.
+
+    Unlike its parent, which also covers a dropped request to a running
+    server, this is the server being down: a resend fails the same way until
+    it is started, and a cloud model behind it was never reached.
+    """
+
+    retryable = False
+    user_message = (
+        "The local model server isn't answering. Start the model server, then "
+        "send the message again."
+    )
+
+    def __init__(
+        self,
+        user_message: Optional[str] = None,
+        endpoint: Optional[str] = None,
+    ):
+        self.endpoint = endpoint
+        super().__init__(user_message=user_message)
+
+
+#: How a failed turn names this cause to a front-end, which offers the fix.
+MODEL_SERVER_DOWN = "model_server_down"
+
+#: The wording of :class:`LemonadeServerDownError`, once a wrapper flattened it.
+_SERVER_DOWN_RE = re.compile(
+    r"the (?:local )?model server(?: at (\S+))? isn't answering[^\n]*",
+    re.IGNORECASE,
+)
 
 
 class LemonadeUpstreamTimeoutError(LemonadeError):
@@ -763,6 +797,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         seen.add(id(cur))
         if isinstance(cur, LemonadeError):
             return cur
+        if isinstance(cur, LemonadeServerDownError):
+            return LemonadeServerUnreachableError(str(cur), cur.endpoint)
         if isinstance(cur, LemonadeAuthError):
             return LemonadeAuthRejectedError(user_message=str(cur))
         if isinstance(cur, CloudModelUnavailableError):
@@ -807,6 +843,9 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         load_error = _model_load_error(envelope[1], context=raw)
         if load_error is not None:
             return load_error
+    down = _SERVER_DOWN_RE.search(raw)
+    if down:
+        return LemonadeServerUnreachableError(down.group(0).strip(), down.group(1))
     if "no model loaded" in text or "model_not_loaded" in text:
         return LemonadeModelNotLoadedError()
     # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the

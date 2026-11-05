@@ -379,6 +379,8 @@ def _dispatch_one(
         if event.get("failed") is True:
             # The sidecar's turn ended on a model failure; the answer says so.
             out["failed"] = True
+            if isinstance(event.get("failure"), str):
+                out["failure"] = event["failure"]
         # Same top-level fields an in-process answer carries, so the turn's
         # token counts and cost are recorded for a relayed turn too.
         usage = event.get("usage")

@@ -28,7 +28,7 @@ import { SetupChecks } from './setup/SetupChecks';
 import { SetupRail, type RailStep } from './setup/SetupRail';
 import { TestStep } from './setup/TestStep';
 import {
-    canCreateImages, catalogOf, extraModels, initialSelection, isEmbedding, isNpu, isOptional, overallFromPlan,
+    canCreateImages, cantRunHere, catalogOf, extraModels, initialSelection, isEmbedding, isNpu, isOptional, overallFromPlan,
     pendingDownloads, resolveVision, savedVision, shortfall, skipChanges, toggle, tooBig, totals, type Selection,
 } from './setup/selection';
 import type {
@@ -608,8 +608,15 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         setActionError(null);
         setAckDisk(acknowledgeLowDisk);
         const catalog = catalogOf(plan);
+        const big = cloud ? [] : tooBig(catalog, selection).filter((e) => !e.downloaded || e.id === selection.defaultChat);
+        // Nothing here can run it: no confirm can make it work, so it blocks the download.
+        const cantRun = big.find(cantRunHere);
+        if (cantRun) {
+            const key = cantRun.id === selection.defaultChat ? 'setup.models.cantRun.chat' : 'setup.models.cantRun.other';
+            setActionError(t(key, { name: cantRun.name, why: tooBigText(cantRun, t) }));
+            return;
+        }
         if (!cloud && !acknowledgeNoFit) {
-            const big = tooBig(catalog, selection).filter((e) => !e.downloaded || e.id === selection.defaultChat);
             if (big.length > 0 && big.every((e) => e.need_gb != null)) {
                 setConfirm({ kind: 'no_fit', models: big });
                 return;
@@ -648,7 +655,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             committing.current = false;
             setBusy(false);
         }
-    }, [plan, selection, cloud, noFitAcked, download]);
+    }, [plan, selection, cloud, noFitAcked, download, t]);
 
     const stepTo = useCallback((id: Stage) => {
         setActionError(null);
@@ -807,15 +814,15 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const finish = useCallback(async (first?: StartCard) => {
         setActionError(null);
         try {
-            // Setup leaves the active model alone, so a cloud user would stay on the cloud.
-            if (onClose && !cloud && answering) await selectModel(answering);
+            // Chat opens on the model setup set up and tested, not an older pick; a cloud setup keeps its model.
+            if (!cloud && answering) await selectModel(answering);
             await refreshModel();
         } catch (err) {
             setActionError(errorText(err));
             return;
         }
         onReady(first);
-    }, [answering, cloud, onClose, onReady, refreshModel, selectModel]);
+    }, [answering, cloud, onReady, refreshModel, selectModel]);
 
     useEffect(() => {
         if (!canFinish) return;
@@ -947,7 +954,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
 
     const optional = selection && !cloud ? catalog.filter((e) => isOptional(e) && !selection.ticked.has(e.id) && !e.downloaded
         && (canCreateImages(chatEntry) || !e.roles.includes('image_creation'))) : [];
-    const biggerOption = catalog.find((e) => e.fits === false && e.chat_choice && e.support === 'verified');
+    const biggerOption = catalog.find((e) => e.fit_code === 'memory' && e.chat_choice && e.support === 'verified');
 
     return (
         <main className="setup" aria-labelledby="setup-title">
@@ -1105,7 +1112,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     {stage === 'models' && (
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.models.title')}</h1>
-                            {plan && selection && <BackendChoice plan={plan} selection={selection} onSelection={setSelection} disabled={busy || runGoing} />}
+                            {plan && selection && <BackendChoice plan={plan} selection={selection} onSelection={setSelection} disabled={busy || runGoing} onRecheck={() => void loadPlan()} />}
                             {showGpu && gpu?.total_gb != null && gpu.gpu_gb != null && (
                                 <p className="setup-hint setup-gpu-option">
                                     {t('setup.models.gpu', { gpu: formatSize(gpu.gpu_gb), total: formatSize(gpu.total_gb) })}{' '}

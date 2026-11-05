@@ -277,6 +277,7 @@ export function ModelSettings() {
             onAskRemove={() => setConfirmRemove(m.id)}
             onKeep={() => setConfirmRemove(null)}
             onRemove={() => void remove(m.id)}
+            onNpuRecheck={() => void loadModels(chosen, true)}
         />
     );
 
