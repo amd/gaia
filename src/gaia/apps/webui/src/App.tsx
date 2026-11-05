@@ -181,14 +181,14 @@ function App() {
                     continue;
                 }
                 // A new pinned embedded server is an update, not first-run setup: the models stay.
-                if (!check.ready && check.stage === 'upgrade' && !active?.remote) {
+                if (!check.ready && check.stage === 'upgrade') {
                     setSetup({ state: 'upgrading' });
                     // A re-check after the wait timed out finds that update still going: follow it.
                     const run = await api.getSetupStatus();
                     const updating = run.upgrade_embedded && (run.state === 'running' || run.state === 'verifying');
-                    if (!updating) await api.startSetup(false, false, { upgradeEmbedded: true });
+                    if (!updating) await api.startSetup(!!active?.remote, false, { upgradeEmbedded: true });
                     await waitForEmbeddedUpgrade();
-                    check = await api.checkSetup(false);
+                    check = await api.checkSetup(!!active?.remote);
                 }
                 // Read status and chats before showing the app, so it never flashes "lost connection" or "no chats".
                 if (waited > 0) await Promise.all([refreshStatus.current(), reloadSessions.current()]);

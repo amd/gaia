@@ -396,6 +396,30 @@ describe('first-run setup', () => {
         expect(mocked.checkSetup).toHaveBeenCalledTimes(2);
     });
 
+    it('a cloud-model user gets the same quick server update, then enters chat', async () => {
+        mocked.getActiveModel.mockResolvedValue({
+            provider: 'fireworks', model: 'fireworks.accounts/fireworks/models/kimi', label: 'Kimi', remote: true, is_default: false,
+        });
+        let finishUpgrade!: (status: { state: 'ready' }) => void;
+        mocked.checkSetup
+            .mockResolvedValueOnce({ ready: false, stage: 'upgrade', steps: [] })
+            .mockResolvedValueOnce(READY);
+        mocked.startSetup.mockResolvedValue({ state: 'running', upgrade_embedded: true } as never);
+        mocked.getSetupStatus.mockImplementation(() => (mocked.startSetup.mock.calls.length
+            ? new Promise((resolve) => { finishUpgrade = resolve; })
+            : Promise.resolve({ state: 'idle' })));
+        render(<App />);
+
+        expect(await screen.findByText('Updating the local model server…')).toBeInTheDocument();
+        expect(screen.queryByRole('heading', { name: 'Set up GAIA' })).not.toBeInTheDocument();
+        await waitFor(() => expect(mocked.startSetup).toHaveBeenCalledWith(true, false, { upgradeEmbedded: true }));
+
+        finishUpgrade({ state: 'ready' });
+        expect(await screen.findByLabelText('Message')).toBeInTheDocument();
+        expect(mocked.checkSetup).toHaveBeenCalledTimes(2);
+        expect(mocked.checkSetup).toHaveBeenNthCalledWith(2, true);
+    });
+
     it('a re-check during an update follows it instead of starting a second one', async () => {
         mocked.checkSetup
             .mockResolvedValueOnce({ ready: false, stage: 'upgrade', steps: [] })
