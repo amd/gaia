@@ -1643,7 +1643,7 @@ export const enMessages = {
     'settings.connectors.noClient': 'No OAuth client configured',
     'settings.connectors.clientRequired': 'Client ID is required.',
     'settings.connectors.client': 'OAuth client',
-    'settings.connectors.clientHelp': 'Bring your own OAuth client — saved encrypted in your OS keyring (same store as gaia connectors configure) and reused for future connections. Environment variables are only used when no saved client exists.',
+    'settings.connectors.clientHelp': 'Bring your own OAuth client — saved encrypted in your OS keyring and reused for future connections. Environment variables are only used when no saved client exists.',
     'settings.connectors.saveClient': 'Save client',
     'settings.connectors.active': 'Active',
     'settings.connectors.disableServer': 'Disable this MCP server',

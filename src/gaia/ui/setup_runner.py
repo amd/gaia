@@ -454,7 +454,7 @@ def write_report(record: Dict[str, Any]) -> Path:
             f"The troubleshooting report took over {_REPORT_TIMEOUT_S} s and was stopped."
         ) from e
     except OSError as e:
-        raise SetupError(f"Couldn't start `gaia diagnostics`: {e}") from e
+        raise SetupError(f"Couldn't start the troubleshooting report: {e}") from e
     if proc.returncode != 0 or not out.is_file():
         raise SetupError(
             "Couldn't write the troubleshooting report: "

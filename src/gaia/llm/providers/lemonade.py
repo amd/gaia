@@ -32,7 +32,12 @@ from ..lemonade_client import (
     runs_on_npu,
 )
 from ..lemonade_launcher import describe_client_hint
-from ..surface_hints import TUI_MODEL_SWITCH_HINT, TUI_PROVIDER_AUTH_HINT
+from ..surface_hints import (
+    APP_WEDGED_SERVER_HINT,
+    TUI_MODEL_SWITCH_HINT,
+    TUI_PROVIDER_AUTH_HINT,
+    TUI_SETUP_HINT,
+)
 
 if TYPE_CHECKING:
     from gaia.audio.lemonade_asr import Transcript
@@ -301,13 +306,8 @@ class LemonadeUpstreamTimeoutError(LemonadeError):
         "  • Wait 30s and resend the same query — KV cache will be primed.\n"
         # Never name a launch command here: `lemonade-server serve` was dropped
         # in 10.7 and the surviving forms differ per machine (CLAUDE.md).
-        # `gaia kill` rather than `gaia daemon restart`: the daemon reaps only a
-        # server it started itself, so a restart is a no-op against a wedged one
-        # the user launched from the tray. Clearing the port works either way,
-        # and GAIA starts a fresh supervised server on the next request.
-        "  • Clear the wedged server:  gaia kill  (GAIA restarts it on the next query)\n"
-        "  • Reduce retrieved RAG chunks:  gaia chat --max-chunks 2 ...\n"
-        "  • Close other GPU/NPU-heavy apps competing for the device."
+        "  • Close other GPU/NPU-heavy apps competing for the device.\n"
+        f"  • {APP_WEDGED_SERVER_HINT}"
     )
 
 
@@ -338,7 +338,7 @@ class LemonadeModelNotFoundError(LemonadeError):
     retryable = False
     user_message = (
         "The model this agent needs isn't installed on the local LLM server. "
-        "Run `gaia init` to set up a profile, then try again."
+        f"{TUI_SETUP_HINT}"
     )
 
     def __init__(
@@ -352,8 +352,7 @@ class LemonadeModelNotFoundError(LemonadeError):
             pull = describe_client_hint("pull", model_id).instruction.rstrip(".")
             message = (
                 f"The model this agent needs (`{model_id}`) isn't installed on "
-                f"the local LLM server. {pull}. Or run `gaia init` "
-                "to set up a profile, then try again."
+                f"the local LLM server. {pull}. Or: {TUI_SETUP_HINT}"
             )
         super().__init__(user_message=message, payload=payload)
 

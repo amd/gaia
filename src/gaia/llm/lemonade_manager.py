@@ -39,6 +39,7 @@ from gaia.llm.lemonade_client import (
     runs_on_npu,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
+from gaia.llm.surface_hints import surface_wording
 from gaia.logger import get_logger
 
 
@@ -393,7 +394,7 @@ class LemonadeManager:
         except LemonadeClientError as e:
             cls._log.error("%s", e)
             if not quiet:
-                print(f"❌ {e}", file=sys.stderr)
+                print(f"❌ {surface_wording(str(e), 'cli')}", file=sys.stderr)
             return False
         return True
 
@@ -1415,7 +1416,11 @@ class LemonadeManager:
         except LemonadeStartError as e:
             cls._log.error("Could not start the local model server: %s", e)
             if not quiet:
-                print(f"\n❌ {e}", file=sys.stderr, flush=True)
+                print(
+                    f"\n❌ {surface_wording(str(e), 'cli')}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             return False
         finally:
             lock.acquire()
