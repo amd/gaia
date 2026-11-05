@@ -5,7 +5,7 @@ import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties }
 import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Clock } from 'lucide-react';
 import { MessageBubble, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
-import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
+import { agentEventToStep, isProgressTick, statusText } from '../utils/streamSteps';
 import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
 import { ensureModel, modelKnownReady } from '../stores/modelNeededStore';
@@ -1013,9 +1013,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // Consolidate consecutive ones into a single entry.
                 if (event.type === 'status') {
                     const status = event.status;
-                    const msg = event.phase === 'loading_tools'
-                        ? getT()('chat.loadingTools')
-                        : (event.message || '').trim();
+                    const msg = statusText(event);
                     if (status === 'history_cut') {
                         historyNotice = msg || undefined;
                         setLiveHistoryNotice(historyNotice ?? null);
