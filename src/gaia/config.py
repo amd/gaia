@@ -12,6 +12,7 @@ Stored at ``~/.gaia/config.json``.
 import json
 import logging
 import os
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -89,6 +90,64 @@ def check_read_aloud_speed(value: int) -> int:
         raise GaiaConfigError(
             "read_aloud_speed is a percentage of normal speed from "
             f"{READ_ALOUD_MIN_SPEED} to {READ_ALOUD_MAX_SPEED}, got {value}."
+        )
+    return value
+
+
+VOICE_TURN_TAKING = ("hands_free", "push_to_talk")
+VOICE_MIN_SILENCE_MS = 300
+VOICE_MAX_SILENCE_MS = 1200
+_VOICE_LANGUAGE_RE = re.compile(r"^(auto|[a-z]{2})$")
+_VOICE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+#: Checked when the file is read, so a bad value names its key at startup.
+_VOICE_KEYS = (
+    "voice_language",
+    "voice_asr_model",
+    "voice_turn_taking",
+    "voice_silence_ms",
+)
+
+
+def check_voice_language(value: Any) -> Optional[str]:
+    """An ISO 639-1 code, ``auto``, or None to follow the app's language."""
+    language = str(value or "").strip().lower()
+    if not language:
+        return None
+    if not _VOICE_LANGUAGE_RE.match(language):
+        raise GaiaConfigError(
+            f"voice_language must be a two-letter language code such as 'en' or "
+            f"'ar', or 'auto', got {value!r}."
+        )
+    return language
+
+
+def check_voice_asr_model(value: Any) -> str:
+    """``auto`` or a Lemonade model id."""
+    model = str(value or "").strip()
+    if not model:
+        return "auto"
+    if model != "auto" and not _VOICE_MODEL_RE.match(model):
+        raise GaiaConfigError(
+            f"voice_asr_model must be 'auto' or a Lemonade model id, got {value!r}."
+        )
+    return model
+
+
+def check_voice_turn_taking(value: Any) -> str:
+    word = str(value or "").strip().lower()
+    if word not in VOICE_TURN_TAKING:
+        raise GaiaConfigError(
+            f"voice_turn_taking must be one of {', '.join(VOICE_TURN_TAKING)}, "
+            f"got {value!r}."
+        )
+    return word
+
+
+def check_voice_silence_ms(value: int) -> int:
+    if not VOICE_MIN_SILENCE_MS <= value <= VOICE_MAX_SILENCE_MS:
+        raise GaiaConfigError(
+            f"voice_silence_ms is how long a pause ends your turn, from "
+            f"{VOICE_MIN_SILENCE_MS} to {VOICE_MAX_SILENCE_MS} ms, got {value}."
         )
     return value
 
@@ -202,6 +261,14 @@ class GaiaConfig:
         read_aloud_speed: How fast replies are read aloud, as a percentage of
             normal speed (50-200).
         read_aloud_auto: Read every finished reply aloud without being asked.
+        voice_language: The language you speak to GAIA in, as a two-letter code
+            or ``auto``. ``None`` follows the app's language.
+        voice_asr_model: The speech recognizer, ``auto`` or a Lemonade model id.
+        voice_turn_taking: ``hands_free`` (a pause ends your turn) or
+            ``push_to_talk``.
+        voice_silence_ms: How long a pause ends your turn (300-1200).
+        voice_status_updates: Speak a short line before each step in voice mode.
+        voice_captions: Show live captions in voice mode.
     """
 
     profile: str = "chat"
@@ -225,6 +292,12 @@ class GaiaConfig:
     read_aloud_voice: Optional[str] = None
     read_aloud_speed: int = 100
     read_aloud_auto: bool = False
+    voice_language: Optional[str] = None
+    voice_asr_model: str = "auto"
+    voice_turn_taking: str = "hands_free"
+    voice_silence_ms: int = 500
+    voice_status_updates: bool = True
+    voice_captions: bool = True
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None
@@ -275,6 +348,14 @@ class GaiaConfig:
             return check_read_aloud_voice(value)
         if key == "read_aloud_speed":
             return check_read_aloud_speed(cls._whole_number(key, value))
+        if key == "voice_language":
+            return check_voice_language(value)
+        if key == "voice_asr_model":
+            return check_voice_asr_model(value)
+        if key == "voice_turn_taking":
+            return check_voice_turn_taking(value)
+        if key == "voice_silence_ms":
+            return check_voice_silence_ms(cls._whole_number(key, value))
         if cls._is_int_field(key):
             return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):
@@ -535,6 +616,15 @@ class GaiaConfig:
                 f"GAIA config at {config_file}",
                 "Fix or delete that key in the file, then retry.",
             )
+        for key in _VOICE_KEYS:
+            if key in kwargs:
+                try:
+                    kwargs[key] = cls._coerce(key, kwargs[key])
+                except GaiaConfigError as e:
+                    raise GaiaConfigError(
+                        f"GAIA config at {config_file}: {e} Fix or delete that "
+                        "key in the file, then retry."
+                    ) from e
         return cls(**kwargs)._snapshot()
 
     def _snapshot(self) -> "GaiaConfig":

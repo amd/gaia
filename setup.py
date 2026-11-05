@@ -217,6 +217,8 @@ setup(
             "uvicorn>=0.32.0",
             "python-multipart>=0.0.9",
             "httpx>=0.27.0,<1.0",
+            # uvicorn serves WebSockets (voice mode) only with this installed.
+            "websockets>=12.0",
             "psutil>=5.9.0",
             # OAuth connections (issue #915): keyring stores refresh tokens in
             # the OS credential store (macOS Keychain, Windows DPAPI, Linux

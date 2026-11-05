@@ -121,6 +121,7 @@ from gaia.utils.file_lock import held_by_another_program
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.utils.user_folders import documents_dir
 from gaia.vlm.mixin import VLMToolsMixin
+from gaia.voice.prompt import VOICE_TURN_NOTE
 
 # Sentinel for not-yet-built lazy attributes (``rag``, ``session_manager``).
 # Distinct from ``None``. A missing RAG extra caches ``None``; any other RAG
@@ -845,8 +846,12 @@ class ChatAgent(
         return f"{Path(file_path).name} ({file_path}){written_in}"
 
     def get_memory_dynamic_context(self) -> str:
-        """Per-turn context, plus which documents are indexed right now."""
-        parts = (super().get_memory_dynamic_context(), self._indexed_documents_line())
+        """Per-turn context, which documents are indexed, and the voice note."""
+        parts = (
+            super().get_memory_dynamic_context(),
+            self._indexed_documents_line(),
+            VOICE_TURN_NOTE if getattr(self, "reply_style", "text") == "voice" else "",
+        )
         return "\n".join(part for part in parts if part)
 
     # ── lazy subsystems (#2323 Increment 3) ────────────────────────────────
