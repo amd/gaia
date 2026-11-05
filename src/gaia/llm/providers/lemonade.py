@@ -25,6 +25,7 @@ from ..lemonade_client import (
     LemonadeServerDownError,
     active_profile_ctx_size,
     is_tool_calling_model,
+    lemonade_log_hint,
     local_sampling_defaults,
     requested_thinking,
     resolve_ctx_size,
@@ -417,6 +418,275 @@ class LemonadeLocalOnlyError(LemonadeError):
     user_message = "Local only is on, so GAIA won't use a cloud AI model."
 
 
+#: Lemonade error codes meaning the model could not be loaded (Lemonade's API
+#: docs, "Errors" tables). The cause persists, so a resend fails the same way.
+MODEL_LOAD_ERROR_CODES = frozenset(
+    {
+        "model_load_error",
+        "model_load_refused",
+        "model_not_supported",
+        "slots_pinned_error",
+        "router_residency_conflict",
+    }
+)
+
+_URL_RE = re.compile(r"https?://[^\s'\"<>()\[\]]+")
+# Lemonade appends its NPU driver page to every FLM validation failure; for a
+# memlock failure the driver is fine and the fix is GAIA's locked-memory step.
+_MEMLOCK_RE = re.compile(r"\bmemlock\b", re.IGNORECASE)
+NPU_MEMLOCK_GUIDE_URL = "https://amd-gaia.ai/docs/guides/npu#the-locked-memory-limit"
+_LOAD_PREFIX_RE = re.compile(
+    r"^failed to load(?: model)? ['\"`]?([^'\"`:\s]+)['\"`]?(?: on \S+)?\s*:\s*",
+    re.IGNORECASE,
+)
+_QUOTED_MODEL_RE = re.compile(r"\bmodel ['\"`]([^'\"`]+)['\"`]", re.IGNORECASE)
+_WRAPPER_MODEL_RE = re.compile(
+    r"failed to load(?: model)? ['\"`]?([^'\"`:\s]+)['\"`]?", re.IGNORECASE
+)
+_ERROR_ENVELOPE_RE = re.compile(r"\{\s*['\"]error['\"]\s*:")
+_HTTP_STATUS_RE = re.compile(r"(?:status|error code:?)\s*\(?(\d{3})\b", re.IGNORECASE)
+
+
+def _plain_reason(message: str, limit: int = 240) -> Tuple[Optional[str], List[str]]:
+    """Lemonade's error message as one plain sentence, plus the links in it.
+
+    Keeps the first line only (what follows is a trace or a log dump), moves
+    links out of the sentence, and folds inner sentence breaks so the agent's
+    cause/advice split keeps the reason in one piece.
+    """
+    urls = [u.rstrip(".,;:") for u in _URL_RE.findall(message or "")]
+    first = next((ln.strip() for ln in (message or "").splitlines() if ln.strip()), "")
+    reason = _URL_RE.sub("", first)
+    reason = re.sub(r"\.\s+(?=[A-Z])", "; ", reason)
+    reason = re.sub(r"\s+", " ", reason).strip(" .;:-")
+    if len(reason) > limit:
+        reason = reason[: limit - 1].rstrip() + "…"
+    return reason or None, urls
+
+
+class LemonadeModelLoadError(LemonadeError):
+    """Lemonade has the model but could not load it (``model_load_error`` and kin).
+
+    The NPU driver, memory or the model itself is at fault, so sending the
+    message again fails the same way — except a backend that crashed at start,
+    which is intermittent. Lemonade's own reason is carried.
+    """
+
+    retryable = False
+    user_message = f"The model couldn't load. {TUI_MODEL_SWITCH_HINT}"
+
+    def __init__(
+        self,
+        model_id: Optional[str] = None,
+        reason: Optional[str] = None,
+        help_url: Optional[str] = None,
+        log_hint: Optional[str] = None,
+        payload: Optional[dict] = None,
+        crashed_at_start: bool = False,
+        fix_hint: Optional[str] = None,
+    ):
+        self.model_id = model_id
+        self.reason = reason
+        self.help_url = help_url
+        # The backend process crashing at start is intermittent on some iGPUs.
+        self.retryable = crashed_at_start
+        name = f"The model `{model_id}`" if model_id else "The model"
+        parts = [
+            (
+                f"{name} couldn't load: {reason}."
+                if reason
+                else f"{name} couldn't load, and Lemonade gave no reason."
+            ),
+            (
+                "Its backend sometimes fails to start; send the message again."
+                if crashed_at_start
+                else "Sending the message again will fail the same way until "
+                "that is fixed."
+            ),
+        ]
+        if fix_hint:
+            parts.append(fix_hint)
+        elif help_url:
+            parts.append(f"Lemonade's help for this error: {help_url}.")
+        parts.append(TUI_MODEL_SWITCH_HINT)
+        if log_hint:
+            parts.append(log_hint)
+        super().__init__(user_message=" ".join(parts), payload=payload)
+
+
+class LemonadeServerError(LemonadeError):
+    """Lemonade answered with an HTTP 5xx that names no lasting cause.
+
+    The server is reachable, so this is never "couldn't reach the local LLM";
+    nothing says the cause persists, so sending it again may work.
+    """
+
+    retryable = True
+    user_message = (
+        "The local LLM server answered with an error. Send the message again."
+    )
+
+    def __init__(
+        self,
+        status: Optional[int] = None,
+        detail: Optional[str] = None,
+        log_hint: Optional[str] = None,
+        payload: Optional[dict] = None,
+    ):
+        self.status = status
+        code = f" (HTTP {status})" if status else ""
+        said = f": {detail}" if detail else ""
+        message = (
+            f"The local LLM server answered with an error{code}{said}. "
+            "Send the message again."
+        )
+        if log_hint:
+            message = f"{message} {log_hint}"
+        super().__init__(user_message=message, payload=payload)
+
+
+def _balanced_braces(text: str, start: int) -> Optional[str]:
+    """The ``{...}`` starting at *start*, honouring quoted strings."""
+    depth = 0
+    quote = None
+    escaped = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+def _embedded_error(text: str) -> Optional[dict]:
+    """The ``error`` object of a Lemonade envelope quoted inside *text*.
+
+    ``requests`` paths quote the body as JSON; the OpenAI SDK quotes it as a
+    Python dict repr (``Error code: 500 - {'error': {...}}``).
+    """
+    import ast
+
+    for match in _ERROR_ENVELOPE_RE.finditer(text):
+        start = match.start()
+        try:
+            payload, _end = json.JSONDecoder().raw_decode(text, start)
+        except ValueError:
+            chunk = _balanced_braces(text, start)
+            if chunk is None:
+                continue
+            try:
+                payload = ast.literal_eval(chunk)
+            except (ValueError, SyntaxError, MemoryError, RecursionError):
+                continue
+        if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+            return payload["error"]
+    return None
+
+
+def lemonade_error_envelope(
+    exc: BaseException,
+) -> Optional[Tuple[Optional[int], dict]]:
+    """``(http_status, error_object)`` of the Lemonade error behind *exc*.
+
+    Reads the OpenAI SDK's parsed ``body`` when the cause chain has one, else
+    the envelope quoted in an exception's text. None when there is none.
+    """
+    cur: Optional[BaseException] = exc
+    seen: set = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        body = getattr(cur, "body", None)
+        if isinstance(body, dict):
+            err = body.get("error", body)
+            # Newer SDKs hand over the bare error object, sometimes with only a message.
+            if isinstance(err, dict) and (
+                err.get("code") or err.get("type") or err.get("message")
+            ):
+                status = getattr(cur, "status_code", None)
+                return (status if isinstance(status, int) else None), err
+        text = str(cur)
+        err = _embedded_error(text)
+        if err is not None:
+            status_match = _HTTP_STATUS_RE.search(text)
+            return (int(status_match.group(1)) if status_match else None), err
+        cur = cur.__cause__ or cur.__context__
+    return None
+
+
+def _envelope_codes(err: dict) -> List[Tuple[str, dict]]:
+    """``(code_or_type, owning_object)`` pairs of an envelope and its nested error."""
+    found = []
+    details = err.get("details")
+    response = details.get("response") if isinstance(details, dict) else None
+    nested = response.get("error") if isinstance(response, dict) else None
+    for obj in (err, nested):
+        if not isinstance(obj, dict):
+            continue
+        for key in ("code", "type"):
+            value = obj.get(key)
+            if isinstance(value, str) and value:
+                found.append((value.lower(), obj))
+    return found
+
+
+def _model_load_error(
+    err: dict,
+    context: str = "",
+    model: Optional[str] = None,
+    payload: Optional[dict] = None,
+) -> Optional[LemonadeModelLoadError]:
+    """A :class:`LemonadeModelLoadError` when *err* is one of Lemonade's load codes."""
+    owner = next(
+        (obj for code, obj in _envelope_codes(err) if code in MODEL_LOAD_ERROR_CODES),
+        None,
+    )
+    if owner is None:
+        return None
+    message = str(owner.get("message") or err.get("message") or "")
+    first = next((ln.strip() for ln in message.splitlines() if ln.strip()), "")
+    named = _LOAD_PREFIX_RE.match(first)
+    if named:
+        model = model or named.group(1)
+        message = message.replace(first, first[named.end() :], 1)
+    else:
+        quoted = _QUOTED_MODEL_RE.search(first)
+        if quoted:
+            model = model or quoted.group(1)
+    if not model:
+        wrapper = _WRAPPER_MODEL_RE.search(context)
+        model = wrapper.group(1) if wrapper else None
+    reason, urls = _plain_reason(message)
+    memlock = bool(_MEMLOCK_RE.search(message))
+    return LemonadeModelLoadError(
+        model_id=model,
+        reason=reason,
+        help_url=None if memlock else (urls[0] if urls else None),
+        fix_hint=(
+            "The NPU needs a higher locked-memory limit; GAIA's NPU guide shows "
+            f"how to raise it: {NPU_MEMLOCK_GUIDE_URL}."
+            if memlock
+            else None
+        ),
+        log_hint=lemonade_log_hint(),
+        payload=payload,
+        crashed_at_start=bool(
+            re.search(r"llama[-_]server failed to start", message, re.IGNORECASE)
+        ),
+    )
+
+
 def _classify_lemonade_response(
     response: dict, model: Optional[str] = None
 ) -> Tuple[Optional[LemonadeError], bool]:
@@ -431,6 +701,10 @@ def _classify_lemonade_response(
     err = response.get("error")
     if not isinstance(err, dict):
         return None, False
+
+    load_error = _model_load_error(err, model=model, payload=response)
+    if load_error is not None:
+        return load_error, True
 
     # Lemonade may nest the upstream llama-server error inside
     # ``details.response.error`` for ``backend_error`` envelopes.
@@ -577,6 +851,12 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     )
     if rejected:
         return LemonadeAuthRejectedError(user_message=rejected.group(0).strip())
+    # Lemonade's own error code beats any wording or status below.
+    envelope = lemonade_error_envelope(exc)
+    if envelope is not None:
+        load_error = _model_load_error(envelope[1], context=raw)
+        if load_error is not None:
+            return load_error
     down = _SERVER_DOWN_RE.search(raw)
     if down:
         return LemonadeServerUnreachableError(down.group(0).strip(), down.group(1))
@@ -617,25 +897,32 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     is_unreachable = bool(CONNECTION_FAILURE_RE.search(text)) and not (
         READ_TIMEOUT_RE.search(text)
     )
-    # Lemonade HTTP 5xx — typical when llama-server is mid-swap between models
-    # or hit an internal recovery state. Treat them as the network-flavour
-    # transient so the chat layer's reload-and-retry path gets a chance.
-    is_backend_5xx = bool(
-        re.search(r"failed with status 5\d\d", text)
-        or "internal server error" in text
-        or "service unavailable" in text
-        or "bad gateway" in text
-        or "gateway timeout" in text
-    )
     if is_timeout and not is_unreachable:
         return LemonadeUpstreamTimeoutError()
-    if (
-        "network_error" in text
-        or "curl error" in text
-        or is_unreachable
-        or is_backend_5xx
-    ):
+    if "network_error" in text or "curl error" in text or is_unreachable:
         return LemonadeNetworkError()
+    # An HTTP 5xx means the server answered, so it is never "couldn't reach".
+    status = envelope[0] if envelope is not None else None
+    if status is None:
+        status_match = re.search(
+            r"(?:failed with status|\(status|error code:?)\s*(5\d\d)\b", text
+        )
+        status = int(status_match.group(1)) if status_match else None
+    if (status is not None and 500 <= status < 600) or any(
+        phrase in text
+        for phrase in (
+            "internal server error",
+            "service unavailable",
+            "bad gateway",
+            "gateway timeout",
+        )
+    ):
+        detail = None
+        if envelope is not None:
+            detail, _urls = _plain_reason(str(envelope[1].get("message") or ""), 200)
+        return LemonadeServerError(
+            status=status, detail=detail, log_hint=lemonade_log_hint()
+        )
     return None
 
 
