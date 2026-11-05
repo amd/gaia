@@ -97,7 +97,9 @@ class TestSafeOpenDocument:
         detail = exc_info.value.detail
         assert detail.startswith(f"GAIA can only read documents under {Path.home()}")
         assert "move or copy it under one of those folders" in detail
-        assert DOCUMENT_ROOTS_ENV in detail
+        # The Agent UI shows this; a desktop user can't set an env var.
+        assert DOCUMENT_ROOTS_ENV not in detail
+        assert "restart GAIA" not in detail
 
     def test_safe_open_rejects_directory(self, home_tmp_dir):
         """Directory path must return 400 (not a regular file)."""
