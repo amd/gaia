@@ -176,6 +176,7 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.providers.lemonade import (
     CONNECTION_FAILURE_RE,
+    MODEL_SERVER_DOWN,
     LemonadeStreamCutOffError,
 )
 from gaia.llm.retry import (
@@ -2547,6 +2548,8 @@ Do NOT wrap conversational replies in JSON.
             "request_retries": 0,
             "step_retries": 0,
             "unreachable": False,
+            # The model server itself accepted no connection.
+            "server_down": False,
             # The turn ended because a model call failed (any cause).
             "failed": False,
         }
@@ -3123,7 +3126,11 @@ Do NOT wrap conversational replies in JSON.
         define ``mark_turn_failed`` still prints the answer, just unmarked.
         """
         hook = getattr(self.console, "mark_turn_failed", None)
-        if hook is not None:
+        if hook is None:
+            return
+        if self._turn_model_retries.get("server_down"):
+            hook(failure=MODEL_SERVER_DOWN)
+        else:
             hook()
 
     def _uses_native_tool_calls(self) -> bool:
@@ -8375,12 +8382,29 @@ Do NOT wrap conversational replies in JSON.
             cause, advice = _split_cause_and_advice(typed_msg)
         else:
             cause, advice = str(exc).strip()[:300] or type(exc).__name__, None
+        server_down = self._model_server_down(exc)
+        if server_down:
+            self._turn_model_retries["server_down"] = True
         return self._model_failure_answer(
             conversation,
             steps_taken,
             stopped_responding=stalled or retry_state_of(exc) is not None,
             cause=cause,
             advice=advice,
+            # The cloud provider behind a down server was never reached.
+            name_service=not server_down,
+        )
+
+    @staticmethod
+    def _model_server_down(exc: BaseException) -> bool:
+        """Whether *exc* is the model server accepting no connection at all."""
+        from gaia.llm.providers.lemonade import (
+            LemonadeServerUnreachableError,
+            classify_lemonade_exception,
+        )
+
+        return isinstance(
+            classify_lemonade_exception(exc), LemonadeServerUnreachableError
         )
 
     def _model_failure_answer(
@@ -8391,6 +8415,7 @@ Do NOT wrap conversational replies in JSON.
         stopped_responding: bool,
         cause: str,
         advice: Optional[str],
+        name_service: bool = True,
     ) -> str:
         """Say the turn is unfinished, why, what already ran, and what next."""
         from collections import Counter
@@ -8399,7 +8424,7 @@ Do NOT wrap conversational replies in JSON.
         cause = cause.strip().rstrip(".")
         cause = cause[:1].upper() + cause[1:]
         # pylint: disable-next=assignment-from-none
-        label = self._model_service_label()
+        label = self._model_service_label() if name_service else None
         if label and label.lower() in cause.lower():
             label = None  # the cause already names it
         lines = [
@@ -9910,6 +9935,8 @@ Do NOT wrap conversational replies in JSON.
             "request_retries": 0,
             "step_retries": 0,
             "unreachable": False,
+            # The model server itself accepted no connection.
+            "server_down": False,
             # The turn ended because a model call failed (any cause).
             "failed": False,
         }
@@ -12744,6 +12771,7 @@ Do NOT wrap conversational replies in JSON.
                 "step_retries": self._turn_model_retries["step_retries"],
             },
             "model_unreachable": self._turn_model_retries["unreachable"],
+            "model_server_down": self._turn_model_retries["server_down"],
             # Any model-call failure ended the turn; front-ends report it failed.
             "model_failed": self._turn_model_retries["failed"],
             "extraction_sources": sorted(self._extraction_ledger.results),

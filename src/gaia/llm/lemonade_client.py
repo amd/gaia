@@ -125,6 +125,11 @@ GAIA_LEMONADE_RECONNECT_POLL_SECONDS = 2.0
 RECONNECTING_MESSAGE = "Reconnecting to the model server…"
 #: Retry reasons that mean nothing answered at all (see ``classify_exception``).
 _CONNECT_FAILURES = frozenset({"connection error", "connect timeout"})
+#: Connect timeout of the one check that tells a dead server from a dropped
+#: request, after a request could not connect.
+SERVER_DOWN_PROBE_SECONDS = 2.0
+#: Set on a failed request whose server accepted no connection at all.
+_SERVER_DOWN_ATTR = "_gaia_lemonade_server_down"
 
 
 def _embedded_lemonade_url() -> str:
@@ -3231,6 +3236,34 @@ class LemonadeUnresponsiveError(LemonadeClientError):
     timeout: it is up and busy (often loading a model), or stuck — not down."""
 
 
+class LemonadeServerDownError(LemonadeClientError):
+    """Nothing accepts a connection at the Lemonade address.
+
+    Every request goes through that server, cloud models included, so the
+    cloud provider was never reached and retrying it cannot help.
+    """
+
+    def __init__(
+        self,
+        endpoint: Optional[str] = None,
+        provider: Optional[str] = None,
+        message: Optional[str] = None,
+    ):
+        self.endpoint = endpoint
+        self.provider = provider
+        if message is None:
+            host = (endpoint or "").rsplit(":", 1)[0].strip("[]").lower()
+            local = not endpoint or host in ("localhost", "127.0.0.1", "::1")
+            server = "The local model server" if local else "The model server"
+            where = f" at {endpoint}" if endpoint else ""
+            reached = f", so the message never reached {provider}" if provider else ""
+            message = (
+                f"{server}{where} isn't answering{reached}. Start the model "
+                "server, then send the message again."
+            )
+        super().__init__(message)
+
+
 class GaiaLemonadeNotAnsweringError(LemonadeClientError):
     """GAIA's own server is up but not answering yet; the daemon left it be."""
 
@@ -4414,10 +4447,11 @@ class LemonadeClient:
         from gaia.daemon.paths import log_path
 
         reason = f" The daemon reports: {str(last).rstrip('.')}." if last else ""
-        raise LemonadeClientError(
-            f"GAIA's Lemonade Server at {self.base_url} stopped answering and "
+        raise LemonadeServerDownError(
+            _endpoint_label(self.base_url),
+            message=f"GAIA's Lemonade Server at {self.base_url} stopped answering and "
             f"was not back within {timeout:.0f}s.{reason} Run `gaia daemon "
-            f"status`, and read the daemon log at {log_path()} for why it stopped."
+            f"status`, and read the daemon log at {log_path()} for why it stopped.",
         ) from last
 
     def _survive_gaia_lemonade_stop(self, call: Callable[[], Any], model: str) -> Any:
@@ -5290,15 +5324,20 @@ class LemonadeClient:
                 return None
             return classify_exception(error)
 
-        def hand_off(_error: BaseException, reason: str) -> bool:
-            if not (
+        def hand_off(error: BaseException, reason: str) -> bool:
+            if reason not in _CONNECT_FAILURES:
+                return False
+            if (
                 gone_server_waits
-                and reason in _CONNECT_FAILURES
                 and self.follows_gaia_lemonade
                 and self._gaia_lemonade_gone()
             ):
+                self._gone_handoff().pending = True
+                return True
+            if self._server_accepts_connections():
                 return False
-            self._gone_handoff().pending = True
+            # Backing off cannot bring a stopped server back: fail now.
+            setattr(error, _SERVER_DOWN_ATTR, True)
             return True
 
         return ModelCallRetrier(
@@ -5316,6 +5355,42 @@ class LemonadeClient:
             log=self.log,
             classify=classify,
             hand_off=hand_off,
+        )
+
+    def _server_accepts_connections(self) -> bool:
+        """One quick connect to the server, after a request could not connect."""
+        from urllib.parse import urlsplit
+
+        try:
+            parts = urlsplit(self.base_url)
+            host = parts.hostname or self.host
+            port = parts.port or (443 if parts.scheme == "https" else 80)
+        except ValueError:
+            host, port = self.host, self.port
+        try:
+            with socket.create_connection(
+                (host, port), timeout=SERVER_DOWN_PROBE_SECONDS
+            ):
+                return True
+        except OSError as e:
+            self.log.warning(
+                f"Lemonade at {self.base_url} accepts no connection ({e}); "
+                "not retrying the request."
+            )
+            return False
+
+    def _server_down_error(
+        self, error: BaseException, model: Optional[str]
+    ) -> Optional[LemonadeServerDownError]:
+        """The error to raise for *error* when its server accepted no connection."""
+        if not getattr(error, _SERVER_DOWN_ATTR, False):
+            return None
+        from gaia.llm.inference_location import provider_phrase
+
+        provider = self.cloud_model_provider(model) if model else None
+        return LemonadeServerDownError(
+            _endpoint_label(self.base_url),
+            provider_phrase(provider) if provider else None,
         )
 
     def _server_load_in_progress(self) -> Optional[str]:
@@ -5445,6 +5520,11 @@ class LemonadeClient:
             return self._model_retrier(model, gone_server_waits).call(
                 api_call, what=what, state=state
             )
+        except Exception as e:
+            down = self._server_down_error(e, model)
+            if down is None:
+                raise
+            raise down from e
         finally:
             self._record_retries(state)
 
@@ -6293,6 +6373,9 @@ class LemonadeClient:
             self.log.error(message)
             raise attach_retry_state(LemonadeClientError(message), state) from e
         except (openai.APIError, openai.APIConnectionError, openai.RateLimitError) as e:
+            down = self._server_down_error(e, model)
+            if down is not None:
+                raise down from e
             if self.cloud_model_provider(model):
                 raise attach_retry_state(
                     self._cloud_failure(
@@ -6305,6 +6388,9 @@ class LemonadeClient:
             self.log.error(error_msg)
             raise attach_retry_state(LemonadeClientError(error_msg), state)
         except Exception as e:
+            down = self._server_down_error(e, model)
+            if down is not None:
+                raise down from e
             self.log.error(f"Error using OpenAI client for streaming: {str(e)}")
             label = _endpoint_label(self.base_url)
             # An inner error from this client already names the server.

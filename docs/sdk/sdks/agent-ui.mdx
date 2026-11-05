@@ -1063,7 +1063,7 @@ Deleting a chat deletes its copies.
 
     | Event type | Fields | Description |
     |------------|--------|-------------|
-    | `done` | `message_id` (int), `content` (string), `turn_summary` (object, optional) | Signals the end of the stream. `message_id` is the database ID of the saved assistant message. `content` is the full response text. `turn_summary` is the turn's sources and data flow (below); it is also saved with the message and returned by the messages endpoint. |
+    | `done` | `message_id` (int), `content` (string), `turn_summary` (object, optional), `failed` (bool, optional), `failure` (string, optional) | Signals the end of the stream. `message_id` is the database ID of the saved assistant message. `content` is the full response text. `turn_summary` is the turn's sources and data flow (below); it is also saved with the message and returned by the messages endpoint. `failed` marks a turn a model failure ended, and `content` then says why. `failure` names a cause the app can fix: `model_server_down` when the local model server took no connection (cloud models go through it too). |
 
     **Example stream** showing a typical multi-step interaction:
     ```

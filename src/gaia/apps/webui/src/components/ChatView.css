@@ -466,3 +466,47 @@
     }
 
 }
+
+/* Under a turn the model server ended by taking no connection. */
+.server-down-notice {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    margin-block: 4px 12px;
+    padding: 12px;
+    max-width: 640px;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+    background: var(--bg-card);
+    border: 1px solid var(--accent-yellow);
+    border-radius: var(--radius-md);
+}
+
+.server-down-notice p {
+    margin: 0;
+}
+
+.server-down-notice--ok {
+    border-color: var(--border-light);
+}
+
+.server-down-notice__title {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.server-down-notice__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.server-down-notice__raw {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}

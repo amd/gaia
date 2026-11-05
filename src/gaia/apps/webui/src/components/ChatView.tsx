@@ -51,6 +51,7 @@ import { isPlaceholderTitle } from '../utils/sessionTitle';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
+import { ModelServerDownNotice } from './ModelServerDownNotice';
 import { useChatDraft } from '../hooks/useSavedDraft';
 import { getT, useT } from '../i18n/useT';
 
@@ -1103,6 +1104,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         cards: cardsSnapshot.length > 0 ? cardsSnapshot : undefined,
                         stopState,
                         historyNotice,
+                        failure: event.failed ? event.failure : undefined,
                     };
                     if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
                     addMessage(assistantMsg);
@@ -1139,6 +1141,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     ...m,
                                     cards: prev?.cards ?? m.cards,
                                     stopState: m.stopState ?? prevMsgs.find((p) => p.id === m.id)?.stopState,
+                                    failure: m.failure ?? prevMsgs.find((p) => p.id === m.id)?.failure,
                                 };
                             });
                             setMessages(msgs);
@@ -1756,6 +1759,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     onTryAgain={canTryAgain ? () => handleTryAgain(msg) : undefined}
                                     latencyMs={latency}
                                 />
+                                {msg.failure === 'model_server_down' && idx === messages.length - 1 && !busy && (
+                                    <ModelServerDownNotice />
+                                )}
                                 {comparison?.messageId === msg.id && (
                                     <AnswerComparison
                                         original={msg}

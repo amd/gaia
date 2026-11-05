@@ -1011,6 +1011,53 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const SERVER_DOWN_REPLY = 'The model call failed at step 1, so this request is unfinished. The local model server at 127.0.0.1:13305 '
+    + "isn't answering, so the message never reached Fireworks AI.\n\nNothing had run yet.\n\nStart the model server, then send the message again.";
+
+/** The send fails on a stopped model server, and the server's saved copy of the chat then holds that reply. */
+async function withServerDown(page: Page): Promise<void> {
+    let sent = false;
+    await page.route('**/api/chat/send', (route) => {
+        sent = true;
+        const done = { type: 'done', message_id: 42, content: SERVER_DOWN_REPLY, failed: true, failure: 'model_server_down' };
+        return route.fulfill({ status: 200, contentType: 'text/event-stream', body: `data: ${JSON.stringify(done)}\n\n` });
+    });
+    await page.route(new RegExp(`/api/sessions/${ANSWER_SESSION}/messages(\\?|$)`), (route) => (sent
+        ? route.fulfill({
+            json: {
+                messages: [
+                    { id: 41, session_id: ANSWER_SESSION, role: 'user', content: 'Summarize the minutes', created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 42, session_id: ANSWER_SESSION, role: 'assistant', content: SERVER_DOWN_REPLY, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+                total: 2,
+            },
+        })
+        : route.fallback()));
+    await page.route('**/api/providers/local/status', (route) => route.fulfill({
+        json: {
+            state: 'stopped', active_model: 'fireworks.glm-5', active_display_name: 'glm-5', active_remote: true, model: null,
+            display_name: null, placement: null, ctx_size: null, memory: null, memory_error: null,
+            error: "The model server isn't answering at http://127.0.0.1:13305/api/v1. Restart starts it.",
+            base_url: 'http://127.0.0.1:13305/api/v1', owner: 'gaia', busy: false, restarting: false, restart_error: null,
+        },
+    }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a turn the stopped model server ended offers to start it (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withServerDown);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Summarize the minutes');
+        await box.press('Enter');
+        const notice = page.locator('.server-down-notice');
+        await expect(notice).toHaveCount(1);
+        await expect(notice.getByRole('button', { name: locale === 'ar' ? /تشغيل خادم النماذج/ : /Start the model server/ })).toBeVisible();
+        await expect(notice).not.toContainText('gaia ');
+        await shot(page, `server-down-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 /** GAIA answered once that this chat was running, then stopped listening. */
 async function withGaiaStoppedMidAnswer(page: Page): Promise<void> {
     let polls = 0;
