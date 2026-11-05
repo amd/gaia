@@ -845,9 +845,9 @@ export const enMessages = {
     'spend.todayChats.one': 'Today, in {n} chat',
     'spend.todayChats.other': 'Today, across {n} chats',
     'spend.perAnswer': 'Each answer in this chat',
-    'spend.note': 'At Fireworks AI list price.',
+    'spend.note': 'At the provider\'s list price.',
     'spend.titleExcluded': 'At least this much: a stopped answer isn\'t counted, since its cost is unknown',
-    'spend.excluded': 'Not counted: {chat} stopped answer(s) here, {today} today. A stopped answer sends no token count, so its cost is unknown, but Fireworks AI may still bill it. The totals are a floor.',
+    'spend.excluded': 'Not counted: {chat} stopped answer(s) here, {today} today. A stopped answer sends no token count, so its cost is unknown, but the provider may still bill it. The totals are a floor.',
     'spend.month': 'This month\'s total and limit',
 
     // Settings

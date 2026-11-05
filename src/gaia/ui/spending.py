@@ -227,7 +227,10 @@ def chat_spend(
             f"'since' must be an ISO timestamp such as 2026-11-05T08:00:00Z, got {since!r}."
         ) from e
     start_utc = start.astimezone(dt.timezone.utc)
-    chat = _cloud_answers(db.answer_costs(session_id=session_id))
+    # Sorted by instant: old and new timestamp formats don't sort together as text.
+    chat = sorted(
+        _cloud_answers(db.answer_costs(session_id=session_id)), key=_answered_at
+    )
     today = [
         a
         for a in _cloud_answers(db.answer_costs(since_day=start_utc.date().isoformat()))

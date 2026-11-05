@@ -199,6 +199,15 @@ def test_old_sqlite_timestamps_are_read_as_utc(db):
     )
 
 
+def test_answers_are_listed_by_time_across_timestamp_formats(db):
+    chat = db.create_session(title="a")["id"]
+    # As text, the space in the old format sorts before the newer "T" row.
+    _answer(db, chat, _estimate(0.02), "2026-11-05T09:00:00+00:00")
+    _answer(db, chat, _estimate(0.01), "2026-11-05 10:00:00")
+    items = spending.chat_spend(db, chat, FLASH, SINCE)["chat"]["items"]
+    assert [i["usd"] for i in items] == [0.02, 0.01]
+
+
 def test_chat_spending_route(client, db):
     chat = db.create_session(title="a")["id"]
     _answer(db, chat, _estimate(0.03), "2026-11-05T09:00:00+00:00")

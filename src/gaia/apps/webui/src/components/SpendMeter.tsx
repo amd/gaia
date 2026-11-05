@@ -63,6 +63,13 @@ export function SpendMeter({ sessionId, busy }: SpendMeterProps) {
     }, [busy, load]);
     // Opening re-reads, so a chat left open past midnight starts a new "today".
     useEffect(() => (open ? load() : undefined), [open, load]);
+    // Coming back to the window re-reads too: other chats or a new day may have moved "today".
+    useEffect(() => {
+        let cancel: (() => void) | undefined;
+        const onFocus = () => { cancel?.(); cancel = load(); };
+        window.addEventListener('focus', onFocus);
+        return () => { window.removeEventListener('focus', onFocus); cancel?.(); };
+    }, [load]);
 
     if (!spend?.paid || spend.model !== (model ?? null)) return null;
     const { chat, today } = spend;

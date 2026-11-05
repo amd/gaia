@@ -129,6 +129,15 @@ describe('SpendMeter', () => {
         expect(container.innerHTML).toBe('');
     });
 
+    it('re-reads when the window regains focus, so "today" follows other chats and midnight', async () => {
+        mockedApi.getChatSpending.mockResolvedValue(spending());
+        render(<SpendMeter sessionId="s1" busy={false} />);
+        await screen.findByRole('button', { name: /Cloud spending/ });
+        mockedApi.getChatSpending.mockResolvedValue(spending({ today: { ...spending().today, usd: 0.75 } }));
+        act(() => { window.dispatchEvent(new Event('focus')); });
+        await screen.findByRole('button', { name: /\$0\.75 today/ });
+    });
+
     it('re-reads once a reply ends', async () => {
         mockedApi.getChatSpending.mockResolvedValue(spending());
         const { rerender } = render(<SpendMeter sessionId="s1" busy />);
