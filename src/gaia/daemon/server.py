@@ -264,6 +264,19 @@ def _build_deregister(
     return _deregister
 
 
+def _keychain_auth():
+    """The /host/v1/keychain credential store, or ``None`` off macOS.
+
+    Only macOS ties keychain approval to the build asking; elsewhere the
+    sidecar keeps reading the OS store itself and the routes are not mounted.
+    """
+    if sys.platform != "darwin":
+        return None
+    from gaia.daemon.custody.auth import CustodyAuth
+
+    return CustodyAuth()
+
+
 def run(host: str = HOST) -> None:
     """Start the daemon and serve until shutdown. Blocks."""
     from gaia.logger import configure
@@ -311,9 +324,7 @@ def run(host: str = HOST) -> None:
     # callback URL is the daemon's own loopback address.
     custody_store = CustodyStore(custody_db_path())
     custody_auth = CustodyAuth()
-    # Only macOS ties keychain approval to the build asking; elsewhere the
-    # sidecar keeps reading the OS store itself.
-    keychain_auth = CustodyAuth() if sys.platform == "darwin" else None
+    keychain_auth = _keychain_auth()
     custody_base_url = f"http://{host}:{port}"
 
     specs = {**builtin_specs(), **_load_extra_specs()}

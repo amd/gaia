@@ -311,7 +311,7 @@ def test_registry_mints_for_the_flagship_only(tmp_path):
     assert keychain.resolve(flagship_manager.mint_keychain_secret()) == "gaia"
 
 
-def _spawn_flagship(monkeypatch, tmp_path, version):
+def _flagship_manager(monkeypatch, tmp_path, version, mode="user"):
     from gaia.daemon.sidecars import manager as mgr_mod
     from gaia.daemon.sidecars.manager import AgentSidecarManager
     from gaia.daemon.sidecars.spec import builtin_specs
@@ -322,21 +322,26 @@ def _spawn_flagship(monkeypatch, tmp_path, version):
         pid = 4321
 
     def popen(_argv, **kwargs):
+        captured.clear()
         captured.update(kwargs.get("env") or {})
         return Proc()
 
     monkeypatch.setattr(mgr_mod.subprocess, "Popen", popen)
     monkeypatch.setattr(mgr_mod.atexit, "register", lambda *a, **k: None)
     monkeypatch.setenv("TMPDIR", str(tmp_path))
-    manager = AgentSidecarManager(builtin_specs()["gaia"], mode="user")
+    manager = AgentSidecarManager(builtin_specs()["gaia"], mode=mode)
     monkeypatch.setattr(manager, "_open_log", lambda port: None)
     monkeypatch.setattr(manager, "_close_log", lambda: None)
-    monkeypatch.setattr(manager, "_cleanup_secret_file", lambda: None)
     manager.installed_binary_version = version
     manager.custody_url = "http://daemon"
     manager.custody_secret = "custody"
     manager.mint_keychain_secret = lambda: "keychain-credential"
+    return manager, captured
 
+
+def _spawn_flagship(monkeypatch, tmp_path, version, mode="user"):
+    manager, captured = _flagship_manager(monkeypatch, tmp_path, version, mode)
+    monkeypatch.setattr(manager, "_cleanup_secret_file", lambda: None)
     manager._spawn_process(["sidecar"], {}, 9127)
     return captured
 
@@ -353,15 +358,141 @@ def test_spawn_delivers_the_credential_as_a_file_never_in_the_env(
     assert "keychain-credential" not in captured.values()
 
 
-def test_an_older_binary_that_would_not_delete_the_file_gets_none(
-    monkeypatch, tmp_path
-):
-    captured = _spawn_flagship(monkeypatch, tmp_path, "0.3.3")
-    assert KEYCHAIN_SECRET_FILE_ENV_VAR not in captured
-
-
 def test_child_processes_do_not_inherit_the_credential_path(monkeypatch):
     from gaia.env import child_env
 
     monkeypatch.setenv(KEYCHAIN_SECRET_FILE_ENV_VAR, "/tmp/x")
     assert KEYCHAIN_SECRET_FILE_ENV_VAR not in child_env({})
+
+
+def test_an_older_binary_gets_no_file(monkeypatch, tmp_path):
+    captured = _spawn_flagship(monkeypatch, tmp_path, "0.3.3")
+    assert KEYCHAIN_SECRET_FILE_ENV_VAR not in captured
+
+
+def test_an_unknown_binary_version_is_not_offered_the_file(monkeypatch, tmp_path):
+    from gaia.daemon.sidecars.errors import SidecarSpawnError
+
+    manager, captured = _flagship_manager(monkeypatch, tmp_path, None)
+    assert manager._binary_reads_keychain_file() is False
+    # The launch-secret negotiation refuses an unknown version before this.
+    with pytest.raises(SidecarSpawnError, match="version is unknown"):
+        manager._spawn_process(["sidecar"], {}, 9127)
+    assert not captured
+    assert not list(tmp_path.glob("gaia-gaia-secret-*"))
+
+
+def test_the_first_binary_that_deletes_the_file_gets_one(monkeypatch, tmp_path):
+    captured = _spawn_flagship(monkeypatch, tmp_path, "0.3.4")
+    assert Path(captured[KEYCHAIN_SECRET_FILE_ENV_VAR]).is_file()
+
+
+def test_dev_mode_gets_no_file_because_uvicorn_never_reads_it(monkeypatch, tmp_path):
+    monkeypatch.setenv(KEYCHAIN_SECRET_FILE_ENV_VAR, "/stale/from/parent")
+    captured = _spawn_flagship(monkeypatch, tmp_path, None, mode="dev")
+    assert KEYCHAIN_SECRET_FILE_ENV_VAR not in captured
+    files = tmp_path.glob("gaia-gaia-secret-*/launch-secret")
+    assert all(f.read_text(encoding="utf-8") != "keychain-credential" for f in files)
+
+
+def test_a_respawn_removes_the_previous_keychain_file(monkeypatch, tmp_path):
+    manager, captured = _flagship_manager(monkeypatch, tmp_path, "0.3.4")
+    credentials = iter(["first-credential", "second-credential"])
+    manager.mint_keychain_secret = lambda: next(credentials)
+    try:
+        manager._spawn_process(["sidecar"], {}, 9127)
+        first = Path(captured[KEYCHAIN_SECRET_FILE_ENV_VAR])
+        assert first.read_text(encoding="utf-8") == "first-credential"
+
+        manager._spawn_process(["sidecar"], {}, 9128)
+        second = Path(captured[KEYCHAIN_SECRET_FILE_ENV_VAR])
+        assert second.read_text(encoding="utf-8") == "second-credential"
+        assert not first.exists()
+        assert not first.parent.exists()
+    finally:
+        manager._cleanup_secret_file()
+    assert not second.exists()
+
+
+def test_an_old_credential_is_refused_after_a_re_mint(os_store, daemon):
+    auth, client = daemon
+    old = auth.mint("gaia")
+    new = auth.mint("gaia")
+    os_store.items[(SERVICE_NAME, "s")] = "s3cret-value"
+    body = {"service": SERVICE_NAME, "username": "s"}
+
+    stale = client.post(
+        "/host/v1/keychain/get", json=body, headers={"Authorization": f"Bearer {old}"}
+    )
+    assert stale.status_code == 403
+    assert "s3cret-value" not in stale.text
+
+    fresh = client.post(
+        "/host/v1/keychain/get", json=body, headers={"Authorization": f"Bearer {new}"}
+    )
+    assert fresh.json() == {"value": "s3cret-value"}
+
+
+def test_deleting_an_absent_item_is_a_404_on_the_route(os_store, daemon):
+    auth, client = daemon
+    resp = client.post(
+        "/host/v1/keychain/delete",
+        json={"service": SERVICE_NAME, "username": "missing"},
+        headers={"Authorization": f"Bearer {auth.mint('gaia')}"},
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "action, body",
+    [
+        ("set", {"service": "com.apple.other", "username": "s", "value": "v"}),
+        ("delete", {"service": "com.apple.other", "username": "s"}),
+    ],
+)
+def test_set_and_delete_refuse_other_services(os_store, daemon, action, body):
+    auth, client = daemon
+    os_store.items[("com.apple.other", "s")] = "kept"
+    resp = client.post(
+        f"/host/v1/keychain/{action}",
+        json=body,
+        headers={"Authorization": f"Bearer {auth.mint('gaia')}"},
+    )
+    assert resp.status_code == 403
+    assert os_store.items == {("com.apple.other", "s"): "kept"}
+
+
+@pytest.mark.parametrize(
+    "platform, offered", [("darwin", True), ("linux", False), ("win32", False)]
+)
+def test_the_daemon_offers_the_keychain_on_macos_only(monkeypatch, platform, offered):
+    from gaia.daemon import server
+
+    monkeypatch.setattr(server.sys, "platform", platform)
+    assert isinstance(server._keychain_auth(), CustodyAuth) is offered
+
+
+def test_an_older_core_still_deletes_the_credential(monkeypatch, tmp_path, capsys):
+    import sys
+    import types
+
+    entry = pytest.importorskip("gaia_agent.entry")
+    secret_file = tmp_path / "secret"
+    secret_file.write_text("s3cret", encoding="utf-8")
+    monkeypatch.setenv(KEYCHAIN_SECRET_FILE_ENV_VAR, str(secret_file))
+    monkeypatch.setitem(sys.modules, "gaia.connectors.daemon_keyring", None)
+    fake_server = types.ModuleType("gaia_agent.server")
+    fake_server.serve_http = lambda args: 0
+    monkeypatch.setitem(sys.modules, "gaia_agent.server", fake_server)
+    monkeypatch.setattr("gaia.tls.use_os_trust_store", lambda: None)
+    monkeypatch.setattr("gaia.login_path.apply_login_path", lambda: None)
+    monkeypatch.setattr(entry, "selects_http", lambda args: True)
+    monkeypatch.setattr(entry, "_configure_logging", lambda: None)
+
+    assert entry.main(["--serve"]) == 0
+
+    assert not secret_file.exists()
+    assert KEYCHAIN_SECRET_FILE_ENV_VAR not in os.environ
+    assert "cannot read the keychain through the GAIA daemon" in (
+        capsys.readouterr().err
+    )

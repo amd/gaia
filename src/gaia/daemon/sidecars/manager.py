@@ -615,8 +615,10 @@ class AgentSidecarManager:
 
     def _binary_reads_keychain_file(self) -> bool:
         minimum = self.spec.keychain_file_min_version
+        # Dev mode runs ``uvicorn server:app``, which never reaches entry.main()
+        # to read and delete the file. Its interpreter doesn't change on update.
         if (self.resolved_mode or self.mode) == "dev":
-            return True
+            return False
         version = self.installed_binary_version
         return bool(
             minimum and version and _version_tuple(version) >= _version_tuple(minimum)
