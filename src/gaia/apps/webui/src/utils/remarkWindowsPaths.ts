@@ -27,9 +27,10 @@ interface MdNode {
  * Spaces stay in only when the words after them (names or `(x86)` groups) run
  * straight to a `\`, so `C:\OneDrive - AMD\_drafts` and `C:\Program Files (x86)\.gaia`
  * are one path while `C:\foo and more`, `C:\foo, see x\_y` and `C:\foo \*x\*` end at `foo`.
+ * After a `,` or `;` one word may still run to a `\`, so `C:\Music\Smith, John\_old` stays whole.
  * Words can't hold a space, `\`, `(` or `)`, so each spaced run has one parse.
  */
-const RAW_WIN_PATH_RE = /(?:(?<![A-Za-z0-9])[A-Za-z]:\\|\\\\[A-Za-z0-9_.$-]+\\)(?:\\\*|[^\s"`()\]<>|*]|(?<![,;])(?: (?:[^\s"`()\]<>|*\\,;:]|\([^\s"`()\]<>|*\\,;:]*\))+)+(?=\\)|\((?:\\\*|[^\s"`()\]<>|*])*\))*/g;
+const RAW_WIN_PATH_RE = /(?:(?<![A-Za-z0-9])[A-Za-z]:\\|\\\\[A-Za-z0-9_.$-]+\\)(?:\\\*|[^\s"`()\]<>|*]|(?:(?<![,;])(?: (?:[^\s"`()\]<>|*\\,;:]|\([^\s"`()\]<>|*\\,;:]*\))+)+|(?<=[,;]) (?:[^\s"`()\]<>|*\\,;:]|\([^\s"`()\]<>|*\\,;:]*\))+)(?=\\)|\((?:\\\*|[^\s"`()\]<>|*])*\))*/g;
 
 const ESCAPE_RE = /\\([!-/:-@[-`{-~])/g;
 

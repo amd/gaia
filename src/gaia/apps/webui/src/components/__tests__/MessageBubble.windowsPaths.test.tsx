@@ -62,6 +62,19 @@ describe('Windows paths in prose keep their backslashes', () => {
         expect(textOf(`Saved to ${path} just now.`)).toBe(`Saved to ${path} just now.`);
     });
 
+    it.each([
+        'C:\\Music\\Smith, John\\_old\\a.mp3',
+        'C:\\Music\\Artist; Live\\_x',
+        'C:\\a b\\c, d\\_e',
+        'C:\\Users\\Kalin\\OneDrive - AMD\\Smith, John\\_old\\a.mp3',
+    ])('keeps the path %s whose folder has a comma or semicolon', (path) => {
+        expect(textOf(`Saved to ${path} just now.`)).toBe(`Saved to ${path} just now.`);
+    });
+
+    it('ends a path at a comma when several words follow it', () => {
+        expect(textOf('Saved to C:\\foo, then use snake\\_case')).toBe('Saved to C:\\foo, then use snake_case');
+    });
+
     it('keeps a path with several spaces in the user\'s own message', () => {
         const path = 'C:\\gtest\\docs8\\OneDrive - AMD\\_drafts\\plan.md';
         expect(textOf(`Summarize ${path}`, 'user')).toBe(`Summarize ${path}`);
