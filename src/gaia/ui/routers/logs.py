@@ -4,8 +4,8 @@
 """GAIA's logs and the model server's, for the Agent UI's log viewer.
 
 Every line is redacted before it is sent (:mod:`gaia.log_reader`). Lines can
-still quote a conversation, so the routes need the UI header and refuse
-mobile access.
+still quote a conversation, so the routes need the UI header and answer only
+the PC running GAIA.
 """
 
 from __future__ import annotations
@@ -16,39 +16,41 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from ..models import LogReadResponse, LogSourcesResponse
-from ..security import require_ui_header, via_tunnel
+from ..security import _is_loopback_name, require_ui_header, via_tunnel
 
 router = APIRouter(tags=["logs"])
 
-_OVER_TUNNEL = "Read GAIA's logs on the PC running GAIA, not over mobile access."
+_ELSEWHERE = (
+    "Read GAIA's logs on the PC running GAIA, not over mobile access or from "
+    "another computer."
+)
 
 
-def _refuse_tunnel(request: Request) -> None:
-    if via_tunnel(request):
-        raise HTTPException(status_code=403, detail=_OVER_TUNNEL)
+def _at_this_pc(request: Request) -> None:
+    host = request.client.host if request.client else ""
+    if not _is_loopback_name(host) or via_tunnel(request):
+        raise HTTPException(status_code=403, detail=_ELSEWHERE)
 
 
 @router.get(
     "/api/logs",
     response_model=LogSourcesResponse,
-    dependencies=[Depends(require_ui_header)],
+    dependencies=[Depends(require_ui_header), Depends(_at_this_pc)],
 )
-def list_logs(request: Request) -> Dict[str, Any]:
+def list_logs() -> Dict[str, Any]:
     """Each log source and the files it has now."""
     from gaia.log_sources import describe_sources
 
-    _refuse_tunnel(request)
     return {"sources": describe_sources()}
 
 
 @router.get(
     "/api/logs/{source}",
     response_model=LogReadResponse,
-    dependencies=[Depends(require_ui_header)],
+    dependencies=[Depends(require_ui_header), Depends(_at_this_pc)],
 )
 async def read_log(
     source: str,
-    request: Request,
     file: Optional[str] = Query(None, max_length=200),
     after: Optional[str] = Query(None, max_length=32),
     limit: int = Query(1000, ge=1, le=5000),
@@ -60,7 +62,6 @@ async def read_log(
     from gaia.log_reader import LogRead, read_log_file
     from gaia.log_sources import UnknownLogError, find_file
 
-    _refuse_tunnel(request)
     try:
         if source == "model_server":
             result = await read_lemonade_log(after=after, limit=limit)

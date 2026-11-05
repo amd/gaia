@@ -127,8 +127,12 @@ def test_linux_keeps_its_tools(install, monkeypatch):
 
 
 def test_windows_skips_posix_tools(install, monkeypatch):
+    from gaia.llm import lemonade_embedded
+
     tmp_path, calls = install
     monkeypatch.setattr(sys, "platform", "win32")
+    # The real check calls the Windows API, which a faked platform doesn't have.
+    monkeypatch.setattr(lemonade_embedded, "pid_exists", lambda pid: True)
     _bundle(tmp_path)
 
     tools = {cmd[0] for cmd in calls}
@@ -151,3 +155,16 @@ def test_logs_are_redacted_for_sharing(install, monkeypatch):
         b"sent Authorization: [redacted]\nused [redacted]\nplain\n"
     )
     assert LEMONADE_KEY.encode() not in members["lemonade/lemond.log"]
+
+
+def test_a_damaged_config_still_bundles_redacted_logs(install, monkeypatch):
+    from gaia import config
+
+    tmp_path, _ = install
+    gaia_dir = tmp_path / ".gaia"
+    (gaia_dir / "config.json").write_text("{bad", encoding="utf-8")
+    monkeypatch.setattr(config, "GAIA_CONFIG_FILE", gaia_dir / "config.json")
+    (gaia_dir / "gaia.log").write_bytes(b"sent Authorization: Bearer abcdef1234567\n")
+    members = _bundle(tmp_path)
+
+    assert members["gaia.log"] == b"sent Authorization: [redacted]\n"

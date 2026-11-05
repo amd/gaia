@@ -100,6 +100,19 @@ describe('the log viewer', () => {
         expect(screen.getByText(/this app's server, chats, tools/)).toBeInTheDocument();
     });
 
+    it('shows the new tab, not a slow read of the old one', async () => {
+        let finishModelServer: (r: LogReadResponse) => void = () => {};
+        mocked.getLog.mockImplementation((source) => (source === 'model_server'
+            ? new Promise<LogReadResponse>((resolve) => { finishModelServer = resolve; })
+            : Promise.resolve(serverRead({ owner: null, base_url: null, lines: [{ text: 'gaia started', severity: 'info', tag: null }], cursor: '9' }))));
+        await openLogs();
+        fireEvent.click(screen.getByRole('tab', { name: 'GAIA' }));
+        expect(await screen.findByText(/gaia started/)).toBeInTheDocument();
+        await act(async () => { finishModelServer(serverRead()); });
+        expect(screen.queryByText(/npu device busy/)).not.toBeInTheDocument();
+        expect(screen.getByText(/gaia started/)).toBeInTheDocument();
+    });
+
     it('picks among a group’s files', async () => {
         await openLogs('agent');
         const picker = await screen.findByRole('combobox', { name: 'File' });

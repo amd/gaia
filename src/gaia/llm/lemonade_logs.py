@@ -132,15 +132,17 @@ def _known_secrets(api_key: Optional[str]) -> List[str]:
 def known_secrets() -> tuple:
     """GAIA's Lemonade keys and secret env values, and a note if one was unreadable.
 
-    A credential store that won't answer must not hide GAIA's logs: those
-    lines are still redacted by shape, and the note says the saved key wasn't.
+    A credential store that won't answer, or a config file that won't parse,
+    must not hide GAIA's logs: those lines are still redacted by shape, and the
+    note says the saved key wasn't.
     """
+    from gaia.config import GaiaConfigError
     from gaia.llm.lemonade_choice import LemonadeChoiceError
     from gaia.llm.lemonade_client import resolve_lemonade_api_key
 
     try:
         return _known_secrets(resolve_lemonade_api_key(None)), None
-    except LemonadeChoiceError as e:
+    except (LemonadeChoiceError, GaiaConfigError) as e:
         log.warning("Log viewer: saved Lemonade key unreadable: %s", e)
         return _known_secrets(None), (
             f"The saved Lemonade key could not be read ({e}), so it is "

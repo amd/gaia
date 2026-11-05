@@ -262,6 +262,7 @@ def _entry(seq, severity, tag, msg):
 
 
 class TestStream:
+    @pytest.mark.allow_network
     def test_reads_entries_after_a_sequence_with_the_bearer_key(self):
         server = FakeLogStream(
             [_entry(1, "Info", "main", "start"), _entry(2, "Error", "LlamaCpp", "boom")]
@@ -284,6 +285,7 @@ class TestStream:
             {"type": "logs.subscribe", "after_seq": 1},
         ]
 
+    @pytest.mark.allow_network
     def test_a_wrong_key_is_an_error(self):
         import aiohttp
 
@@ -304,6 +306,7 @@ class TestUsersLemonade:
         monkeypatch.setenv("LEMONADE_BASE_URL", self.URL)
         monkeypatch.setenv("LEMONADE_API_KEY", "user-key-abcdef")
 
+    @pytest.mark.allow_network
     def test_stream_lines_are_parsed_and_redacted(self, monkeypatch):
         server = FakeLogStream(
             [
@@ -361,7 +364,7 @@ class TestRouter:
 
         app = FastAPI()
         app.include_router(router_mod.router)
-        client = TestClient(app)
+        client = TestClient(app, client=("127.0.0.1", 50000))
         client.headers.pop("x-gaia-ui", None)
         return client
 
@@ -377,6 +380,19 @@ class TestRouter:
     def test_refused_over_mobile_access(self, client, url):
         r = client.get(url, headers={**self.H, "X-Forwarded-For": "1.2.3.4"})
         assert r.status_code == 403 and "mobile access" in r.json()["detail"]
+
+    @pytest.mark.parametrize("url", ["/api/logs", "/api/logs/gaia"])
+    def test_refused_from_another_computer(self, url):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from gaia.ui.routers import logs as router_mod
+
+        app = FastAPI()
+        app.include_router(router_mod.router)
+        other = TestClient(app, client=("192.168.1.20", 50000))
+        r = other.get(url, headers=self.H)
+        assert r.status_code == 403 and "another computer" in r.json()["detail"]
 
     def test_model_server_lines(self, client, tmp_path, monkeypatch):
         _lemond_log(tmp_path, "2026-11-04 10:00:00.000 [Info] (main) hi\n")
@@ -462,6 +478,19 @@ class TestRouter:
             raise choice.LemonadeChoiceError("credential store locked")
 
         monkeypatch.setattr(lc, "resolve_lemonade_api_key", locked)
+        body = client.get("/api/logs/gaia", headers=self.H).json()
+        assert body["available"]
+        assert "saved Lemonade key could not be read" in body["detail"]
+
+    def test_a_damaged_config_does_not_hide_gaias_log(
+        self, client, gaia_logs, monkeypatch
+    ):
+        from gaia.config import GaiaConfigError
+
+        def damaged(*a, **k):
+            raise GaiaConfigError("config.json is not valid JSON")
+
+        monkeypatch.setattr(lc, "resolve_lemonade_api_key", damaged)
         body = client.get("/api/logs/gaia", headers=self.H).json()
         assert body["available"]
         assert "saved Lemonade key could not be read" in body["detail"]
