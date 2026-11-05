@@ -465,6 +465,15 @@ def resolve_default_chat_model() -> str:
     return GaiaConfig.load().resolve_model(None, DEFAULT_MODEL_NAME)
 
 
+def resolve_chat_model() -> str:
+    """The model chat reopens on: ``last_model``, the user's last pick in the
+    Agent UI or TUI, else :func:`resolve_default_chat_model`. May be a cloud model.
+    """
+    from gaia.config import GaiaConfig
+
+    return GaiaConfig.load().last_model or resolve_default_chat_model()
+
+
 #: Default chat models that also read images, so indexing a scan loads no second model.
 VISION_CHAT_MODELS = frozenset(
     {DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAME, FLASH_OPTION_MODEL_NAME}
