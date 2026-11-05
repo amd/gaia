@@ -34,6 +34,7 @@ from typing import (
     Callable,
     Dict,
     Generator,
+    Iterable,
     Iterator,
     List,
     Optional,
@@ -2976,7 +2977,7 @@ class UnknownUserModelError(ValueError):
     """A ``user.`` id missing from ``MODELS``; Lemonade may still list it by name."""
 
 
-def pull_request_body(model_id: str) -> Dict[str, Any]:
+def pull_request_body(model_id: str, registered: Iterable[str] = ()) -> Dict[str, Any]:
     """JSON body for Lemonade ``POST /pull``.
 
     Built-ins are name only — a ``recipe`` makes Lemonade read the call as a
@@ -2984,9 +2985,12 @@ def pull_request_body(model_id: str) -> Dict[str, Any]:
     so the body carries its checkpoint and recipe, plus the labels Lemonade
     cannot infer (``embedding``, ``mmproj``, ``vision``, ``reasoning``).
     A gateway model has no weights and raises ``RuntimeError`` before any
-    request. An unknown ``user.`` id raises ``UnknownUserModelError`` instead
-    of a pull Lemonade answers with HTTP 500; a caller that finds the id in
-    Lemonade's own list may pull it by name.
+    request. A ``user.`` id GAIA doesn't know goes out name only when it is in
+    *registered* (see :func:`registered_model_ids`), since Lemonade already
+    holds its checkpoint; otherwise it raises ``UnknownUserModelError`` instead
+    of a pull Lemonade answers with HTTP 500. Lemonade lists such a model
+    without its ``user.`` prefix, so the match ignores it and the body keeps
+    the prefix with Lemonade's casing.
 
     Known gateway namespaces (``amd.``, ``fireworks.``) are refused even before
     the catalog has been read. Any other gateway id is refused once
@@ -3010,8 +3014,30 @@ def pull_request_body(model_id: str) -> Dict[str, Any]:
         return {"model_name": requirement.model_id}
 
     if model_id.lower().startswith("user."):
+        for name in registered:
+            if _model_ids_match(name, model_id):
+                bare = (
+                    name[len("user.") :] if name.lower().startswith("user.") else name
+                )
+                return {"model_name": f"user.{bare}"}
         raise UnknownUserModelError(_unknown_user_model_message(model_id))
     return {"model_name": model_id}
+
+
+def registered_model_ids(listing: Any) -> List[str]:
+    """Model ids from a Lemonade ``GET /models?show_all=true`` JSON body.
+
+    Entries that aren't objects with a string ``id`` are skipped. Raises
+    ``ValueError`` when the body has no ``data`` list.
+    """
+    data = listing.get("data") if isinstance(listing, dict) else None
+    if not isinstance(data, list):
+        raise ValueError(
+            f"Lemonade's model list has no 'data' list (got {type(listing).__name__})"
+        )
+    return [
+        m["id"] for m in data if isinstance(m, dict) and isinstance(m.get("id"), str)
+    ]
 
 
 def _unknown_user_model_message(model_id: str) -> str:
