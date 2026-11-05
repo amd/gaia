@@ -16,7 +16,7 @@ import { useUndoEvents } from '../../utils/undoEvents';
 import { PanelSection } from './PanelSection';
 import type { OutputItem, OutputKind } from '../../types/sessionPanel';
 import { ref, type MessageKey, type Param, type Params } from '../../i18n/registry';
-import { tEn, useT, type Translate } from '../../i18n/useT';
+import { dateLocale, tEn, useT, type Translate } from '../../i18n/useT';
 
 /** Rows shown before "Show more". */
 export const OUTPUTS_SHOWN = 5;
@@ -34,12 +34,12 @@ const CHANGE_LABEL = { created: 'out.change.created', edited: 'out.change.edited
 
 /** "3 min ago", from a UTC `YYYY-MM-DD HH:MM:SS`. */
 export function whenText(utc: string | null, now = Date.now(), t: Translate = tEn): string {
-    const when = whenMessage(utc, now);
+    const when = whenMessage(utc, now, dateLocale(t));
     return when == null ? '' : typeof when === 'string' ? when : t(when.key, when.params);
 }
 
 /** "3 min ago" as a message, a plain date once older than a day, or null. */
-function whenMessage(utc: string | null, now: number): { key: MessageKey; params?: Params } | string | null {
+function whenMessage(utc: string | null, now: number, locale: string | undefined): { key: MessageKey; params?: Params } | string | null {
     if (!utc) return null;
     const at = Date.parse(`${utc.replace(' ', 'T')}Z`);
     if (Number.isNaN(at)) return null;
@@ -47,7 +47,7 @@ function whenMessage(utc: string | null, now: number): { key: MessageKey; params
     if (s < 60) return { key: 'out.justNow' };
     if (s < 3600) return { key: 'out.minAgo', params: { n: Math.floor(s / 60) } };
     if (s < 86400) return { key: 'out.hAgo', params: { n: Math.floor(s / 3600) } };
-    return new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    return new Date(at).toLocaleDateString(locale, { month: 'short', day: 'numeric' });
 }
 
 function stateKey(item: OutputItem): MessageKey | null {
@@ -116,7 +116,7 @@ function OutputsList({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) 
                     const { label, Icon } = KIND[item.kind];
                     const state = stateKey(item);
                     const changed = item.change && item.kind !== 'document' ? CHANGE_LABEL[item.change] : undefined;
-                    const when = whenMessage(item.created_at, Date.now());
+                    const when = whenMessage(item.created_at, Date.now(), dateLocale(t));
                     // One line per language, bracketed once: kind, time, state.
                     const meta = t.compose((say) => [
                         changed ? say('out.kindChanged', { kind: ref(label), change: ref(changed) }) : say(label),

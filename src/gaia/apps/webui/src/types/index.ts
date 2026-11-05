@@ -4,7 +4,7 @@
 /** Types shared across the GAIA Agent UI frontend. */
 
 import type { TurnSummaryResponse } from './api.gen';
-import type { SetupCatalogEntry, SetupComponent, SetupModelProgress, SetupOverall, SetupTest } from './setup';
+import type { SetupNpuProblem } from './setup';
 
 export * from './setup';
 
@@ -446,6 +446,8 @@ export interface Message {
     failed?: boolean;
     /** Client-side: the raw error, to recognize the server's saved copy of this failure. */
     failureText?: string;
+    /** Client-side: the cause a failed turn named (`done.failure`), for its fix. */
+    failure?: string;
     /** Set when this turn pushed older turns out of the model's view. */
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */
@@ -688,6 +690,20 @@ export interface MCPServerStatus {
 
 // ── Scheduled Tasks ──────────────────────────────────────────────────────
 
+/** When a schedule runs, as data the UI words in its own language. */
+export interface ScheduleDescription {
+    /** every: count + unit, optional days; window: that plus start/end hour; days: named days, optional time; daily: a time. */
+    kind: 'every' | 'window' | 'days' | 'daily';
+    count: number | null;
+    unit: 'second' | 'minute' | 'hour' | 'day' | 'week' | null;
+    /** 0 = Monday … 6 = Sunday. */
+    days: number[] | null;
+    /** "HH:MM", 24-hour. */
+    time: string | null;
+    start_hour: number | null;
+    end_hour: number | null;
+}
+
 /** A recurring scheduled task. */
 export interface Schedule {
     id: string;
@@ -704,8 +720,9 @@ export interface Schedule {
     session_id: string | null;
     /** Parsed natural-language schedule as JSON; null for plain-interval schedules. */
     schedule_config: string | null;
-    /** When it runs, e.g. "Weekdays at 8:00 AM" — the same words the form preview shows. */
+    /** When it runs in English, e.g. "Weekdays at 8:00 AM"; the UI words `description_parts` instead. */
     description: string;
+    description_parts: ScheduleDescription;
     /** The last run's error; null when it succeeded. */
     last_error: string | null;
     /** A run is in flight right now, timed or Run now. */
@@ -729,6 +746,8 @@ export interface ParsedSchedule {
     end_hour: number | null;
     days_of_week: number[] | null;
     description: string;
+    /** Null when the input was rejected; `description` then says what to fix. */
+    description_parts?: ScheduleDescription | null;
     next_run_at: string | null;
     /** IANA zone the times are in. */
     timezone?: string | null;
@@ -879,6 +898,10 @@ export interface StreamEvent {
     message_id?: number;
     /** On `done`: the user's Stop ended this run (absent when it completed normally). */
     cancelled?: boolean;
+    /** On `done`: a model failure ended this run. */
+    failed?: boolean;
+    /** On a failed `done`: a cause the UI offers a fix for. */
+    failure?: 'model_server_down' | string;
     /** On `followup_taken`: the message the running turn took. */
     text?: string;
     /** On `followup_returned`: messages the turn ended without taking. */
@@ -888,6 +911,9 @@ export interface StreamEvent {
     message?: string;
     /** Model phase on a status event: reading, loading_model, reasoning, tool_call, … */
     phase?: string;
+    /** Drop the answer text streamed since the last tool. On `thinking`: it was this reasoning.
+     *  On `status`: the reply was cut off (the model server stopped) and starts over. */
+    retracts_answer?: boolean;
     step?: number;
     total?: number;
     tool?: string;
@@ -909,6 +935,8 @@ export interface StreamEvent {
     stats?: InferenceStats;
     /** Per-turn sources, files and data flow (attached to done events). */
     turn_summary?: TurnSummary;
+    /** Library documents the agent indexed and attached to the chat (done events). */
+    documents_added?: Document[];
     /** MCP server statuses (for mcp_status events). */
     servers?: MCPServerStatus[];
     /** Structured command output (for tool_result of run_shell_command). */
@@ -997,198 +1025,6 @@ export interface StreamEvent {
     data?: unknown;
 }
 
-// ── First-run setup (GET /api/setup/*) ────────────────────────────────────
-
-export type SetupStepStatus = 'pending' | 'active' | 'done' | 'failed' | 'cancelled';
-
-export interface SetupStep {
-    key: 'server' | 'models' | 'finish';
-    label: string;
-    detail: string;
-    status?: SetupStepStatus;
-}
-
-/** `gaia init --check --json`: ready, or the stage and reasons it is not. */
-export interface SetupCheck {
-    ready: boolean;
-    stage?: 'setup' | 'upgrade' | 'server' | 'load' | string;
-    reasons?: string[];
-    models?: Array<{ id: string; role: string; size_gb: number | null; loaded: boolean; error: string | null }>;
-    /** True but no setup step, e.g. no GAIA agent build for this PC. */
-    warnings?: string[];
-    /** The hub has no GAIA agent build for this PC, so chat can't run here. */
-    no_agent_build?: boolean;
-    steps: SetupStep[];
-    /** The steps for a cloud provider, which downloads only the embedding model. */
-    cloud_steps?: SetupStep[];
-}
-
-/** A failed setup with a known fix: the user's Lemonade Server isn't answering. */
-export interface SetupProblem {
-    kind: 'server_unreachable' | 'server_too_old';
-    /** One plain sentence: what is wrong, in English, with the address and versions. */
-    message: string;
-    /** How to start that server, or null when this PC has none to start. */
-    start: string | null;
-    /** Setup can switch to GAIA's own server instead. */
-    use_gaia: boolean;
-    /** Set when it can't switch from here (LEMONADE_BASE_URL), and what does. */
-    switch_hint: string | null;
-}
-
-export interface SetupDevice {
-    kind: string;
-    name: string;
-    family: string | null;
-    available: boolean;
-    integrated?: boolean | null;
-    cores?: number | null;
-    threads?: number | null;
-}
-
-export interface SetupGaiaBuild {
-    version: string;
-    /** A published release or release candidate, a wheel built from a checkout, or a checkout itself. */
-    kind: 'release' | 'release_candidate' | 'local' | 'source';
-    /** The candidate's number, e.g. "2" for 0.25.5rc2. */
-    rc: string | null;
-    /** The checkout's commit, for a source build. */
-    commit: string | null;
-}
-
-export interface SetupSystem {
-    gaia_version: string;
-    gaia_build?: SetupGaiaBuild;
-    /** Settings, chats, logs and GAIA's own Lemonade. */
-    gaia_home: string | null;
-    agent_version: string | null;
-    lemonade_version: string | null;
-    os: string | null;
-    processor: string | null;
-    physical_memory: string | null;
-    devices: SetupDevice[];
-}
-
-export type SetupLogStage = 'check' | 'download' | 'test';
-
-export interface SetupRunStatus {
-    state: 'idle' | 'running' | 'verifying' | 'ready' | 'failed' | 'cancelled';
-    steps?: SetupStep[];
-    text?: string;
-    percent?: number | null;
-    /** How much of the current download is done, e.g. "1.20 GB of 5.60 GB". */
-    size?: string | null;
-    error?: string | null;
-    problem?: SetupProblem | null;
-    command?: string;
-    log_tail?: string[];
-    /** Each stage's log, its last lines: the checks, the downloads, the Test step. */
-    logs?: Partial<Record<SetupLogStage, string[]>>;
-    skip_chat_model?: boolean;
-    /** The run is switching to GAIA's own server; a retry must keep switching. */
-    gaia_lemonade?: boolean;
-    /** A model's download failed in this run; its row says why. */
-    model_failed?: boolean;
-    /** Each piece besides the models, by id. */
-    components?: Record<string, 'active' | 'done' | 'failed'>;
-    tests?: SetupTest[];
-    /** The run only starts the model server; models are chosen and pulled after. */
-    server_only?: boolean;
-    /** The run replaces an older embedded Lemonade artifact without model downloads. */
-    upgrade_embedded?: boolean;
-    /** The chat model setup chose, once it has said. */
-    chat_model?: string | null;
-    /** Each model's download, the run's and any single download's. */
-    models?: SetupModelProgress[];
-    overall?: SetupOverall;
-}
-
-/** GET /api/setup/plan: what setup will use and download, before it starts. */
-export interface SetupPlan {
-    /** `url` is null while GAIA's own server isn't running: it has no address yet. */
-    lemonade: { mode: 'gaia' | 'external'; url: string | null; reachable: boolean };
-    chat_model: { id: string; user_set: boolean; size_gb: number | null; downloaded: boolean | null };
-    recommended_model: string | null;
-    /** GAIA's own server isn't running yet, so the final pick comes once it is. */
-    decided_after_server: boolean;
-    memory_gb: number | null;
-    memory_source: string | null;
-    options: Array<{ id: string; size_gb: number | null; fits: boolean | null; reason: string | null }>;
-    models: Array<{ id: string; role: 'chat' | 'embedding'; size_gb: number | null }>;
-    download_gb: number | null;
-    capacity_gb?: number | null;
-    /** The drive Lemonade stores models on; `free_gb` null when it couldn't be read. */
-    disk?: { path: string | null; free_gb: number | null; source: 'lemonade' | 'local' | null };
-    disk_warning?: string | null;
-    skipped_models?: string[];
-    catalog?: SetupCatalogEntry[];
-    /** Backends Lemonade reports for this PC. */
-    backends?: Array<{ recipe: string; backend: string; state: string | null; version?: string | null; default: boolean }>;
-    /** What setup found across the stack; null where nothing could find out. */
-    system?: SetupSystem;
-    /** Everything else setup fetches. */
-    components?: SetupComponent[];
-    /** The model the user chose to read images; null is GAIA's choice. */
-    vision_model?: string | null;
-}
-
-/** A task a new chat offers, from what is set up on this PC. */
-export interface StartCard {
-    /** The skill that sharpens this task when installed; also the card's id. */
-    skill: string;
-    title: string;
-    note: string;
-    prompt: string;
-    /** The prompt ends where the user types the subject, so it fills the box instead of sending. */
-    needs_input: boolean;
-}
-
-/** GET /api/onboarding/start */
-export interface StartScreen {
-    cards: StartCard[];
-    /** choosable: a new chat can be given another folder. */
-    working_folder: { path: string; name: string; gaia_folder: boolean; choosable: boolean };
-    /** Why there are no cards: the agent couldn't list its skills. */
-    skills_error?: string | null;
-}
-
-// ── Which Lemonade Server GAIA uses (/api/lemonade/*) ─────────────────────
-
-export type LemonadeMode = 'gaia' | 'external';
-
-/** GET /api/lemonade/target: the server GAIA uses now and who chose it. */
-export interface LemonadeTarget {
-    mode: LemonadeMode;
-    /** null until the user (or `gaia init`) has chosen. */
-    saved_mode: LemonadeMode | null;
-    /** `env` means LEMONADE_BASE_URL chose it, so the UI cannot change it. */
-    source: 'env' | 'config' | 'gaia';
-    base_url: string | null;
-    saved_base_url: string | null;
-    api_key_stored: boolean;
-    gaia_installed: boolean;
-    /** Nobody has chosen yet: offer a Lemonade found running. */
-    offer: boolean;
-    what_gaia_does: string;
-}
-
-export type LemonadeProbeStatus = 'ok' | 'needs_key' | 'bad_key' | 'too_old' | 'not_lemonade' | 'unreachable';
-
-/** A Lemonade the user already runs, from GET /api/lemonade/detect. */
-export interface LemonadeFound {
-    url: string;
-    status: LemonadeProbeStatus;
-    version: string | null;
-    minimum: string | null;
-    message: string;
-}
-
-export interface LemonadeTargetBody {
-    mode: LemonadeMode;
-    base_url?: string;
-    api_key?: string;
-}
-
 // ── AI providers (GET /api/providers) ─────────────────────────────────────
 
 export type ProviderId = 'local' | 'fireworks' | 'amd';
@@ -1269,6 +1105,8 @@ export interface ProviderModel {
     fits?: boolean | null;
     available?: boolean;
     unavailable_reason?: string | null;
+    /** What stops this NPU model on this PC's NPU (Linux setup), in place of the reason. */
+    npu_problems?: SetupNpuProblem[];
     /** Median tokens/s of its recent turns on this PC. */
     tokens_per_second?: number | null;
     /** An in-flight (or just-finished) download of this model. */

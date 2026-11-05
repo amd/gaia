@@ -48,6 +48,8 @@ class _FakeManager:
 
         return self._mode_override or os.environ.get(self.spec.mode_env_var) or "user"
 
+    uses_ignored_lemonade = False
+
     @property
     def is_running(self):
         return self._running
@@ -176,3 +178,21 @@ def test_server_on_started_closure_returns_early_without_base_url():
     reg.ensure("email")
 
     assert forwarder.calls == []  # no forward attempted without a base_url
+
+
+def test_a_sidecar_on_an_ignored_lemonade_is_restarted_on_ensure():
+    """Setup chose GAIA's own while the agent ran on LEMONADE_BASE_URL (#6671)."""
+    reg = _registry(lambda aid, mgr: None)
+    reg.ensure("email")
+    manager = reg._managers["email"][0]
+    assert manager.start_calls == 1
+    manager.uses_ignored_lemonade = True
+    reg.ensure("email")
+    assert manager.start_calls == 2 and manager.is_running
+
+
+def test_a_sidecar_on_the_right_lemonade_is_attached_not_restarted():
+    reg = _registry(lambda aid, mgr: None)
+    reg.ensure("email")
+    reg.ensure("email")
+    assert reg._managers["email"][0].start_calls == 1

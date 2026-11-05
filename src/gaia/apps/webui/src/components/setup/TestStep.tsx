@@ -74,8 +74,8 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
     const againSize = catalog.find((e) => e.id === again)?.full_size_gb;
     // The assistant never installed (no download server, or no internet): its test can't run.
     const agentNotInstalled = stopped && run.components?.agent === 'failed';
-    // Only a model's own failure is helped by choosing another model.
-    const modelAtFault = required.some((r) => r.subject);
+    // Only a model's own failure is helped by choosing another model; a missing assistant isn't one.
+    const modelAtFault = required.some((r) => r.subject && r.kind !== 'missing');
     return (
         <>
             <section className="setup-card" aria-label={t('setup.test.title')}>

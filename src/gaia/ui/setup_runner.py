@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from gaia.llm.surface_hints import surface_wording
 from gaia.logger import get_logger
 from gaia.utils.terminal import windows_hidden_popen_kwargs
 
@@ -75,10 +76,6 @@ class SetupError(Exception):
 
 class SetupBusy(SetupError):
     """Setup, or that model's download, is already running."""
-
-
-class LemonadeOverridden(SetupError):
-    """``LEMONADE_BASE_URL`` picks the server, so setup can't switch it."""
 
 
 def _marker():
@@ -134,10 +131,11 @@ def _child_env(**extra: str) -> Dict[str, str]:
     load in its check failed. Without it the CLI finds the daemon itself.
     """
     from gaia.daemon.constants import BROKER_URL_ENV_VAR
+    from gaia.llm.lemonade_choice import child_lemonade_env
 
     env = {k: v for k, v in os.environ.items() if k != BROKER_URL_ENV_VAR}
     env.update(extra)
-    return env
+    return child_lemonade_env(env)
 
 
 def _gaia_argv(*args: str) -> List[str]:
@@ -328,11 +326,11 @@ def describe(line: str) -> Optional[Progress]:
     return None
 
 
-def _agent_turn_problem(model_id: Optional[str] = None) -> Optional[str]:
-    """Why one turn through the installed GAIA assistant failed, or None when it answered.
+def _agent_turn_problem(model_id: str) -> Optional[str]:
+    """Why one turn through the installed GAIA assistant on *model_id* failed,
+    in the agent's own words (or :data:`AGENT_MISSING`), or None when it answered.
 
-    The turn goes through the assistant's own program, the way chat reaches it,
-    on *model_id* (a cloud model) or else the assistant's local default.
+    The turn goes through the assistant's own program, the way chat reaches it.
     """
     from gaia.hub import installer as hub_installer
     from gaia.ui._chat_helpers import relay_one_prompt
@@ -349,11 +347,65 @@ def _agent_turn_problem(model_id: Optional[str] = None) -> Optional[str]:
             memory="off",
             max_steps=1,
         )
+        why = None if (answer or "").strip() else "it ended without an answer"
     except RuntimeError as e:
-        return f"GAIA didn't answer a test message: {e}"
-    if not (answer or "").strip():
-        return "GAIA didn't answer a test message: it ended without an answer."
-    return None
+        why = str(e)
+    return why
+
+
+def _agent_turn_failure(model_id: str) -> str:
+    """The Test step's sentence for a failed chat on *model_id*."""
+    from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
+    from gaia.ui.routers.providers import display_name
+    from gaia.ui.warmup import _device_for
+
+    name = display_name(model_id)
+    if model_id.startswith("claude-") or cloud_model_provider(model_id):
+        what = f"GAIA's test chat on {name}, which runs in the cloud, got no answer."
+    else:
+        device = _device_for(LemonadeClient(verbose=False), model_id)
+        where = f"this PC's {device.upper()}" if device else "this PC"
+        what = f"{name} loads on {where}, but GAIA's test chat on it got no answer."
+    return (
+        f"{what} Test again, or choose another chat model. The setup report "
+        "has the details."
+    )
+
+
+def agent_ui_chat_model(db, run: "SetupRun") -> str:
+    """The model the Agent UI's first chat after *run* opens on.
+
+    A local run: the chat model it set up, which the Ready screen switches
+    chat to. A cloud run: the model a new chat opens on, resolved as chat does.
+    """
+    if not run.skip_chat_model:
+        if not run.chat_model:
+            raise SetupError(
+                "Setup didn't say which chat model it set up, so GAIA can't test "
+                "a chat. Test again; the setup report has the details."
+            )
+        return run.chat_model
+    from gaia.ui._chat_helpers import get_agent_registry
+    from gaia.ui.routers.providers import restore_last_model
+    from gaia.ui.warmup import new_chat_model
+
+    # The UI applies last_model once the server is up; do it now, so the test
+    # and the first chat agree.
+    restore_last_model(db)
+    model = new_chat_model(db, get_agent_registry())[0]
+    if not model:
+        raise SetupError(
+            "GAIA couldn't tell which model chat will open on, so it can't test "
+            "a chat. Pick a chat model in Settings, then test again."
+        )
+    return model
+
+
+def tui_chat_model(run: "SetupRun") -> str:  # pylint: disable=unused-argument
+    """The model the TUI opens chat on: the saved ``last_model``, else the agent's default."""
+    from gaia.llm.lemonade_client import resolve_chat_model
+
+    return resolve_chat_model()
 
 
 #: The Test step's reason when a cloud setup has no cloud model saved to chat with.
@@ -403,7 +455,7 @@ def write_report(record: Dict[str, Any]) -> Path:
             f"The troubleshooting report took over {_REPORT_TIMEOUT_S} s and was stopped."
         ) from e
     except OSError as e:
-        raise SetupError(f"Couldn't start `gaia diagnostics`: {e}") from e
+        raise SetupError(f"Couldn't start the troubleshooting report: {e}") from e
     if proc.returncode != 0 or not out.is_file():
         raise SetupError(
             "Couldn't write the troubleshooting report: "
@@ -484,19 +536,30 @@ def server_problem() -> Optional[Dict[str, Any]]:
             # The hint is extra; losing it must not hide that the server isn't answering.
             logger.warning("Could not work out how to start Lemonade: %s", e)
             start = None
+    # Choosing GAIA's own here also overrides LEMONADE_BASE_URL (start()).
     return {
         "kind": kind,
         "message": message,
         "start": start,
-        # LEMONADE_BASE_URL outranks a saved choice, so only unsetting it switches.
-        "use_gaia": not from_env,
-        "switch_hint": (
-            "LEMONADE_BASE_URL points GAIA at this server. To use GAIA's own "
-            "instead, unset it and restart GAIA."
-            if from_env
-            else None
-        ),
+        "use_gaia": True,
+        # Switching ignores this value from then on; the screen says so first.
+        "env_url": configured if from_env else None,
     }
+
+
+def _override_env_server() -> None:
+    """GAIA's own, picked here, wins over the ``LEMONADE_BASE_URL`` it replaces.
+
+    Saved before ``gaia init`` runs: init, its check and the daemon inherit
+    that variable and would otherwise all go back to the server that failed.
+    """
+    from gaia.config import GaiaConfigError
+    from gaia.llm.lemonade_choice import ignore_env_url
+
+    try:
+        ignore_env_url()
+    except GaiaConfigError as e:
+        raise SetupError(f"Could not save the switch to GAIA's own: {e}") from e
 
 
 def _forget_previous_server() -> None:
@@ -765,6 +828,8 @@ class SetupRun:
     extra_models: List[str] = field(default_factory=list)
     #: A model's download failed in this run: its row already says why.
     model_failed: bool = False
+    #: The model the app's first chat after this run opens on; see :func:`agent_ui_chat_model`.
+    chat_model_for: Optional[Callable[["SetupRun"], str]] = None
     #: Each piece besides the models, by id: ``active``, ``done``, ``failed``.
     components: Dict[str, str] = field(default_factory=dict)
     #: The Test step's rows, in the order they ran, by (job, subject).
@@ -936,22 +1001,17 @@ class SetupRunner:
         extra_models: Optional[List[str]] = None,
         server_only: bool = False,
         upgrade_embedded: bool = False,
+        *,
+        chat_model_for: Callable[["SetupRun"], str],
     ) -> Dict[str, Any]:
         """Start setup; *gaia_lemonade* sets up and saves GAIA's own server.
 
         *extra_models* are pulled beside the plan's. *server_only* starts the
         model server and stops there, so the models can be chosen against it.
         *upgrade_embedded* replaces a mismatched embedded server without
-        re-running first-time model setup.
+        re-running first-time model setup. *chat_model_for* names the model
+        the app's chat will open on, the one setup's test chat runs on.
         """
-        if gaia_lemonade:
-            from gaia.llm.lemonade_choice import env_override_note
-
-            if env_override_note():
-                raise LemonadeOverridden(
-                    "LEMONADE_BASE_URL points GAIA at another server, so setup "
-                    "can't switch to GAIA's own. Unset it and restart GAIA."
-                )
         # A cancelled run's checks may still be finishing; they would land on the new run.
         # A stopped run's load check may still be ending; its results would land
         # on the new run. Cancel kills it, so this wait is short.
@@ -977,8 +1037,11 @@ class SetupRunner:
                 server_only=server_only,
                 upgrade_embedded=upgrade_embedded,
                 extra_models=list(extra_models or []),
+                chat_model_for=chat_model_for,
             )
             command = run_command(skip_chat_model, gaia_lemonade)
+            if gaia_lemonade:
+                _override_env_server()
             if self._run is not None and self._run.server_only:
                 self._check_log = list(self._run.stage_logs.get("check", []))
             try:
@@ -1631,30 +1694,50 @@ class SetupRunner:
             run.note(run.error if problem else run.text)
 
     def _test_agent(self, run: SetupRun) -> Optional[str]:
-        """One real turn through the agent: every model passing doesn't prove GAIA answers."""
-        with self._lock:
-            self._record_test(
-                run, {"job": "agent", "subject": None, "state": "running"}
-            )
-        from gaia.config import GaiaConfig
-
-        started = time.monotonic()
-        # A cloud setup chats on the cloud model connecting saved, as chat will.
+        """One real turn through the agent, on the model chat will open on:
+        every model loading doesn't prove GAIA answers on that one."""
         from gaia.llm.lemonade_client import cloud_model_provider
 
-        cloud = GaiaConfig.load().last_model if run.skip_chat_model else None
-        if cloud and not (cloud.startswith("claude-") or cloud_model_provider(cloud)):
-            cloud = None
-        if run.skip_chat_model and not cloud:
-            problem = NO_CLOUD_MODEL
+        started = time.monotonic()
+        from gaia.config import GaiaConfigError
+
+        if run.chat_model_for is None:
+            raise SetupError("This setup run doesn't know which model chat opens on.")
+        try:
+            model = run.chat_model_for(run)
+        except (SetupError, GaiaConfigError) as e:
+            logger.warning("Setup can't tell which model chat opens on: %s", e)
+            model, unknown = "", str(e)
         else:
-            problem = _agent_turn_problem(cloud)
+            unknown = None
+        cloud = model.startswith("claude-") or bool(cloud_model_provider(model))
+        problem = unknown
+        if problem is None and run.skip_chat_model and not cloud:
+            # A cloud setup chats on the cloud model connecting saved.
+            problem = NO_CLOUD_MODEL
+        # The row names the model the chat test runs on.
+        subject = None if problem else model
+        with self._lock:
+            self._record_test(
+                run, {"job": "agent", "subject": subject, "state": "running"}
+            )
+            if problem is None:
+                run.note(f"Testing a chat on {model}")
+        if problem is None:
+            why = _agent_turn_problem(model)
+            if why == AGENT_MISSING:
+                problem = why
+            elif why is not None:
+                logger.warning("Setup's test chat on %s failed: %s", model, why)
+                problem = _agent_turn_failure(model)
+                with self._lock:
+                    run.note(f"Test chat on {model} failed: {why}")
         with self._lock:
             self._record_test(
                 run,
                 {
                     "job": "agent",
-                    "subject": None,
+                    "subject": subject,
                     "state": "failed" if problem else "passed",
                     "error": problem,
                     "kind": (
@@ -1684,6 +1767,8 @@ class SetupRunner:
                         return
                 self._on_event(event)
                 return
+        # init words its advice for a terminal; this log is read in the app.
+        line = surface_wording(line, "agent_ui")
         progress = describe(line)
         with self._lock:
             run.note(line, printed=True)

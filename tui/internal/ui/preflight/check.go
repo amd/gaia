@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -240,7 +239,7 @@ func simplyNotRunning(err error) bool {
 // lemonadeElsewhere reports whether LEMONADE_BASE_URL points at another
 // machine. That setup is the user's own, so the gate starts nothing for it.
 func lemonadeElsewhere() bool {
-	base := strings.TrimSpace(os.Getenv(lemonadeBaseURLEnv))
+	base := gaiaLemonade.EnvBaseURL()
 	return base != "" && !isLoopback(base)
 }
 

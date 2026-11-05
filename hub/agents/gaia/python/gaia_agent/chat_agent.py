@@ -59,7 +59,11 @@ from gaia.agents.base.context_eviction import (
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import before_change, note_untracked
 from gaia.agents.base.memory import MemoryMixin
-from gaia.agents.base.model_features import features_for_model, withheld_tools
+from gaia.agents.base.model_features import (
+    FEATURE_TOOLS,
+    features_for_model,
+    withheld_tools,
+)
 from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 
 # dynamic_tools_env_override is re-exported so callers importing it from
@@ -291,6 +295,8 @@ class ChatAgentConfig:
     claude_model: str = "claude-sonnet-5"
     base_url: Optional[str] = None
     model_id: Optional[str] = None  # None = use default model (Gemma)
+    # True: build without starting Lemonade or preloading; the first request loads.
+    skip_lemonade: bool = False
 
     # Execution settings
     max_steps: int = field(default_factory=default_max_steps)
@@ -693,6 +699,7 @@ class ChatAgent(
             # Unset lets the base resolve the port only after starting the server.
             base_url=config.base_url,
             model_id=effective_model_id,  # Pass the effective model to parent
+            skip_lemonade=config.skip_lemonade,
             max_steps=config.max_steps,
             debug_prompts=config.debug_prompts,
             show_prompts=config.show_prompts,
@@ -1543,7 +1550,14 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
 """
         # Only advertise web and media tools the profile registers.
-        unsupported = "**UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md ."
+        # List only what this session lacks; a contradicting line wins on Gemma.
+        lacking = ["cloud storage", "file conversion", "live collaboration"]
+        if not self._offers_scheduling():
+            lacking.insert(0, "scheduling")
+        # The email tools only read mail, so sending stays unsupported either way.
+        reads_email = bool(FEATURE_TOOLS["email"] & set(self._tools_registry))
+        lacking.insert(0, "sending email" if reads_email else "email")
+        unsupported = f"**UNSUPPORTED:** {', '.join(lacking).capitalize()} — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md ."
         if "web_browse" in spec.tool_groups:
             unsupported += " Web browsing IS supported via `search_web` / `fetch_page` / `download_file`."
         unsupported += " Image analysis IS supported via `analyze_image`."
@@ -1599,7 +1613,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         prompt = base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
         if not spec.early_return:
             prompt += self._session_folders_line()
-        if getattr(self.config, "surface", None) == "agent_ui":
+        if self._offers_scheduling():
             prompt += _AGENT_UI_SCHEDULE_LINE
         scratch_dir = getattr(self, "scratch_dir", None)
         if scratch_dir is not None:
@@ -3057,6 +3071,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             for _name in _chat_exclude:
                 self._instance_tools.pop(_name, None)
         self._offer_features(self.model_features)
+
+    def _offers_scheduling(self) -> bool:
+        """The Agent UI has a Scheduled tasks panel; other surfaces don't."""
+        return getattr(self.config, "surface", None) == "agent_ui"
 
     def _offers_image_generation(self) -> bool:
         """Image generation is on in the config and the model is offered it."""

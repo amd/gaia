@@ -437,6 +437,7 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
         capacity_from_system_info,
         check_fit,
         npu_capacity,
+        npu_not_ready_reason,
     )
 
     size = None
@@ -457,6 +458,13 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
                     f"default_model {model_id} runs on an AMD NPU, and Lemonade "
                     "reports none on this PC. Choose a GPU model with `gaia config "
                     "set default_model <id>`, then re-run `gaia init`."
+                )
+            not_ready = npu_not_ready_reason(capacity)
+            if not_ready:
+                raise ModelFitError(
+                    f"default_model {model_id} runs on the NPU. The NPU model "
+                    f"{not_ready}. Then re-run `gaia init`, or choose "
+                    "a GPU model with `gaia config set default_model <id>`."
                 )
         verdict = check_fit(
             float(size), capacity, kv_cache_for(mr, capacity) if mr else 0.0
@@ -813,10 +821,8 @@ def check_setup_status(
     no_agent_build = False
     warnings: list = []
     agent_id = profile_config.get("agent")
-    if agent_id in HUB_INSTALL_AGENTS and not InitCommand._is_hub_agent_available(
-        agent_id
-    ):
-        # Same sentinel run() installs; models on the server do not imply the agent.
+    if agent_id in HUB_INSTALL_AGENTS and not _agent_ready_for_check(agent_id):
+        # Models on the server do not imply the agent.
         command = (
             "gaia init"
             if profile == DEFAULT_INIT_PROFILE
@@ -876,6 +882,34 @@ def check_setup_status(
         warnings=warnings,
         no_agent_build=no_agent_build,
     )
+
+
+def _terminal_installer_agent() -> Optional[Path]:
+    """The flagship install.sh / install.ps1 put in GAIA's bin dir, else None.
+
+    Those installers ship it there, on PATH, with no hub sentinel; the TUI runs
+    it from PATH.
+    """
+    from gaia.home import gaia_home
+
+    name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
+    path = gaia_home() / "bin" / name
+    if not path.is_file():
+        return None
+    if sys.platform != "win32" and not os.access(path, os.X_OK):
+        return None
+    return path
+
+
+def _agent_ready_for_check(agent_id: str) -> bool:
+    """Whether the readiness check counts *agent_id* as installed.
+
+    The hub sentinel `gaia init` writes, or for the flagship the terminal
+    installer's copy. Never touches the network.
+    """
+    if InitCommand._is_hub_agent_available(agent_id):
+        return True
+    return agent_id == FLAGSHIP_AGENT_ID and _terminal_installer_agent() is not None
 
 
 def _agent_build_missing(agent_id: str) -> Tuple[Optional[str], Optional[str]]:
@@ -1748,6 +1782,8 @@ class InitCommand:
                 )
                 if not self._install_backend():
                     return self._fail_before_agent(has_hub_agent_check)
+                if self.profile == "npu":
+                    self._offer_memlock_fix_for_npu_profile()
 
             # Any PC with an NPU gets its backend, so the NPU models show up in
             # the model pickers without a separate profile.
@@ -2302,14 +2338,12 @@ class InitCommand:
         backend will not install still finishes setup — with a warning that
         says the NPU models will not be offered and how to retry.
         """
+        from gaia.llm import npu_linux
         from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
         try:
-            devices = (
-                LemonadeClient(verbose=self.verbose)
-                .get_system_info()
-                .get("devices", {})
-            )
+            info = LemonadeClient(verbose=self.verbose).get_system_info()
+            devices = info.get("devices", {})
         except LemonadeClientError as e:
             self._print_warning(
                 f"Could not ask Lemonade whether this PC has an NPU ({e}), so the "
@@ -2325,6 +2359,69 @@ class InitCommand:
                 "The NPU models will not be offered until Lemonade's NPU backend "
                 "installs. Re-run `gaia init` to retry."
             )
+            return
+        problems = npu_linux.check(info)
+        if self._offer_memlock_fix(problems):
+            problems = npu_linux.check(info)
+        if problems:
+            self._print_warning(
+                "The NPU models will not be offered until this PC is set up to run "
+                "them:"
+            )
+            for problem in problems:
+                self._print_warning(f"  - {problem.title} {problem.fix}")
+            self._print_warning(
+                "See https://amd-gaia.ai/docs/guides/npu#linux, then re-run "
+                "`gaia init`."
+            )
+
+    def _offer_memlock_fix_for_npu_profile(self) -> None:
+        """``--profile npu``: offer the locked-memory fix before the NPU model is
+        judged, so the fit check that follows doesn't stop on it unasked."""
+        from gaia.llm import npu_linux
+        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+        # Nobody to ask: the fit check that follows says what is missing.
+        if self.yes or not stdin_is_tty() or not npu_linux._on_linux():
+            return
+        try:
+            info = LemonadeClient(verbose=self.verbose).get_system_info()
+        except LemonadeClientError as e:
+            self._print_warning(
+                f"Could not ask Lemonade about this PC's NPU ({e}), so the "
+                "locked-memory check is skipped. If the NPU model will not load, "
+                "see https://amd-gaia.ai/docs/guides/npu#linux and re-run "
+                "`gaia init --profile npu`."
+            )
+            return
+        self._offer_memlock_fix(npu_linux.check(info))
+
+    def _offer_memlock_fix(self, problems) -> bool:
+        """Raise the locked-memory limit FastFlowLM needs, when someone is here
+        to enter the administrator password. True once it is in place."""
+        from gaia.llm import npu_linux
+
+        wanted = any(
+            p.code == npu_linux.MEMLOCK and dict(p.params).get("fix") == "apply"
+            for p in problems
+        )
+        if not wanted or self.yes or not stdin_is_tty():
+            return False
+        if not self._prompt_yes_no(
+            "The NPU needs an unlimited locked-memory limit. Raise it now? It asks "
+            "for the administrator password, and applies after a restart"
+        ):
+            return False
+        try:
+            npu_linux.apply_memlock_fix()
+        except npu_linux.MemlockFixError as e:
+            self._print_warning(str(e))
+            return False
+        self._print_success(
+            "Locked-memory limit raised. Restart the PC, then the NPU models are "
+            "offered."
+        )
+        return True
 
     def _component(self, component: str, state: str) -> None:
         """Report one piece setup fetches: ``active``, ``done`` or ``failed``."""
@@ -2498,12 +2595,12 @@ class InitCommand:
             )
             if skipped_gemma(self.profile, model_ids):
                 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+                from gaia.llm.surface_hints import CLI_VISION_DOWNLOAD_HINT
 
                 self._print(
                     f"   Not downloading {DEFAULT_MODEL_NAME}: your "
-                    f"default_model is {self._chat_choice.model_id}. To ask "
-                    "about images, download it (~6 GB) with "
-                    "`gaia download --agent vlm`."
+                    f"default_model is {self._chat_choice.model_id}. "
+                    f"{CLI_VISION_DOWNLOAD_HINT}"
                 )
 
         # A Claude-backed session never calls the local chat LLM — only

@@ -38,6 +38,12 @@ correctness; never let nit volume bury a blocking finding.
 When unsure whether something is 🟡 or 🟢, ask "would this break or mislead a user?" If no,
 it is a nit.
 
+**A defect a user can see is never a 🟢**, even when the PR didn't cause it: wrong text, the
+wrong language or locale, a needless wait. If this PR shouldn't fix it, keep it 🟡, start it
+with `Follow-up:` and a one-line issue title, and don't let it alone decide Request changes.
+The author fixes it or files that issue before merge. Three of these, posted as 🟢 on #6598,
+#6599 and #6602, were fixed only because someone reread the reviews after merge (#6609, #6610).
+
 ## Licences
 
 GAIA ships no AGPL, GPL or LGPL code (or SSPL, EUPL or non-commercial / share-alike

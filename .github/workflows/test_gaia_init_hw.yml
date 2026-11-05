@@ -78,11 +78,9 @@ jobs:
       matrix:
         include:
           # The default profile: what a bare `gaia init` gives a new user.
+          # The NPU profile, with an agent turn, is test_npu_agent_chat.yml's.
           - profile: gaia
             model: Gemma-4-E4B-it-GGUF
-          # Built-in FLM models on the NPU: the #1655 fresh-pull path.
-          - profile: npu
-            model: gemma4-it-e2b-FLM
     steps:
       - uses: actions/checkout@v7
 

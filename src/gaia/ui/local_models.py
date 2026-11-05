@@ -128,13 +128,28 @@ def annotate_local_models(
     *health* None means the server did not answer: nothing is reported loaded.
     *capacity* None means memory is unknown: no fit verdict, nothing hidden for it.
     """
+    from gaia.llm import npu_linux
+
     loaded = loaded_entries(health or {})
+    # Read once: every FLM model shares this PC's one NPU. One that is loaded
+    # proves the NPU runs, and flm validate needn't touch it while it serves.
+    serving = any(
+        m.get("recipe") == "flm" and find_loaded(loaded, m["id"]) is not None
+        for m in models
+    )
+    npu_problems = (
+        [] if serving else [p.as_dict() for p in npu_linux.check(system_info)]
+    )
     out = []
     for m in models:
         entry = find_loaded(loaded, m["id"])
         size = _size_gb(m)
         fit_reason = _fit(m, size, capacity)
-        recipe_reason = recipe_unavailable_reason(m.get("recipe"), system_info)
+        recipe_reason = (
+            None
+            if entry is not None or (serving and m.get("recipe") == "flm")
+            else recipe_unavailable_reason(m.get("recipe"), system_info)
+        )
         # A model that is running proves it runs, whatever the estimate says.
         unavailable = (
             None if entry is not None else (recipe_reason or fit_reason or None)
@@ -155,6 +170,10 @@ def annotate_local_models(
                 "fits": None if fit_reason is None else fit_reason == "",
                 "available": unavailable is None,
                 "unavailable_reason": unavailable,
+                # The same reasons, for the UI to say in its own language.
+                "npu_problems": (
+                    npu_problems if entry is None and m.get("recipe") == "flm" else []
+                ),
                 "tokens_per_second": speeds.get(m["id"]),
             }
         )

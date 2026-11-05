@@ -4,7 +4,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, NOW, mockApi, useLocale, useTheme } from './fixtures';
+import { ANSWER_SESSION, NOW, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme } from './fixtures';
 import { SETUP_SCENES, withSetup } from './setup-scenes';
 
 let unhandled: string[] = [];
@@ -64,6 +64,24 @@ test('phone width', async ({ page }, info) => {
     await expect(page.getByText('Action items from Aug 28')).toBeVisible();
     await expect(page).toHaveScreenshot('phone-answer.png');
 });
+
+for (const locale of ['en', 'ar']) {
+    for (const status of TOOL_STATUS) {
+        test(`running tool status, ${status.name}, ${locale}`, async ({ page }, info) => {
+            test.skip(info.project.name !== 'light', 'baselined in the light theme only');
+            await page.emulateMedia({ reducedMotion: 'reduce' });
+            await holdOnToolStatus(page, status);
+            await useLocale(page, locale);
+            await open(page, 'light', `#${ANSWER_SESSION}`);
+            const box = page.getByRole('textbox').first();
+            await box.fill('List every action item in the minutes');
+            await box.press('Enter');
+            const reply = page.locator('.msg-assistant').last();
+            await expect.poll(() => shownText(reply.locator('.flow-tool.active .flow-tool-label'))).toContain(status[locale as 'en' | 'ar']);
+            await expect(reply).toHaveScreenshot(`tool-status-${status.name}-${locale}.png`);
+        });
+    }
+}
 
 for (const locale of ['en', 'ar']) {
     for (const s of SETUP_SCENES) {

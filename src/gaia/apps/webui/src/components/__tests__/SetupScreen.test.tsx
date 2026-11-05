@@ -305,7 +305,7 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
         mockedApi.getSetupPlan.mockResolvedValue(COLD_SERVER);
         mockedApi.startSetup.mockResolvedValueOnce({
             state: 'failed', server_only: true, steps: [], error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true, switch_hint: null },
+            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true },
         }).mockResolvedValueOnce(SERVER_RUNNING);
         renderSetup();
         expect(await screen.findByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
@@ -356,11 +356,19 @@ describe('SetupScreen: the recommendation', () => {
     });
 
     it('names the verified model that would not fit, and why', async () => {
-        const big = { ...QWEN, fits: false as const, need_gb: 27.1, capacity_gb: 16, planned: false, selected: false, recommended: false };
+        const big = { ...QWEN, fits: false as const, fit_code: 'memory' as const, need_gb: 27.1, capacity_gb: 16, planned: false, selected: false, recommended: false };
         const small = { ...GEMMA_CHAT, chat_choice: true };
         mockedApi.getSetupPlan.mockResolvedValue(plan([small, big, EMBED], { chat_model: { id: GEMMA.id, user_set: false, size_gb: 5.97, downloaded: false } }));
         await open();
         expect(await planScreen()).toHaveTextContent(`${QWEN.name} is a bigger model that answers better, but it needs about 27.1 GB of memory and this PC has 16.0 GB.`);
+    });
+
+    it("calls no model this PC can't run a bigger model", async () => {
+        const npu = { ...QWEN, fits: false as const, fit_code: 'npu' as const, need_gb: 27.1, capacity_gb: 16, planned: false, selected: false, recommended: false };
+        const small = { ...GEMMA_CHAT, chat_choice: true };
+        mockedApi.getSetupPlan.mockResolvedValue(plan([small, npu, EMBED], { chat_model: { id: GEMMA.id, user_set: false, size_gb: 5.97, downloaded: false } }));
+        await open();
+        expect(await planScreen()).not.toHaveTextContent('is a bigger model');
     });
 
     it('opens everything that will download, components and models', async () => {
@@ -474,6 +482,15 @@ describe('SetupScreen: first run, local', () => {
         const onReady = await startLocal();
         fireEvent.click(await startChatting());
         await waitFor(() => expect(onReady).toHaveBeenCalledExactlyOnceWith(undefined));
+    });
+
+    // Setup tested a chat on this model; an older pick must not be what chat opens on (#6632).
+    it('opens chat on the model setup set up and tested, on the first run too', async () => {
+        mockedApi.selectModel.mockResolvedValue({ provider: 'local', model: QWEN.id, label: QWEN.name, remote: false, is_default: false });
+        const onReady = await startLocal();
+        fireEvent.click(await startChatting());
+        await waitFor(() => expect(onReady).toHaveBeenCalled());
+        expect(mockedApi.selectModel).toHaveBeenCalledExactlyOnceWith(QWEN.id);
     });
 
     it('names the model that answers, lists vision and documents, and offers a first task', async () => {
@@ -643,6 +660,25 @@ describe('SetupScreen: warnings and confirmations', () => {
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
         fireEvent.click(within(sheet).getByRole('button', { name: 'Download anyway' }));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalled());
+    });
+
+    // `gaia init --profile npu` saved an NPU model this PC can't run (#6632): no confirm can make it work.
+    it('refuses a saved chat model this PC can\'t run, naming it and why, without asking', async () => {
+        const npu = {
+            ...FLM, downloaded: false, size_gb: 3.2, planned: true, selected: true, roles: ['chat' as const],
+            fits: false as const, need_gb: 3.5, capacity_gb: 16, fit_code: 'npu' as const,
+            fit_reason: 'needs an AMD Ryzen AI NPU and its driver',
+        };
+        const saved = plan([npu, GEMMA, EMBED]);
+        mockedApi.getSetupPlan.mockResolvedValue({ ...saved, chat_model: { ...saved.chat_model, id: npu.id, user_set: true } });
+        await open();
+        clickStart();
+        expect(await screen.findByText(
+            "Gemma 4 E2B (NPU) can't run on this PC. Runs only on a Ryzen AI NPU, and this PC has none that can run it. Choose another chat model.",
+        )).toBeInTheDocument();
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+        expect(mockedApi.startSetup).not.toHaveBeenCalled();
+        expect(mockedApi.chooseSetupChatModel).not.toHaveBeenCalled();
     });
 
     it('stays put on Pick a smaller one, with nothing downloading', async () => {
@@ -898,7 +934,7 @@ describe('SetupScreen: downloading', () => {
         ], {
             state: 'failed',
             error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true, switch_hint: null },
+            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true },
         });
         mockedApi.startSetup.mockResolvedValue(stopped);
         await startLocal();
@@ -1442,7 +1478,6 @@ describe("SetupScreen: the user's server isn't answering", () => {
             message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
             start: 'Start Lemonade Server from the Lemonade tray icon.',
             use_gaia: true,
-            switch_hint: null,
         },
         command: 'gaia init --profile gaia',
         log_tail: [`❌ ${RAW}`],
@@ -1453,6 +1488,9 @@ describe("SetupScreen: the user's server isn't answering", () => {
     it('says so plainly, says how to start it, and keeps the exception in Details', async () => {
         mockedApi.startSetup.mockResolvedValue(UNREACHABLE);
         await startLocal();
+        // A saved server's address isn't set outside the app: nothing to ignore.
+        expect(await screen.findByRole('button', { name: /Use GAIA.s own instead/ })).toBeInTheDocument();
+        expect(screen.queryByText(/set outside the app/)).not.toBeInTheDocument();
         expect(await screen.findByRole('alert')).toHaveTextContent("Your Lemonade Server at 127.0.0.1:9 isn't answering.");
         expect(screen.getByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
         expect(screen.queryByText(/HTTPConnectionPool/)).not.toBeInTheDocument();
@@ -1473,7 +1511,7 @@ describe("SetupScreen: the user's server isn't answering", () => {
         mockedApi.startSetup.mockResolvedValueOnce({
             ...UNREACHABLE,
             error: message,
-            problem: { kind: 'server_too_old', message, start: null, use_gaia: true, switch_hint: null },
+            problem: { kind: 'server_too_old', message, start: null, use_gaia: true },
         }).mockResolvedValueOnce(READY);
         await startLocal();
         expect(await screen.findByText(/older than GAIA needs\. Update it, or use GAIA.s own instead\./)).toBeInTheDocument();
@@ -1487,13 +1525,20 @@ describe("SetupScreen: the user's server isn't answering", () => {
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, true, expect.any(Object)));
     });
 
-    it("doesn't offer a switch LEMONADE_BASE_URL would override, and says what does", async () => {
-        const hint = "LEMONADE_BASE_URL points GAIA at this server. To use GAIA's own instead, unset it and restart GAIA.";
-        mockedApi.startSetup.mockResolvedValue({ ...UNREACHABLE, problem: { ...UNREACHABLE.problem!, use_gaia: false, switch_hint: hint } });
+    it("offers GAIA's own when an environment setting picked the server, and says that address will be ignored (#6671)", async () => {
+        mockedApi.startSetup.mockResolvedValue({
+            ...UNREACHABLE,
+            problem: { ...UNREACHABLE.problem!, env_url: 'http://127.0.0.1:9' },
+        });
         await startLocal();
-        expect(await screen.findByText(hint)).toBeInTheDocument();
-        expect(screen.queryByRole('button', { name: /Use GAIA.s own instead/ })).not.toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+        const useGaia = await screen.findByRole('button', { name: /Use GAIA.s own instead/ });
+        expect(screen.getByText(
+            "This server's address (http://127.0.0.1:9) is set outside the app. If you use GAIA's own, GAIA ignores that address until it changes.",
+        )).toBeInTheDocument();
+        expect(screen.queryByText(/LEMONADE_BASE_URL|unset|restart GAIA/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/setting outside the app/i)).not.toBeInTheDocument();
+        fireEvent.click(useGaia);
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, true, expect.any(Object)));
     });
 });
 

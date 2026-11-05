@@ -274,6 +274,60 @@ class TestAgentUiRouter:
         assert "could not switch" in r.json()["detail"]
         assert GaiaConfig.load().lemonade_mode is None
 
+    ENV_URL = "http://127.0.0.1:59999/api/v1"
+
+    def _installed(self, monkeypatch, installed):
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_embedded.EmbeddedLemonade.is_installed",
+            lambda self: installed,
+        )
+
+    def test_gaias_own_over_lemonade_base_url_from_settings(self, client, monkeypatch):
+        ensured = mock.Mock(return_value={"running": True})
+        monkeypatch.setattr("gaia.daemon.client.ensure_lemonade", ensured)
+        self._installed(monkeypatch, True)
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.ENV_URL)
+        assert client.get("/api/lemonade/target", headers=self.H).json()["source"] == (
+            "env"
+        )
+        r = client.post("/api/lemonade/target", json={"mode": "gaia"}, headers=self.H)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["source"] == "gaia" and body["env_url_ignored"] == self.ENV_URL
+        assert body["env_override"] is None
+        saved = GaiaConfig.load()
+        assert saved.lemonade_mode == "gaia"
+        assert saved.lemonade_env_url_ignored == self.ENV_URL
+        # Leaving a server that wasn't GAIA's is checked end to end.
+        ensured.assert_called_once()
+
+    def test_gaias_own_over_lemonade_base_url_before_it_is_installed(
+        self, client, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "gaia.daemon.client.ensure_lemonade",
+            lambda: pytest.fail("nothing to start yet; setup installs it"),
+        )
+        self._installed(monkeypatch, False)
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.ENV_URL)
+        r = client.post("/api/lemonade/target", json={"mode": "gaia"}, headers=self.H)
+        assert r.status_code == 200, r.text
+        assert r.json()["source"] == "gaia" and r.json()["gaia_installed"] is False
+
+    def test_a_failed_switch_over_lemonade_base_url_changes_nothing(
+        self, client, monkeypatch
+    ):
+        from gaia.daemon.errors import DaemonError
+
+        self._installed(monkeypatch, True)
+        self.applied.side_effect = DaemonError("boom")
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.ENV_URL)
+        r = client.post("/api/lemonade/target", json={"mode": "gaia"}, headers=self.H)
+        assert r.status_code == 502
+        saved = GaiaConfig.load()
+        assert saved.lemonade_mode is None and saved.lemonade_env_url_ignored is None
+        assert choice.configured_source() == "env"
+
 
 # ---------------------------------------------------------------------------
 # gaia init

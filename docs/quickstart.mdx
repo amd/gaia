@@ -115,8 +115,8 @@ Install GAIA globally with a single command:
     - ✅ Install `uv` (if not already installed)
     - ✅ Download Python 3.12 (if needed)
     - ✅ Create `%USERPROFILE%\.gaia\venv` virtual environment
-    - ✅ Install GAIA CLI (accessible globally via PATH)
-    - ✅ Add GAIA to your PATH
+    - ✅ Install GAIA CLI, copied into `%USERPROFILE%\.gaia\bin`
+    - ✅ Add `%USERPROFILE%\.gaia\bin` to your PATH. Only GAIA's own commands live there, so your own `python` and `pip` stay first. Re-running the installer fixes an older install that put `%USERPROFILE%\.gaia\venv\Scripts` on PATH
 
     <Tip>
       After installation, close and reopen your terminal, then run:
@@ -137,8 +137,8 @@ Install GAIA globally with a single command:
     - ✅ Install `uv` (if not already installed)
     - ✅ Download Python 3.12 (if needed)
     - ✅ Create `~/.gaia/venv` virtual environment
-    - ✅ Install GAIA CLI (accessible globally via PATH)
-    - ✅ Add GAIA to your PATH
+    - ✅ Install GAIA CLI, linked into `~/.gaia/bin`
+    - ✅ Add `~/.gaia/bin` to your PATH. Only GAIA's own commands live there, so your system `python3` and `pip` stay first. Re-running the installer fixes an older install that put `~/.gaia/venv/bin` on PATH
 
     <Tip>
       After installation, reload your shell config, then run:

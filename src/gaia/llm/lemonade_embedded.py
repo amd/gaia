@@ -2055,6 +2055,11 @@ class EmbeddedLemonade:
             str(port),
         ]
         log.info("Starting embedded Lemonade: %s", " ".join(argv))
+        if sys.platform.startswith("linux"):
+            from gaia.llm.npu_linux import raise_memlock_soft_limit
+
+            # FastFlowLM pins the model in locked memory, and inherits lemond's limit.
+            raise_memlock_soft_limit()
 
         # Own group/session so the server outlives the CLI process that spawned
         # it. A hidden console, not none: lemond's llama/whisper/kokoro children

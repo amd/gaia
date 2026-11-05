@@ -471,6 +471,13 @@ class OutputHandler(ABC):
         the same thing in words for clients that only show text. Optional.
         """
 
+    def restart_answer(self, message: str) -> None:
+        """The reply streamed so far was cut off and the step starts over.
+
+        A front-end that drew the partial reply drops it and shows *message*
+        in its place, so the new reply never silently replaces it. Optional.
+        """
+
     def pause_progress(self):
         """Pause progress indicator, remembering state for later resume. Optional — default no-op."""
         ...
@@ -505,9 +512,12 @@ class OutputHandler(ABC):
         """
         ...
 
-    def mark_turn_failed(self) -> None:
+    def mark_turn_failed(self, failure: Optional[str] = None) -> None:
         """The next :meth:`print_final_answer` ends a turn a model failure cut
-        short, so a console can report the turn as failed. Optional — no-op."""
+        short, so a console can report the turn as failed. Optional — no-op.
+
+        *failure* names a cause a front-end can offer a fix for
+        (``"model_server_down"``), or is None."""
 
     def print_turn_metrics(  # pylint: disable=unused-argument
         self, record: Dict[str, Any]

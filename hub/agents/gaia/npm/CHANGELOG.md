@@ -10,6 +10,32 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **A long document extraction says which page it is on and when the model
+  server restarts.** It ran for minutes with no live status, and a server
+  that stopped under it showed nothing until the extraction resumed. It now
+  sends phase `reading` before each page ("Reading page 4 of 12…"), and a
+  server that stops under any tool's own model calls gets the same
+  `model_restart` status as one that stops mid-reply.
+- **The first message on the NPU model no longer waits out the warm-up.**
+  After a restart, the first "hello" on `gemma4-it-e4b-FLM` waited ~30 s while
+  the sidecar read its ~19K-token prompt, then spent another ~35 s reading it
+  again, because FastFlowLM reuses a prompt only when the next request
+  continues it. On an NPU model the warm-up now only loads the model, so that
+  first answer starts ~30 s sooner.
+- **A reply cut off by a model-server restart is taken back, not swapped.**
+  When GAIA's model server stopped part-way through a reply, the stream sat
+  on the half-written text for minutes, then a different reply silently
+  replaced it. A `status` with phase `answer_restart` and
+  `retracts_answer: true` now tells the client to drop the cut-off text, phase
+  `model_restart` is the live line while the daemon restarts the server, and
+  a server that does not come back ends the turn with
+  `failure: "model_server_down"`.
+- **A stopped local model server fails the turn at once and is named.** A cloud
+  model's turn used to retry for about three minutes and then blame the cloud
+  provider, though the provider was never reached. A refused connection to the
+  local server now ends the turn within seconds, the answer names that server,
+  and `final` carries `failure: "model_server_down"` so a front-end can offer to
+  start it (SPEC §5.1).
 - **The query stream documents the `reconnecting` status phase.** It is sent
   once while GAIA's own Lemonade Server restarts mid-turn or mid-`/model`
   switch, so integrators can show a live reconnecting line instead of treating
@@ -110,6 +136,12 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **Reasoning no longer shows as the answer when a model sends only `</think>`.**
+  A model whose chat template opens the reasoning block streamed that reasoning
+  as answer text, and the step-limit answer, memory and skill learning read it
+  as part of the reply. The `reasoning` event that follows the tag now carries
+  `retracts_answer: true`; a client drops the `token` text since the last
+  `tool_call` from the answer it has shown.
 - **Text read aloud plays in the Agent UI chat.** `text_to_speech` saved speech
   to `~/.gaia/tts`, outside the folder the chat plays audio from, so you got a
   file path instead of a player. Speech with no `output_path` is now saved with
@@ -127,10 +159,21 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   model now stops that warm-up, so it neither delays the turn nor loads its
   model over the one the turn uses; a turn on the warmed model still waits for
   it and reuses its cache (#6582).
+- **The start-up warm-up loads the model you picked, not the setup default.**
+  After a restart, a chat on the NPU model waited ~50 s: the sidecar warmed the
+  GPU model setup chose, which evicted the NPU model, and the turn then evicted
+  it back at a smaller window. The warm-up now follows `last_model` (else
+  `default_model`), loads only inside the step a turn on another model can stop,
+  and, like the Agent UI, skips on a PC under 24 GB of memory.
 - **The SPEC names `GAIA_ALLOWED_PATHS` and the 150-step default.** Reading
   only the SPEC, an integrator could not see that a bad allowlist entry stops
   the sidecar at startup, or that an omitted `/query` `max_steps` runs 150
   steps (`FLAGSHIP_MAX_STEPS`; the body or `GAIA_AGENT_MAX_STEPS` still wins).
+- **"Forget everything" works on Gemma 4 E4B.** The model ran no tool and told
+  the user GAIA had no delete-all, because the only forget rule it read
+  deleted one memory at a time. It now calls `forget_everything` for "forget
+  everything about me" or "delete all my data", keeps per-item `forget` for one
+  topic, and never claims GAIA can't do what one of its tools does (#6701).
 - **"Forget everything" forgets everything.** It deleted each memory a plain
   `recall` listed, but that listing holds back sensitive ones, so a saved PIN
   survived while the agent said memory was empty. The next session then rebuilt

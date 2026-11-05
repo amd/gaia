@@ -574,7 +574,9 @@ def test_windows_never_hands_a_compound_line_to_cmd_exe_as_one_string(
             return "", ""
 
     def fake_popen(args, **kwargs):
-        calls.append((args, kwargs.get("shell", False)))
+        # cmd.exe is launched explicitly, reading the step from the environment.
+        text = (kwargs.get("env") or {}).get(shell_tools._CMD_TEXT_ENV)
+        calls.append((text[1:-1], True) if text else (args, kwargs.get("shell")))
         return _Exited(args)
 
     monkeypatch.setattr(shell_tools, "os", _WindowsOS())

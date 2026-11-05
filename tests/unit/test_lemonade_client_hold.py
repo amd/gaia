@@ -401,8 +401,11 @@ class TestDaemonStop:
 
         with pytest.raises(SystemExit) as exc:
             self._stop(monkeypatch, _fail)
-        assert exc.value.code == 1
-        assert "killed nothing" in capsys.readouterr().out
+        # Its own exit code, so an installer doesn't report the daemon as stuck.
+        assert exc.value.code == 3
+        out = capsys.readouterr().out
+        assert "Lemonade Server did not stop" in out
+        assert "killed nothing" in out
 
 
 class TestDaemonRestart:

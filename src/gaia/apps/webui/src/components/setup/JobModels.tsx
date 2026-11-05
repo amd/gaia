@@ -8,7 +8,7 @@ import type { SetupCatalogEntry, SetupPlan } from '../../types';
 import { formatSize } from './format';
 import { statusText, tooBigText } from './ModelChecklist';
 import {
-    canCreateImages, catalogOf, isEmbedding, isNpu, isOptional, isVision, pickChat, pickVision, resolveVision,
+    canCreateImages, cantRunHere, catalogOf, isEmbedding, isNpu, isOptional, isVision, pickChat, pickVision, resolveVision,
     toggle, VISION_NONE, type Selection,
 } from './selection';
 
@@ -34,7 +34,7 @@ function RadioRow({ name, entry: e, checked, recommended, disabled, onPick, chil
     return (
         <li className={`mc-row${checked ? ' is-ticked' : ''}`}>
             <label className="mc-row-main">
-                <input type="radio" className="mc-radio" name={name} checked={checked} disabled={disabled} onChange={onPick} />
+                <input type="radio" className="mc-radio" name={name} checked={checked} disabled={disabled || cantRunHere(e)} onChange={onPick} />
                 <span className="mc-text">
                     <span className="mc-name-line">
                         <span className="mc-name" title={e.id}><bdi>{e.name}</bdi></span>
