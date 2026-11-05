@@ -116,6 +116,12 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Fixed
 
+- **Reasoning no longer shows as the answer when a model sends only `</think>`.**
+  A model whose chat template opens the reasoning block streamed that reasoning
+  as answer text, and the step-limit answer, memory and skill learning read it
+  as part of the reply. The `reasoning` event that follows the tag now carries
+  `retracts_answer: true`; a client drops the `token` text since the last
+  `tool_call` from the answer it has shown.
 - **Text read aloud plays in the Agent UI chat.** `text_to_speech` saved speech
   to `~/.gaia/tts`, outside the folder the chat plays audio from, so you got a
   file path instead of a player. Speech with no `output_path` is now saved with
