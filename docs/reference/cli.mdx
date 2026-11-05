@@ -501,7 +501,10 @@ The exit code still says whether setup succeeded.
 device axis explicitly with `gaia init --profile npu`, which swaps the GGUF models for
 their FLM equivalents — the default never switches your backend for you. It installs
 the same flagship agent as a bare `gaia init`, and fails the same way
-when the download server can't be reached.
+when the download server can't be reached. On Linux, when the NPU's 8 MB locked-memory
+limit would stop the model from loading, it offers to raise the limit (it asks for an
+administrator password, and the change applies after a restart). It never asks under
+`--yes` or without a terminal. See [NPU on Linux](/guides/npu#the-locked-memory-limit).
 </Note>
 
 <Note>
@@ -1889,8 +1892,10 @@ What it does not cover:
   own copy of GAIA, so a cloud model named in a request to it isn't checked. Update
   the agent with `gaia agent install <id>`.
 - A key set in Lemonade's own environment (for example
-  `LEMONADE_FIREWORKS_API_KEY`), or a key a Lemonade you run yourself holds: GAIA's own
-  requests are still refused, but a program talking to Lemonade directly could use it.
+  `LEMONADE_FIREWORKS_API_KEY`), or a key held by a Lemonade you chose (with
+  `LEMONADE_BASE_URL` or `gaia lemonade connect`): GAIA leaves that server's keys alone
+  and its own requests are still refused, but a program talking to Lemonade directly
+  could use it.
   If GAIA can't reach its Lemonade when you turn Local only on, it says so; restart
   Lemonade to drop any key it still holds.
 

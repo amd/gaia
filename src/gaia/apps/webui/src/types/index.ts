@@ -446,6 +446,8 @@ export interface Message {
     failed?: boolean;
     /** Client-side: the raw error, to recognize the server's saved copy of this failure. */
     failureText?: string;
+    /** Client-side: the cause a failed turn named (`done.failure`), for its fix. */
+    failure?: string;
     /** Set when this turn pushed older turns out of the model's view. */
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */
@@ -688,6 +690,20 @@ export interface MCPServerStatus {
 
 // ── Scheduled Tasks ──────────────────────────────────────────────────────
 
+/** When a schedule runs, as data the UI words in its own language. */
+export interface ScheduleDescription {
+    /** every: count + unit, optional days; window: that plus start/end hour; days: named days, optional time; daily: a time. */
+    kind: 'every' | 'window' | 'days' | 'daily';
+    count: number | null;
+    unit: 'second' | 'minute' | 'hour' | 'day' | 'week' | null;
+    /** 0 = Monday … 6 = Sunday. */
+    days: number[] | null;
+    /** "HH:MM", 24-hour. */
+    time: string | null;
+    start_hour: number | null;
+    end_hour: number | null;
+}
+
 /** A recurring scheduled task. */
 export interface Schedule {
     id: string;
@@ -704,8 +720,9 @@ export interface Schedule {
     session_id: string | null;
     /** Parsed natural-language schedule as JSON; null for plain-interval schedules. */
     schedule_config: string | null;
-    /** When it runs, e.g. "Weekdays at 8:00 AM" — the same words the form preview shows. */
+    /** When it runs in English, e.g. "Weekdays at 8:00 AM"; the UI words `description_parts` instead. */
     description: string;
+    description_parts: ScheduleDescription;
     /** The last run's error; null when it succeeded. */
     last_error: string | null;
     /** A run is in flight right now, timed or Run now. */
@@ -729,6 +746,8 @@ export interface ParsedSchedule {
     end_hour: number | null;
     days_of_week: number[] | null;
     description: string;
+    /** Null when the input was rejected; `description` then says what to fix. */
+    description_parts?: ScheduleDescription | null;
     next_run_at: string | null;
     /** IANA zone the times are in. */
     timezone?: string | null;
@@ -879,6 +898,10 @@ export interface StreamEvent {
     message_id?: number;
     /** On `done`: the user's Stop ended this run (absent when it completed normally). */
     cancelled?: boolean;
+    /** On `done`: a model failure ended this run. */
+    failed?: boolean;
+    /** On a failed `done`: a cause the UI offers a fix for. */
+    failure?: 'model_server_down' | string;
     /** On `followup_taken`: the message the running turn took. */
     text?: string;
     /** On `followup_returned`: messages the turn ended without taking. */
@@ -888,6 +911,8 @@ export interface StreamEvent {
     message?: string;
     /** Model phase on a status event: reading, loading_model, reasoning, tool_call, … */
     phase?: string;
+    /** On `thinking`: the answer text streamed since the last tool was this reasoning; drop it. */
+    retracts_answer?: boolean;
     step?: number;
     total?: number;
     tool?: string;
@@ -1103,6 +1128,20 @@ export interface SetupRunStatus {
     overall?: SetupOverall;
 }
 
+/** One thing between this PC and running a model on its NPU (Linux setup). */
+export interface SetupNpuProblem {
+    code: 'driver' | 'device' | 'firmware' | 'access' | 'memlock' | 'runtime';
+    title: string;
+    fix: string;
+    params: Record<string, string>;
+}
+
+export interface SetupNpuStatus {
+    present: boolean;
+    ready: boolean;
+    problems: SetupNpuProblem[];
+}
+
 /** GET /api/setup/plan: what setup will use and download, before it starts. */
 export interface SetupPlan {
     /** `url` is null while GAIA's own server isn't running: it has no address yet. */
@@ -1124,6 +1163,8 @@ export interface SetupPlan {
     catalog?: SetupCatalogEntry[];
     /** Backends Lemonade reports for this PC. */
     backends?: Array<{ recipe: string; backend: string; state: string | null; version?: string | null; default: boolean }>;
+    /** An NPU Lemonade reports, and what stops a model running on it yet. */
+    npu?: SetupNpuStatus;
     /** What setup found across the stack; null where nothing could find out. */
     system?: SetupSystem;
     /** Everything else setup fetches. */
@@ -1269,6 +1310,8 @@ export interface ProviderModel {
     fits?: boolean | null;
     available?: boolean;
     unavailable_reason?: string | null;
+    /** What stops this NPU model on this PC's NPU (Linux setup), in place of the reason. */
+    npu_problems?: SetupNpuProblem[];
     /** Median tokens/s of its recent turns on this PC. */
     tokens_per_second?: number | null;
     /** An in-flight (or just-finished) download of this model. */

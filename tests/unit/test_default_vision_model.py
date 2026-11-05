@@ -1,0 +1,66 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+"""Which model reads scans and images when nobody named one (#6674).
+
+A tested vision model already loaded, else the default chat model when it has
+vision, else Gemma.
+"""
+
+import types
+
+import pytest
+
+from gaia.llm import lemonade_client as lc
+
+NON_VISION = "Qwen3-0.6B-GGUF"
+
+
+@pytest.fixture
+def config(monkeypatch):
+    def use(default, last_model=None, vision_model=None):
+        monkeypatch.setattr(lc, "resolve_default_chat_model", lambda: default)
+        monkeypatch.setattr(
+            "gaia.config.GaiaConfig.load",
+            classmethod(
+                lambda cls: types.SimpleNamespace(
+                    vision_model=vision_model, last_model=last_model
+                )
+            ),
+        )
+
+    return use
+
+
+def test_a_default_with_vision_reads_images(config):
+    config(lc.LARGE_DEFAULT_MODEL_NAME)
+    assert lc.resolve_default_vision_model() == lc.LARGE_DEFAULT_MODEL_NAME
+
+
+def test_a_default_without_vision_hands_images_to_gemma(config):
+    config(NON_VISION)
+    assert lc.resolve_default_vision_model() == lc.DEFAULT_MODEL_NAME
+
+
+def test_a_last_chat_without_vision_keeps_the_default(config):
+    config(lc.LARGE_DEFAULT_MODEL_NAME, last_model=NON_VISION)
+    assert lc.resolve_default_vision_model() == lc.LARGE_DEFAULT_MODEL_NAME
+
+
+def test_a_last_chat_with_vision_reads_images(config):
+    config(NON_VISION, last_model=lc.LARGE_DEFAULT_MODEL_NAME)
+    assert lc.resolve_default_vision_model() == lc.LARGE_DEFAULT_MODEL_NAME
+
+
+def test_a_resident_tested_vision_model_is_used(monkeypatch):
+    monkeypatch.setattr(
+        lc.LemonadeClient,
+        "health_check",
+        lambda self: {
+            "all_models_loaded": [{"model_name": lc.LARGE_DEFAULT_MODEL_NAME}]
+        },
+    )
+    assert (
+        lc.resident_vision_model(lc.DEFAULT_MODEL_NAME, "http://127.0.0.1:59992/api/v1")
+        == lc.LARGE_DEFAULT_MODEL_NAME
+    )

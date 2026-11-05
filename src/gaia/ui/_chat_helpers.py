@@ -39,7 +39,7 @@ from gaia.agents.install_hints import (
 from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
 from gaia.llm import lemonade_client as _lemonade_client_mod
 from gaia.llm.inference_location import InferenceLocation, resolve_inference_location
-from gaia.llm.providers.lemonade import classify_lemonade_exception
+from gaia.llm.providers.lemonade import MODEL_SERVER_DOWN, classify_lemonade_exception
 from gaia.security import (
     BLOCKED_DIRECTORIES,
     AllowedPathsEnvError,
@@ -3342,6 +3342,15 @@ def _turn_failure(
     return False, None
 
 
+def _turn_failure_kind(answer_event: Optional[dict], result: Any) -> Optional[str]:
+    """The named cause of a failed turn (``"model_server_down"``), or None."""
+    if isinstance(answer_event, dict) and isinstance(answer_event.get("failure"), str):
+        return answer_event["failure"]
+    if isinstance(result, dict) and result.get("model_server_down"):
+        return MODEL_SERVER_DOWN
+    return None
+
+
 def _done_event(
     msg_id: int,
     content: str,
@@ -3349,19 +3358,23 @@ def _done_event(
     stats: Optional[dict] = None,
     turn_summary: Optional[dict] = None,
     failed: bool = False,
+    failure: Optional[str] = None,
 ) -> dict:
     """Build the closing ``done`` SSE payload for a persisted turn.
 
     ``cancelled`` is set only when the user's Stop actually ended the run, so
     the UI labels the turn from what happened rather than from the click — a
     Stop that lands after the agent already answered stays an ordinary turn.
-    ``failed`` marks a turn a model failure ended; its content explains why.
+    ``failed`` marks a turn a model failure ended; its content explains why,
+    and ``failure`` names a cause the UI offers a fix for.
     """
     event: dict = {"type": "done", "message_id": msg_id, "content": content}
     if turn_cancelled:
         event["cancelled"] = True
     elif failed:
         event["failed"] = True
+        if failure:
+            event["failure"] = failure
     if stats:
         event["stats"] = stats
     if turn_summary:
@@ -4661,6 +4674,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 elif event_type == "commentary":
                     # Those chunks narrated a tool call; the answer starts after it.
                     full_response = ""
+                elif event_type == "thinking" and event.get("retracts_answer"):
+                    # Those chunks were reasoning a lone </think> closed.
+                    full_response = ""
                 elif event_type == "agent_error" and event.get("fatal"):
                     # A relayed sidecar's terminal error: the turn ends here.
                     fatal_error = event.get("content") or ""
@@ -5127,6 +5143,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 stats=inference_stats,
                 turn_summary=turn_summary,
                 failed=turn_failed,
+                failure=(
+                    _turn_failure_kind(answer_event, result_holder.get("result"))
+                    if turn_failed
+                    else None
+                ),
             )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"

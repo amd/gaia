@@ -21,18 +21,20 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/amd/gaia/tui/internal/gaiainit"
 )
 
 // Timeout bounds one call. A check reads Hugging Face and, once per llama.cpp
 // release, GitHub; removing a model asks Lemonade to delete its files.
 const Timeout = 90 * time.Second
 
-// Binary resolves the `gaia` CLI on PATH; tests substitute a stub.
+// Binary resolves the `gaia` CLI; tests substitute a stub.
 var Binary = func() (string, error) {
-	bin, err := exec.LookPath("gaia")
+	bin, err := gaiainit.ResolveCLI()
 	if err != nil {
 		return "", fmt.Errorf(
-			"the `gaia` CLI is not on PATH, so models can't be added from a link. " +
+			"the `gaia` CLI is not on PATH or in ~/.gaia/bin, so models can't be added from a link. " +
 				"Install GAIA with `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
 				"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`)")
 	}

@@ -712,6 +712,8 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
     message rather than raising, so a run can finish with no ``answer`` event.
     Surfacing that message beats inventing a generic error.
     """
+    from gaia.llm.providers.lemonade import MODEL_SERVER_DOWN
+
     if isinstance(result, dict):
         if result.get("status") == "cancelled":
             # Stopped mid-generation: the loop returns no text by design, and
@@ -723,6 +725,8 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
                 final: Dict[str, Any] = {"type": "final", "answer": value}
                 if result.get("model_failed"):
                     final["failed"] = True
+                    if result.get("model_server_down"):
+                        final["failure"] = MODEL_SERVER_DOWN
                 return final
         error = result.get("error")
         if isinstance(error, str) and error.strip():
@@ -1384,13 +1388,13 @@ _QUERY_SSE_RESPONSES = {
         "description": (
             "Server-Sent Events stream (text/event-stream). Each `data:` line is "
             "one canonical event discriminated on `type`: status {message, "
-            "phase?, queue?} | token {delta} | reasoning {delta} | "
+            "phase?, queue?} | token {delta} | reasoning {delta, retracts_answer?} | "
             "tool_call {tool, args} | tool_result {tool, data, render?} | "
             "needs_confirmation {run_id, action, summary, confirm_id?, "
             "always_scope?, risk?, tool_label?, args?, args_truncated?, "
             "prompt_context?} | needs_input {run_id, request_id, question, "
             "options, allow_free_text, sensitive, respond_url, "
-            "timeout_seconds?} | final {answer, usage?, failed?, "
+            "timeout_seconds?} | final {answer, usage?, failed?, failure?, "
             "performance?, context?, context_error?, model_messages?} | "
             "error {detail, status}. A needs_confirmation's `args` are exactly "
             "the arguments the model sent for the gated call, each value capped "

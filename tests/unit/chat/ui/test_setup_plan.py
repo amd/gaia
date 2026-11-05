@@ -1080,6 +1080,7 @@ def test_setup_refuses_to_start_on_a_saved_npu_model_this_pc_cant_run(
         detail = r.json()["detail"]
         assert "can't run on this PC" in detail
         assert "Ryzen AI NPU" in detail and "Choose another chat model" in detail
+        assert "gaia " not in detail
     assert started == []
 
 

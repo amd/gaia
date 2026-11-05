@@ -350,6 +350,15 @@ def _backends(system_info: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return backends
 
 
+def _npu_status(capacity) -> Dict[str, Any]:
+    """Whether this PC has an NPU, and what stops a model running on it yet."""
+    from gaia.llm.model_fit import npu_problems
+
+    present = bool(capacity is not None and capacity.has_npu)
+    problems = [p.as_dict() for p in npu_problems(capacity)]
+    return {"present": present, "ready": present and not problems, "problems": problems}
+
+
 def _catalog(
     client,
     profile: str,
@@ -609,6 +618,7 @@ def build_plan(
         "catalog": catalog,
         "components": _components(lemonade, skip_models=False, system_info=system_info),
         "backends": _backends(system_info),
+        "npu": _npu_status(capacity),
         "system": _system_summary(system_info, client),
         "vision_model": _saved_vision_model(),
     }
@@ -650,8 +660,8 @@ def _refuse_unrunnable(plan: Dict[str, Any]) -> None:
         return
     raise CantRunHere(
         f"Setup's chat model, {_display_name(chat_id)}, can't run on this PC: "
-        f"{entry['fit_reason']}. Choose another chat model (Customize in setup, "
-        "or `gaia config set default_model <model>`), then start setup again."
+        f"{entry['fit_reason']}. Choose another chat model under Customize, "
+        "then start setup again."
     )
 
 

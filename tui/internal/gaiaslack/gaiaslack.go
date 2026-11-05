@@ -20,6 +20,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/amd/gaia/tui/internal/gaiainit"
 )
 
 // StatusTimeout bounds the read-only probe. It spawns a Python interpreter and
@@ -34,14 +36,14 @@ const StatusTimeout = 30 * time.Second
 // cannot run it.
 var ErrUnanswered = errors.New("Slack readiness could not be determined")
 
-// Binary resolves the `gaia` CLI on PATH. A package var, not a bare
-// exec.LookPath, so tests can substitute a stub — same injection point as
+// Binary resolves the `gaia` CLI. A package var, not a bare
+// gaiainit.ResolveCLI, so tests can substitute a stub — same injection point as
 // gaiainit.Binary.
 var Binary = func() (string, error) {
-	bin, err := exec.LookPath("gaia")
+	bin, err := gaiainit.ResolveCLI()
 	if err != nil {
 		return "", fmt.Errorf(
-			"the `gaia` CLI is not on PATH, so Slack setup cannot run. " +
+			"the `gaia` CLI is not on PATH or in ~/.gaia/bin, so Slack setup cannot run. " +
 				"Install GAIA with `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
 				"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), or " +
 				"`pip install amd-gaia` into the Python environment on your PATH")

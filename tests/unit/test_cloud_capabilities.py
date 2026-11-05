@@ -627,7 +627,8 @@ def test_cloud_request_carries_the_callers_effort_unchanged(monkeypatch, effort)
     client.cloud_model_provider = lambda model: "amd"
     monkeypatch.setattr(lc.requests, "post", post)
     monkeypatch.setattr(client, "_recover_stopped_gaia_lemonade", lambda *a, **k: False)
-    with pytest.raises(lc.requests.exceptions.ConnectionError):
+    client._server_accepts_connections = lambda: False
+    with pytest.raises(lc.LemonadeServerDownError):
         client.chat_completions(
             model="amd.Qwen3.8-Flash-Next",
             messages=[{"role": "user", "content": "hi"}],

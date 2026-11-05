@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
+    UnknownUserModelError,
     _is_local_url,
     _model_ids_match,
     cloud_model_provider,
@@ -123,9 +124,8 @@ async def _pull_body(model_name: str) -> Dict[str, Any]:
     """
     try:
         return pull_request_body(model_name)
-    except ValueError:
-        if not model_name.lower().startswith("user."):
-            raise
+    except UnknownUserModelError:
+        pass  # Lemonade may list it by name; ask it before refusing.
     import httpx  # pylint: disable=import-outside-toplevel
 
     base_url = resolve_lemonade_base_url()
@@ -139,9 +139,8 @@ async def _pull_body(model_name: str) -> Dict[str, Any]:
             registered = registered_model_ids(resp.json())
     except (httpx.HTTPError, ValueError) as exc:
         raise RuntimeError(
-            f"Cannot download '{model_name}': the model list from Lemonade at "
-            f"{base_url} could not be read ({exc}). Check that Lemonade is "
-            "running, then try again."
+            f"Can't download '{model_name}': the local model server didn't "
+            f"say whether it has this model ({exc}). Try again in a moment."
         ) from exc
     return pull_request_body(model_name, registered=registered)
 

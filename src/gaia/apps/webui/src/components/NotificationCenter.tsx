@@ -20,9 +20,11 @@ import {
   selectUnreadCount,
   selectVisibleNotifications,
   PATH_ACCESS_TOOL,
+  permissionPromptText,
 } from '../stores/notificationStore';
 import type { GaiaNotification, NotificationType } from '../types/agent';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
+import { MarkedText, markLtr } from './MarkedText';
 import './NotificationCenter.css';
 
 interface NotificationCenterProps {
@@ -183,6 +185,8 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
         ) : (
           notifications.map((n) => {
             const meta = NOTIFICATION_META[n.type];
+            // A prompt reads as its card does, not as its stored English text.
+            const prompt = n.type === 'permission_request' && n.tool ? permissionPromptText(n, t, markLtr) : null;
             return (
               <div
                 className={`notification-item ${!n.read ? 'unread' : ''} ${meta.colorClass}`}
@@ -209,10 +213,19 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
                       {formatNotifTime(n.timestamp, t)}
                     </span>
                   </div>
-                  {n.title && (
-                    <span className="notification-title">{n.title}</span>
+                  {prompt ? (
+                    <>
+                      <span className="notification-title"><MarkedText text={prompt.heading} /></span>
+                      <span className="notification-message"><MarkedText text={prompt.question} /></span>
+                    </>
+                  ) : (
+                    <>
+                      {n.title && (
+                        <span className="notification-title">{n.title}</span>
+                      )}
+                      <span className="notification-message">{n.message}</span>
+                    </>
                   )}
-                  <span className="notification-message">{n.message}</span>
 
                   {/* Tool info for permission requests */}
                   {n.type === 'permission_request' && n.tool && n.tool !== PATH_ACCESS_TOOL && (

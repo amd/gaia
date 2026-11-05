@@ -31,14 +31,32 @@ class _Stream:
         return False
 
 
-# Ids the fake Lemonade lists from ``GET /models``.
-_REGISTERED = []
+class _Catalog:
+    def __init__(self, ids, status_code=200):
+        self.ids = ids
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code != 200:
+            raise httpx.HTTPStatusError(
+                f"HTTP {self.status_code}",
+                request=httpx.Request("GET", "http://lemonade/models"),
+                response=httpx.Response(self.status_code),
+            )
+
+    def json(self):
+        return {"data": [{"id": i} for i in self.ids]}
 
 
 @pytest.fixture
-def sent(monkeypatch):
+def lemonade_lists():
+    """What Lemonade's ``/models?show_all=true`` answers; edit per test."""
+    return _Catalog([])
+
+
+@pytest.fixture
+def sent(monkeypatch, lemonade_lists):
     calls = []
-    _REGISTERED.clear()
 
     class _Client:
         def __init__(self, *a, **k):
@@ -55,10 +73,8 @@ def sent(monkeypatch):
             return _Stream()
 
         async def get(self, url, params=None, headers=None):
-            data = [{"id": i} for i in _REGISTERED]
-            return httpx.Response(
-                200, json={"data": data}, request=httpx.Request("GET", url)
-            )
+            assert url.endswith("/models") and params == {"show_all": "true"}
+            return lemonade_lists
 
     monkeypatch.setattr(httpx, "AsyncClient", _Client)
     return calls
@@ -142,16 +158,18 @@ def test_unknown_user_model_is_not_posted(sent, monkeypatch):
     assert "Add a model from Hugging Face" in progress["message"]
 
 
-def test_user_model_registered_in_lemonade_directly_pulls_by_name(sent):
+def test_user_model_registered_in_lemonade_directly_pulls_by_name(sent, lemonade_lists):
     """Lemonade already holds its checkpoint, so Download and Resume send the name."""
-    _REGISTERED.append("user.My-Own-GGUF")
+    lemonade_lists.ids.append("user.My-Own-GGUF")
     asyncio.run(system._stream_lemonade_pull("user.My-Own-GGUF", True))
     assert sent == [{"model_name": "user.My-Own-GGUF", "stream": True, "force": True}]
 
 
-def test_user_model_lemonade_lists_without_its_prefix_pulls_by_name(sent):
+def test_user_model_lemonade_lists_without_its_prefix_pulls_by_name(
+    sent, lemonade_lists
+):
     """``/models`` lists it bare; the pull is name only, under ``user.``."""
-    _REGISTERED.append("My-Own-GGUF")
+    lemonade_lists.ids.append("My-Own-GGUF")
     asyncio.run(system._stream_lemonade_pull("user.my-own-gguf", False))
     assert sent == [{"model_name": "user.My-Own-GGUF", "stream": True}]
 
@@ -212,6 +230,41 @@ def test_auto_load_after_the_pull_uses_the_name_lemonade_listed(monkeypatch):
     asyncio.run(_run())
     assert loaded == [("pull", "user.My-Own-GGUF"), ("load", "user.My-Own-GGUF")]
     assert system._get_download_progress("user.my-own-gguf")["state"] == "complete"
+
+
+def test_user_model_lemonade_lists_but_gaia_does_not_pulls_by_name(
+    sent, lemonade_lists
+):
+    """Registered in Lemonade directly: name only, as before #6566 (#6675)."""
+    lemonade_lists.ids = ["Other-Model-GGUF", "My-Own-Finetune-GGUF"]
+    asyncio.run(system._stream_lemonade_pull("user.My-Own-Finetune-GGUF", False))
+    assert sent == [{"model_name": "user.My-Own-Finetune-GGUF", "stream": True}]
+
+
+def test_unknown_user_model_error_is_plain_language(sent, monkeypatch):
+    async def _keep(_model_name):
+        return None
+
+    monkeypatch.setattr(system, "_evict_progress_after_ttl", _keep)
+    asyncio.run(system._stream_lemonade_pull("user.not-a-real-model", False))
+    message = system._get_download_progress("user.not-a-real-model")["message"]
+    for developer_text in ("MODELS", "lemonade_client", "gaia init", "gaia model"):
+        assert developer_text not in message
+
+
+def test_unreadable_catalog_refuses_instead_of_guessing(
+    sent, lemonade_lists, monkeypatch
+):
+    async def _keep(_model_name):
+        return None
+
+    monkeypatch.setattr(system, "_evict_progress_after_ttl", _keep)
+    lemonade_lists.status_code = 500
+    asyncio.run(system._stream_lemonade_pull("user.not-a-real-model", False))
+    assert sent == []
+    progress = system._get_download_progress("user.not-a-real-model")
+    assert progress["state"] == "error"
+    assert "didn't say whether it has this model" in progress["message"]
 
 
 def test_listed_name_without_the_namespace_still_registers_under_it(sent):

@@ -437,6 +437,7 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
         capacity_from_system_info,
         check_fit,
         npu_capacity,
+        npu_not_ready_reason,
     )
 
     size = None
@@ -457,6 +458,13 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
                     f"default_model {model_id} runs on an AMD NPU, and Lemonade "
                     "reports none on this PC. Choose a GPU model with `gaia config "
                     "set default_model <id>`, then re-run `gaia init`."
+                )
+            not_ready = npu_not_ready_reason(capacity)
+            if not_ready:
+                raise ModelFitError(
+                    f"default_model {model_id} runs on the NPU, which can't run "
+                    f"models yet. {not_ready} Then re-run `gaia init`, or choose "
+                    "a GPU model with `gaia config set default_model <id>`."
                 )
         verdict = check_fit(
             float(size), capacity, kv_cache_for(mr, capacity) if mr else 0.0
@@ -1774,6 +1782,8 @@ class InitCommand:
                 )
                 if not self._install_backend():
                     return self._fail_before_agent(has_hub_agent_check)
+                if self.profile == "npu":
+                    self._offer_memlock_fix_for_npu_profile()
 
             # Any PC with an NPU gets its backend, so the NPU models show up in
             # the model pickers without a separate profile.
@@ -2328,14 +2338,12 @@ class InitCommand:
         backend will not install still finishes setup — with a warning that
         says the NPU models will not be offered and how to retry.
         """
+        from gaia.llm import npu_linux
         from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
         try:
-            devices = (
-                LemonadeClient(verbose=self.verbose)
-                .get_system_info()
-                .get("devices", {})
-            )
+            info = LemonadeClient(verbose=self.verbose).get_system_info()
+            devices = info.get("devices", {})
         except LemonadeClientError as e:
             self._print_warning(
                 f"Could not ask Lemonade whether this PC has an NPU ({e}), so the "
@@ -2351,6 +2359,69 @@ class InitCommand:
                 "The NPU models will not be offered until Lemonade's NPU backend "
                 "installs. Re-run `gaia init` to retry."
             )
+            return
+        problems = npu_linux.check(info)
+        if self._offer_memlock_fix(problems):
+            problems = npu_linux.check(info)
+        if problems:
+            self._print_warning(
+                "The NPU models will not be offered until this PC is set up to run "
+                "them:"
+            )
+            for problem in problems:
+                self._print_warning(f"  - {problem.title} {problem.fix}")
+            self._print_warning(
+                "See https://amd-gaia.ai/docs/guides/npu#linux, then re-run "
+                "`gaia init`."
+            )
+
+    def _offer_memlock_fix_for_npu_profile(self) -> None:
+        """``--profile npu``: offer the locked-memory fix before the NPU model is
+        judged, so the fit check that follows doesn't stop on it unasked."""
+        from gaia.llm import npu_linux
+        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+        # Nobody to ask: the fit check that follows says what is missing.
+        if self.yes or not stdin_is_tty() or not npu_linux._on_linux():
+            return
+        try:
+            info = LemonadeClient(verbose=self.verbose).get_system_info()
+        except LemonadeClientError as e:
+            self._print_warning(
+                f"Could not ask Lemonade about this PC's NPU ({e}), so the "
+                "locked-memory check is skipped. If the NPU model will not load, "
+                "see https://amd-gaia.ai/docs/guides/npu#linux and re-run "
+                "`gaia init --profile npu`."
+            )
+            return
+        self._offer_memlock_fix(npu_linux.check(info))
+
+    def _offer_memlock_fix(self, problems) -> bool:
+        """Raise the locked-memory limit FastFlowLM needs, when someone is here
+        to enter the administrator password. True once it is in place."""
+        from gaia.llm import npu_linux
+
+        wanted = any(
+            p.code == npu_linux.MEMLOCK and dict(p.params).get("fix") == "apply"
+            for p in problems
+        )
+        if not wanted or self.yes or not stdin_is_tty():
+            return False
+        if not self._prompt_yes_no(
+            "The NPU needs an unlimited locked-memory limit. Raise it now? It asks "
+            "for the administrator password, and applies after a restart"
+        ):
+            return False
+        try:
+            npu_linux.apply_memlock_fix()
+        except npu_linux.MemlockFixError as e:
+            self._print_warning(str(e))
+            return False
+        self._print_success(
+            "Locked-memory limit raised. Restart the PC, then the NPU models are "
+            "offered."
+        )
+        return True
 
     def _component(self, component: str, state: str) -> None:
         """Report one piece setup fetches: ``active``, ``done`` or ``failed``."""

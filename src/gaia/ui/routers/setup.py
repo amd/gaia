@@ -20,7 +20,7 @@ from gaia.logger import get_logger
 from .. import setup_plan as plan_api
 from ..database import ChatDatabase
 from ..dependencies import get_db
-from ..security import require_ui_header
+from ..security import require_local_pc, require_ui_header
 from ..setup_plan import (
     CantRunHere,
     ServerNotRunning,
@@ -116,6 +116,42 @@ def setup_plan() -> Dict[str, Any]:
         return build_plan()
     except SetupPlanError as e:
         raise _plan_error(e, _PLAN_FAILED) from e
+
+
+@router.post("/api/setup/npu/recheck", dependencies=[Depends(require_ui_header)])
+def setup_npu_recheck() -> Dict[str, Any]:
+    """Read the NPU's setup afresh, after the user fixed something; returns the plan."""
+    from gaia.llm import npu_linux
+
+    npu_linux.forget()
+    return setup_plan()
+
+
+# Starts a root step on this PC, so only someone at this PC may ask for it.
+@router.post(
+    "/api/setup/npu/memlock-fix",
+    dependencies=[Depends(require_ui_header), Depends(require_local_pc)],
+)
+def setup_npu_memlock_fix() -> Dict[str, Any]:
+    """Raise the locked-memory limit FastFlowLM needs, behind the desktop's own
+    administrator prompt; returns the plan. It applies after a restart."""
+    from gaia.llm import npu_linux
+
+    try:
+        npu_linux.apply_memlock_fix()
+    except npu_linux.MemlockFixError as e:
+        logger.warning("NPU memlock fix not applied (%s): %s", e.code, e)
+        status = {
+            "cancelled": 409,
+            "timeout": 409,
+            "not_authorized": 409,
+            "not_linux": 422,
+            "no_pkexec": 422,
+        }.get(e.code, 500)
+        raise HTTPException(
+            status_code=status, detail={"code": e.code, "message": str(e)}
+        ) from e
+    return setup_plan()
 
 
 def _confirm(warning: Dict[str, Any]) -> HTTPException:

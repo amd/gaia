@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -125,7 +126,7 @@ def test_unknown_user_model_message_gives_user_facing_advice():
     message = str(exc.value)
     assert "Settings > Model > Add a model from Hugging Face" in message
     assert "/provider, choose Local, then ctrl+a" in message
-    assert "`gaia model add <link>`" in message
+    assert "gaia model" not in message
     assert "gaia init" not in message
     assert "MODELS" not in message
     assert "lemonade_client" not in message
@@ -179,8 +180,6 @@ class _FakeAsyncClient:
         return False
 
     async def get(self, url, params=None, headers=None):
-        import httpx
-
         _FakeAsyncClient.calls.append((url, params))
         listing = _FakeAsyncClient.listing
         if listing is None:
@@ -190,8 +189,6 @@ class _FakeAsyncClient:
 
 @pytest.fixture
 def lemonade_models(monkeypatch):
-    import httpx
-
     _FakeAsyncClient.calls = []
     _FakeAsyncClient.registered = []
     _FakeAsyncClient.listing = None
@@ -264,5 +261,18 @@ def test_download_endpoint_400s_when_the_model_list_cannot_be_read(
     with pytest.raises(HTTPException) as err:
         asyncio.run(system.download_model_endpoint(req))
     assert err.value.status_code == 400
-    assert "model list from Lemonade" in err.value.detail
+    assert "didn't say whether it has this model" in err.value.detail
     assert started == []
+
+
+def test_download_endpoint_accepts_a_user_model_lemonade_lists(
+    monkeypatch, lemonade_models
+):
+    lemonade_models.registered = ["My-Own-Finetune-GGUF"]
+
+    async def _pull(*a):
+        return None
+
+    monkeypatch.setattr(system, "_stream_lemonade_pull", _pull)
+    req = system.DownloadModelRequest(model_name="user.My-Own-Finetune-GGUF")
+    assert asyncio.run(system.download_model_endpoint(req))["status"] == "downloading"

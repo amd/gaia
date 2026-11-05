@@ -309,6 +309,22 @@ describe('mid-turn notes', () => {
         expect(screen.getAllByText("I'll check the forecast first.")).toHaveLength(1);
     });
 
+    it('moves reasoning a lone </think> closed out of the answer', async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onChunk({ type: 'chunk', content: 'Check the forecast first.' } as StreamEvent);
+            emit({ type: 'thinking', content: 'Check the forecast first.', retracts_answer: true });
+        });
+        act(() => {
+            capturedCallbacks!.onChunk({ type: 'chunk', content: 'Clear Saturday.' } as StreamEvent);
+        });
+
+        await waitFor(() => expect(useChatStore.getState().streamingContent).toBe('Clear Saturday.'));
+        const thought = useChatStore.getState().agentSteps[0];
+        expect(thought.type).toBe('thinking');
+        expect(thought.detail).toBe('Check the forecast first.');
+    });
+
     it('ends the reasoning once the answer starts streaming', async () => {
         await driveSend();
         act(() => {

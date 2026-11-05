@@ -4,6 +4,7 @@
 import { useT } from '../../i18n/useT';
 import * as api from '../../services/api';
 import type { SetupPlan } from '../../types';
+import { NpuNotReady } from './NpuNotReady';
 import { cantRunHere, catalogOf, isNpu, pickChat, recommendedSelection, type Selection } from './selection';
 
 /**
@@ -25,6 +26,8 @@ interface Props {
     selection: Selection;
     onSelection: (selection: Selection) => void;
     disabled?: boolean;
+    /** Read this PC again, after the user fixed what stops the NPU. */
+    onRecheck?: () => void;
 }
 
 /**
@@ -32,14 +35,17 @@ interface Props {
  * on the GPU with Vulkan, or FastFlowLM on a Ryzen AI NPU. Picking one picks
  * that backend's chat model.
  */
-export function BackendChoice({ plan, selection, onSelection, disabled = false }: Props) {
+export function BackendChoice({ plan, selection, onSelection, disabled = false, onRecheck }: Props) {
     const t = useT();
     const catalog = catalogOf(plan);
+    // An NPU that is there but can't run a model yet is shown, with what to fix, not offered.
+    const npuProblems = plan.npu?.present && !plan.npu.ready ? plan.npu.problems : [];
     // GAIA's own NPU model on a PC whose NPU holds it, else an NPU chat model already downloaded.
-    const npuModel = catalog.find((e) => isNpu(e) && e.gaia_model && e.chat_choice && e.fits !== false)
+    const npuModel = npuProblems.length ? undefined
+        : catalog.find((e) => isNpu(e) && e.gaia_model && e.chat_choice && e.fits !== false)
         ?? catalog.find((e) => isNpu(e) && e.chat_choice && e.downloaded && !cantRunHere(e));
     // Lemonade sees an NPU, but its NPU engine can't run here: say so rather than hide it silently.
-    const npuUnusable = !npuModel && catalog.some((e) => isNpu(e) && e.fit_code === 'npu');
+    const npuUnusable = !npuProblems.length && !npuModel && catalog.some((e) => isNpu(e) && e.fit_code === 'npu');
     const onNpu = !!catalog.find((e) => e.id === selection.defaultChat && isNpu(e));
     // Back to the GPU: setup's own pick, unless that is the NPU model itself.
     const recommended = recommendedSelection(plan).defaultChat;
@@ -52,9 +58,10 @@ export function BackendChoice({ plan, selection, onSelection, disabled = false }
         if (id === 'gpu' && onNpu && gpuChat) onSelection(pickChat(selection, catalog, gpuChat));
     };
 
-    const choices: Array<{ id: 'gpu' | 'npu'; label: string }> = [
+    const choices: Array<{ id: 'gpu' | 'npu'; label: string; unavailable?: boolean }> = [
         { id: 'gpu', label: t('setup.backend.gpu') },
         ...(npuModel ? [{ id: 'npu' as const, label: t('setup.backend.npu') }] : []),
+        ...(npuProblems.length ? [{ id: 'npu' as const, label: t('setup.backend.npu'), unavailable: true }] : []),
     ];
     const selected = onNpu ? 'npu' : 'gpu';
 
@@ -68,15 +75,20 @@ export function BackendChoice({ plan, selection, onSelection, disabled = false }
                         type="button"
                         role="radio"
                         aria-checked={selected === c.id}
+                        aria-describedby={c.unavailable ? 'setup-npu-problems' : undefined}
                         className={selected === c.id ? 'is-active' : ''}
-                        disabled={disabled}
+                        disabled={disabled || c.unavailable}
                         onClick={() => choose(c.id)}
                     >
                         <bdi>{c.label}</bdi>
                     </button>
                 ))}
             </div>
-            <p className="setup-hint">{t(npuModel ? 'setup.backend.hint' : npuUnusable ? 'setup.backend.hintNpuUnusable' : 'setup.backend.hintNoNpu')}</p>
+            {npuProblems.length > 0 ? (
+                <NpuNotReady problems={npuProblems} disabled={disabled} onRecheck={onRecheck} />
+            ) : (
+                <p className="setup-hint">{t(npuModel ? 'setup.backend.hint' : npuUnusable ? 'setup.backend.hintNpuUnusable' : 'setup.backend.hintNoNpu')}</p>
+            )}
         </section>
     );
 }
