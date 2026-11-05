@@ -238,6 +238,38 @@ class TestWindow:
         assert manager_client.load_model.called is not wired
 
 
+class TestNpuWindow:
+    """Why one NPU model got two windows after a restart, and what keeps one.
+
+    The Agent UI loaded it at 128K with nothing else resident; the sidecar's
+    warm-up then loaded the GPU model, and the user's turn sized the NPU model
+    against the memory that model still held: 32K, so it reloaded at 32K.
+    """
+
+    NPU = lc.NPU_DEFAULT_MODEL_NAME
+    WINDOWS_STRIX_HALO_NPU = {
+        "Physical Memory": "128 GB",
+        "devices": {
+            "amd_gpu": [{"available": True, "integrated": True, "vram_gb": 64.0}],
+            "amd_npu": {"available": True, "name": "AMD Ryzen AI NPU"},
+        },
+    }
+
+    def test_nothing_else_loaded_gets_the_full_window(self, machine):
+        machine(self.WINDOWS_STRIX_HALO_NPU, _ram(64, 40))
+        assert lc.resolve_ctx_size(self.NPU, base_url=URL) == 131072
+
+    def test_a_gpu_model_still_loaded_shrinks_it_to_the_floor(self, machine):
+        machine(self.WINDOWS_STRIX_HALO_NPU, _ram(64, 13.8), loaded={GEMMA: 65536})
+        assert (
+            lc.resolve_ctx_size(self.NPU, base_url=URL) == model_fit.MIN_CONTEXT_TOKENS
+        )
+
+    def test_a_turn_on_the_resident_npu_model_asks_for_the_window_it_has(self, machine):
+        machine(self.WINDOWS_STRIX_HALO_NPU, _ram(64, 13.8), loaded={self.NPU: 131072})
+        assert lc.resolve_ctx_size(self.NPU, base_url=URL) == 131072
+
+
 class TestStrixHaloUnchanged:
     """The baseline machines keep their windows and their default model."""
 

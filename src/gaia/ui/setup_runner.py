@@ -405,10 +405,9 @@ def agent_ui_chat_model(db, run: "SetupRun") -> str:
 
 def tui_chat_model(run: "SetupRun") -> str:  # pylint: disable=unused-argument
     """The model the TUI opens chat on: the saved ``last_model``, else the agent's default."""
-    from gaia.config import GaiaConfig
-    from gaia.llm.lemonade_client import resolve_default_chat_model
+    from gaia.llm.lemonade_client import resolve_chat_model
 
-    return GaiaConfig.load().last_model or resolve_default_chat_model()
+    return resolve_chat_model()
 
 
 #: The Test step's reason when a cloud setup has no cloud model saved to chat with.

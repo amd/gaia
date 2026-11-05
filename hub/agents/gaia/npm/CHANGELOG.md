@@ -139,6 +139,12 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   model now stops that warm-up, so it neither delays the turn nor loads its
   model over the one the turn uses; a turn on the warmed model still waits for
   it and reuses its cache (#6582).
+- **The start-up warm-up loads the model you picked, not the setup default.**
+  After a restart, a chat on the NPU model waited ~50 s: the sidecar warmed the
+  GPU model setup chose, which evicted the NPU model, and the turn then evicted
+  it back at a smaller window. The warm-up now follows `last_model` (else
+  `default_model`), loads only inside the step a turn on another model can stop,
+  and, like the Agent UI, skips on a PC under 24 GB of memory.
 - **The SPEC names `GAIA_ALLOWED_PATHS` and the 150-step default.** Reading
   only the SPEC, an integrator could not see that a bad allowlist entry stops
   the sidecar at startup, or that an omitted `/query` `max_steps` runs 150
