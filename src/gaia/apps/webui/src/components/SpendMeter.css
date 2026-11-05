@@ -26,6 +26,10 @@
     width: 300px;
 }
 
+.spend-meter-panel dd {
+    white-space: nowrap;
+}
+
 .spend-meter-answers {
     max-height: 120px;
     overflow-y: auto;

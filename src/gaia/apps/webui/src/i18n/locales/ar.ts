@@ -845,7 +845,9 @@ const messages: Messages = {
     'spend.todayChats.one': 'اليوم، في محادثة واحدة',
     'spend.todayChats.other': 'اليوم، في {n} محادثات',
     'spend.perAnswer': 'كل إجابة في هذه المحادثة',
-    'spend.note': 'بسعر القائمة لدى Fireworks AI. الإجابة الموقوفة بلا سعر.',
+    'spend.note': 'بسعر القائمة لدى Fireworks AI.',
+    'spend.titleExcluded': 'هذا المبلغ على الأقل: لا تُحتسب الإجابة الموقوفة لأن تكلفتها غير معروفة',
+    'spend.excluded': 'غير محتسبة: إجابات موقوفة هنا {chat}، واليوم {today}. لا ترسل الإجابة الموقوفة عدد الرموز، فتكلفتها غير معروفة، لكن قد تحتسبها Fireworks AI. المجاميع حد أدنى.',
     'spend.month': 'إجمالي هذا الشهر والحد',
 
     // Settings

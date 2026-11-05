@@ -63,11 +63,16 @@ describe('startOfLocalDay', () => {
 
 describe('SpendMeter', () => {
     it('shows this chat and today, and asks for the model the chip shows', async () => {
-        mockedApi.getChatSpending.mockResolvedValue(spending());
+        const all = spending();
+        mockedApi.getChatSpending.mockResolvedValue(spending({
+            chat: { ...all.chat, unpriced_answers: 0 },
+            today: { ...all.today, unpriced_answers: 0 },
+        }));
         render(<SpendMeter sessionId="s1" busy={false} />);
         const chip = await screen.findByRole('button', { name: /Cloud spending: \$0\.04 in this chat, \$0\.31 today/ });
         expect(chip.textContent).toContain('$0.04');
         expect(chip.textContent).toContain('today $0.31');
+        expect(chip.textContent).not.toContain('≥');
         expect(mockedApi.getChatSpending).toHaveBeenCalledWith('s1', expect.any(String), FLASH);
         // Amounts are isolated left-to-right, so an Arabic layout can't reverse "$0.04".
         expect(chip.querySelectorAll('bdi[dir="ltr"]')).toHaveLength(2);
@@ -82,6 +87,19 @@ describe('SpendMeter', () => {
         expect(within(panel).getByText('Today, across 4 chats')).toBeTruthy();
         const rows = panel.querySelectorAll('.spend-meter-answers .context-meter-row dd');
         expect(Array.from(rows).map((r) => r.textContent)).toEqual(['Not reported', '$0.0020', '$0.04']);
+    });
+
+    it('marks totals missing a stopped answer as a floor and says why', async () => {
+        mockedApi.getChatSpending.mockResolvedValue(spending({
+            today: { ...spending().today, unpriced_answers: 2 },
+        }));
+        render(<SpendMeter sessionId="s1" busy={false} />);
+        const chip = await screen.findByRole('button', { name: /≥ \$0\.04 in this chat, ≥ \$0\.31 today/ });
+        expect(chip.title).toMatch(/stopped answer isn't counted/);
+        fireEvent.click(chip);
+        const panel = await screen.findByRole('dialog', { name: 'Cloud spending' });
+        expect(within(panel).getByRole('note').textContent)
+            .toMatch(/Not counted: 1 stopped answer\(s\) here, 2 today\..*may still bill it/);
     });
 
     it('opens Settings for the monthly total and limit', async () => {

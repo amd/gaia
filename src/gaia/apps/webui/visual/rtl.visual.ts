@@ -246,6 +246,14 @@ const audit = (page: Page): Promise<string[]> =>
             if (gap < 8) problems.push(`failed reply's text touches its bar (${Math.round(gap)}px): ${label(reply)}`);
         }
 
+        // An amount with its unit or sign reads as one token; split over two lines it reads as two.
+        for (const amount of document.querySelectorAll('.popover bdi[dir="ltr"]')) {
+            const text = amount.textContent?.trim() ?? '';
+            if (!shown(amount) || text.length > 16 || !/\d/.test(text)) continue;
+            const lines = new Set([...amount.getClientRects()].map((r) => Math.round(r.top)));
+            if (lines.size > 1) problems.push(`an amount wraps across lines: ${label(amount)}`);
+        }
+
         // A popover that opens scrolled down hides its first lines behind the fold.
         for (const popover of document.querySelectorAll('.popover')) {
             if (shown(popover) && popover.scrollTop > 0) problems.push(`popover opens scrolled past its top: ${label(popover)}`);

@@ -66,6 +66,10 @@ export function SpendMeter({ sessionId, busy }: SpendMeterProps) {
 
     if (!spend?.paid || spend.model !== (model ?? null)) return null;
     const { chat, today } = spend;
+    // A stopped answer sends no token count, so a total missing one is a floor.
+    const floor = (s: { usd: number; unpriced_answers: number }) =>
+        `${s.unpriced_answers > 0 ? '≥ ' : ''}${formatUsd(s.usd)}`;
+    const excluded = chat.unpriced_answers + today.unpriced_answers > 0;
     const answers = [...chat.items].reverse();
     const at = (iso: string) => new Date(iso).toLocaleTimeString(dateLocale(t), { hour: 'numeric', minute: '2-digit' });
 
@@ -77,12 +81,12 @@ export function SpendMeter({ sessionId, busy }: SpendMeterProps) {
                 className="context-meter spend-meter"
                 onClick={() => setOpen((v) => !v)}
                 aria-expanded={open}
-                aria-label={t('spend.aria', { chat: formatUsd(chat.usd), today: formatUsd(today.usd) })}
-                title={t('spend.title')}
+                aria-label={t('spend.aria', { chat: floor(chat), today: floor(today) })}
+                title={t(excluded ? 'spend.titleExcluded' : 'spend.title')}
             >
-                <bdi dir="ltr">{formatUsd(chat.usd)}</bdi>
+                <bdi dir="ltr">{floor(chat)}</bdi>
                 <span className="spend-meter-today">
-                    · {t.bare('spend.today')} <bdi dir="ltr">{formatUsd(today.usd)}</bdi>
+                    · {t.bare('spend.today')} <bdi dir="ltr">{floor(today)}</bdi>
                 </span>
             </button>
             <Popover open={open} onClose={close} anchor={anchor} label={t('spend.window')} align="end">
@@ -90,13 +94,18 @@ export function SpendMeter({ sessionId, busy }: SpendMeterProps) {
                     <dl className="context-meter-rows">
                         <div className="context-meter-row">
                             <dt>{t('spend.thisChat')}</dt>
-                            <dd><bdi dir="ltr">{formatUsd(chat.usd)}</bdi></dd>
+                            <dd><bdi dir="ltr">{floor(chat)}</bdi></dd>
                         </div>
                         <div className="context-meter-row">
                             <dt>{t.plural('spend.todayChats', today.chats)}</dt>
-                            <dd><bdi dir="ltr">{formatUsd(today.usd)}</bdi></dd>
+                            <dd><bdi dir="ltr">{floor(today)}</bdi></dd>
                         </div>
                     </dl>
+                    {excluded && (
+                        <p className="context-meter-note spend-meter-excluded" role="note">
+                            {t('spend.excluded', { chat: chat.unpriced_answers, today: today.unpriced_answers })}
+                        </p>
+                    )}
                     {answers.length > 0 && (
                         <>
                             <div className="spend-meter-heading">{t('spend.perAnswer')}</div>
