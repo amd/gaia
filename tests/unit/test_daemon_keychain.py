@@ -162,6 +162,46 @@ def test_other_keychain_services_are_refused(os_store, daemon):
     assert "s3cret-value" not in resp.text
 
 
+def test_a_plaintext_backend_on_the_daemon_is_refused(os_store, daemon):
+    class PlaintextKeyring(_MemoryKeyring):
+        pass
+
+    plaintext = PlaintextKeyring()
+    keyring.set_keyring(plaintext)
+    auth, client = daemon
+    secret = auth.mint("gaia")
+    resp = client.post(
+        "/host/v1/keychain/set",
+        json={"service": SERVICE_NAME, "username": "s", "value": "s3cret-value"},
+        headers={"Authorization": f"Bearer {secret}"},
+    )
+    assert resp.status_code == 503
+    assert "Insecure keyring backend" in resp.json()["detail"]
+    assert not plaintext.items
+
+
+@pytest.mark.parametrize("mounted", [True, False])
+def test_create_app_mounts_the_keychain_routes_only_when_asked(tmp_path, mounted):
+    from gaia.daemon.app import create_app
+    from gaia.daemon.custody.store import CustodyStore
+
+    store = CustodyStore(tmp_path / "custody.db")
+    try:
+        app = create_app(
+            token="client-tok",
+            port=4001,
+            pid=1,
+            started_at=1.0,
+            custody_auth=CustodyAuth(),
+            custody_store=store,
+            keychain_auth=CustodyAuth() if mounted else None,
+        )
+        paths = {getattr(r, "path", None) for r in app.routes}
+        assert ("/host/v1/keychain/get" in paths) is mounted
+    finally:
+        store.close()
+
+
 def test_a_refusal_surfaces_as_a_keyring_error():
     import httpx
 
@@ -308,7 +348,8 @@ def test_spawn_delivers_the_credential_as_a_file_never_in_the_env(
 
     path = Path(captured[KEYCHAIN_SECRET_FILE_ENV_VAR])
     assert path.read_text(encoding="utf-8") == "keychain-credential"
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert "keychain-credential" not in captured.values()
 
 

@@ -27,6 +27,11 @@ SERVICE_NAME = "gaia.connections"
 def _keyring():
     try:
         from gaia.connectors._keyring import keyring
+        from gaia.connectors.store import verify_keyring_backend
+
+        # The sidecar's own check sees only DaemonKeyring, so refuse a
+        # plaintext backend here, where the secrets are actually stored.
+        verify_keyring_backend()
     except ConnectorsError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     return keyring
