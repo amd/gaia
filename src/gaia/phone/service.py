@@ -142,6 +142,9 @@ class PhoneService:
             updated["enabled"] = False
         self.store.put_settings(updated)
         self._provider = None
+        # Apply keep-awake on the next tick rather than up to a minute later.
+        self._awake_checked = -1e18
+        self._wake.set()
         return updated
 
     def set_credentials(
