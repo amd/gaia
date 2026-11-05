@@ -1489,7 +1489,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             self.config, "enable_browser", False
         ):
             browser_section = """
-**BROWSER TOOLS:** search_web (DuckDuckGo, no key), fetch_page (extract readable text/links/tables), download_file (save URL locally; can then index_document).
+**BROWSER TOOLS:** search_web (DuckDuckGo, no key), fetch_page (extract readable text/links/tables), download_file (save URL locally; can then index_document). For a latest-version or release question, fetch_page the project's own releases or changelog page (its repository, official site or package registry) and cite it; a search snippet or news article can be out of date.
 """
 
         # Tail of Tier 1: indexing note kept separately so gated sections can

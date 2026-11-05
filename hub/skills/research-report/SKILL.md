@@ -2,7 +2,7 @@
 name: research-report
 description: Research a topic on the open web and write a cited Markdown report. Use when the user asks for a report, a literature scan, a competitive landscape, or a "what's the current state of X" answer that needs sources.
 license: MIT
-version: 1.0.2
+version: 1.0.3
 metadata:
   gaia:
     security_tier: community
@@ -54,7 +54,10 @@ re-fetching the web.
   nothing; if a query comes back empty, rephrase once, then say so rather than
   inventing results.
 - Prefer primary sources (documentation, filings, the project's own site) over
-  aggregators.
+  aggregators. `search_web` lists them first and marks them `[primary source]`.
+- A "latest version" or "newest release" claim must come from the project's own
+  releases or changelog page, fetched with `fetch_page`. News articles lag behind
+  releases; if no result is primary, search for the releases page before answering.
 
 ## Fork this
 
