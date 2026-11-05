@@ -228,8 +228,13 @@ class FakeLemonade:
     def app(self):
         app = web.Application()
         app.router.add_get("/api/v1/health", self.health)
+        app.router.add_post("/api/v1/load", self.load)
         app.router.add_get("/v1/realtime", self.realtime)
         return app
+
+    async def load(self, request):
+        self.loaded = (await request.json())["model_name"]
+        return web.json_response({"status": "success"})
 
     async def health(self, request):
         self.auth.append(request.headers.get("Authorization"))
@@ -322,6 +327,7 @@ async def test_listener_protocol_shape(fake_lemonade):
     assert append["type"] == "input_audio_buffer.append"
     assert base64.b64decode(append["audio"]) == frame
     assert fake.auth == ["Bearer secret"]
+    assert fake.loaded == "Moonshine-Tiny-Streaming"
 
 
 async def test_listener_reports_refusal(fake_lemonade):

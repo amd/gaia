@@ -253,47 +253,63 @@ class VoiceSession:
             log.info("Kokoro warm-up failed: %s", e)
 
     async def _speak_loop(self) -> None:
+        """Synthesize the next piece while the current one plays."""
+        audio: "asyncio.Queue" = asyncio.Queue(maxsize=2)
+        player = asyncio.create_task(self._play_loop(audio))
+        try:
+            while True:
+                piece = await self._queue.get()
+                if piece.generation != self._generation:
+                    continue
+                if piece.kind == "end":
+                    await audio.put((piece, None))
+                    continue
+                # A status line still waiting when newer speech is queued is stale.
+                if piece.kind == "status" and not self._queue.empty():
+                    continue
+                try:
+                    samples, rate = await asyncio.to_thread(
+                        self._synth.synthesize,
+                        piece.text,
+                        self.options.voice,
+                        self.options.speed,
+                    )
+                except (ConnectionError, RuntimeError, ValueError) as e:
+                    await self._emit(
+                        VoiceError(
+                            "tts_failed",
+                            "Couldn't speak this reply.",
+                            detail=str(e)[:300],
+                        ).to_event()
+                    )
+                    continue
+                if piece.generation != self._generation:
+                    continue
+                samples = pcm.resample(
+                    np.asarray(samples, dtype=np.float32), rate, pcm.TTS_RATE
+                )
+                await audio.put((piece, samples))
+        finally:
+            player.cancel()
+
+    async def _play_loop(self, audio: "asyncio.Queue") -> None:
         assert self._sink is not None
+        step = pcm.TTS_RATE * FRAME_MS // 1000
         while True:
-            piece = await self._queue.get()
+            piece, samples = await audio.get()
             if piece.generation != self._generation:
                 continue
-            if piece.kind == "end":
+            if samples is None:
                 if self.speaking:
                     self.speaking = False
                     await self._emit({"type": "speaking_done"})
                 continue
-            # A status line still waiting when newer speech is queued is stale.
-            if piece.kind == "status" and not self._queue.empty():
-                continue
-            try:
-                samples, rate = await asyncio.to_thread(
-                    self._synth.synthesize,
-                    piece.text,
-                    self.options.voice,
-                    self.options.speed,
-                )
-            except (ConnectionError, RuntimeError, ValueError) as e:
-                await self._emit(
-                    VoiceError(
-                        "tts_failed",
-                        "Couldn't speak this reply.",
-                        detail=str(e)[:300],
-                    ).to_event()
-                )
-                continue
-            if piece.generation != self._generation:
-                continue
-            samples = pcm.resample(
-                np.asarray(samples, dtype=np.float32), rate, pcm.TTS_RATE
-            )
             if not self.speaking:
                 self.speaking = True
                 await self._emit({"type": "speaking", "kind": piece.kind})
             await self._emit(
                 {"type": "spoken_piece", "kind": piece.kind, "text": piece.text}
             )
-            step = pcm.TTS_RATE * FRAME_MS // 1000
             for i in range(0, samples.size, step):
                 if piece.generation != self._generation:
                     break
@@ -306,6 +322,11 @@ class VoiceSession:
                         "value": round(pcm.level(chunk), 3),
                     }
                 )
-            if piece.kind == "status" and self._queue.empty() and self.speaking:
+            if (
+                piece.kind == "status"
+                and audio.empty()
+                and self._queue.empty()
+                and self.speaking
+            ):
                 self.speaking = False
                 await self._emit({"type": "speaking_done"})

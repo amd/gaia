@@ -24,6 +24,8 @@ from gaia.voice.lemonade import LemonadeTarget
 log = get_logger(__name__)
 
 CONNECT_TIMEOUT = 10.0
+#: Loading a recognizer the first time can take a while on a cold disk.
+LOAD_TIMEOUT = 180.0
 DEFAULT_SILENCE_MS = 500
 
 _EVENT_MAP = {
@@ -105,6 +107,7 @@ class RealtimeListener:
                 f"Lemonade Server isn't reachable at {self.target.origin}.",
                 detail=str(e),
             ) from e
+        await self._load_model()
         url = realtime_url(self.target, health, self.model)
         try:
             self._ws = await self._http.ws_connect(
@@ -138,6 +141,30 @@ class RealtimeListener:
             {"silence_duration_ms": int(self.silence_ms)} if self.vad else None
         )
         await self._send({"type": "session.update", "session": session})
+
+    async def _load_model(self) -> None:
+        """The realtime endpoint serves only a loaded model; it never loads one."""
+        assert self._http is not None
+        try:
+            async with self._http.post(
+                f"{self.target.base_url}/load",
+                json={"model_name": self.model},
+                headers=self.target.headers,
+                timeout=aiohttp.ClientTimeout(total=LOAD_TIMEOUT),
+            ) as response:
+                if response.status >= 400:
+                    text = (await response.text())[:300]
+                    raise VoiceError(
+                        "asr_failed",
+                        f"Lemonade couldn't load the speech recognizer {self.model}: "
+                        f"{text}",
+                    )
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            raise VoiceError(
+                "asr_failed",
+                f"Lemonade didn't finish loading the speech recognizer {self.model}.",
+                detail=str(e),
+            ) from e
 
     async def send_pcm16(self, pcm: bytes) -> None:
         if not pcm:
