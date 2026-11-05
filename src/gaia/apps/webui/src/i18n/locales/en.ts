@@ -1936,6 +1936,7 @@ export const enMessages = {
     'update.status.noChannel': 'No GAIA release publishes a desktop update for this platform yet.',
     'update.status.disabled': 'Updates are turned off for this install (GAIA_DISABLE_UPDATE=1).',
     'update.status.upToDate': 'GAIA is up to date.',
+    'update.status.readFailed': 'Couldn\'t read the update status ({reason}). Press Check for updates to try again, or restart GAIA.',
     'update.settings.title': 'Updates',
     'update.settings.running': 'Running GAIA {version}.',
     'update.settings.unknownVersion': 'unknown',

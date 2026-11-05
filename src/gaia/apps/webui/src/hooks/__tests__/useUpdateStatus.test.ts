@@ -125,6 +125,43 @@ describe('useUpdateStatus — with bridge', () => {
         expect(result.current.status).toBe('available');
         expect(result.current.version).toBe('0.22.0');
     });
+
+    it('reports a rejected status read instead of keeping the default state', async () => {
+        const bridge = makeUpdaterBridge({
+            getStatus: vi.fn(async () => {
+                throw new Error("Error invoking remote method 'gaia-updater:get-status': Error: No handler registered");
+            }),
+        });
+        vi.stubGlobal('gaiaUpdater', bridge);
+
+        const { result } = renderHook(() => useUpdateStatus());
+
+        await act(async () => {
+            await new Promise((r) => setTimeout(r, 0));
+        });
+
+        expect(result.current.readError).toBe('No handler registered');
+    });
+
+    it('keeps a pushed status when the initial read fails after it', async () => {
+        let rejectRead: (e: Error) => void = () => {};
+        let pushStatus: (s: UpdateState) => void = () => {};
+        const bridge = makeUpdaterBridge({
+            getStatus: vi.fn(() => new Promise<UpdateState>((_, reject) => { rejectRead = reject; })),
+            onStatusChange: vi.fn((cb: (s: UpdateState) => void) => { pushStatus = cb; return () => {}; }),
+        });
+        vi.stubGlobal('gaiaUpdater', bridge);
+
+        const { result } = renderHook(() => useUpdateStatus());
+        act(() => pushStatus({ ...INITIAL_STATE, status: 'available', version: '0.26.0' }));
+        await act(async () => {
+            rejectRead(new Error('timed out'));
+            await new Promise((r) => setTimeout(r, 0));
+        });
+
+        expect(result.current.status).toBe('available');
+        expect(result.current.readError).toBeUndefined();
+    });
 });
 
 describe('INITIAL_STATE', () => {

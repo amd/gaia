@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState } from 'react';
+import type { Param } from '../i18n/registry';
+import { log } from '../utils/logger';
+import { updateErrorReason } from './updateError';
 
 /**
  * Auto-update status surfaced by the Electron main process via the
@@ -46,6 +49,8 @@ export interface UpdateState {
     previousVersion?: string | null;
     /** The app opened but its backend never came up. */
     startFailed?: boolean;
+    /** Why the renderer couldn't read the status at all, or null. */
+    readError?: Param | null;
 }
 
 /** Info about a single published release, as returned by listReleases(). */
@@ -105,6 +110,7 @@ export function useUpdateStatus(): UpdateState {
         if (!updater) return;
 
         let mounted = true;
+        let pushed = false;
 
         // Fetch the current state immediately (covers the race where a
         // status event fires before we mount).
@@ -113,13 +119,16 @@ export function useUpdateStatus(): UpdateState {
             .then((s) => {
                 if (mounted && s) setState(s);
             })
-            .catch(() => {
-                // Swallow — the subscription below will still work and
-                // surface any actual update events.
+            .catch((err) => {
+                log.system.error('Reading the update status failed', err);
+                // A status the updater already pushed is newer than this failure.
+                if (mounted && !pushed) setState((prev) => ({ ...prev, readError: updateErrorReason(err) }));
             });
 
         const unsubscribe = updater.onStatusChange((s) => {
-            if (mounted && s) setState(s);
+            if (!s) return;
+            pushed = true;
+            if (mounted) setState(s);
         });
 
         return () => {
