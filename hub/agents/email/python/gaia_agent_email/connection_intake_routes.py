@@ -21,7 +21,6 @@ a credential. Loud, actionable errors; no silent fallbacks.
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
-
 from gaia_agent_email import forwarded_credentials
 from gaia_agent_email.connector_routes import SUPPORTED_PROVIDERS
 from gaia_agent_email.contract import (
