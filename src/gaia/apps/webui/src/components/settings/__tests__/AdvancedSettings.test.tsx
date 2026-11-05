@@ -9,11 +9,14 @@ import { useChatStore } from '../../../stores/chatStore';
 import type { SystemStatus } from '../../../types';
 
 vi.mock('../../../services/api');
-const modelActions = vi.hoisted(() => ({ downloadError: null as string | null }));
+const modelActions = vi.hoisted(() => ({
+    downloadError: null as string | null,
+    downloadModel: vi.fn(),
+}));
 vi.mock('../../../hooks/useModelActions', () => ({
     useModelActions: () => ({
         isLoadingModel: false, isDownloadingModel: false, downloadError: modelActions.downloadError,
-        loadModel: vi.fn(), downloadModel: vi.fn(),
+        loadModel: vi.fn(), downloadModel: modelActions.downloadModel,
     }),
 }));
 
@@ -37,6 +40,7 @@ function status(overrides: Partial<SystemStatus>): SystemStatus {
 beforeEach(() => {
     vi.clearAllMocks();
     modelActions.downloadError = null;
+    modelActions.downloadModel.mockReset();
     useChatStore.getState().setSystemStatus(null);
     mockedApi.getMCPRuntimeStatus.mockResolvedValue({ servers: [] } as never);
     mockedApi.getLemonadeTarget.mockResolvedValue({
@@ -117,8 +121,10 @@ describe('AdvancedSettings', () => {
             default_model_name: 'user.x', model_labels: null,
         }));
         render(<AdvancedSettings />);
-        await screen.findByText('Download');
+        const download = await screen.findByText('Download');
+        fireEvent.click(download);
 
+        expect(modelActions.downloadModel).toHaveBeenCalledWith(false, undefined, true);
         expect(screen.getAllByText(/Cannot download 'user.x'/)).toHaveLength(1);
     });
 

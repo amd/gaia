@@ -199,7 +199,7 @@ export function AdvancedSettings() {
                                 </div>
                                 <button
                                     className="btn-model-action btn-model-action--download"
-                                    onClick={() => downloadModel(false)}
+                                    onClick={() => downloadModel(false, undefined, !status.model_loaded)}
                                     disabled={isDownloadingModel}
                                 >
                                     {isDownloadingModel ? (

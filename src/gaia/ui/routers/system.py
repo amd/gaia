@@ -242,9 +242,8 @@ def _parse_pull_event_block(block: str) -> Optional[Dict[str, Any]]:
 async def _auto_load_after_download(model_name: str) -> None:
     """Issue a Lemonade ``/v1/load`` for ``model_name`` at our default ctx.
 
-    Called from ``_stream_lemonade_pull`` once the pull completes so the
-    user doesn't have to take a second action ("model downloaded — now go
-    click Load") to actually start chatting. We use the same
+    Called from ``_stream_lemonade_pull`` only when the requester opts in
+    with ``load_after``. We use the same
     ``DEFAULT_CONTEXT_SIZE`` (32K) the rest of GAIA expects, otherwise
     Lemonade falls back to its own much smaller default and the next
     chat hits the "ctx too small" reload branch.
