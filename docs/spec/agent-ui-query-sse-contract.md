@@ -440,6 +440,7 @@ is on the wire. It is sent when the phase actually starts, never on a timer, and
 | `tool_call` | a long tool call's arguments are still streaming | `chars` so far |
 | `reconnecting` | GAIA's own Lemonade Server stopped mid-request or during a `/model` switch: sent once while the agent waits for the daemon to bring it back, then it retries. A server the user runs, or a remote `LEMONADE_BASE_URL`, is never waited on | — |
 | `model_restart` | GAIA's own Lemonade Server stopped under a model call: sent while the step waits to retry and again while the daemon starts it (`message` "The model server stopped. GAIA is restarting it…"), or before the daemon starts a server that was never running ("Starting the model server…") | — |
+| `model_retry` | a model call failed for another reason (the model service was busy, timed out, stopped sending, or the connection dropped) and is retried: once per retry, `message` naming the trouble, the wait and the attempt ("The model service is busy — retrying in 8s (2/4)") | — |
 | `answer_restart` | a reply was cut off part-way (the model server stopped or the connection dropped) and the step starts over; carries `retracts_answer: true` | — |
 | `model_queue` | the turn is queued for the model behind another request, then every ~2 s while it waits, then once when it gets the model | `queue` (below) |
 
