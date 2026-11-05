@@ -423,6 +423,15 @@ carries `"retracts_answer": true`, and the client drops the `token` text since
 the last `tool_call` from the answer. Without the field, reasoning folds into
 `status` lines as before. Pre-2.22 binaries `422` it.
 
+A reply can also be taken back without `reasoning`. When GAIA's model server
+stops part-way through a reply (or the connection drops), the step is sent
+again, and a `status` with `"phase": "answer_restart"` and
+`"retracts_answer": true` comes first: the client drops the `token` text
+since the last `tool_call` and shows the status `message` in its place. While
+the daemon restarts the server, `status` lines carry `"phase":
+"model_restart"`. If it is not back within the retries, `final` carries
+`failure: "model_server_down"`.
+
 ```json
 {
   "query": "What's in this directory?",

@@ -208,6 +208,10 @@ class TurnTracker:
                         self.raw_content += "\n\n"
                     self._tool_since_text = False
                 self.raw_content += content
+        elif etype == "status" and event.get("retracts_answer"):
+            # A reply cut off when the model server stopped; it starts over.
+            self.raw_content = ""
+            self._tool_since_text = False
         elif etype == "answer":
             if event.get("content"):
                 self.raw_content = event["content"]

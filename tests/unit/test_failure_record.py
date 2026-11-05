@@ -373,6 +373,17 @@ def test_typed_failure_keeps_its_advice_and_adds_the_record(home):
     assert fr.RECORD_ID_RE.search(answer)
 
 
+def test_gaias_own_server_that_did_not_come_back_names_the_record(home):
+    agent = _agent(SimpleNamespace(base_url=LOCAL, api_key=None))
+    agent.chat.llm_client.gaia_lemonade_stopped = lambda: True
+    agent._turn_model_retries["server_stopped"] = True
+
+    answer = agent._model_call_failed_answer(LemonadeNetworkError(), None, 1, [])
+
+    assert "could not restart it" in answer
+    assert fr.RECORD_ID_RE.search(answer)
+
+
 def test_a_model_not_served_by_lemonade_gets_no_record(home):
     agent = _agent(None)  # e.g. a Claude client: no Lemonade to describe
 

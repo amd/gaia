@@ -977,12 +977,20 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
-                // A lone </think> showed the text streamed since the last tool was reasoning.
-                if (event.type === 'thinking' && event.retracts_answer) {
+                // Not the answer: it was reasoning (a lone </think>), or was cut off (status; say so).
+                if (event.retracts_answer) {
                     fullContent = '';
                     toolOccurredRef.current = false;
                     streamBufferRef.current = '';
                     setStreamContent('');
+                    if (event.type === 'status') {
+                        const step = agentEventToStep(
+                            { type: 'status', status: 'warning', message: getT()('live.answerRestarted') } as StreamEvent,
+                            stepIdRef,
+                        );
+                        if (step) addAgentStep(step);
+                        return;
+                    }
                 }
 
                 // One "Thinking" step per turn. appendThinkingContent() appends

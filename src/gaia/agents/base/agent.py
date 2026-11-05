@@ -189,6 +189,7 @@ from gaia.llm.retry import (
     model_retry_notices,
     retry_state_of,
 )
+from gaia.llm.surface_hints import TUI_SERVER_RESTART_HINT as SERVER_RESTART_HINT
 from gaia.logger import get_logger
 from gaia.utils import awake_clock
 from gaia.utils.json_string import extract_json_string_field
@@ -482,6 +483,14 @@ def tool_execution_timeout() -> float:
 # seconds; these waits cover the rarer outage that lasts a few minutes.
 DEFAULT_MODEL_STEP_RETRIES = 2
 DEFAULT_MODEL_RETRY_COOLDOWN = 30.0
+
+# Live lines and the restart note; the Agent UI matches these exact strings to
+# show them in the user's language.
+SERVER_RESTARTING_MESSAGE = "The model server stopped. GAIA is restarting it…"
+SERVER_STARTING_MESSAGE = "Starting the model server…"
+ANSWER_RESTART_MESSAGE = (
+    "The answer so far was cut off, so GAIA is starting it again from the top."
+)
 
 
 def model_step_retries() -> int:
@@ -2526,6 +2535,8 @@ Do NOT wrap conversational replies in JSON.
             "unreachable": False,
             # The model server itself accepted no connection.
             "server_down": False,
+            # GAIA's own model server stopped under a call this turn.
+            "server_stopped": False,
             # The turn ended because a model call failed (any cause).
             "failed": False,
         }
@@ -4912,8 +4923,17 @@ Do NOT wrap conversational replies in JSON.
                     self.console.report_phase(
                         "downloading_model", f"Downloading {model}"
                     )
-                elif state == "reconnecting":
-                    self.console.report_phase("reconnecting", RECONNECTING_MESSAGE)
+                elif state in ("reconnecting", "starting_server"):
+                    if self._turn_model_retries.get("server_stopped"):
+                        self.console.report_phase(
+                            "model_restart", SERVER_RESTARTING_MESSAGE
+                        )
+                    elif state == "reconnecting":
+                        self.console.report_phase("reconnecting", RECONNECTING_MESSAGE)
+                    else:
+                        self.console.report_phase(
+                            "model_restart", SERVER_STARTING_MESSAGE
+                        )
                 else:
                     self.console.report_phase(
                         "loading_model", f"Loading {model} into memory"
@@ -8262,6 +8282,9 @@ Do NOT wrap conversational replies in JSON.
             return None, None
         tally = self._turn_model_retries
         tally["request_retries"] += state.retries
+        stopped = self._gaia_server_stopped()
+        if stopped:
+            tally["server_stopped"] = True
         wait = self._model_step_retry_wait(exc, retries_used)
         if partial_output:
             # Close the cut-off line before saying anything else.
@@ -8277,11 +8300,19 @@ Do NOT wrap conversational replies in JSON.
                 retries_used + 1,
                 model_step_retries(),
             )
-            self.console.print_warning(
+            retry_line = (
                 f"{self._model_trouble(state.last_reason)} — retrying this step "
                 f"in {wait:.0f}s ({retries_used + 1}/{model_step_retries()}); "
                 "the work so far is kept"
             )
+            if partial_output:
+                self._restart_answer()
+            # The phase goes first: a relay drops the same line repeated after it.
+            if stopped:
+                self.console.report_phase("model_restart", SERVER_RESTARTING_MESSAGE)
+            else:
+                self.console.report_phase("model_retry", retry_line)
+            self.console.print_warning(retry_line)
             if not self._cool_down_for_model(wait):
                 return "cancelled", None
             return "retry", None
@@ -8297,12 +8328,52 @@ Do NOT wrap conversational replies in JSON.
         )
         tally["unreachable"] = True
         tally["failed"] = True
+        if stopped:
+            return "unreachable", self._server_not_back_answer(
+                conversation, steps_taken, self._save_failure_record(exc)
+            )
         return "unreachable", self._model_unreachable_answer(
             conversation,
             steps_taken,
             state,
             retries_used,
             record_id=self._save_failure_record(exc),
+        )
+
+    def _gaia_server_stopped(self) -> bool:
+        """Whether the chat model's server is GAIA's own and is not answering."""
+        provider = getattr(getattr(self, "chat", None), "llm_client", None)
+        check = getattr(provider, "gaia_lemonade_stopped", None)
+        return callable(check) and check() is True
+
+    def _restart_answer(self) -> None:
+        """Take back the cut-off reply on screen before the step starts over."""
+        hook = getattr(self.console, "restart_answer", None)
+        if hook is not None:
+            hook(ANSWER_RESTART_MESSAGE)
+
+    def _server_not_back_answer(
+        self,
+        conversation: List[Dict[str, Any]],
+        steps_taken: int,
+        record_id: Optional[str] = None,
+    ) -> str:
+        """The final answer when GAIA's own model server stopped mid-turn and
+        the daemon did not bring it back. Marked server-down, so a front-end
+        can offer to start it."""
+        self._turn_model_retries["server_down"] = True
+        return self._model_failure_answer(
+            conversation,
+            steps_taken,
+            stopped_responding=True,
+            cause="",
+            advice=SERVER_RESTART_HINT,
+            record_id=record_id,
+            name_service=False,
+            headline=(
+                "The model server stopped while answering, and GAIA could not "
+                "restart it"
+            ),
         )
 
     def _model_unreachable_answer(
@@ -8377,6 +8448,15 @@ Do NOT wrap conversational replies in JSON.
         one (split into what happened and what to do), else the raw error;
         either way followed by the fault record it saved, when it saved one.
         """
+        if (
+            self._turn_model_retries.get("server_stopped")
+            and self._gaia_server_stopped()
+        ):
+            # The raw error names CLI checks; the front-end offers the restart.
+            logger.error("GAIA's model server did not come back: %s", exc)
+            return self._server_not_back_answer(
+                conversation, steps_taken, self._save_failure_record(exc)
+            )
         record_id = self._save_failure_record(exc)
         stalled = False
         cur: Optional[BaseException] = exc
@@ -8427,8 +8507,13 @@ Do NOT wrap conversational replies in JSON.
         advice: Optional[str],
         record_id: Optional[str] = None,
         name_service: bool = True,
+        headline: Optional[str] = None,
     ) -> str:
-        """Say the turn is unfinished, why, what already ran, and what next."""
+        """Say the turn is unfinished, why, what already ran, and what next.
+
+        *headline* replaces the opening "The model stopped responding at step
+        N" when the caller knows better what happened.
+        """
         from collections import Counter
 
         from gaia.llm.failure_record import record_note
@@ -8440,10 +8525,9 @@ Do NOT wrap conversational replies in JSON.
         label = self._model_service_label() if name_service else None
         if label and label.lower() in cause.lower():
             label = None  # the cause already names it
-        lines = [
-            f"The model {what} at step {steps_taken}, so this request is "
-            f"unfinished. {label + ': ' if label else ''}{cause}."
-        ]
+        opening = headline or f"The model {what} at step {steps_taken}"
+        detail = f" {label + ': ' if label else ''}{cause}." if cause else ""
+        lines = [f"{opening}, so this request is unfinished.{detail}"]
         tools_used = Counter(
             msg["name"]
             for msg in conversation
@@ -9952,6 +10036,8 @@ Do NOT wrap conversational replies in JSON.
             "unreachable": False,
             # The model server itself accepted no connection.
             "server_down": False,
+            # GAIA's own model server stopped under a call this turn.
+            "server_stopped": False,
             # The turn ended because a model call failed (any cause).
             "failed": False,
         }
@@ -10529,6 +10615,8 @@ Do NOT wrap conversational replies in JSON.
                             stream_cut_offs,
                             _MAX_STREAM_CUT_OFF_RETRIES,
                         )
+                        if full_response:
+                            self._restart_answer()
                         continue
                     except ConnectionError as e:
                         # A transient endpoint failure the client already

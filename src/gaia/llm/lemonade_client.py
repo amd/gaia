@@ -4315,7 +4315,8 @@ class LemonadeClient:
         # Called as (model, state) around a load this client actually performs:
         # "downloading" or "loading" before it, "loaded" after it succeeds. A
         # cold load is the longest silent wait a chat turn has. Also called
-        # with "reconnecting" while a request waits for GAIA's server to return.
+        # with "reconnecting" while a request waits for GAIA's server to return,
+        # and "starting_server" before the daemon is asked to start it.
         self.model_load_listener: Optional[Callable[[str, str], None]] = None
 
         # Set logging level based on verbosity
@@ -4473,6 +4474,14 @@ class LemonadeClient:
                 return False
         except OSError:
             return True
+
+    def gaia_lemonade_stopped(self) -> bool:
+        """Whether this client follows GAIA's own server and it is not answering.
+
+        False for a server GAIA does not run: only GAIA's own is restarted by
+        the daemon.
+        """
+        return self.follows_gaia_lemonade and self._gaia_lemonade_gone()
 
     def _gone_handoff(self) -> threading.local:
         """Per-thread: the retrier handed this thread's failure to the
@@ -4693,6 +4702,9 @@ class LemonadeClient:
                 "No GAIA Lemonade Server is running (this client last used "
                 f"{self.base_url}); asking the GAIA daemon for the one it runs now."
             )
+            # The daemon's start can take minutes; say so before it begins.
+            if self.model_load_listener is not None:
+                self.model_load_listener(model or self.model or "", "starting_server")
             self._start_gaia_lemonade()
             self.log.info(f"Now using GAIA's Lemonade Server at {self.base_url}")
             self._replay_cloud_key(model)
@@ -4704,9 +4716,13 @@ class LemonadeClient:
             return
         previous = self.base_url
         self._point_at_gaia_lemonade(f"http://{DEFAULT_HOST}:{state['port']}")
+        where = (
+            f"came back at {self.base_url}"
+            if previous == self.base_url
+            else f"moved from {previous} to {self.base_url}"
+        )
         self.log.warning(
-            f"GAIA's Lemonade Server moved from {previous} to {self.base_url} "
-            "(the daemon restarted it); following it."
+            f"GAIA's Lemonade Server {where} (the daemon restarted it); following it."
         )
         self._replay_cloud_key(model)
 
