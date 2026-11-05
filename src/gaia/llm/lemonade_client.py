@@ -849,11 +849,78 @@ _LOCAL_REQUEST_LOCKS: Dict[str, threading.RLock] = {}
 _LOCAL_REQUEST_LOCKS_GUARD = threading.Lock()
 
 
+def _local_model_key(model: str) -> str:
+    return model[len("user.") :] if model.startswith("user.") else model
+
+
 def _local_request_lock(model: str) -> threading.RLock:
     """The lock serializing this process's requests to local *model*."""
-    key = model[len("user.") :] if model.startswith("user.") else model
     with _LOCAL_REQUEST_LOCKS_GUARD:
-        return _LOCAL_REQUEST_LOCKS.setdefault(key, threading.RLock())
+        return _LOCAL_REQUEST_LOCKS.setdefault(
+            _local_model_key(model), threading.RLock()
+        )
+
+
+#: Replies per model still being read after their caller left (``watch_stream``
+#: drains NPU streams); the model is busy until they end.
+_DRAINING: Dict[str, int] = {}
+_DRAINING_CHANGED = threading.Condition()
+
+
+def _begin_drain(model: str) -> Callable[[], None]:
+    """Count a drain of *model*'s stream; returns the call that ends it."""
+    key = _local_model_key(model)
+    with _DRAINING_CHANGED:
+        _DRAINING[key] = _DRAINING.get(key, 0) + 1
+
+    def end() -> None:
+        with _DRAINING_CHANGED:
+            _DRAINING[key] -= 1
+            if not _DRAINING[key]:
+                del _DRAINING[key]
+            _DRAINING_CHANGED.notify_all()
+
+    return end
+
+
+def _wait_for_drains(model: str) -> None:
+    """Wait, reported and cancellable, until no reply of *model* is draining."""
+    key = _local_model_key(model)
+    with _DRAINING_CHANGED:
+        if not _DRAINING.get(key):
+            return
+    from gaia.daemon import broker_client
+
+    started = time.monotonic()
+    next_update = started
+    while True:
+        with _DRAINING_CHANGED:
+            if not _DRAINING.get(key):
+                break
+            _DRAINING_CHANGED.wait(broker_client.LOCAL_WAIT_POLL_S)
+        now = time.monotonic()
+        if now >= next_update:
+            broker_client.notify_wait(
+                {
+                    "event": "queued",
+                    "scope": "process",
+                    "model": model,
+                    "position": 1,
+                    "queue_length": 1,
+                    "waited_s": now - started,
+                    "reason": "it is finishing a reply that was stopped",
+                }
+            )
+            next_update = now + broker_client.LOCAL_WAIT_UPDATE_EVERY_S
+        broker_client.check_cancelled(f"'{model}' (finishing a stopped reply)")
+    broker_client.notify_wait(
+        {
+            "event": "granted",
+            "scope": "process",
+            "model": model,
+            "waited_s": time.monotonic() - started,
+        }
+    )
 
 
 #: Time a model-slot lease allows on top of the request budget for the load it
@@ -915,6 +982,7 @@ def _holding_local_request_lock(model: str):
             lock.release()
             raise
     try:
+        _wait_for_drains(model)
         yield
     finally:
         lock.release()
@@ -6188,6 +6256,10 @@ class LemonadeClient:
         # when the consumer finishes or closes the stream.
         with self._model_slot_lease(model, request_timeout=timeout):
             self._ensure_model_loaded(model, auto_download)
+            from gaia.daemon.broker_client import check_cancelled
+
+            # A caller that gave up while the model loaded must send nothing.
+            check_cancelled(f"'{model}' to load")
 
             # Known not to stream: go straight to the non-streaming call rather
             # than making the user wait for an empty stream every turn.
@@ -6427,6 +6499,9 @@ class LemonadeClient:
                 limits=limits,
                 activity=activity,
                 is_output=_chunk_carries_output,
+                # FastFlowLM's engine restarts when a reply is cut off mid-stream.
+                drain_on_abandon=runs_on_npu(model),
+                on_drain=lambda: _begin_drain(model),
             )
 
         def _convert(stream) -> Generator[Dict[str, Any], None, None]:
