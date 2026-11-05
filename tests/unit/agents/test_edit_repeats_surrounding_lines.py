@@ -198,6 +198,36 @@ class TestLegitimateEditsStillWork:
         assert result["after_start_line"] == 1
 
 
+class TestInsertingBetweenSimilarBlocks:
+    """A line common to both neighbours, inside the new block, is not a paste."""
+
+    def test_a_function_between_two_ending_in_return_none(self):
+        content = "def a():\n    return None\n\ndef b():\n    return None\n"
+        updated, error = apply_unique_replacement(
+            "x.py", content, "def b():\n", "def new():\n    return None\n\ndef b():\n"
+        )
+        assert error is None
+        assert updated == (
+            "def a():\n    return None\n\n"
+            "def new():\n    return None\n\n"
+            "def b():\n    return None\n"
+        )
+
+    def test_a_stub_method_between_two_stubs(self):
+        content = (
+            "class C:\n    def a(self):\n        pass\n\n"
+            "    def b(self):\n        pass\n"
+        )
+        updated, error = apply_unique_replacement(
+            "c.py",
+            content,
+            "    def b(self):\n",
+            "    def new(self):\n        pass\n\n    def b(self):\n",
+        )
+        assert error is None
+        assert "    def new(self):\n        pass\n" in updated
+
+
 class TestHelperContract:
     def test_the_helper_refuses_the_rc_case(self):
         updated, error = apply_unique_replacement(

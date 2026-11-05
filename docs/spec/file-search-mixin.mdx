@@ -288,11 +288,12 @@ class FileSearchToolsMixin:
 
         new_content replaces old_content only; to rewrite the whole file, use
         write_file. An edit whose new_content repeats lines from just outside
-        old_content (a run above, a run below, or one line from each side, two
-        or more lines in all) is refused, because splicing it in would leave
-        those lines twice. The error lists them in `repeated_lines`; to keep
-        them in new_content, include them in old_content too. A single echoed
-        line and lines of punctuation such as closing braces may repeat.
+        old_content (a run above, a run below, or the line above first and the
+        line below last, two or more lines in all) is refused, because
+        splicing it in would leave those lines twice. The error lists them in
+        `repeated_lines`; to keep them in new_content, include them in
+        old_content too. A single echoed line and lines of punctuation such as
+        closing braces may repeat.
 
         A `.py` edit that would turn a file with valid syntax into one without
         is refused too. The semantics live in `gaia.agents.tools.file_edit`,

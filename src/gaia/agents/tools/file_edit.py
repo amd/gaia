@@ -20,8 +20,9 @@ unlocked.
   cannot tell a wrong-region edit from the one it asked for, and neither can
   the human reading the diff.
 - ``new_content`` must not repeat the lines just outside ``old_content``,
-  above, below, or one from each side. That is a whole-file rewrite squeezed
-  into one span, and splicing it in would leave those lines twice.
+  above, below, or one from each side at its edges. That is a whole-file
+  rewrite squeezed into one span, and splicing it in would leave those lines
+  twice.
 - A rejected edit carries the file's current content around the region the
   caller was aiming at, so the retry lands without a separate re-read.
 """
@@ -359,6 +360,9 @@ def _nearest_run(new_lines: List[str], neighbours: List[str], above: bool) -> Li
         if not _contains_run(new_lines, run):
             break
         best = run
+    # A lone echoed line counts only where a paste puts it: at the edge.
+    if len(best) == 1 and new_lines[0 if above else -1] != best[0]:
+        return []
     return best
 
 

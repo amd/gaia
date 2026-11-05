@@ -355,8 +355,9 @@ Extend `old_content` with surrounding lines until it is unique.
 
 **`new_content` must not repeat the lines around `old_content`.** When it
 contains two or more of the lines just outside the matched text — a run above,
-a run below, or one line from each side — the caller has put the whole
-intended file into one span, and splicing it in would leave those lines twice.
+a run below, or the line above as its first line and the line below as its
+last — the caller has put the whole intended file into one span, and splicing
+it in would leave those lines twice.
 The edit is refused and the repeats are listed in `repeated_lines`. Pass only
 the replacement text; if those lines belong in `new_content`, include them in
 `old_content` too; to rewrite the whole file, use `write_file`. A single echoed
