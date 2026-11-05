@@ -1,25 +1,27 @@
 ---
 title: Phone calls and texts
-description: GAIA texts or calls your phone when something urgent needs you, talks with you in voice mode over the call, and later takes your calls, all with the models still on your PC
+description: GAIA calls or texts your phone when something urgent needs you, only ever to numbers in your phone book, and later lets you talk with it on the call while the models stay on your PC
 ---
 
-**Status: Design for a later release. Not part of the current release, and implementation has not started.**
-Baseline: `aaa056b7` on `main`, November 2, 2026. Builds on [voice mode](/plans/voice), which must ship first.
+**Status: In development.** Builds on [voice mode](/plans/voice). Revised after a security and
+feasibility review on November 5, 2026.
 
-A notification is easy to miss. A text is harder to miss, and a phone call is hardest. This plan
-lets GAIA text you or ring your phone when something you marked as urgent happens: a scheduled
-job failed, an email from someone on your list arrived, or a task has waited on your approval
-too long. A text says what happened in one line. On a call, GAIA tells you in a sentence or two,
-you can ask follow-up questions in voice mode, and the call is saved as a chat you can read
-later.
+A notification is easy to miss. A text is harder to miss, and a phone call is hardest. GAIA calls
+or texts you when something you marked as urgent happens: a scheduled job failed, a task has
+waited on your approval too long, GAIA itself can't run, or an agent you allowed to reach you
+needs you. The call tells you that something needs you and where to look. It never reads out
+your data. Talking with GAIA on the call comes in a later phase, and only after you key in your
+PIN.
 
-**The models stay on your PC.** Speech recognition, the reply and speech output run locally,
-exactly as in voice mode. What leaves the PC is the call's audio and the text's words, which have
-to cross the phone network to reach you. That is the one exception to voice mode's "everything local" rule. It is
-opt-in, and GAIA says so plainly before you turn it on (see [Privacy](#privacy)).
+**GAIA only contacts numbers in your phone book.** Every call and text goes through one check
+in the daemon that refuses any number not in it. A number gets into the phone book only when
+someone at this PC types in a code that reached that phone. GAIA never calls emergency services
+or anyone else.
 
-**GAIA only contacts you.** It calls and texts numbers you have verified, and never emergency
-services or anyone else.
+**What leaves the PC.** A call or text has to cross the phone network, so the provider sees the
+number, the time, and what is said or written. GAIA keeps that to a fixed sentence per alert
+type, with no file names, email subjects or agent text. The models stay on the PC. See
+[Privacy](#privacy).
 
 Related: #702 (voice-first parity), the [voice plan](/plans/voice), the
 [messaging plan](/plans/messaging-integrations-plan) (alerts over Telegram and Slack).
@@ -28,257 +30,205 @@ Related: #702 (voice-first parity), the [voice plan](/plans/voice), the
 
 | Question | Decision |
 |----------|----------|
-| Provider | **Telnyx**, through a SIP account the user creates. GAIA speaks plain SIP, so any SIP provider works under "Other SIP provider"; Telnyx is the one we test and document. |
-| How the PC reaches the phone network | The PC **registers outbound** with the provider over SIP and places calls itself. No public URL, no webhook, no tunnel, no port forwarding. |
-| Where the call runs | A small daemon sidecar, `gaia-phone`, owns SIP and audio. The call's audio feeds the same server-side voice session voice mode uses. |
-| Who pays | The user's own provider account. About $1 a month for a number and about half a cent a minute in the US (Telnyx list price, November 2026). A two-minute call costs about a cent. AMD hosts nothing. |
-| What counts as urgent | Only rules the user sets. GAIA never decides on its own that something deserves a call. |
-| Who GAIA may call or text | Only numbers the user has verified with a test call. The sidecar enforces this, not the prompt. |
-| What GAIA says before you confirm | Only that it has an urgent alert and its title. Details wait until you say "go ahead" or press 1. |
-| Texts | GAIA texts the same verified numbers from the same number. Sending is an outbound HTTPS request to the provider, so it needs no public URL either. Texts are one-way at first. A messaging API is provider-specific, so texts start with Telnyx; Twilio's API is the second. |
-| Text content | By default, the alert's title and "Open GAIA for details". A rule can opt in to the one-line summary. |
-| Calling GAIA | Later phase: you call GAIA's number, enter your PIN, and you're in voice mode with your PC. |
+| Provider | **Twilio.** An individual can sign up in minutes, and the trial account's free credit covers testing. A trial can only call numbers verified in the Twilio console, which matches the phone book. One API covers calls, texts and the live audio stream that talking on a call needs. Telnyx is cheaper per minute but checks identity harder before an individual can buy a number. The provider sits behind one interface, so it can be added later. |
+| Where it runs | **The GAIA daemon** owns phone, as `gaia.phone`: the phone book, rules, limits, the alert queue and the provider. It is the one always-on process, and both apps already talk to it. The Agent UI reaches it through its server; the TUI calls it directly. |
+| Public URL | **Not needed for alerts.** A call is placed with its script inline, and GAIA polls the provider for the outcome (answered, no answer, busy, failed). Talking on a call (phase B) needs mobile access's tunnel. |
+| What a call says | A fixed sentence per alert type, spoken twice. Example: "This is GAIA on your PC. A scheduled job failed. Open GAIA to see it." No title from a task, email or agent is ever spoken or texted, so injected text can't put words in GAIA's mouth, and a voicemail or a lock-screen preview can't leak them. |
+| What a text says | The same fixed sentence. |
+| Phone book | Numbers added only by a code check (see [Phone book](#phone-book)). The send path refuses any other number, and nothing can widen that, including the agent, a rule or the API. |
+| Limits | Per day, 6 calls and 20 texts by default, reset at local midnight. Agent-raised alerts get their own limit of 2 calls a day, so they can't use up the calls a real failure needs. Each rule has a 30-minute cooldown: repeats in that window join the open alert instead of placing a new call. |
+| Clock | The PC's local time zone, for quiet hours and the daily reset. |
+| Secrets | The provider's Account SID and Auth Token (or an API key and secret) go in the OS credential store through the daemon, like provider keys. They are never written to `config.json` or logged. |
+| Testing without an account | A **Simulated phone** provider: calls and texts are recorded in the call log and shown in the apps instead of being sent. Every rule, limit and screen works with it. CI tests the Twilio request shapes against a fake Twilio server. |
 
 ### Options considered and why they lost
 
 | Option | Why it lost |
 |--------|-------------|
-| **Provider media streams** (the provider calls a webhook, then opens a WebSocket to the PC for audio) | Needs a public HTTPS URL that is always up. Mobile access's tunnel is optional and starts with the Agent UI, and an alert has to work when nobody has set that up. |
-| **Hosted voice-agent platforms** | They run speech recognition, speech output and often the model in the cloud. That breaks the local rule for everything said on the call, not just the audio in transit. |
-| **Voice calls in messaging apps** | Telegram, Signal and Slack give bots no way to place a voice call. |
-| **Push notifications only** | Silent under Do Not Disturb, which is exactly when an emergency call matters. They stay as the first, quieter step (see [Escalation](#escalation)). |
-| **Texts through an email-to-SMS gateway** | Most US carriers have shut theirs down or deliver late, and none confirm delivery. |
-| **Twilio as the default** | Works, but costs about three times as much per minute (about 1.4¢ in the US), and a registered SIP device on Twilio still needs a voice URL (a hosted TwiML Bin) to route its calls. It stays supported through "Other SIP provider", with setup steps in the guide. |
-| **A Python SIP stack in the daemon** | The mature ones (PJSIP, pyVoIP) are GPL, which GAIA's MIT license can't take. `sipgo` (Go, BSD-2) and Pion's RTP packages (MIT) can. |
+| **A SIP client on the PC** (register outbound, place calls over SIP) | No public URL even for talking, but it means a SIP stack, SDP, SRTP keys, a jitter buffer and NAT handling in a new Go sidecar. Inline call scripts plus polling get alert calls with none of that. Revisit if talk mode without a tunnel becomes a must. |
+| **Telnyx as the default** | About a third of Twilio's per-minute price, but an individual faces business and identity checks before buying a number. Kept behind the provider interface. |
+| **Hosted voice-agent platforms** | They run recognition, speech and often the model in the cloud. |
+| **Voice calls in messaging apps** | Telegram, Signal and Slack give bots no way to place a call. |
+| **Push notifications only** | Silent under Do Not Disturb. They stay as the first step. |
+| **Email-to-SMS gateways** | Most US carriers shut theirs down or deliver late, and none confirm delivery. |
+| **Speaking the alert's title** | A title comes from a task, an email or an agent, so an attacker can write it. It would also be recorded by voicemail. |
 
 ## Architecture
 
 ```
- phone ── phone network ── Telnyx ══ SIP over TLS + SRTP ══ gaia-phone (sidecar, on the PC)
-                                     (PC registers outbound,           │  8 kHz audio frames
-                                      so NAT is fine)                  ▼
-                                                     daemon voice session (voice plan)
-                                                     ASR → GAIA turn → TTS, all via Lemonade
+ Agent UI ── Agent UI server ──┐
+                               ├── daemon: /v1/phone/*  (client token)
+ TUI ─────────────────────────┘        │
+ flagship sidecar ── /host/v1/alerts ──┤  (sidecar's own token, agent-scoped)
+ gaia schedule  ──── /v1/phone/alerts ─┤
+                                       ▼
+                         gaia.phone.PhoneService
+          phone book · rules · limits · quiet hours · alert queue (SQLite)
+                                       │ one send path, phone book check
+                                       ▼
+                     provider: Twilio REST  |  Simulated
 ```
 
-- **`gaia-phone`** is a Go binary the daemon installs and supervises like its other sidecars. It
-  is built on `sipgo` for SIP and Pion's `rtp` package for media, and is shipped per platform
-  (Windows, Linux, macOS).
-  - **Registration:** it registers with the provider on start, re-registers before expiry, and
-    sends a keep-alive every 30 s so the NAT mapping stays open for incoming calls.
-  - **Calls:** it places calls (INVITE with digest auth) and answers incoming ones in the later
-    phase.
-  - **Audio:** it carries G.711 µ-law, which every PSTN path supports, and Opus or G.722 when the
-    provider offers them end to end.
-  - **What it doesn't own:** it holds no model and no prompt. It turns RTP into 20 ms PCM frames
-    on a loopback socket to the daemon, and back.
-- **The voice session** gains a phone transport next to the browser and TUI ones. The turn loop,
-  barge-in and the [spoken-reply contract](/plans/voice#the-spoken-reply-contract) are reused
-  unchanged. The phone side cancels its own echo, so the session's echo handling is off for calls.
-  - **Audio rates:** incoming 8 kHz audio is upsampled to 16 kHz for recognition, and speech output
-    is downsampled to 8 kHz before it goes out.
-- **The credentials** (SIP username and password) live in the OS credential store through the
-  daemon, like provider API keys. The daemon hands them to the sidecar at spawn. They are never
-  written to a file or logged.
-- **The PC has to be on.** The PC places the call, so a PC that is asleep or off can't call. When
-  any call rule is on, GAIA keeps the PC from sleeping while it's plugged in, and Settings says so.
-  A PC that is offline can't send the alert that it's offline; see the open questions.
+- **`gaia.phone`** is a plain Python package with no imports from `gaia.ui` or the daemon's
+  routes. The daemon hosts it and mounts its router.
+- **One send path.** `PhoneService._place_call` and `_send_text` are the only code that reaches
+  the provider. Each one re-reads the phone book from the store and refuses a number that isn't
+  verified. The rule engine, the routes and the agent tool all go through `raise_alert`, never to
+  the provider directly.
+- **Escalation runs in the daemon** as one asyncio task per open alert. Alert state lives in
+  SQLite (`~/.gaia/phone/phone.db`), so a daemon restart resumes an open alert rather than losing
+  or repeating it.
+- **Outcome by polling.** After placing a call, GAIA reads the call record every 3 s until it
+  ends: `completed` means answered; `no-answer`, `busy`, `failed` and `canceled` mean not. A text
+  is read the same way (`delivered`, `undelivered`, `failed`).
 
-## When GAIA calls
+## Alert sources
 
-### Call rules
+| Source | Fires when | Status |
+|--------|-----------|--------|
+| A scheduled job fails | A `gaia schedule` run raises, recurring or one-shot. Today a recurring failure is only logged; this adds the hook. | Phase A |
+| A task waits on your approval | An Agent UI turn has shown a permission card for longer than N minutes (default 10) | Phase A |
+| GAIA can't run | The daemon can't reach Lemonade for 5 minutes | Phase A |
+| An agent asks to reach you | The flagship's `alert_owner(reason)` tool, only for a session or schedule you allowed to ("May alert me") | Phase A |
+| An email from someone on your list | Needs sender authentication (DKIM/DMARC) before matching the list, because a From header is easy to fake | Later |
 
-Settings › Phone › **Call me when…** holds the rules. Each rule is a condition GAIA checks
-directly in code. The model doesn't judge whether the condition is met:
+`alert_owner`'s `reason` is stored and shown in the apps. It is never spoken or texted.
 
-| Rule | Condition |
-|------|-----------|
-| A scheduled job fails | A `gaia schedule` run ends in an error or its own "call me if" check matches |
-| An email from someone on my list arrives | Email triage marks it urgent and the sender is on the list |
-| A task waits on my approval | A background task has waited on an approval longer than N minutes (default 15) |
-| GAIA itself needs attention | The daemon can't reach Lemonade, the disk is nearly full, or a sidecar keeps crashing |
+## Escalation
 
-**Background tasks and schedules can also call.** A skill or schedule the user runs in the
-background can be given permission to call ("May call me if it needs me"). It then gets a
-`call_owner(title, why)` tool. The tool goes through the same gate as every other route:
-verified numbers, quiet hours and the daily cap all apply. An email or web page that tells the
-agent to call can't widen any of that. The worst it can do is use one of today's calls, and every
-call is logged with the rule or task that placed it.
+Each rule picks its steps:
 
-### Escalation
+1. **Notify** in the Agent UI and TUI.
+2. **Text** right away, or when nobody opens the alert within N minutes (default 5).
+3. **Call** after N more minutes (default 5), or right away for rules marked urgent.
+4. **Call again** once, two minutes later, to the same number. On iPhone, "Allow repeated calls"
+   lets a second call within three minutes ring through Focus; setup tells you where to turn it
+   on. If you have a second number, the next step calls it.
 
-Each rule picks how hard GAIA tries:
+Opening the alert in either app, or marking it handled, stops every remaining step. Quiet hours
+hold everything except rules marked urgent. When a limit is reached, the alert stays in the apps
+and says which limit stopped it.
 
-1. **Notify.** An alert in the Agent UI, the TUI, and any connected messaging app (Telegram,
-   Slack).
-2. **Text.** A text to your phone, right away or when nobody opens the alert within N minutes
-   (default 5).
-3. **Call** if nobody opens the alert within N more minutes (default 5), or **call now** for rules
-   marked urgent.
-4. **Call again** once if nobody answers, two minutes later. On iPhone, a second call within three
-   minutes rings through Focus when "Allow repeated calls" is on, and setup turns it on.
+## Phone book
 
-Each rule picks the steps it uses: notify only, notify and text, or all of them. Opening the
-alert in any app stops the steps that haven't run yet.
+- **Adding a number:** you enter it in Settings › Phone (Agent UI) or the phone panel (TUI). GAIA
+  calls it, or texts it if you pick that, and says a 6-digit code. You type the code into the
+  same screen within 10 minutes. Three wrong codes cancel the attempt.
+- **Who can add one:** the code is accepted only from the Agent UI or TUI with a person at the
+  PC. Neither the agent nor a rule can add a number. When the phone book already has a number,
+  adding another also needs a code sent to the first number, so someone who controls only the new
+  phone can't finish it.
+- **Changes are announced.** Adding or removing a number texts the numbers already there, and the
+  apps show it.
+- **Verification calls count** against the daily limit, at most 3 attempts an hour.
+- **Format:** numbers are stored in E.164 (`+15551234567`). The phone book refuses short codes,
+  premium-rate prefixes and emergency numbers, before any code is sent.
 
-**Limits:**
-- **Quiet hours:** rules marked urgent ignore them, and every other rule waits for them to end.
-- **Daily cap:** 5 calls and 20 texts a day by default.
-- **One call at a time:** another alert that comes in during a call is read out on that call.
+## The call (phase A)
 
-## The call
+1. **Ring.** Caller ID shows your Twilio number. Setup has you save it as a contact, with
+   Emergency Bypass on iPhone, or as a starred contact allowed through Do Not Disturb on Android.
+2. **Answer.** GAIA says its fixed sentence twice and hangs up. On a trial account, Twilio first
+   plays its own trial notice and asks you to press a key.
+3. **Voicemail.** The same sentence, which has nothing private in it.
 
-1. **Ring.** Caller ID shows GAIA's number. Setup has you save it as a contact, with Emergency
-   Bypass on iPhone or as a starred contact allowed through Do Not Disturb on Android.
-2. **Answer.** GAIA says: "Hi, it's GAIA on your PC. I have an urgent alert: the nightly backup
-   failed. Say 'go ahead' or press 1 to hear it."
-   - Nothing past the title is said before you confirm, so a family member or a lock-screen
-     preview hears only the title.
-3. **Details.** GAIA gives the spoken summary and then stays in voice mode. You can ask
-   ("what was the error?", "did last night's run work?") and interrupt at any time.
-   - Answers follow the spoken-reply contract: short, with no paths or tables read out.
-4. **Actions.** At first you can only ask questions on a call; actions wait until you're at the
-   PC. In the later phase, which needs voice approvals (out of scope for voice mode's first
-   version), a user who sets a PIN can approve a waiting task by saying it or keying it in.
-   GAIA reads back what it will do before it does it. Caller ID can be spoofed, so a PIN is
-   always required for actions.
-5. **Hang up.** Say "that's all" or just hang up. The call is saved as a chat named
-   "Call · nightly backup failed" with the transcript, the tool steps and the result, the same way
-   voice turns land in history.
+## Talking on the call (phase B)
 
-**Voicemail.** When the call is answered by a greeting that runs past about 4 s with no break,
-GAIA treats it as voicemail. It leaves only "GAIA has an urgent alert for you. Open GAIA to see
-it." and hangs up. It never says the title, because voicemail is easy for someone else to hear.
+- Needs mobile access to be on. The call's script connects a live audio stream to
+  `wss://<tunnel>/api/phone/stream`, which carries 8 kHz µ-law audio both ways and the digits you
+  press.
+- **PIN first.** GAIA asks for your PIN on the keypad. Until you enter it, the call has only that
+  alert's own record: no files, web, memory, shell or email tools. Three wrong PINs end the call
+  and alert you in the apps.
+- After the PIN, it is voice mode over the phone with the same spoken-reply contract. Approvals
+  aren't taken on a call; GAIA says that you need to be at the PC.
+- The stream is accepted only with the one-time token in that call's script, and only while that
+  call is live.
+- Calls are saved to the call log with their transcript.
 
-**Latency.** The phone network adds about 150 to 300 ms each way, so GAIA's answer starts about
-2 s after you stop talking, against 1.5 s in voice mode at the PC. Every other part of the
-voice-mode latency budget is unchanged.
+## Calling GAIA (phase C)
 
-## Texts
-
-A text reads like this:
-
-> GAIA: Nightly backup failed. Open GAIA for details.
-
-- **What's in it:** the title is all a text says by default, because texts show on the lock
-  screen and stay on the carrier's servers. A rule can opt in to the one-line summary, such as
-  "GAIA: Nightly backup failed: the backup drive is full." Texts never include paths, file
-  contents or links.
-- **How it's sent:** the `gaia-phone` sidecar sends it through the provider's messaging API over
-  HTTPS from the PC, through the same verified-number and cap checks as calls. It needs a
-  provider API key next to the SIP login, kept in the OS credential store the same way.
-- **Delivery:** the provider accepting a text doesn't mean it reached the phone. Delivery reports
-  arrive by webhook, which needs a public URL, so at first the alert shows "Text sent" rather than
-  "Delivered". That is also why texts never stop the escalation; only opening the alert does.
-- **Replies:** replies also arrive by webhook, so texts are one-way at first. Once calling GAIA is on
-  (the later phase), every text ends with "Call this number to talk to GAIA." Replying by text is
-  an open question below.
-- **US registration:** US carriers block texts from a local number that isn't registered for
-  10DLC. A personal user registers as a sole proprietor: about $4 once, $15 for the campaign review,
-  about $2 a month, and usually a few business days for carrier approval (Telnyx list prices,
-  November 2026). A toll-free number is the other path: free to verify, about 5 business days.
-  Setup walks through one of them and keeps texts off until the provider reports the number
-  approved. Calls work in the meantime.
-
-### Calling GAIA (later phase)
-
-You call GAIA's number. The sidecar accepts calls only from verified numbers, and caller ID can be
-spoofed, so it then asks for the PIN. Three wrong PINs block that number for an hour and alert you
-in the apps. After the PIN you're in an ordinary voice-mode session with your PC.
+You call GAIA's number from a number in your phone book. Caller ID can be faked, so GAIA always
+asks for the PIN first. Three wrong PINs block that caller for an hour and alert you.
 
 ## Setup
 
-Setup is in Agent UI Settings › Phone, and the TUI has the same steps. You never use a command
-line:
+Settings › Phone in the Agent UI, and `/phone` in the TUI. You never use a command line:
 
-1. **Explain.** One screen: what calls are for, what it costs (shown from the provider's list
-   price), and that call audio crosses the phone network.
-2. **Account.** Create a Telnyx account (the screen links to it). Set a monthly spending limit
-   and limit outbound calls to your country; setup checks both and says which one is missing.
-3. **Number and SIP login.** Buy a number in the Telnyx portal, then create a SIP credential
-   connection with that number on it. Paste the SIP username, password and number into GAIA.
-   - GAIA registers right away and shows "Connected" or the provider's exact error. For example, a
-     403 is shown as "The provider rejected the password", not as a generic failure.
-4. **Your number.** Enter your phone number. GAIA calls it and reads a four-digit code; you type
-   the code into Settings to verify the number. You can add more numbers.
-5. **Texts (optional).** Paste a provider API key, then register the number for texts: setup links
-   to the provider's sole-proprietor 10DLC form or toll-free verification, and shows "Waiting for
-   approval" until the provider reports it approved.
-6. **Rules.** Pick the rules, quiet hours and the daily caps.
-7. **Test.** One button places a real call through the whole path: a sample alert, a follow-up
-   question, and the saved chat. A second sends a test text once texts are approved.
+1. **Explain.** What calls are for, the cost (about $1.15 a month for a US number and about 1.4¢
+   a minute, Twilio list price, November 2026), and that calls and texts cross the phone network.
+2. **Account.** Sign up at Twilio (linked). On a trial, verify your own number in the Twilio
+   console too; a trial can call only numbers verified there.
+3. **Keys.** Paste the Account SID and Auth Token, then the Twilio number calls come from. GAIA
+   checks them against the account at once and shows the provider's own error if one fails.
+4. **Phone book.** Add your number with the code check.
+5. **Rules.** Turn each source on, choose its steps, quiet hours and limits.
+6. **Test.** A button sends a test alert through every step it would use.
 
-"Other SIP provider" takes a SIP server address and credentials in place of step 3, and links to
-the guide's provider notes, Twilio among them.
+**Use a dedicated Twilio account or subaccount.** GAIA can't narrow what the Auth Token allows,
+so whoever has it could use the account. Keep the balance low, turn off auto-recharge, and limit
+calling to your own country in Twilio's geo permissions. Setup says this on the keys step.
+
+## Texts
+
+- **US:** carriers block texts from numbers that aren't registered. A toll-free number needs
+  toll-free verification; a local number needs 10DLC registration as a sole proprietor. Twilio
+  advises against starting toll-free verification on a trial, so texts may not work until the
+  account is upgraded. Setup shows texts as "Not approved yet" until a test text is delivered.
+- **Canada and other countries** follow the provider's own rules; Canada has no 10DLC.
+- Calls work while texts wait for approval.
 
 ## Failure states
 
-Every failure is shown in Settings › Phone, and as an alert in the apps when it hits a real
-call. A failed call never quietly turns into a text or an email.
+Every failure shows in the phone settings, and on the alert itself when it happens during one.
+No failure quietly becomes a different channel.
 
 | Failure | What the user sees |
 |---------|--------------------|
-| Registration fails | "GAIA can't sign in to your phone provider: <provider reason>." Calls stay off until it signs in. |
-| Network drops during a call | GAIA re-dials once. If that also fails, the alert stays in the apps, marked "Call failed". |
-| Provider refuses the call (no balance, blocked destination) | The provider's reason, plus a link to the account page where it can be fixed. |
-| Lemonade is down when a call is due | GAIA still calls and plays a short prerecorded line: "GAIA has an urgent alert but can't talk right now. Check your PC." The "GAIA itself needs attention" rule covers this case. |
-| Daily cap reached | The alert stays in the apps with "Not called: daily limit reached" or "Not texted: daily limit reached". |
-| Text rejected (number not registered, carrier blocked it) | The provider's reason. Texts turn off until it's fixed, and the rule's other steps still run. |
+| Bad keys | "Twilio rejected the Account SID or Auth Token." Phone stays off. |
+| Number not in the phone book | The send is refused and logged. The UI never offers this number to the agent or rules. |
+| Trial can't call an unverified number | Twilio's error 21219, shown as "Verify this number in the Twilio console too while the account is a trial." |
+| Provider refuses (no balance, blocked country) | The provider's message and a link to the account page. |
+| Daily limit, quiet hours | "Not called: daily limit reached" or "Held for quiet hours" on the alert. |
+| Daemon was down when an alert was due | On start, it resumes open alerts and says how late each one is. |
+| PC asleep | Nothing can call. Settings says "Calls only while this PC is awake" and offers to keep it awake on AC power (Windows now; Linux and macOS follow). |
 
 ## Privacy
 
-- **What crosses the network:** the call's audio, a text's words, and the numbers involved. The
-  phone network carries audio and texts unencrypted once they leave the provider, and carriers
-  keep texts. Between the PC and the provider, SIP runs over TLS, audio over SRTP, and the
-  messaging API over HTTPS.
-- **What never leaves the PC:** the models, the transcript, the saved chat, your files, and the
-  rules.
-- **How much is said:** GAIA says as little as it can. On a call you hear the title before you
-  confirm, and the spoken summary after. A text carries the title, or the summary if the rule opts
-  in. Files and long output stay in the saved chat.
-- **What the setup notice says:** the provider can technically record calls, and GAIA never asks
-  it to. It also says that phone calls are the one part of voice that isn't fully local.
+- **What the provider sees:** your number, GAIA's number, the time, the call length, and the
+  fixed sentence. For talking on a call (phase B), also the audio, which travels over the phone
+  network unencrypted once it leaves the provider.
+- **What never leaves the PC:** files, email, task output, agent text, the call log and the
+  transcript.
+- **The apps say this** on the setup's first screen.
 
 ## Test strategy
 
-- **Unit tests for the sidecar** against a local SIP test server: registration, re-registration,
-  digest auth, INVITE, BYE, keep-alive, DTMF, and refusing an unverified number.
-- **Text tests:** the shape of the messaging API request, title-only content by default, the cap,
-  and refusing an unverified number.
-- **Contract tests** that check the shape of the SIP messages and SDP sent, not only that a send
-  happened, because every provider rejects some malformed request a stub would accept.
-- **One real call per release** to a test number on the self-hosted pool's Telnyx account:
-  register, call, answer through a second SIP endpoint, play a sample alert, take a spoken
-  question, hang up, check the saved chat. One real text to the same test number.
-- **Gate tests:** prompt-injected email text tries to trigger a call, an unverified number, quiet
-  hours, the daily cap, and a wrong PIN.
-- **Hands-on pass:** iPhone and Android with Focus or Do Not Disturb on, voicemail, and a call over
-  a weak connection.
+- **Unit:** the phone book (E.164 checks, refused prefixes, code expiry and attempts, the
+  second-number rule), the send path refusing unverified numbers, limits and their reset,
+  cooldown merging, quiet hours across midnight, escalation timing and stopping, restart
+  resuming open alerts.
+- **Contract:** Twilio request shapes (form fields, `Twiml`, basic auth, the account path)
+  against a fake Twilio HTTP server, and the status values GAIA maps from.
+- **Security:** an agent tool call with a phone number in its reason, a rule pointing at an
+  unknown number, a code submitted through the agent's token, a flood of alerts against the
+  limits.
+- **Apps:** Settings › Phone and `/phone` screens in every state with the Simulated provider,
+  with screenshots.
+- **Real:** one real call and text with a Twilio account before each release candidate.
 
 ## Delivery sequence
 
-| PR | Scope |
-|----|-------|
-| 1 | `gaia-phone` sidecar: SIP registration and outbound calls, audio over loopback, daemon supervision, credential handling. A test call that plays a fixed message. |
-| 2 | Phone transport in the voice session, the call script, confirmation, voicemail handling, saved chats. |
-| 3 | Call rules, escalation, quiet hours, cap, `call_owner` tool, setup in the Agent UI and TUI, guide page. |
-| 4 | Texts: messaging API in the sidecar, the text step in escalation, the registration step in setup. |
-| 5 | Calling GAIA: inbound calls, PIN, actions with PIN. |
-
-Each PR ships with its docs: the guide page (`docs/guides/phone-calls.mdx`) and the settings
-reference.
+| Phase | Scope |
+|-------|-------|
+| A | `gaia.phone` with Twilio and Simulated providers, phone book, rules, limits, escalation, the four sources, daemon routes, Agent UI Settings › Phone and alert banners, TUI `/phone`, guide page |
+| B | Talking on a call: live audio stream over mobile access, PIN, limited pre-PIN tools, call transcripts |
+| C | Calling GAIA |
 
 ## Out of scope and open questions
 
-- **Replying by text and delivery reports.** Both arrive by webhook. Open question: receive them
-  through mobile access's tunnel when it's on, or poll the provider's message records if it offers
-  them, without making either a requirement.
-- **Calling or texting anyone but you,** such as a family member or a colleague, or emergency
-  services. Contacting other people raises consent and robocall rules that need their own design.
-- **A PC that is off or offline.** An alert like "my PC went offline" has to come from somewhere
-  else, such as a provider-side health check or a phone app. Open question: is it worth a small
-  hosted check, and who would run it?
-- **Countries.** Number and caller-ID rules vary by country. The first release targets the US and
-  Canada; others follow the provider's coverage, tested one at a time.
-- **Arabic.** Calls follow voice mode's Arabic support and are English only until spoken Arabic
-  replies are good enough. Texts can be in Arabic from the start.
+- **Email-sender alerts** wait for DKIM/DMARC checks on the sender.
+- **A PC that is off.** An alert that the PC went offline has to come from somewhere else.
+- **Contacting anyone but you.**
+- **Arabic.** The fixed sentences are translated; Twilio's voice for Arabic is checked before it
+  ships.

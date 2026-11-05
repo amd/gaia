@@ -3,7 +3,7 @@ title: Dictation and voice mode
 description: Talk to GAIA in the Agent UI and the TUI, with dictation into the composer and a fast hands-free voice mode that speaks short answers and shows the full work on screen
 ---
 
-**Status: Design for a later release. Not part of the current release, and implementation has not started.**
+**Status: In development.** The architecture was revised on November 5, 2026, after mapping it onto the code; see [Revision](#revision-turns-run-in-the-apps).
 Baseline: `aaa056b7` on `main`, November 2, 2026, with Lemonade 2026.44.1. Builds on read-aloud
 (`feat/read-aloud`, not merged yet).
 
@@ -37,7 +37,7 @@ WebSocket), #2985 (untested voice-stack paths), #3494 (the mic hearing GAIA's ow
 |----------|----------|
 | Dictation flow | Record; when the user stops, the transcript is inserted into the composer, never sent. |
 | Where voice mode lives | Its own screen in each app, not a toggle inside the chat view. |
-| Who runs the loop | **A server-side voice session.** One Python implementation listens, runs the turn, and streams speech straight from the answer tokens. The apps keep one socket open and render. |
+| Who runs the loop | **The app runs the turn; the server owns the audio.** Each app sends a voice turn through its normal chat path with `reply_style: "voice"`. One Python voice session does listening, recognition, the earcon and speech. See [Revision](#revision-turns-run-in-the-apps). |
 | Turn-taking | Hands-free by default: GAIA notices when you stop talking and answers. Talking over GAIA stops it. Push-to-talk is a setting. |
 | Speech recognition | **Moonshine Streaming for English, Whisper for other languages**, chosen from the voice language. |
 | Reply model | **The chat model already loaded**, with a spoken-summary prompt contract, reasoning turned down for voice turns, and the prompt prefilled when voice mode opens. No model swap. |
@@ -109,6 +109,35 @@ WebSocket), #2985 (untested voice-stack paths), #3494 (the mic hearing GAIA's ow
   Electron media-permission handler, and no TUI capture.
 
 ## Architecture
+
+### Revision: turns run in the apps
+
+The first design had `VoiceSession` run each turn itself. Mapping it onto the code showed why
+that doesn't fit:
+- The daemon has no in-process way to run a turn.
+- The TUI keeps its own conversation and sends it with every query.
+- The Agent UI's chat pipeline is what saves a turn.
+
+A server-run turn would have bypassed all three. So the voice socket now carries audio and
+speech, and each app runs a voice turn the same way it runs a typed one:
+
+1. The socket sends `final` with the transcript.
+2. The app sends it as an ordinary message with `reply_style: "voice"`. It is saved, shown and
+   cancelled like any other message.
+3. As the answer streams, the app sends each spoken piece back over the socket (`speak`), and
+   the server synthesizes and plays it (Agent UI: PCM frames to the browser; daemon: its own
+   speaker).
+4. Barge-in: the app sends `interrupt`, which drops queued speech at once.
+
+What the server still does: hold the recognizer connection, cut speech into clauses, call
+Kokoro, play the earcon, report levels for the animations, and refuse a remote Lemonade. The
+`<spoken>` split happens where the answer stream is parsed: `sse_handler.py` for the Agent UI,
+and the TUI's own parser. Both run the same test cases. Phone calls (phase B of
+[Phone calls and texts](/plans/phone-calls)) are the one host with no app, so there the phone
+service runs the turn itself.
+
+The diagram and protocol below describe the first design, except where this revision says
+otherwise.
 
 ```
  Agent UI (browser / Electron)                      TUI
