@@ -1385,6 +1385,20 @@ def model_server_failure(exc: BaseException) -> Optional[Any]:
     return classify_lemonade_exception(exc)
 
 
+def model_server_message(typed: Any) -> str:
+    """*typed*'s user message, with a start instruction for a server GAIA doesn't run.
+
+    The daemon restarts GAIA's own server; a server the user runs is theirs
+    to start.
+    """
+    from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
+    from gaia.llm.providers.lemonade import LemonadeNetworkError
+
+    if isinstance(typed, LemonadeNetworkError) and not gaia_runs_lemonade():
+        return f"{typed.user_message} {describe_start_hint().instruction}"
+    return typed.user_message
+
+
 def _terminal_error(exc: BaseException) -> Dict[str, Any]:
     """Actionable copy for a run-killing exception.
 
@@ -1394,7 +1408,7 @@ def _terminal_error(exc: BaseException) -> Dict[str, Any]:
     """
     typed = model_server_failure(exc)
     if typed is not None:
-        return {"type": "error", "detail": typed.user_message}
+        return {"type": "error", "detail": model_server_message(typed)}
     return {"type": "error", "detail": f"{type(exc).__name__}: {exc}"}
 
 

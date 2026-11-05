@@ -18,7 +18,8 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   the default port, and `/query` answers `503` with the classified message
   ("GAIA's AI engine couldn't start … Open Settings > Setup and press Run setup
   again") worded for the request's `surface`. Errors mid-run use the same
-  wording and no longer name a terminal command.
+  wording; only a model server the user runs, not GAIA's own, still gets
+  this machine's start instruction.
 
 ### Changed
 

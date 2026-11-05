@@ -470,10 +470,18 @@ class TestEmptyAnswerOutcome:
 _BASE = "http://lemonade.test:8000/api/v1"
 
 
-def _probe(model_id, handler):
+def _probe(model_id, handler, gaias_own=True):
     """Run the backend probe against a fake Lemonade served by ``handler``."""
     real_client = httpx.AsyncClient
     with (
+        patch(
+            "gaia.llm.lemonade_launcher.gaia_runs_lemonade",
+            return_value=gaias_own,
+        ),
+        patch(
+            "gaia.llm.lemonade_launcher.describe_start_hint",
+            return_value=MagicMock(instruction="START-HINT"),
+        ),
         patch.object(_chat_helpers, "_eval_provider_kwargs", return_value={}),
         patch(
             "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
@@ -510,6 +518,13 @@ class TestEmptyAnswerBackendProblem:
         assert "isn't responding" in problem
         assert problem.endswith(APP_SERVER_DOWN_HINT)
         assert "gaia " not in problem
+
+    def test_a_server_the_user_runs_gets_its_start_hint(self):
+        def refuse(request):
+            raise httpx.ConnectError("connection refused", request=request)
+
+        problem = _probe("Gemma-4-E4B-it-GGUF", refuse, gaias_own=False)
+        assert problem.endswith("START-HINT")
 
     def test_unhealthy_status_names_the_http_code(self):
         problem = _probe("M-GGUF", lambda request: httpx.Response(503))

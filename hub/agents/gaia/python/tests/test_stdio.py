@@ -362,21 +362,24 @@ def test_an_agent_exception_becomes_a_terminal_error():
     assert "tool exploded" in terminals[0]["detail"]
 
 
-def test_unreachable_lemonade_gets_actionable_copy(monkeypatch):
+@pytest.mark.parametrize("gaias_own", [True, False])
+def test_unreachable_lemonade_gets_actionable_copy(monkeypatch, gaias_own):
     """The raw urllib3 repr tells a user nothing; name the problem instead."""
     monkeypatch.setattr(
         "gaia.llm.lemonade_launcher.describe_start_hint",
         lambda *a, **k: StartHint(instruction="Run: lemond --port 13305"),
+    )
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda *a: gaias_own
     )
     detail = stdio._terminal_error(
         ConnectionError("Max retries exceeded ... Connection refused")
     )["detail"]
 
     assert "local LLM" in detail
-    # The app recovers the server itself; a terminal command is no fix there.
-    assert "lemond" not in detail
-    assert "gaia " not in detail
     assert "Max retries" not in detail
+    # The daemon restarts GAIA's own server; one the user runs is theirs to start.
+    assert ("Run: lemond --port 13305" in detail) is not gaias_own
 
 
 def test_gaias_engine_that_cannot_start_names_the_setup_fix():

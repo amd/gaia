@@ -80,14 +80,18 @@ def test_init_hint_never_names_the_removed_cli_unpatched(monkeypatch):
     assert "Start it with `lemonade-server serve`" not in hint
 
 
-def test_server_run_error_is_classified_with_no_command(start_hint):
+@pytest.mark.parametrize("gaias_own", [True, False])
+def test_server_run_error_is_classified(start_hint, monkeypatch, gaias_own):
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda *a: gaias_own
+    )
     detail = server_mod._terminal_error_detail(
         ConnectionError("Max retries exceeded ... Connection refused")
     )
 
     assert "local LLM" in detail
-    assert _INSTRUCTION not in detail
     assert "Max retries" not in detail
+    assert (_INSTRUCTION in detail) is not gaias_own
 
 
 def _fake_agent():

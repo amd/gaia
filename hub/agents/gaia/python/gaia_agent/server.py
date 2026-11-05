@@ -687,17 +687,17 @@ def _terminal_error_detail(exc: BaseException) -> str:
     'something went wrong' would hide the one detail that makes a bug
     reportable.
     """
-    from gaia_agent.stdio import model_server_failure
+    from gaia_agent.stdio import model_server_failure, model_server_message
 
     typed = model_server_failure(exc)
     if typed is not None:
-        return typed.user_message
+        return model_server_message(typed)
     return f"{type(exc).__name__}: {exc}"
 
 
 def _start_failure(exc: BaseException, surface: str) -> HTTPException:
     """The HTTP error for a run that failed before its loop started."""
-    from gaia_agent.stdio import model_server_failure
+    from gaia_agent.stdio import model_server_failure, model_server_message
 
     typed = model_server_failure(exc)
     if typed is None:
@@ -707,7 +707,7 @@ def _start_failure(exc: BaseException, surface: str) -> HTTPException:
     logger.warning("%s /query could not start: %s", AGENT_ID, exc)
     # Not the caller's fault and not a bug: the model server is unavailable.
     return HTTPException(
-        status_code=503, detail=surface_wording(typed.user_message, surface)
+        status_code=503, detail=surface_wording(model_server_message(typed), surface)
     )
 
 

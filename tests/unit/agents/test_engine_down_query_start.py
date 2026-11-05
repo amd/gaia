@@ -38,6 +38,8 @@ _COMMANDS = ("gaia lemonade", "gaia init", "gaia daemon", "run:", "Run:")
 def engine_cannot_start(tmp_path, monkeypatch, gaia_owned_lemonade):
     """GAIA's engine is unpacked without ``lemond``; the daemon can't start it."""
     monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+    # Memory's warm-up asks the daemon too; this counts the chat's own asks.
+    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
     EmbeddedLemonade().dist_dir.mkdir(parents=True)
     ensure = MagicMock(
         side_effect=LemonadeStartFailedError("start failed", reason=_REASON)
@@ -89,8 +91,8 @@ class TestACloudChatWithTheEngineDown:
         assert not any(raw in detail for raw in _RAW), detail
         assert not any(command in detail for command in _COMMANDS), detail
         assert not [url for url in sent if ":13305" in url], sent
-        # One failed start is final: no reconnect wait, no second spawn.
-        assert ensure.call_count <= 2
+        # One failed start is final: no reconnect wait, no second start.
+        assert ensure.call_count == 1
         assert elapsed < 20
 
     def test_a_tui_caller_gets_the_tuis_own_fix(self, engine_cannot_start):
