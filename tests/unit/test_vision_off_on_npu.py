@@ -83,14 +83,37 @@ def test_chat_is_told_it_is_off_and_offered_no_download(chat_model, monkeypatch)
     }
 
 
-@pytest.mark.parametrize(
+CLOUD = "fireworks.deepseek-v4p1-flash"
+IMAGE_TOOLS = pytest.mark.parametrize(
     "call",
     [
         lambda host, path: host._analyze_image(path),
         lambda host, path: host._answer_question_about_image(path, "what is it?"),
     ],
 )
-def test_the_image_tools_say_why_they_cannot_read(call, tmp_path):
+
+
+@pytest.fixture
+def downloaded(monkeypatch):
+    """Lemonade lists *models* as downloaded; None makes it unreachable."""
+
+    def use(*models):
+        class Client:
+            def __init__(self, base_url=None, verbose=True):
+                pass
+
+            def list_models(self, show_all=False):
+                assert not show_all, "only downloaded models count"
+                if models == (None,):
+                    raise lc.LemonadeClientError("Request failed: refused")
+                return {"data": [{"id": m} for m in models]}
+
+        monkeypatch.setattr(lc, "LemonadeClient", Client)
+
+    return use
+
+
+def _read(call, tmp_path):
     host = VLMToolsMixin()
     host.vlm_model = None
     host.vlm_client = None
@@ -98,7 +121,50 @@ def test_the_image_tools_say_why_they_cannot_read(call, tmp_path):
     image.write_bytes(b"x")
     result = call(host, str(image))
     assert result["status"] == "error"
-    assert result["error"] == lc.VISION_OFF_ON_NPU
+    return result["error"]
+
+
+@IMAGE_TOOLS
+@pytest.mark.parametrize("last_model", [CLOUD, NPU])
+def test_with_no_vision_model_the_tools_say_none_is_installed(
+    call, last_model, chat_model, downloaded, tmp_path
+):
+    chat_model(NPU, last_model=last_model)
+    downloaded(NPU, lc.DEFAULT_EMBEDDING_MODEL)
+    error = _read(call, tmp_path)
+    assert error == lc.VISION_NOT_INSTALLED
+    assert "Settings > Model" in error and "Gemma 4 E4B" in error
+    assert "GPU" not in error and "NPU" not in error
+    assert "`" not in error and "gaia " not in error
+
+
+@IMAGE_TOOLS
+def test_with_a_vision_model_installed_the_npu_is_the_cause(
+    call, chat_model, downloaded, tmp_path
+):
+    chat_model(NPU)
+    downloaded(NPU, lc.DEFAULT_MODEL_NAME)
+    assert _read(call, tmp_path) == lc.VISION_OFF_ON_NPU
+
+
+@IMAGE_TOOLS
+def test_a_chosen_vision_model_counts_as_installed(
+    call, chat_model, downloaded, tmp_path
+):
+    chat_model(NPU, vision_model="user.My-VL-GGUF")
+    downloaded(NPU, "My-VL-GGUF")
+    assert _read(call, tmp_path) == lc.VISION_OFF_ON_NPU
+
+
+@IMAGE_TOOLS
+def test_an_unreachable_server_names_no_wrong_cause(
+    call, chat_model, downloaded, tmp_path
+):
+    chat_model(NPU)
+    downloaded(None)
+    error = _read(call, tmp_path)
+    assert "couldn't check which models are installed" in error
+    assert "GPU" not in error
 
 
 def test_indexing_an_image_says_why_it_is_not_read(tmp_path):

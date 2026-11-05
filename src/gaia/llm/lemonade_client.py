@@ -492,6 +492,41 @@ VISION_OFF_ON_NPU = (
     "Settings > Model."
 )
 
+#: Why there is no vision model: none that reads images is downloaded.
+VISION_NOT_INSTALLED = (
+    "No image-reading model is installed on this PC. To read images, download "
+    "Gemma 4 E4B: in Settings > Model, open Manage downloads and disk space, "
+    "tick Gemma 4 E4B and apply, then ask again."
+)
+
+
+def vision_off_reason(base_url: Optional[str] = None) -> str:
+    """Why reading images is off, once :func:`resolve_default_vision_model` gave None.
+
+    The NPU is the cause only when a model that reads images is downloaded:
+    switching chat to the GPU installs nothing.
+    """
+    from gaia.config import GaiaConfig
+    from gaia.installer.model_choice import VISION_ONLY_MODELS
+
+    readers = [*VISION_CHAT_MODELS, *VISION_ONLY_MODELS]
+    chosen = GaiaConfig.load().vision_model
+    if chosen:
+        readers.append(chosen)
+    try:
+        catalog = LemonadeClient(base_url=base_url, verbose=False).list_models()
+    except LemonadeClientError as e:
+        return (
+            "GAIA can't read this image: it couldn't check which models are "
+            f"installed on this PC ({e})."
+        )
+    installed = any(
+        _model_ids_match(entry.get("id"), reader)
+        for entry in catalog.get("data", [])
+        for reader in readers
+    )
+    return VISION_OFF_ON_NPU if installed else VISION_NOT_INSTALLED
+
 
 def resolve_default_vision_model() -> Optional[str]:
     """The model that reads text in scans and images when nobody passed one.
