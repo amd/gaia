@@ -22,6 +22,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/images"
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/setupapi"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 )
 
@@ -63,7 +64,8 @@ func (m ChatModel) runImageCommand(query string) (tea.Model, tea.Cmd) {
 	base := m.lemonadeBaseURL
 	switch {
 	case len(fields) == 0:
-		return m, func() tea.Msg { return showImageSettings(base) }
+		api, chat := newChatSetupAPI(), m.modelID
+		return m, func() tea.Msg { return showImageSettings(base, chat, api) }
 	case len(fields) == 1 && fields[0] == "open":
 		return m.openLastImage()
 	case len(fields) == 2 && fields[0] == "model":
@@ -143,7 +145,7 @@ func savedImageModel(s preflight.ImageSettings) string {
 	return s.Model
 }
 
-func showImageSettings(base string) tea.Msg {
+func showImageSettings(base, chatModel string, api setupapi.API) tea.Msg {
 	saved, err := preflight.ReadImageSettings()
 	if err != nil {
 		return imageResultMsg{err: err}
@@ -152,7 +154,38 @@ func showImageSettings(base string) tea.Msg {
 	if err != nil {
 		return imageResultMsg{err: fmt.Errorf("%s: %w", describeImageSettings(saved, nil), err)}
 	}
-	return imageResultMsg{text: renderImageSettings(saved, choices)}
+	text := renderImageSettings(saved, choices)
+	if note := chatModelImageNote(api, chatModel); note != "" {
+		text = note + "\n" + text
+	}
+	return imageResultMsg{text: text}
+}
+
+// chatModelImageNote warns when the chat model is too small to be offered
+// image creation, as Settings › Image creation does. An unreadable setup
+// catalog leaves the note out; the settings still show and save.
+func chatModelImageNote(api setupapi.API, chatModel string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	plan, err := api.Plan(ctx)
+	if err != nil {
+		return ""
+	}
+	if chatModel == "" {
+		chatModel = plan.ChatModel.ID
+	}
+	for _, e := range append(plan.Catalog, plan.Models...) {
+		if !lemonade.SameLocalID(e.ID, chatModel) || e.FeatureTier != setupapi.TierCompact {
+			continue
+		}
+		name := e.Name
+		if name == "" {
+			name = e.ID
+		}
+		return "[!] " + name + ", the chat model, is too small to be offered image creation, " +
+			"so these settings won't be used until you switch models (/models)."
+	}
+	return ""
 }
 
 // describeImageSettings is one line naming what the next image is created

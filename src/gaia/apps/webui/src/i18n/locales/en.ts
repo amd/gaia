@@ -868,6 +868,8 @@ export const enMessages = {
     'images.settings.stepsHint': "More steps add detail and take longer.",
     'images.settings.shared': "The terminal app uses the same settings.",
     'images.settings.loadFailed': "Couldn't load the image settings: {reason}",
+    'images.settings.unreachable': "Lemonade isn't answering, so the image models can't be listed. Once it's running, try again.",
+    'images.settings.retry': "Try again",
     'images.settings.saveFailed': "Couldn't save the image settings: {reason}",
     'settings.language': 'Language',
     'settings.languageHint': 'Changes the app’s labels and layout, not the language GAIA answers in.',

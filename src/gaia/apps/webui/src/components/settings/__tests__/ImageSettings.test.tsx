@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImageSettings } from '../ImageSettings';
 import * as api from '../../../services/api';
 import { useChatStore } from '../../../stores/chatStore';
+import { useModelStore } from '../../../stores/modelStore';
 
 vi.mock('../../../services/api', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../../../services/api')>();
@@ -68,8 +69,11 @@ describe('ImageSettings', () => {
         mockedApi.getImageSettings.mockResolvedValue({
             ...SETTINGS, chat_model: 'Gemma-4-E4B-it-GGUF', chat_model_creates_images: false,
         });
+        useModelStore.setState({ names: { 'Gemma-4-E4B-it-GGUF': 'Gemma 4 E4B' } });
         render(<ImageSettings />);
-        expect((await screen.findByRole('status')).textContent).toContain('Gemma-4-E4B-it-GGUF');
+        const notice = (await screen.findByRole('status')).textContent;
+        expect(notice).toContain('Gemma 4 E4B');
+        expect(notice).not.toContain('Gemma-4-E4B-it-GGUF');
         fireEvent.click(screen.getByRole('button', { name: 'Choose a chat model' }));
         expect(useChatStore.getState().settingsSection).toBe('model');
     });
@@ -91,9 +95,21 @@ describe('ImageSettings', () => {
     });
 
     it('says why it could not load instead of showing empty controls', async () => {
-        mockedApi.getImageSettings.mockRejectedValue(new api.ApiError('x', 503, 'Lemonade is down', null));
+        mockedApi.getImageSettings.mockRejectedValue(new api.ApiError('x', 500, 'config.json is not valid JSON', null));
         render(<ImageSettings />);
-        expect((await screen.findByRole('alert')).textContent).toContain('Lemonade is down');
+        expect((await screen.findByRole('alert')).textContent).toContain('config.json is not valid JSON');
         expect(screen.queryByLabelText('Model')).toBeNull();
+    });
+
+    it('says plainly when Lemonade is not answering, and loads again on Try again', async () => {
+        const raw = "Could not read the image models from Lemonade at http://127.0.0.1:13305/api/v1: HTTPConnectionPool(host='127.0.0.1')";
+        mockedApi.getImageSettings.mockRejectedValueOnce(new api.ApiError('x', 503, raw, null));
+        render(<ImageSettings />);
+        const alert = await screen.findByRole('alert');
+        expect(alert.textContent).toContain("Lemonade isn't answering");
+        expect(alert.textContent).not.toContain('HTTPConnectionPool');
+        expect(screen.getByText(raw)).toBeTruthy();
+        fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+        expect(await screen.findByLabelText('Model')).toBeTruthy();
     });
 });

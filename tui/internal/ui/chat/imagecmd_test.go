@@ -19,6 +19,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/setupapi"
+	"github.com/amd/gaia/tui/internal/setupapi/setupapitest"
 )
 
 // imageCatalog is the slice of Lemonade's catalog the Python tests use.
@@ -417,5 +419,41 @@ func TestClickingTheImageLineOpensIt(t *testing.T) {
 	cmd()
 	if len(*started) == 0 {
 		t.Error("the image was not opened")
+	}
+}
+
+// chatModelTier makes /image see chatID as the chat model, at tier.
+func chatModelTier(t *testing.T, m ChatModel, chatID, tier string) ChatModel {
+	t.Helper()
+	entry := setupapitest.Entry(chatID, []string{setupapi.RoleChat}, 5.97, true, true, true, nil, 0, 0)
+	entry.Name = "Gemma 4 E4B"
+	entry.FeatureTier = tier
+	prev := newChatSetupAPI
+	newChatSetupAPI = func() setupapi.API {
+		return &setupapitest.Fake{P: setupapi.Plan{Catalog: []setupapi.CatalogEntry{entry}}}
+	}
+	t.Cleanup(func() { newChatSetupAPI = prev })
+	m.modelID = chatID
+	return m
+}
+
+func TestImageSaysWhenTheChatModelIsNotOfferedImages(t *testing.T) {
+	m, _, _ := imageModel(t, "")
+	m = chatModelTier(t, m, "Gemma-4-E4B-it-GGUF", setupapi.TierCompact)
+	m = runImage(t, m, "/image")
+	got := lastStatus(t, m)
+	for _, want := range []string{"Gemma 4 E4B, the chat model, is too small to be offered image creation", "/models"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("status lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestImageSaysNothingOfAChatModelThatCreatesImages(t *testing.T) {
+	m, _, _ := imageModel(t, "")
+	m = chatModelTier(t, m, "Gemma-4-E4B-it-GGUF", "full")
+	m = runImage(t, m, "/image")
+	if got := lastStatus(t, m); strings.Contains(got, "too small") {
+		t.Errorf("status warns about a model that creates images:\n%s", got)
 	}
 }

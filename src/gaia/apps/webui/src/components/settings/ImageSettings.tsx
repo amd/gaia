@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
+import { displayModelName, useModelNames } from '../../stores/modelStore';
 import { useT } from '../../i18n/useT';
 
 /** Step counts offered beside a model's own; capped by the server's maximum. */
@@ -21,14 +22,20 @@ function errorText(err: unknown): string {
 export function ImageSettings() {
     const t = useT();
     const openSettings = useChatStore((s) => s.openSettings);
+    useModelNames();
     const [settings, setSettings] = useState<api.ImageSettings | null>(null);
-    const [loadError, setLoadError] = useState<string | null>(null);
+    const [loadError, setLoadError] = useState<{ unreachable: boolean; detail: string } | null>(null);
     const [saveError, setSaveError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
 
-    useEffect(() => {
-        api.getImageSettings().then(setSettings).catch((err) => setLoadError(errorText(err)));
-    }, []);
+    const load = () => {
+        setLoadError(null);
+        api.getImageSettings().then(setSettings).catch((err) => setLoadError({
+            unreachable: err instanceof api.ApiError && err.httpStatus === 503,
+            detail: errorText(err),
+        }));
+    };
+    useEffect(load, []);
 
     const save = (change: Parameters<typeof api.updateImageSettings>[0]) => {
         setSaving(true);
@@ -44,7 +51,15 @@ export function ImageSettings() {
         return (
             <div className="settings-pane">
                 {title}
-                <p className="settings-error" role="alert">{t('images.settings.loadFailed', { reason: loadError })}</p>
+                {loadError.unreachable ? (
+                    <>
+                        <p className="settings-error" role="alert">{t('images.settings.unreachable')}</p>
+                        <p className="settings-hint">{loadError.detail}</p>
+                        <button type="button" className="btn-secondary" onClick={load}>{t('images.settings.retry')}</button>
+                    </>
+                ) : (
+                    <p className="settings-error" role="alert">{t('images.settings.loadFailed', { reason: loadError.detail })}</p>
+                )}
             </div>
         );
     }
@@ -66,7 +81,7 @@ export function ImageSettings() {
 
             {!settings.chat_model_creates_images && (
                 <div className="settings-notice" role="status">
-                    <p>{t('images.settings.chatModelCannot', { model: settings.chat_model })}</p>
+                    <p>{t('images.settings.chatModelCannot', { model: displayModelName(settings.chat_model) })}</p>
                     <button type="button" className="btn-secondary" onClick={() => openSettings('model')}>
                         {t('images.settings.chooseChatModel')}
                     </button>

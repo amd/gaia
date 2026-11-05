@@ -868,6 +868,8 @@ const messages: Messages = {
     'images.settings.stepsHint': "المزيد من الخطوات يضيف تفاصيل ويستغرق وقتًا أطول.",
     'images.settings.shared': "يستخدم تطبيق الطرفية الإعدادات نفسها.",
     'images.settings.loadFailed': "تعذّر تحميل إعدادات الصور: {reason}",
+    'images.settings.unreachable': "لا يستجيب Lemonade، لذا يتعذّر عرض نماذج الصور. أعد المحاولة بعد تشغيله.",
+    'images.settings.retry': "أعد المحاولة",
     'images.settings.saveFailed': "تعذّر حفظ إعدادات الصور: {reason}",
     'settings.language': 'اللغة',
     'settings.languageHint': 'تغيّر تسميات التطبيق واتجاه تخطيطه، لا اللغة التي يجيب بها GAIA.',
