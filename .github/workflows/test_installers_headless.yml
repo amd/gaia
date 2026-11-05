@@ -446,7 +446,7 @@ jobs:
           case "${KIND}" in
             agent-ui-deb|appimage)
               sudo apt-get update
-              pkgs="xvfb xauth x11-utils x11-apps imagemagick"
+              pkgs="xvfb xauth"
               if [ "${KIND}" = appimage ]; then
                 if [ "${OS_IMAGE}" = ubuntu-24.04 ]; then pkgs="${pkgs} libfuse2t64"; else pkgs="${pkgs} libfuse2"; fi
               fi

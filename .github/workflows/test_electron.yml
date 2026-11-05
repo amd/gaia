@@ -593,11 +593,58 @@ jobs:
           rm test-launch.js
         timeout-minutes: 3
 
+  # A mocked process cannot show Electron replacing Node's SIGTERM handler (#6579).
+  test-sigterm-quit:
+    name: SIGTERM quits the real Electron (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: src/gaia/apps/webui/package-lock.json
+
+      - name: Install the Agent UI's Electron
+        working-directory: src/gaia/apps/webui
+        run: npm ci
+
+      - name: Install xvfb
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: DIAG the guard on main
+        continue-on-error: true
+        run: |
+          git fetch -q --depth=1 origin main
+          git show FETCH_HEAD:src/gaia/apps/webui/services/quit-guard.cjs > "${RUNNER_TEMP}/old-guard.cjs"
+          export GAIA_QUIT_GUARD="${RUNNER_TEMP}/old-guard.cjs"
+          if [ "${RUNNER_OS}" = Linux ]; then xvfb-run -a node --test tests/electron/sigterm-electron.test.mjs
+          else node --test tests/electron/sigterm-electron.test.mjs; fi
+
+      - name: SIGTERM quits without the quit question
+        run: |
+          if [ "${RUNNER_OS}" = Linux ]; then
+            xvfb-run -a node --test tests/electron/sigterm-electron.test.mjs
+          else
+            node --test tests/electron/sigterm-electron.test.mjs
+          fi
+
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
     if: always()
-    needs: [test-electron-framework, test-webui-vitest, test-apps-integration, test-apps-functional, test-apps-build, dependency-audit, test-electron-runtime]
+    needs: [test-electron-framework, test-webui-vitest, test-apps-integration, test-apps-functional, test-apps-build, dependency-audit, test-electron-runtime, test-sigterm-quit]
 
     steps:
       - name: Check test results
@@ -612,6 +659,7 @@ jobs:
           echo "Test Apps Functionality: ${{ needs.test-apps-functional.result }}"
           echo "Test Apps Build: ${{ needs.test-apps-build.result }}"
           echo "Test Electron Runtime: ${{ needs.test-electron-runtime.result }}"
+          echo "SIGTERM quits the real Electron: ${{ needs.test-sigterm-quit.result }}"
           echo "Dependency Audit: ${{ needs.dependency-audit.result }}"
           echo ""
 
@@ -644,6 +692,11 @@ jobs:
 
           if [[ "${{ needs.test-electron-runtime.result }}" == "failure" ]]; then
             echo "❌ FAILED: Electron Runtime tests - apps crash on startup"
+            FAILED=true
+          fi
+
+          if [[ "${{ needs.test-sigterm-quit.result }}" == "failure" ]]; then
+            echo "❌ FAILED: SIGTERM did not quit the Agent UI's Electron"
             FAILED=true
           fi
 
