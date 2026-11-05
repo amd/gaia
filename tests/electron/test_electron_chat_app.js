@@ -1153,7 +1153,12 @@ describe('Chat App Integration', () => {
     });
 
     it('should auto-upload dropped files', () => {
-      expect(chatContent).toContain('uploadDocumentBlob');
+      const chatDocuments = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/utils/chatDocuments.ts'),
+        'utf8'
+      );
+      expect(chatContent).toContain('addDroppedFiles(sessionId');
+      expect(chatDocuments).toContain('api.uploadDocumentBlob(file)');
     });
 
     it('should have drag active CSS class', () => {

@@ -3,7 +3,7 @@
 
 /** Events streamed over SSE during a chat turn. */
 
-import type { InferenceStats, MCPServerStatus, McpOutput, TurnSummary } from './index';
+import type { Document, InferenceStats, MCPServerStatus, McpOutput, TurnSummary } from './index';
 
 /** Extended SSE event types for agent communication. */
 export type StreamEventType =
@@ -101,6 +101,8 @@ export interface StreamEvent {
     stats?: InferenceStats;
     /** Per-turn sources, files and data flow (attached to done events). */
     turn_summary?: TurnSummary;
+    /** Library documents the agent indexed and attached to the chat (done events). */
+    documents_added?: Document[];
     /** MCP server statuses (for mcp_status events). */
     servers?: MCPServerStatus[];
     /** Structured command output (for tool_result of run_shell_command). */

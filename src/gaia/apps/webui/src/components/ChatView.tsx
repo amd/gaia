@@ -51,6 +51,7 @@ import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { usePolicyToast } from '../hooks/usePolicyToast';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { isPlaceholderTitle } from '../utils/sessionTitle';
+import { addDroppedFiles, showAddedDocuments } from '../utils/chatDocuments';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
@@ -1067,6 +1068,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
                 streamBufferRef.current = '';
 
+                // Even for a backgrounded chat: these are library and chat-list state.
+                showAddedDocuments(sessionId, event.documents_added ?? []);
+
                 // A completion for a backgrounded session is persisted
                 // server-side, so don't touch the shared store (#1580).
                 if (isStale()) return;
@@ -1532,12 +1536,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     }, [documents, sessionId, updateSessionInList]);
 
-    // Drag & drop — uploads the file blob directly rather than relying on
-    // File.path (which is browser-undefined and was removed in Electron 32+).
-    // Dropped files index quietly and auto-attach to the current session;
-    // the Document Library panel is NOT forced open so the drop doesn't
-    // interrupt the chat view. Users can still open the library manually
-    // to see progress for large files. See issue #728.
+    // Drag & drop: see addDroppedFiles.
     const handleDrop = useCallback(async (e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
@@ -1552,35 +1551,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         if (documents.length === 0) return;
 
         if (!(await ensureModel('embedding'))) return;
-        for (const file of documents) {
-            log.doc.info(`Dropped on chat view: ${file.name}`);
-            try {
-                const doc = await api.uploadDocumentBlob(file);
-                if (sessionId && doc?.id) {
-                    try {
-                        await api.attachDocument(sessionId, doc.id);
-                        const freshSession = useChatStore.getState().sessions.find(s => s.id === sessionId);
-                        const existing = freshSession?.document_ids ?? [];
-                        if (!existing.includes(doc.id)) {
-                            updateSessionInList(sessionId, { document_ids: [...existing, doc.id] });
-                        }
-                        log.doc.info(`Auto-attached "${file.name}" to session ${sessionId}`);
-                    } catch (attachErr) {
-                        log.doc.warn(`Could not attach dropped document to session: ${attachErr}`);
-                    }
-                }
-            } catch (err) {
-                log.doc.error(`Upload failed: ${file.name}`, err);
-            }
-        }
-        // The document bar lists only documents the store knows about.
-        try {
-            const data = await api.listDocuments();
-            setDocuments(data.documents || []);
-        } catch (err) {
-            log.doc.error('Could not refresh the document list after a drop', err);
-        }
-    }, [sessionId, updateSessionInList, setDocuments, attach]);
+        await addDroppedFiles(sessionId, documents);
+    }, [sessionId, attach]);
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
@@ -1683,7 +1655,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             {visibleDocs.map((d) => (
                                 <span key={d.id} className="doc-pill" title={d.filepath || d.filename}>
                                     <FileText size={9} className="doc-pill-icon" aria-hidden="true" />
-                                    <span className="doc-pill-name">{d.filename}</span>
+                                    <span className="doc-pill-name" dir="auto">{d.filename}</span>
                                     <button
                                         className="doc-pill-remove"
                                         onClick={(e) => handleRemoveDocument(e, d.id)}

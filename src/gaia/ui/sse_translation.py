@@ -120,6 +120,8 @@ SUMMARY_VIEW_KEYS = (
     "file_path",
     "image_path",
     "audio_path",
+    # How many chunks ``index_document`` stored, for the Document library.
+    "num_chunks",
     # A ``search_web`` result's hits, so a relayed turn can cite them.
     "sources",
 )

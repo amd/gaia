@@ -1713,6 +1713,7 @@ class RAGToolsMixin:
                         "status": "success",
                         "message": f"Already indexed: {Path(file_path).name}",
                         "file_name": Path(file_path).name,
+                        "file_path": real_file_path,
                         "already_indexed": True,
                         "from_cache": True,
                         "total_indexed_files": len(self.indexed_files),
@@ -1764,6 +1765,8 @@ class RAGToolsMixin:
                         "message": f"{msg}. {save_warning}" if save_warning else msg,
                         **({"warning": save_warning} if save_warning else {}),
                         "file_name": result.get("file_name"),
+                        # The Agent UI records this path in the user's Document library.
+                        "file_path": real_file_path,
                         "file_type": result.get("file_type"),
                         "file_size_mb": result.get("file_size_mb"),
                         "num_pages": result.get("num_pages"),
