@@ -276,6 +276,10 @@ stop_agent_ui() {
   for p in $(pgrep -f "${APP_PATTERN}" || true); do
     ps -o args= -p "${p}" 2>/dev/null | grep -q -- '--type=' || mains="${mains} ${p}"
   done
+  local dport; dport="$(grep -oE 'ui-port[ =]+[0-9]+' "${GAIA_HOME}/electron-main.log" | tail -n1 | grep -oE '[0-9]+$' || true)"
+  echo "DIAG work-in-progress: $(curl -sS --max-time 5 -H 'X-Gaia-UI: 1' "http://127.0.0.1:${dport}/api/system/work-in-progress" 2>&1)"
+  echo "DIAG setup status: $(curl -sS --max-time 5 -H 'X-Gaia-UI: 1' "http://127.0.0.1:${dport}/api/setup/status" 2>&1 | head -c 600)"
+  for p in ${mains}; do [ -r "/proc/${p}/status" ] && grep -E 'Sig(Cgt|Blk|Ign)' "/proc/${p}/status" | sed "s/^/DIAG ${p} /" || true; done
   echo "asking the app to quit: SIGTERM to${mains:- (no main process found)}"
   # shellcheck disable=SC2086 # a list of pids
   [ -z "${mains}" ] || kill -TERM ${mains} 2>/dev/null || true
@@ -284,6 +288,18 @@ stop_agent_ui() {
     if [ -z "$(app_pids)" ]; then echo "the app and its backend exited ${i}s after SIGTERM"; return 0; fi
     sleep 1
   done
+  local dd=""
+  for p in ${mains}; do [ -r "/proc/${p}/environ" ] && dd="$(tr '\0' '\n' <"/proc/${p}/environ" | grep '^DISPLAY=' | cut -d= -f2 || true)" || true; done
+  if [ -n "${dd}" ]; then
+    echo "DIAG display ${dd}"
+    (xwininfo -root -tree -display "${dd}" 2>&1 | grep -v 'has no name' | head -60) || true
+    xwd -root -silent -display "${dd}" >"${LOGS}/screen.xwd" 2>/dev/null && (convert "${LOGS}/screen.xwd" "${LOGS}/screen.png" 2>&1 || true)
+  elif [ "${OS}" = Darwin ]; then
+    screencapture -x "${LOGS}/screen.png" 2>&1 || true
+    osascript -e 'tell application "System Events" to get name of every window of every process whose background only is false' 2>&1 || true
+  fi
+  echo "DIAG work-in-progress after: $(curl -sS --max-time 5 -H 'X-Gaia-UI: 1' "http://127.0.0.1:${dport}/api/system/work-in-progress" 2>&1)"
+  echo "DIAG electron-main tail:"; tail -n 8 "${GAIA_HOME}/electron-main.log" | cut -c1-200
   local left
   left="$(for p in $(app_pids); do ps -o pid=,args= -p "${p}" 2>/dev/null; done)"
   echo "${left}" >"${WORK}/quit-leftovers"
