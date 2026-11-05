@@ -788,3 +788,52 @@ class TestScriptsRefuseOutsideCi:
             "New-Item"
         )
         assert "RUNNER_TEMP" in posix and "RUNNER_TEMP" in windows
+
+
+def _posix_function(name: str) -> str:
+    script = (HEADLESS / "posix-journey.sh").read_text(encoding="utf-8")
+    start = script.index(f"\n{name}() {{\n") + 1
+    return script[start : script.index("\n}\n", start) + 3]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="bash script")
+class TestLaunchWaitsForTheMainLog:
+    """A cold AppImage can open electron-main.log just past the 10s check."""
+
+    def _wait(self, tmp_path, app: str, writer: str, seconds: int):
+        log = tmp_path / "electron-main.log"
+        body = (
+            "set -u\n"
+            f"LOGS={str(tmp_path)!r}\n"
+            f"LOG={str(log)!r}\n"
+            ': > "$LOGS/app.err"\n'
+            'die() { echo "DIE: $*" >&2; exit 1; }\n'
+            + _posix_function("wait_for_main_log")
+            + f"{app}\n"
+            "trap 'kill $pid 2>/dev/null' EXIT\n"
+            f"{writer}\n"
+            f'wait_for_main_log "$pid" "$LOG" {seconds}\n'
+        )
+        return subprocess.run(
+            ["bash", "-c", body], capture_output=True, text=True, timeout=60
+        )
+
+    def test_a_log_written_after_the_check_starts_passes(self, tmp_path):
+        out = self._wait(tmp_path, "sleep 30 & pid=$!", '(sleep 2; : > "$LOG") &', 10)
+        assert out.returncode == 0, out.stderr
+
+    def test_a_running_app_that_never_writes_the_log_fails(self, tmp_path):
+        out = self._wait(tmp_path, "sleep 30 & pid=$!", ":", 2)
+        assert out.returncode == 1
+        assert "is running but wrote no" in out.stderr
+        assert "within 12s of launch" in out.stderr
+
+    def test_an_app_that_exits_first_fails_at_once(self, tmp_path):
+        out = self._wait(tmp_path, "true & pid=$!; wait $pid", ":", 30)
+        assert out.returncode == 1
+        assert "the app exited without writing" in out.stderr
+
+    def test_launch_uses_the_wait_not_a_one_shot_check(self):
+        launch = _posix_function("launch_agent_ui")
+        assert "wait_for_main_log" in launch
+        assert '[ -f "${GAIA_HOME}/electron-main.log" ] ||' not in launch

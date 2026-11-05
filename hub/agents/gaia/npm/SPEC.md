@@ -430,7 +430,9 @@ again, and a `status` with `"phase": "answer_restart"` and
 since the last `tool_call` and shows the status `message` in its place. While
 the daemon restarts the server, `status` lines carry `"phase":
 "model_restart"`. If it is not back within the retries, `final` carries
-`failure: "model_server_down"`.
+`failure: "model_server_down"`. A tool's own model calls report the same
+restart, and `extract_document_items` sends `"phase": "reading"` before each
+page's call ("Reading page 4 of 12…").
 
 ```json
 {
