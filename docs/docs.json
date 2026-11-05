@@ -416,6 +416,7 @@
               "plans/security-model",
               "plans/email-triage-skill",
               "plans/messaging-integrations-plan",
+              "plans/home-assistant",
               "plans/daemon-convergence",
               "plans/autonomy-engine"
             ]
