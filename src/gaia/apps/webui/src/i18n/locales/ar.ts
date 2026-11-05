@@ -837,6 +837,16 @@ const messages: Messages = {
     'ctx.meter.warning.one': 'المحادثة تملأ سياق النموذج. قد يخرج أقدم دور من نطاق رؤية النموذج تاليًا:',
     'ctx.meter.warning.other': 'المحادثة تملأ سياق النموذج. أقدم الأدوار التي قد تخرج من نطاق رؤية النموذج تاليًا ({n}):',
     'ctx.meter.warningSaved': 'تبقى محفوظة، ويمكنك أن تطلب من GAIA استرجاعها.',
+    'spend.aria': 'الإنفاق السحابي: {chat} في هذه المحادثة، و{today} اليوم في كل المحادثات',
+    'spend.title': 'تكلفة هذه المحادثة ومحادثات اليوم على النموذج السحابي',
+    'spend.today': 'اليوم',
+    'spend.window': 'الإنفاق السحابي',
+    'spend.thisChat': 'هذه المحادثة',
+    'spend.todayChats.one': 'اليوم، في محادثة واحدة',
+    'spend.todayChats.other': 'اليوم، في {n} محادثات',
+    'spend.perAnswer': 'كل إجابة في هذه المحادثة',
+    'spend.note': 'بسعر القائمة لدى Fireworks AI. الإجابة الموقوفة بلا سعر.',
+    'spend.month': 'إجمالي هذا الشهر والحد',
 
     // Settings
     'settings.title': 'الإعدادات',

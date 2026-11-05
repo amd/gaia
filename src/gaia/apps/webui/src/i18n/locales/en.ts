@@ -837,6 +837,16 @@ export const enMessages = {
     'ctx.meter.warning.one': 'The conversation is filling the model\'s context. The oldest turn may drop out of the model\'s view next:',
     'ctx.meter.warning.other': 'The conversation is filling the model\'s context. The oldest {n} turns may drop out of the model\'s view next:',
     'ctx.meter.warningSaved': 'They stay saved, and you can ask GAIA to recall them.',
+    'spend.aria': 'Cloud spending: {chat} in this chat, {today} today across chats',
+    'spend.title': 'What this chat and today\'s chats cost on the cloud model',
+    'spend.today': 'today',
+    'spend.window': 'Cloud spending',
+    'spend.thisChat': 'This chat',
+    'spend.todayChats.one': 'Today, in {n} chat',
+    'spend.todayChats.other': 'Today, across {n} chats',
+    'spend.perAnswer': 'Each answer in this chat',
+    'spend.note': 'At Fireworks AI list price. A stopped answer has no price.',
+    'spend.month': 'This month\'s total and limit',
 
     // Settings
     'settings.title': 'Settings',

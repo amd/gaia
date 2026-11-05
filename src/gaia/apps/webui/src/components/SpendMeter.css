@@ -1,0 +1,42 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.spend-meter {
+    gap: 4px;
+    white-space: nowrap;
+}
+
+.spend-meter-today {
+    color: var(--text-muted);
+}
+
+/* Keeps its width; the model chip beside it is the one that truncates. */
+.composer-row .spend-meter-wrap {
+    flex-shrink: 0;
+    min-width: auto;
+}
+
+.spend-meter-heading {
+    margin: 12px 0 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.spend-meter-panel {
+    width: 300px;
+}
+
+.spend-meter-answers {
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.spend-meter-unknown {
+    color: var(--text-muted);
+}
+
+@media (max-width: 480px) {
+    .spend-meter-today {
+        display: none;
+    }
+}
