@@ -25,7 +25,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from gaia.agents.base.memory import MemoryMixin
+from gaia.agents.base.memory import STABLE_MEMORY_PROMPT_CHARS, MemoryMixin
 from gaia.agents.base.memory_store import MemoryStore
 from gaia.agents.base.system_context import (
     collect_system_info as _real_collect_system_info,
@@ -2118,10 +2118,10 @@ class TestIntegrationScenarios:
 
 
 class TestSystemPromptSizeCap:
-    """get_memory_system_prompt() must never exceed 4000 chars."""
+    """get_memory_system_prompt() must never exceed its hard cap."""
 
     def test_system_prompt_within_size_limit(self, mixin_host):
-        """System prompt is always ≤ 4000 + len(truncation marker) chars."""
+        """System prompt is always ≤ the cap + len(truncation marker) chars."""
         store = mixin_host.memory_store
         # Store 10 preferences each near max content size
         for i in range(10):
@@ -2141,9 +2141,9 @@ class TestSystemPromptSizeCap:
             )
 
         prompt = mixin_host.get_memory_system_prompt()
-        # 4000 chars hard cap + room for the truncation marker itself
+        # Hard cap + room for the truncation marker itself
         _MARKER = "\n... (memory truncated)"
-        assert len(prompt) <= 4000 + len(_MARKER)
+        assert len(prompt) <= STABLE_MEMORY_PROMPT_CHARS + len(_MARKER)
 
     def test_memories_that_do_not_fit_are_counted_not_cut(self, mixin_host):
         """A memory too long for the cap is left out whole, and the prompt says so."""
@@ -2160,7 +2160,7 @@ class TestSystemPromptSizeCap:
         assert "(10 more stored memories are not listed here" in prompt
         assert "p0word299" not in prompt
         assert "memory truncated" not in prompt
-        assert len(prompt) <= 4000
+        assert len(prompt) <= STABLE_MEMORY_PROMPT_CHARS
 
     def test_system_prompt_has_instructions_when_no_memory(self, mixin_host):
         """System prompt includes memory instructions even with no user memories."""
