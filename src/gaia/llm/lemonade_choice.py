@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Dict, Mapping, Optional, Tuple
 from urllib.parse import urlparse
 
 from gaia.logger import get_logger
@@ -167,12 +167,44 @@ def _same_env_value(a: Optional[str], b: Optional[str]) -> bool:
     return bool(a and b) and a.strip().rstrip("/") == b.strip().rstrip("/")
 
 
+def is_ignored_env_value(url: Optional[str], marker: Optional[str] = None) -> bool:
+    """True when *url*, a ``LEMONADE_BASE_URL`` value, is one the app chose
+    GAIA's own over. *marker* is that environment's ``GAIA_LEMONADE_EMBEDDED``.
+    """
+    if (marker or "").strip() == "1" or not (url or "").strip():
+        return False
+    return _same_env_value(url, _config().lemonade_env_url_ignored)
+
+
 def env_url_ignored() -> Optional[str]:
     """This process's ``LEMONADE_BASE_URL`` when the app chose GAIA's own over it."""
     env = _raw_env_url()
-    if env and _same_env_value(env, _config().lemonade_env_url_ignored):
-        return env
-    return None
+    return env if is_ignored_env_value(env) else None
+
+
+def child_lemonade_env(env: Mapping[str, str]) -> Dict[str, str]:
+    """*env* for a process GAIA spawns, without a ``LEMONADE_BASE_URL`` it ignores.
+
+    The child may be an agent built apart from this GAIA that never reads
+    ``lemonade_env_url_ignored``, so it must not inherit that value or its
+    key. It gets GAIA's own running server, marked as GAIA's so it follows a
+    restart, or no address at all when the saved setting picks the server.
+    """
+    out = dict(env)
+    if not is_ignored_env_value(
+        out.get("LEMONADE_BASE_URL"), out.get("GAIA_LEMONADE_EMBEDDED")
+    ):
+        return out
+    out.pop("LEMONADE_BASE_URL", None)
+    out.pop("LEMONADE_API_KEY", None)
+    if external_lemonade_url() is None:
+        from gaia.llm.lemonade_client import running_embedded_lemonade_url
+
+        url = running_embedded_lemonade_url()
+        if url:
+            out["LEMONADE_BASE_URL"] = url
+            out["GAIA_LEMONADE_EMBEDDED"] = "1"
+    return out
 
 
 def _env_url() -> Optional[str]:

@@ -2195,7 +2195,9 @@ gaia config set lemonade_mode gaia             # back to GAIA's own
 `LEMONADE_BASE_URL` wins over the saved setting, except a value someone chose GAIA's
 own over in the Agent UI's setup. That value is saved as `lemonade_env_url_ignored`
 and ignored, with `LEMONADE_API_KEY`, while the variable still holds it; any other
-value applies again. `status` says when it is ignored.
+value applies again. `status` says when it is ignored. Processes GAIA starts (the
+daemon, its agents, setup) never inherit an ignored value: they get GAIA's own server's
+address instead, and an agent already running on the old one restarts on its next use.
 
 ### Embedded commands
 

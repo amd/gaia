@@ -398,7 +398,9 @@ class NativeAgentLauncher:
         if extra_args:
             cmd.extend(str(a) for a in extra_args)
 
-        merged_env = child_env(env)
+        from gaia.llm.lemonade_choice import child_lemonade_env
+
+        merged_env = child_lemonade_env(child_env(env))
 
         if self.debug:
             logger.debug("native-launcher: spawning %s", cmd)

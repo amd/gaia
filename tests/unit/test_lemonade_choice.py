@@ -304,6 +304,66 @@ class TestEnvChosenAwayFrom:
         with pytest.raises(GaiaConfigError, match="not valid JSON"):
             configured_lemonade_url()
 
+    def _gaias_own_running(self, tmp_path, port=63207):
+        state = tmp_path / "gaia-home" / "lemonade" / "state.json"
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(json.dumps({"port": port, "api_key": "k"}), encoding="utf-8")
+
+    DEAD = "http://127.0.0.1:59999/api/v1"
+    INHERITED = {"LEMONADE_BASE_URL": DEAD, "LEMONADE_API_KEY": "dead", "PATH": "p"}
+
+    def test_a_child_gets_gaias_own_instead_of_an_ignored_value(
+        self, monkeypatch, tmp_path
+    ):
+        # Agents are built apart from GAIA and may never read the saved choice.
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.DEAD)
+        choice.ignore_env_url()
+        self._gaias_own_running(tmp_path)
+        assert choice.child_lemonade_env(self.INHERITED) == {
+            "LEMONADE_BASE_URL": "http://localhost:63207/api/v1",
+            "GAIA_LEMONADE_EMBEDDED": "1",
+            "PATH": "p",
+        }
+
+    def test_a_child_gets_no_address_while_gaias_own_is_down(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.DEAD)
+        choice.ignore_env_url()
+        assert choice.child_lemonade_env(self.INHERITED) == {"PATH": "p"}
+
+    def test_a_child_follows_a_saved_server_over_an_ignored_value(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.DEAD)
+        choice.ignore_env_url()
+        self._gaias_own_running(tmp_path)
+        _save(lemonade_mode="external", lemonade_base_url=USER_URL)
+        assert choice.child_lemonade_env(self.INHERITED) == {"PATH": "p"}
+
+    def test_a_child_keeps_a_value_that_is_not_ignored(self, monkeypatch, tmp_path):
+        self._gaias_own_running(tmp_path)
+        assert choice.child_lemonade_env(self.INHERITED) == self.INHERITED
+        own = {**self.INHERITED, "GAIA_LEMONADE_EMBEDDED": "1"}
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.DEAD)
+        choice.ignore_env_url()
+        assert choice.child_lemonade_env(own) == own
+
+    def test_the_daemon_and_setup_children_never_inherit_an_ignored_value(
+        self, monkeypatch, tmp_path
+    ):
+        from gaia.daemon.client import _daemon_env
+        from gaia.ui.setup_runner import _child_env
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.DEAD)
+        monkeypatch.setenv("LEMONADE_API_KEY", "dead")
+        choice.ignore_env_url()
+        self._gaias_own_running(tmp_path)
+        for env in (_daemon_env(), _child_env()):
+            assert env["LEMONADE_BASE_URL"] == "http://localhost:63207/api/v1"
+            assert env["GAIA_LEMONADE_EMBEDDED"] == "1"
+            assert "LEMONADE_API_KEY" not in env
+
     def test_nothing_is_saved_without_an_env_value(self, monkeypatch):
         assert choice.ignore_env_url() is None
         monkeypatch.setenv("LEMONADE_BASE_URL", "http://localhost:50601/api/v1")

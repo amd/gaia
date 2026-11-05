@@ -130,10 +130,11 @@ def _child_env(**extra: str) -> Dict[str, str]:
     load in its check failed. Without it the CLI finds the daemon itself.
     """
     from gaia.daemon.constants import BROKER_URL_ENV_VAR
+    from gaia.llm.lemonade_choice import child_lemonade_env
 
     env = {k: v for k, v in os.environ.items() if k != BROKER_URL_ENV_VAR}
     env.update(extra)
-    return env
+    return child_lemonade_env(env)
 
 
 def _gaia_argv(*args: str) -> List[str]:
