@@ -4,6 +4,7 @@
 """Linux NPU setup checks: what stops FastFlowLM before setup offers the NPU (#6632)."""
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -493,8 +494,31 @@ def test_profile_npu_says_what_to_fix(not_set_up):
 
     client = MagicMock()
     client.get_system_info.return_value = linux_system_info()
-    with pytest.raises(ModelFitError, match="locked-memory.*without `--profile npu`"):
+    with pytest.raises(
+        ModelFitError, match="locked-memory.*without `--profile npu`"
+    ) as e:
         recommend_npu_chat_model(client)
+    assert_reads_as_sentences(str(e.value))
+
+
+def test_npu_default_model_refusal_says_what_to_fix(not_set_up):
+    from gaia.installer.init_command import _refuse_if_it_does_not_fit
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+    from gaia.llm.model_fit import ModelFitError
+
+    client = MagicMock()
+    client.list_models.return_value = {"data": []}
+    client.get_system_info.return_value = linux_system_info()
+    with pytest.raises(ModelFitError, match="locked-memory.*re-run `gaia init`") as e:
+        _refuse_if_it_does_not_fit(client, NPU_DEFAULT_MODEL_NAME)
+    assert_reads_as_sentences(str(e.value))
+
+
+def assert_reads_as_sentences(message: str) -> None:
+    # The reason is a predicate; spliced in bare it read "yet. needs this PC's…".
+    assert "The NPU model needs this PC's NPU set up first: " in message
+    assert not re.search(r"\. [a-z]", message), message
+    assert not re.search(r"[a-z] (Run|Then) ", message), message
 
 
 def test_setup_plan_lists_the_problems_for_the_screen(not_set_up):

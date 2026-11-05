@@ -532,7 +532,7 @@ func probeLemonadeHTTP(ctx context.Context) (base string, reachable bool, trace 
 	defer cancel()
 
 	var bases []string
-	if override := strings.TrimSpace(os.Getenv(lemonadeBaseURLEnv)); override != "" {
+	if override := lemonade.EnvBaseURL(); override != "" {
 		// The agent will use exactly this, so it is the only thing worth
 		// probing — a local server on 13305 proves nothing about it.
 		bases = []string{lemonade.ResolveBaseURL(override)}

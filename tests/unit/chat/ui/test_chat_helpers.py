@@ -1329,6 +1329,72 @@ class TestGuardModelTitles:
         assert self._titling_model(model) == model
 
 
+class TestEchoedInstructionTitles:
+    """Gemma on the NPU sometimes answers the title prompt with the prompt itself."""
+
+    QUESTION = r"Read C:\gtest\run-rc9\fx\notes.txt"
+
+    def _title_reply(self, content):
+        from gaia.ui import _chat_helpers as ch
+
+        client = _resident_title_client("gemma4-it-e4b-FLM", content)
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            return asyncio.run(
+                ch._generate_session_title(
+                    "http://localhost:13305/api/v1",
+                    "gemma4-it-e4b-FLM",
+                    self.QUESTION,
+                    "ok",
+                )
+            )
+
+    @pytest.mark.parametrize(
+        "echo",
+        [
+            "Summarise user task in 3 to 6 plain words for a tab/window title",
+            "Summarise the user's task in 3 to 6 plain words for a tab/window title,",
+            "Summarize the user's task in plain words",
+            "Reply with ONLY the title, no quotes, no trailing punctuation",
+        ],
+    )
+    def test_echoed_instruction_is_not_a_title(self, echo):
+        assert self._title_reply(echo) is None
+
+    @pytest.mark.parametrize(
+        "title",
+        ["Read notes.txt file", "Translate the task for a user", "Plain Words Title"],
+    )
+    def test_titles_sharing_a_few_prompt_words_are_kept(self, title):
+        assert self._title_reply(title) == title
+
+    def test_chat_keeps_its_first_question_as_the_title(self):
+        from gaia.ui import _chat_helpers as ch
+
+        question_title = ch._title_from_question(self.QUESTION)
+        db = MagicMock()
+        sid = "echoed-instruction-title"
+        db.get_session.return_value = {"id": sid, "title": question_title}
+        db.get_messages.return_value = []
+        client = _resident_title_client(
+            "gemma4-it-e4b-FLM",
+            "Summarise user task in 3 to 6 plain words for a tab/window title",
+        )
+        with (
+            patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client),
+            patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
+                return_value="http://localhost:13305/api/v1",
+            ),
+        ):
+            asyncio.run(
+                ch._maybe_update_session_title(
+                    db, sid, self.QUESTION, "ok", "gemma4-it-e4b-FLM"
+                )
+            )
+        client.chat_completions.assert_called_once()
+        db.replace_auto_title.assert_not_called()
+
+
 async def test_spawn_background_keeps_the_task_alive_until_done():
     """asyncio holds tasks weakly; a fire-and-forget title task must be pinned."""
     import gaia.ui._chat_helpers as ch

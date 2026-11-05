@@ -220,8 +220,8 @@ def test_non_200_health_ends_the_turn():
 # ---------------------------------------------------------------------------
 
 
-def test_connect_error_ends_the_turn_with_what_to_check():
-    """httpx.ConnectError during /health → the turn fails saying what to check."""
+def test_connect_error_ends_the_turn_with_what_to_do():
+    """httpx.ConnectError during /health → the turn fails saying what to do."""
     with (
         patch(_LEMONADE_MANAGER) as mock_mgr,
         patch(_HTTPX_GET, side_effect=httpx.ConnectError("refused")),
@@ -229,8 +229,9 @@ def test_connect_error_ends_the_turn_with_what_to_check():
     ):
         mock_mgr.get_base_url.return_value = _BASE_URL
 
-        with pytest.raises(RuntimeError, match="Check that Lemonade is running"):
+        with pytest.raises(RuntimeError, match="close GAIA and open it again") as exc:
             _maybe_load_expected_model("Qwen3.5-35B-A3B-GGUF")
+        assert "gaia init" not in str(exc.value)
 
         mock_cls.assert_not_called()
 
