@@ -23,6 +23,8 @@ describe('localizeLiveStatus', () => {
             'Reconnecting to the model server…',
             'Connection lost. Reconnecting (attempt 2 of 3)…',
             'Waiting for GAIA to start this answer…',
+            'The model server stopped. GAIA is restarting it…',
+            'Starting the model server…',
         ]) {
             expect(localizeLiveStatus(tEn, label)).toBe(label);
         }
@@ -30,6 +32,10 @@ describe('localizeLiveStatus', () => {
 
     it('translates the reading line for Arabic', () => {
         expect(ar('Reading your request')).toBe('جارٍ قراءة طلبك (Reading your request)');
+    });
+
+    it('translates the model-server restart line for Arabic', () => {
+        expect(ar('The model server stopped. GAIA is restarting it…')).toContain('توقف خادم النموذج');
     });
 
     it('keeps counts, attempts and model names in the Arabic line', () => {

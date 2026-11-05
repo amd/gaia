@@ -280,6 +280,8 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
                 full_content = done_content
 
         elif etype == "status":
+            if event.get("retracts_answer"):
+                full_content = ""
             msg = event.get("message", "")
             if msg:
                 event_log.append(f"[status] {msg}")

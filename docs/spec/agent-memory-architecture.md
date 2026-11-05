@@ -1120,13 +1120,15 @@ def update_memory(knowledge_id: str, content: str = "",
 
 @tool
 def forget(knowledge_id: str) -> dict:
-    """Remove a specific memory entry by ID."""
+    """Remove one memory by ID (from recall). To erase all memory, use
+    forget_everything."""
 
 @tool
 def forget_everything() -> dict:
-    """Erase all of memory, sensitive entries and stored past conversations
-    included. Asks the user first; cannot be undone. Learned procedures and
-    skill deltas are kept."""
+    """Erase all of memory in one call, sensitive entries and stored past
+    conversations included. Use for "forget everything about me" or "delete
+    all my data"; one topic goes through forget. Asks the user first; cannot
+    be undone. Learned procedures and skill deltas are kept."""
 
 @tool
 def search_past_conversations(query: str = "", days: int = 0,

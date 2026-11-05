@@ -256,6 +256,13 @@ and the answer. Join the deltas as they come. One with `retracts_answer: true`
 means the `token` text since the last tool call was reasoning: drop it from the
 answer. Older binaries reject the field with `422`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**A reply can start over.** When GAIA's model server stops part-way through a
+reply, the step is retried once the server is back, and a `status` with
+`retracts_answer: true` (phase `answer_restart`) comes first: drop the `token`
+text since the last tool call and show its `message` instead, so the new reply
+never silently replaces the old one. While the server restarts, `status` lines
+carry phase `model_restart`.
+
 **Showing how full the model's window is?** From contract 2.21 the `final`
 event carries `context`: the window size, the tokens the next call will take,
 and what takes them (prompt, tools, documents, history). Older binaries leave

@@ -11,6 +11,8 @@ const EXACT: Record<string, Parameters<Translate>[0]> = {
     'Reasoning': 'live.reasoning',
     'Reconnecting to the model server…': 'live.reconnectingServer',
     'Waiting for GAIA to start this answer…': 'live.waitingStart',
+    'The model server stopped. GAIA is restarting it…': 'live.serverRestarting',
+    'Starting the model server…': 'live.serverStarting',
 };
 
 /**

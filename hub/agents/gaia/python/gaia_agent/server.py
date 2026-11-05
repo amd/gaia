@@ -1388,7 +1388,8 @@ _QUERY_SSE_RESPONSES = {
         "description": (
             "Server-Sent Events stream (text/event-stream). Each `data:` line is "
             "one canonical event discriminated on `type`: status {message, "
-            "phase?, queue?} | token {delta} | reasoning {delta, retracts_answer?} | "
+            "phase?, queue?, retracts_answer?} | token {delta} | "
+            "reasoning {delta, retracts_answer?} | "
             "tool_call {tool, args} | tool_result {tool, data, render?} | "
             "needs_confirmation {run_id, action, summary, confirm_id?, "
             "always_scope?, risk?, tool_label?, args?, args_truncated?, "
@@ -2260,30 +2261,41 @@ def build_app() -> FastAPI:
     return app
 
 
-def _default_model_is_servable() -> bool:
-    """Whether warming the default model would load it rather than download it.
+def _model_to_warm() -> Optional[str]:
+    """The model the first turn runs on, or None when the warm-up should skip.
 
-    Building the warm-up agent preloads its model, and Lemonade downloads a
-    missing one on load — gigabytes the user never asked for when they chose
-    a cloud model and skipped the local one.
+    That is the model chat reopens on (``last_model``, else ``default_model``),
+    as in the Agent UI and TUI: warming any other one makes Lemonade, which
+    keeps one chat model loaded, evict the user's pick for it. Skipped like the
+    Agent UI's own warm-up on a PC small enough to load on the first message,
+    for Claude, and for a model not downloaded: Lemonade downloads a missing
+    one on load, gigabytes the user never asked for.
     """
     from gaia.llm.lemonade_client import (
         LemonadeClient,
         cloud_model_provider,
-        resolve_default_chat_model,
+        resolve_chat_model,
     )
+    from gaia.ui.warmup import preload_skip_reason
 
-    model = resolve_default_chat_model()
+    low_memory = preload_skip_reason()
+    if low_memory:
+        logger.info("GAIA sidecar: warm-up skipped (%s)", low_memory)
+        return None
+    model = resolve_chat_model()
+    if model.startswith("claude-"):
+        logger.info("GAIA sidecar: warm-up skipped (chat runs on Claude, %s)", model)
+        return None
     if cloud_model_provider(model):
-        return True
+        return model
     if not LemonadeClient(verbose=False).get_model_info(model)["downloaded"]:
         logger.info(
             "GAIA sidecar: warm-up skipped (%s is not downloaded; a turn that "
             "uses it downloads it)",
             model,
         )
-        return False
-    return True
+        return None
+    return model
 
 
 class _StartupWarmUp:
@@ -2310,9 +2322,14 @@ class _StartupWarmUp:
             self._stop_for_another_model()
 
     def note_turn(self, model: Optional[str]) -> None:
-        """A turn starts on *model*; None is the default, the warm-up's own."""
-        if model is None or self.done.is_set():
+        """A turn starts on *model*; None runs ``default_model``, which need not
+        be the warm-up's (that follows the user's last pick)."""
+        if self.done.is_set():
             return
+        if model is None:
+            from gaia.llm.lemonade_client import resolve_default_chat_model
+
+            model = resolve_default_chat_model()
         with self._lock:
             self._turn_models.append(model)
             self._stop_for_another_model()
@@ -2359,22 +2376,28 @@ def _warmup_blocking() -> None:
     """
     state = _startup_warm_up
     try:
-        _warm_default_model(state)
+        _warm_chat_model(state)
     finally:
         state.done.set()
 
 
-def _warm_default_model(state: _StartupWarmUp) -> None:
+def _warm_chat_model(state: _StartupWarmUp) -> None:
     from gaia_agent.session_registry import build_session_agent
 
     from gaia.chat.sdk import LLMCallCancelled
-    from gaia.llm.lemonade_client import resolve_default_chat_model
+    from gaia.llm.lemonade_client import cloud_model_provider
 
     try:
-        state.aim(resolve_default_chat_model())
-        if state.cancel.is_set() or not _default_model_is_servable():
+        model = _model_to_warm()
+        if model is None:
             return
-        agent = build_session_agent()
+        state.aim(model)
+        if state.cancel.is_set():
+            return
+        # No preload while building: only warm_up's load can be stopped by a turn.
+        agent = build_session_agent(
+            model_id=model, skip_lemonade=not cloud_model_provider(model)
+        )
     except Exception as e:  # noqa: BLE001 - reported, and chat still works
         logger.warning(
             "GAIA sidecar: warm-up failed before the model was reached (%s). "
@@ -2386,6 +2409,14 @@ def _warm_default_model(state: _StartupWarmUp) -> None:
         return
     try:
         result = agent.warm_up(cancel=state.cancel)
+        if result.get("primed") is False:
+            logger.info(
+                "GAIA sidecar: loaded %s in %ss (its prompt is read by the first "
+                "turn: FastFlowLM keeps no cache a new chat can reuse)",
+                getattr(agent, "model_id", "?"),
+                result.get("seconds"),
+            )
+            return
         logger.info(
             "GAIA sidecar: warmed %s in %ss (%s of %s prompt tokens cached)",
             getattr(agent, "model_id", "?"),

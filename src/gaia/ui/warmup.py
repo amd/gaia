@@ -26,6 +26,8 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from gaia.llm.surface_hints import APP_RESTART_HINT
+
 logger = logging.getLogger(__name__)
 
 #: A re-request inside this window after a successful warm-up is a no-op.
@@ -475,9 +477,8 @@ def wait_for_warm_up(
         if time.monotonic() >= deadline:
             raise TimeoutError(
                 f"The start-up warm-up was still {warmer.phase() or 'starting'} "
-                f"after {timeout:g} s, so this turn did not start. Check that "
-                "Lemonade is running (`gaia init --check`), then send the "
-                "message again."
+                f"after {timeout:g} s, so this turn did not start. Send the message "
+                f"again. {APP_RESTART_HINT}"
             )
 
 

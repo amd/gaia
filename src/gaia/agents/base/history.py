@@ -638,11 +638,20 @@ def _message_kind(message: dict[str, Any]) -> str:
     return "history"
 
 
+#: Opens the per-turn memory block ``MemoryMixin`` prepends to a user message.
+MEMORY_CONTEXT_HEADER = "[GAIA Memory Context]"
+
+
 def _turn_preview(turn: list[dict[str, Any]], limit: int = 60) -> str:
     for message in turn:
         content = message.get("content")
         if message.get("role") == "user" and isinstance(content, str) and content:
+            if content.startswith(MEMORY_CONTEXT_HEADER):
+                # The user's text follows the block's last blank line.
+                content = content.rpartition("\n\n")[2]
             text = " ".join(content.split())
+            if not text:
+                continue
             return text if len(text) <= limit else text[: limit - 1] + "…"
     return "(a turn with no question text)"
 
