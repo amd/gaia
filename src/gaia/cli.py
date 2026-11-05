@@ -233,6 +233,13 @@ def _lemonade_answers(base_url: str | None = None) -> bool:
     return _probe(client)
 
 
+def _cli_wording(e: BaseException) -> str:
+    """*e*'s message with the apps' advice swapped for the CLI's commands."""
+    from gaia.llm.surface_hints import surface_wording
+
+    return surface_wording(str(e), "cli")
+
+
 def _cli_error_text(e: BaseException) -> str:
     """An LLM failure as the CLI shows it: the typed remedy, in CLI terms."""
     from gaia.llm.providers.lemonade import classify_lemonade_exception
@@ -7374,7 +7381,7 @@ def _warn_if_default_model_unavailable(model_id: str) -> None:
     try:
         failure = GatewayState.load().unavailable(model_id)
     except GatewayError as e:
-        print(f"⚠️  {e}", file=sys.stderr)
+        print(f"⚠️  {_cli_wording(e)}", file=sys.stderr)
         return
     if failure:
         print(
@@ -7457,7 +7464,7 @@ def _claude_route_sends_another_token(token):
     except GatewayError as e:
         print(
             f"⚠️  Claude gateway models (amd.Claude-*) send the token from GAIA, "
-            f"not Lemonade, and GAIA has none: {e}",
+            f"not Lemonade, and GAIA has none: {_cli_wording(e)}",
             file=sys.stderr,
         )
         return False
@@ -7486,7 +7493,7 @@ def _test_gateway_claude(model, source, prompt):
         client = create_client("lemonade", model=model)
         content = client.chat([{"role": "user", "content": prompt}], max_tokens=256)
     except (GatewayError, RuntimeError, ImportError) as e:
-        print(f"❌ Testing {model} failed: {e}", file=sys.stderr)
+        print(f"❌ Testing {model} failed: {_cli_wording(e)}", file=sys.stderr)
         sys.exit(1)
     print(content)
     usage = client.get_last_usage() or {}
@@ -7869,12 +7876,12 @@ def handle_gateway_command(args):
             return
 
     except GatewayError as e:
-        print(f"❌ {e}", file=sys.stderr)
+        print(f"❌ {_cli_wording(e)}", file=sys.stderr)
         sys.exit(1)
     except LemonadeClientError as e:
         # `models` and `test` go through LemonadeClient, which raises its own
         # type. Letting it escape printed a traceback instead of the message.
-        print(f"❌ {e}", file=sys.stderr)
+        print(f"❌ {_cli_wording(e)}", file=sys.stderr)
         sys.exit(1)
     except ConnectorsError as e:
         # The credential store raises this for an unusable backend, and `logout

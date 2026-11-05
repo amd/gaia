@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
+from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT
 
 from .. import answer_retry, followups
 from .. import permissions as session_permissions
@@ -194,16 +195,15 @@ def _reject_unknown_agent_type(agent_type: str | None) -> None:
     load_error = registry.get_load_error(agent_type)
     reason = f" It failed to load: {load_error}." if load_error else ""
     install = (
-        "`gaia init`"
+        f" To install the GAIA agent: {AGENT_UI_SETUP_HINT}"
         if agent_type == "gaia"
-        else f"`gaia hub install {agent_type} --trust`"
+        else ""
     )
     raise HTTPException(
         status_code=422,
         detail=(
             f"Unknown agent_type '{agent_type}'.{reason} Registered agent ids: "
-            f"{', '.join(valid_ids)}. Pick one of these, or install the agent "
-            f"with {install} and try again."
+            f"{', '.join(valid_ids)}. Pick one of these.{install}"
         ),
     )
 

@@ -1633,7 +1633,7 @@ const messages: Messages = {
     'settings.connectors.noClient': 'لم يُعدّ عميل OAuth',
     'settings.connectors.clientRequired': 'معرّف العميل مطلوب.',
     'settings.connectors.client': 'عميل OAuth',
-    'settings.connectors.clientHelp': 'استخدم عميل OAuth الخاص بك — يُحفظ مشفرًا في سلسلة مفاتيح النظام (المخزن نفسه لأمر gaia connectors configure) ويُعاد استخدامه للاتصالات القادمة. لا تُستخدم متغيرات البيئة إلا عند عدم وجود عميل محفوظ.',
+    'settings.connectors.clientHelp': 'استخدم عميل OAuth الخاص بك — يُحفظ مشفرًا في سلسلة مفاتيح النظام ويُعاد استخدامه للاتصالات القادمة. لا تُستخدم متغيرات البيئة إلا عند عدم وجود عميل محفوظ.',
     'settings.connectors.saveClient': 'حفظ العميل',
     'settings.connectors.active': 'نشط',
     'settings.connectors.disableServer': 'تعطيل خادم MCP هذا',

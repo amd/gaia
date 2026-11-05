@@ -295,7 +295,8 @@ def _flagship_missing_message(registry) -> str:
     return (
         "The GAIA agent is not installed, so the scheduled task could not run"
         + (f" (it failed to load: {reason})" if reason else "")
-        + ". Run `gaia init` to install it, then re-run the scheduled task."
+        + ". Open Settings > Setup and press Run setup again, then re-run the "
+        "scheduled task."
     )
 
 

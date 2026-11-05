@@ -2288,7 +2288,7 @@ class TestStreamInferenceModel:
         assert resp.status_code == 200
         create.assert_not_called()
         assert '"type": "error"' in resp.text
-        assert "gaia config set default_model" in resp.text
+        assert "choose a local chat model" in resp.text
 
     def test_a_cut_off_reply_still_streams_its_complete_insights(
         self, client, tmp_path

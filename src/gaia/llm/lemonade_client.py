@@ -85,7 +85,12 @@ from gaia.llm.stream_watchdog import (
     stall_limits,
     watch_stream,
 )
-from gaia.llm.surface_hints import TUI_PROVIDER_AUTH_HINT, TUI_PROVIDER_SETTINGS
+from gaia.llm.surface_hints import (
+    APP_RESTART_HINT,
+    TUI_PROVIDER_AUTH_HINT,
+    TUI_PROVIDER_SETTINGS,
+    TUI_SETUP_HINT,
+)
 from gaia.logger import get_logger
 from gaia.ports import (
     is_gaia_process,
@@ -4301,8 +4306,7 @@ class LemonadeClient:
         if own is None:
             raise LemonadeClientError(
                 "GAIA's Lemonade Server is restarting and is not back yet. Try "
-                "again in a moment; if this persists, run `gaia daemon status` "
-                "and check the daemon log."
+                f"again in a moment. {APP_RESTART_HINT}"
             )
         raise LemonadeClientError(
             f"{base_url} is not GAIA's Lemonade Server (that runs at {own}), so "
@@ -4466,8 +4470,8 @@ class LemonadeClient:
         raise LemonadeServerDownError(
             _endpoint_label(self.base_url),
             message=f"GAIA's Lemonade Server at {self.base_url} stopped answering and "
-            f"was not back within {timeout:.0f}s.{reason} Run `gaia daemon "
-            f"status`, and read the daemon log at {log_path()} for why it stopped.",
+            f"was not back within {timeout:.0f}s.{reason} {APP_RESTART_HINT} "
+            f"The daemon log at {log_path()} says why it stopped.",
         ) from last
 
     def _survive_gaia_lemonade_stop(self, call: Callable[[], Any], model: str) -> Any:
@@ -4707,8 +4711,8 @@ class LemonadeClient:
         if not tooling.found:
             raise LemonadeClientError(
                 "Lemonade Server not found (no install at its canonical "
-                "path). Run `gaia init` to install "
-                "it, or set LEMONADE_SERVER_PATH to the server executable."
+                f"path). {TUI_SETUP_HINT} Or set LEMONADE_SERVER_PATH to the "
+                "server executable."
             )
 
         spec = build_start_command(tooling)
@@ -4907,8 +4911,7 @@ class LemonadeClient:
             raise LemonadeClientError(
                 f"Could not read the model catalog at {self.base_url}/models to "
                 f"check for llama.cpp arguments saved for {model_name}, so it "
-                f"was not loaded: {e} Check that Lemonade is running "
-                "(`gaia init --check`)."
+                f"was not loaded: {e} Try again in a moment. {APP_RESTART_HINT}"
             ) from e
         for entry in catalog.get("data", []):
             if _model_ids_match(entry.get("id"), model_name):
@@ -7184,7 +7187,7 @@ class LemonadeClient:
             raise LemonadeClientError(
                 f"Could not read Lemonade's model catalog at {self.base_url} to "
                 f"determine whether '{model}' is gateway-hosted: {e}. "
-                f"Check the server is running (`gaia gateway status`)."
+                f"Try again in a moment. {APP_RESTART_HINT}"
             ) from e
         if is_cloud_model(model):
             return True
@@ -8514,8 +8517,7 @@ class LemonadeClient:
                 f"Failed to load model '{model}' on {self.base_url}: {e} "
                 f"Check that the model is available and the Lemonade server "
                 f"has enough memory; see the server log (typical path: "
-                f"~/.cache/lemonade/server.log), or run `gaia init` to "
-                f"(re)install it."
+                f"~/.cache/lemonade/server.log). Or: {TUI_SETUP_HINT}"
             ) from e
         # Recorded only after a successful load — a failed/cancelled load
         # raises above and never reaches here, so it can't be misattributed
@@ -8617,8 +8619,8 @@ class LemonadeClient:
         except LemonadeClientError as e:
             raise LemonadeClientError(
                 f"Cannot read free memory from Lemonade at {self.base_url} before "
-                f"loading {model_name}: {e} Check that Lemonade is running "
-                "(`gaia init --check`)."
+                f"loading {model_name}: {e} Try again in a moment. "
+                f"{APP_RESTART_HINT}"
             ) from e
         if verdict is None:
             self.log.debug(
@@ -10094,8 +10096,7 @@ def create_lemonade_client(
                         raise LemonadeClientError(
                             f"Failed to load {model_name}: could not download it "
                             f"from {client.base_url} ({pull_error}). Check the "
-                            "model name and your connection, or run `gaia init` "
-                            "to install it."
+                            "model name and your connection, then try again."
                         ) from pull_error
                     if not finished:
                         raise LemonadeClientError(

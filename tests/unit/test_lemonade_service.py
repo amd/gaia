@@ -149,7 +149,7 @@ def test_no_daemon_is_a_loud_error_naming_how_to_start_it(monkeypatch, down_clie
         ensure_lemonade_running(ctx_size=65536)
 
     assert "background service" in str(e.value)
-    assert "gaia daemon start" in str(e.value)
+    assert "close GAIA and open it again" in str(e.value)
 
 
 def test_a_readiness_check_never_boots_a_daemon(monkeypatch, down_client):

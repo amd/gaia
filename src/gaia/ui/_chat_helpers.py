@@ -40,6 +40,7 @@ from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
 from gaia.llm import lemonade_client as _lemonade_client_mod
 from gaia.llm.inference_location import InferenceLocation, resolve_inference_location
 from gaia.llm.providers.lemonade import MODEL_SERVER_DOWN, classify_lemonade_exception
+from gaia.llm.surface_hints import APP_RESTART_HINT
 from gaia.security import (
     BLOCKED_DIRECTORIES,
     AllowedPathsEnvError,
@@ -3636,8 +3637,8 @@ def _preflight_load(
         logger.error("Pre-flight model load could not lease the model slot: %s", exc)
         raise BrokerUnavailableError(
             f"Could not reserve the model slot for {model_id} from the GAIA "
-            f"daemon, so this turn did not start: {exc} Check `gaia daemon "
-            "status`; send the message again once the other app's turn is done.",
+            f"daemon, so this turn did not start: {exc} Send the message again "
+            f"once the other app's turn is done. {APP_RESTART_HINT}",
             status_code=exc.status_code,
         ) from exc
     except Exception as exc:
@@ -3645,9 +3646,8 @@ def _preflight_load(
             raise  # The caller reads it as the stop, not as a failure.
         logger.error("Pre-flight model load failed for %s: %s", model_id, exc)
         raise RuntimeError(
-            f"Could not load {model_id} before answering: {exc}. Check that "
-            "Lemonade is running (`gaia init --check`), then send the message "
-            "again."
+            f"Could not load {model_id} before answering: {exc}. Send the "
+            f"message again. {APP_RESTART_HINT}"
         ) from exc
 
 

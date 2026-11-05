@@ -48,9 +48,17 @@ from gaia.llm.lemonade_supervisor import (
     _probe,
 )
 from gaia.llm.retry import http_body_text
+from gaia.llm.surface_hints import APP_RESTART_HINT
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
+
+
+def _where_to_look() -> str:
+    from gaia.daemon.paths import log_path
+
+    return f"Where to look: the GAIA background service's log at {log_path()}"
+
 
 __all__ = [
     "LemonadeStartError",
@@ -170,8 +178,7 @@ def _ask_the_daemon(
         raise LemonadeStartError(
             "The GAIA background service answered without saying where the "
             f"local model server listens: {body}\n"
-            "To fix: restart it with `gaia daemon stop` then `gaia daemon start`.\n"
-            "Where to look: `gaia daemon logs`"
+            f"To fix: {APP_RESTART_HINT}\n{_where_to_look()}"
         )
     return LemonadeState(
         base_url=served_url,
@@ -508,8 +515,7 @@ def _post_start(payload: dict, timeout: float) -> dict:
         raise LemonadeStartError(
             "The local model server is not running, and neither is the GAIA "
             "background service that owns it — so nothing can start it.\n"
-            "To fix: run `gaia daemon start`, then retry.\n"
-            "Where to look: `gaia daemon logs`"
+            f"To fix: {APP_RESTART_HINT}\n{_where_to_look()}"
         )
 
     url = f"http://{inst.host}:{inst.port}{API_PREFIX}/lemonade/start"
@@ -523,8 +529,7 @@ def _post_start(payload: dict, timeout: float) -> dict:
         raise LemonadeStartError(
             "The local model server is not running, and the request asking the "
             f"background service to start it failed: {e}\n"
-            "To fix: check it with `gaia daemon status`, then retry.\n"
-            "Where to look: `gaia daemon logs`"
+            f"To fix: {APP_RESTART_HINT}\n{_where_to_look()}"
         ) from e
 
     if resp.status_code == 200:
@@ -542,7 +547,6 @@ def _post_start(payload: dict, timeout: float) -> dict:
         or (
             f"The background service refused to start the local model server "
             f"(HTTP {resp.status_code}).\n"
-            "To fix: check it with `gaia daemon status`.\n"
-            "Where to look: `gaia daemon logs`"
+            f"To fix: {APP_RESTART_HINT}\n{_where_to_look()}"
         )
     )
