@@ -261,3 +261,107 @@ def test_a_stopped_warm_up_skips_the_memory_upkeep():
         agent.warm_up(cancel=cancel)
     assert _MemoryAgent.runs == 0
     assert agent._memory_post_init_pending is True  # pylint: disable=protected-access
+
+
+# ── FastFlowLM: load only, no prompt read ─────────────────────────────────
+#
+# FLM v1.0.7 reuses a cached prompt only when the next request continues the
+# last one, so the first turn's own user message discards a primed prefix:
+# priming cost ~35 s on the NPU and saved that turn nothing.
+
+FLM = "gemma4-it-e4b-FLM"
+
+
+class _LemonadeClient:
+    def __init__(self, on_load=None):
+        self.loaded = []
+        self.on_load = on_load
+
+    def ensure_model_loaded(self, model):
+        if self.on_load is not None:
+            self.on_load()
+        self.loaded.append(model)
+
+
+def _flm_agent(on_load=None):
+    agent = _Agent(loader=None)
+    agent.model_id = FLM
+    agent.chat.llm_client = _LemonadeClient(on_load)
+    return agent
+
+
+def test_flm_warm_up_loads_the_model_and_sends_no_prompt():
+    agent = _flm_agent()
+    steps: list = []
+
+    result = agent.warm_up(progress=steps.append)
+
+    assert agent.chat.calls == []
+    assert agent.chat.llm_client.loaded == [FLM]
+    assert result["primed"] is False
+    assert steps == [f"Loading {FLM}"]
+
+
+def test_flm_warm_up_gives_a_turn_no_prompt_read_to_wait_behind():
+    """A turn on the warmed model only ever waits for the load it needs anyway."""
+    agent = _flm_agent()
+    agent.warm_up(cancel=threading.Event())
+    assert agent.chat.calls == []
+    assert agent.chat.llm_client.loaded == [FLM]
+
+
+def test_a_stopped_flm_warm_up_loads_nothing():
+    agent = _flm_agent()
+    cancel = threading.Event()
+    cancel.set()
+
+    with pytest.raises(LLMCallCancelled):
+        agent.warm_up(cancel=cancel)
+    assert agent.chat.llm_client.loaded == []
+
+
+def test_an_flm_warm_up_load_wait_can_be_stopped():
+    seen = {}
+    agent = _flm_agent(
+        on_load=lambda: seen.update(lease_scope=broker_client._cancel_scope.get())
+    )
+    cancel = threading.Event()
+
+    agent.warm_up(cancel=cancel)
+
+    assert seen["lease_scope"] is cancel
+
+
+def test_an_flm_load_failure_is_raised_not_hidden():
+    def down():
+        raise ConnectionError("Lemonade not reachable")
+
+    agent = _flm_agent(on_load=down)
+    with pytest.raises(ConnectionError):
+        agent.warm_up(cancel=threading.Event())
+
+
+def test_an_flm_warm_up_without_a_lemonade_client_says_so():
+    agent = _Agent(loader=None)
+    agent.model_id = FLM
+    with pytest.raises(RuntimeError, match="Lemonade"):
+        agent.warm_up()
+
+
+def test_the_lemonade_provider_loads_through_the_turns_own_preflight(monkeypatch):
+    """Same window and lease as a turn's load, so the turn does not reload."""
+    from gaia.llm.providers.lemonade import LemonadeProvider
+
+    base = "http://127.0.0.1:59999/api/v1"
+    monkeypatch.setenv("LEMONADE_BASE_URL", base)
+    provider = LemonadeProvider(model=FLM, base_url=base)
+    calls = []
+    monkeypatch.setattr(
+        provider._backend,  # pylint: disable=protected-access
+        "_ensure_model_loaded",
+        lambda model, **kw: calls.append((model, kw)),
+    )
+
+    provider.ensure_model_loaded(FLM)
+
+    assert calls == [(FLM, {})]

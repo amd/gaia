@@ -1333,6 +1333,12 @@ class LemonadeProvider(LLMClient):
     def unload_model(self, model_name: Optional[str] = None) -> None:
         self._backend.unload_model(model_name)
 
+    def ensure_model_loaded(self, model_name: str) -> None:
+        """Load *model_name* as a request's own pre-flight would (same window,
+        same lease), or do nothing when it is already resident."""
+        # pylint: disable=protected-access
+        self._backend._ensure_model_loaded(model_name)
+
     def _extract_text(self, response: dict) -> str:
         return response["choices"][0]["text"]
 
