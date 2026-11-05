@@ -8,7 +8,14 @@ import { create } from 'zustand';
 import * as api from '../services/api';
 import { useChatStore } from './chatStore';
 import { log } from '../utils/logger';
-import type { ActiveModel, Session } from '../types';
+import type { ActiveModel, Session, WarmUpStatus } from '../types';
+
+/** A local model picked from the list, loading in the background; `error` once that load failed. */
+export interface PickLoad {
+    model: string;
+    seconds: number;
+    error: string | null;
+}
 
 interface ModelState {
     active: ActiveModel | null;
@@ -21,6 +28,7 @@ interface ModelState {
     queueError: string | null;
     /** Friendly names the backend gave, by model id. */
     names: Record<string, string>;
+    pickLoad: PickLoad | null;
     refresh: () => Promise<void>;
     retryNow: () => void;
     select: (model: string) => Promise<void>;
@@ -28,8 +36,12 @@ interface ModelState {
     applyQueued: () => Promise<void>;
     rememberNames: (models: Array<{ id: string; display_name?: string }>) => void;
     dismissRestoreNotice: () => void;
+    /** Ask for the failed pick's load again. */
+    retryPickLoad: () => Promise<void>;
+    dismissPickLoad: () => void;
 }
 
+export const PICK_LOAD_POLL_MS = 1_000;
 const RESTORE_RETRY_MS = 5_000;
 const RESTORE_RETRIES = 24;
 /** A failed read is retried, doubling up to the cap: the backend may still be starting. */
@@ -39,6 +51,8 @@ let restoreRetries = 0;
 let namesRequested = false;
 let failRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let failRetryMs = MODEL_RETRY_INITIAL_MS;
+// Bumped by each pick, so an older pick's watch stops.
+let pickLoadWatch = 0;
 
 function clearFailRetry(): void {
     if (failRetryTimer) clearTimeout(failRetryTimer);
@@ -51,6 +65,39 @@ export function resetModelRetryForTests(): void {
     failRetryMs = MODEL_RETRY_INITIAL_MS;
     restoreRetries = 0;
     namesRequested = false;
+    pickLoadWatch += 1;
+}
+
+/** The pick's own warm-up: one on another model is still finishing, and the pick's runs next. */
+function isPickWarmUp(w: WarmUpStatus, model: string): boolean {
+    return !w.model || sameModelId(w.model, model);
+}
+
+/** Follow the backend's load of a picked local model until it is ready or has failed. */
+function watchPickLoad(model: string, set: (s: Partial<ModelState>) => void): void {
+    const watch = ++pickLoadWatch;
+    set({ pickLoad: { model, seconds: 0, error: null } });
+    const poll = async () => {
+        const w: WarmUpStatus = await api.getWarmUp();
+        if (watch !== pickLoadWatch) return;
+        const seconds = Math.floor(w.elapsed_seconds ?? 0);
+        if (w.state === 'warming') {
+            set({ pickLoad: { model, seconds: isPickWarmUp(w, model) ? seconds : 0, error: null } });
+            setTimeout(() => { void poll().catch(fail); }, PICK_LOAD_POLL_MS);
+        } else if (w.state === 'failed' && isPickWarmUp(w, model)) {
+            set({ pickLoad: { model, seconds, error: w.error || 'The load stopped without saying why.' } });
+        } else {
+            set({ pickLoad: null });
+        }
+    };
+    // A watch that breaks says so rather than leave "Loading" up for good.
+    const fail = (err: unknown) => {
+        if (watch !== pickLoadWatch) return;
+        log.system.warn(`Lost track of loading ${model}`, err);
+        const reason = err instanceof Error ? err.message : String(err);
+        set({ pickLoad: { model, seconds: 0, error: `GAIA couldn't check on the load: ${reason}` } });
+    };
+    void poll().catch(fail);
 }
 
 /** Local models' friendly names, read once so every surface names a model as the chip does. */
@@ -71,6 +118,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     queued: null,
     queueError: null,
     names: {},
+    pickLoad: null,
     refresh: async () => {
         if (!namesRequested) {
             namesRequested = true;
@@ -120,6 +168,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
             log.system.error('Could not refresh chats after a model switch; the next poll will', err);
         }
         set({ active, error: null, restoreNotice: null });
+        // The backend starts loading a local pick; follow it so the wait is visible.
+        if (active.remote) {
+            pickLoadWatch += 1;
+            set({ pickLoad: null });
+        } else {
+            watchPickLoad(model, set);
+        }
         // An empty list has no model to report, and must not wipe the sidebar.
         if (sessions?.length) useChatStore.getState().setSessions(sessions);
     },
@@ -143,6 +198,22 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set({ names: next });
     },
     dismissRestoreNotice: () => set({ restoreNotice: null }),
+    retryPickLoad: async () => {
+        const model = get().pickLoad?.model;
+        if (!model) return;
+        try {
+            await api.requestWarmUp();
+        } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            set({ pickLoad: { model, seconds: 0, error: `GAIA couldn't start the load: ${reason}` } });
+            return;
+        }
+        watchPickLoad(model, set);
+    },
+    dismissPickLoad: () => {
+        pickLoadWatch += 1;
+        set({ pickLoad: null });
+    },
 }));
 
 // A pick made during a reply keeps that reply on its model, then applies.

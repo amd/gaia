@@ -713,11 +713,18 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                     # frontend can name it precisely in the warning banner.
                     status.default_model_name = custom_model or default_model
 
-                # When no LLM is loaded, check if the expected model is downloaded.
+                # When the expected model isn't loaded, check if it is downloaded.
                 # Respects the custom_model override.
                 # Uses show_all=true to see models that are in the catalog but not
                 # yet pulled to disk.
-                if not status.model_loaded and status.default_model_name:
+                expected_missing = (
+                    not status.model_loaded or not status.expected_model_loaded
+                )
+                if (
+                    expected_missing
+                    and status.default_model_name
+                    and not status.default_model_is_cloud
+                ):
                     _target = status.default_model_name
                     try:
                         catalog_resp = await client.get(

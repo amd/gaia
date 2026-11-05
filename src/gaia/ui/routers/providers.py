@@ -1237,6 +1237,11 @@ def select_model(
     except ProviderError as e:
         _raise(e)
     db.set_setting("custom_model", model_id)
+    if provider_of(model_id) == LOCAL:
+        from gaia.ui import warmup
+
+        # Load it now: nothing else would until the next message is sent.
+        warmup.request_warm_up("model pick", fresh=True)
     # A choice made now supersedes this run's restore notice.
     global _restore_result
     with _restore_lock:

@@ -6,10 +6,80 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionBanner } from '../ConnectionBanner';
 import { ErrorNotice } from '../settings/ErrorNotice';
 import { useChatStore } from '../../stores/chatStore';
+import { useModelStore } from '../../stores/modelStore';
 import type { SystemStatus } from '../../types';
 
 beforeEach(() => {
     useChatStore.setState({ backendConnected: true, currentSessionId: null, messages: [] });
+    useModelStore.setState({ pickLoad: null });
+});
+
+describe('a model picked from the list', () => {
+    const ready = { lemonade_running: true, init_state: 'ready', model_loaded: 'gemma4-it-e4b-FLM' } as SystemStatus;
+    const QWEN = 'Qwen3.6-35B-A3B-GGUF';
+
+    beforeEach(() => {
+        useChatStore.setState({ systemStatus: ready });
+    });
+
+    it('shows its load with a timer, and that typing is fine meanwhile', () => {
+        useModelStore.setState({ pickLoad: { model: QWEN, seconds: 12, error: null } });
+        const { container } = render(<ConnectionBanner />);
+        expect(screen.getByRole('status')).toHaveTextContent(`Loading ${QWEN}… 12s`);
+        expect(container).toHaveTextContent('You can type now');
+        expect(container).not.toHaveTextContent('Loading AI model');
+    });
+
+    it('stays up during a chat, where the next message waits on it', () => {
+        useChatStore.setState({ currentSessionId: 's1', messages: [{ id: 1 } as never] });
+        useModelStore.setState({ pickLoad: { model: QWEN, seconds: 3, error: null } });
+        render(<ConnectionBanner />);
+        expect(screen.getByRole('status')).toHaveTextContent(`Loading ${QWEN}`);
+    });
+
+    it('says why the load failed and offers to try again', () => {
+        const retry = vi.fn().mockResolvedValue(undefined);
+        const reason = `Not enough free memory to load ${QWEN}: it needs about 33.0 GB and only 3.7 GB is free. Close apps that use a lot of memory, then try again.`;
+        useModelStore.setState({ pickLoad: { model: QWEN, seconds: 4, error: reason }, retryPickLoad: retry });
+        render(<ConnectionBanner />);
+        const alert = screen.getByRole('alert');
+        expect(alert).toHaveTextContent(`Couldn't load ${QWEN}.`);
+        expect(alert).toHaveTextContent('only 3.7 GB is free');
+        fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+        expect(retry).toHaveBeenCalledTimes(1);
+        fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+        expect(useModelStore.getState().pickLoad).toBeNull();
+    });
+});
+
+describe('the start-up banner', () => {
+    it('names the boot task that is running', () => {
+        useChatStore.setState({ systemStatus: {
+            lemonade_running: true, init_state: 'initializing',
+            init_tasks: [{ name: 'Checking LLM server', status: 'done' }, { name: 'Loading AI model', status: 'running' }],
+        } as SystemStatus });
+        render(<ConnectionBanner />);
+        expect(screen.getByRole('status')).toHaveTextContent('Loading AI model');
+    });
+
+    it('never says it is loading once every boot task has finished', () => {
+        useChatStore.setState({ systemStatus: {
+            lemonade_running: true, init_state: 'initializing',
+            init_tasks: [{ name: 'Checking LLM server', status: 'done' }, { name: 'Loading AI model', status: 'done' }],
+        } as SystemStatus });
+        render(<ConnectionBanner />);
+        expect(screen.queryByRole('status')).toBeNull();
+    });
+
+    it('gives way to "slow to answer" when the status it rests on is stale', () => {
+        useChatStore.setState({ systemStatus: {
+            lemonade_running: true, init_state: 'initializing',
+            init_tasks: [{ name: 'Loading AI model', status: 'running' }],
+        } as SystemStatus });
+        const { container } = render(<ConnectionBanner backendSlow />);
+        expect(container).toHaveTextContent('GAIA is slow to answer');
+        expect(container).not.toHaveTextContent('Loading AI model');
+    });
 });
 
 describe('the model server is down', () => {

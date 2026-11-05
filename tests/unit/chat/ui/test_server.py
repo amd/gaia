@@ -865,6 +865,57 @@ class TestSystemStatus:
         assert data["model_context_size"] == 4096
 
     @patch("httpx.AsyncClient")
+    def test_system_status_picked_model_not_loaded_yet(self, mock_httpx_cls, client):
+        """A picked model that another model still holds the slot for is named
+        as downloaded, so the UI can load it rather than wait on a send."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "gemma4-it-e4b-FLM",
+            "all_models_loaded": [
+                {
+                    "model_name": "gemma4-it-e4b-FLM",
+                    "type": "llm",
+                    "device": "npu",
+                    "recipe_options": {"ctx_size": 65536},
+                }
+            ],
+        }
+        catalog = {
+            "data": [
+                {"id": "gemma4-it-e4b-FLM", "downloaded": True, "size": 9.1},
+                {"id": "Qwen3.6-35B-A3B-GGUF", "downloaded": True, "size": 23.3},
+            ]
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            if "/models" in url:
+                return make_response(200, catalog)
+            return make_response(200, {})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        client.put("/api/settings", json={"custom_model": "Qwen3.6-35B-A3B-GGUF"})
+        data = client.get("/api/system/status").json()
+        assert data["model_loaded"] == "gemma4-it-e4b-FLM"
+        assert data["default_model_name"] == "Qwen3.6-35B-A3B-GGUF"
+        assert data["expected_model_loaded"] is False
+        assert data["model_downloaded"] is True
+        assert data["default_model_size_gb"] == 23.3
+
+    @patch("httpx.AsyncClient")
     def test_system_status_custom_model_respected(self, mock_httpx_cls, client):
         """expected_model_loaded is True when the loaded model matches the
         custom_model override stored in settings."""

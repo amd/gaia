@@ -1196,6 +1196,40 @@ def test_select_local_model(client, lemonade, keys, db):
     assert keys["ensure"] == []
 
 
+def test_picking_a_local_model_starts_loading_it(
+    client, lemonade, keys, db, monkeypatch
+):
+    from gaia.ui import warmup
+
+    asked = []
+    monkeypatch.setattr(
+        warmup, "request_warm_up", lambda reason, fresh=False: asked.append(fresh)
+    )
+    lemonade.models = _CATALOG
+    assert (
+        client.post(
+            "/api/providers/select", json={"model": "Qwen3-4B-GGUF"}
+        ).status_code
+        == 200
+    )
+    assert asked == [True]
+
+
+def test_picking_a_cloud_model_loads_nothing_here(
+    client, lemonade, keys, db, monkeypatch
+):
+    from gaia.ui import warmup
+
+    asked = []
+    monkeypatch.setattr(
+        warmup, "request_warm_up", lambda reason, fresh=False: asked.append(fresh)
+    )
+    lemonade.models = _CATALOG
+    resp = client.post("/api/providers/select", json={"model": "fireworks.aa-model"})
+    assert resp.status_code == 200, resp.text
+    assert asked == []
+
+
 def test_a_picked_npu_model_is_the_model_after_a_restart(client, lemonade, keys, db):
     npu = "gemma4-it-e4b-FLM"
     lemonade.models = [

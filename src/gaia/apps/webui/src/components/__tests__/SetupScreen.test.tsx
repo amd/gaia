@@ -84,6 +84,8 @@ beforeEach(() => {
     mockedApi.getStartScreen.mockResolvedValue(START);
     mockedApi.listProviders.mockResolvedValue({ providers: [], active: null, lemonade_error: null } as unknown as Awaited<ReturnType<typeof api.listProviders>>);
     mockedApi.getActiveModel.mockResolvedValue({ provider: 'local', model: QWEN.id, label: 'Qwen', remote: false, is_default: true });
+    mockedApi.selectModel.mockResolvedValue({ provider: 'local', model: QWEN.id, label: 'Qwen', remote: false, is_default: true });
+    mockedApi.getWarmUp.mockResolvedValue({ state: 'ready', elapsed_seconds: 1 });
 });
 
 /** Render, and return the callback the screen reports ready through. */

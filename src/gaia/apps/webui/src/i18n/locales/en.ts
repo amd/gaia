@@ -1694,6 +1694,12 @@ export const enMessages = {
     // The connection banner
     'banner.serverStopped': "The model server isn't running.",
     'banner.finishSetup': 'Set up models on this PC, or choose a cloud model in Settings.',
+    'banner.pickLoad.loading': 'Loading {model}…',
+    'banner.pickLoad.seconds': '{s}s',
+    'banner.pickLoad.canType': 'You can type now; your message sends once it is ready.',
+    'banner.pickLoad.failed': "Couldn't load {model}.",
+    'banner.pickLoad.retry': 'Try again',
+    'banner.dismiss': 'Dismiss',
 
     // The update chip
 
