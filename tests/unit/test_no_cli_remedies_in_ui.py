@@ -64,6 +64,7 @@ ALLOWED = {
     ("ui/setup_runner.py", "gaia init (pid"): "log line",
     ("ui/setup_runner.py", "gaia init --check --json` printed"): "names the step",
     ("ui/routers/chat.py", "gaia eval agent"): "an env var only the eval sets",
+    ("ui/routers/sessions.py", "gaia hub install"): "an agent id the app never lists",
     ("ui/security.py", "gaia eval agent"): "an override only the eval sends",
     # Lines #6686 rewords; left alone here to keep the two diffs apart.
     ("ui/setup_plan.py", "or `gaia config set default_model"): "#6686",
@@ -199,8 +200,51 @@ def test_app_hints_name_no_command(name):
         (surface_hints.TUI_SETUP_HINT, "gaia init"),
         (surface_hints.TUI_GATEWAY_KEY_HINT, "gaia gateway auth"),
         (surface_hints.APP_RESTART_HINT, "gaia daemon status"),
+        (surface_hints.APP_SERVICE_DOWN_HINT, "gaia daemon start"),
     ],
 )
 def test_the_cli_keeps_its_command(hint, command):
     assert command in surface_wording(f"It failed. {hint}", "cli")
     assert not COMMAND.search(surface_wording(f"It failed. {hint}", "agent_ui"))
+
+
+def test_a_cli_startup_failure_prints_the_cli_command(monkeypatch, capsys):
+    """The CLI must not tell a terminal user to close and reopen the app."""
+    from gaia.llm import lemonade_client, lemonade_manager, lemonade_service
+
+    def _fails(**_):
+        raise lemonade_client.LemonadeClientError(
+            f"The model server was not back within 60s. {surface_hints.APP_RESTART_HINT}"
+        )
+
+    monkeypatch.setattr(lemonade_service, "ensure_daemon_owns_lemonade", lambda: None)
+    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", lambda **_: 65536)
+    monkeypatch.setattr(lemonade_manager.LemonadeManager, "ensure_ready", _fails)
+
+    assert cli.initialize_lemonade_for_agent("chat") == (False, None)
+
+    err = capsys.readouterr().err
+    assert surface_hints.CLI_RESTART_HINT in err
+    assert surface_hints.APP_RESTART_HINT not in err
+
+
+def test_a_failed_key_replay_tells_an_app_user_where_to_fix_it(monkeypatch):
+    pytest.importorskip("fastapi")
+    from gaia.llm import cloud_keys
+    from gaia.ui._chat_helpers import _replay_cloud_key_for_relay
+
+    def _rejected(provider):
+        raise cloud_keys.CloudKeyError(
+            f"The gateway rejected the key. {surface_hints.TUI_GATEWAY_KEY_HINT}"
+        )
+
+    monkeypatch.setattr(cloud_keys, "ensure_authenticated", _rejected)
+    emitted = []
+    sse = type("SSE", (), {"_emit": lambda self, event: emitted.append(event)})()
+
+    _replay_cloud_key_for_relay(sse, "amd.DeepSeek-V4.1-Flash")
+
+    (event,) = emitted
+    assert surface_hints.AGENT_UI_GATEWAY_KEY_HINT in event["message"]
+    assert not COMMAND.search(event["message"])
+    assert "/gateway" not in event["message"]

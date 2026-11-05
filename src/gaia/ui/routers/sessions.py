@@ -194,10 +194,15 @@ def _reject_unknown_agent_type(agent_type: str | None) -> None:
     )
     load_error = registry.get_load_error(agent_type)
     reason = f" It failed to load: {load_error}." if load_error else ""
+    # The app lists only registered agents, so an unknown non-gaia id comes
+    # from an API caller, who can install it from the Agent Hub on the host.
     install = (
         f" To install the GAIA agent: {AGENT_UI_SETUP_HINT}"
         if agent_type == "gaia"
-        else ""
+        else (
+            " Or install it from the Agent Hub on the GAIA host with "
+            f"`gaia hub install {agent_type} --trust`, then try again."
+        )
     )
     raise HTTPException(
         status_code=422,

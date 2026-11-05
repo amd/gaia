@@ -85,6 +85,12 @@ CLI_RESTART_HINT = (
     "If it keeps happening, run `gaia daemon status` and check the daemon log."
 )
 
+#: When GAIA's background service is not running at all, so the CLI must start
+#: it: `gaia daemon status` (the restart hint) would only report it is down.
+APP_SERVICE_DOWN_HINT = "Close GAIA and open it again so its background service starts."
+CLI_SERVICE_DOWN_HINT = "Run `gaia daemon start`, then try again."
+SERVICE_SERVICE_DOWN_HINT = "Run `gaia daemon start` on the GAIA host, then try again."
+
 #: A model server whose model call keeps timing out.
 APP_WEDGED_SERVER_HINT = "If it keeps timing out, close GAIA and open it again."
 # `gaia kill`, not `gaia daemon restart`: the daemon reaps only a server it started.
@@ -108,6 +114,7 @@ _SWAPS = {
         (TUI_SETUP_HINT, CLI_SETUP_HINT),
         (TUI_GATEWAY_KEY_HINT, CLI_GATEWAY_KEY_HINT),
         (APP_RESTART_HINT, CLI_RESTART_HINT),
+        (APP_SERVICE_DOWN_HINT, CLI_SERVICE_DOWN_HINT),
         (APP_WEDGED_SERVER_HINT, CLI_WEDGED_SERVER_HINT),
     ),
     "service": (
@@ -117,6 +124,7 @@ _SWAPS = {
         (TUI_SETUP_HINT, SERVICE_SETUP_HINT),
         (TUI_GATEWAY_KEY_HINT, SERVICE_GATEWAY_KEY_HINT),
         (APP_RESTART_HINT, CLI_RESTART_HINT),
+        (APP_SERVICE_DOWN_HINT, SERVICE_SERVICE_DOWN_HINT),
         (APP_WEDGED_SERVER_HINT, CLI_WEDGED_SERVER_HINT),
     ),
     "tui": (),

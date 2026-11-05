@@ -199,7 +199,7 @@ def initialize_lemonade_for_agent(
                 quiet=quiet, host=host, port=port, model=model
             )
     except LemonadeClientError as e:
-        print(f"❌ Error: {e}", file=sys.stderr)
+        print(f"❌ Error: {_cli_wording(e)}", file=sys.stderr)
         return False, None
 
     if not success:

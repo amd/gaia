@@ -2403,7 +2403,7 @@ def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
         sse_handler._emit(
             {
                 "type": "status",
-                "message": (
+                "message": _agent_ui_wording(
                     f"Could not reconnect {provider}: {exc}. If the answer says "
                     "the model is unavailable, reconnect it in Settings > Model."
                 ),

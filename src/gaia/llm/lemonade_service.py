@@ -48,7 +48,7 @@ from gaia.llm.lemonade_supervisor import (
     _probe,
 )
 from gaia.llm.retry import http_body_text
-from gaia.llm.surface_hints import APP_RESTART_HINT
+from gaia.llm.surface_hints import APP_RESTART_HINT, APP_SERVICE_DOWN_HINT
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -515,7 +515,7 @@ def _post_start(payload: dict, timeout: float) -> dict:
         raise LemonadeStartError(
             "The local model server is not running, and neither is the GAIA "
             "background service that owns it — so nothing can start it.\n"
-            f"To fix: {APP_RESTART_HINT}\n{_where_to_look()}"
+            f"To fix: {APP_SERVICE_DOWN_HINT}\n{_where_to_look()}"
         )
 
     url = f"http://{inst.host}:{inst.port}{API_PREFIX}/lemonade/start"

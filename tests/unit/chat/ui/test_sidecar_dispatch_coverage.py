@@ -106,6 +106,22 @@ def test_the_unknown_agent_message_does_not_contradict_itself():
     assert "gaia init" not in detail and "gaia hub" not in detail
 
 
+def test_an_unknown_hub_agent_still_says_how_to_install_it():
+    """Only API callers send an id the app never listed; they need the remedy."""
+    from gaia.ui.routers.sessions import _reject_unknown_agent_type
+
+    registry = _Registry(None)
+    registry.agents = []
+    with patch("gaia.ui.routers.sessions.get_agent_registry", return_value=registry):
+        with pytest.raises(HTTPException) as exc:
+            _reject_unknown_agent_type("toy")
+
+    detail = exc.value.detail
+    assert "Unknown agent_type 'toy'" in detail
+    assert "`gaia hub install toy --trust`" in detail
+    assert "Settings > Setup" not in detail
+
+
 def test_uninstalled_flagship_says_so_rather_than_failing_at_the_daemon():
     """ "Install it from the Hub" beats whatever the daemon says about being
     asked to start a sidecar that was never installed."""
