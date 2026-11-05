@@ -1638,7 +1638,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             {visibleDocs.map((d) => (
                                 <span key={d.id} className="doc-pill" title={d.filepath || d.filename}>
                                     <FileText size={9} className="doc-pill-icon" aria-hidden="true" />
-                                    <span className="doc-pill-name">{d.filename}</span>
+                                    <span className="doc-pill-name" dir="auto">{d.filename}</span>
                                     <button
                                         className="doc-pill-remove"
                                         onClick={(e) => handleRemoveDocument(e, d.id)}

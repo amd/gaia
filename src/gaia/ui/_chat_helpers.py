@@ -3850,7 +3850,9 @@ async def _get_chat_response(
             if hasattr(agent, "config"):
                 agent.config.working_directory = working_directory
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
-                new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
+                from .agent_documents import not_yet_indexed
+
+                new_paths = not_yet_indexed(rag_file_paths, agent.indexed_files)
                 for fpath in new_paths:
                     doc_name = Path(fpath).name
                     try:
@@ -4331,9 +4333,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                     _extend_cached_scope(agent, allowed)
                     # Index any session docs newly attached since last turn.
-                    new_rag_paths = [
-                        p for p in rag_file_paths if p not in agent.indexed_files
-                    ]
+                    from .agent_documents import not_yet_indexed
+
+                    new_rag_paths = not_yet_indexed(rag_file_paths, agent.indexed_files)
                     if new_rag_paths and hasattr(agent, "rag") and agent.rag:
                         _index_rag_with_progress(
                             agent,

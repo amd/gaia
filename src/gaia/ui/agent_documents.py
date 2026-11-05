@@ -11,13 +11,14 @@ next chat can attach it.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
 import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Collection, Dict, Iterable, List, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -27,6 +28,7 @@ from .database import ChatDatabase
 from .routers.documents import _sanitize_stem, _short_id
 from .utils import (
     ALLOWED_EXTENSIONS,
+    compute_file_hash,
     compute_file_hash_from_fd,
     is_within_document_roots,
     managed_documents_dir,
@@ -68,11 +70,15 @@ def _record_in_place(db: ChatDatabase, path: Path, chunks: int) -> Dict[str, Any
     )
 
 
-def _record_copy(db: ChatDatabase, path: Path, chunks: int) -> Dict[str, Any]:
+def _record_copy(
+    db: ChatDatabase, path: Path, chunks: int
+) -> Tuple[Dict[str, Any], bool]:
     """Record a file outside every document root as a copy the library owns.
 
     The library only opens files under its roots, so the original could not be
     previewed or re-indexed from there; the agent was allowed to read it.
+    Returns the library row and whether a copy was made: none is when the
+    library already holds the same content.
     """
     if path.suffix.lower() not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=unsupported_type_message(path.name))
@@ -86,14 +92,14 @@ def _record_copy(db: ChatDatabase, path: Path, chunks: int) -> Dict[str, Any]:
     file_hash = hasher.hexdigest()
     existing = db.get_document_by_hash(file_hash)
     if existing:
-        return existing
+        return existing, False
 
     managed = managed_documents_dir()
     managed.mkdir(parents=True, exist_ok=True)
     copy = managed / f"{_short_id()}_{_sanitize_stem(path.stem)}{path.suffix.lower()}"
     shutil.copyfile(path, copy)
     file_stat = copy.stat()
-    return db.add_document(
+    doc = db.add_document(
         filename=path.name,
         filepath=str(copy),
         file_hash=file_hash,
@@ -101,6 +107,7 @@ def _record_copy(db: ChatDatabase, path: Path, chunks: int) -> Dict[str, Any]:
         chunk_count=chunks,
         file_mtime=file_stat.st_mtime,
     )
+    return doc, True
 
 
 def add_indexed_documents(
@@ -115,9 +122,10 @@ def add_indexed_documents(
     for raw_path, chunks in indexed:
         path = Path(os.path.realpath(raw_path))
         try:
-            in_place = is_within_document_roots(path)
-            record = _record_in_place if in_place else _record_copy
-            doc = record(db, path, chunks)
+            if is_within_document_roots(path):
+                doc, copied = _record_in_place(db, path, chunks), False
+            else:
+                doc, copied = _record_copy(db, path, chunks)
             db.attach_document(session_id, doc["id"])
             result.documents.append(db.get_document(doc["id"]))
         except HTTPException as exc:
@@ -131,7 +139,7 @@ def add_indexed_documents(
             )
             reason = str(exc)
         else:
-            if not in_place:
+            if copied:
                 result.notices.append(
                     f"{path.name} is outside the folders your documents are read "
                     f"from, so your documents hold a copy of it. Changes to "
@@ -144,3 +152,32 @@ def add_indexed_documents(
             f"your documents, so later chats won't find it: {reason}"
         )
     return result
+
+
+@functools.lru_cache(maxsize=512)
+def _hash_at(path: str, mtime_ns: int, size: int) -> str:
+    return compute_file_hash(Path(path))
+
+
+def _content_hash(path: str) -> Optional[str]:
+    """SHA-256 of *path*'s content, the library's ``file_hash``; None if unreadable."""
+    try:
+        st = os.stat(path)
+        return _hash_at(path, st.st_mtime_ns, st.st_size)
+    except OSError as exc:
+        logger.debug("Could not hash %s: %s", path, exc)
+        return None
+
+
+def not_yet_indexed(paths: Iterable[str], indexed: Collection[str]) -> List[str]:
+    """The *paths* whose content the agent has not indexed yet.
+
+    The library holds a copy of a file from outside its folders, at a new
+    path; the agent indexed the original, so the copy has nothing new for it.
+    An unreadable path is kept, so indexing it reports why.
+    """
+    fresh = [p for p in paths if p not in indexed]
+    if not fresh:
+        return fresh
+    held = {h for h in map(_content_hash, indexed) if h}
+    return [p for p in fresh if _content_hash(p) not in held]

@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MODEL_LIST, NOW, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -2082,5 +2082,54 @@ for (const locale of ['ar', 'en']) {
             await expect(page.getByText('run_shell')).toBeVisible();
             await checkMemory(page, locale, 'advanced-phone');
         });
+    });
+}
+
+const INDEXED_MANUAL = {
+    id: 'd-manual', filename: 'plant_manual.md', filepath: 'C:\\Users\\you\\.gaia\\documents\\3f9a1c2b_plant_manual.md',
+    file_size: 2_048, chunk_count: 3, indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1,
+    indexing_status: 'complete',
+};
+
+const COPY_NOTICE = 'plant_manual.md is outside the folders your documents are read from, so your documents hold a copy '
+    + 'of it. Changes to D:\\gtest\\plant_manual.md won\'t reach the copy.';
+const INDEX_REQUEST = 'Add D:\\gtest\\plant_manual.md to my documents';
+const INDEX_ANSWER = 'Added plant_manual.md to your documents.';
+
+/** "Add it to my documents" on a file outside the document folders, as the backend streams it. */
+const INDEXED_OUTSIDE = [
+    { type: 'tool_start', tool: 'index_document', detail: '', narration: '' },
+    { type: 'tool_result', summary: 'Indexed plant_manual.md (3 chunks)', success: true },
+    { type: 'status', status: 'warning', message: COPY_NOTICE },
+    { type: 'chunk', content: INDEX_ANSWER },
+    { type: 'done', message_id: 4, content: INDEX_ANSWER, documents_added: [INDEXED_MANUAL] },
+];
+
+/** The chat as saved once that turn ends, which the app reloads. */
+const SAVED_AFTER_INDEXING = {
+    messages: [
+        ...MESSAGES.messages,
+        { id: 3, session_id: ANSWER_SESSION, role: 'user', content: INDEX_REQUEST, created_at: NOW.toISOString(), rag_sources: null },
+        {
+            id: 4, session_id: ANSWER_SESSION, role: 'assistant', content: INDEX_ANSWER, created_at: NOW.toISOString(), rag_sources: null,
+            agent_steps: [
+                { id: 1, type: 'tool', label: 'Using tool', tool: 'index_document', result: 'Indexed plant_manual.md (3 chunks)', active: false, success: true, latencyMs: 900 },
+            ],
+        },
+    ],
+    total: 4,
+};
+
+for (const locale of ['ar', 'en']) {
+    test(`a document the agent indexes joins the chat's document bar (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, INDEXED_OUTSIDE);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill(INDEX_REQUEST);
+        await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({ json: SAVED_AFTER_INDEXING }));
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.doc-pill-name')).toHaveText('plant_manual.md');
+        await expect(page.getByText(INDEX_ANSWER)).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `agent-indexed-document-${locale}`);
     });
 }

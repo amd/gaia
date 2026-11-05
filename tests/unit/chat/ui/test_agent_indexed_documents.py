@@ -16,7 +16,7 @@ import pytest
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.rag_tools import RAGToolsMixin
 from gaia.ui._chat_helpers import _add_indexed_documents_to_library, _done_event
-from gaia.ui.agent_documents import add_indexed_documents
+from gaia.ui.agent_documents import add_indexed_documents, not_yet_indexed
 from gaia.ui.database import ChatDatabase
 from gaia.ui.email_sidecar.relay import _dispatch_one
 from gaia.ui.sse_handler import SSEOutputHandler
@@ -167,6 +167,65 @@ def test_a_file_outside_the_library_folders_goes_in_as_a_copy(tmp_path, home, db
     assert db.get_session_documents(session["id"])[0]["id"] == library_doc["id"]
     [notice] = added.notices
     assert "copy" in notice and str(outside.resolve()) in notice
+
+
+def _outside(tmp_path: Path, text: str = "Backup generator code: BG-7731") -> Path:
+    outside = tmp_path / "gtest" / "plant_manual.md"
+    outside.parent.mkdir(exist_ok=True)
+    outside.write_text(text, encoding="utf-8")
+    return outside
+
+
+def test_reindexing_a_copied_file_does_not_repeat_the_copy_notice(tmp_path, home, db):
+    outside = _outside(tmp_path)
+    session = db.create_session()
+
+    first = add_indexed_documents(db, session["id"], [(str(outside), 3)])
+    again = add_indexed_documents(db, session["id"], [(str(outside), 3)])
+
+    assert len(first.notices) == 1
+    assert again.notices == []
+    assert len(db.list_documents()) == 1
+    assert [d["id"] for d in again.documents] == [d["id"] for d in first.documents]
+
+
+def test_no_copy_notice_when_the_library_already_holds_the_content(tmp_path, home, db):
+    inside = home / "plant_manual.md"
+    inside.write_text("Backup generator code: BG-7731", encoding="utf-8")
+    outside = _outside(tmp_path)
+    session = db.create_session()
+    add_indexed_documents(db, session["id"], [(str(inside), 3)])
+
+    added = add_indexed_documents(db, session["id"], [(str(outside), 3)])
+
+    assert added.notices == []
+    [library_doc] = db.list_documents()
+    assert Path(library_doc["filepath"]) == inside.resolve()
+
+
+def test_the_library_copy_of_an_indexed_file_is_not_indexed_again(tmp_path, home, db):
+    """The agent indexed the original; next turn the chat lists the copy too."""
+    outside = _outside(tmp_path)
+    session = db.create_session()
+    add_indexed_documents(db, session["id"], [(str(outside), 3)])
+    copy = db.get_session_documents(session["id"])[0]["filepath"]
+    other = home / "other.md"
+    other.write_text("Something else", encoding="utf-8")
+
+    assert not_yet_indexed([copy, str(other)], {str(outside)}) == [str(other)]
+
+
+def test_a_changed_or_unreadable_file_is_still_indexed(tmp_path, home):
+    outside = _outside(tmp_path)
+    edited = home / "plant_manual.md"
+    edited.write_text("Backup generator code: BG-9000", encoding="utf-8")
+    missing = str(home / "gone.md")
+
+    assert not_yet_indexed([str(edited), missing], {str(outside)}) == [
+        str(edited),
+        missing,
+    ]
+    assert not_yet_indexed([str(outside)], {str(outside)}) == []
 
 
 def test_a_file_the_library_cannot_hold_is_named_with_the_reason(home, db):
