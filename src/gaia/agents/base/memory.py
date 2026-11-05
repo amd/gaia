@@ -5536,10 +5536,11 @@ class MemoryMixin(ProceduralMemoryMixin):
                 **cleared,
                 "message": (
                     "Erased everything GAIA remembered about you and your "
-                    "chats, past conversations included. Skills it learned for "
-                    "doing tasks are kept; `gaia skill deltas <skill> --reset` "
-                    "undoes what it learned about a skill. Chats listed in the "
-                    "sidebar, this one included, stay until you delete them there."
+                    "chats, past conversations included. Lessons it learned for "
+                    "doing tasks with its skills are kept. To clear them, run "
+                    "`gaia skill deltas <skill> --reset` in a terminal. Chats "
+                    "listed in the sidebar, this one included, stay until you "
+                    "delete them there."
                 ),
             }
 
