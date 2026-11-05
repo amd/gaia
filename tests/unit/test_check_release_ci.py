@@ -1,13 +1,14 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""util/check_release_ci.py: a release only publishes a commit CI passed.
+"""util/check_release_ci.py: a final only publishes a commit CI passed; a
+release candidate is never held by tests.
 
 Most commits on main have no passing run of their own (the next merge cancels
-it, path filters skip others), so the gate dispatches what is missing against
-the tag and waits. These tests pin that it never treats "no evidence" as green,
-never dispatches the same workflow twice, ignores the stale runs that made it
-dispatch, and that a candidate is held only by its critical checks while a
-final is held by everything.
+it, path filters skip others), so on a final the gate dispatches what is
+missing against the tag and waits. These tests pin that a final never treats
+"no evidence" as green, never dispatches the same workflow twice, and ignores
+the stale runs that made it dispatch; and that a candidate reads each check
+once, reports every state, never dispatches or waits, and exits 0.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ T0 = datetime(2026, 10, 18, 12, 0, tzinfo=timezone.utc)
 LINUX = "Unit Tests (Linux, py3.12)"
 FLOOR = "Import Every Module (Linux, py3.10)"
 MACOS = "Unit Tests (macOS, py3.12)"
-UNIT_RC = next(c for c in crc.RC_CRITICAL if c.workflow == "test_unit.yml")
+UNIT_RC = next(c for c in crc.RC_REPORTED if c.workflow == "test_unit.yml")
 
 
 def run(conclusion, status="completed", minutes=0, run_id=1):
@@ -85,7 +86,7 @@ def _job_names(name: str) -> dict[str, str]:
     return {j.get("name", jid): jid for jid, j in _workflow(name)["jobs"].items()}
 
 
-ALL_SETS = crc.RC_CRITICAL + crc.RC_ADVISORY + crc.FINAL_REQUIRED
+ALL_SETS = crc.RC_REPORTED + crc.FINAL_REQUIRED
 
 
 # ── The lists match the workflows they name ─────────────────────────────
@@ -103,18 +104,26 @@ def test_every_check_names_real_jobs_and_inputs(check):
         )
 
 
-def test_the_rc_set_is_exactly_the_agreed_critical_list():
-    assert [(c.workflow, c.jobs) for c in crc.RC_CRITICAL] == [
-        ("lint.yml", ()),
-        ("test_unit.yml", (LINUX, FLOOR)),
-    ]
-    assert all(c.why for c in crc.RC_CRITICAL)
-
-
 NPU_ROWS = ("NPU agent chat (Windows, cold)", "NPU agent chat (Linux, cold)")
 
 
-@pytest.mark.parametrize("checks", [crc.RC_ADVISORY, crc.FINAL_REQUIRED])
+def test_the_rc_report_lists_the_linux_suite_first_and_on_its_own():
+    # Reported, never gating; Linux and the import floor stay their own row so
+    # the summary says whether the suite the release is built on passed.
+    assert [(c.workflow, c.jobs) for c in crc.RC_REPORTED] == [
+        ("lint.yml", ()),
+        ("test_unit.yml", (LINUX, FLOOR)),
+        (
+            "test_unit.yml",
+            (MACOS, "Unit Tests (Windows, py3.12)", "Offline Integration Tests"),
+        ),
+        ("test_gaia_cli_linux.yml", ()),
+        ("release_train_dryrun.yml", ()),
+        ("test_npu_agent_chat.yml", NPU_ROWS),
+    ]
+
+
+@pytest.mark.parametrize("checks", [crc.RC_REPORTED, crc.FINAL_REQUIRED])
 def test_a_push_run_with_only_the_windows_npu_row_does_not_pass(checks):
     # A main push starts only the Windows row; the Linux row is skipped.
     (npu,) = [c for c in checks if c.workflow == "test_npu_agent_chat.yml"]
@@ -129,20 +138,20 @@ def test_a_push_run_with_only_the_windows_npu_row_does_not_pass(checks):
 
 def test_a_final_requires_everything_an_rc_sees():
     final = {c.workflow: c for c in crc.FINAL_REQUIRED}
-    for c in crc.RC_CRITICAL + crc.RC_ADVISORY:
+    for c in crc.RC_REPORTED:
         assert c.workflow in final, c.label
         # The whole run, or at least the same jobs.
         assert not final[c.workflow].jobs or set(c.jobs) <= set(final[c.workflow].jobs)
 
 
-def test_every_test_unit_job_is_critical_or_advisory_on_an_rc():
-    # A new job must be classified, not silently dropped from the RC view.
+def test_every_test_unit_job_is_reported_on_an_rc():
+    # A new job must show up in the RC summary, not be silently dropped.
     # "Select unit tests" only feeds the Linux job: if it fails, that job is
-    # skipped, and a skipped critical job fails the gate.
-    named = {n for c in crc.RC_CRITICAL + crc.RC_ADVISORY for n in c.jobs}
-    assert set(_job_names("test_unit.yml")) - named == {"Select unit tests"}
-    critical = {n for c in crc.RC_CRITICAL for n in c.jobs}
-    assert not critical & {n for c in crc.RC_ADVISORY for n in c.jobs}
+    # skipped, and the report says so.
+    rows = [c.jobs for c in crc.RC_REPORTED if c.workflow == "test_unit.yml"]
+    named = [n for jobs in rows for n in jobs]
+    assert set(_job_names("test_unit.yml")) - set(named) == {"Select unit tests"}
+    assert len(named) == len(set(named)), "a job is reported twice"
 
 
 def test_in_run_critical_jobs_gate_approve_publish():
@@ -152,11 +161,17 @@ def test_in_run_critical_jobs_gate_approve_publish():
         assert f"needs.{jid}.result == 'success'" in approve["if"], jid
 
 
-def test_the_dry_run_never_holds_or_slows_an_rc_but_holds_a_final():
-    # publish.yml builds and smoke-tests the candidate in-run; the hour-long dry
-    # run is only reported on an RC, and never started for one.
-    assert "release_train_dryrun.yml" not in {c.workflow for c in crc.RC_CRITICAL}
-    assert "release_train_dryrun.yml" in {c.workflow for c in crc.RC_ADVISORY}
+def test_the_ci_gate_never_holds_an_rc_in_the_workflow_either():
+    # Even if the script itself errors (an API outage), an RC still publishes.
+    assert "ci-green" not in crc.RC_IN_RUN_CRITICAL
+    approve = _workflow("publish.yml")["jobs"]["approve-publish"]
+    assert (
+        "(needs.validate.outputs.is_rc == 'true' || "
+        "needs.ci-green.result == 'success')"
+    ) in approve["if"]
+
+
+def test_the_dry_run_holds_a_final_and_is_never_started_for_it():
     final = next(
         c for c in crc.FINAL_REQUIRED if c.workflow == "release_train_dryrun.yml"
     )
@@ -164,17 +179,16 @@ def test_the_dry_run_never_holds_or_slows_an_rc_but_holds_a_final():
     assert "-f rc_tag=" in final.remedy_args
 
 
-def test_an_rc_never_dispatches_or_waits_for_an_advisory_check():
-    # The gate only ever polls RC_CRITICAL; advise() reads once.
+def test_an_rc_snapshot_reads_each_check_once():
     calls: list[str] = []
 
     def get_runs(w):
         calls.append(w)
         return []
 
-    advisory = crc.advise("amd/gaia", "v1.0.0-rc1", crc.RC_ADVISORY, get_runs)
-    assert calls == [c.workflow for c in crc.RC_ADVISORY]
-    assert {v.state for v in advisory} == {"missing"}
+    verdicts = crc.snapshot("amd/gaia", "v1.0.0-rc1", crc.RC_REPORTED, get_runs)
+    assert calls == [c.workflow for c in crc.RC_REPORTED]
+    assert {v.state for v in verdicts} == {"missing"}
 
 
 # ── judge(): whole-run checks ───────────────────────────────────────────
@@ -299,7 +313,7 @@ def test_an_empty_check_list_is_refused():
         crc.check("amd/gaia", "v1", (), lambda w: [], lambda c: None, 1)
 
 
-def test_the_rc5_commit_passes_the_rc_gate_and_fails_the_final_gate():
+def test_the_rc5_commit_is_reported_on_the_rc_and_fails_the_final_gate():
     unit = {
         1: unit_jobs(**{MACOS: ("failure", "completed")}),
         2: [job(n) for n in NPU_ROWS],
@@ -312,19 +326,15 @@ def test_the_rc5_commit_passes_the_rc_gate_and_fails_the_final_gate():
             return [run("success", run_id=2)]
         return [run("success")]
 
-    started: list = []
-    rc = crc.check(
-        "amd/gaia",
-        "v1.0.0-rc1",
-        crc.RC_CRITICAL,
-        get_runs,
-        started.append,
-        wait_minutes=10,
-        get_jobs=_jobs_for(unit),
+    rc = crc.snapshot(
+        "amd/gaia", "v1.0.0-rc1", crc.RC_REPORTED, get_runs, _jobs_for(unit)
     )
-    assert {v.state for v in rc} == {"success"}
-    assert started == []
+    assert [v.state for v in rc if v.workflow == "test_unit.yml"] == [
+        "success",
+        "failed",
+    ]
 
+    started: list = []
     clock = Clock()
     final = crc.check(
         "amd/gaia",
@@ -469,25 +479,105 @@ def test_in_progress_on_main_is_waited_for_not_dispatched():
     assert verdicts[0].state == "success"
 
 
-# ── advisory and the report ─────────────────────────────────────────────
+# ── the release candidate's report ──────────────────────────────────────
 
 
-def test_advisory_checks_are_reported_but_never_block():
-    unit = {1: unit_jobs(**{MACOS: ("failure", "completed")})}
-    advisory = crc.advise(
-        "amd/gaia",
-        "v1.0.0-rc1",
-        crc.RC_ADVISORY,
-        lambda w: [run("failure")] if w == "test_unit.yml" else [],
-        _jobs_for(unit),
+def _one_of_each_state():
+    states = ["success", "failed", "pending", "missing"]
+    return [
+        crc.Verdict(
+            C(f"{s}.yml"), s, f"https://x/{s}", f"fix {s}" if s != "success" else ""
+        )
+        for s in states
+    ]
+
+
+def test_the_rc_report_names_every_state_in_plain_words():
+    text, warnings = crc.report_rc(_one_of_each_state(), "abc123def4567", "v1.0.0-rc1")
+    for row in (
+        "| `success.yml` | passed |",
+        "| `failed.yml` | failed |",
+        "| `pending.yml` | still running |",
+        "| `missing.yml` | no run on this commit |",
+    ):
+        assert row in text
+    assert "does not block a release candidate" in text
+    assert "v1.0.0-rc1 publishes anyway" in text
+    # One warning per check that is not green, each with its remedy in the summary.
+    assert len(warnings) == 3
+    assert all("the final requires it" in w for w in warnings)
+    assert not any("success.yml" in w for w in warnings)
+    for s in ("failed", "pending", "missing"):
+        assert f"`fix {s}`" in text
+
+
+def test_an_all_green_rc_report_has_no_warnings():
+    green = [crc.Verdict(c, "success", "https://x") for c in crc.RC_REPORTED]
+    text, warnings = crc.report_rc(green, "abc123", "v1.0.0-rc1")
+    assert warnings == []
+    assert "publishes anyway" not in text
+
+
+def test_a_missing_dry_run_on_an_rc_prints_the_command_for_that_candidate():
+    (dry,) = [c for c in crc.RC_REPORTED if c.workflow == "release_train_dryrun.yml"]
+    v = crc.judge(dry, [], "amd/gaia", "v1.0.0-rc3")
+    assert v.remedy == (
+        "gh workflow run release_train_dryrun.yml --repo amd/gaia "
+        "--ref v1.0.0-rc3 -f rc_tag=v1.0.0-rc3"
     )
-    assert {v.state for v in advisory} == {"failed", "missing"}
-    green = [crc.Verdict(c, "success", "https://x") for c in crc.RC_CRITICAL]
-    ok, text = crc.report(green, "abc123", is_rc=True, advisory=advisory)
-    assert ok
-    assert "| advisory | failed |" in text
-    assert "release candidate gate" in text
-    assert "final requires them" in text
+
+
+def _rc_main(monkeypatch, tmp_path, get_runs, jobs):
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setattr(crc, "fetch_runs", lambda repo, w, sha, tok: get_runs(w))
+    monkeypatch.setattr(crc, "fetch_jobs", lambda repo, rid, tok: jobs[rid])
+
+    def never(*a, **k):
+        pytest.fail("an RC must not dispatch, poll or wait")
+
+    monkeypatch.setattr(crc, "check", never)
+    monkeypatch.setattr(crc, "dispatch", never)
+    monkeypatch.setattr(crc.time, "sleep", never)
+    code = crc.main(["--repo", "amd/gaia", "--sha", "abc123", "--tag", "v1.0.0-rc3"])
+    return code, summary.read_text(encoding="utf-8")
+
+
+def test_an_rc_with_every_check_red_or_absent_still_exits_0(
+    monkeypatch, tmp_path, capsys
+):
+    jobs = {
+        1: unit_jobs(**{LINUX: (None, "in_progress"), MACOS: ("failure", "completed")})
+    }
+
+    def get_runs(w):
+        if w == "lint.yml":
+            return [run("failure", run_id=7)]
+        if w == "test_unit.yml":
+            return [run(None, status="in_progress")]
+        return []
+
+    code, summary = _rc_main(monkeypatch, tmp_path, get_runs, jobs)
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "| `lint.yml` | failed |" in summary
+    assert f"| `test_unit.yml ({LINUX}, {FLOOR})` | still running |" in summary
+    assert "| `test_gaia_cli_linux.yml` | no run on this commit |" in summary
+    assert out.count("::warning::") == len(crc.RC_REPORTED)
+    assert "::error::" not in out
+
+
+def test_an_all_green_rc_exits_0_without_warnings(monkeypatch, tmp_path, capsys):
+    jobs = {1: unit_jobs(), 2: [job(n) for n in NPU_ROWS]}
+
+    def get_runs(w):
+        return [run("success", run_id=2 if w == "test_npu_agent_chat.yml" else 1)]
+
+    code, summary = _rc_main(monkeypatch, tmp_path, get_runs, jobs)
+    assert code == 0
+    assert "::warning::" not in capsys.readouterr().out
+    assert "| passed |" in summary
 
 
 # ── the API layer ───────────────────────────────────────────────────────
@@ -532,25 +622,25 @@ def test_main_refuses_a_tag_that_is_not_a_release(monkeypatch, capsys):
     assert "not a release tag" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize(
-    "tag, expected", [("v1.0.0-rc3", "RC_CRITICAL"), ("v1.0.0", "FINAL_REQUIRED")]
-)
-def test_main_picks_the_set_from_the_tag(monkeypatch, capsys, tag, expected):
+@pytest.mark.parametrize("state, code", [("success", 0), ("failed", 1), ("pending", 1)])
+def test_a_final_still_waits_on_and_is_held_by_everything(
+    monkeypatch, capsys, state, code
+):
     monkeypatch.setenv("GITHUB_TOKEN", "tok")
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     seen = {}
 
-    def fake_check(repo, t, checks, *a, **k):
-        seen["checks"] = checks
-        return [crc.Verdict(c, "success", "u") for c in checks]
+    def fake_check(repo, t, checks, get_runs, start_run, wait_minutes, **k):
+        seen.update(checks=checks, wait=wait_minutes)
+        return [crc.Verdict(c, state, "u", "r") for c in checks]
 
     monkeypatch.setattr(crc, "check", fake_check)
-    monkeypatch.setattr(crc, "fetch_runs", lambda *a: [])
-    assert crc.main(["--repo", "amd/gaia", "--sha", "abc", "--tag", tag]) == 0
-    assert seen["checks"] is getattr(crc, expected)
+    assert crc.main(["--repo", "amd/gaia", "--sha", "abc", "--tag", "v1.0.0"]) == code
+    assert seen["checks"] is crc.FINAL_REQUIRED
+    assert seen["wait"] == 80
     out = capsys.readouterr().out
-    # An RC prints a warning per advisory check that is not green; a final has none.
-    assert ("::warning::advisory" in out) == tag.endswith("rc3")
+    assert ("::error::" in out) == (code == 1)
+    assert "::warning::" not in out
 
 
 @pytest.mark.parametrize("code, hinted", [(403, True), (404, False), (502, False)])
