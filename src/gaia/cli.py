@@ -7274,9 +7274,20 @@ def _handle_network_policy(action, value) -> None:
         for key, model in cleared:
             print(f"   Cleared {key} (was {model}): it is a cloud model.")
         print(f"   GAIA now uses {resolve_default_chat_model()} by default.")
-    from gaia.llm.cloud_keys import CloudKeyError, drop_runtime_keys
+    from gaia.llm.cloud_keys import (
+        CloudKeyError,
+        drop_runtime_keys,
+        users_lemonade_url,
+    )
 
     try:
+        users_url = users_lemonade_url()
+        if users_url:
+            print(
+                f"   Left your Lemonade Server at {users_url} as is: any cloud "
+                "keys it holds stay there, and GAIA won't send it cloud requests."
+            )
+            return
         dropped = drop_runtime_keys()
     except CloudKeyError as e:
         print(

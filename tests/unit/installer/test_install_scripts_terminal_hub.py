@@ -964,6 +964,65 @@ def test_install_tui_fails_when_github_is_unreachable(tmp_path):
     assert not installed.exists()
 
 
+# ── functional: GAIA_CLI_ONLY, for a package that already owns the binaries ──
+
+_MAIN_STEPS = (
+    "detect_environment",
+    "check_download_tool",
+    "resolve_pin",
+    "install_uv",
+    "install_gaia",
+    "link_gaia_commands",
+    "add_to_path",
+    "install_tui",
+    "install_flagship_agent",
+)
+
+
+def _run_main_with_stubbed_steps(tmp_path, cli_only):
+    stubs = "; ".join(f'{step}() {{ echo "STEP {step}"; }}' for step in _MAIN_STEPS)
+    return _run_sh_function(
+        tmp_path, f"{stubs}; main", {"GAIA_CLI_ONLY": cli_only}, shell="dash"
+    )[0]
+
+
+def _steps_run(result):
+    return [
+        line.split(" ", 1)[1]
+        for line in result.stdout.splitlines()
+        if line.startswith("STEP ")
+    ]
+
+
+@posix_only
+@pytest.mark.skipif(shutil.which("dash") is None, reason="needs dash")
+def test_cli_only_installs_the_cli_and_leaves_the_packaged_binaries(tmp_path):
+    result = _run_main_with_stubbed_steps(tmp_path, "1")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _steps_run(result) == list(_MAIN_STEPS[:-2])
+
+
+@posix_only
+@pytest.mark.skipif(shutil.which("dash") is None, reason="needs dash")
+def test_without_cli_only_main_still_installs_everything(tmp_path):
+    result = _run_main_with_stubbed_steps(tmp_path, "")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _steps_run(result) == list(_MAIN_STEPS)
+
+
+@posix_only
+@pytest.mark.skipif(shutil.which("dash") is None, reason="needs dash")
+@pytest.mark.parametrize("value", ["true", "yes", "0", "2"])
+def test_a_bad_cli_only_value_is_refused_before_anything_installs(tmp_path, value):
+    result = _run_main_with_stubbed_steps(tmp_path, value)
+
+    assert result.returncode != 0
+    assert "GAIA_CLI_ONLY" in result.stdout + result.stderr
+    assert _steps_run(result) == []
+
+
 # ── functional: the flagship sidecar is optional, but never unverified ──────
 #
 # The whole point of the sidecar step is that it can fail without taking a

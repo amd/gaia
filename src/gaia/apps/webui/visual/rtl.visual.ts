@@ -923,23 +923,39 @@ async function withSchedules(page: Page, schedules: unknown[] = SCHEDULE_ROWS): 
         ] },
     }));
     await page.route('**/api/schedules/parse', (route) => route.fulfill({
-        json: { interval_seconds: 0, time_of_day: null, start_hour: null, end_hour: null, days_of_week: null, description: "25:00 isn't a time — use 0:00–23:59.", next_run_at: null, valid: false },
+        json: route.request().postDataJSON().input === 'every 2m'
+            ? { interval_seconds: 120, time_of_day: null, start_hour: null, end_hour: null, days_of_week: null, description: 'Every 2 minutes', description_parts: { ...NO_PARTS, kind: 'every', count: 2, unit: 'minute' }, next_run_at: new Date(NOW.getTime() + 120_000).toISOString(), valid: true }
+            : { interval_seconds: 0, time_of_day: null, start_hour: null, end_hour: null, days_of_week: null, description: "25:00 isn't a time — use 0:00–23:59.", description_parts: null, next_run_at: null, valid: false },
     }));
 }
+
+const NO_PARTS = { kind: 'every', count: null, unit: null, days: null, time: null, start_hour: null, end_hour: null };
 
 const SCHEDULE_ROW = {
     id: 's1', name: 'Morning brief', interval_seconds: 86_400, prompt: 'Summarize my unread email and calendar for today',
     status: 'active', created_at: null, last_run_at: new Date(NOW.getTime() - 7 * 60_000).toISOString(),
     next_run_at: new Date(NOW.getTime() + 17 * 60_000).toISOString(), last_result: '3 new items', run_count: 9, error_count: 1,
-    session_id: 'chat-1', schedule_config: null, description: 'Daily at 8:00 AM', last_error: 'The model server stopped.',
+    session_id: 'chat-1', schedule_config: null, description: 'Weekdays at 8:00 AM', last_error: 'The model server stopped.',
+    description_parts: { ...NO_PARTS, kind: 'days', days: [0, 1, 2, 3, 4], time: '08:00' },
 };
-const SCHEDULE_ROWS = [SCHEDULE_ROW, { ...SCHEDULE_ROW, id: 's2', name: 'Weekly budget check-in', status: 'paused', next_run_at: null, error_count: 0, last_error: null, session_id: null, description: 'Every Monday at 9:00 AM' }];
+const SCHEDULE_ROWS = [
+    SCHEDULE_ROW,
+    {
+        ...SCHEDULE_ROW, id: 's2', name: 'Weekly budget check-in', status: 'paused', next_run_at: null, error_count: 0, last_error: null, session_id: null,
+        description: 'Every Monday, Wednesday at 9:00 AM', description_parts: { ...NO_PARTS, kind: 'days', days: [0, 2], time: '09:00' },
+    },
+    {
+        ...SCHEDULE_ROW, id: 's3', name: 'Inbox sweep', last_error: null, error_count: 0, session_id: null,
+        description: 'Every 2 hours, 8:00 AM - 6:00 PM, weekdays',
+        description_parts: { ...NO_PARTS, kind: 'window', count: 2, unit: 'hour', start_hour: 8, end_hour: 18, days: [0, 1, 2, 3, 4] },
+    },
+];
 
 /** Titles, labels and placeholders in the schedules dialog that carry no Arabic. */
 const untranslatedAttributes = (page: Page): Promise<string[]> =>
     page.locator('.schedule-modal').evaluate((root) =>
         [root.closest('[role="dialog"]')!, ...root.querySelectorAll('[title], [aria-label], [placeholder]')].flatMap((el) =>
-            ['aria-label', 'placeholder', ...(el.closest('.schedule-card-meta') ? [] : ['title'])]
+            ['aria-label', 'placeholder', 'title']
                 .map((a) => el.getAttribute(a) ?? '')
                 .filter((v) => /[A-Za-z]{3}/.test(v) && !/[؀-ۿ]/.test(v))));
 
@@ -979,6 +995,14 @@ for (const locale of ['ar', 'en']) {
             await check(page, 'form-empty');
         });
 
+        test('new schedule with a "when" GAIA can read', async ({ page }) => {
+            await openSchedules(page, []);
+            await page.locator('.schedule-modal .btn-primary').click();
+            await page.locator('.schedule-nl-input').fill('every 2m');
+            await expect(page.locator('.schedule-parsed-preview.valid')).toBeVisible();
+            await check(page, 'form-valid');
+        });
+
         test('new schedule with a "when" GAIA cannot read', async ({ page }) => {
             await openSchedules(page);
             await page.locator('.schedule-modal .btn-primary').click();
@@ -1007,6 +1031,53 @@ for (const locale of ['ar', 'en']) {
         await expect(page.getByText('HTTPConnectionPool')).toBeHidden();
         await expect(page.locator('.settings-notice .btn-secondary')).toBeVisible();
         await shot(page, `model-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+const SERVER_DOWN_REPLY = 'The model call failed at step 1, so this request is unfinished. The local model server at 127.0.0.1:13305 '
+    + "isn't answering, so the message never reached Fireworks AI.\n\nNothing had run yet.\n\nStart the model server, then send the message again.";
+
+/** The send fails on a stopped model server, and the server's saved copy of the chat then holds that reply. */
+async function withServerDown(page: Page): Promise<void> {
+    let sent = false;
+    await page.route('**/api/chat/send', (route) => {
+        sent = true;
+        const done = { type: 'done', message_id: 42, content: SERVER_DOWN_REPLY, failed: true, failure: 'model_server_down' };
+        return route.fulfill({ status: 200, contentType: 'text/event-stream', body: `data: ${JSON.stringify(done)}\n\n` });
+    });
+    await page.route(new RegExp(`/api/sessions/${ANSWER_SESSION}/messages(\\?|$)`), (route) => (sent
+        ? route.fulfill({
+            json: {
+                messages: [
+                    { id: 41, session_id: ANSWER_SESSION, role: 'user', content: 'Summarize the minutes', created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 42, session_id: ANSWER_SESSION, role: 'assistant', content: SERVER_DOWN_REPLY, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+                total: 2,
+            },
+        })
+        : route.fallback()));
+    await page.route('**/api/providers/local/status', (route) => route.fulfill({
+        json: {
+            state: 'stopped', active_model: 'fireworks.glm-5', active_display_name: 'glm-5', active_remote: true, model: null,
+            display_name: null, placement: null, ctx_size: null, memory: null, memory_error: null,
+            error: "The model server isn't answering at http://127.0.0.1:13305/api/v1. Restart starts it.",
+            base_url: 'http://127.0.0.1:13305/api/v1', owner: 'gaia', busy: false, restarting: false, restart_error: null,
+        },
+    }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a turn the stopped model server ended offers to start it (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withServerDown);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Summarize the minutes');
+        await box.press('Enter');
+        const notice = page.locator('.server-down-notice');
+        await expect(notice).toHaveCount(1);
+        await expect(notice.getByRole('button', { name: locale === 'ar' ? /تشغيل خادم النماذج/ : /Start the model server/ })).toBeVisible();
+        await expect(notice).not.toContainText('gaia ');
+        await shot(page, `server-down-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
 }
@@ -1548,10 +1619,42 @@ for (const locale of ['ar', 'en']) {
             return range.getClientRects()[0].left - el.getBoundingClientRect().left;
         });
         expect(gap).toBeLessThan(16);
-        await expect(page.locator('.perm-card-title bdi')).toHaveText('Allow running python?');
+        const title = page.locator('.perm-card-title');
+        if (locale === 'ar') await expect(title).toContainText('هل تسمح بـ');
+        else await expect(title).toHaveText('Allow running python?');
+        await expect(title.locator('bdi[dir="ltr"]').first()).toHaveText('running python');
         await expect(page.getByRole('button', { name: /Allow once/ })).toContainText(locale === 'ar' ? 'السماح مرة واحدة' : 'Allow once');
         expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre')).toEqual([]);
         await shot(page, `permission-python-${locale}`);
+    });
+}
+
+const PATH_PROMPT = [{
+    type: 'permission_request', tool: 'allow_path_access', tool_label: 'allowing path access', confirm_id: 'c-path',
+    args: { path: 'C:\\Users\\you\\Documents\\sales_data_2025.csv', kind: 'file' },
+}];
+
+for (const locale of ['ar', 'en']) {
+    test(`a path-access prompt asks in the UI language, the path left to right (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, PATH_PROMPT);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('summarize my sales data');
+        await page.keyboard.press('Enter');
+        const title = page.locator('.perm-card-title');
+        await expect(title).toBeVisible();
+        const question = page.locator('.perm-card-question');
+        if (locale === 'ar') {
+            await expect(title).toContainText('هل تسمح لـ GAIA باستخدام هذا الملف؟');
+            await expect(question).toContainText('يريد GAIA استخدام الملف');
+        } else {
+            await expect(title).toHaveText('Let GAIA use this file?');
+            await expect(question).toContainText("GAIA wants to use the file");
+        }
+        await expect(question.locator('bdi[dir="ltr"]').first()).toHaveText('C:\\Users\\you\\Documents\\sales_data_2025.csv');
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre')).toEqual([]);
+        await shot(page, `permission-path-${locale}`);
     });
 }
 

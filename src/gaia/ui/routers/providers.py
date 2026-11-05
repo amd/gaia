@@ -1696,7 +1696,8 @@ def restart_local(
                 "go ahead."
             ),
         )
-    if provider_of(model_id) != LOCAL:
+    # A stopped server is started even for a cloud model: it relays that model too.
+    if server_up and provider_of(model_id) != LOCAL:
         raise HTTPException(
             status_code=422,
             detail="The active model runs in the cloud; nothing to restart.",
