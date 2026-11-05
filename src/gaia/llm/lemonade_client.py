@@ -9,6 +9,7 @@ OpenAI-compatible API and additional functionality.
 """
 
 import atexit
+import base64
 import contextvars
 import json
 import logging
@@ -7149,6 +7150,154 @@ class LemonadeClient:
         except Exception as e:
             self.log.error(f"Error generating image: {str(e)}")
             raise LemonadeClientError(f"Error generating image: {str(e)}")
+
+    IMAGE_EDIT_DEFAULT_MODEL = "Flux-2-Klein-4B"
+    IMAGE_UPSCALE_DEFAULT_MODEL = "RealESRGAN-x4plus"
+
+    @staticmethod
+    def _image_path(
+        image_path: Union[str, Path], *, allowed_suffixes: set[str], endpoint: str
+    ) -> Path:
+        """Return an existing source image accepted by one image endpoint."""
+        path = Path(image_path).expanduser()
+        if not path.is_file():
+            raise LemonadeClientError(f"Image file does not exist: {path}")
+        if path.suffix.lower() not in allowed_suffixes:
+            suffixes = ", ".join(sorted(allowed_suffixes))
+            raise LemonadeClientError(
+                f"{endpoint} requires an image with one of: {suffixes}."
+            )
+        return path
+
+    def _image_response(
+        self, response: requests.Response, *, endpoint: str
+    ) -> Dict[str, Any]:
+        """Return a JSON image response without exposing credential-bearing errors."""
+        if response.status_code == 401:
+            raise LemonadeAuthError(
+                "Lemonade returned 401 Unauthorized. Verify LEMONADE_API_KEY."
+            )
+        if response.status_code >= 400:
+            raise LemonadeClientError(
+                f"Request to {endpoint} failed with status {response.status_code}: "
+                f"{http_body_text(response)}"
+            )
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise LemonadeClientError(
+                "Lemonade returned a non-JSON image response."
+            ) from exc
+
+    def _post_image_multipart(
+        self,
+        endpoint: str,
+        image_path: Union[str, Path],
+        fields: Dict[str, Any],
+        *,
+        timeout: int,
+    ) -> Dict[str, Any]:
+        """POST an image and fields to a Lemonade multipart endpoint."""
+        from gaia.llm.lemonade_choice import setup_change_refusal
+
+        path = self._image_path(
+            image_path,
+            allowed_suffixes={".png", ".jpg", ".jpeg"},
+            endpoint="Image editing",
+        )
+        url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        refusal = setup_change_refusal(url, "POST", fields)
+        if refusal:
+            raise UsersServerUnchangedError(refusal)
+        try:
+            with path.open("rb") as image_file:
+                response = requests.post(
+                    url,
+                    data=fields,
+                    files={
+                        "image": (path.name, image_file, "application/octet-stream")
+                    },
+                    headers=self._auth_headers(),
+                    timeout=(10, timeout),
+                )
+            return self._image_response(response, endpoint=endpoint)
+        except requests.RequestException as exc:
+            raise LemonadeClientError(f"Lemonade image request failed: {exc}") from exc
+
+    def _post_image_json(
+        self,
+        endpoint: str,
+        payload: Dict[str, Any],
+        *,
+        timeout: int,
+    ) -> Dict[str, Any]:
+        """POST a JSON request to a Lemonade image endpoint."""
+        from gaia.llm.lemonade_choice import setup_change_refusal
+
+        url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        refusal = setup_change_refusal(url, "POST", payload)
+        if refusal:
+            raise UsersServerUnchangedError(refusal)
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                headers={"Content-Type": "application/json", **self._auth_headers()},
+                timeout=(10, timeout),
+            )
+            return self._image_response(response, endpoint=endpoint)
+        except requests.RequestException as exc:
+            raise LemonadeClientError(f"Lemonade image request failed: {exc}") from exc
+
+    @guard_inference()
+    def edit_image(
+        self,
+        image_path: Union[str, Path],
+        prompt: str,
+        model: str = IMAGE_EDIT_DEFAULT_MODEL,
+        size: Optional[str] = None,
+        n: int = 1,
+        timeout: int = 900,
+    ) -> Dict[str, Any]:
+        """Edit a PNG or JPEG with Lemonade's OpenAI-compatible endpoint."""
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise LemonadeClientError("Image editing requires a non-empty prompt.")
+        if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 10:
+            raise LemonadeClientError("Image editing requires n between 1 and 10.")
+        if size is not None and not re.fullmatch(r"[1-9]\d{0,3}x[1-9]\d{0,3}", size):
+            raise LemonadeClientError(
+                "Image editing size must use WIDTHxHEIGHT, e.g. 1024x1024."
+            )
+        fields: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "n": n,
+            "response_format": "b64_json",
+        }
+        if size is not None:
+            fields["size"] = size
+        return self._post_image_multipart(
+            "images/edits", image_path, fields, timeout=timeout
+        )
+
+    @guard_inference()
+    def upscale_image(
+        self,
+        image_path: Union[str, Path],
+        model: str = IMAGE_UPSCALE_DEFAULT_MODEL,
+        timeout: int = 900,
+    ) -> Dict[str, Any]:
+        """Upscale a PNG through Lemonade's base64-JSON endpoint."""
+        path = self._image_path(
+            image_path,
+            allowed_suffixes={".png"},
+            endpoint="Image upscaling",
+        )
+        payload = {
+            "image": base64.b64encode(path.read_bytes()).decode("ascii"),
+            "model": model,
+        }
+        return self._post_image_json("images/upscale", payload, timeout=timeout)
 
     @guard_inference()
     def generate_3d_model(
