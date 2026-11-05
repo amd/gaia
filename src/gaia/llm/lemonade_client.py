@@ -2466,7 +2466,7 @@ def recommend_npu_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
     not_ready = npu_not_ready_reason(npu)
     if not_ready:
         raise ModelFitError(
-            f"This PC's NPU can't run models yet. {not_ready} Run `gaia init` "
+            f"The NPU model {not_ready}. Run `gaia init` "
             "without `--profile npu` to use the GPU meanwhile, or see "
             "https://amd-gaia.ai/docs/guides/npu#linux."
         )
@@ -3000,6 +3000,10 @@ def is_cloud_model(model_id: Optional[str]) -> bool:
     return bool(model_id) and model_id in _CLOUD_MODELS
 
 
+class UnknownUserModelError(ValueError):
+    """A ``user.`` id missing from ``MODELS``; Lemonade may still list it by name."""
+
+
 def pull_request_body(model_id: str) -> Dict[str, Any]:
     """JSON body for Lemonade ``POST /pull``.
 
@@ -3008,8 +3012,9 @@ def pull_request_body(model_id: str) -> Dict[str, Any]:
     so the body carries its checkpoint and recipe, plus the labels Lemonade
     cannot infer (``embedding``, ``mmproj``, ``vision``, ``reasoning``).
     A gateway model has no weights and raises ``RuntimeError`` before any
-    request. An unknown ``user.`` id raises ``ValueError`` instead of a pull
-    Lemonade answers with HTTP 500.
+    request. An unknown ``user.`` id raises ``UnknownUserModelError`` instead
+    of a pull Lemonade answers with HTTP 500; a caller that finds the id in
+    Lemonade's own list may pull it by name.
 
     Known gateway namespaces (``amd.``, ``fireworks.``) are refused even before
     the catalog has been read. Any other gateway id is refused once
@@ -3017,9 +3022,7 @@ def pull_request_body(model_id: str) -> Dict[str, Any]:
     """
     if is_cloud_model(model_id) or cloud_model_provider(model_id):
         raise RuntimeError(
-            f"'{model_id}' is hosted on a gateway, so there is nothing to "
-            f"download. If it is unavailable, check the gateway connection "
-            f"with `gaia gateway status`."
+            f"'{model_id}' is hosted on a gateway, so there is nothing to download."
         )
 
     requirement = find_model_requirement(model_id)
@@ -3035,17 +3038,16 @@ def pull_request_body(model_id: str) -> Dict[str, Any]:
         return {"model_name": requirement.model_id}
 
     if model_id.lower().startswith("user."):
-        raise ValueError(_unknown_user_model_message(model_id))
+        raise UnknownUserModelError(_unknown_user_model_message(model_id))
     return {"model_name": model_id}
 
 
 def _unknown_user_model_message(model_id: str) -> str:
     return (
-        f"Cannot download '{model_id}': GAIA doesn't know where to download "
-        "it from. Add it from its Hugging Face link, then download it: in the "
-        "Agent UI use Settings > Model > Add a model from Hugging Face; in the "
-        "terminal app use /provider, choose Local, then ctrl+a; or run "
-        "`gaia model add <link>`."
+        f"Can't download '{model_id}': GAIA doesn't know where it comes from. "
+        "Add it from its Hugging Face link, then download it: in the Agent UI "
+        "use Settings > Model > Add a model from Hugging Face; in the terminal "
+        "app use /provider, choose Local, then ctrl+a."
     )
 
 

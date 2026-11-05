@@ -403,6 +403,8 @@ def validate(flm: Path) -> List[NpuProblem]:
     A build that answers without a report but exits 0 is not taken as a
     broken NPU: that is an FLM that predates ``--json``, and is logged.
     """
+    # flm inherits our soft limit; judge it at the hard limit Lemonade will get.
+    raise_memlock_soft_limit()
     try:
         result = subprocess.run(
             [str(flm), "validate", "--json"],

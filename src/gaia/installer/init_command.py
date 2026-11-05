@@ -462,8 +462,8 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
             not_ready = npu_not_ready_reason(capacity)
             if not_ready:
                 raise ModelFitError(
-                    f"default_model {model_id} runs on the NPU, which can't run "
-                    f"models yet. {not_ready} Then re-run `gaia init`, or choose "
+                    f"default_model {model_id} runs on the NPU. The NPU model "
+                    f"{not_ready}. Then re-run `gaia init`, or choose "
                     "a GPU model with `gaia config set default_model <id>`."
                 )
         verdict = check_fit(
@@ -2379,12 +2379,21 @@ class InitCommand:
         """``--profile npu``: offer the locked-memory fix before the NPU model is
         judged, so the fit check that follows doesn't stop on it unasked."""
         from gaia.llm import npu_linux
-        from gaia.llm.lemonade_client import LemonadeClient
+        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
         # Nobody to ask: the fit check that follows says what is missing.
         if self.yes or not stdin_is_tty() or not npu_linux._on_linux():
             return
-        info = LemonadeClient(verbose=self.verbose).get_system_info()
+        try:
+            info = LemonadeClient(verbose=self.verbose).get_system_info()
+        except LemonadeClientError as e:
+            self._print_warning(
+                f"Could not ask Lemonade about this PC's NPU ({e}), so the "
+                "locked-memory check is skipped. If the NPU model will not load, "
+                "see https://amd-gaia.ai/docs/guides/npu#linux and re-run "
+                "`gaia init --profile npu`."
+            )
+            return
         self._offer_memlock_fix(npu_linux.check(info))
 
     def _offer_memlock_fix(self, problems) -> bool:

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -86,7 +87,7 @@ def test_unknown_user_model_message_gives_user_facing_advice():
     message = str(exc.value)
     assert "Settings > Model > Add a model from Hugging Face" in message
     assert "/provider, choose Local, then ctrl+a" in message
-    assert "`gaia model add <link>`" in message
+    assert "gaia model" not in message
     assert "gaia init" not in message
     assert "MODELS" not in message
     assert "lemonade_client" not in message
@@ -123,8 +124,34 @@ def test_dotted_local_name_is_not_mistaken_for_a_gateway():
     }
 
 
+@pytest.fixture
+def lemonade_lists(monkeypatch):
+    """Lemonade's ``/models?show_all=true`` answer; append ids per test."""
+    ids: list = []
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, params=None, headers=None):
+            return httpx.Response(
+                200,
+                json={"data": [{"id": i} for i in ids]},
+                request=httpx.Request("GET", url),
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    return ids
+
+
 @pytest.mark.parametrize("model_id", ["amd.Claude-Opus-5", "user.not-a-real-model"])
-def test_download_endpoint_refuses_up_front(model_id, monkeypatch):
+def test_download_endpoint_refuses_up_front(model_id, monkeypatch, lemonade_lists):
     """The button gets a 400 it can show, not a 202 for a pull that never runs."""
     started = []
     monkeypatch.setattr(system, "_stream_lemonade_pull", lambda *a: started.append(a))
@@ -133,3 +160,16 @@ def test_download_endpoint_refuses_up_front(model_id, monkeypatch):
         asyncio.run(system.download_model_endpoint(req))
     assert err.value.status_code == 400
     assert started == []
+
+
+def test_download_endpoint_accepts_a_user_model_lemonade_lists(
+    monkeypatch, lemonade_lists
+):
+    lemonade_lists.append("My-Own-Finetune-GGUF")
+
+    async def _pull(*a):
+        return None
+
+    monkeypatch.setattr(system, "_stream_lemonade_pull", _pull)
+    req = system.DownloadModelRequest(model_name="user.My-Own-Finetune-GGUF")
+    assert asyncio.run(system.download_model_endpoint(req))["status"] == "downloading"

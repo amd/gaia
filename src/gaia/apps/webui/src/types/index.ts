@@ -911,6 +911,8 @@ export interface StreamEvent {
     message?: string;
     /** Model phase on a status event: reading, loading_model, reasoning, tool_call, … */
     phase?: string;
+    /** On `thinking`: the answer text streamed since the last tool was this reasoning; drop it. */
+    retracts_answer?: boolean;
     step?: number;
     total?: number;
     tool?: string;

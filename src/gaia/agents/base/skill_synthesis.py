@@ -37,6 +37,7 @@ from typing import Callable, Dict, List, Optional
 import numpy as np
 import yaml
 
+from gaia.llm.reasoning import strip_reasoning
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -575,7 +576,7 @@ def distill_cluster(
     )
 
     raw_text = response.text if hasattr(response, "text") else str(response)
-    raw_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+    raw_text = strip_reasoning(raw_text)
     if raw_text.startswith("```"):
         raw_text = re.sub(r"^```(?:[a-zA-Z]+)?\s*", "", raw_text)
         raw_text = re.sub(r"\s*```$", "", raw_text).strip()
