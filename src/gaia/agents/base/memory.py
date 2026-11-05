@@ -1224,8 +1224,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             else:
                 logger.warning(
                     "[MemoryMixin] Lemonade embedding service unreachable — "
-                    "memory v2 disabled for this session (start lemonade-server "
-                    "and reload to enable). Reason: %s",
+                    "memory v2 disabled for this session (start GAIA's model "
+                    "server and reload to enable). Reason: %s",
                     e,
                 )
             # Tear down the partially-built state so no later code path tries

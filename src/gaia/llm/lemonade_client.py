@@ -3461,6 +3461,25 @@ class GaiaLemonadeStartError(LemonadeClientError):
         self.log_file = log_file
 
 
+#: Why GAIA's model server last failed to start, until one answers again.
+_ENGINE_START_FAILURE: Optional[str] = None
+
+
+def remember_engine_start_failure(reason: Optional[str]) -> None:
+    """Record why the model server could not be started; None clears it.
+
+    The next model call then fails at once with that reason instead of
+    polling a server that is not there.
+    """
+    global _ENGINE_START_FAILURE  # pylint: disable=global-statement
+    _ENGINE_START_FAILURE = reason
+
+
+def engine_start_failure() -> Optional[str]:
+    """The reason the model server last failed to start, or None."""
+    return _ENGINE_START_FAILURE
+
+
 class CloudModelUnavailableError(LemonadeClientError):
     """A cloud provider answered 404 for the requested model.
 
@@ -4721,6 +4740,7 @@ class LemonadeClient:
         except LemonadeNotAnsweringError as e:
             raise GaiaLemonadeNotAnsweringError(str(e)) from e
         except LemonadeStartFailedError as e:
+            remember_engine_start_failure(e.reason)
             log_file = (
                 Path(self._gaia_daemon_dir) / "daemon.log"
                 if self._gaia_daemon_dir
@@ -4735,6 +4755,7 @@ class LemonadeClient:
             raise LemonadeClientError(
                 f"Could not start GAIA's Lemonade Server: {e}"
             ) from e
+        remember_engine_start_failure(None)
         self._point_at_gaia_lemonade(served["base_url"])
 
     def _point_at_gaia_lemonade(self, base_url: str) -> None:
@@ -8535,12 +8556,27 @@ class LemonadeClient:
             self.log.debug(f"'{model}' is cloud-routed; skipping download/load")
             return
 
+        self._fail_fast_if_engine_cannot_start()
         with self._model_slot_lease(model):
             t0 = time.perf_counter()
             try:
                 self._ensure_model_loaded_locked(model, force=force)
             finally:
                 perf_trace.note_wait("ensure_loaded_s", time.perf_counter() - t0)
+
+    def _fail_fast_if_engine_cannot_start(self) -> None:
+        """Ask the daemon again while a failed start of GAIA's server still holds.
+
+        The daemon answers at once, so the call fails with
+        :class:`GaiaLemonadeStartError` instead of polling an absent server. A
+        server that answers again clears the record.
+        """
+        if engine_start_failure() is None or not self.follows_gaia_lemonade:
+            return
+        if self._server_accepts_connections():
+            remember_engine_start_failure(None)
+            return
+        self._start_gaia_lemonade()
 
     def _ensure_model_loaded_locked(self, model: str, *, force: bool = False) -> None:
         """The check-and-load body of :meth:`_ensure_model_loaded`, run while
@@ -8808,9 +8844,11 @@ class LemonadeClient:
         """Refuse a load that would run this machine out of memory.
 
         Only for a model GAIA knows the size of, on a Lemonade on this machine.
-        Raises :class:`InsufficientMemoryError` with what to close, and
-        :class:`LemonadeClientError` when free memory cannot be read: loading
-        blind is what let the kernel kill the app on a 16 GB PC.
+        Raises :class:`InsufficientMemoryError` with what to close,
+        :class:`LemonadeServerDownError` when no server accepts a connection,
+        and :class:`LemonadeClientError` when free memory cannot be read
+        otherwise: loading blind is what let the kernel kill the app on a 16 GB
+        PC.
         """
         requirement = find_model_requirement(model_name)
         if (
@@ -8830,6 +8868,11 @@ class LemonadeClient:
                 f"loaded: {e}"
             ) from e
         except LemonadeClientError as e:
+            if (
+                isinstance(e.__cause__, requests.exceptions.ConnectionError)
+                and not self._server_accepts_connections()
+            ):
+                raise LemonadeServerDownError(_endpoint_label(self.base_url)) from e
             raise LemonadeClientError(
                 f"Cannot read free memory from Lemonade at {self.base_url} before "
                 f"loading {model_name}: {e} Try again in a moment. "
