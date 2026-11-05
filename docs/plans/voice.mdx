@@ -3,7 +3,7 @@ title: Dictation and voice mode
 description: Talk to GAIA in the Agent UI and the TUI, with dictation into the composer and a fast hands-free voice mode that speaks short answers and shows the full work on screen
 ---
 
-**Status: In development.** The architecture was revised on November 5, 2026, after mapping it onto the code; see [Revision](#revision-turns-run-in-the-apps).
+**Status: Implementation starting.** The architecture was revised on November 5, 2026, after mapping it onto the code; see [Revision](#revision-turns-run-in-the-apps).
 Baseline: `aaa056b7` on `main`, November 2, 2026, with Lemonade 2026.44.1. Builds on read-aloud
 (`feat/read-aloud`, not merged yet).
 
@@ -133,8 +133,8 @@ What the server still does: hold the recognizer connection, cut speech into clau
 Kokoro, play the earcon, report levels for the animations, and refuse a remote Lemonade. The
 `<spoken>` split happens where the answer stream is parsed: `sse_handler.py` for the Agent UI,
 and the TUI's own parser. Both run the same test cases. Phone calls (phase B of
-[Phone calls and texts](/plans/phone-calls)) are the one host with no app, so there the phone
-service runs the turn itself.
+[Phone calls and texts](/plans/phone-calls)) are the one host with no app; there the Agent UI
+server runs the turns, since it owns the chat pipeline.
 
 The diagram and protocol below describe the first design, except where this revision says
 otherwise.

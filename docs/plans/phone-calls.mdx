@@ -3,8 +3,8 @@ title: Phone calls and texts
 description: GAIA calls or texts your phone when something urgent needs you, only ever to numbers in your phone book, and later lets you talk with it on the call while the models stay on your PC
 ---
 
-**Status: In development.** Builds on [voice mode](/plans/voice). Revised after a security and
-feasibility review on November 5, 2026.
+**Status: Phase A implementation starting.** Builds on [voice mode](/plans/voice). Revised after
+two security and feasibility reviews on November 5, 2026.
 
 A notification is easy to miss. A text is harder to miss, and a phone call is hardest. GAIA calls
 or texts you when something you marked as urgent happens: a scheduled job failed, a task has
@@ -78,21 +78,31 @@ Related: #702 (voice-first parity), the [voice plan](/plans/voice), the
 - **Escalation runs in the daemon** as one asyncio task per open alert. Alert state lives in
   SQLite (`~/.gaia/phone/phone.db`), so a daemon restart resumes an open alert rather than losing
   or repeating it.
-- **Outcome by polling.** After placing a call, GAIA reads the call record every 3 s until it
-  ends: `completed` means answered; `no-answer`, `busy`, `failed` and `canceled` mean not. A text
-  is read the same way (`delivered`, `undelivered`, `failed`).
+- **Outcome by polling.** Calls are placed with answering-machine detection
+  (`MachineDetection=Enable`). GAIA reads the call record every 3 s until it ends. Only
+  `answered_by: human` counts as reached; voicemail, `no-answer`, `busy`, `failed` and
+  `canceled` all go on to the next step. A text is read the same way (`delivered`,
+  `undelivered`, `failed`).
+- **Reached stops the calls, not the alert.** A call a person answered stops further calls and
+  texts for that alert. The alert stays open in the apps until it is opened or marked handled.
+- **No double calls after a crash.** Before calling, GAIA saves a `placing` row; it stores the
+  provider's call ID as soon as the provider returns it. On restart, a `placing` row with no ID
+  is checked against the provider's recent calls to that number before anything is redialed.
 
 ## Alert sources
 
 | Source | Fires when | Status |
 |--------|-----------|--------|
 | A scheduled job fails | A `gaia schedule` run raises, recurring or one-shot. Today a recurring failure is only logged; this adds the hook. | Phase A |
-| A task waits on your approval | An Agent UI turn has shown a permission card for longer than N minutes (default 10) | Phase A |
-| GAIA can't run | The daemon can't reach Lemonade for 5 minutes | Phase A |
-| An agent asks to reach you | The flagship's `alert_owner(reason)` tool, only for a session or schedule you allowed to ("May alert me") | Phase A |
+| A task waits on your approval | An Agent UI turn has shown a permission card for longer than N minutes (default 10). The UI server reports the card to the daemon when it appears and clears it when answered. TUI turns are not covered in phase A. | Phase A |
+| GAIA can't run | Lemonade has been unreachable for 5 minutes while the daemon runs, including when the daemon itself fails to start it | Phase A |
+| An agent asks to reach you | The flagship's `alert_owner(reason)` tool, offered only when "Agents may alert me" is on. The route is scoped to the agent, not the session, so the setting is global; agent alerts have their own limit. Scheduled runs use a different agent runtime and can't call it yet. | Phase A |
 | An email from someone on your list | Needs sender authentication (DKIM/DMARC) before matching the list, because a From header is easy to fake | Later |
 
 `alert_owner`'s `reason` is stored and shown in the apps. It is never spoken or texted.
+
+A scheduled job alerts when its run raises. A job whose agent replies "I couldn't do it" without
+raising isn't a failure to the scheduler and doesn't alert.
 
 ## Escalation
 
@@ -114,13 +124,19 @@ and says which limit stopped it.
 - **Adding a number:** you enter it in Settings › Phone (Agent UI) or the phone panel (TUI). GAIA
   calls it, or texts it if you pick that, and says a 6-digit code. You type the code into the
   same screen within 10 minutes. Three wrong codes cancel the attempt.
-- **Who can add one:** the code is accepted only from the Agent UI or TUI with a person at the
-  PC. Neither the agent nor a rule can add a number. When the phone book already has a number,
-  adding another also needs a code sent to the first number, so someone who controls only the new
-  phone can't finish it.
-- **Changes are announced.** Adding or removing a number texts the numbers already there, and the
-  apps show it.
-- **Verification calls count** against the daily limit, at most 3 attempts an hour.
+- **Who can add one:** neither the agent nor a rule can. When the phone book already has a
+  number, adding another also needs a code sent to an existing number, so someone who controls
+  only the new phone can't finish it.
+- **The phone book is never empty while phone is on.** The keys and the first number are one
+  setup step, so phone turns on only once a number is verified. Removing a number needs a code
+  sent to that number. The last number can't be removed; turning phone off removes it.
+- **Changes are announced** by a call to the numbers already there (texts may not be approved
+  yet), and the apps show them.
+- **Accepted risk:** any process running as you can read the daemon's client token, including an
+  agent's shell tool once you approve it. The code checks above are what stop such a process from
+  adding its own number; it can't finish one without a code from a phone already in the book.
+- **Verification calls count** against the daily limit, at most 3 attempts an hour. The code is
+  sent by call by default, because texts are usually blocked until the number is registered.
 - **Format:** numbers are stored in E.164 (`+15551234567`). The phone book refuses short codes,
   premium-rate prefixes and emergency numbers, before any code is sent.
 
@@ -134,9 +150,12 @@ and says which limit stopped it.
 
 ## Talking on the call (phase B)
 
-- Needs mobile access to be on. The call's script connects a live audio stream to
-  `wss://<tunnel>/api/phone/stream`, which carries 8 kHz µ-law audio both ways and the digits you
-  press.
+- **Host:** the Agent UI server, which owns the chat pipeline and mobile access's tunnel. The
+  daemon's phone service places the call with a script that connects a live audio stream to
+  `wss://<tunnel>/api/phone/stream`. The UI server checks the call's one-time token with the
+  daemon, then runs the turns there. Needs mobile access to be on and the Agent UI server
+  running; without them, a call is the fixed sentence only.
+- The stream carries 8 kHz µ-law audio both ways and the digits you press.
 - **PIN first.** GAIA asks for your PIN on the keypad. Until you enter it, the call has only that
   alert's own record: no files, web, memory, shell or email tools. Three wrong PINs end the call
   and alert you in the apps.
@@ -191,7 +210,7 @@ No failure quietly becomes a different channel.
 | Provider refuses (no balance, blocked country) | The provider's message and a link to the account page. |
 | Daily limit, quiet hours | "Not called: daily limit reached" or "Held for quiet hours" on the alert. |
 | Daemon was down when an alert was due | On start, it resumes open alerts and says how late each one is. |
-| PC asleep | Nothing can call. Settings says "Calls only while this PC is awake" and offers to keep it awake on AC power (Windows now; Linux and macOS follow). |
+| PC asleep | Nothing can call. Settings says "Calls only while this PC is awake" and offers to keep the system (not the display) awake on AC power: `SetThreadExecutionState` on Windows, `systemd-inhibit` on Linux, `caffeinate` on macOS, all in phase A. |
 
 ## Privacy
 
