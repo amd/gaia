@@ -72,6 +72,13 @@ on:
         required: false
         type: string
         default: ''
+      # A release candidate is never held by tests; the smoke jobs that check
+      # the built installers still run.
+      skip_source_tests:
+        description: 'Skip the custom-agent MCP harness, which tests the source tree rather than the built installers'
+        required: false
+        type: boolean
+        default: false
     # Explicit secret declarations. Callers (publish.yml) must forward
     # each one explicitly via `secrets:` — we intentionally do NOT use
     # `secrets: inherit` on the caller side so forks / PRs can't leak
@@ -1202,7 +1209,8 @@ jobs:
   custom-agent-mcp-harness:
     name: Custom agent MCP harness (${{ matrix.os }})
     needs: build
-    if: always() && needs.build.result == 'success'
+    # !skip, not == false: on a PR the input is unset (null), and null == false.
+    if: always() && needs.build.result == 'success' && !inputs.skip_source_tests
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:

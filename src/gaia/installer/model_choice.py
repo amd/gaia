@@ -254,6 +254,17 @@ def memory_reason(need_gb: float, capacity) -> str:
 FIT_MEMORY, FIT_NPU, FIT_BACKEND = "memory", "npu", "backend"
 
 
+def cant_run_reason(fit: Dict[str, Any]) -> Optional[str]:
+    """Why nothing on this PC can run the model *fit* describes, or None.
+
+    Only a missing NPU or backend counts. A memory shortfall is an estimate
+    the user may accept, so it is never a reason to refuse the model.
+    """
+    if fit.get("fit_code") in (FIT_NPU, FIT_BACKEND):
+        return fit["fit_reason"]
+    return None
+
+
 def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, Any]:
     """``fits`` / ``need_gb`` / ``capacity_gb`` / ``fit_reason`` / ``fit_code`` for one model.
 

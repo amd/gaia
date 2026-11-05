@@ -17,7 +17,6 @@ import asyncio
 import concurrent.futures
 import copy
 import functools
-import importlib.util
 import json
 import logging
 import os
@@ -32,15 +31,16 @@ from typing import Any, Callable, ContextManager, Optional, Tuple
 
 from fastapi import HTTPException
 
-from gaia.agents.install_hints import (
-    LEGACY_FLAGSHIP_AGENT_IDS,
-    agent_not_installed_message,
-)
+from gaia.agents.install_hints import LEGACY_FLAGSHIP_AGENT_IDS
 from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
 from gaia.llm import lemonade_client as _lemonade_client_mod
 from gaia.llm.inference_location import InferenceLocation, resolve_inference_location
-from gaia.llm.providers.lemonade import MODEL_SERVER_DOWN, classify_lemonade_exception
-from gaia.llm.surface_hints import APP_RESTART_HINT
+from gaia.llm.providers.lemonade import (
+    MODEL_SERVER_DOWN,
+    LemonadeModelUnavailableError,
+    classify_lemonade_exception,
+)
+from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT, APP_RESTART_HINT
 from gaia.security import (
     BLOCKED_DIRECTORIES,
     AllowedPathsEnvError,
@@ -74,6 +74,7 @@ from gaia.ui.email_sidecar.profiles import (
     working_directory_supported,
 )
 from gaia.ui.memory_settings import memory_enabled
+from gaia.ui.security import FLAGSHIP_AGENT_ID
 from gaia.ui.turn_changes import TurnRecording
 from gaia.utils import awake_clock as _awake_clock
 from gaia.utils.awake_clock import AwakeClockError
@@ -503,6 +504,28 @@ def _take_model_load_lock(sse_handler=None, stopped=None) -> bool:
             )
             shown = True
     return True
+
+
+def _refuse_unrunnable_model(model_id: str) -> None:
+    """Raise when nothing on this PC can run *model_id*: no NPU or backend for it.
+
+    A memory estimate never refuses; the load itself says if memory runs out.
+
+    Raises:
+        LemonadeModelUnavailableError: with the reason and where to fix it.
+    """
+    from gaia.ui.routers.providers import display_name, local_unavailable_reason
+
+    reason = local_unavailable_reason(model_id)
+    if reason is None:
+        return
+    raise LemonadeModelUnavailableError(
+        user_message=(
+            f"{display_name(model_id)} can't run on this PC: {reason.rstrip('.')}. "
+            "Open Settings › Model to fix it on the model's card, or switch to "
+            "another model there."
+        )
+    )
 
 
 def _load_making_room(
@@ -1401,32 +1424,21 @@ def _disconnect_cached_agent(entry) -> None:
 def _agent_unavailable_message(requested: str, registry) -> str:
     """Return a user-friendly error message for an agent that could not be loaded.
 
-    Mirrors the fail-loudly precedent at _chat_helpers.py around line 589 — no
-    silent swap to chat, just a clear message the user can act on.
-
-    ChatAgent's old ids are the one case where the generic message is a dead
-    end: they resolve to the flagship, so "pick another agent from the
-    selector" names a selector they are not in, and every historical session
-    carries one. When the flagship is genuinely absent, name its package and
-    install command instead — a recorded load error still wins, since it says
-    more than "missing".
+    No silent swap to another agent, just a clear message the user can act on.
+    The flagship (and ChatAgent's old ids, which resolve to it) has no selector
+    to pick from and nothing to re-create, so it points at Setup instead.
     """
-    if (
-        requested in LEGACY_FLAGSHIP_AGENT_IDS
-        and importlib.util.find_spec("gaia_agent") is None
-    ):
-        return agent_not_installed_message(
-            f"The '{requested}' agent is not installed",
-            "gaia-agent-gaia",
-            next_step="Then restart the server.",
+    reason = registry.get_load_error(requested) if registry is not None else None
+
+    if requested == FLAGSHIP_AGENT_ID or requested in LEGACY_FLAGSHIP_AGENT_IDS:
+        problem = (
+            f"GAIA's assistant failed to load: {reason}."
+            if reason
+            else "GAIA's assistant isn't installed."
         )
+        return f"{problem} {AGENT_UI_SETUP_HINT}"
 
-    reason_suffix = ""
-    if registry is not None:
-        reason = registry.get_load_error(requested)
-        if reason:
-            reason_suffix = f": {reason}"
-
+    reason_suffix = f": {reason}" if reason else ""
     return (
         f"I couldn't load the agent **'{requested}'**. "
         f"It may have failed to install or contains an error{reason_suffix}. "
@@ -3496,6 +3508,7 @@ def _preflight_load(
             resolve_ctx_size,
             resolve_lemonade_api_key,
             resolve_lemonade_base_url,
+            runs_on_npu,
         )
         from gaia.llm.lemonade_manager import LemonadeManager
 
@@ -3550,6 +3563,9 @@ def _preflight_load(
                 else f"ctx={active_ctx} < required {required_ctx}"
             )
         )
+        if runs_on_npu(model_id):
+            # A blocked NPU's load fails as a retryable network error; say why first.
+            _refuse_unrunnable_model(model_id)
         logger.info("Pre-flight load: %s → loading %s", reason, model_id)
         if sse_handler is not None:
             sse_handler._emit(
@@ -3656,7 +3672,7 @@ def _preflight_load(
         # The fix is closing apps, not checking Lemonade: pass the reason on.
         logger.error("Pre-flight model load refused: %s", exc)
         raise
-    except ModelInUseError as exc:
+    except (ModelInUseError, LemonadeModelUnavailableError) as exc:
         logger.error("Pre-flight model load refused: %s", exc)
         raise
     except LeaseWaitCancelled:

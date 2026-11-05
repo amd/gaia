@@ -208,7 +208,7 @@ describe('DocumentLibrary says where documents go', () => {
 
     it('explains a file outside the readable folders without asking for a bug report', async () => {
         mockedApi.uploadDocumentByPath.mockRejectedValue(Object.assign(
-            new Error('GAIA can only read documents under C:\\Users\\u. Move or copy the file there, or add its folder to GAIA_DOCUMENT_ROOTS and restart GAIA.'),
+            new Error('GAIA can only read documents under C:\\Users\\u. Move or copy the file there.'),
             { httpStatus: 403 },
         ));
         render(<DocumentLibrary />);

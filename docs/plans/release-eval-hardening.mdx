@@ -38,7 +38,7 @@ Every row below was checked against the workflow or the code, not the docs. Runt
 
 | Tier | What it covers | Trigger | Hardware | Runtime | Blocks a release? |
 |---|---|---|---|---|---|
-| Unit tests (`test_unit.yml`) | ~22,500 tests, mostly against fakes | PR, merge | Hosted: Linux, macOS arm64, Windows | 11–18 min after #5161 | **Final: yes**, every job. **RC: Linux and the py3.10 import job only**; macOS and Windows are warnings (`util/check_release_ci.py`) |
+| Unit tests (`test_unit.yml`) | ~22,500 tests, mostly against fakes | PR, merge | Hosted: Linux, macOS arm64, Windows | 11–18 min after #5161 | **Final: yes**, every job. **RC: no**; every job is reported as a warning (`util/check_release_ci.py`) |
 | Offline integration (`test_unit.yml` job) | Daemon, CLI tool-confirmation, wheel journey, TLS, checksum pins | PR, merge | Hosted Linux only | Minutes | Final only, as part of `test_unit` |
 | Electron (`test_electron.yml`) | Jest suites. Real-process tree and quit tests only since #5438 | PR, merge | Hosted Linux | ≤15 min | No |
 | TUI (`build_tui.yml`) | ~240 Go test files | PR, merge | Hosted, 3 OSes | Minutes | No |

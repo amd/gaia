@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MODEL_LIST, NOW, SYSTEM_STATUS, mockApi, useLocale, useTheme, withConnectors, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, MODEL_LIST, NOW, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -459,6 +459,22 @@ for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 
         await shot(page, `live-status-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const status of TOOL_STATUS) {
+        test(`a running tool's row says what its model calls are doing: ${status.name} (${locale})`, async ({ page }) => {
+            await open(page, `#${ANSWER_SESSION}`, locale, (p) => holdOnToolStatus(p, status));
+            const box = page.getByRole('textbox').first();
+            await box.fill('List every action item in the minutes');
+            await box.press('Enter');
+            const row = page.locator('.flow-tool.active').last();
+            await expect.poll(() => shownText(row.locator('.flow-tool-label'))).toContain(status[locale]);
+            expect(await row.evaluate((el) => getComputedStyle(el).direction)).toBe(locale === 'ar' ? 'rtl' : 'ltr');
+            await shot(page, `tool-status-${status.name}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+        });
+    }
 }
 
 test('documents', async ({ page }) => {
@@ -1799,6 +1815,42 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.perm-card-hint')).toContainText(locale === 'ar' ? 'من قبل: 2.' : 'allowed this 2 times');
         expect(await audit(page)).toEqual([]);
         await shot(page, `permission-repeated-${locale}`);
+    });
+}
+
+const PANEL_EVENTS = [
+    { ...PYTHON_PROMPT[0], confirm_id: 'n-denied' },
+    { ...PATH_PROMPT[0], confirm_id: 'n-pending' },
+    {
+        type: 'policy_alert', tool: 'run_shell_command', decision: 'BLOCK', reason: 'Shell commands are blocked here.',
+        rule_ids: ['no-shell'], policy_version: 'v7', receipt_id: 'rcpt-7',
+    },
+];
+
+for (const locale of ['ar', 'en']) {
+    test(`the notification panel's tabs, labels and buttons are in the UI language (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, PANEL_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route('**/api/chat/confirm-tool', (route) => route.fulfill({ json: { status: 'ok', approved: false, granted: null } }));
+        });
+        await page.locator('textarea').first().fill('summarize my sales data');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.perm-card-title')).toBeVisible();
+        await page.locator('.sb-bottom-actions .sb-icon-btn').first().click();
+        const panel = page.locator('.notification-center');
+        await expect(panel.locator('.notification-item')).toHaveCount(3);
+        // Newest first, so the last permission item is the Python prompt.
+        await panel.locator('.notification-item.notif-type-permission').last().locator('.notification-action-deny').click();
+        await expect(panel.locator('.notification-response-badge')).toHaveCount(1);
+        const ar = locale === 'ar';
+        await expect(panel.locator('.notification-center-title')).toContainText(ar ? 'الإشعارات' : 'Notifications');
+        await expect(panel.getByRole('tab').first()).toContainText(ar ? 'الكل' : 'All');
+        await expect(panel.locator('.notification-response-badge')).toContainText(ar ? 'تم الرفض' : 'Denied');
+        await expect(panel.locator('.notification-footer-btn').first()).toContainText(ar ? 'تعليم الكل كمقروء' : 'Mark All Read');
+        expect(await audit(page)).toEqual([]);
+        // Agent names, titles, bodies and policy reasons are the notification's own text, not the panel's.
+        if (ar) expect(await untranslated(page, '.notification-center', '.notification-agent, .notification-title, .notification-message, .notification-policy-reason')).toEqual([]);
+        await shot(page, `notification-panel-${locale}`);
     });
 }
 

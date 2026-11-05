@@ -1,11 +1,21 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+/** A `status` event's effect on the live line and the turn's timeline. */
+
 import { useChatStore } from '../stores/chatStore';
 import type { StreamEvent } from '../types';
 import { agentEventToStep, isProgressTick } from './streamSteps';
 
-/** Applies a live turn's `status` event, other than `history_cut`, to the chat store. */
+/** Live phases that are a call's own label or the client's wait notice, not the call's progress. */
+const CALL_LABEL_PHASES = new Set(['tool', 'waiting']);
+
+/** A phase sent while a call runs comes from that call's own model calls, not the turn's. */
+export function selectToolStatus(s: { livePhase: string | null; liveStatus: string | null }): string | null {
+    return s.livePhase && !CALL_LABEL_PHASES.has(s.livePhase) ? s.liveStatus : null;
+}
+
+/** Show a phased status on the live line, and fold consecutive progress lines into one timeline step. */
 export function applyStatusEvent(event: StreamEvent, stepIdRef: { current: number }): void {
     const store = useChatStore.getState();
     const status = event.status;
@@ -33,29 +43,19 @@ export function applyStatusEvent(event: StreamEvent, stepIdRef: { current: numbe
     // The client's own wait notice is not a step of the turn.
     if (event.phase === 'waiting') return;
     if (isProgressTick(event)) return;
-    // Skip "Executing <tool>" messages - redundant with tool_start
+    // "Executing <tool>" repeats tool_start.
     if (msg.toLowerCase().startsWith('executing ')) return;
-    if (status === 'working' || status === 'warning' || status === 'info') {
-        const currentSteps = useChatStore.getState().agentSteps;
-        const lastStep = currentSteps[currentSteps.length - 1];
-        // Consolidate with previous status step (but NOT thinking —
-        // overwriting a thinking step's detail would discard all
-        // accumulated thinking text).
-        if (lastStep && lastStep.type === 'status' && lastStep.active) {
-            store.updateLastAgentStep({
-                label: msg || 'Working',
-                detail: msg,
-            });
-            return;
-        }
-        // If the last step is thinking, update only the label
-        // so the summary bar shows the status, but preserve the
-        // accumulated thinking detail.
-        if (lastStep && lastStep.type === 'thinking' && lastStep.active) {
-            store.updateLastAgentStep({ label: msg || 'Thinking' });
-            return;
-        }
-        const step = agentEventToStep(event, stepIdRef);
-        if (step) store.addAgentStep(step);
+    if (status !== 'working' && status !== 'warning' && status !== 'info') return;
+    const lastStep = store.agentSteps[store.agentSteps.length - 1];
+    if (lastStep && lastStep.type === 'status' && lastStep.active) {
+        store.updateLastAgentStep({ label: msg || 'Working', detail: msg });
+        return;
     }
+    // Only the label: a thinking step's detail holds the reasoning so far.
+    if (lastStep && lastStep.type === 'thinking' && lastStep.active) {
+        store.updateLastAgentStep({ label: msg || 'Thinking' });
+        return;
+    }
+    const step = agentEventToStep(event, stepIdRef);
+    if (step) store.addAgentStep(step);
 }

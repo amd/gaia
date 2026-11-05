@@ -653,14 +653,12 @@ def _refuse_unrunnable(plan: Dict[str, Any]) -> None:
     """Raise :class:`CantRunHere` when *plan*'s chat model can't run on this PC."""
     chat_id = plan["chat_model"]["id"]
     entry = next((e for e in plan["catalog"] if e["id"] == chat_id), None)
-    if entry is None or entry["fit_code"] not in (
-        model_choice.FIT_NPU,
-        model_choice.FIT_BACKEND,
-    ):
+    reason = model_choice.cant_run_reason(entry) if entry is not None else None
+    if reason is None:
         return
     raise CantRunHere(
         f"Setup's chat model, {_display_name(chat_id)}, can't run on this PC: "
-        f"{entry['fit_reason']}. Choose another chat model under Customize, "
+        f"{reason}. Choose another chat model under Customize, "
         "then start setup again."
     )
 
@@ -753,10 +751,11 @@ def choose_chat_model(
         )
     model_id = entry["id"]
     fits, reason = entry["fits"], entry["fit_reason"]
-    if entry["fit_code"] in (model_choice.FIT_NPU, model_choice.FIT_BACKEND):
+    cant_run = model_choice.cant_run_reason(entry)
+    if cant_run is not None:
         # Not a memory estimate to accept: nothing on this PC can run it.
         raise CantRunHere(
-            f"{_display_name(model_id)} can't run on this PC: {reason}. "
+            f"{_display_name(model_id)} can't run on this PC: {cant_run}. "
             "Choose another chat model."
         )
     if model_id in DEFAULT_MODEL_LADDER and model_id != DEFAULT_MODEL_LADDER[-1]:

@@ -717,8 +717,7 @@ def ensure_document_path_allowed(raw: Path) -> str:
     denied = (
         f"GAIA can only read documents under "
         f"{_describe_roots(roots)}, and {raw} is outside them. Check the path "
-        f"is right. If it is, move or copy it under one of those folders, "
-        f"or add its folder to {DOCUMENT_ROOTS_ENV} and restart GAIA."
+        f"is right. If it is, move or copy it under one of those folders."
     )
     abs_raw = Path(os.path.abspath(str(raw)))
     if not any(abs_raw.is_relative_to(root) for root in roots):

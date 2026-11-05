@@ -16,7 +16,6 @@
   "components/MessageBubble.tsx": 3,
   "components/MobileAccessModal.tsx": 21,
   "components/ModelChip.tsx": 24,
-  "components/NotificationCenter.tsx": 19,
   "components/PrivateChatButton.tsx": 4,
   "components/QueuedMessages.tsx": 7,
   "components/RetryWithMenu.tsx": 3,

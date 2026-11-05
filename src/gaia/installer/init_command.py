@@ -2595,12 +2595,12 @@ class InitCommand:
             )
             if skipped_gemma(self.profile, model_ids):
                 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+                from gaia.llm.surface_hints import CLI_VISION_DOWNLOAD_HINT
 
                 self._print(
                     f"   Not downloading {DEFAULT_MODEL_NAME}: your "
-                    f"default_model is {self._chat_choice.model_id}. To ask "
-                    "about images, download it (~6 GB) with "
-                    "`gaia download --agent vlm`."
+                    f"default_model is {self._chat_choice.model_id}. "
+                    f"{CLI_VISION_DOWNLOAD_HINT}"
                 )
 
         # A Claude-backed session never calls the local chat LLM — only
