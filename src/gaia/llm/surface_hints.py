@@ -7,6 +7,9 @@ answers the TUI, the Agent UI and headless service callers alike), so LLM
 errors carry the TUI's advice and each other front-end swaps those exact
 sentences for its own with :func:`surface_wording`. Keep every TUI string here
 a whole sentence or a phrase that reads correctly after the swap.
+
+``gaia init`` speaks to a terminal, so its lines carry ``CLI_*`` advice that
+the Agent UI's setup log swaps for the app's own.
 """
 
 #: How a TUI user picks another model.
@@ -59,21 +62,93 @@ SERVICE_PROVIDER_SETTINGS = (
     "on the model server this GAIA host uses (LEMONADE_BASE_URL)"
 )
 
+#: What to do when GAIA's own model server stopped and did not come back. The
+#: next request asks the daemon to start it again, on every front-end.
+TUI_SERVER_RESTART_HINT = (
+    "Send your message again and GAIA will try to start the model server once more."
+)
+AGENT_UI_SERVER_RESTART_HINT = (
+    "Press Start the model server below, then send your message again."
+)
+
+#: How a user repairs GAIA's install (a missing or broken Lemonade Server).
+TUI_SETUP_HINT = "Run /setup in the TUI to repair GAIA's setup, then try again."
+AGENT_UI_SETUP_HINT = "Open Settings > Setup and press Run setup again, then try again."
+CLI_SETUP_HINT = "Run `gaia init` to repair GAIA's setup, then try again."
+SERVICE_SETUP_HINT = (
+    "Run `gaia init` on the GAIA host to repair its setup, then try again."
+)
+
+#: What a user does when the AMD LLM gateway rejects GAIA's key.
+TUI_GATEWAY_KEY_HINT = (
+    "Run /gateway in the TUI and enter a current AMD LLM gateway key."
+)
+AGENT_UI_GATEWAY_KEY_HINT = (
+    "Enter a current AMD LLM gateway key under Settings > Model."
+)
+CLI_GATEWAY_KEY_HINT = "Run `gaia gateway auth` with a current AMD LLM gateway key."
+SERVICE_GATEWAY_KEY_HINT = (
+    "Run `gaia gateway auth` on the GAIA host with a current AMD LLM gateway key."
+)
+
+#: When GAIA's background service misbehaves. Both apps read it as written.
+APP_RESTART_HINT = "If it keeps happening, close GAIA and open it again."
+CLI_RESTART_HINT = (
+    "If it keeps happening, run `gaia daemon status` and check the daemon log."
+)
+
+#: When GAIA's background service is not running at all, so the CLI must start
+#: it: `gaia daemon status` (the restart hint) would only report it is down.
+APP_SERVICE_DOWN_HINT = "Close GAIA and open it again so its background service starts."
+CLI_SERVICE_DOWN_HINT = "Run `gaia daemon start`, then try again."
+SERVICE_SERVICE_DOWN_HINT = "Run `gaia daemon start` on the GAIA host, then try again."
+
+#: A model server whose model call keeps timing out.
+APP_WEDGED_SERVER_HINT = "If it keeps timing out, close GAIA and open it again."
+# `gaia kill`, not `gaia daemon restart`: the daemon reaps only a server it started.
+CLI_WEDGED_SERVER_HINT = (
+    "If it keeps timing out, clear the wedged server with `gaia kill`; GAIA "
+    "restarts it on the next query."
+)
+
+#: How a user who skipped the default vision model gets it later. Printed by
+#: ``gaia init``; the Agent UI's setup log shows the app's version.
+CLI_VISION_DOWNLOAD_HINT = (
+    "To ask about images, download it (~6 GB) with `gaia download --agent vlm`."
+)
+AGENT_UI_VISION_DOWNLOAD_HINT = (
+    "To ask about images later, tick it under Settings > Model (a ~6 GB download)."
+)
+
 _SWAPS = {
     "agent_ui": (
+        (CLI_VISION_DOWNLOAD_HINT, AGENT_UI_VISION_DOWNLOAD_HINT),
+        (TUI_SERVER_RESTART_HINT, AGENT_UI_SERVER_RESTART_HINT),
         (TUI_MODEL_SWITCH_HINT, AGENT_UI_MODEL_SWITCH_HINT),
         (TUI_PROVIDER_AUTH_HINT, AGENT_UI_PROVIDER_AUTH_HINT),
         (TUI_PROVIDER_SETTINGS, AGENT_UI_PROVIDER_SETTINGS),
+        (TUI_SETUP_HINT, AGENT_UI_SETUP_HINT),
+        (TUI_GATEWAY_KEY_HINT, AGENT_UI_GATEWAY_KEY_HINT),
     ),
     "cli": (
         (TUI_MODEL_SWITCH_HINT, CLI_MODEL_SWITCH_HINT),
         (TUI_PROVIDER_AUTH_HINT, CLI_PROVIDER_AUTH_HINT),
         (TUI_PROVIDER_SETTINGS, CLI_PROVIDER_SETTINGS),
+        (TUI_SETUP_HINT, CLI_SETUP_HINT),
+        (TUI_GATEWAY_KEY_HINT, CLI_GATEWAY_KEY_HINT),
+        (APP_RESTART_HINT, CLI_RESTART_HINT),
+        (APP_SERVICE_DOWN_HINT, CLI_SERVICE_DOWN_HINT),
+        (APP_WEDGED_SERVER_HINT, CLI_WEDGED_SERVER_HINT),
     ),
     "service": (
         (TUI_MODEL_SWITCH_HINT, SERVICE_MODEL_SWITCH_HINT),
         (TUI_PROVIDER_AUTH_HINT, SERVICE_PROVIDER_AUTH_HINT),
         (TUI_PROVIDER_SETTINGS, SERVICE_PROVIDER_SETTINGS),
+        (TUI_SETUP_HINT, SERVICE_SETUP_HINT),
+        (TUI_GATEWAY_KEY_HINT, SERVICE_GATEWAY_KEY_HINT),
+        (APP_RESTART_HINT, CLI_RESTART_HINT),
+        (APP_SERVICE_DOWN_HINT, SERVICE_SERVICE_DOWN_HINT),
+        (APP_WEDGED_SERVER_HINT, CLI_WEDGED_SERVER_HINT),
     ),
     "tui": (),
 }

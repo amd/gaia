@@ -29,6 +29,8 @@ export const catalogOf = (plan: SetupPlan | null): SetupCatalogEntry[] => plan?.
 export const isVision = (e: SetupCatalogEntry) => e.roles.includes('vision');
 export const isEmbedding = (e: SetupCatalogEntry) => e.roles.includes('embedding');
 export const isNpu = (e: SetupCatalogEntry) => e.recipe === 'flm';
+/** Nothing on this PC can run it, whatever its size: not a choice to confirm. */
+export const cantRunHere = (e: SetupCatalogEntry) => e.fits === false && (e.fit_code === 'npu' || e.fit_code === 'backend');
 export const isOptional = (e: SetupCatalogEntry) => e.support === null;
 export const canCreateImages = (chat: SetupCatalogEntry | undefined) => chat?.feature_tier !== 'compact';
 

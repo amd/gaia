@@ -436,8 +436,9 @@ def test_the_readiness_probe_takes_no_request_parameters():
 #: ``register_shell_tools`` call the bare profile already makes unconditionally
 #: — measured at 3,110 with both conditional tools present. Still under a fifth
 #: of the default profile's 17,942; see
-#: ``test_fast_mode_costs_a_fraction_of_the_default``.
-FAST_PREFILL_CEILING = 3300
+#: ``test_fast_mode_costs_a_fraction_of_the_default``. Raised from 3300 when
+#: gaia-voice gained the never-deny-a-tool rule (#6701): measured at 3,321.
+FAST_PREFILL_CEILING = 3350
 
 
 @contextlib.contextmanager
@@ -550,8 +551,9 @@ def test_fast_mode_meets_the_conversational_prefill_budget(monkeypatch):
     from pathlib import Path
     from types import SimpleNamespace
 
-    from gaia.agents.base import project_map
     from gaia_agent import chat_agent
+
+    from gaia.agents.base import project_map
 
     home = Path("/home/user")
     monkeypatch.setattr(project_map, "working_directory_line", lambda *_: "")

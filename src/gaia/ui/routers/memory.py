@@ -6,6 +6,7 @@
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -18,6 +19,11 @@ from pydantic import BaseModel, field_validator
 # Category sets come from the data layer. The dashboard may write the
 # chat-turn categories plus `profile`; `system` and `permission` are never typed
 # or approved in the UI. Only the eval-only admin seed takes the full set.
+from gaia.agents.base.inferred_insights import (
+    DEFAULT_CONFIDENCE,
+    normalize_confidence,
+    parse_inferred_insights,
+)
 from gaia.agents.base.memory_store import (
     USER_REVIEWED_CATEGORIES as _DASHBOARD_CATEGORIES,
 )
@@ -28,6 +34,7 @@ from gaia.agents.base.memory_store import (
     check_memory_content,
     is_about_user,
 )
+from gaia.llm.reasoning import strip_reasoning
 from gaia.ui.memory_settings import MEMORY_ENABLED_KEY, memory_enabled
 
 from ..database import ChatDatabase
@@ -943,14 +950,10 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
             )
             if hasattr(raw, "__iter__") and not isinstance(raw, str):
                 raw = "".join(raw)
-            raw = raw.strip()
-            # Strip <think> blocks from reasoning models
-            import re as _re
-
-            raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
+            raw = strip_reasoning(raw)
             if raw.startswith("```"):
-                raw = _re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = _re.sub(r"\s*```$", "", raw).strip()
+                raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                raw = re.sub(r"\s*```$", "", raw).strip()
             try:
                 classification = json.loads(raw)
                 relationship = classification.get("relationship", "neutral")
@@ -1544,9 +1547,9 @@ def stream_inference(include_browser: bool = Query(False)):
                         "type": "error",
                         "message": (
                             f"Profile inference runs only on a local model, but "
-                            f"the default model is the cloud model '{model}'. Set "
-                            "a local one with `gaia config set default_model "
-                            "<model>` and try again."
+                            f"the default model is the cloud model '{model}'. "
+                            "Open Settings > Setup, press Run setup again and "
+                            "choose a local chat model, then try again."
                         ),
                     }
                 )
@@ -1588,22 +1591,8 @@ def stream_inference(include_browser: bool = Query(False)):
 
             yield _sse({"type": "log", "message": "Parsing insights..."})
             try:
-                cleaned = raw_response.strip()
-                if cleaned.startswith("```"):
-                    cleaned = "\n".join(cleaned.split("\n")[1:])
-                    if "```" in cleaned:
-                        cleaned = cleaned[: cleaned.rfind("```")]
-                insights = json.loads(cleaned.strip())
-                if not isinstance(insights, list):
-                    raise ValueError("Expected JSON array")
-                insights = [
-                    i
-                    for i in insights
-                    if isinstance(i, dict)
-                    and isinstance(i.get("content"), str)
-                    and i["content"].strip()
-                ]
-            except Exception as e:
+                insights, incomplete = parse_inferred_insights(raw_response)
+            except ValueError as e:
                 cid = _log_server_error("failed to parse LLM inference response", e)
                 yield _sse(
                     {
@@ -1616,19 +1605,40 @@ def stream_inference(include_browser: bool = Query(False)):
                 )
                 yield _sse({"type": "done", "total": 0})
                 return
+            if incomplete:
+                yield _sse(
+                    {
+                        "type": "log",
+                        "message": (
+                            "The LLM's reply was incomplete or malformed; "
+                            f"keeping the {len(insights)} insight(s) that parsed."
+                        ),
+                    }
+                )
 
+            sent = 0
             for insight in insights:
                 insight["content"] = insight["content"].strip()[:200]
-                try:
-                    insight["confidence"] = max(
-                        0.0, min(1.0, float(insight.get("confidence", 0.7)))
+                raw_confidence = insight.get("confidence", DEFAULT_CONFIDENCE)
+                confidence = normalize_confidence(raw_confidence)
+                if confidence is None:
+                    yield _sse(
+                        {
+                            "type": "log",
+                            "message": (
+                                f"Skipped insight {insight['content']!r}: "
+                                f"confidence {raw_confidence!r} is not a number "
+                                "or low/medium/high."
+                            ),
+                        }
                     )
-                except (ValueError, TypeError):
-                    insight["confidence"] = 0.7
+                    continue
+                insight["confidence"] = confidence
                 insight["domain"] = insight.get("domain", "general")
                 yield _sse({"type": "insight", "item": insight})
+                sent += 1
 
-            yield _sse({"type": "done", "total": len(insights)})
+            yield _sse({"type": "done", "total": sent})
 
         except Exception as exc:
             cid = _log_server_error("stream-inference failed", exc)

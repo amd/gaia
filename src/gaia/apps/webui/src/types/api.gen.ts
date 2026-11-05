@@ -96,6 +96,7 @@ export interface ApiSchemas {
   RetryWithRequest: RetryWithRequest;
   RunningAnswer: RunningAnswer;
   RunningIndexJob: RunningIndexJob;
+  ScheduleDescription: ScheduleDescription;
   ScheduleListResponse: ScheduleListResponse;
   ScheduleResponse: ScheduleResponse;
   ScheduleResultsResponse: ScheduleResultsResponse;
@@ -970,6 +971,7 @@ export interface ParseScheduleRequest {
 export interface ParseScheduleResponse {
   days_of_week?: number[] | null;
   description: string;
+  description_parts?: ScheduleDescription | null;
   end_hour?: number | null;
   interval_seconds: number;
   next_run_at?: string | null;
@@ -977,6 +979,27 @@ export interface ParseScheduleResponse {
   time_of_day?: string | null;
   timezone?: string | null;
   valid: boolean;
+}
+/**
+ * When a schedule runs, as data the UI words in its own language.
+ *
+ * ``every``: count + unit, optional days. ``window``: that plus start/end
+ * hour. ``days``: named days, optional time. ``daily``: a time each day.
+ */
+export interface ScheduleDescription {
+  count?: number | null;
+  /**
+   * 0=Monday … 6=Sunday
+   */
+  days?: number[] | null;
+  end_hour?: number | null;
+  kind: "every" | "window" | "days" | "daily";
+  start_hour?: number | null;
+  /**
+   * "HH:MM", 24-hour
+   */
+  time?: string | null;
+  unit?: ("second" | "minute" | "hour" | "day" | "week") | null;
 }
 /**
  * ``ask`` prompts for every gated tool; ``full_access`` runs them unasked.
@@ -1061,6 +1084,7 @@ export interface ScheduleListResponse {
 export interface ScheduleResponse {
   created_at?: string | null;
   description: string;
+  description_parts: ScheduleDescription;
   error_count?: number;
   id: string;
   interval_seconds: number;

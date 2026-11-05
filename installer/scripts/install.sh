@@ -11,6 +11,9 @@ set -eu
 GAIA_HOME="$HOME/.gaia"
 GAIA_VENV="$GAIA_HOME/venv"
 GAIA_BIN="$GAIA_HOME/bin"
+# GAIA's console scripts, linked into $GAIA_BIN. Only $GAIA_BIN goes on PATH:
+# the venv's bin also holds python3 and pip, which would shadow the system's.
+GAIA_COMMANDS="gaia gaia-cli gaia-mcp"
 PYTHON_VERSION="3.12"
 
 # The GAIA Terminal UI binary comes from the GitHub release: publish.yml
@@ -20,6 +23,9 @@ GAIA_RELEASES_URL="${GAIA_RELEASES_URL%/}"
 # Empty means the latest stable release. A tag pins the whole install to that
 # release (resolve_pin): v0.25.0 or a candidate such as v0.25.1-rc2.
 GAIA_RELEASE_TAG="${GAIA_RELEASE_TAG:-}"
+# 1 installs only the Python CLI: a package (.pkg, .deb, .rpm) owns gaia-tui and
+# gaia-agent, and the terminal runs this at first setup to add the rest.
+GAIA_CLI_ONLY="${GAIA_CLI_ONLY:-}"
 # Set by resolve_pin: the core package spec, and "", "final" or "rc".
 GAIA_PACKAGE_SPEC="amd-gaia[api]"
 PIN_KIND=""
@@ -658,16 +664,102 @@ install_flagship_agent() {
     print_success "GAIA agent $version installed to $GAIA_BIN/gaia-agent"
 }
 
+# Link GAIA's own commands from the venv into $GAIA_BIN, the one directory on PATH
+link_gaia_commands() {
+    print_step "Linking GAIA commands into $GAIA_BIN..."
+    if ! mkdir -p "$GAIA_BIN"; then
+        print_error "Could not create $GAIA_BIN"
+        exit 1
+    fi
+    for name in $GAIA_COMMANDS; do
+        target="$GAIA_VENV/bin/$name"
+        link="$GAIA_BIN/$name"
+        if [ ! -x "$target" ]; then
+            print_error "$target is missing after the GAIA package installed."
+            echo "  Fix:  delete $GAIA_VENV and re-run this installer."
+            exit 1
+        fi
+        if [ -e "$link" ] && [ ! -L "$link" ]; then
+            print_error "$link exists and is not a link to GAIA's venv; leaving it alone."
+            echo "  Fix:  move $link out of the way and re-run this installer."
+            exit 1
+        fi
+        if ! ln -sf "$target" "$link"; then
+            print_error "Could not link $link to $target"
+            exit 1
+        fi
+    done
+    print_success "Linked $GAIA_COMMANDS into $GAIA_BIN"
+}
+
+# Rewrite PATH lines that earlier installers wrote, which also put
+# $GAIA_VENV/bin on PATH. Other lines are left byte-for-byte; the file is
+# written in place so a symlinked rc file and its permissions are kept.
+migrate_rc_path_line() {
+    _rc="$1"
+    if ! grep -Fxq -e "$legacy_export" -e "$legacy_venv_export" "$_rc"; then
+        return 0
+    fi
+    scratch_dir rc
+    _tmp="$SCRATCH/rc"
+    if ! GAIA_RC_OLD1="$legacy_export" GAIA_RC_OLD2="$legacy_venv_export" \
+        GAIA_RC_NEW="$path_export" GAIA_RC_MARKER="# Added by GAIA installer" \
+        awk '
+            { line[NR] = $0 }
+            END {
+                n = 0
+                seen = 0
+                for (i = 1; i <= NR; i++) {
+                    l = line[i]
+                    if (l == ENVIRON["GAIA_RC_OLD1"] || l == ENVIRON["GAIA_RC_OLD2"]) {
+                        l = ENVIRON["GAIA_RC_NEW"]
+                    }
+                    if (l == ENVIRON["GAIA_RC_NEW"]) {
+                        if (seen) {
+                            # A second installer block: drop it with its marker and blank line.
+                            if (n > 0 && out[n] == ENVIRON["GAIA_RC_MARKER"]) n--
+                            if (n > 0 && out[n] == "") n--
+                            continue
+                        }
+                        seen = 1
+                    }
+                    out[++n] = l
+                }
+                for (i = 1; i <= n; i++) print out[i]
+            }
+        ' "$_rc" > "$_tmp"; then
+        print_error "Could not read $_rc to update GAIA's PATH line."
+        echo "  Fix:  in $_rc, change that line to:  $path_export"
+        exit 1
+    fi
+    if ! cat "$_tmp" > "$_rc"; then
+        print_error "Could not rewrite $_rc."
+        echo "  Fix:  in $_rc, change GAIA's PATH line to:  $path_export"
+        exit 1
+    fi
+    print_success "Updated $_rc: PATH now has only $GAIA_BIN, not $GAIA_VENV/bin"
+}
+
 # Add GAIA to PATH
 add_to_path() {
     print_step "Adding GAIA to PATH..."
 
-    # Both bins: the venv holds the Python CLI, $GAIA_BIN holds the terminal hub.
-    path_export="export PATH=\"\$PATH:$GAIA_VENV/bin:$GAIA_BIN\""
+    path_export="export PATH=\"\$PATH:$GAIA_BIN\""
+    # What earlier installers wrote: venv plus bin, and (pre-0.23) the venv alone.
+    legacy_export="export PATH=\"\$PATH:$GAIA_VENV/bin:$GAIA_BIN\""
+    legacy_venv_export="export PATH=\"\$PATH:$GAIA_VENV/bin\""
 
     # Export for the current session regardless of what we can write.
-    PATH="$PATH:$GAIA_VENV/bin:$GAIA_BIN"
+    PATH="$PATH:$GAIA_BIN"
     export PATH
+
+    # Migrate every file an earlier install may have written, whatever the
+    # current shell: a user who switched shells still has the old line.
+    for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+        if [ -f "$rc" ]; then
+            migrate_rc_path_line "$rc"
+        fi
+    done
 
     primary_rc=""
     user_shell="${SHELL:-}"
@@ -698,9 +790,13 @@ add_to_path() {
 
     if [ -z "$primary_rc" ]; then
         print_warning "Unrecognized shell (${SHELL:-unset}); not editing any startup file."
-        echo "  Add these two directories to your PATH by hand:"
-        echo "    $GAIA_VENV/bin"
+        echo "  Add this directory to your PATH by hand:"
         echo "    $GAIA_BIN"
+        if [ "${user_shell##*/}" = "fish" ]; then
+            echo "  In fish:  fish_add_path --append $GAIA_BIN"
+        fi
+        echo "  Do not add $GAIA_VENV/bin: its python3 would replace your system's."
+        echo "  If an earlier GAIA install had you add it, remove it from your PATH."
         RELOAD_FILE=""
         return 0
     fi
@@ -713,8 +809,8 @@ add_to_path() {
         if [ ! -f "$rc" ] && [ "$rc" != "$primary_rc" ]; then
             continue
         fi
-        # Match on $GAIA_BIN, not the whole line: pre-0.23 installs wrote a
-        # venv-only export that a line-exact check would duplicate.
+        # Match on $GAIA_BIN, not the whole line, so a line the user wrote
+        # themselves is not duplicated.
         if [ -f "$rc" ] && grep -Fq "$GAIA_BIN" "$rc"; then
             continue
         fi
@@ -732,6 +828,27 @@ add_to_path() {
     else
         print_success "GAIA is already on PATH in your shell config"
     fi
+}
+
+# Rejects any GAIA_CLI_ONLY value but unset or 1, before anything installs.
+check_cli_only() {
+    case "$GAIA_CLI_ONLY" in
+        ""|1) ;;
+        *)
+            print_error "GAIA_CLI_ONLY='$GAIA_CLI_ONLY' is not valid."
+            echo "  Fix:  set it to 1 to install only the gaia command, or unset it."
+            exit 1
+            ;;
+    esac
+}
+
+show_cli_next_steps() {
+    echo ""
+    print_success "The gaia command is installed in $GAIA_BIN"
+    if [ -n "${RELOAD_FILE:-}" ]; then
+        printf '  New terminals find it. In this one, run: %ssource %s%s\n' "$COLOR_GREEN" "$RELOAD_FILE" "$COLOR_RESET"
+    fi
+    echo ""
 }
 
 # Show next steps
@@ -777,6 +894,8 @@ main() {
     printf '%s========================================%s\n' "$COLOR_CYAN" "$COLOR_RESET"
     echo ""
 
+    check_cli_only
+
     # Check prerequisites
     detect_environment
     check_download_tool
@@ -790,9 +909,18 @@ main() {
     # Install GAIA
     install_gaia
 
+    # After every install and upgrade, so an install from before the links
+    # existed gets them too.
+    link_gaia_commands
+
     # Before the terminal hub, so a hard failure there still leaves the Python
     # CLI reachable.
     add_to_path
+
+    if [ "$GAIA_CLI_ONLY" = "1" ]; then
+        show_cli_next_steps
+        return 0
+    fi
 
     # Install the terminal hub binary
     install_tui

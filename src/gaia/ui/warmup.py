@@ -13,8 +13,10 @@ running: both would share Lemonade's single slot (a non-streaming turn is not
 tracked, so it can overlap). A turn on the warmed model that starts
 mid-warm-up waits for it (:func:`wait_for_warm_up`) instead of reading the
 prefix a second time, and says what it is waiting on; Stop ends that wait. A
-turn on any other model, cloud or local, stops the warm-up and does not wait:
-the warm-up would only evict the model that turn loads.
+turn on any other model, cloud or local, stops the warm-up: the warm-up would
+only evict the model that turn loads. A local turn still waits out a model load
+already under way, which can't be interrupted and holds the memory its own
+load needs.
 """
 
 from __future__ import annotations
@@ -22,7 +24,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from gaia.llm.surface_hints import APP_RESTART_HINT
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,26 @@ _PHASE_MESSAGES = {
     "priming": "Finishing start-up: reading GAIA's instructions into the model",
 }
 _DEFAULT_PHASE_MESSAGE = "Finishing start-up"
+
+
+def new_chat_session() -> Dict[str, Any]:
+    """What ChatDatabase.create_session stores for a chat the user just opened."""
+    from gaia.ui.database import resolved_default_model
+
+    return {
+        "model": resolved_default_model(),
+        "agent_type": NEW_CHAT_AGENT,
+        "device": "gpu",
+    }
+
+
+def new_chat_model(db, registry) -> Tuple[Optional[str], Optional[int]]:
+    """``(model_id, device_ctx)`` the first turn of a chat opened now runs on."""
+    from gaia.ui import _chat_helpers as chat
+
+    return chat.resolve_session_model(
+        new_chat_session(), NEW_CHAT_AGENT, db.get_setting("custom_model"), registry
+    )
 
 
 class PrefixWarmer:
@@ -268,7 +292,6 @@ def _warm_new_chat_prefix(
     from gaia.chat.sdk import LLMCallCancelled
     from gaia.llm.lemonade_client import LemonadeClient
     from gaia.ui import _chat_helpers as chat
-    from gaia.ui.database import resolved_default_model
 
     low_memory = preload_skip_reason()
     if low_memory:
@@ -300,16 +323,9 @@ def _warm_new_chat_prefix(
             return "is not downloaded yet"
         return None
 
-    # What ChatDatabase.create_session stores for a chat the user just opened.
-    session = {
-        "model": resolved_default_model(),
-        "agent_type": NEW_CHAT_AGENT,
-        "device": "gpu",
-    }
+    session = new_chat_session()
     custom_model = db.get_setting("custom_model")
-    model_id, device_ctx = chat.resolve_session_model(
-        session, NEW_CHAT_AGENT, custom_model, registry
-    )
+    model_id, device_ctx = new_chat_model(db, registry)
     reason = skip_reason(model_id) if model_id else None
     if reason:
         logger.info("Warm-up skipped: %s %s", model_id, reason)
@@ -348,12 +364,14 @@ def _warm_new_chat_prefix(
                 return None
         if note_target is not None:
             note_target(effective, _device_for(client, effective))
+        # Phase before the check: a turn that sees "loading" waits for the load,
+        # one that doesn't is sure this check sees its stop.
+        _set_phase("loading")
         if cancel is not None and cancel.is_set():
             logger.info("Warm-up of %s stopped for a turn on another model", effective)
             return None
         # The turn's own pre-flight: load at the ctx a turn expects, or the
         # first turn reloads the model and the primed cache goes with it.
-        _set_phase("loading")
         chat._maybe_load_expected_model(effective)
         _set_phase("priming")
         try:
@@ -405,6 +423,11 @@ def _set_phase(phase: str) -> None:
         _warmer.set_phase(phase)
 
 
+def _released(warmer: PrefixWarmer) -> bool:
+    """A stopped warm-up frees the turn, unless a model load is under way."""
+    return warmer.cancel.is_set() and warmer.phase() != "loading"
+
+
 def wait_for_warm_up(
     timeout: float = 300.0, *, handler=None, model: Optional[str] = None
 ) -> None:
@@ -413,8 +436,9 @@ def wait_for_warm_up(
     With an SSE *handler*, the turn shows what the warm-up is doing, and a
     Stop (``handler.cancelled``) ends the wait at once; the caller checks
     ``cancelled`` afterwards. A turn on any *model* other than the one
-    warming stops the warm-up and returns without waiting; None means the
-    default model, the warm-up's own.
+    warming stops the warm-up and returns, once a model load already under
+    way has finished (a cloud turn does not wait even for that); None means
+    the default model, the warm-up's own.
 
     Raises:
         TimeoutError: the warm-up is still running after *timeout* seconds;
@@ -434,8 +458,8 @@ def wait_for_warm_up(
     deadline = time.monotonic() + timeout
     shown = None
     # The warm-up's model is only known once its agent is built, so a turn on
-    # another model can learn it is not waiting part-way through.
-    while not warmer.cancel.is_set() and not warmer.wait(0.2):
+    # another model can learn part-way through that it is not waiting.
+    while not _released(warmer) and not warmer.wait(0.2):
         if handler is not None:
             if handler.cancelled.is_set():
                 logger.info("Chat turn stopped while waiting for the warm-up")
@@ -454,9 +478,8 @@ def wait_for_warm_up(
         if time.monotonic() >= deadline:
             raise TimeoutError(
                 f"The start-up warm-up was still {warmer.phase() or 'starting'} "
-                f"after {timeout:g} s, so this turn did not start. Check that "
-                "Lemonade is running (`gaia init --check`), then send the "
-                "message again."
+                f"after {timeout:g} s, so this turn did not start. Send the message "
+                f"again. {APP_RESTART_HINT}"
             )
 
 

@@ -13,6 +13,7 @@ import datetime
 import json
 import mimetypes
 import os
+import sqlite3
 import sys
 import threading
 from pathlib import Path
@@ -199,6 +200,29 @@ def _index_unavailable_message(db_path: str, exc: BaseException) -> str:
     return head + "See the GAIA log for details." + tail
 
 
+def _index_search_failed_note(exc: BaseException) -> str:
+    """The find_files footnote saying the index failed and the disk was walked."""
+    head = (
+        f"\n\nNote: the file index failed ({exc}), so this searched the disk "
+        "instead, which is slower and may stop before covering every folder. "
+    )
+    kind = _sqlite_kind(exc)
+    if kind == "busy":
+        return head + (
+            "It is locked by another GAIA process; searching again later "
+            "should use it."
+        )
+    if kind == "corrupt":
+        return head + "The index file is damaged; tell the user it needs rebuilding."
+    if kind == "access":
+        return head + (
+            "GAIA can't read the index file; tell the user to check its permissions."
+        )
+    return head + (
+        "Tell the user the file index is failing; details are in the GAIA log."
+    )
+
+
 class FileSystemToolsMixin:
     """File system navigation, search, and management tools.
 
@@ -231,8 +255,6 @@ class FileSystemToolsMixin:
         db_path = getattr(config, "filesystem_index_path", None)
         if not db_path:
             return None
-        import sqlite3
-
         from gaia.filesystem.index import FileSystemIndexService
 
         with _open_lock_for(self):
@@ -866,6 +888,7 @@ class FileSystemToolsMixin:
                 # so a query with no words (``*.*``) or a glob that can match
                 # mid-word (``*port*`` finds ``report``) goes to the walk.
                 by_name = effective_type != "metadata"
+                index_note = ""
                 if (
                     mixin._fs_index
                     and effective_type in ("name", "auto", "metadata")
@@ -928,10 +951,14 @@ class FileSystemToolsMixin:
                                     f"  {i}. {r['path']} ({size_str}, {mod_str})"
                                 )
                             return "\n".join(lines)
-                    except Exception as e:
-                        logger.debug(
-                            f"Index search failed, falling back to filesystem: {e}"
+                    except sqlite3.Error as e:
+                        logger.warning(
+                            "find_files: index query for %r failed, searching "
+                            "the disk instead: %s",
+                            query,
+                            e,
                         )
+                        index_note = _index_search_failed_note(e)
 
                 # Filesystem search
                 # Determine search roots based on scope
@@ -1058,7 +1085,12 @@ class FileSystemToolsMixin:
                         )
                     else:
                         found_none = f"No files found matching '{query}'."
-                    return f"{found_none} {skipped_note}".rstrip() + skip_note + stopped
+                    return (
+                        f"{found_none} {skipped_note}".rstrip()
+                        + skip_note
+                        + stopped
+                        + index_note
+                    )
 
                 lines = [f"Found {len(results)} result(s):\n"]
                 for i, r in enumerate(results, 1):
@@ -1078,7 +1110,7 @@ class FileSystemToolsMixin:
 
                 if skipped_note:
                     lines.append(f"\n{skipped_note}")
-                return "\n".join(lines) + skip_note + stopped
+                return "\n".join(lines) + skip_note + stopped + index_note
 
             except ValueError as e:
                 return str(e)

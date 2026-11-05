@@ -67,6 +67,18 @@ def test_search_hits_stand_in_when_no_page_was_read():
     assert {p["kind"] for p in pages} == {"search_result"}
 
 
+def test_search_hit_titles_drop_the_primary_source_tag():
+    ledger = TurnLedger()
+    text = (
+        'Web search results for: "kestrel releases"\n\n'
+        "1. Releases · kestrel/kestrel [primary source]\n"
+        "   https://github.com/kestrel/kestrel/releases\n"
+    )
+    _call(ledger, "search_web", {"query": "kestrel releases"}, text)
+    pages = ledger.summary(location=LOCAL)["pages"]
+    assert [p["title"] for p in pages] == ["Releases · kestrel/kestrel"]
+
+
 def test_a_failed_fetch_is_not_a_source_but_its_site_was_contacted():
     ledger = TurnLedger()
     _call(

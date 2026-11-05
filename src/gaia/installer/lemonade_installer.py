@@ -51,8 +51,8 @@ GITHUB_RELEASE_TAG_BASE = "https://github.com/lemonade-sdk/lemonade/releases/tag
 # tests/integration/test_lemonade_embeddable_assets.py checks them against the
 # live release.
 INSTALLER_SHA256 = {
-    "v2026.44.1/lemonade.msi": "85c97cf2ae3f7f7c1857c01d718e7c59c2784e4a10c14795f107ba44a6f921ec",
-    "v2026.44.1/lemonade-server-minimal.msi": "cfa3f96a452e608ab98275e981824f06d5074373217e52278e0423afae9a5243",
+    "v2026.45.3/lemonade.msi": "60a33cfe26cbb0c3926f451a4829f3922aec1edc43114cf1ce198ce3f02d2208",
+    "v2026.45.3/lemonade-server-minimal.msi": "e7e31e17b9805fe714dde6d9e9e73a87bc17c0568be492598ae1d0d2265e9ae1",
 }
 
 #: The oldest Lemonade release GAIA can remove when it upgrades a PC. Older
@@ -115,6 +115,8 @@ LEGACY_MSI_SHA256 = {
     "v2026.42.1/lemonade.msi": "94ec399d71fe0d3fa4386aca440374f167c27d2dd0479055c8d8b3da869058d4",
     "v2026.43.3/lemonade-server-minimal.msi": "ae82d13d6f7dc057c57425c959d5746184fb834c569de871c573606ea5a8980a",
     "v2026.43.3/lemonade.msi": "95227ef9013678ec3f4d0a26c10bfde261373a4fd14cf6ec5fad6a81ed9dd71d",
+    "v2026.44.1/lemonade-server-minimal.msi": "cfa3f96a452e608ab98275e981824f06d5074373217e52278e0423afae9a5243",
+    "v2026.44.1/lemonade.msi": "85c97cf2ae3f7f7c1857c01d718e7c59c2784e4a10c14795f107ba44a6f921ec",
 }
 
 # platform.machine() varies by OS/libc for the same hardware.

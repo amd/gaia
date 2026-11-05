@@ -32,10 +32,35 @@ interface Props {
     run?: SetupRunStatus | null;
     /** The models that will download, listed before anything starts. */
     models?: SetupCatalogEntry[];
+    /** Runs setup again; a failed row offers it once the run has stopped. */
+    onRetry?: () => void;
+    retryDisabled?: boolean;
+}
+
+/** Why a piece failed, in a plain sentence, the run's own words behind Details. */
+function FailedReason({ id, error, transient, onRetry, disabled }: { id: SetupComponent['id']; error: string | null | undefined; transient: boolean; onRetry?: () => void; disabled?: boolean }) {
+    const t = useT();
+    const name = t(`setup.component.${id}`);
+    return (
+        <div className="setup-content-failure" role="alert">
+            <p>{t(transient ? 'setup.contents.failedNetwork' : 'setup.contents.failedOther', { name })}</p>
+            {error && (
+                <details className="dl-details">
+                    <summary>{t('setup.progress.details')}</summary>
+                    <pre dir="ltr">{error}</pre>
+                </details>
+            )}
+            {onRetry && (
+                <button type="button" className="btn-primary" onClick={onRetry} disabled={disabled} aria-label={t('setup.contents.retryNamed', { name })}>
+                    {t('setup.progress.retry')}
+                </button>
+            )}
+        </div>
+    );
 }
 
 /** Everything that comes to this PC: what, how big, and from where. Nothing hidden. */
-export function DownloadContents({ plan, run, models = [] }: Props) {
+export function DownloadContents({ plan, run, models = [], onRetry, retryDisabled }: Props) {
     const t = useT();
     return (
         <ul className="setup-contents">
@@ -56,6 +81,7 @@ export function DownloadContents({ plan, run, models = [] }: Props) {
                             <bdi dir="ltr">{sizeText(c.size_gb, t)}</bdi>
                             <span>{stateText(c, state, t)}</span>
                         </span>
+                        {state === 'failed' && ended && !run?.problem && <FailedReason id={c.id} error={run?.error} transient={run?.component_kinds?.[c.id] === 'transient'} onRetry={onRetry} disabled={retryDisabled} />}
                     </li>
                 );
             })}

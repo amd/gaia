@@ -47,7 +47,10 @@ def test_combined_spec_field_is_rejected(client, require_lemonade):
         "A combined 'spec' field was accepted -- if the server now supports it, "
         "split_backend_spec in lemonade_client can be simplified"
     )
-    assert "recipe" in response.text and "backend" in response.text
+    # Since 2026.45 only `backend` is required (a cloud install has no recipe).
+    body = response.json()
+    assert body.get("code") == "missing_argument", body
+    assert "'backend'" in body.get("error", ""), body
 
 
 def test_install_backend_request_is_accepted(client, require_lemonade):

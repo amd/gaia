@@ -85,6 +85,7 @@ const _inSafeMode = _crashCount >= SAFE_MODE_THRESHOLD;
 
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
+const { probeTrayHost } = require("./services/tray-host.cjs");
 const { appIconPath, appUserModelId } = require("./services/app-icon.cjs");
 const {
   attachWindowGuards,
@@ -92,6 +93,7 @@ const {
   fetchWorkInProgress,
   installQuitGuard,
   QUIT,
+  quitOnTermSignal,
   RESTART_FOR_UPDATE,
 } = require("./services/quit-guard.cjs");
 const AgentProcessManager = require("./services/agent-process-manager.cjs");
@@ -256,6 +258,8 @@ let engineInstall = null;
 
 /** @type {TrayManager | null} */
 let trayManager = null;
+/** Settles once the tray knows whether this desktop shows tray icons. */
+let trayHostReady = null;
 
 /** @type {AgentProcessManager | null} */
 let agentProcessManager = null;
@@ -665,15 +669,20 @@ function createWindow() {
   // Show window when ready (unless --minimized or startMinimized config)
   mainWindow.once("ready-to-show", () => {
     console.log("[main] ready-to-show fired");
-    const shouldStartMinimized =
-      startMinimized || (trayManager && trayManager.startMinimized);
+    Promise.resolve(trayHostReady).then(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      // Never start hidden where no tray icon would bring the window back.
+      const canHide = Boolean(trayManager && trayManager.trayHost.available);
+      const shouldStartMinimized =
+        canHide && (startMinimized || trayManager.startMinimized);
 
-    if (!shouldStartMinimized) {
-      console.log("[main] mainWindow.show() called");
-      mainWindow.show();
-    } else {
-      console.log("[main] Starting minimized to tray");
-    }
+      if (!shouldStartMinimized) {
+        console.log("[main] mainWindow.show() called");
+        mainWindow.show();
+      } else {
+        console.log("[main] Starting minimized to tray");
+      }
+    });
   });
 
   return mainWindow;
@@ -781,6 +790,14 @@ function initializeServices() {
     reopenWindow: () => reopenWindow(),
   });
   trayManager.create();
+  trayHostReady = probeTrayHost()
+    .then((host) => {
+      if (trayManager) trayManager.setHost(host);
+    })
+    .catch((err) => {
+      // The host stays unknown, so closing quits instead of hiding.
+      console.error(`[main] Could not record the tray host: ${err.message}`);
+    });
   try {
     trayManager.syncLoginItem();
   } catch (err) {
@@ -1186,7 +1203,7 @@ app.whenReady().then(async () => {
   if (showingInstallScreen) {
     const installed = await engineInstall.run();
     if (!installed) {
-      console.log("[main] Quit while the install waited on Try again");
+      console.log("[main] Quit during the backend install");
       return;
     }
     engineInstall.starting();
@@ -1338,11 +1355,13 @@ const quitGuard = installQuitGuard({
   },
 });
 
+quitOnTermSignal({ proc: process, app, guard: quitGuard });
+
 installQuitCleanup({ app, cleanup });
 
 async function cleanup() {
   shutdownStarted = true;
-  if (engineInstall) engineInstall.stop();
+  const installStopped = engineInstall ? engineInstall.stop() : null;
 
   // Phase F: tear down auto-updater timers and IPC handlers.
   try {
@@ -1365,9 +1384,9 @@ async function cleanup() {
     keepAwake = null;
   }
 
-  // The agents and the backend stop side by side: each waits out its own
-  // grace period, and in series they could overrun the quit's time limit.
-  await Promise.all([stopAgentsForQuit(), stopBackendForQuit()]);
+  // The install, the agents and the backend stop side by side: each waits out
+  // its own grace period, and in series they could overrun the quit's time limit.
+  await Promise.all([installStopped, stopAgentsForQuit(), stopBackendForQuit()]);
 
   // Destroy tray icon
   if (trayManager) {

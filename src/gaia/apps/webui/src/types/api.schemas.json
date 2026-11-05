@@ -3155,6 +3155,16 @@
         "title": "Description",
         "type": "string"
       },
+      "description_parts": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ScheduleDescription"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "end_hour": {
         "anyOf": [
           {
@@ -3563,6 +3573,104 @@
     "title": "RunningIndexJob",
     "type": "object"
   },
+  "ScheduleDescription": {
+    "description": "When a schedule runs, as data the UI words in its own language.\n\n``every``: count + unit, optional days. ``window``: that plus start/end\nhour. ``days``: named days, optional time. ``daily``: a time each day.",
+    "properties": {
+      "count": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Count"
+      },
+      "days": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "0=Monday … 6=Sunday",
+        "title": "Days"
+      },
+      "end_hour": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "End Hour"
+      },
+      "kind": {
+        "enum": [
+          "every",
+          "window",
+          "days",
+          "daily"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "start_hour": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Start Hour"
+      },
+      "time": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "\"HH:MM\", 24-hour",
+        "title": "Time"
+      },
+      "unit": {
+        "anyOf": [
+          {
+            "enum": [
+              "second",
+              "minute",
+              "hour",
+              "day",
+              "week"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Unit"
+      }
+    },
+    "required": [
+      "kind"
+    ],
+    "title": "ScheduleDescription",
+    "type": "object"
+  },
   "ScheduleListResponse": {
     "description": "List of scheduled tasks.",
     "properties": {
@@ -3600,6 +3708,9 @@
       "description": {
         "title": "Description",
         "type": "string"
+      },
+      "description_parts": {
+        "$ref": "#/components/schemas/ScheduleDescription"
       },
       "error_count": {
         "default": 0,
@@ -3709,7 +3820,8 @@
       "interval_seconds",
       "prompt",
       "status",
-      "description"
+      "description",
+      "description_parts"
     ],
     "title": "ScheduleResponse",
     "type": "object"

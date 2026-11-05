@@ -297,6 +297,8 @@
     padding: 0 3px;
     font-family: var(--font-mono);
     font-size: 12px;
+    /* A path's double spaces are part of its name. */
+    white-space: pre-wrap;
 }
 .file-path-link:hover {
     color: var(--accent);

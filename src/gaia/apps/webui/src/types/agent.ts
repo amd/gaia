@@ -42,6 +42,8 @@ export interface GaiaNotification {
   risk?: string;
   /** The agent's own one-line description of the call, shown when no args came with it. */
   summary?: string;
+  /** A path-access prompt backing the call just allowed, so it reads as a follow-up. */
+  pathFollowUp?: boolean;
   /** For policy_alert type. */
   decision?: string;
   reason?: string;
@@ -67,8 +69,15 @@ export interface TraySettings {
   startOnLogin: boolean;
 }
 
+/** Whether this desktop shows tray icons (stock GNOME doesn't); checked once at startup. */
+export interface TrayHost {
+  available: boolean;
+  reason: null | 'checking' | 'no-host' | 'check-failed';
+}
+
 export interface TrayConfig {
   tray: TraySettings;
+  host: TrayHost;
 }
 
 export interface TrayChatRef {
@@ -138,7 +147,7 @@ export interface GaiaWindowFrame {
 }
 
 /** FAILURE_REASONS in services/backend-installer.cjs. */
-export type EngineInstallReason = 'disk' | 'network' | 'tls' | 'locked';
+export type EngineInstallReason = 'disk' | 'network' | 'tls' | 'locked' | 'daemon';
 
 export interface EngineInstallError {
   stage: string | null;

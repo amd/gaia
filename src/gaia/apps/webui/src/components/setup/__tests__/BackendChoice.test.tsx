@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
@@ -13,7 +13,13 @@ import { EMBED, GEMMA, QWEN, entry, plan } from './fixtures';
 
 vi.mock('../../../services/api', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../../../services/api')>();
-    return { ...actual, getModelServer: vi.fn(), setModelServerBackend: vi.fn() };
+    return {
+        ...actual,
+        getModelServer: vi.fn(),
+        setModelServerBackend: vi.fn(),
+        fixSetupNpuMemlock: vi.fn(),
+        recheckSetupNpu: vi.fn(),
+    };
 });
 
 // GAIA's own NPU model, as setup lists it on a PC whose NPU holds it.
@@ -57,10 +63,103 @@ describe('choosing where the chat model runs', () => {
         expect(screen.getByTestId('chat')).toHaveTextContent(theirs.id);
     });
 
+    // #6632: Lemonade saw the NPU, but FastFlowLM can't run here, so NPU isn't offered and the hint says why.
+    it("offers no NPU where its engine can't run, even for an NPU model already downloaded", () => {
+        const why = { fits: false as const, fit_reason: 'needs an AMD Ryzen AI NPU and its driver', fit_code: 'npu' as const };
+        const ours = { ...NPU, ...why };
+        const theirs = entry({ id: 'gemma4-it-e2b-FLM', name: 'Gemma 4 E2B (NPU)', recipe: 'flm', gaia_model: false, downloaded: true, size_gb: 0, ...why });
+        render(<Harness setup={plan([QWEN, GEMMA, EMBED, ours, theirs])} />);
+        expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['Graphics (GPU)']);
+        expect(screen.getByText("Chat runs on this PC's graphics (GPU). This PC's Ryzen AI NPU can't run GAIA's models.")).toBeInTheDocument();
+    });
+
     it('offers no NPU on a PC without one', () => {
         render(<Harness setup={plan([QWEN, GEMMA, EMBED])} />);
         expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['Graphics (GPU)']);
         expect(screen.getByText(/Chat runs on this PC's graphics/)).toBeInTheDocument();
+    });
+
+    // #6632: a stock desktop leaves memlock at 8 MB; the NPU model must not be picked.
+    const notReady = (memlockFix: 'apply' | 'restart' | 'stuck') => plan([QWEN, GEMMA, EMBED, NPU], {
+        npu: {
+            present: true,
+            ready: false,
+            problems: [
+                { code: 'memlock', title: '', fix: '', params: { limit: '8 MB', fix: memlockFix } },
+                { code: 'access', title: '', fix: '', params: { device: '/dev/accel/accel0', group: 'render' } },
+            ],
+        },
+    });
+
+    function WithRecheck({ setup, onRecheck }: { setup: SetupPlan; onRecheck: () => void }) {
+        const [selection, setSelection] = useState(() => initialSelection(setup));
+        return (
+            <>
+                <BackendChoice plan={setup} selection={selection} onSelection={setSelection} onRecheck={onRecheck} />
+                <output data-testid="chat">{selection.defaultChat}</output>
+            </>
+        );
+    }
+
+    it('shows an NPU that is not set up yet, with what to fix, and does not offer it', async () => {
+        const onRecheck = vi.fn();
+        vi.mocked(api.recheckSetupNpu).mockResolvedValue(notReady('apply'));
+        render(<WithRecheck setup={notReady('apply')} onRecheck={onRecheck} />);
+        const npu = screen.getByRole('radio', { name: 'Ryzen AI NPU' });
+        expect(npu).toBeDisabled();
+        fireEvent.click(npu);
+        expect(screen.getByTestId('chat')).toHaveTextContent(QWEN.id);
+        const note = screen.getByRole('note');
+        expect(note).toHaveTextContent('The locked-memory limit is 8 MB, and the NPU needs it unlimited.');
+        expect(note).toHaveTextContent('GAIA can raise it for everyone on this PC, once');
+        expect(note).toHaveTextContent('Add your account to the render group, then sign out and back in.');
+        expect(note).toHaveTextContent('Until then chat runs on the graphics (GPU).');
+        fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+        await waitFor(() => expect(onRecheck).toHaveBeenCalledOnce());
+        expect(api.recheckSetupNpu).toHaveBeenCalledOnce();
+    });
+
+    it('raises the locked-memory limit behind the administrator prompt, then checks again', async () => {
+        const onRecheck = vi.fn();
+        vi.mocked(api.fixSetupNpuMemlock).mockResolvedValue(notReady('restart'));
+        render(<WithRecheck setup={notReady('apply')} onRecheck={onRecheck} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Raise the limit' }));
+        await waitFor(() => expect(onRecheck).toHaveBeenCalledOnce());
+        expect(api.fixSetupNpuMemlock).toHaveBeenCalledOnce();
+        expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('says so when the administrator prompt is closed', async () => {
+        const onRecheck = vi.fn();
+        vi.mocked(api.fixSetupNpuMemlock).mockRejectedValue(
+            new api.ApiError('closed', 409, 'closed', null, [], { code: 'cancelled', message: 'closed' }),
+        );
+        render(<WithRecheck setup={notReady('apply')} onRecheck={onRecheck} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Raise the limit' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent('The administrator prompt was closed, so nothing changed.');
+        expect(onRecheck).not.toHaveBeenCalled();
+    });
+
+    it('points to the guide, not another restart, when the limit is still low after one', () => {
+        render(<WithRecheck setup={notReady('stuck')} onRecheck={vi.fn()} />);
+        const note = screen.getByRole('note');
+        expect(note).toHaveTextContent('The locked-memory limit is still 8 MB after a restart.');
+        expect(note).toHaveTextContent('DefaultLimitMEMLOCK');
+        expect(screen.queryByRole('button', { name: 'Raise the limit' })).toBeNull();
+    });
+
+    it('asks only for a restart once the limit is raised', () => {
+        render(<WithRecheck setup={notReady('restart')} onRecheck={vi.fn()} />);
+        const note = screen.getByRole('note');
+        expect(note).toHaveTextContent('The locked-memory limit is still 8 MB.');
+        expect(note).toHaveTextContent('Restart the PC to finish.');
+        expect(screen.queryByRole('button', { name: 'Raise the limit' })).toBeNull();
+    });
+
+    it('offers a set-up NPU as before', () => {
+        render(<Harness setup={plan([QWEN, GEMMA, EMBED, NPU], { npu: { present: true, ready: true, problems: [] } })} />);
+        expect(screen.getByRole('radio', { name: 'Ryzen AI NPU' })).toBeEnabled();
+        expect(screen.queryByRole('note')).toBeNull();
     });
 
     it('keeps llama.cpp on Vulkan at the start, only where this PC runs it', async () => {

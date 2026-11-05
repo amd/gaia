@@ -330,7 +330,11 @@ def gaia_runs_lemonade(base_url: Optional[str] = None) -> bool:
     if configured_lemonade_url():
         return False
     embedded = EmbeddedLemonade()
-    if not (embedded.is_installed() or embedded.replaces_older_install()):
+    if not (
+        embedded.is_installed()
+        or embedded.replaces_older_install()
+        or embedded.is_incomplete()
+    ):
         return False
     if base_url is None:
         return True

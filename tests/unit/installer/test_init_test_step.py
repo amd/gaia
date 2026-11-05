@@ -337,10 +337,12 @@ def test_the_agent_turn_goes_through_the_installed_binary_not_gaia_p():
         patch("gaia.ui._chat_helpers.relay_one_prompt", return_value="ok") as relay,
         patch.object(setup_runner.subprocess, "run") as run,
     ):
-        assert setup_runner._agent_turn_problem() is None
+        assert setup_runner._agent_turn_problem("gemma4-it-e4b-FLM") is None
     run.assert_not_called()
     kwargs = relay.call_args.kwargs
     assert kwargs["agent_type"] == "gaia"
+    # The turn runs on the model it was given, never the agent's own default.
+    assert kwargs["model_id"] == "gemma4-it-e4b-FLM"
     # A test message must not land in the user's memory.
     assert kwargs["memory"] == "off"
 
@@ -351,7 +353,10 @@ def test_no_installed_binary_says_the_assistant_is_missing():
         patch("gaia.hub.installer.read_sentinel", return_value=None),
         patch("gaia.ui._chat_helpers.relay_one_prompt") as relay,
     ):
-        assert setup_runner._agent_turn_problem() == setup_runner.AGENT_MISSING
+        assert (
+            setup_runner._agent_turn_problem("Gemma-4-E4B-it-GGUF")
+            == setup_runner.AGENT_MISSING
+        )
     relay.assert_not_called()
 
 
@@ -366,7 +371,11 @@ def test_an_agent_turn_that_fails_says_so(outcome):
         else {"return_value": outcome}
     )
     with patch("gaia.ui._chat_helpers.relay_one_prompt", **kwargs):
-        assert "didn't answer" in setup_runner._agent_turn_problem()
+        why = setup_runner._agent_turn_problem("Gemma-4-E4B-it-GGUF")
+    # The agent's own words, for the log; the screen gets its own sentence.
+    assert why == (
+        str(outcome) if isinstance(outcome, Exception) else "it ended without an answer"
+    )
 
 
 @pytest.mark.parametrize(

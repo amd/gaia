@@ -8,7 +8,8 @@
 # Flow:
 #   validate → build (pypi + npm + desktop installers + terminal installers,
 #              parallel; the Windows setup follows the desktop and terminal builds)
-#            → ci-green (the tagged commit passed CI; parallel with the builds)
+#            → ci-green (the tagged commit passed CI; parallel with the builds;
+#              on an RC it only reports, see the job)
 #     → approve (single manual gate for a final; none for an RC)
 #       → publish (pypi + npm, parallel)
 #         → post-publish smoke test (PyPI install verification)
@@ -344,10 +345,12 @@ jobs:
           fi
 
       - name: Run backend tests
+        # A final only: tests never hold a release candidate.
+        if: needs.validate.outputs.is_rc != 'true'
         # No silent fallback (CLAUDE.md "No Silent Fallbacks"): this is the only
-        # pytest run on the release path -- test_unit.yml triggers on pushes to
-        # main, not on a v* tag -- so a swallowed failure here publishes a broken
-        # build. The `|| echo` and `2>/dev/null` this replaces made the step green
+        # pytest run on a final's release path -- test_unit.yml triggers on
+        # pushes to main, not on a v* tag -- so a swallowed failure here
+        # publishes a broken build. The `|| echo` and `2>/dev/null` this replaces made the step green
         # whether the tests passed, failed, or never ran at all.
         #
         # [api] as well as [dev]: gaia.ui imports fastapi, which only the api/ui
@@ -385,6 +388,7 @@ jobs:
     with:
       tag: ${{ needs.validate.outputs.tag_name }}
       publish_to_release: false
+      skip_source_tests: ${{ needs.validate.outputs.is_rc == 'true' }}
 
   # ── Release candidate: the flagship agent from this commit ──────────
   # The hub's flagship is whatever release_agent_gaia.yml last published, which
@@ -406,12 +410,13 @@ jobs:
 
   # ── The tagged commit passed CI ─────────────────────────────────────
   # The test workflows ran when this commit reached main, not on the tag, and
-  # most of those runs were cancelled by the next merge. util/check_release_ci.py
-  # requires a passing run of each required check on this exact commit,
-  # dispatches any that has none against the tag, and waits. Parallel with the
-  # builds, so it only adds time when CI is slower than they are. An RC needs
-  # only its RC_CRITICAL set and reports the rest as warnings; a final needs
-  # FINAL_REQUIRED, everything.
+  # most of those runs were cancelled by the next merge. For a final,
+  # util/check_release_ci.py requires a passing run of each FINAL_REQUIRED
+  # check on this exact commit, dispatches any that has none against the tag,
+  # and waits. Parallel with the builds, so it only adds time when CI is slower
+  # than they are. An RC is never held by tests: the script reads each check
+  # once, reports its state as a warning, and exits 0, and approve-publish does
+  # not need this job to pass on an RC.
   ci-green:
     name: Tagged commit passed CI
     needs: validate
@@ -433,10 +438,10 @@ jobs:
           python3 util/check_release_ci.py --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --tag "${TAG_NAME}"
 
   # ── Stage 3: Approve (single manual gate, finals only) ──────────────
-  # All builds and CI must pass before anything publishes. A final waits for a
-  # reviewer in the "publish" environment; an RC runs in "publish-rc", which has
-  # none. pypi and npm keep their own environments: the trusted publishers are
-  # bound to those names.
+  # All builds, and for a final CI too, must pass before anything publishes. A
+  # final waits for a reviewer in the "publish" environment; an RC runs in
+  # "publish-rc", which has none. pypi and npm keep their own environments: the
+  # trusted publishers are bound to those names.
 
   approve-publish:
     name: Approve Publishing
@@ -446,7 +451,7 @@ jobs:
       needs.build-pypi.result == 'success' &&
       needs.build-npm.result == 'success' &&
       needs.build-desktop-installers.result == 'success' &&
-      needs.ci-green.result == 'success' &&
+      (needs.validate.outputs.is_rc == 'true' || needs.ci-green.result == 'success') &&
       needs.tui-installers-complete.result == 'success' &&
       (needs.validate.outputs.is_rc == 'true' || needs.windows-setup.outputs.ok == 'true') &&
       (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
@@ -1134,6 +1139,7 @@ jobs:
           expected=(
             "gaia-agent-ui-${v}-x64-setup.exe" "gaia-agent-ui-${v}-x64-setup.exe.blockmap" latest.yml
             "gaia-agent-ui-${v}-arm64.dmg" "gaia-agent-ui-${v}-arm64.dmg.blockmap" latest-mac.yml
+            "gaia-agent-ui-${v}-arm64.zip" "gaia-agent-ui-${v}-arm64.zip.blockmap"
             "gaia-agent-ui-${v}-amd64.deb" "gaia-agent-ui-${v}-x86_64.AppImage" latest-linux.yml
           )
           missing=()
@@ -1145,6 +1151,18 @@ jobs:
             exit 1
           fi
           ls -l "${expected[@]/#/release-assets/}"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # The desktop app updates from these manifests, so every file one names
+      # must be attached as built, or that platform cannot update (#5682).
+      - name: Check the update manifests name only attached files
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pyyaml
+          python util/check_release_assets.py --dir release-assets
 
       - name: Create GitHub Release
         if: needs.validate.outputs.is_rc != 'true'
@@ -1294,7 +1312,59 @@ jobs:
           if [ "${IS_RC}" = "true" ] && [ "${WINDOWS_SETUP_OK}" != "true" ]; then
             args+=(--skip-windows-setup)
           fi
+          python3 -m pip install --quiet pyyaml
           python3 util/check_release_assets.py --repo "${GITHUB_REPOSITORY}" --tag "${TAG_NAME}" "${args[@]}"
+
+  # ── Published vs verified (#6611) ───────────────────────────────────
+  # Report only. Each asset on the release against the SHA-256 the release-train
+  # dry run recorded for this commit and tag. Rebuilt bytes differ today, so
+  # this measures how far the release is from shipping what was verified, and
+  # exercises the lookup promotion will rely on (docs/plans/release-promote.md).
+  # Nothing waits on it; once publish.yml promotes, it becomes a --strict gate.
+  verified-build-report:
+    name: Published vs verified build
+    needs: [validate, github-release, github-release-installers]
+    if: >-
+      !cancelled() &&
+      needs.github-release.result == 'success'
+    # Report only: a GitHub API hiccup here must not turn the Publish run red,
+    # which would hold back a final's release notes (claude.yml waits on success).
+    # Drop this when the report becomes the --strict gate.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read   # the dry run's manifest artifact
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - name: Find the dry run that verified this commit
+        id: locate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          python3 util/release_promote.py locate --repo "${GITHUB_REPOSITORY}" \
+            --sha "${GITHUB_SHA}" --tag "${TAG_NAME}" \
+            --out "${RUNNER_TEMP}/verified" --missing-ok | tee -a "$GITHUB_OUTPUT"
+
+      - name: Compare the release with it
+        if: steps.locate.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+          RUN_URL: ${{ steps.locate.outputs.run_url }}
+        run: |
+          set -euo pipefail
+          python3 util/release_promote.py compare --repo "${GITHUB_REPOSITORY}" \
+            --tag "${TAG_NAME}" --manifest "${RUNNER_TEMP}/verified/release-manifest.json" \
+            --run-url "${RUN_URL}" | tee -a "$GITHUB_STEP_SUMMARY"
 
   # The website builds its download links and release entries from the GitHub
   # releases at deploy time, so a new release only appears after a rebuild.
