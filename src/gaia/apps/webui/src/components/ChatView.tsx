@@ -5,7 +5,8 @@ import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties }
 import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Clock } from 'lucide-react';
 import { MessageBubble, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
-import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
+import { agentEventToStep } from '../utils/streamSteps';
+import { applyStatusEvent } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
 import { RecordingProgress } from './RecordingProgress';
@@ -1021,54 +1022,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         setLiveHistoryNotice(historyNotice ?? null);
                         return;
                     }
-                    if (event.phase === 'recording_found' && event.section != null) {
-                        useChatStore.getState().addRecordingSection({
-                            section: event.section,
-                            sections: event.sections ?? event.section,
-                            start: event.start ?? '',
-                            end: event.end ?? '',
-                            summary: event.summary ?? '',
-                            items: event.items ?? [],
-                        });
-                        return;
-                    }
-                    if (event.phase === 'recording' && event.stage != null) {
-                        useChatStore.getState().setRecordingStage(event.stage, {
-                            state: event.state ?? 0,
-                            percent: event.percent,
-                            etaSeconds: event.eta_seconds,
-                        });
-                        return;
-                    }
-                    if (event.phase && msg) useChatStore.getState().setLiveStatus(msg, event.phase);
-                    // The client's own wait notice is not a step of the turn.
-                    if (event.phase === 'waiting') return;
-                    if (isProgressTick(event)) return;
-                    // Skip "Executing <tool>" messages - redundant with tool_start
-                    if (msg.toLowerCase().startsWith('executing ')) return;
-                    if (status === 'working' || status === 'warning' || status === 'info') {
-                        const currentSteps = useChatStore.getState().agentSteps;
-                        const lastStep = currentSteps[currentSteps.length - 1];
-                        // Consolidate with previous status step (but NOT thinking —
-                        // overwriting a thinking step's detail would discard all
-                        // accumulated thinking text).
-                        if (lastStep && lastStep.type === 'status' && lastStep.active) {
-                            updateLastAgentStep({
-                                label: msg || 'Working',
-                                detail: msg,
-                            });
-                            return;
-                        }
-                        // If the last step is thinking, update only the label
-                        // so the summary bar shows the status, but preserve the
-                        // accumulated thinking detail.
-                        if (lastStep && lastStep.type === 'thinking' && lastStep.active) {
-                            updateLastAgentStep({ label: msg || 'Thinking' });
-                            return;
-                        }
-                        const step = agentEventToStep(event, stepIdRef);
-                        if (step) addAgentStep(step);
-                    }
+                    applyStatusEvent(event, stepIdRef);
                     return;
                 }
 
