@@ -20,6 +20,8 @@ from gaia.llm.providers.lemonade import (
     LemonadeUpstreamTimeoutError,
 )
 
+pytestmark = pytest.mark.failure_records
+
 KEY = "sk-local-lemonade-key-0123456789"
 EMBEDDED_KEY = "embedded-key-must-not-ship-42"
 LOCAL = "http://127.0.0.1:51002/api/v1"
