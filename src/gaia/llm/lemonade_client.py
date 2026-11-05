@@ -236,15 +236,12 @@ def configured_lemonade_url() -> Optional[str]:
     Values exported by GAIA's own credentials file (marked with
     ``GAIA_LEMONADE_EMBEDDED``) describe GAIA's server, whose port and key
     change on every restart, so they are not a choice: GAIA follows its
-    recorded state instead.
+    recorded state instead. Nor is a value the person chose GAIA's own over
+    in the app (``lemonade_env_url_ignored``).
     """
-    from gaia.llm.lemonade_choice import external_lemonade_url
+    from gaia.llm.lemonade_choice import _env_url, external_lemonade_url
 
-    if os.getenv("GAIA_LEMONADE_EMBEDDED", "").strip() != "1":
-        env_url = os.getenv("LEMONADE_BASE_URL", "").strip()
-        if env_url:
-            return env_url
-    return external_lemonade_url()
+    return _env_url() or external_lemonade_url()
 
 
 def resolve_lemonade_base_url(base_url: Optional[str] = None) -> str:
@@ -346,11 +343,14 @@ def resolve_lemonade_api_key(
     """
     if api_key is not None:
         return api_key
+    from gaia.llm.lemonade_choice import env_url_ignored, external_api_key
+
     env_value = os.getenv("LEMONADE_API_KEY")
     own_credentials = os.getenv("GAIA_LEMONADE_EMBEDDED", "").strip() == "1"
     if env_value is not None and env_value.strip() and not own_credentials:
-        return env_value.strip()
-    from gaia.llm.lemonade_choice import external_api_key
+        # The key goes with the env server; GAIA's own chosen over it never gets it.
+        if not env_url_ignored():
+            return env_value.strip()
 
     target = resolve_lemonade_base_url(base_url)
     return external_api_key(target) or _embedded_lemonade_api_key(base_url)

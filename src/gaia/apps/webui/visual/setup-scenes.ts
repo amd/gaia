@@ -187,7 +187,7 @@ const SERVER_FAILED = {
     error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
     problem: {
         kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-        start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true, switch_hint: null,
+        start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true,
     },
 };
 
