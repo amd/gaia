@@ -289,7 +289,7 @@ const chatHelpText = `  GAIA Chat
 
   Commands    /help /clear /full-access /slack /setup
               /memory /model /provider /gateway /agents
-              /models /gpu /read-aloud /voice
+              /models /gpu /read-aloud /voice /phone
   /cost       Session spend · /cost help for rates
   Ctrl+R      Dictate (/dictate) · /talk: voice mode
   /update     New GAIA release? · /update now

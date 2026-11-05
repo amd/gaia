@@ -48,6 +48,7 @@ var paletteCommands = []paletteCommand{
 	{"/voice", "Pick the read-aloud voice and speed, or read every reply"},
 	{"/dictate", "Speak into the composer; Ctrl+R does the same"},
 	{"/talk", "Voice mode: talk with GAIA and hear the answer"},
+	{"/phone", "Phone alerts: your number, the rules, and alerts so far"},
 	{"/agents", "List installed agents and switch this session to one"},
 	{"/update", "Check for a newer GAIA, install one (/update now, /update v0.25.0), or set auto-update"},
 }

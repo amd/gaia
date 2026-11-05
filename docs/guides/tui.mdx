@@ -706,6 +706,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
 | `/dictate` | Same as `Ctrl+R`: speak into the composer |
 | `/talk` | Voice mode: talk with GAIA and hear a short spoken answer — see [Talking to GAIA](#talking-to-gaia) |
+| `/phone` | Phone alerts: the provider, your phone book, the rules and the alerts so far — see [Phone alerts](#phone-alerts) |
 | `/update` | Check for a newer GAIA. `/update now` installs the newest, `/update v0.25.0` installs and pins that exact one, `/update back` returns to the version before the last update, `/update auto on` installs new releases when you quit (off by default), `/update rc on` offers release candidates too. See [Updating GAIA](/guides/install#updating-gaia) |
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
@@ -785,6 +786,22 @@ The first time, voice mode asks to download the speech models it needs
 replies, and says so if yours is older. The voice and speed are `/voice`'s;
 the other settings are the `voice_*` keys in [Configuration](/reference/cli#configuration),
 shared with the Agent UI.
+
+### Phone alerts
+
+`/phone` sets up [phone alerts](/guides/phone-alerts), the texts and calls GAIA
+makes when something urgent needs you. It has four sections; `Tab` (or `1`–`4`,
+or a click) moves between them and `Esc` returns to the chat.
+
+| Section | What you do there |
+|---|---|
+| Setup | Turn phone alerts on or off, use the Simulated phone or enter your Twilio keys (the Auth Token never shows on screen), and send a test alert. With the Simulated phone, the calls and texts it would have made are listed here |
+| Phone book | `a` adds a number: GAIA sends it a 6-digit code, and a second code to your first number when there is one. `x` removes a number, after a code sent to it |
+| Rules | Each alert's on/off (`Enter`), steps (`s`: notify, text, call), urgent (`u`), and how long an approval may wait (`+`/`-`). Also quiet hours, texts, keeping the PC awake and the daily limits |
+| Alerts | Every alert with what it sent and why one is held. `Enter` marks it handled, which stops the texts and calls left |
+
+While an alert is open, a line under the chat's header says so, such as
+`⚠ Scheduled job failed · /phone`. It goes away once the alert is handled.
 
 ### When the agent asks first
 

@@ -196,6 +196,7 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 		"/copy all":    "/copy all",
 		"/dictate":     "/dictate",
 		"/talk":        "/talk",
+		"/phone":       "/phone",
 	}
 	for _, cmd := range chatModelCommands(t) {
 		if strings.HasPrefix(cmd, "/bypass") {

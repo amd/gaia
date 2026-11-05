@@ -21,10 +21,12 @@ import (
 	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/phone"
 	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/components"
 
 	"github.com/amd/gaia/tui/internal/ui/modelsetup"
+	"github.com/amd/gaia/tui/internal/ui/phonepanel"
 	"github.com/amd/gaia/tui/internal/ui/providers"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 	"github.com/amd/gaia/tui/internal/voice"
@@ -199,6 +201,12 @@ type ChatModel struct {
 	dictation *dictationState
 	voice     *voiceMode
 	voiceSeq  int
+	// phonePanel is /phone; phoneBanner is the one-line open-alert notice,
+	// and phoneBannerOff stops its poll for a daemon without phone alerts.
+	phonePanel     *phonepanel.Model
+	phoneBanner    string
+	phoneBannerOff bool
+	phoneBannerAPI *phone.Client
 	// nextReplyStyle is the reply style the next startTurn asks for, once.
 	nextReplyStyle string
 	messages       []Message
@@ -704,6 +712,10 @@ func (m ChatModel) Init() tea.Cmd {
 		// memory share to change, so only there does the palette offer it.
 		cmds = append(cmds, probeGPUCmd())
 	}
+	if m.agentID == setupAgentID {
+		// Open phone alerts show as a one-line banner; quiet when there are none.
+		cmds = append(cmds, phoneBannerPoll(0))
+	}
 	if m.agentID == setupAgentID && m.initialQuery == "" {
 		// The one-time Slack offer. Gated on an empty initial query so a user
 		// who launched with a question gets their answer, not an ad; and run
@@ -930,6 +942,9 @@ func queuedSendWatchdogAfter(turnSeq int, d time.Duration) tea.Cmd {
 }
 
 func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if next, cmd, handled := m.routePhoneMsg(msg); handled {
+		return next, cmd
+	}
 	if next, cmd, handled := m.routeVoiceMsg(msg); handled {
 		return next, cmd
 	}
@@ -1962,6 +1977,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	case "/talk":
 		return m.openVoiceMode()
 
+	case "/phone":
+		return m.openPhonePanel()
+
 	case "/clear":
 		return m.clearConversation()
 
@@ -2537,6 +2555,9 @@ func (m ChatModel) chatChromeRows() int {
 	rows := headerH + dividersH + statusH + m.composerRows()
 	if banner := m.renderFullAccessBanner(); banner != "" {
 		rows += lipgloss.Height(banner)
+	}
+	if m.renderPhoneBanner() != "" {
+		rows++
 	}
 	return rows
 }
@@ -3773,6 +3794,9 @@ func (m ChatModel) contentHeaderRows() int {
 	if m.renderFullAccessBanner() != "" {
 		n++
 	}
+	if m.renderPhoneBanner() != "" {
+		n++
+	}
 	n++ // divider immediately above the viewport
 	return n
 }
@@ -3792,6 +3816,9 @@ func (m ChatModel) View() string {
 	}
 	if m.voice != nil {
 		return m.help.Render(m.voiceView(), m.width, m.height)
+	}
+	if m.phonePanel != nil {
+		return m.help.Render(m.phonePanel.View(), m.width, m.height)
 	}
 
 	header := m.renderHeader()
@@ -3853,6 +3880,9 @@ func (m ChatModel) View() string {
 	// it renders to "" and JoinVertical drops it, costing no row.
 	rows := []string{header}
 	if banner := m.renderFullAccessBanner(); banner != "" {
+		rows = append(rows, banner)
+	}
+	if banner := m.renderPhoneBanner(); banner != "" {
 		rows = append(rows, banner)
 	}
 	rows = append(rows, divider, vpView)
