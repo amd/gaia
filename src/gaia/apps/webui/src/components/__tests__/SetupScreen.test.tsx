@@ -873,7 +873,7 @@ describe('SetupScreen: downloading', () => {
         const stopped = runStatus([
             progress({ id: EMBED.id, roles: ['embedding'], state: 'ready', bytes_done: 0.3e9, bytes_total: 0.3e9 }),
             progress({ id: QWEN.id, state: 'ready', bytes_done: 23.3e9, bytes_total: 23.3e9 }),
-        ], { state: 'failed', error, components: { server: 'done', backend: 'done', agent: 'failed' } });
+        ], { state: 'failed', error, components: { server: 'done', backend: 'done', agent: 'failed' }, component_kinds: { agent: 'transient' } });
         mockedApi.getSetupPlan.mockResolvedValue({ ...COLD_BIG(), components: COMPONENTS });
         mockedApi.startSetup.mockResolvedValue(stopped);
         await startLocal();

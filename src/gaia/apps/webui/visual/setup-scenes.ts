@@ -142,6 +142,7 @@ const RUN_ROW_FAILED = {
 const RUN_AGENT_COMPONENT_FAILED = {
     ...RUN, state: 'failed',
     components: { server: 'done', backend: 'done', agent: 'failed' },
+    component_kinds: { agent: 'transient' },
     error: "`gaia init --profile gaia` failed (exit 1): GAIA 0.25.4rc11 is release candidate v0.25.4-rc11, which installs the GAIA agent built from its own commit. Could not read https://github.com/amd/gaia/releases/download/v0.25.4-rc11/gaia-agent-release.json (tried 3 times): HTTPSConnectionPool(host='github.com', port=443): Read timed out. (read timeout=30)",
     models: [row(EMBED_ID, ['embedding'], 'ready', 330e6, 330e6), row(GEMMA_ID, ['chat', 'vision'], 'ready', 5.97e9, 5.97e9)],
     overall: { bytes_done: 6.3e9, bytes_total: 6.3e9, speed_bps: 0, eta_s: null, percent: 100, failed: 0 },

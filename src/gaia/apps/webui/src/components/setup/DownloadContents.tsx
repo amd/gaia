@@ -8,8 +8,6 @@ import { formatSize } from './format';
 
 type RunState = 'active' | 'done' | 'failed' | undefined;
 
-const NETWORK_RE = /timed out|timeout|connection|resolve|unreachable|ssl|network/i;
-
 function stateText(c: SetupComponent, state: RunState, t: Translate): string {
     if (state === 'active') return t('setup.contents.working');
     if (state === 'done') return t('setup.contents.ready');
@@ -40,12 +38,12 @@ interface Props {
 }
 
 /** Why a piece failed, in a plain sentence, the run's own words behind Details. */
-function FailedReason({ id, error, onRetry, disabled }: { id: SetupComponent['id']; error: string | null | undefined; onRetry?: () => void; disabled?: boolean }) {
+function FailedReason({ id, error, transient, onRetry, disabled }: { id: SetupComponent['id']; error: string | null | undefined; transient: boolean; onRetry?: () => void; disabled?: boolean }) {
     const t = useT();
     const name = t(`setup.component.${id}`);
     return (
         <div className="setup-content-failure" role="alert">
-            <p>{t(error && NETWORK_RE.test(error) ? 'setup.contents.failedNetwork' : 'setup.contents.failedOther', { name })}</p>
+            <p>{t(transient ? 'setup.contents.failedNetwork' : 'setup.contents.failedOther', { name })}</p>
             {error && (
                 <details className="dl-details">
                     <summary>{t('setup.progress.details')}</summary>
@@ -83,7 +81,7 @@ export function DownloadContents({ plan, run, models = [], onRetry, retryDisable
                             <bdi dir="ltr">{sizeText(c.size_gb, t)}</bdi>
                             <span>{stateText(c, state, t)}</span>
                         </span>
-                        {state === 'failed' && ended && !run?.problem && <FailedReason id={c.id} error={run?.error} onRetry={onRetry} disabled={retryDisabled} />}
+                        {state === 'failed' && ended && !run?.problem && <FailedReason id={c.id} error={run?.error} transient={run?.component_kinds?.[c.id] === 'transient'} onRetry={onRetry} disabled={retryDisabled} />}
                     </li>
                 );
             })}

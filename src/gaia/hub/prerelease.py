@@ -21,7 +21,10 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
+from gaia.logger import get_logger
 from gaia.version import __version__ as CORE_VERSION
+
+logger = get_logger(__name__)
 
 FLAGSHIP_AGENT_ID = "gaia"
 RELEASES_DOWNLOAD_URL = "https://github.com/amd/gaia/releases/download"
@@ -145,6 +148,21 @@ def _is_transient(exc: BaseException) -> bool:
     return isinstance(exc, (requests.ConnectionError, requests.Timeout))
 
 
+def is_transient_failure(exc: BaseException) -> bool:
+    """Whether *exc*, or an exception it was raised from, may pass on a retry.
+
+    A 404 on an incomplete pre-release is not: setup run again gets the same 404.
+    """
+    seen = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        if _is_transient(current):
+            return True
+        seen.add(id(current))
+        current = current.__cause__
+    return False
+
+
 def _fetch_with_retry(
     fetcher: Callable[[str], bytes], url: str, attempts: int, backoff_seconds: float
 ) -> bytes:
@@ -154,7 +172,16 @@ def _fetch_with_retry(
         except Exception as exc:  # re-raised unless transient with tries left
             if attempt == attempts or not _is_transient(exc):
                 raise
-            time.sleep(backoff_seconds * 2 ** (attempt - 1))
+            wait = backoff_seconds * 2 ** (attempt - 1)
+            logger.warning(
+                "Reading %s failed (attempt %d of %d): %s; retrying in %.0f s",
+                url,
+                attempt,
+                attempts,
+                exc,
+                wait,
+            )
+            time.sleep(wait)
     raise AssertionError("unreachable")
 
 

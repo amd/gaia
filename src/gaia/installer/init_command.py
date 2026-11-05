@@ -1224,6 +1224,13 @@ class _DownloadProgress:
             )
 
 
+def _failure_kind(exc: BaseException) -> str:
+    """``transient`` when running setup again may get past *exc*, else ``other``."""
+    from gaia.hub import prerelease
+
+    return "transient" if prerelease.is_transient_failure(exc) else "other"
+
+
 class InitEvents:
     """``gaia init --progress-json``: one JSON object per stdout line.
 
@@ -1496,6 +1503,8 @@ class InitCommand:
         self._runtime_failed = False
         # Why the agent could not be checked or installed, for refresh_agent().
         self._agent_problem: Optional[str] = None
+        # "transient" when running setup again may fix _agent_problem, else "other".
+        self._agent_problem_kind = "other"
         # The working agent stayed because the hub couldn't be asked about it.
         self._agent_kept = False
 
@@ -1839,8 +1848,17 @@ class InitCommand:
                     f"Checking {profile_config['agent']} agent installation...",
                 )
                 self._component("agent", "active")
-                self._ensure_hub_agent_installed()
-                self._component("agent", self._agent_component_state())
+                try:
+                    self._ensure_hub_agent_installed()
+                except Exception as exc:  # re-raised; the row first learns its kind
+                    self._component("agent", "failed", kind=_failure_kind(exc))
+                    raise
+                agent_state = self._agent_component_state()
+                self._component(
+                    "agent",
+                    agent_state,
+                    kind=self._agent_problem_kind if agent_state == "failed" else None,
+                )
 
             # Build Agent UI frontend (dev/source installs only). No
             # try/except here: ensure_webui_built() never raises for an
@@ -2423,9 +2441,18 @@ class InitCommand:
         )
         return True
 
-    def _component(self, component: str, state: str) -> None:
-        """Report one piece setup fetches: ``active``, ``done`` or ``failed``."""
-        self.events.emit("component", component=component, state=state)
+    def _component(
+        self, component: str, state: str, kind: Optional[str] = None
+    ) -> None:
+        """Report one piece setup fetches: ``active``, ``done`` or ``failed``.
+
+        A failed piece may carry *kind*: ``transient`` when running setup again
+        may fix it, ``other`` when it can't.
+        """
+        if kind is None:
+            self.events.emit("component", component=component, state=state)
+        else:
+            self.events.emit("component", component=component, state=state, kind=kind)
 
     def _ensure_llamacpp_backend(self) -> bool:
         """Fetch the llama.cpp backend now, not unannounced inside the first load.
@@ -3729,6 +3756,7 @@ class InitCommand:
         except Exception as exc:  # noqa: BLE001 - reported below, never swallowed
             log.debug("Agent Hub catalog fetch failed", exc_info=True)
             self._agent_problem = f"Could not reach {hub_url}: {exc}"
+            self._agent_problem_kind = _failure_kind(exc)
             self._print_error(
                 hub_unreachable_message(
                     agent_id, hub_url, exc, retry=self._flagship_install_command()
