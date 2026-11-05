@@ -8,6 +8,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
+### Added
+
+- **Voice turns (contract 2.28).** `/query` takes `reply_style: "voice"` for a
+  turn that will be spoken aloud. The agent then writes a short status line
+  before each tool call and opens its answer with a `<spoken>…</spoken>`
+  summary of at most 40 words, so dictation and voice mode in the Agent UI and
+  the TUI can speak the outcome and show the detail. Typed turns are
+  unchanged, including their cached prompt.
+
 ### Changed
 
 - **"Every section that mentions X" no longer reads the whole document.**
