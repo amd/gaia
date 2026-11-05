@@ -81,6 +81,29 @@ export function pathAccessTitle(args: unknown, followUp = false, t: Translate = 
   return t(`prompt.path.${followUp ? 'titleAlso' : 'title'}.${noun}`);
 }
 
+/**
+ * A permission prompt's heading and question, worded from the call in the UI
+ * language rather than from its stored English title and message.
+ */
+export function permissionPromptText(
+  n: GaiaNotification,
+  t: Translate = tEn,
+  mark: (text: string) => string = (s) => s,
+): { heading: string; question: string } {
+  const args = n.toolArgs ?? {};
+  if (n.tool === PATH_ACCESS_TOOL) {
+    return {
+      heading: pathAccessTitle(args, n.pathFollowUp, t),
+      question: pathAccessQuestion(args, n.pathFollowUp, t, mark),
+    };
+  }
+  const tool = mark(n.toolLabel ?? n.tool ?? '');
+  return {
+    heading: t(n.toolLabel ? 'prompt.title.tool' : 'prompt.title.toolId', { tool }),
+    question: t('prompt.needsOk', { tool }),
+  };
+}
+
 /** `C:\A\b.txt` and `c:/a/b.txt/` compare equal. Picks card wording only; too loose for an access check. */
 function normalizePath(p: string): string {
   return p.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
