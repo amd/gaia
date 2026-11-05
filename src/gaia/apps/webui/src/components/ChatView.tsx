@@ -5,7 +5,8 @@ import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties }
 import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Clock } from 'lucide-react';
 import { MessageBubble, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
-import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
+import { agentEventToStep } from '../utils/streamSteps';
+import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
 import { ensureModel, modelKnownReady } from '../stores/modelNeededStore';
@@ -58,8 +59,6 @@ import { getT, useT } from '../i18n/useT';
 /** Events that only come after the agent got past a permission prompt. */
 const RESOLVES_PROMPTS = new Set(['tool_start', 'tool_end', 'tool_result']);
 const RECONNECTING_PREFIX = 'Connection lost. Reconnecting';
-// Live phases that are the call's own label or the client's wait notice, not the call's progress.
-const CALL_LABEL_PHASES = new Set(['tool', 'waiting']);
 
 /** How long Stop waits for the server's closing `done` before the client closes the turn itself. */
 export const STOP_GRACE_MS = 15_000;
@@ -110,8 +109,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const setNotificationTypeFilter = useNotificationStore((s) => s.setTypeFilter);
     const pendingPrompt = useChatStore((s) => (s.pendingPrompt?.sessionId === sessionId ? s.pendingPrompt : null));
     const liveStatus = useChatStore((s) => s.liveStatus);
-    // A phase sent while a call runs comes from that call's own model calls, not the turn's.
-    const toolStatus = useChatStore((s) => (s.livePhase && !CALL_LABEL_PHASES.has(s.livePhase) ? s.liveStatus : null));
+    const toolStatus = useChatStore(selectToolStatus);
     const awaitingUser = useChatStore((s) => s.awaitingUser);
     // Other events can arrive while a question waits; it still waits on the user.
     const hasLiveQuestion = useChatStore((s) => Object.values(s.liveQuestions).some((q) => q.sessionId === sessionId));
@@ -1012,46 +1010,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
-                // ── Consolidate status events ────────────────────────────
-                // Working/info status messages are progress indicators.
-                // Consolidate consecutive ones into a single entry.
                 if (event.type === 'status') {
-                    const status = event.status;
-                    const msg = (event.message || '').trim();
-                    if (status === 'history_cut') {
-                        historyNotice = msg || undefined;
+                    if (event.status === 'history_cut') {
+                        historyNotice = (event.message || '').trim() || undefined;
                         setLiveHistoryNotice(historyNotice ?? null);
                         return;
                     }
-                    if (event.phase && msg) useChatStore.getState().setLiveStatus(msg, event.phase);
-                    // The client's own wait notice is not a step of the turn.
-                    if (event.phase === 'waiting') return;
-                    if (isProgressTick(event)) return;
-                    // Skip "Executing <tool>" messages - redundant with tool_start
-                    if (msg.toLowerCase().startsWith('executing ')) return;
-                    if (status === 'working' || status === 'warning' || status === 'info') {
-                        const currentSteps = useChatStore.getState().agentSteps;
-                        const lastStep = currentSteps[currentSteps.length - 1];
-                        // Consolidate with previous status step (but NOT thinking —
-                        // overwriting a thinking step's detail would discard all
-                        // accumulated thinking text).
-                        if (lastStep && lastStep.type === 'status' && lastStep.active) {
-                            updateLastAgentStep({
-                                label: msg || 'Working',
-                                detail: msg,
-                            });
-                            return;
-                        }
-                        // If the last step is thinking, update only the label
-                        // so the summary bar shows the status, but preserve the
-                        // accumulated thinking detail.
-                        if (lastStep && lastStep.type === 'thinking' && lastStep.active) {
-                            updateLastAgentStep({ label: msg || 'Thinking' });
-                            return;
-                        }
-                        const step = agentEventToStep(event, stepIdRef);
-                        if (step) addAgentStep(step);
-                    }
+                    applyStatusEvent(event, stepIdRef);
                     return;
                 }
 
