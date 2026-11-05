@@ -1004,6 +1004,10 @@ class LemonadeProvider(LLMClient):
         """Whether this client is aimed at GAIA's own server (see ``LemonadeClient``)."""
         return self._backend.follows_gaia_lemonade
 
+    def gaia_lemonade_stopped(self) -> bool:
+        """Whether GAIA's own server stopped answering (see ``LemonadeClient``)."""
+        return self._backend.gaia_lemonade_stopped()
+
     def wait_for_gaia_lemonade(
         self,
         model: Optional[str] = None,

@@ -274,6 +274,8 @@ def _dispatch_one(
         for key in ("phase", "words", "chars", "queue"):
             if key in event:
                 status[key] = event[key]
+        if event.get("retracts_answer"):
+            status["retracts_answer"] = True
         handler._emit(status)
 
     elif etype == "token":

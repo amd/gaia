@@ -10,6 +10,14 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
 ### Changed
 
+- **A reply cut off by a model-server restart is taken back, not swapped.**
+  When GAIA's model server stopped part-way through a reply, the stream sat
+  on the half-written text for minutes, then a different reply silently
+  replaced it. A `status` with phase `answer_restart` and
+  `retracts_answer: true` now tells the client to drop the cut-off text, phase
+  `model_restart` is the live line while the daemon restarts the server, and
+  a server that does not come back ends the turn with
+  `failure: "model_server_down"`.
 - **A stopped local model server fails the turn at once and is named.** A cloud
   model's turn used to retry for about three minutes and then blame the cloud
   provider, though the provider was never reached. A refused connection to the

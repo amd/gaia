@@ -676,8 +676,9 @@ class SSEOutputHandler(OutputHandler):
             self._text_since_tool = ""
         elif etype == "answer":
             self._text_since_tool = ""
-        elif etype == "thinking" and event.get("retracts_answer"):
-            # The text shown since the last tool was reasoning, not commentary.
+        elif etype in ("thinking", "status") and event.get("retracts_answer"):
+            # The text shown since the last tool was reasoning, or a reply that
+            # was cut off; either way it is not commentary.
             self._text_since_tool = ""
             self._shown_fence, self._shown_line_start = None, True
         self.event_queue.put(event)
@@ -1093,6 +1094,18 @@ class SSEOutputHandler(OutputHandler):
 
     def report_progress(self, message: str):
         self._emit({"type": "status", "status": "working", "message": message})
+
+    def restart_answer(self, message: str) -> None:
+        self.delivered_answer = ""
+        self._emit(
+            {
+                "type": "status",
+                "status": "warning",
+                "phase": "answer_restart",
+                "message": message,
+                "retracts_answer": True,
+            }
+        )
 
     def report_phase(self, phase: str, message: str, **counts: int):
         self._emit(

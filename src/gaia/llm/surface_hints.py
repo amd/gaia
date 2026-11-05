@@ -59,6 +59,15 @@ SERVICE_PROVIDER_SETTINGS = (
     "on the model server this GAIA host uses (LEMONADE_BASE_URL)"
 )
 
+#: What to do when GAIA's own model server stopped and did not come back. The
+#: next request asks the daemon to start it again, on every front-end.
+TUI_SERVER_RESTART_HINT = (
+    "Send your message again and GAIA will try to start the model server once more."
+)
+AGENT_UI_SERVER_RESTART_HINT = (
+    "Press Start the model server below, then send your message again."
+)
+
 #: How a user repairs GAIA's install (a missing or broken Lemonade Server).
 TUI_SETUP_HINT = "Run /setup in the TUI to repair GAIA's setup, then try again."
 AGENT_UI_SETUP_HINT = "Open Settings > Setup and press Run setup again, then try again."
@@ -101,6 +110,7 @@ CLI_WEDGED_SERVER_HINT = (
 
 _SWAPS = {
     "agent_ui": (
+        (TUI_SERVER_RESTART_HINT, AGENT_UI_SERVER_RESTART_HINT),
         (TUI_MODEL_SWITCH_HINT, AGENT_UI_MODEL_SWITCH_HINT),
         (TUI_PROVIDER_AUTH_HINT, AGENT_UI_PROVIDER_AUTH_HINT),
         (TUI_PROVIDER_SETTINGS, AGENT_UI_PROVIDER_SETTINGS),

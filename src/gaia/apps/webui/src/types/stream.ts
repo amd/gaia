@@ -71,7 +71,8 @@ export interface StreamEvent {
     start?: string;
     end?: string;
     items?: FoundItem[];
-    /** On `thinking`: the answer text streamed since the last tool was this reasoning; drop it. */
+    /** Drop the answer text streamed since the last tool. On `thinking`: it was this reasoning.
+     *  On `status`: the reply was cut off (the model server stopped) and starts over. */
     retracts_answer?: boolean;
     step?: number;
     total?: number;
