@@ -2812,6 +2812,34 @@ def _pin_windows_tools(shell_text: str, segments: list) -> str:
     return "|".join(pinned)
 
 
+#: Where the cmd.exe launcher below hands the command to its inner cmd.exe.
+_CMD_TEXT_ENV = "GAIA_SHELL_COMMAND"
+
+#: subprocess.CREATE_NO_WINDOW, which only exists on Windows builds of Python.
+_CREATE_NO_WINDOW = 0x08000000
+
+
+def _cmd_exe_launch(text: str, env: Dict[str, str]) -> Tuple[str, Dict[str, Any]]:
+    """The command line and Popen kwargs that run *text* through cmd.exe in UTF-8.
+
+    cmd.exe writes its built-ins' output in the console code page, so ``dir``
+    turns every non-ASCII file name into ``?`` before any byte reaches us.
+    ``chcp`` only takes effect for a cmd.exe started after it, so an inner one
+    runs *text*; it reads *text* through delayed expansion, which the outer
+    cmd.exe performs after parsing, so it never acts on the operators in it.
+    The child gets its own hidden console so ``chcp`` cannot change the user's.
+    """
+    comspec = os.environ.get("COMSPEC", "cmd.exe")
+    command_line = (
+        f'"{comspec}" /v:on /c "chcp 65001>nul && "{comspec}" /c !{_CMD_TEXT_ENV}!"'
+    )
+    return command_line, {
+        # Quoted the way shell=True quotes it, so cmd.exe strips the same quotes.
+        "env": {**env, _CMD_TEXT_ENV: f'"{text}"'},
+        "creationflags": _CREATE_NO_WINDOW,
+    }
+
+
 def _run_step(
     step: _Step,
     cwd: str,
@@ -2913,8 +2941,16 @@ def _run_step(
     # re-enters communicate() with NO timeout, so a surviving grandchild holding
     # the pipes hangs the call for as long as it lives. terminate_process_tree
     # below kills the whole tree first, so the deadline means what it says.
+    popen_args: Any = exec_cmd
+    launch: Dict[str, Any] = {
+        "env": _segment_env(step.envs[0] if step.envs else {}),
+        "shell": use_shell,
+    }
+    if use_shell and os.name == "nt":
+        popen_args, cmd_launch = _cmd_exe_launch(exec_cmd, launch["env"])
+        launch.update(cmd_launch, shell=False)
     process = subprocess.Popen(  # pylint: disable=consider-using-with
-        exec_cmd,
+        popen_args,
         cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=_captured_stderr(mode, subprocess.PIPE),
@@ -2938,12 +2974,11 @@ def _run_step(
         stdin=subprocess.DEVNULL,
         encoding="utf-8",
         errors="replace",
-        env=_segment_env(step.envs[0] if step.envs else {}),
         # POSIX: its own session, so the kill reaches every descendant — and
         # never the agent's own process group. Windows gets that reach from
         # taskkill /T instead.
         start_new_session=os.name != "nt",
-        shell=use_shell,  # nosec B602 - Windows-only; command whitelist-validated above, shell needed for cmd.exe built-ins/pipes
+        **launch,  # nosec B602 - shell only for a whitelist-validated step, which needs cmd.exe built-ins/pipes
     )
     try:
         stdout, stderr, cancelled = (waiter or _wait_plain)(process, timeout)
@@ -4717,17 +4752,21 @@ class ShellToolsMixin:
                 "cwd": cwd,
             }
         start_time = time.monotonic()
+        popen_args: Any = command
+        launch: Dict[str, Any] = {"env": _segment_env({}), "shell": True}
+        if os.name == "nt":
+            popen_args, cmd_launch = _cmd_exe_launch(command, launch["env"])
+            launch.update(cmd_launch, shell=False)
         process = subprocess.Popen(  # pylint: disable=consider-using-with
-            command,
+            popen_args,
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
             encoding="utf-8",
             errors="replace",
-            env=_segment_env({}),
             start_new_session=os.name != "nt",
-            shell=True,  # nosec B602 - the user approved this exact string
+            **launch,  # nosec B602 - the user approved this exact string
         )
         self._record_command_execution()
         try:
