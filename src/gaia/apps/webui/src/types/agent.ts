@@ -69,8 +69,15 @@ export interface TraySettings {
   startOnLogin: boolean;
 }
 
+/** Whether this desktop shows tray icons (stock GNOME doesn't); checked once at startup. */
+export interface TrayHost {
+  available: boolean;
+  reason: null | 'checking' | 'no-host' | 'check-failed';
+}
+
 export interface TrayConfig {
   tray: TraySettings;
+  host: TrayHost;
 }
 
 export interface TrayChatRef {

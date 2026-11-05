@@ -1723,6 +1723,8 @@ const messages: Messages = {
     'settings.desktop.startMinimized': 'البدء في {tray}',
     'settings.desktop.startMinimizedHint': 'يفتح GAIA دون نافذته. استخدم أيقونته في {tray} لإظهاره.',
     'settings.desktop.readFailed': 'تعذّرت قراءة إعدادات سطح المكتب: {reason}',
+    'settings.desktop.noTray': 'لا يعرض سطح المكتب لديك أيقونات علبة النظام، لذا يؤدي إغلاق النافذة إلى إنهاء GAIA. في GNOME، فعّل إضافة AppIndicator ثم أعد تشغيل GAIA.',
+    'settings.desktop.noTrayCheckFailed': 'تعذّر على GAIA التحقق مما إذا كان سطح المكتب لديك يعرض أيقونات علبة النظام، لذا يؤدي إغلاق النافذة إلى إنهاء GAIA.',
     'settings.server.readFailed': 'تعذّرت معرفة خادم النماذج الذي يستخدمه GAIA',
     'settings.server.usesEnv': 'يستخدم GAIA خادم Lemonade في {url}، المحدد عبر LEMONADE_BASE_URL.',
     'settings.server.usesYours': 'يستخدم GAIA خادم Lemonade الخاص بك في {url}.',

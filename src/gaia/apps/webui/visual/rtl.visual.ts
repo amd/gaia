@@ -871,6 +871,22 @@ for (const locale of ['ar', 'en']) {
         });
     }
 
+    test(`desktop app on a desktop with no tray (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await withDesktopBridges(p, {}, { available: false, reason: 'no-host' });
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const desktop = page.locator('.settings-disclosure', { hasText: /Desktop app|تطبيق سطح المكتب/ });
+        await expect(desktop).toBeVisible();
+        await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+        await desktop.scrollIntoViewIfNeeded();
+        await expect(desktop.locator('#desktop-minimizeToTray-hint')).toContainText('AppIndicator');
+        await shot(page, `desktop-${locale}-no-tray`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
     test(`notifications on the desktop app (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withDesktopBridges(p); });
         await page.getByRole('button', { name: /Settings/ }).first().click();
