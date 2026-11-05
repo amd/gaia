@@ -21,7 +21,6 @@ import { translate, type MessageKey, type Params } from '../src/i18n/registry';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..', '..', '..', '..');
 const FAKE_SERVER = join(REPO, 'installer', 'headless', 'fake_model_server.py');
-const REAP = join(HERE, 'reap_journey.py');
 const PYTHON = process.env.GAIA_E2E_PYTHON || 'python';
 const UI_DIST = process.env.GAIA_E2E_UI_DIST || resolve(HERE, '..', 'dist');
 const SCREENS = process.env.GAIA_E2E_SCREENS || join(HERE, 'test-results', 'screens');
@@ -112,15 +111,41 @@ class Service {
 
     async stop(): Promise<void> {
         const pid = this.child.pid;
-        if (!this.exited && pid) {
-            // A setup run's `gaia init` must go too, or it outlives the test.
-            if (process.platform === 'win32') spawnSync('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore' });
-            else process.kill(-pid, 'SIGKILL');
+        // A setup run's `gaia init` must go too, or it outlives the test.
+        if (pid && process.platform !== 'win32') {
+            // The group, even when its leader already exited: what it started may not have.
+            try {
+                process.kill(-pid, 'SIGKILL');
+            } catch (e) {
+                if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e;
+            }
+        } else if (pid && !this.exited) {
+            spawnSync('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore' });
+        }
+        if (pid) {
             const deadline = Date.now() + 10_000;
             while (!this.exited && Date.now() < deadline) await sleep(50);
             if (!this.exited) throw new Error(`${this.name} (pid ${pid}) survived being killed`);
         }
         await new Promise<void>((done) => this.log.end(done));
+    }
+}
+
+function alive(pid: number): boolean {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (e) {
+        return (e as NodeJS.ErrnoException).code === 'EPERM';
+    }
+}
+
+function readJson(path: string): unknown {
+    if (!existsSync(path)) return null;
+    try {
+        return JSON.parse(readFileSync(path, 'utf-8'));
+    } catch (e) {
+        throw new Error(`${path} is not readable JSON: ${(e as Error).message}`);
     }
 }
 
@@ -253,16 +278,76 @@ export class Journey {
         return [join(this.logs, 'backend.log'), join(this.logs, 'fake.log')].map((p) => `--- ${p}\n${tail(p, 80)}`).join('\n');
     }
 
+    /** Stop everything this journey started; throws, naming the pid, for any that outlives it. */
     async stop(): Promise<void> {
         await this.backend?.stop();
         await this.fake?.stop();
         await Promise.all(this.listeners.map((s) => new Promise((done) => s.close(done))));
-        // The daemon and its sidecars start in their own session, so the backend's kill misses them.
-        const reap = spawnSync(PYTHON, [REAP, this.root], { encoding: 'utf-8', timeout: 60_000, windowsHide: true });
-        if (reap.status !== 0) throw new Error(`GAIA processes outlived the journey:\n${reap.error ?? ''}${reap.stdout}${reap.stderr}`);
-        if (reap.stdout.trim()) console.log(reap.stdout.trim());
-        rmSync(this.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+        await this.stopDaemon();
     }
+
+    /**
+     * Delete the journey's folder once {@link stop} has run. Returns why it could
+     * not, rather than throwing: a leftover temp folder is not a failed journey.
+     */
+    remove(): string | null {
+        try {
+            rmSync(this.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+            return null;
+        } catch (e) {
+            return `could not delete ${this.root}: ${(e as Error).message}`;
+        }
+    }
+
+    /**
+     * The daemon and its sidecars. The backend or `gaia init` starts the daemon in
+     * its own session, so stopping their process trees does not reach it.
+     */
+    private daemonPids(): number[] {
+        const host = join(this.home, '.gaia', 'host');
+        const pids: number[] = [];
+        const instance = readJson(join(host, 'instance.json')) as { pid?: unknown } | null;
+        if (typeof instance?.pid === 'number') pids.push(instance.pid);
+        const sidecars = readJson(join(host, 'sidecars.json'));
+        if (Array.isArray(sidecars)) {
+            for (const entry of sidecars as Array<{ pid?: unknown }>) if (typeof entry?.pid === 'number') pids.push(entry.pid);
+        }
+        return pids.filter(alive);
+    }
+
+    /** `gaia daemon stop`, as a user would, then wait for each of its processes to exit. */
+    private async stopDaemon(): Promise<void> {
+        const pids = this.daemonPids();
+        if (pids.length === 0) return;
+        const run = spawnSync(PYTHON, ['-m', 'gaia.cli', 'daemon', 'stop'], {
+            env: this.env(), cwd: this.root, encoding: 'utf-8', timeout: 90_000, windowsHide: true,
+        });
+        let left = pids;
+        const deadline = Date.now() + 15_000;
+        while (left.length > 0 && Date.now() < deadline) {
+            await sleep(200);
+            left = left.filter(alive);
+        }
+        // A pid the OS reused for something else since is not ours.
+        const leaked = left.map((pid) => ({ pid, cmd: commandLine(pid) })).filter((p) => /gaia/i.test(p.cmd));
+        if (leaked.length > 0) {
+            throw new Error(
+                `still running after \`gaia daemon stop\` (exit ${run.status}): ` +
+                    leaked.map((p) => `pid ${p.pid} ${p.cmd}`).join('; ') +
+                    `\n${run.error ?? ''}${run.stdout}${run.stderr}\n--- ${join(this.home, '.gaia', 'host', 'daemon.log')}\n` +
+                    tail(join(this.home, '.gaia', 'host', 'daemon.log')),
+            );
+        }
+    }
+}
+
+/** The command line of *pid*, or '' once it has exited. */
+function commandLine(pid: number): string {
+    const run =
+        process.platform === 'win32'
+            ? spawnSync('powershell', ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], { encoding: 'utf-8', windowsHide: true })
+            : spawnSync('ps', ['-o', 'args=', '-p', String(pid)], { encoding: 'utf-8' });
+    return (run.stdout ?? '').trim();
 }
 
 interface Fixtures {
@@ -286,6 +371,11 @@ export const test = base.extend<Fixtures & JourneyOptions>({
         await use(journey);
         if (info.status !== info.expectedStatus) await info.attach('services', { body: journey.describe(), contentType: 'text/plain' });
         await journey.stop();
+        const leftover = journey.remove();
+        if (leftover) {
+            console.warn(`[journey] ${leftover}`);
+            info.annotations.push({ type: 'warning', description: leftover });
+        }
         expect(crashes, 'uncaught errors in the page').toEqual([]);
     },
     shot: async ({ page, lang }, use, info) => {
