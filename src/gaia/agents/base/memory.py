@@ -279,6 +279,19 @@ TURN_RECALL_MIN_FIELD = 8
 #: Memories scored to measure the field.
 TURN_RECALL_FIELD_SIZE = 200
 
+#: forget() given the user's words instead of an id: memories looked up, and
+#: the similarity that alone makes one a match. Above the recall bar, since a
+#: wrong match erases the wrong memory.
+FORGET_LOOKUP_TOP_K = 10
+FORGET_SURE_SIMILARITY = 0.6
+#: Words that say nothing about which memory a forget means.
+_FORGET_FILLER = frozenset(
+    "a an and the to of for in on at or that this these those it its is am are "
+    "was were be been i im me my mine myself we our you your user about thing "
+    "things stuff fact facts memory memories forget remember erase delete "
+    "remove please".split()
+)
+
 #: Size cap on the stable memory section, instructions included
 #: (4250 chars ≈ 1060 tokens). Grow it with the instructions, so they never
 #: take room from the user's memories.
@@ -335,6 +348,16 @@ def _names_in(text: str) -> set:
             names.add(token)
         sentence_start = False
     return names
+
+
+def _forget_words(text: str) -> set:
+    """The words in *text* that pick out a memory, plural ``s`` dropped."""
+    words = set()
+    for word in re.findall(r"[a-z0-9]+", text.lower()):
+        if word in _FORGET_FILLER or len(word) < 2:
+            continue
+        words.add(word[:-1] if len(word) > 3 and word.endswith("s") else word)
+    return words
 
 
 def _is_lesson(item: Dict) -> bool:
@@ -2160,6 +2183,37 @@ class MemoryMixin(ProceduralMemoryMixin):
             store.count_use(results)
 
         return results
+
+    def _forget_lookup(self, description: str) -> Tuple[Optional[Dict], List[Dict]]:
+        """The one memory *description* clearly names, if any, and the candidates.
+
+        Candidates come from the search ``recall`` runs. One matches when it
+        holds every word of the description that names something, or scores
+        FORGET_SURE_SIMILARITY on meaning. Two matches are no match.
+        """
+        candidates = [
+            item
+            for item in self._hybrid_search(
+                description,
+                include_sensitive=True,
+                top_k=FORGET_LOOKUP_TOP_K,
+                count_as_use=False,
+            )
+            if item.get("category") in EXTRACTABLE_CATEGORIES
+        ]
+        if not candidates:
+            return None, []
+        words = _forget_words(description)
+        similarity = dict(
+            self._faiss_search(self._embed_text(description), TURN_RECALL_FIELD_SIZE)
+        )
+        matches = [
+            item
+            for item in candidates
+            if (words and words <= _forget_words(str(item.get("content", ""))))
+            or similarity.get(item["id"], 0.0) >= FORGET_SURE_SIMILARITY
+        ]
+        return (matches[0] if len(matches) == 1 else None), candidates
 
     # ==================================================================
     # Mem0-Style LLM Extraction
@@ -5570,7 +5624,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         @tool
         def forget(knowledge_id: str) -> dict:
-            """Remove one memory by ID (from recall). To erase all memory, use forget_everything."""
+            """Remove one memory: its ID from recall, or the user's words for it (e.g. 'allergic to shellfish'). Words erase only the one memory they clearly match; otherwise nothing is erased and the matching IDs come back. To erase all memory, use forget_everything."""
             if (gone := _store_gone()) is not None:
                 return gone
             try:
@@ -5578,6 +5632,25 @@ class MemoryMixin(ProceduralMemoryMixin):
                 removed = mixin._memory_store.forget(knowledge_id)
             except ValueError as exc:
                 return {"status": "error", "message": str(exc)}
+            candidates: List[Dict] = []
+            if not removed:
+                description = knowledge_id
+                try:
+                    match, candidates = mixin._forget_lookup(description)
+                except RuntimeError as exc:
+                    return {
+                        "status": "error",
+                        "knowledge_id": description,
+                        "message": (
+                            f"No memory has id '{description}', and memory "
+                            f"could not be searched for it: {exc}. Nothing was "
+                            "erased. Don't tell the user it was erased."
+                        ),
+                        "display_message": "Couldn't search memory, so nothing was erased",
+                    }
+                if match is not None:
+                    knowledge_id = match["id"]
+                    removed = mixin._memory_store.forget(knowledge_id)
             if removed:
                 mixin._faiss_remove(knowledge_id)
                 mixin._refresh_if_shown(knowledge_id)
@@ -5591,14 +5664,32 @@ class MemoryMixin(ProceduralMemoryMixin):
                     ),
                 }
             # An error, not a status: a miss read as success tells the user it's gone.
+            if candidates:
+                return {
+                    "status": "error",
+                    "knowledge_id": knowledge_id,
+                    "candidates": [
+                        {"knowledge_id": item["id"], "content": item["content"]}
+                        for item in mixin._redact_credentials(candidates)
+                    ],
+                    "message": (
+                        f"'{knowledge_id}' doesn't clearly match one memory. "
+                        "Nothing was erased. Forget the id of each candidate "
+                        "the user meant, or ask which one. Don't tell the user "
+                        "it was erased."
+                    ),
+                    "display_message": "Nothing erased yet: checking which memory was meant",
+                }
             return {
                 "status": "error",
                 "knowledge_id": knowledge_id,
                 "message": (
-                    f"No memory has id '{knowledge_id}'. Nothing was erased. "
-                    "Call recall to get the ids of the matching memories, then "
-                    "forget each id. Don't tell the user it was erased."
+                    f"No memory has id '{knowledge_id}' or matches it. Nothing "
+                    "was erased. Call recall to get the ids of the matching "
+                    "memories, then forget each id. Don't tell the user it was "
+                    "erased."
                 ),
+                "display_message": "No saved memory matched, so nothing was erased",
             }
 
         @tool
