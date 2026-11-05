@@ -515,3 +515,42 @@ async def test_model_server_alert_after_five_minutes_and_clears(env):
     assert service.alerts(open_only=True)[0]["count"] == 1  # one alert per outage
     service.note_health(True)
     assert service.alerts(open_only=True) == []
+
+
+class FakeAwake:
+    def __init__(self):
+        self.wants = []
+
+    def want(self, on):
+        self.wants.append(on)
+
+    @property
+    def state(self):
+        return {"held": bool(self.wants and self.wants[-1]), "reason": "x"}
+
+
+async def test_keeps_the_pc_awake_only_while_phone_is_on(tmp_path):
+    clock = Clock()
+    awake = FakeAwake()
+    service = PhoneService(
+        PhoneStore(tmp_path / "a.db"), Secrets(), clock=clock, awake=awake
+    )
+    service.use_simulated()
+    await service.tick()
+    await _enroll(service)
+    service.update_settings({"enabled": True})
+    await _run(service, clock, 61)
+    service.update_settings({"keep_awake": False})
+    await _run(service, clock, 61)
+    assert awake.wants[0] is False and True in awake.wants and awake.wants[-1] is False
+    await service.stop()
+    service.store.close()
+
+
+def test_awake_hold_releases_on_battery(monkeypatch):
+    from gaia.phone import awake as awake_mod
+
+    monkeypatch.setattr(awake_mod, "on_ac_power", lambda: False)
+    hold = awake_mod.AwakeHold()
+    hold.want(True)
+    assert hold.state == {"held": False, "reason": "battery"}

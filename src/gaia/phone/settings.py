@@ -26,6 +26,7 @@ DEFAULTS: Dict[str, Any] = {
     "delays": {"text_after_minutes": 5, "call_after_minutes": 5},
     "cooldown_minutes": 30,
     "simulated_outcome": "human",
+    "keep_awake": True,
     "rules": {
         "schedule_failed": {"on": True, "steps": "notify_text_call", "urgent": False},
         "approval_waiting": {
@@ -71,7 +72,7 @@ def apply_patch(current: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any
             if value not in PROVIDERS:
                 raise _bad(f"provider must be one of {', '.join(PROVIDERS)}")
             out[key] = value
-        elif key == "texts_enabled":
+        elif key in ("texts_enabled", "keep_awake"):
             out[key] = _bool(key, value)
         elif key == "quiet_hours":
             out[key] = _quiet(value)

@@ -109,7 +109,8 @@
                     "pages": [
                       "guides/email",
                       "guides/slack",
-                      "guides/telegram-adapter"
+                      "guides/telegram-adapter",
+                      "guides/phone-alerts"
                     ]
                   },
                   {

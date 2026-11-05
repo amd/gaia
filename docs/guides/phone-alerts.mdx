@@ -1,0 +1,127 @@
+---
+title: "Phone Alerts"
+description: "GAIA texts or calls your phone when something urgent needs you, only at numbers in your phone book"
+icon: "phone"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/phone/`](https://github.com/amd/gaia/tree/main/src/gaia/phone)
+</Info>
+
+A notification is easy to miss. With phone alerts, GAIA texts or rings your phone when something
+you care about happens:
+
+- a scheduled job fails
+- a task has waited on your approval too long
+- GAIA's model server can't start
+- an agent you allowed to reach you needs you
+
+The call says what kind of thing happened and asks you to open GAIA. It never reads out your
+files, email or anything a task or agent wrote.
+
+## What leaves your PC
+
+A call or text crosses the phone network, so the provider sees your number, GAIA's number, the
+time and a fixed sentence such as "This is GAIA on your PC. A scheduled job failed. Open GAIA to
+see it." Nothing else leaves: no file names, email subjects, task output or agent text. The
+models stay on your PC.
+
+## Try it without an account
+
+Settings › Phone starts on the **Simulated phone**. Calls and texts are recorded and shown in
+Settings instead of being sent, so you can set up the phone book, rules and limits and send a
+test alert before signing up anywhere.
+
+## Set up Twilio
+
+GAIA uses [Twilio](https://www.twilio.com) for real calls and texts. An individual can sign up in
+a few minutes, and the trial's free credit covers testing.
+
+<Steps>
+  <Step title="Sign up">
+    Create an account at [twilio.com/try-twilio](https://www.twilio.com/try-twilio) and verify
+    your own phone number when it asks.
+  </Step>
+  <Step title="Get a number">
+    In the Twilio console, choose **Get a phone number**. This is the number GAIA calls from.
+  </Step>
+  <Step title="Copy your keys">
+    On the console's home page, copy the **Account SID** (it starts with `AC`) and the **Auth
+    Token**.
+  </Step>
+  <Step title="Add them to GAIA">
+    In Settings › Phone, choose **Twilio**, paste the Account SID, Auth Token and your Twilio
+    number, and save. GAIA checks them against your account right away.
+  </Step>
+  <Step title="Add your number">
+    Enter your own number. GAIA calls it and says a 6-digit code; type it in within 10 minutes.
+  </Step>
+  <Step title="Turn phone on and test">
+    Turn phone on, then choose **Send test alert**. Your phone rings.
+  </Step>
+</Steps>
+
+<Warning>
+  Use a Twilio account (or subaccount) just for GAIA, keep its balance low and turn off
+  auto-recharge. In Twilio's **Voice Geographic Permissions**, allow only your own country.
+  Anyone with the Auth Token can use the account, and GAIA can't limit what it allows.
+</Warning>
+
+**On a trial account,** Twilio plays a short trial notice before GAIA speaks and asks you to press
+a key. A trial can only call numbers verified in the Twilio console, so verify each number there
+as well as in GAIA. Upgrading the account removes both limits.
+
+**Texts in the US** need the number registered with carriers first: toll-free verification for a
+toll-free number, or 10DLC registration for a local one. Twilio advises against starting
+toll-free verification on a trial. Calls work in the meantime; turn texts on in Settings once
+your number is approved.
+
+## The phone book
+
+GAIA only calls or texts numbers in your phone book.
+
+- A number gets in only when you type the code that reached that phone.
+- Adding a second number also needs a code sent to the first one, so someone holding only the new
+  phone can't add it.
+- Every addition or removal is announced by a call to the numbers already there.
+- Removing a number needs a code sent to it. To remove the last one, turn phone off first.
+- GAIA refuses emergency, short, premium-rate and satellite numbers.
+
+## How an alert escalates
+
+Each rule picks its steps: notify only, notify and text, or notify, text and call.
+
+1. The alert shows in the Agent UI and the terminal app.
+2. A text after 5 minutes if nobody opened it.
+3. A call 5 minutes after that. Rules marked urgent text and call right away.
+4. If voicemail or nobody answers, GAIA calls again two minutes later, then tries your next number.
+
+Opening or dismissing the alert in either app stops every step left. A call a person answers
+stops further calls for that alert. Voicemail doesn't count as answered.
+
+**Limits:** 6 calls and 20 texts a day by default, reset at local midnight. Alerts raised by an
+agent have their own limit of 2 calls a day, so they can't use up the calls a real failure needs.
+Repeats of the same alert within 30 minutes join the open one.
+
+**Quiet hours** hold every alert except rules marked urgent until they end.
+
+**Make it ring through Do Not Disturb:** save GAIA's Twilio number as a contact. On iPhone, turn on
+Emergency Bypass for it, and turn on Settings › Focus › Allow repeated calls. On Android, star the
+contact and allow starred contacts through Do Not Disturb.
+
+## Letting an agent alert you
+
+Turn on **Agents may alert me** to give the GAIA agent an `alert_owner` tool. The agent can then
+ask GAIA to reach you; your rules still decide whether that's a text or a call, and you hear the
+fixed sentence, not the agent's words. The agent's reason shows in the apps. Start a new chat after
+changing this setting.
+
+## When something goes wrong
+
+| What you see | What it means |
+|---|---|
+| Twilio rejected the Account SID or Auth Token | Copy both again from the Twilio console. |
+| Verify this number in the Twilio console too | The account is a trial; verify the number there or upgrade. |
+| Not called: daily limit reached | The day's call limit is used up; raise it in Settings › Phone. |
+| Held for quiet hours | The alert waits for quiet hours to end. |
+| Calls only while this PC is awake | A sleeping PC can't call. Keep it plugged in and awake. |

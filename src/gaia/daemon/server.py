@@ -263,10 +263,13 @@ def _build_deregister(
 def _build_phone():
     """The phone service over its own store in the host directory."""
     from gaia.daemon.paths import phone_db_path
+    from gaia.phone.awake import AwakeHold
     from gaia.phone.service import KeyringSecrets, PhoneService
     from gaia.phone.store import PhoneStore
 
-    return PhoneService(PhoneStore(phone_db_path()), KeyringSecrets())
+    return PhoneService(
+        PhoneStore(phone_db_path()), KeyringSecrets(), awake=AwakeHold()
+    )
 
 
 def run(host: str = HOST) -> None:

@@ -108,6 +108,7 @@ class PhoneService:
         *,
         clock: Callable[[], float] = time.time,
         provider_factory: Optional[Callable[[Dict[str, Any]], Provider]] = None,
+        awake=None,
     ):
         self.store = store
         self.secrets = secrets
@@ -123,6 +124,8 @@ class PhoneService:
         self._unhealthy_since: Optional[float] = None
         self._health_reason = ""
         self._health_alerted = False
+        self._awake = awake
+        self._awake_checked = -1e18
 
     # ---------------------------------------------------------------- settings
 
@@ -216,6 +219,7 @@ class PhoneService:
                 "text", self._day_start(), purpose="alert"
             ),
             "last_error": self.last_error,
+            "awake": self._awake.state if self._awake is not None else None,
         }
 
     # ---------------------------------------------------------------- phone book
@@ -504,6 +508,9 @@ class PhoneService:
         ):
             self._health_alerted = True
             self.raise_alert("health", reason=self._health_reason)
+        if self._awake is not None and now - self._awake_checked >= 60:
+            self._awake_checked = now
+            self._awake.want(bool(settings["enabled"] and settings["keep_awake"]))
         for delivery in self.store.deliveries(states=["placed"]):
             if now - self._polled_at.get(delivery["id"], 0) >= POLL_SECONDS:
                 self._polled_at[delivery["id"]] = now
@@ -857,6 +864,8 @@ class PhoneService:
             self._task = asyncio.get_running_loop().create_task(self.run())
 
     async def stop(self) -> None:
+        if self._awake is not None:
+            self._awake.want(False)
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
