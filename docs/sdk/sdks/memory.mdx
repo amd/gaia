@@ -1075,7 +1075,7 @@ These 6 tools are registered by `register_memory_tools()` and exposed to the LLM
   </Card>
 
   <Card title="forget" icon="trash">
-    Delete one memory, by its ID from `recall` or by the user's words for it ("allergic to shellfish"). Words erase only the one memory they clearly match: it holds every word that names something, or scores at least `FORGET_SURE_SIMILARITY` (0.6) on meaning. Anything less erases nothing and returns the candidate IDs, and the Agent UI step says nothing was erased rather than quoting the message written for the model.
+    Delete one memory, by its ID from `recall` or by the user's words for it ("allergic to shellfish"). Words erase only the one memory they clearly match: it holds every word that names something, or scores at least `FORGET_SURE_SIMILARITY` (0.6) on meaning. A forget by words also returns the erased text as `erased`. Anything less erases nothing and returns the candidate IDs (only memories in this session's context that share a word with the description or clear the recall floor, so a miss returns none), and the Agent UI step says nothing was erased rather than quoting the message written for the model.
   </Card>
 
   <Card title="forget_everything" icon="eraser">

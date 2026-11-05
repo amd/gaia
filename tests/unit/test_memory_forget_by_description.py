@@ -30,7 +30,7 @@ from gaia.agents.base.tool_outcome import tool_result_failed
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.ui.sse_handler import _summarize_tool_result
 
-DIM = 64
+DIM = 256
 SHELLFISH = "User is allergic to shellfish"
 PARTNER_SHELLFISH = "User's partner Sam is allergic to shellfish"
 TEA = "User's favourite tea is sencha"
@@ -104,6 +104,7 @@ def test_a_description_with_one_match_erases_it(store):
 
     assert result["status"] == "removed"
     assert result["knowledge_id"] == shellfish
+    assert result["erased"] == SHELLFISH
     assert not tool_result_failed(result)
     assert store.get_item(shellfish) is None
     assert store.get_item(tea) is not None
@@ -153,6 +154,7 @@ def test_a_valid_id_erases_it(store):
 
     assert result["status"] == "removed"
     assert result["knowledge_id"] == shellfish
+    assert "erased" not in result
     assert store.get_item(shellfish) is None
     assert store.get_item(partners) is not None
 
@@ -167,6 +169,10 @@ def test_a_description_matching_nothing_erases_nothing(store):
     assert result["status"] == "error"
     assert tool_result_failed(result)
     assert "Nothing was erased" in result["message"]
+    assert "candidates" not in result
+    assert result["display_message"] == (
+        "No saved memory matched, so nothing was erased"
+    )
     assert store.get_item(shellfish) is not None
     assert store.get_item(tea) is not None
 
@@ -217,10 +223,32 @@ def test_a_forget_by_description_counts_as_the_users_forget(store):
     assert host._turn_forgot is True
 
 
+def test_a_memory_from_another_context_is_never_matched(store):
+    host = _Host(store)
+    host._memory_context = "personal"
+    kid = store.store(category="fact", content=SHELLFISH, context="work")
+    host._embed_and_index(kid, SHELLFISH, "test memory")
+
+    with _tools(host) as tools:
+        result = tools["forget"](knowledge_id="allergic to shellfish")
+
+    assert result["status"] == "error"
+    assert "candidates" not in result
+    assert store.get_item(kid) is not None
+
+
 @pytest.mark.parametrize(
-    "contents", [[SHELLFISH, PARTNER_SHELLFISH], [TEA]], ids=["ambiguous", "none"]
+    "contents, shown_text",
+    [
+        (
+            [SHELLFISH, PARTNER_SHELLFISH],
+            "Nothing erased yet: checking which memory was meant",
+        ),
+        ([TEA], "No saved memory matched, so nothing was erased"),
+    ],
+    ids=["ambiguous", "none"],
 )
-def test_the_ui_step_never_quotes_the_model_instructions(store, contents):
+def test_the_ui_step_never_quotes_the_model_instructions(store, contents, shown_text):
     host = _Host(store)
     for content in contents:
         host.save(content)
@@ -229,7 +257,7 @@ def test_the_ui_step_never_quotes_the_model_instructions(store, contents):
         result = tools["forget"](knowledge_id="allergic to shellfish")
 
     shown = _summarize_tool_result(result)
-    assert shown == result["display_message"]
+    assert shown == shown_text
     assert "erased" in shown and "error" not in shown
     assert "recall" not in shown
     assert "Don't tell the user" not in shown

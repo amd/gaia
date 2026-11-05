@@ -2187,26 +2187,32 @@ class MemoryMixin(ProceduralMemoryMixin):
     def _forget_lookup(self, description: str) -> Tuple[Optional[Dict], List[Dict]]:
         """The one memory *description* clearly names, if any, and the candidates.
 
-        Candidates come from the search ``recall`` runs. One matches when it
-        holds every word of the description that names something, or scores
+        Candidates come from the search ``recall`` runs, scoped like turn
+        recall, and must share a naming word or clear the recall floor. One
+        matches when it holds every naming word of the description, or scores
         FORGET_SURE_SIMILARITY on meaning. Two matches are no match.
         """
-        candidates = [
-            item
-            for item in self._hybrid_search(
-                description,
-                include_sensitive=True,
-                top_k=FORGET_LOOKUP_TOP_K,
-                count_as_use=False,
-            )
-            if item.get("category") in EXTRACTABLE_CATEGORIES
-        ]
-        if not candidates:
-            return None, []
+        ctx = self._memory_context
+        contexts = None if ctx == "global" else (ctx, "global")
         words = _forget_words(description)
         similarity = dict(
             self._faiss_search(self._embed_text(description), TURN_RECALL_FIELD_SIZE)
         )
+        candidates = []
+        for item in self._hybrid_search(
+            description,
+            include_sensitive=True,
+            top_k=FORGET_LOOKUP_TOP_K,
+            count_as_use=False,
+        ):
+            if item.get("category") not in EXTRACTABLE_CATEGORIES or (
+                contexts is not None and item.get("context") not in contexts
+            ):
+                continue
+            # The search ranks the whole store; an unrelated memory is no candidate.
+            shared = words & _forget_words(str(item.get("content", "")))
+            if shared or similarity.get(item["id"], 0.0) >= TURN_RECALL_MIN_SIMILARITY:
+                candidates.append(item)
         matches = [
             item
             for item in candidates
@@ -5632,6 +5638,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 removed = mixin._memory_store.forget(knowledge_id)
             except ValueError as exc:
                 return {"status": "error", "message": str(exc)}
+            match: Optional[Dict] = None
             candidates: List[Dict] = []
             if not removed:
                 description = knowledge_id
@@ -5654,7 +5661,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             if removed:
                 mixin._faiss_remove(knowledge_id)
                 mixin._refresh_if_shown(knowledge_id)
-                return {
+                result = {
                     "status": "removed",
                     "knowledge_id": knowledge_id,
                     "message": (
@@ -5663,6 +5670,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                         "though it is still in the chat history."
                     ),
                 }
+                if match is not None:
+                    # Matched from words, so say which memory went.
+                    result["erased"] = mixin._redact_credentials([match])[0]["content"]
+                return result
             # An error, not a status: a miss read as success tells the user it's gone.
             if candidates:
                 return {
