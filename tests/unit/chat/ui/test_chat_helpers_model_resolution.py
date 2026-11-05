@@ -519,7 +519,7 @@ class TestChatAgentGoesThroughTheRegistry:
 
     def test_a_missing_chat_registration_is_not_silently_substituted(self):
         """No direct `from gaia_agent.chat_agent import ChatAgent` left to fall
-        back on: an unregistered `chat` surfaces the install hint instead."""
+        back on: an unregistered `chat` points the user at Setup instead."""
         registry, _ = _make_registry()
         registry.get.return_value = None
         registry.get_load_error.return_value = None
@@ -529,9 +529,8 @@ class TestChatAgentGoesThroughTheRegistry:
         with (
             patch("gaia.ui._chat_helpers._agent_registry", registry),
             patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
-            patch("gaia.ui._chat_helpers.importlib.util.find_spec", return_value=None),
         ):
             result = _call_non_streaming(session, db, agent_type_override=None)
 
         registry.create_agent.assert_not_called()
-        assert "gaia-agent-gaia" in str(result)
+        assert "GAIA's assistant isn't installed" in str(result)

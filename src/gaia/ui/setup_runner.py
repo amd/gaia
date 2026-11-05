@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from gaia.llm.surface_hints import surface_wording
 from gaia.logger import get_logger
 from gaia.utils.terminal import windows_hidden_popen_kwargs
 
@@ -1766,6 +1767,8 @@ class SetupRunner:
                         return
                 self._on_event(event)
                 return
+        # init words its advice for a terminal; this log is read in the app.
+        line = surface_wording(line, "agent_ui")
         progress = describe(line)
         with self._lock:
             run.note(line, printed=True)
