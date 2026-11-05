@@ -1694,6 +1694,42 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const PANEL_EVENTS = [
+    { ...PYTHON_PROMPT[0], confirm_id: 'n-denied' },
+    { ...PATH_PROMPT[0], confirm_id: 'n-pending' },
+    {
+        type: 'policy_alert', tool: 'run_shell_command', decision: 'BLOCK', reason: 'Shell commands are blocked here.',
+        rule_ids: ['no-shell'], policy_version: 'v7', receipt_id: 'rcpt-7',
+    },
+];
+
+for (const locale of ['ar', 'en']) {
+    test(`the notification panel's tabs, labels and buttons are in the UI language (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, PANEL_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route('**/api/chat/confirm-tool', (route) => route.fulfill({ json: { status: 'ok', approved: false, granted: null } }));
+        });
+        await page.locator('textarea').first().fill('summarize my sales data');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.perm-card-title')).toBeVisible();
+        await page.locator('.sb-bottom-actions .sb-icon-btn').first().click();
+        const panel = page.locator('.notification-center');
+        await expect(panel.locator('.notification-item')).toHaveCount(3);
+        // Newest first, so the last permission item is the Python prompt.
+        await panel.locator('.notification-item.notif-type-permission').last().locator('.notification-action-deny').click();
+        await expect(panel.locator('.notification-response-badge')).toHaveCount(1);
+        const ar = locale === 'ar';
+        await expect(panel.locator('.notification-center-title')).toContainText(ar ? 'الإشعارات' : 'Notifications');
+        await expect(panel.getByRole('tab').first()).toContainText(ar ? 'الكل' : 'All');
+        await expect(panel.locator('.notification-response-badge')).toContainText(ar ? 'تم الرفض' : 'Denied');
+        await expect(panel.locator('.notification-footer-btn').first()).toContainText(ar ? 'تعليم الكل كمقروء' : 'Mark All Read');
+        expect(await audit(page)).toEqual([]);
+        // Agent names, titles, bodies and policy reasons are the notification's own text, not the panel's.
+        if (ar) expect(await untranslated(page, '.notification-center', '.notification-agent, .notification-title, .notification-message, .notification-policy-reason')).toEqual([]);
+        await shot(page, `notification-panel-${locale}`);
+    });
+}
+
 /** A first message whose chat model isn't downloaded, on a disk too small for it. */
 async function withMissingModel(page: Page): Promise<void> {
     await page.route('**/api/setup/needs/chat', (route) =>

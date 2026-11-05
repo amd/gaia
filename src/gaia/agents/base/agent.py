@@ -172,6 +172,7 @@ from gaia.llm.lemonade_client import (
     budget_for_ctx,
     is_context_overflow_error,
     resolve_default_chat_model,
+    runs_on_npu,
     truncation_budget,
 )
 from gaia.llm.providers.lemonade import (
@@ -9561,6 +9562,8 @@ Do NOT wrap conversational replies in JSON.
         context size and leaves the prompt prefix in the server's cache, so the
         first real question starts answering instead of reading ~10K tokens of
         instructions. Only worth it for a local model; the caller decides.
+        An NPU (FastFlowLM) model is only loaded: that server keeps no prompt
+        cache a different next request can reuse.
 
         Setting *cancel* abandons the warm-up, even mid-prompt, and raises
         ``LLMCallCancelled``: a turn on another model must not wait behind it.
@@ -9581,6 +9584,12 @@ Do NOT wrap conversational replies in JSON.
             core = loader.warm(self._tools_registry)
             if core:
                 self._apply_tool_filter(core)
+        if runs_on_npu(self.model_id):
+            # FastFlowLM reuses a prompt only when the next request continues it,
+            # so a primed prefix would be re-read by the first turn anyway.
+            say(f"Loading {self.model_id}")
+            self._warm_up_cancellable(self._load_warm_up_model, cancel)
+            return {"seconds": round(time.perf_counter() - started, 1), "primed": False}
         say(f"Loading {self.model_id} and reading its instructions")
         if cancel is None:
             self.chat.send_messages(
@@ -9606,6 +9615,27 @@ Do NOT wrap conversational replies in JSON.
         Streamed, with *cancel* as the Stop hook, so it also ends during the
         silent prompt read and while queued for the model slot.
         """
+        self._warm_up_cancellable(
+            lambda: self.chat.send_messages(
+                [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                system_prompt=self.system_prompt,
+                tools=self._openai_tools,
+                max_tokens=1,
+                cancel=cancel,
+            ),
+            cancel,
+        )
+
+    @staticmethod
+    def _warm_up_cancellable(
+        step: Callable[[], Any], cancel: Optional[threading.Event]
+    ) -> None:
+        """Run *step*, abandoned the moment *cancel* is set (also mid-wait for
+        the model slot); a failure caused by that stop raises
+        ``LLMCallCancelled``."""
+        if cancel is None:
+            step()
+            return
         if cancel.is_set():
             raise LLMCallCancelled("warm-up stopped before the model was reached")
         try:
@@ -9613,19 +9643,26 @@ Do NOT wrap conversational replies in JSON.
                 model_retry_notices(lambda _notice: None, cancel.is_set),
                 lease_cancel_scope(cancel),
             ):
-                self.chat.send_messages(
-                    [{"role": "user", "content": self.WARM_UP_PROMPT}],
-                    system_prompt=self.system_prompt,
-                    tools=self._openai_tools,
-                    max_tokens=1,
-                    cancel=cancel,
-                )
+                step()
         except LLMCallCancelled:
             raise
         except Exception as e:
             if cancel.is_set():
                 raise LLMCallCancelled(f"warm-up stopped: {e}") from e
             raise
+
+    def _load_warm_up_model(self) -> None:
+        """Load the model at the window a turn loads it with, sending no prompt."""
+        client = getattr(self.chat, "llm_client", None)
+        ensure_loaded = getattr(client, "ensure_model_loaded", None)
+        if not callable(ensure_loaded):
+            raise RuntimeError(
+                f"Can't warm up {self.model_id}: its client "
+                f"({type(client).__name__}) is not a Lemonade client, and only "
+                "Lemonade serves FastFlowLM models. Check the agent's provider "
+                "settings."
+            )
+        ensure_loaded(self.model_id)
 
     def process_query(
         self,

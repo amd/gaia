@@ -35,37 +35,31 @@ interface NotificationCenterProps {
 
 const NOTIFICATION_META: Record<
   NotificationType,
-  { icon: React.ReactNode; colorClass: string; label: string }
+  { icon: React.ReactNode; colorClass: string }
 > = {
   permission_request: {
     icon: <ShieldAlert size={16} />,
     colorClass: 'notif-type-permission',
-    label: 'Permission',
   },
   policy_alert: {
     icon: <ShieldAlert size={16} />,
     colorClass: 'notif-type-policy',
-    label: 'Policy',
   },
   security_alert: {
     icon: <AlertTriangle size={16} />,
     colorClass: 'notif-type-security',
-    label: 'Security',
   },
   status_change: {
     icon: <CheckCircle size={16} />,
     colorClass: 'notif-type-status',
-    label: 'Status',
   },
   info: {
     icon: <Info size={16} />,
     colorClass: 'notif-type-info',
-    label: 'Info',
   },
   error: {
     icon: <AlertCircle size={16} />,
     colorClass: 'notif-type-error',
-    label: 'Error',
   },
 };
 
@@ -132,21 +126,21 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
 
   // Filter type tabs
   const filterTypes: Array<{ key: NotificationType | null; label: string }> = [
-    { key: null, label: 'All' },
-    { key: 'permission_request', label: 'Permissions' },
-    { key: 'policy_alert', label: 'Policy' },
-    { key: 'error', label: 'Errors' },
-    { key: 'security_alert', label: 'Security' },
-    { key: 'status_change', label: 'Status' },
-    { key: 'info', label: 'Info' },
+    { key: null, label: t('notifications.filter.all') },
+    { key: 'permission_request', label: t('notifications.filter.permissions') },
+    { key: 'policy_alert', label: t('notifications.filter.policy') },
+    { key: 'error', label: t('notifications.filter.errors') },
+    { key: 'security_alert', label: t('notifications.filter.security') },
+    { key: 'status_change', label: t('notifications.filter.status') },
+    { key: 'info', label: t('notifications.filter.info') },
   ];
 
   return (
-    <div className="notification-center" role="dialog" aria-label="Notification Center">
+    <div className="notification-center" role="dialog" aria-label={t('notifications.dialogAria')}>
       {/* Header */}
       <div className="notification-center-header">
         <div className="notification-center-title-row">
-          <h2 className="notification-center-title">Notifications</h2>
+          <h2 className="notification-center-title">{t('notifications.title')}</h2>
           {unreadCount > 0 && (
             <span className="notification-center-badge">{unreadCount}</span>
           )}
@@ -154,14 +148,14 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
         <button
           className="btn-icon notification-center-close"
           onClick={onClose}
-          aria-label="Close notification center"
+          aria-label={t('notifications.close')}
         >
           <X size={18} />
         </button>
       </div>
 
       {/* Filter tabs */}
-      <div className="notification-filter-bar" role="tablist" aria-label="Filter notifications">
+      <div className="notification-filter-bar" role="tablist" aria-label={t('notifications.filterAria')}>
         {filterTypes.map((ft) => (
           <button
             key={ft.key ?? 'all'}
@@ -180,7 +174,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
         {notifications.length === 0 ? (
           <div className="notification-empty">
             <Bell size={40} strokeWidth={1.2} />
-            <span>No notifications</span>
+            <span>{t('notifications.empty')}</span>
           </div>
         ) : (
           notifications.map((n) => {
@@ -208,7 +202,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
                 {/* Content */}
                 <div className="notification-content">
                   <div className="notification-content-header">
-                    <span className="notification-agent">{n.agentName}</span>
+                    <span className="notification-agent" dir="auto">{n.agentName}</span>
                     <span className="notification-time">
                       {formatNotifTime(n.timestamp, t)}
                     </span>
@@ -230,7 +224,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
                   {/* Tool info for permission requests */}
                   {n.type === 'permission_request' && n.tool && n.tool !== PATH_ACCESS_TOOL && (
                     <span className="notification-tool">
-                      Tool: <code dir="ltr">{n.tool}</code>
+                      {t('activity.policy.tool')}: <code dir="ltr">{n.tool}</code>
                     </span>
                   )}
 
@@ -238,30 +232,30 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
                     <div className="notification-policy-details">
                       {n.tool && (
                         <span className="notification-tool">
-                          Tool: <code dir="ltr">{n.tool}</code>
+                          {t('activity.policy.tool')}: <code dir="ltr">{n.tool}</code>
                         </span>
                       )}
                       {n.reason && (
                         <span className="notification-policy-reason">
-                          Reason: {n.reason}
+                          {t('notifications.reason')}: {n.reason}
                         </span>
                       )}
                       {n.ruleIds && n.ruleIds.length > 0 && (
                         <span className="notification-tool">
-                          Rules: <code>{n.ruleIds.join(', ')}</code>
+                          {t('activity.policy.rules')}: <code dir="ltr">{n.ruleIds.join(', ')}</code>
                         </span>
                       )}
                       {n.policyVersion && (
                         <span className="notification-tool">
-                          Policy: <code>{n.policyVersion}</code>
+                          {t('activity.policy.policy')}: <code dir="ltr">{n.policyVersion}</code>
                         </span>
                       )}
                       <span className="notification-tool">
-                        Receipt:{' '}
+                        {t('activity.policy.receipt')}:{' '}
                         {n.receiptId ? (
-                          <code>{n.receiptId}</code>
+                          <code dir="ltr">{n.receiptId}</code>
                         ) : (
-                          <em>Receipt unavailable</em>
+                          <em>{t('activity.policy.receiptUnavailable')}</em>
                         )}
                       </span>
                     </div>
@@ -278,7 +272,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
                         }}
                       >
                         <Check size={14} />
-                        Approve
+                        {t('notifications.approve')}
                       </button>
                       <button
                         className="notification-action-btn notification-action-deny"
@@ -288,7 +282,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
                         }}
                       >
                         <X size={14} />
-                        Deny
+                        {t('notifications.deny')}
                       </button>
                     </div>
                   )}
@@ -300,7 +294,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
                         n.response === 'allow' ? 'response-allow' : 'response-deny'
                       }`}
                     >
-                      {n.response === 'allow' ? 'Approved' : 'Denied'}
+                      {n.response === 'allow' ? t('notifications.approved') : t('notifications.denied')}
                     </span>
                   )}
                 </div>
@@ -312,7 +306,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
                     e.stopPropagation();
                     dismiss(n.id);
                   }}
-                  aria-label="Dismiss notification"
+                  aria-label={t('notifications.dismiss')}
                 >
                   <X size={14} />
                 </button>
@@ -331,11 +325,11 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
             disabled={unreadCount === 0}
           >
             <Check size={14} />
-            Mark All Read
+            {t('notifications.markAllRead')}
           </button>
           <button className="notification-footer-btn notification-footer-clear" onClick={clearAll}>
             <Trash2 size={14} />
-            Clear
+            {t('notifications.clear')}
           </button>
         </div>
       )}
