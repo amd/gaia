@@ -1511,7 +1511,7 @@ class LemonadeProvider(LLMClient):
                 "%s kept writing after its tool call; stopped the stream there",
                 self._last_model,
             )
-            # Closing the stream stops the server generating the rest.
+            # The client reads out the rest: cutting FastFlowLM off restarts it.
             close = getattr(response, "close", None)
             if close is not None:
                 close()
