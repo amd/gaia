@@ -245,6 +245,104 @@ def test_an_input_the_script_read_counts_even_if_nothing_printed_it(tmp_path):
     assert _check(blocks, records, name="out.csv") != []
 
 
+ORDERS_CSV = (
+    "order_id,region,product,units,unit_price,returned\n"
+    + "".join(f"{i},North,Widget,{i % 9 + 1},{i % 7 + 3}.50,no\n" for i in range(1, 60))
+    + "251,East,Doohickey,39,35.25,no\n389,West,Widget,39,35.25,no\n"
+    "492,South,Doohickey,40,35.25,no\n"
+)
+TOP_ORDERS_QUERY = (
+    "Create report.md with a markdown table of the 3 largest orders in orders.csv "
+    "(order_id, region, product, revenue), then read it back to confirm."
+)
+TOP_ORDERS_CODE = (
+    "import csv\nfrom decimal import Decimal\n"
+    "rows = list(csv.DictReader(open('orders.csv')))\n"
+    "for r in rows: r['rev'] = Decimal(r['units']) * Decimal(r['unit_price'])\n"
+    "rows.sort(key=lambda r: r['rev'], reverse=True)\n"
+    "for r in rows[:3]: print(r['order_id'], r['region'], r['product'], r['rev'])\n"
+)
+
+
+def _top_orders_turn(stdout, table):
+    return [
+        _read("orders.csv", ORDERS_CSV),
+        _run_python(TOP_ORDERS_CODE, stdout),
+        _rec("write_file", {"file_path": "report.md", "content": table}, {"ok": 1}),
+        _read("report.md", table),
+    ]
+
+
+def _top_orders_table(*rows):
+    return "| order_id | region | product | revenue |\n| --- | --- | --- | --- |\n" + (
+        "".join(f"| {r} |\n" for r in rows)
+    )
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "492 South Doohickey 1410.00\n251 East Doohickey 1374.75\n"
+        "389 West Widget 1374.75\n",
+        "492 South Doohickey 1410.0\n251 East Doohickey 1374.75\n"
+        "389 West Widget 1374.75\n",
+        "[('492', Decimal('1410.00')), ('251', Decimal('1374.75'))]\n",
+    ],
+)
+def test_revenue_a_script_computed_this_turn_is_sourced(stdout):
+    table = _top_orders_table(
+        "492 | South | Doohickey | 1410.00",
+        "251 | East | Doohickey | 1374.75",
+        "389 | West | Widget | 1374.75",
+    )
+
+    findings = _check(
+        _md(table), _top_orders_turn(stdout, table), TOP_ORDERS_QUERY, "report.md"
+    )
+
+    assert findings == []
+
+
+def test_revenue_no_tool_produced_is_still_flagged():
+    stdout = "492 South Doohickey 1410.00\n251 East Doohickey 1374.75\n"
+    table = _top_orders_table(
+        "492 | South | Doohickey | 1410.00",
+        "251 | East | Doohickey | 1374.75",
+        "389 | West | Widget | 1299.40",
+    )
+
+    findings = _check(
+        _md(table), _top_orders_turn(stdout, table), TOP_ORDERS_QUERY, "report.md"
+    )
+
+    assert [f.gate for f in findings] == [FILE]
+    assert "1299.40 (revenue)" in findings[0].note
+    assert "1410.00" not in findings[0].note
+    assert "1374.75" not in findings[0].note
+
+
+def test_a_unit_a_script_printed_is_still_not_a_price():
+    records = [_run_python("print(open('cm5.txt').read())", "Dual 4Kp60 HDMI 60 Hz\n")]
+    table = "| Item | Unit price |\n|---|---|\n| CM5 | 60 |\n"
+
+    assert _check(_md(table), records)
+
+
+def test_a_scratchpad_query_result_is_a_source():
+    records = [
+        _rec(
+            "query_data",
+            {"query": "SELECT region, SUM(units*unit_price) FROM orders GROUP BY 1"},
+            {"status": "success", "result": "East 41572.25\nNorth 45043.62\n"},
+        )
+    ]
+    table = (
+        "| Region | Revenue |\n|---|---|\n| East | 41572.25 |\n| North | 45043.62 |\n"
+    )
+
+    assert _check(_md(table), records, name="regions.md") == []
+
+
 def test_dates_ids_and_quantities_the_user_stated_are_not_figures():
     report = (
         "Order PO-2026-0412 placed 2026-10-14 for 40 units (SKU 1572864), "

@@ -643,8 +643,19 @@ def _basename(path: str) -> str:
     return re.split(r"[\\/]", path.rstrip("\\/"))[-1].lower()
 
 
-def _evidence_texts(records: Sequence[Dict[str, Any]], written: Set[str]) -> List[str]:
-    """What this turn's tools returned that can source a figure in *written*.
+#: Tools whose output is a result they computed, not text they found.
+_COMPUTE_TOOLS = ("query_data",)
+
+
+def _computed(name: str) -> bool:
+    return _has(name, _EXEC_WORDS) or name in _COMPUTE_TOOLS
+
+
+def _evidence_texts(
+    records: Sequence[Dict[str, Any]], written: Set[str]
+) -> List[Tuple[str, bool]]:
+    """``(text, computed)`` per tool result this turn that can source a figure
+    in *written*; *computed* marks a script's or query's output.
 
     Not a write tool's reply, not a failed call, and not a read of a written
     file once it was written — a read-back shows the file, not its source.
@@ -675,7 +686,7 @@ def _evidence_texts(records: Sequence[Dict[str, Any]], written: Set[str]) -> Lis
             for name_ in written
         ):
             continue
-        texts.append(evidence_text(record, code_literals=True))
+        texts.append((evidence_text(record, code_literals=True), _computed(name)))
     return texts
 
 
@@ -918,13 +929,17 @@ def file_findings(
     if not files:
         return []
     written = {_basename(path) for path in files}
-    texts = [_spelled_out(t) for t in _evidence_texts(records, written) + list(inputs)]
+    found = [(_spelled_out(t), c) for t, c in _evidence_texts(records, written)]
+    texts = [t for t, _ in found] + [_spelled_out(t) for t in inputs]
     query = _spelled_out(query or "")
     context = _spelled_out(context or "")
     # "27W", "8GB": a unit glued to its number still shows the number.
     general = _Corpus(_GLUED_UNIT.sub(r"\1 \2", "\n".join([context, query] + texts)))
+    # An amount a script or query computed sources a money figure; a "60 Hz"
+    # it printed still doesn't.
+    computed = [_UNIT.sub(" ", t) for t, c in found if c]
     money = _Corpus(
-        "\n".join([query] + [_money_evidence(t) for t in [context] + texts])
+        "\n".join([query] + [_money_evidence(t) for t in [context] + texts] + computed)
     )
     request_numbers = [
         _number(n) for n in _ANY_NUMBER.findall(_TIMESTAMP.sub(" ", query or ""))
