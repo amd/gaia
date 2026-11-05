@@ -492,19 +492,19 @@ VISION_OFF_ON_NPU = (
     "Settings > Model."
 )
 
-#: Why there is no vision model: none that reads images is downloaded.
+#: Why there is no vision model on the NPU when none that reads images is downloaded.
 VISION_NOT_INSTALLED = (
-    "No image-reading model is installed on this PC. To read images, download "
-    "Gemma 4 E4B: in Settings > Model, open Manage downloads and disk space, "
-    "tick Gemma 4 E4B and apply, then ask again."
+    "No image-reading model is installed on this PC, and the chat model runs on "
+    "the NPU, which doesn't read images. To read images, pick Gemma 4 E4B as the "
+    "chat model in Settings > Model (GAIA offers to download it), then ask again."
 )
 
 
 def vision_off_reason(base_url: Optional[str] = None) -> str:
     """Why reading images is off, once :func:`resolve_default_vision_model` gave None.
 
-    The NPU is the cause only when a model that reads images is downloaded:
-    switching chat to the GPU installs nothing.
+    Switching chat to the GPU installs nothing, so with no image-reading model
+    downloaded the remedy names the download too.
     """
     from gaia.config import GaiaConfig
     from gaia.installer.model_choice import VISION_ONLY_MODELS
@@ -518,7 +518,7 @@ def vision_off_reason(base_url: Optional[str] = None) -> str:
     except LemonadeClientError as e:
         return (
             "GAIA can't read this image: it couldn't check which models are "
-            f"installed on this PC ({e})."
+            f"installed on this PC ({e}). Ask again in a moment. {APP_RESTART_HINT}"
         )
     installed = any(
         _model_ids_match(entry.get("id"), reader)
@@ -532,7 +532,8 @@ def resolve_default_vision_model() -> Optional[str]:
     """The model that reads text in scans and images when nobody passed one.
 
     None while the chat model runs on the NPU: reading images is off there, so
-    no second model is loaded next to it (:data:`VISION_OFF_ON_NPU` says why).
+    no second model is loaded next to it (:func:`vision_off_reason` says why).
+    A cloud chat leaves the NPU idle, so images are read there.
     Otherwise ``vision_model`` from setup when the user chose one; else the
     model chat reopens on, then the default chat model, whichever reads
     images first, because those are already downloaded; else
@@ -542,16 +543,14 @@ def resolve_default_vision_model() -> Optional[str]:
 
     config = GaiaConfig.load()
     model = resolve_default_chat_model()
-    # The model chat reopens on, unless that runs in the cloud.
-    current = config.last_model
-    if not current or current.startswith("claude-") or cloud_model_provider(current):
-        current = model
-    if runs_on_npu(current):
+    current = config.last_model or model
+    cloud = current.startswith("claude-") or bool(cloud_model_provider(current))
+    if not cloud and runs_on_npu(current):
         return None
     chosen = config.vision_model
     if chosen:
         return chosen
-    if current in VISION_CHAT_MODELS:
+    if not cloud and current in VISION_CHAT_MODELS:
         return current
     return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
 
