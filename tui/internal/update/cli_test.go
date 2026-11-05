@@ -79,6 +79,9 @@ func TestAFailedCLIInstallSaysSo(t *testing.T) {
 // pair this TUI with a CLI it was never tested against.
 func TestADevBuildInstallsNoCLI(t *testing.T) {
 	withCurrent(t, "dev")
+	prev := goos
+	goos = "linux"
+	t.Cleanup(func() { goos = prev })
 	hits := serveScript(t, "exit 0")
 
 	err := InstallCLI(context.Background(), &bytes.Buffer{})

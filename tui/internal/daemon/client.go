@@ -388,7 +388,7 @@ type installEvidence struct {
 func unresolvableGaiaReason(ev installEvidence) string {
 	switch {
 	case ev.description == "":
-		return "the `gaia` CLI is not on PATH, so the daemon cannot be launched. " +
+		return "the `gaia` CLI is not on PATH or in ~/.gaia/bin, so the daemon cannot be launched. " +
 			installGaiaHint
 	case ev.runnable:
 		return fmt.Sprintf(
