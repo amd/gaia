@@ -1,0 +1,17 @@
+{
+  "name": "amd-gaia",
+  "owner": {
+    "name": "AMD AI Group"
+  },
+  "metadata": {
+    "description": "Claude Code plugins from AMD GAIA, the local AI agent for AMD Ryzen AI PCs."
+  },
+  "plugins": [
+    {
+      "name": "gaia",
+      "version": "0.1.0",
+      "source": "./hub/plugins/gaia",
+      "description": "Hand easy, read-mostly tasks to the GAIA agent running on this PC's local model."
+    }
+  ]
+}

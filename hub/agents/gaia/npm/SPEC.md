@@ -697,6 +697,19 @@ closed." The question is saved when the turn starts, so it survives even if the
 host kills the process before the turn ends. Another process sharing the
 history file leaves a turn that is still running out of its model view.
 
+`gaia-agent --mcp` is the third transport: a Model Context Protocol server on
+stdin/stdout, which the GAIA plugin for Claude Code launches. It offers two tools.
+`gaia_task` runs one task and returns its answer with the `gaia -p --output-format
+json` record. `gaia_status` reports whether the agent is ready, starting or failed.
+The agent is built once in the background after `initialize` and runs one task at
+a time. Each task starts with an empty conversation, and memory is off
+(`memory_incognito`): nothing from a task is stored, and nothing stored is recalled
+into one. File access is limited to the folder the host started it in.
+Confirmation-gated tools are denied, as in `gaia -p`. A task stops 300 s after it
+starts running (`--task-timeout`). A `notifications/cancelled` stops it, whether
+it is running or still waiting its turn. Logs go to the agent's log file, as on
+the stdio wire.
+
 Contract 2.14 gave the HTTP surface the same three capabilities per run and per
 session — `/tool_decision`, `/sessions/{id}/bypass` (the route keeps its
 original spelling), and `provider: "claude"`. What remains stdio-only is the

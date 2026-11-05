@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
 
+### Added
+
+- **Claude Code can hand tasks to GAIA.** `gaia-agent --mcp` serves the agent as
+  an MCP server with `gaia_task` and `gaia_status`, which the new GAIA plugin for
+  Claude Code launches. Claude passes summaries, triage and document questions to
+  the local model and gets the answer back in its own conversation (SPEC §5.5).
+
 ### Changed
 
 - **A reply cut off by a model-server restart is taken back, not swapped.**

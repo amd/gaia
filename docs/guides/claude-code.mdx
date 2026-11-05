@@ -1,0 +1,66 @@
+---
+title: "GAIA in Claude Code"
+description: "Install the GAIA plugin so Claude Code hands easy, read-mostly tasks to the GAIA agent running on your PC's local model."
+icon: "plug"
+---
+
+The GAIA plugin lets Claude Code pass easy work to GAIA, which runs on your PC's own
+model. Claude still does the thinking. GAIA does the reading: summaries, triage across
+files, document questions. That work costs no cloud tokens, and GAIA reads the files on
+your PC. Only its answer goes back to Claude.
+
+It works in the Claude Code CLI and in the Claude desktop app's **Code** tab.
+
+## Install
+
+GAIA has to be installed on the PC first. Download the installer from
+**[amd-gaia.ai](https://amd-gaia.ai/#install)** and finish its setup, which downloads the
+model. Then, in Claude Code:
+
+```
+/plugin marketplace add amd/gaia
+/plugin install gaia@amd-gaia
+```
+
+Restart Claude Code. The plugin starts GAIA in the background when a session opens.
+The first task waits while the model loads; later ones start right away.
+
+## What Claude hands to GAIA
+
+The plugin's `gaia-offload` skill tells Claude when to use GAIA:
+
+| GAIA does it | Claude keeps it |
+|---|---|
+| Summaries of long files, logs and diffs | Code changes and commands |
+| Finding which files mention something | Design decisions and debugging |
+| Pulling fields out of text, labeling items | Security review |
+| Questions about documents in the project | Anything outside the project folder |
+| First drafts of notes and descriptions | The final answer you rely on |
+
+You can also ask directly: *"Have GAIA summarize the logs in `./logs` and tell me which
+runs failed."*
+
+## What GAIA can and can't do here
+
+- **It reads; it doesn't edit.** GAIA can read files in the folder Claude Code was
+  started in, search the web and run read-only commands. It can't edit or delete files,
+  or run anything that would ask you first. It can save new files, such as a download.
+  Claude makes the changes from GAIA's answer.
+- **Each task starts fresh.** GAIA doesn't remember earlier tasks, so Claude includes
+  everything a task needs.
+- **One task at a time.** A task stops 5 minutes after it starts and says so. A task
+  waiting behind another one, or for the model to load, doesn't count against that.
+- **Your memory stays out of it.** GAIA saves nothing from Claude's tasks to its memory
+  and doesn't use what it remembers about you to answer them. The tasks don't show up
+  in your GAIA chats.
+
+## Troubleshooting
+
+- **Claude says GAIA isn't installed.** The plugin needs the `gaia-agent` program from
+  the GAIA installer. Reinstall GAIA from [amd-gaia.ai](https://amd-gaia.ai/#install),
+  then restart Claude Code.
+- **"GAIA is still loading its agent and model."** The first task after starting waits
+  for the model. Try again in a minute.
+- **"GAIA could not start: …"** The message names what failed, usually the model
+  server. Open GAIA once to let it finish setup, then restart Claude Code.
+- **See what's connected:** `/mcp` in Claude Code lists the `gaia` server and its state.

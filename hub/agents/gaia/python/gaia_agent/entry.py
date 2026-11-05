@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 """The one place argv chooses a transport.
 
-``gaia-agent`` serves two: the HTTP sidecar the daemon and the Agent UI speak,
-and the newline-delimited JSON wire a parent process spawns it for. Which one
+``gaia-agent`` serves three: the HTTP sidecar the daemon and the Agent UI speak,
+the newline-delimited JSON wire a parent process spawns it for, and the MCP
+server Claude Code's GAIA plugin launches (``--mcp``). Which one
 runs is decided here, and **nothing heavy is imported until the decision is
 made**.
 
@@ -35,12 +36,19 @@ from typing import List, Optional
 #: the split is unambiguous.
 HTTP_SELECTORS = ("--serve", "--host", "--port")
 
+#: Selects the MCP server Claude Code's GAIA plugin launches.
+MCP_SELECTOR = "--mcp"
+
 TRANSPORT_HELP = """\
-gaia-agent serves two transports from one binary, chosen by argv:
+gaia-agent serves three transports from one binary, chosen by argv:
 
   gaia-agent --serve [--host HOST] [--port PORT]
       The HTTP sidecar: the /v1/gaia/* contract the daemon and the Agent UI
       speak. Bound to 127.0.0.1:8141 unless told otherwise.
+
+  gaia-agent --mcp [--model ID] [--task-timeout SECONDS]
+      An MCP server over stdin/stdout with the gaia_task and gaia_status
+      tools. This is what the GAIA plugin for Claude Code launches.
 
   gaia-agent [OPTIONS]
       Newline-delimited JSON over stdin/stdout -- one query per line in, one
@@ -67,7 +75,7 @@ def _configure_logging() -> None:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """Dispatch this process onto one of the agent's two transports.
+    """Dispatch this process onto one of the agent's three transports.
 
     A flag belonging to the other transport is an argparse error from the one
     that was selected — never a quiet switch to the other.
@@ -107,13 +115,20 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         return serve_http(args)
 
+    # stdout is about to become a wire, so nothing imported below may log to
+    # it — a stray line reaches the reader as a malformed message.
+    from gaia.logger import route_console_logging_to_stderr
+
+    if MCP_SELECTOR in args:
+        _configure_logging()
+        route_console_logging_to_stderr()
+        from gaia_agent.mcp_server import main as mcp_main
+
+        return mcp_main([arg for arg in args if arg != MCP_SELECTOR])
+
     # The stdio parser cannot mention a mode it does not own.
     if any(arg in ("-h", "--help") for arg in args):
         print(TRANSPORT_HELP)
-
-    # stdout is about to become the event wire, so nothing imported below may
-    # log to it — a stray line reaches the reader as a malformed event.
-    from gaia.logger import route_console_logging_to_stderr
 
     # This transport owns the process too, so install GAIA's handlers before
     # moving them: route_console_logging_to_stderr() only moves handlers that

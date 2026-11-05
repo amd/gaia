@@ -19,6 +19,10 @@ Two ways in:
 - **The programmatic exports** — fetch, spawn the sidecar, drive `POST /v1/gaia/query`
   yourself. What you use when embedding GAIA in an app.
 
+Wiring GAIA into Claude Code itself is neither: install the GAIA plugin, which
+launches `gaia-agent --mcp` (SPEC §5.5) and needs `gaia-agent` on `PATH`. See
+https://amd-gaia.ai/docs/guides/claude-code.
+
 > **This file is NOT one of the agent's own skills.** It is the integration
 > playbook: how *you* wire this package into an app. The agent separately loads
 > **Agent Skills** into its own prompt at runtime from
