@@ -81,6 +81,21 @@ describe('Test step', () => {
         expect(onChooseAnother).toHaveBeenCalledTimes(1);
     });
 
+    it('offers no local model picker on a cloud setup', () => {
+        render(
+            <TestStep
+                run={runStatus([], { state: 'failed', tests: [row('embedding', 'failed', { subject: EMBED.id, kind: 'memory', error: 'out of memory' })] })}
+                expected={[]}
+                names={NAMES}
+                catalog={[QWEN, GEMMA, EMBED, WHISPER]}
+                busy={false}
+                onRetry={vi.fn()}
+            />,
+        );
+        expect(screen.queryByRole('button', { name: 'Choose another model' })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Test again' })).toBeInTheDocument();
+    });
+
     it('for a broken model offers to download that model again', () => {
         const { onDownloadAgain } = show([row('chat', 'failed', { subject: QWEN.id, kind: 'broken', error: 'bad file' })], 'failed');
         const alert = screen.getByRole('alert');
@@ -112,6 +127,18 @@ describe('Test step', () => {
     it('offers no re-download for a broken test with no model behind it', () => {
         show([row('agent', 'failed', { kind: 'broken', error: 'The agent did not answer.' })], 'failed');
         expect(screen.queryByRole('button', { name: /Download .* again/ })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Test again' })).toBeInTheDocument();
+    });
+
+    it('names the model the real chat ran on, and offers another when it got no answer', () => {
+        show([row('agent', 'failed', { subject: GEMMA.id, kind: 'agent', error: 'no answer' })], 'failed');
+        expect(rowOf(/A real chat with GAIA/)).toHaveTextContent(GEMMA.name);
+        expect(screen.getByRole('button', { name: 'Choose another model' })).toBeInTheDocument();
+    });
+
+    it('offers no other model when the assistant itself is missing', () => {
+        show([row('agent', 'failed', { subject: GEMMA.id, kind: 'missing', error: 'missing' })], 'failed');
+        expect(screen.queryByRole('button', { name: 'Choose another model' })).not.toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Test again' })).toBeInTheDocument();
     });
 

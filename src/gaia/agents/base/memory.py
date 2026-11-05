@@ -94,6 +94,7 @@ from gaia.llm.lemonade_client import (
     configured_lemonade_url,
     find_model_requirement,
 )
+from gaia.llm.reasoning import strip_reasoning
 from gaia.llm.retry import (
     current_cancel_check,
     current_retry_listener,
@@ -2260,9 +2261,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             response = outcome["response"]
             raw_text = response.text if hasattr(response, "text") else str(response)
-            # The streamed reply wraps reasoning in <think>, unclosed when the
-            # budget ran out mid-thought; what is left is the answer.
-            raw_text = re.sub(r"<think>.*?(</think>|$)", "", raw_text, flags=re.DOTALL)
+            raw_text = strip_reasoning(raw_text)
             if (
                 getattr(response, "finish_reason", None) == "length"
                 and not raw_text.strip()
@@ -2846,10 +2845,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     raw_text = (
                         response.text if hasattr(response, "text") else str(response)
                     )
-                    raw_text = re.sub(
-                        r"<think>.*?</think>", "", raw_text, flags=re.DOTALL
-                    )
-                    raw_text = raw_text.strip()
+                    raw_text = strip_reasoning(raw_text)
                     if raw_text.startswith("```"):
                         raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
                         raw_text = re.sub(r"\s*```$", "", raw_text)
@@ -3134,8 +3130,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
 
                 raw_text = response.text if hasattr(response, "text") else str(response)
-                raw_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
-                raw_text = raw_text.strip()
+                raw_text = strip_reasoning(raw_text)
                 if raw_text.startswith("```"):
                     raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
                     raw_text = re.sub(r"\s*```$", "", raw_text)
@@ -3770,19 +3765,23 @@ class MemoryMixin(ProceduralMemoryMixin):
             safe.append(item)
         return safe
 
-    def warm_up(self, progress=None):
+    def warm_up(self, progress=None, cancel=None):
         """Run the deferred memory upkeep here, not in front of the first answer."""
         incognito = getattr(self, "_incognito", False)
         if not incognito:
             self._finish_deferred_memory_init()
         # Upkeep reads existing memories with the chat's model; a private or
         # memory-off agent keeps it pending for its first memory-on turn.
-        if not incognito and getattr(self, "_memory_post_init_pending", False):
+        stopped = cancel is not None and cancel.is_set()
+        pending = getattr(self, "_memory_post_init_pending", False)
+        if not incognito and pending and not stopped:
             if progress:
                 progress("Tidying memory")
             self._memory_post_init_pending = False
             self._run_memory_post_init()
-        return super().warm_up(progress)
+        if cancel is None:
+            return super().warm_up(progress)
+        return super().warm_up(progress, cancel=cancel)
 
     # ------------------------------------------------------------------
     # Hook 2: process_query Override (dynamic context injection)
@@ -5532,10 +5531,11 @@ class MemoryMixin(ProceduralMemoryMixin):
                 **cleared,
                 "message": (
                     "Erased everything GAIA remembered about you and your "
-                    "chats, past conversations included. Skills it learned for "
-                    "doing tasks are kept; `gaia skill deltas <skill> --reset` "
-                    "undoes what it learned about a skill. Chats listed in the "
-                    "sidebar, this one included, stay until you delete them there."
+                    "chats, past conversations included. Lessons it learned for "
+                    "doing tasks with its skills are kept. To clear them, run "
+                    "`gaia skill deltas <skill> --reset` in a terminal. Chats "
+                    "listed in the sidebar, this one included, stay until you "
+                    "delete them there."
                 ),
             }
 

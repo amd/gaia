@@ -23,6 +23,14 @@ case "$1" in
         ;;
     purge)
         remove_desktop_link
+        # The locked-memory drop-ins postinst wrote for the NPU, if still ours.
+        for f in /etc/security/limits.d/90-gaia-npu.conf \
+                 /etc/systemd/system/user@.service.d/90-gaia-npu-memlock.conf; do
+            if [ -f "$f" ] && head -n 1 "$f" | grep -q '^# GAIA: FastFlowLM pins NPU models'; then
+                rm -f "$f"
+            fi
+        done
+        rmdir /etc/systemd/system/user@.service.d 2>/dev/null || true
         # Refresh the desktop database + icon cache after the files have
         # been removed so stale entries disappear from menus.
         if command -v update-desktop-database >/dev/null 2>&1; then

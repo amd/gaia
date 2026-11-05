@@ -51,6 +51,7 @@ from gaia.env import child_env, load_env
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
+    describe_upgrade_hint,
     gaia_runs_lemonade,
     get_installed_version,
     resolve_lemonade,
@@ -107,11 +108,6 @@ load_env()
 # =========================================================================
 # Default server host and port (can be overridden via LEMONADE_BASE_URL env var)
 DEFAULT_HOST = "localhost"
-# Lemonade v10.1.0 changed its default port from 8000 to 13305 as part of the
-# "spring cleaning" release. See:
-#   https://github.com/lemonade-sdk/lemonade/wiki/Migration#v10x---v101
-# Minimum supported Lemonade version is declared in INIT_PROFILES
-# (min_lemonade_version); keep both in lock-step when bumping.
 DEFAULT_PORT = 13305
 # API version supported by this client
 LEMONADE_API_VERSION = "v1"
@@ -129,6 +125,11 @@ GAIA_LEMONADE_RECONNECT_POLL_SECONDS = 2.0
 RECONNECTING_MESSAGE = "Reconnecting to the model server…"
 #: Retry reasons that mean nothing answered at all (see ``classify_exception``).
 _CONNECT_FAILURES = frozenset({"connection error", "connect timeout"})
+#: Connect timeout of the one check that tells a dead server from a dropped
+#: request, after a request could not connect.
+SERVER_DOWN_PROBE_SECONDS = 2.0
+#: Set on a failed request whose server accepted no connection at all.
+_SERVER_DOWN_ATTR = "_gaia_lemonade_server_down"
 
 
 def _embedded_lemonade_url() -> str:
@@ -430,17 +431,25 @@ def resolve_default_vision_model() -> Optional[str]:
     None while the chat model runs on the NPU: reading images is off there, so
     no second model is loaded next to it (:data:`VISION_OFF_ON_NPU` says why).
     Otherwise ``vision_model`` from setup when the user chose one; else the
-    PC's chat model when it reads images, because that one is already
-    downloaded and resident; else :data:`DEFAULT_MODEL_NAME`.
+    model chat reopens on, then the default chat model, whichever reads
+    images first, because those are already downloaded; else
+    :data:`DEFAULT_MODEL_NAME`.
     """
     from gaia.config import GaiaConfig
 
+    config = GaiaConfig.load()
     model = resolve_default_chat_model()
-    if runs_on_npu(model):
+    # The model chat reopens on, unless that runs in the cloud.
+    current = config.last_model
+    if not current or current.startswith("claude-") or cloud_model_provider(current):
+        current = model
+    if runs_on_npu(current):
         return None
-    chosen = GaiaConfig.load().vision_model
+    chosen = config.vision_model
     if chosen:
         return chosen
+    if current in VISION_CHAT_MODELS:
+        return current
     return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
 
 
@@ -583,6 +592,51 @@ def is_llm_model_entry(model: Dict[str, Any]) -> bool:
         return model.get("type") == "llm"
     labels = model.get("labels") or []
     return "image" not in labels and "embeddings" not in labels
+
+
+def is_cloud_model_entry(entry: Dict[str, Any]) -> bool:
+    """True when a loaded-model entry is gateway-routed rather than local.
+
+    Accepts a raw ``all_models_loaded`` entry or an enriched ``loaded_models``
+    one. Its ``ctx_size`` is a 4096 placeholder, never a local window.
+    """
+    raw = entry.get("_health") or {}
+    name = entry.get("model_name") or entry.get("id") or ""
+    provider, _, upstream = name.partition(".")
+    return (
+        CLOUD_RECIPE in (entry.get("recipe"), raw.get("recipe"))
+        or "cloud" in (entry.get("labels") or [])
+        or cloud_model_provider(name) is not None
+        or (
+            "none" in (entry.get("device"), raw.get("device"))
+            and bool(upstream)
+            and provider.lower() != "user"
+        )
+    )
+
+
+def loaded_ctx_size(
+    entries: Optional[List[Dict[str, Any]]], model: Optional[str] = None
+) -> Optional[int]:
+    """The ``ctx_size`` *model* is loaded at, read from its own entry.
+
+    With no *model*, the first local LLM entry that reports one. None when the
+    entry is missing or reports no window; a cloud entry never answers.
+    """
+    for entry in entries or []:
+        if not isinstance(entry, dict) or is_cloud_model_entry(entry):
+            continue
+        if model is not None:
+            if not _model_ids_match(entry.get("model_name") or entry.get("id"), model):
+                continue
+        elif not is_llm_model_entry(entry):
+            continue
+        ctx = (entry.get("recipe_options") or {}).get("ctx_size")
+        if isinstance(ctx, int) and not isinstance(ctx, bool) and ctx > 0:
+            return ctx
+        if model is not None:
+            return None
+    return None
 
 
 # Minimum context window (in tokens) that GAIA agents assume is loaded. The
@@ -1568,8 +1622,6 @@ class ModelRequirement:
     # Download size in GB, vision projector included, for the fit check and
     # memory sizing (gaia.llm.model_fit).
     size_gb: Optional[float] = None
-    # Oldest Lemonade whose bundled llama.cpp can load the model.
-    min_lemonade_version: Optional[str] = None
     # The model's native context. With ``kv_bytes_per_token`` and ``size_gb``
     # it makes the window grow from ``min_ctx_size`` toward this as memory
     # allows (``context_for_capacity``). None keeps the window at the floor.
@@ -1694,7 +1746,6 @@ MODELS = {
         thinking=True,
         # Three model shards plus the 0.9 GB vision projector, as Lemonade counts it.
         size_gb=82.86,
-        min_lemonade_version="2026.39.1",
         # 12 of 48 layers are Sparse Attention; the rest are Gated DeltaNet, whose
         # state does not grow: 2 KV heads x 256 dims x K+V x f16 = 24 KiB/token,
         # 1.6 GB at 64K. No max_ctx_size, so the window stays at the floor.
@@ -1712,8 +1763,6 @@ MODELS = {
         tool_calling=True,
         thinking=True,
         size_gb=23.3,
-        # First in Lemonade's built-in catalog in v11.7.0.
-        min_lemonade_version="11.7.0",
         # Native window. 30 of its 40 layers are Gated DeltaNet, whose state does
         # not grow; the other 10 carry 2 KV heads x 256 dims x K+V x f16 =
         # 20 KiB/token: 1.3 GB at 64K, 2.7 GB at 128K, 5.4 GB at 256K.
@@ -2297,14 +2346,11 @@ AGENT_PROFILES = {
 
 
 def lemonade_server_version(client: "LemonadeClient") -> Optional[str]:
-    """The version a running Lemonade reports on ``/health``, or None.
-
-    None means "cannot show support", which keeps the version-gated model out.
-    """
+    """The version a running Lemonade reports on ``/health``, or None."""
     try:
         health = client.health_check()
     except LemonadeClientError:
-        # The caller's reason then reads "this server's version is unknown".
+        # Setup then shows "version not reported" beside the server it found.
         return None
     version = health.get("version") if isinstance(health, dict) else None
     return str(version) if version else None
@@ -2349,11 +2395,16 @@ def optional_chat_models_that_fit(capacity: Any) -> List[str]:
 
 def npu_chat_models_that_fit(capacity: Any) -> List[str]:
     """``NPU_MODEL_LADDER`` models this PC's NPU memory holds, KV cache at their
-    floor included; none without an NPU."""
-    from gaia.llm.model_fit import check_fit, kv_cache_gb, npu_capacity
+    floor included; none without an NPU, or one not set up to run them yet."""
+    from gaia.llm.model_fit import (
+        check_fit,
+        kv_cache_gb,
+        npu_capacity,
+        npu_not_ready_reason,
+    )
 
     npu = npu_capacity(capacity)
-    if npu is None:
+    if npu is None or npu_not_ready_reason(npu):
         return []
     out = []
     for model_id in NPU_MODEL_LADDER:
@@ -2374,6 +2425,7 @@ def recommend_npu_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
         ModelFitError,
         capacity_from_system_info,
         npu_capacity,
+        npu_not_ready_reason,
         pick_default_model,
     )
 
@@ -2388,6 +2440,13 @@ def recommend_npu_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
             f"({', '.join(NPU_MODEL_LADDER)}) cannot run. Run `gaia init` without "
             "`--profile npu` to use the GPU, or see "
             "https://amd-gaia.ai/docs/guides/npu for supported processors."
+        )
+    not_ready = npu_not_ready_reason(npu)
+    if not_ready:
+        raise ModelFitError(
+            f"This PC's NPU can't run models yet. {not_ready} Run `gaia init` "
+            "without `--profile npu` to use the GPU meanwhile, or see "
+            "https://amd-gaia.ai/docs/guides/npu#linux."
         )
     model = NPU_DEFAULT_MODEL_NAME
     candidates = [(model, find_model_requirement(model).size_gb, 0.0)]
@@ -2455,7 +2514,6 @@ def recommend_default_chat_model(
         ModelFitError,
         capacity_from_system_info,
         check_fit,
-        check_server_supports,
         pick_default_model,
     )
 
@@ -2465,9 +2523,6 @@ def recommend_default_chat_model(
     except (ModelFitError, LemonadeClientError) as e:
         # An unanswered request is as unjudgeable as an unreadable answer.
         return floor, [(m, str(e)) for m in DEFAULT_MODEL_LADDER[:-1]], None
-    server_version = lemonade_server_version(client)
-    # Fit first, then version: "upgrade Lemonade" is only useful advice for a
-    # model this PC could actually hold.
     candidates, unsupported = [], []
     for model_id in DEFAULT_MODEL_LADDER:
         mr = find_model_requirement(model_id)
@@ -2490,12 +2545,6 @@ def recommend_default_chat_model(
             )
             continue
         if model_id != floor and check_fit(size, capacity, kv).fits:
-            verdict = check_server_supports(
-                mr.min_lemonade_version if mr else None, server_version
-            )
-            if not verdict.fits:
-                unsupported.append((model_id, verdict.reason))
-                continue
             reason = (
                 _free_memory_rules_out(client, mr, capacity)
                 if judge_free_memory
@@ -2880,10 +2929,7 @@ def catalog_context_window(entry: Dict[str, Any]) -> Optional[int]:
         return value if ok else None
 
     if entry.get("recipe") == CLOUD_RECIPE or entry.get("cloud_provider"):
-        # Older Lemonade lists only context_length, and there it is the real window.
-        return positive(entry.get("max_context_window")) or positive(
-            entry.get("context_length")
-        )
+        return positive(entry.get("max_context_window"))
     return positive(entry.get("context_length"))
 
 
@@ -2930,6 +2976,57 @@ def is_cloud_model(model_id: Optional[str]) -> bool:
     that must be correct on a cold cache should list models first.
     """
     return bool(model_id) and model_id in _CLOUD_MODELS
+
+
+class UnknownUserModelError(ValueError):
+    """A ``user.`` id missing from ``MODELS``; Lemonade may still list it by name."""
+
+
+def pull_request_body(model_id: str) -> Dict[str, Any]:
+    """JSON body for Lemonade ``POST /pull``.
+
+    Built-ins are name only — a ``recipe`` makes Lemonade read the call as a
+    new registration and 400 (#1655). A ``user.`` model is not registered yet,
+    so the body carries its checkpoint and recipe, plus the labels Lemonade
+    cannot infer (``embedding``, ``mmproj``, ``vision``, ``reasoning``).
+    A gateway model has no weights and raises ``RuntimeError`` before any
+    request. An unknown ``user.`` id raises ``UnknownUserModelError`` instead
+    of a pull Lemonade answers with HTTP 500; a caller that finds the id in
+    Lemonade's own list may pull it by name.
+
+    Known gateway namespaces (``amd.``, ``fireworks.``) are refused even before
+    the catalog has been read. Any other gateway id is refused once
+    :func:`record_cloud_models` has seen it.
+    """
+    if is_cloud_model(model_id) or cloud_model_provider(model_id):
+        raise RuntimeError(
+            f"'{model_id}' is hosted on a gateway, so there is nothing to download."
+        )
+
+    requirement = find_model_requirement(model_id)
+    if requirement is not None and requirement.model_id.startswith("user."):
+        body: Dict[str, Any] = {"model_name": requirement.model_id}
+        body.update(
+            {k: v for k, v in requirement.pull_kwargs().items() if v is not None}
+        )
+        if not body.get("checkpoint") or not body.get("recipe"):
+            raise ValueError(_unknown_user_model_message(model_id))
+        return body
+    if requirement is not None:
+        return {"model_name": requirement.model_id}
+
+    if model_id.lower().startswith("user."):
+        raise UnknownUserModelError(_unknown_user_model_message(model_id))
+    return {"model_name": model_id}
+
+
+def _unknown_user_model_message(model_id: str) -> str:
+    return (
+        f"Can't download '{model_id}': GAIA doesn't know where it comes from. "
+        "Add it from its Hugging Face link, then download it: in the Agent UI "
+        "use Settings > Model > Add a model from Hugging Face; in the terminal "
+        "app use /provider, choose Local, then ctrl+a."
+    )
 
 
 def cloud_model_info(model_id: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -3142,8 +3239,7 @@ def _chosen_backend_hint(backend: Optional[str]) -> str:
     return (
         f" GAIA asked for llama.cpp's {backend} backend, as set in Settings → "
         "Advanced → Model server (llamacpp_backend in ~/.gaia/config.json). "
-        "Choose Vulkan there, the GPU backend GAIA has tested, or run "
-        "`gaia config set llamacpp_backend vulkan`."
+        "Choose Vulkan there, the GPU backend GAIA has tested."
     )
 
 
@@ -3162,6 +3258,34 @@ class LemonadeAuthError(LemonadeClientError):
 class LemonadeUnresponsiveError(LemonadeClientError):
     """Lemonade accepted the connection but sent no answer before the read
     timeout: it is up and busy (often loading a model), or stuck — not down."""
+
+
+class LemonadeServerDownError(LemonadeClientError):
+    """Nothing accepts a connection at the Lemonade address.
+
+    Every request goes through that server, cloud models included, so the
+    cloud provider was never reached and retrying it cannot help.
+    """
+
+    def __init__(
+        self,
+        endpoint: Optional[str] = None,
+        provider: Optional[str] = None,
+        message: Optional[str] = None,
+    ):
+        self.endpoint = endpoint
+        self.provider = provider
+        if message is None:
+            host = (endpoint or "").rsplit(":", 1)[0].strip("[]").lower()
+            local = not endpoint or host in ("localhost", "127.0.0.1", "::1")
+            server = "The local model server" if local else "The model server"
+            where = f" at {endpoint}" if endpoint else ""
+            reached = f", so the message never reached {provider}" if provider else ""
+            message = (
+                f"{server}{where} isn't answering{reached}. Start the model "
+                "server, then send the message again."
+            )
+        super().__init__(message)
 
 
 class GaiaLemonadeNotAnsweringError(LemonadeClientError):
@@ -3187,17 +3311,67 @@ class CloudModelUnavailableError(LemonadeClientError):
         self.status = 404
 
 
-class LemonadeVersionError(LemonadeClientError):
-    """Raised when Lemonade Server is older than the oldest version GAIA supports."""
+def describe_version_refusal(
+    found_version: Optional[str], min_version: str, url: Optional[str] = None
+) -> str:
+    """Why a Lemonade reporting *found_version* is refused, naming what it said."""
+    server = f"Lemonade Server at {url}" if url else "Lemonade Server"
+    if not found_version:
+        return (
+            f"{server} reports no version, so GAIA cannot confirm it is "
+            f"v{min_version} or newer."
+        )
+    if parse_version(found_version) is None:
+        return (
+            f"{server} reports version {found_version!r}, which GAIA cannot "
+            f"read, so it cannot confirm it is v{min_version} or newer."
+        )
+    return (
+        f"{server} is v{found_version}, older than v{min_version}, the oldest "
+        "version GAIA supports."
+    )
 
-    def __init__(self, found_version: str, min_version: str):
+
+class LemonadeVersionError(LemonadeClientError):
+    """Raised when Lemonade Server is older than GAIA supports, or reports no
+    version GAIA can read."""
+
+    def __init__(
+        self,
+        found_version: Optional[str],
+        min_version: str,
+        remedy: str,
+        url: Optional[str] = None,
+    ):
         self.found_version = found_version
         self.min_version = min_version
         super().__init__(
-            f"Lemonade Server {found_version} is older than {min_version}, the "
-            "oldest version GAIA supports. Run `gaia init --force-reinstall` to "
-            "install a supported version."
+            f"{describe_version_refusal(found_version, min_version, url)} {remedy}"
         )
+
+
+def check_lemonade_version(
+    found_version: Optional[str], base_url: Optional[str] = None
+) -> None:
+    """Refuse a server below ``LEMONADE_MIN_VERSION`` or one with no readable version.
+
+    Every supported Lemonade reports its version on ``/health``; CalVer
+    development builds (``2026.44.1~3.abc1234``) compare by their release.
+
+    Raises:
+        LemonadeVersionError: Named both versions, or what the server reported.
+    """
+    from gaia.version import LEMONADE_MIN_VERSION
+
+    found = parse_version(found_version)
+    if found is not None and found >= parse_version(LEMONADE_MIN_VERSION):
+        return
+    raise LemonadeVersionError(
+        found_version,
+        LEMONADE_MIN_VERSION,
+        describe_upgrade_hint(base_url),
+        url=base_url,
+    )
 
 
 class ModelDownloadCancelledError(LemonadeClientError):
@@ -3210,6 +3384,10 @@ class InsufficientDiskSpaceError(LemonadeClientError):
 
 class InsufficientMemoryError(LemonadeClientError):
     """Raised instead of a load that would run this machine out of memory."""
+
+
+class LoadedModelMissingError(LemonadeClientError):
+    """A load returned, but ``/health`` does not list the model it loaded."""
 
 
 class UsersServerUnchangedError(LemonadeClientError):
@@ -4293,10 +4471,11 @@ class LemonadeClient:
         from gaia.daemon.paths import log_path
 
         reason = f" The daemon reports: {str(last).rstrip('.')}." if last else ""
-        raise LemonadeClientError(
-            f"GAIA's Lemonade Server at {self.base_url} stopped answering and "
+        raise LemonadeServerDownError(
+            _endpoint_label(self.base_url),
+            message=f"GAIA's Lemonade Server at {self.base_url} stopped answering and "
             f"was not back within {timeout:.0f}s.{reason} Run `gaia daemon "
-            f"status`, and read the daemon log at {log_path()} for why it stopped."
+            f"status`, and read the daemon log at {log_path()} for why it stopped.",
         ) from last
 
     def _survive_gaia_lemonade_stop(self, call: Callable[[], Any], model: str) -> Any:
@@ -4535,22 +4714,19 @@ class LemonadeClient:
         tooling = resolve_lemonade()
         if not tooling.found:
             raise LemonadeClientError(
-                "Lemonade Server not found (no modern install at its canonical "
-                "path, no lemonade-server in PATH). Run `gaia init` to install "
+                "Lemonade Server not found (no install at its canonical "
+                "path). Run `gaia init` to install "
                 "it, or set LEMONADE_SERVER_PATH to the server executable."
             )
 
-        spec = build_start_command(tooling, ctx_size)
+        spec = build_start_command(tooling)
         if ctx_size is not None:
             self.log.info(f"Context size set to: {ctx_size}")
         if log_level != "info":
-            if tooling.kind == "legacy":
-                spec.argv.extend(["--log-level", log_level])
-            else:
-                self.log.debug(
-                    f"log_level={log_level!r} is not supported by the modern "
-                    "Lemonade launcher; ignoring"
-                )
+            self.log.debug(
+                f"log_level={log_level!r} is not supported by the Lemonade "
+                "launcher; ignoring"
+            )
 
         # Merge — never replace — the parent environment; the child loses
         # PATH/LOCALAPPDATA otherwise and LemonadeServer.exe breaks.
@@ -5172,15 +5348,20 @@ class LemonadeClient:
                 return None
             return classify_exception(error)
 
-        def hand_off(_error: BaseException, reason: str) -> bool:
-            if not (
+        def hand_off(error: BaseException, reason: str) -> bool:
+            if reason not in _CONNECT_FAILURES:
+                return False
+            if (
                 gone_server_waits
-                and reason in _CONNECT_FAILURES
                 and self.follows_gaia_lemonade
                 and self._gaia_lemonade_gone()
             ):
+                self._gone_handoff().pending = True
+                return True
+            if self._server_accepts_connections():
                 return False
-            self._gone_handoff().pending = True
+            # Backing off cannot bring a stopped server back: fail now.
+            setattr(error, _SERVER_DOWN_ATTR, True)
             return True
 
         return ModelCallRetrier(
@@ -5198,6 +5379,42 @@ class LemonadeClient:
             log=self.log,
             classify=classify,
             hand_off=hand_off,
+        )
+
+    def _server_accepts_connections(self) -> bool:
+        """One quick connect to the server, after a request could not connect."""
+        from urllib.parse import urlsplit
+
+        try:
+            parts = urlsplit(self.base_url)
+            host = parts.hostname or self.host
+            port = parts.port or (443 if parts.scheme == "https" else 80)
+        except ValueError:
+            host, port = self.host, self.port
+        try:
+            with socket.create_connection(
+                (host, port), timeout=SERVER_DOWN_PROBE_SECONDS
+            ):
+                return True
+        except OSError as e:
+            self.log.warning(
+                f"Lemonade at {self.base_url} accepts no connection ({e}); "
+                "not retrying the request."
+            )
+            return False
+
+    def _server_down_error(
+        self, error: BaseException, model: Optional[str]
+    ) -> Optional[LemonadeServerDownError]:
+        """The error to raise for *error* when its server accepted no connection."""
+        if not getattr(error, _SERVER_DOWN_ATTR, False):
+            return None
+        from gaia.llm.inference_location import provider_phrase
+
+        provider = self.cloud_model_provider(model) if model else None
+        return LemonadeServerDownError(
+            _endpoint_label(self.base_url),
+            provider_phrase(provider) if provider else None,
         )
 
     def _server_load_in_progress(self) -> Optional[str]:
@@ -5327,6 +5544,11 @@ class LemonadeClient:
             return self._model_retrier(model, gone_server_waits).call(
                 api_call, what=what, state=state
             )
+        except Exception as e:
+            down = self._server_down_error(e, model)
+            if down is None:
+                raise
+            raise down from e
         finally:
             self._record_retries(state)
 
@@ -6175,6 +6397,9 @@ class LemonadeClient:
             self.log.error(message)
             raise attach_retry_state(LemonadeClientError(message), state) from e
         except (openai.APIError, openai.APIConnectionError, openai.RateLimitError) as e:
+            down = self._server_down_error(e, model)
+            if down is not None:
+                raise down from e
             if self.cloud_model_provider(model):
                 raise attach_retry_state(
                     self._cloud_failure(
@@ -6187,6 +6412,9 @@ class LemonadeClient:
             self.log.error(error_msg)
             raise attach_retry_state(LemonadeClientError(error_msg), state)
         except Exception as e:
+            down = self._server_down_error(e, model)
+            if down is not None:
+                raise down from e
             self.log.error(f"Error using OpenAI client for streaming: {str(e)}")
             label = _endpoint_label(self.base_url)
             # An inner error from this client already names the server.
@@ -9064,19 +9292,7 @@ class LemonadeClient:
         try:
             health = self.health_check()
 
-            # Lemonade 9.1.4+: context_size moved to all_models_loaded[N].recipe_options.ctx_size
-            all_models = health.get("all_models_loaded", [])
-            reported_ctx = 0
-            for m in all_models:
-                if not is_llm_model_entry(m):
-                    continue
-                ctx = m.get("recipe_options", {}).get("ctx_size", 0)
-                if ctx:
-                    reported_ctx = ctx
-                    break
-            if not reported_ctx:
-                # Fallback for older Lemonade versions
-                reported_ctx = health.get("context_size", 0)
+            reported_ctx = loaded_ctx_size(health.get("all_models_loaded")) or 0
 
             if reported_ctx >= required_tokens:
                 self.log.debug(
@@ -9120,21 +9336,10 @@ class LemonadeClient:
             status.health_data = health
             status.version = health.get("version")
 
-            # Lemonade 9.1.4+: context_size moved to all_models_loaded[N].recipe_options.ctx_size
-            # Only consider LLM entries — a co-loaded transcription or
-            # embedding model's ctx_size is irrelevant and, if it sorts
-            # first, would otherwise be misreported as the server's context.
-            all_models = health.get("all_models_loaded", [])
-            for m in all_models:
-                if not is_llm_model_entry(m):
-                    continue
-                ctx = m.get("recipe_options", {}).get("ctx_size", 0)
-                if ctx:
-                    status.context_size = ctx
-                    break
-            if not status.context_size:
-                # Fallback for older Lemonade versions
-                status.context_size = health.get("context_size", 0)
+            # The first local LLM's window: speech, embedding and cloud entries
+            # can sort first and carry a placeholder ctx_size.
+            all_models = health.get("all_models_loaded") or []
+            status.context_size = loaded_ctx_size(all_models) or 0
 
             # Loaded models: ``/health.all_models_loaded`` should be used,
             # NOT ``/models`` (`/health.all_models_loaded`` gets what is in
@@ -9173,7 +9378,8 @@ class LemonadeClient:
                         # Carried through so consumers can tell a gateway-routed
                         # model from a local one. Without it every ctx-size and
                         # slot decision downstream treats a cloud model as local.
-                        "recipe": catalog.get("recipe", ""),
+                        "recipe": catalog.get("recipe") or hm.get("recipe", ""),
+                        "device": hm.get("device"),
                         "recipe_options": hm.get("recipe_options", {}),
                         "checkpoint": hm.get("checkpoint", ""),
                         # Trained-context ceiling (#2992) — ``/health`` reports
@@ -9408,7 +9614,7 @@ class LemonadeClient:
 
     def get_lemonade_version(self) -> Optional[str]:
         """
-        Get the installed Lemonade version (modern or legacy tooling).
+        Get the installed Lemonade version.
 
         Returns:
             Version string (e.g., "10.7.0") or None if unable to determine
@@ -9436,42 +9642,30 @@ class LemonadeClient:
         Args:
             expected_version: The version GAIA installs (e.g. ``LEMONADE_VERSION``);
                 a supported version that differs only gets a note.
-            actual_version: The version to check. If None, detected from the
-                local Lemonade CLI.
+            actual_version: The version a running server reported. If None,
+                the installed Lemonade CLI is asked, before a start.
             quiet: Suppress console output (the log still records it).
 
         Returns:
-            True when the version meets the floor; None when it cannot be
-            determined, after a warning — an unknown version is never reported
-            as compatible.
+            True when the version meets the floor. None only when no server is
+            running and the CLI's version cannot be read: the server's own
+            report is checked once it answers.
 
         Raises:
-            LemonadeVersionError: The version is below the floor.
+            LemonadeVersionError: The version is below the floor, or a running
+                server reported none GAIA can read.
         """
-        from gaia.version import LEMONADE_MIN_VERSION
-
         if actual_version is None:
             actual_version = self.get_lemonade_version()
+            if parse_version(actual_version) is None:
+                self.log.info(
+                    "Installed Lemonade reports no readable version (%r); "
+                    "checking the server's once it answers",
+                    actual_version,
+                )
+                return None
 
-        found = parse_version(actual_version)
-        if found is None:
-            reported = (
-                f"an unrecognised version ({actual_version!r})"
-                if actual_version
-                else "no version"
-            )
-            message = (
-                f"Lemonade Server reported {reported}, so GAIA cannot confirm it "
-                f"is at least {LEMONADE_MIN_VERSION}. If requests fail, run "
-                "`gaia init --force-reinstall`."
-            )
-            self.log.warning(message)
-            if not quiet:
-                print(f"{_emoji('⚠️', '[WARN]')}  {message}")
-            return None
-
-        if found < parse_version(LEMONADE_MIN_VERSION):
-            raise LemonadeVersionError(actual_version, LEMONADE_MIN_VERSION)
+        check_lemonade_version(actual_version, self.base_url)
 
         if actual_version != expected_version and not quiet:
             print(
@@ -9647,6 +9841,10 @@ class LemonadeClient:
                             )
                         status = self.get_status()
                         status.running = True
+                        try:
+                            check_lemonade_version(status.version, self.base_url)
+                        except LemonadeVersionError as e:
+                            return self._version_error_status(status, e, quiet)
                         return status
                 except Exception as exc:
                     get_logger(__name__).debug(

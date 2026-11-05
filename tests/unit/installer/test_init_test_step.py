@@ -11,6 +11,7 @@ import zlib
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from gaia.installer import init_command, model_choice
 from gaia.installer.init_command import (
@@ -24,6 +25,13 @@ from gaia.installer.init_command import (
     _solid_red_png,
     _test_limit_s,
     _tone_wav,
+)
+from gaia.llm.lemonade_client import (
+    InsufficientMemoryError as LemonadeInsufficientMemory,
+)
+from gaia.llm.lemonade_client import (
+    LemonadeClientError,
+    LemonadeUnresponsiveError,
 )
 from gaia.ui import setup_plan, setup_runner
 
@@ -147,6 +155,53 @@ def test_a_failed_test_says_what_kind_of_failure(error, kind):
     event = cmd.events.seen[-1]
     assert event["kind"] == kind and event["error"] == str(error)
     assert event["seconds"] == 1.3
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [
+        requests.ConnectionError("connection refused"),
+        LemonadeUnresponsiveError("no answer"),
+    ],
+)
+def test_a_server_that_stops_answering_is_not_a_broken_model(raised):
+    client = MagicMock()
+    client.chat_completions.side_effect = raised
+    ok, error = _command()._test_vision(client, "m")
+    assert ok is False and isinstance(error, CheckTimedOut)
+    assert init_command.kind_of_test_failure(error) == "stuck"
+
+
+def test_a_wrapped_connection_error_is_not_a_broken_model():
+    def fail():
+        try:
+            raise requests.ConnectionError("reset")
+        except requests.ConnectionError:
+            raise LemonadeClientError("Request failed: reset")
+
+    ok, error = _command()._within_limit("m", fail)
+    assert ok is False and init_command.kind_of_test_failure(error) == "stuck"
+
+
+def test_an_unknown_test_error_is_still_a_broken_model():
+    ok, error = _command()._within_limit("m", lambda: 1 / 0)
+    assert ok is False and init_command.kind_of_test_failure(error) == "broken"
+
+
+@pytest.mark.parametrize(
+    "job, test",
+    [
+        ("vision", "_test_vision"),
+        ("voice", "_test_model_inference"),
+        (None, "_test_model_inference"),
+    ],
+)
+def test_a_retest_repeats_the_test_that_failed(job, test):
+    client = MagicMock()
+    with patch.object(InitCommand, test, return_value=(False, WrongAnswer("blank"))):
+        assert init_command.retest_model(client, "m", job) == (False, "blank", "answer")
+    with patch.object(InitCommand, test, return_value=(True, None)):
+        assert init_command.retest_model(client, "m", job) == (True, None, None)
 
 
 def _verify(cmd, client, inference, vision=(True, None)):
@@ -282,10 +337,12 @@ def test_the_agent_turn_goes_through_the_installed_binary_not_gaia_p():
         patch("gaia.ui._chat_helpers.relay_one_prompt", return_value="ok") as relay,
         patch.object(setup_runner.subprocess, "run") as run,
     ):
-        assert setup_runner._agent_turn_problem() is None
+        assert setup_runner._agent_turn_problem("gemma4-it-e4b-FLM") is None
     run.assert_not_called()
     kwargs = relay.call_args.kwargs
     assert kwargs["agent_type"] == "gaia"
+    # The turn runs on the model it was given, never the agent's own default.
+    assert kwargs["model_id"] == "gemma4-it-e4b-FLM"
     # A test message must not land in the user's memory.
     assert kwargs["memory"] == "off"
 
@@ -296,7 +353,10 @@ def test_no_installed_binary_says_the_assistant_is_missing():
         patch("gaia.hub.installer.read_sentinel", return_value=None),
         patch("gaia.ui._chat_helpers.relay_one_prompt") as relay,
     ):
-        assert setup_runner._agent_turn_problem() == setup_runner.AGENT_MISSING
+        assert (
+            setup_runner._agent_turn_problem("Gemma-4-E4B-it-GGUF")
+            == setup_runner.AGENT_MISSING
+        )
     relay.assert_not_called()
 
 
@@ -311,7 +371,11 @@ def test_an_agent_turn_that_fails_says_so(outcome):
         else {"return_value": outcome}
     )
     with patch("gaia.ui._chat_helpers.relay_one_prompt", **kwargs):
-        assert "didn't answer" in setup_runner._agent_turn_problem()
+        why = setup_runner._agent_turn_problem("Gemma-4-E4B-it-GGUF")
+    # The agent's own words, for the log; the screen gets its own sentence.
+    assert why == (
+        str(outcome) if isinstance(outcome, Exception) else "it ended without an answer"
+    )
 
 
 @pytest.mark.parametrize(
@@ -582,3 +646,84 @@ def test_the_summary_says_nothing_it_could_not_find(monkeypatch):
     assert found["lemonade_version"] is None
     assert found["agent_version"] is None
     assert found["devices"] == []
+
+
+@pytest.mark.parametrize(
+    "problem, kept, state",
+    [
+        (None, False, "done"),
+        ("Could not reach the hub", True, "done"),
+        ("Install failed", False, "failed"),
+    ],
+)
+def test_the_agent_row_is_failed_only_when_no_agent_answers(problem, kept, state):
+    from gaia.installer.init_command import InitCommand
+
+    cmd = InitCommand(profile="gaia", yes=True)
+    cmd._agent_problem, cmd._agent_kept = problem, kept
+    assert cmd._agent_component_state() == state
+
+
+# ── the load check names why a model failed; only "broken" is a bad file ──
+
+
+def _load_client():
+    client = MagicMock()
+    client.base_url = "http://127.0.0.1:13305/api/v1"
+    client.get_model_info.side_effect = lambda m: {"id": m, "size_gb": 1.0}
+    return client
+
+
+@pytest.mark.parametrize(
+    "raised, kind",
+    [
+        (LemonadeInsufficientMemory("Not enough free memory for m"), "memory"),
+        (LemonadeUnresponsiveError("no answer in 60 s"), "stuck"),
+        (requests.ConnectionError("connection reset"), "stuck"),
+        (LemonadeClientError("model_load_error: bad gguf"), "broken"),
+        (RuntimeError("boom"), "broken"),
+    ],
+)
+def test_the_load_check_says_why_a_chat_model_did_not_load(raised, kind):
+    client = _load_client()
+    client._ensure_model_loaded.side_effect = raised
+    load = init_command._load_model_once(client, "Gemma-4-E4B-it-GGUF")
+    assert load.loaded is False and load.kind == kind
+    reason = init_command._load_failure_reason(load)
+    assert ("would not load" in reason) == (kind == "broken")
+
+
+def test_an_empty_embedding_is_an_answer_not_a_broken_file():
+    client = _load_client()
+    client.embeddings.return_value = {"data": [{"embedding": []}]}
+    load = init_command._load_model_once(client, "user.embeddinggemma-300m-GGUF")
+    assert (load.loaded, load.kind) == (False, "answer")
+
+
+def test_a_silent_speech_model_is_an_answer_not_a_broken_file():
+    import numpy as np
+
+    with patch(
+        "gaia.audio.lemonade_tts.LemonadeTTSClient.synthesize",
+        return_value=(np.zeros(0, dtype=np.float32), 24000),
+    ):
+        load = init_command._load_model_once(_load_client(), "kokoro-v1")
+    assert (load.loaded, load.kind) == (False, "answer")
+    assert "no audio" in load.error
+
+
+def test_a_retest_of_a_load_check_failure_repeats_the_load():
+    client = _load_client()
+    client._ensure_model_loaded.side_effect = LemonadeInsufficientMemory("short")
+    assert init_command.retest_model(client, "Gemma-4-E4B-it-GGUF", "load") == (
+        False,
+        "short",
+        "memory",
+    )
+    client._ensure_model_loaded.side_effect = None
+    assert init_command.retest_model(client, "Gemma-4-E4B-it-GGUF", "load") == (
+        True,
+        None,
+        None,
+    )
+    client.chat_completions.assert_not_called()

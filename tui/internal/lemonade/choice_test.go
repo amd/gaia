@@ -265,10 +265,10 @@ func TestProbeTellsLemonadeFromEverythingElse(t *testing.T) {
 		inMessage                    []string
 	}{
 		{name: "current lemonade", status: 200, contentType: "application/json",
-			body: `{"status":"ok","version":"10.10.0"}`, want: ProbeOK},
+			body: `{"status":"ok","version":"2026.44.1"}`, want: ProbeOK},
 		{name: "too old", status: 200, contentType: "application/json",
-			body: `{"status":"ok","version":"10.8.1"}`, want: ProbeTooOld,
-			inMessage: []string{"v10.8.1", "v10.9.0", "https://lemonade-server.ai", "gaia config set lemonade_mode gaia"}},
+			body: `{"status":"ok","version":"11.9.0"}`, want: ProbeTooOld,
+			inMessage: []string{"v11.9.0", "v2026.44.1", "https://lemonade-server.ai", "gaia config set lemonade_mode gaia"}},
 		{name: "needs a key", status: 401, want: ProbeNeedsKey, inMessage: []string{"gaia lemonade connect"}},
 		{name: "rejects the key", key: "k", status: 403, want: ProbeBadKey, inMessage: []string{"gaia lemonade connect"}},
 		{name: "a web page", status: 200, contentType: "text/html", body: "<html>hi</html>",
@@ -362,19 +362,19 @@ func TestApplyingTheChoiceToTheDaemon(t *testing.T) {
 	}
 }
 
-// The adoption floor is the flagship profile's, or GAIA adopts a server its
-// own setup would refuse.
-func TestMinExternalVersionMatchesTheGaiaProfile(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "src", "gaia", "installer", "init_command.py"))
+// The adoption floor is GAIA's, or GAIA adopts a server its own setup would
+// refuse.
+func TestMinExternalVersionMatchesGaiasFloor(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "src", "gaia", "version.py"))
 	if err != nil {
 		t.Skipf("Python source not alongside this checkout: %v", err)
 	}
-	block := regexp.MustCompile(`(?s)\n    "gaia": \{.*?"min_lemonade_version": "([^"]+)"`).FindSubmatch(raw)
-	if block == nil {
-		t.Fatal("could not find the gaia profile's min_lemonade_version in init_command.py")
+	floor := regexp.MustCompile(`(?m)^LEMONADE_MIN_VERSION = "([^"]+)"`).FindSubmatch(raw)
+	if floor == nil {
+		t.Fatal("could not find LEMONADE_MIN_VERSION in src/gaia/version.py")
 	}
-	if got := string(block[1]); got != MinExternalVersion {
-		t.Fatalf("MinExternalVersion = %s, but the gaia profile needs %s", MinExternalVersion, got)
+	if got := string(floor[1]); got != MinExternalVersion {
+		t.Fatalf("MinExternalVersion = %s, but GAIA needs %s", MinExternalVersion, got)
 	}
 }
 

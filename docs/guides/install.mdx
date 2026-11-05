@@ -138,6 +138,8 @@ If a step fails, the window shows the error with a **Try again** button, and **D
 
 After an app update, the same screen updates the backend and then the GAIA agent. Your models stay as they are. If the agent update fails, **Try again** picks it up, and the next launch does too.
 
+Before it updates the backend, the app stops GAIA's background service (the GAIA daemon) and the agents it runs, because Windows can't replace files a running program holds. The service has no window, so if it won't stop, the screen says so: restart your PC, then choose **Try again**.
+
 ### Choose where chat runs
 
 The app then opens on its setup screen, which asks where chat should run:
@@ -205,8 +207,10 @@ gaia lemonade status
 In the Agent UI, use **Settings → Advanced → Model server**. `gaia lemonade connect`
 with no address uses the one `gaia lemonade detect` finds on this PC.
 
-- **Version:** your Lemonade must be v10.9.0 or newer. An older one is refused, and
-  the message names both versions.
+- **Version:** your Lemonade must be v2026.44.1 or newer. An older one is refused,
+  and the message names both versions, as is one that reports no version GAIA can
+  read. GAIA's own Lemonade Server is upgraded the next time GAIA's daemon starts it;
+  `gaia daemon restart` does that now.
 - **API key:** if your server was started with `LEMONADE_API_KEY`, GAIA asks for it
   (`--api-key-stdin` reads it from a pipe). It's kept in the OS credential store,
   never in GAIA's config file.
@@ -313,6 +317,8 @@ To turn update checks off entirely, set `GAIA_DISABLE_UPDATE=1` before launching
 
 GAIA follows the platform convention: removing the app leaves your user data (chats, documents, downloaded models) behind by default. To remove the data too, run the `gaia uninstall` CLI from a terminal — it has tiered flags so you can decide exactly what to keep.
 
+The Windows uninstaller and `apt remove` also stop GAIA's background service (the GAIA daemon) and the agents it runs. macOS and AppImage have no uninstall step, so after you delete the app they keep running until you restart.
+
 ### Windows
 
 The Windows uninstallers keep data by default. Choosing Yes to the additional
@@ -378,7 +384,7 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Chat file attachments | `~/.gaia/chat/uploads/` |
 | Configuration | `~/.gaia/electron-config.json` |
 | Logs | `~/.gaia/gaia.log` (`$GAIA_HOME/gaia.log` when `GAIA_HOME` is set), or the path in `GAIA_LOG_FILE` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |
-| Terminal UI and agent binaries (one-line installer) | `~/.gaia/bin/` |
+| Terminal UI and agent binaries (one-line installer). It also holds the `gaia`, `gaia-cli` and `gaia-mcp` commands (links on Linux and macOS, copies of the launchers on Windows), and is the only GAIA directory the installer puts on your PATH | `~/.gaia/bin/` |
 | Agent run traces | `~/.gaia/traces/` |
 | Daemon state (token, custody database, logs) | `~/.gaia/host/` (`$GAIA_HOME/host/` when `GAIA_HOME` is set) |
 | Models (managed by Lemonade) | `~/.cache/lemonade/models/` |

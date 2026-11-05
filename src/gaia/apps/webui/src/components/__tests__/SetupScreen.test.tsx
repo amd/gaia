@@ -74,7 +74,7 @@ beforeEach(() => {
     mockedApi.getSetupStatus.mockResolvedValue({ state: 'idle' });
     mockedApi.getCloudPrices.mockResolvedValue({ provider: 'fireworks', models: [], source: null, note: 'Prices are set by the organization that runs the gateway.' });
     mockedApi.getSpending.mockResolvedValue({
-        month: '2026-10', total_usd: 0, turns: 0, unpriced_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price',
+        month: '2026-10', total_usd: 0, turns: 0, unpriced_turns: 0, unreported_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price',
     });
     mockedApi.startSetup.mockResolvedValue(READY);
     mockedApi.getLemonadeTarget.mockResolvedValue({ ...TARGET, offer: false });
@@ -225,6 +225,37 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
     const SERVER_RUNNING: SetupRunStatus = { state: 'running', server_only: true, text: 'Starting the local model server', steps: [] };
     const SERVER_READY: SetupRunStatus = { state: 'ready', server_only: true, steps: [] };
 
+    it("waits for the user when looking for their Lemonade failed, instead of installing GAIA's own", async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(COLD_SERVER);
+        mockedApi.getLemonadeTarget.mockResolvedValue({ ...TARGET, offer: true });
+        mockedApi.detectLemonade.mockRejectedValue(new Error('timed out'));
+        mockedApi.startSetup.mockResolvedValue(SERVER_RUNNING);
+        renderSetup();
+        await screen.findByRole('button', { name: 'Check again' });
+        await new Promise((r) => setTimeout(r, 50));
+        expect(mockedApi.startSetup).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole('button', { name: "Install GAIA's own" }));
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledExactlyOnceWith(false, false, { serverOnly: true }));
+    });
+
+    it("doesn't offer to install GAIA's own once it is already running", async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue({ ...TARGET, offer: true });
+        mockedApi.detectLemonade.mockRejectedValue(new Error('timed out'));
+        mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
+        renderSetup();
+        await screen.findByRole('button', { name: 'Check again' });
+        expect(screen.queryByRole('button', { name: "Install GAIA's own" })).not.toBeInTheDocument();
+    });
+
+    it('offers Try again when starting the model server is refused', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(COLD_SERVER);
+        mockedApi.startSetup.mockRejectedValueOnce(new Error('connection reset')).mockResolvedValue(SERVER_RUNNING);
+        renderSetup();
+        fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(2));
+        expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, false, { serverOnly: true });
+    });
+
     it('starts only the model server by itself, then recommends from what it reads', async () => {
         mockedApi.getSetupPlan.mockResolvedValueOnce(COLD_SERVER).mockResolvedValue(COLD_BIG());
         mockedApi.startSetup.mockResolvedValueOnce(SERVER_RUNNING);
@@ -325,11 +356,19 @@ describe('SetupScreen: the recommendation', () => {
     });
 
     it('names the verified model that would not fit, and why', async () => {
-        const big = { ...QWEN, fits: false as const, need_gb: 27.1, capacity_gb: 16, planned: false, selected: false, recommended: false };
+        const big = { ...QWEN, fits: false as const, fit_code: 'memory' as const, need_gb: 27.1, capacity_gb: 16, planned: false, selected: false, recommended: false };
         const small = { ...GEMMA_CHAT, chat_choice: true };
         mockedApi.getSetupPlan.mockResolvedValue(plan([small, big, EMBED], { chat_model: { id: GEMMA.id, user_set: false, size_gb: 5.97, downloaded: false } }));
         await open();
         expect(await planScreen()).toHaveTextContent(`${QWEN.name} is a bigger model that answers better, but it needs about 27.1 GB of memory and this PC has 16.0 GB.`);
+    });
+
+    it("calls no model this PC can't run a bigger model", async () => {
+        const npu = { ...QWEN, fits: false as const, fit_code: 'npu' as const, need_gb: 27.1, capacity_gb: 16, planned: false, selected: false, recommended: false };
+        const small = { ...GEMMA_CHAT, chat_choice: true };
+        mockedApi.getSetupPlan.mockResolvedValue(plan([small, npu, EMBED], { chat_model: { id: GEMMA.id, user_set: false, size_gb: 5.97, downloaded: false } }));
+        await open();
+        expect(await planScreen()).not.toHaveTextContent('is a bigger model');
     });
 
     it('opens everything that will download, components and models', async () => {
@@ -445,6 +484,15 @@ describe('SetupScreen: first run, local', () => {
         await waitFor(() => expect(onReady).toHaveBeenCalledExactlyOnceWith(undefined));
     });
 
+    // Setup tested a chat on this model; an older pick must not be what chat opens on (#6632).
+    it('opens chat on the model setup set up and tested, on the first run too', async () => {
+        mockedApi.selectModel.mockResolvedValue({ provider: 'local', model: QWEN.id, label: QWEN.name, remote: false, is_default: false });
+        const onReady = await startLocal();
+        fireEvent.click(await startChatting());
+        await waitFor(() => expect(onReady).toHaveBeenCalled());
+        expect(mockedApi.selectModel).toHaveBeenCalledExactlyOnceWith(QWEN.id);
+    });
+
     it('names the model that answers, lists vision and documents, and offers a first task', async () => {
         const done = (e: typeof QWEN) => ({ ...e, downloaded: true, size_gb: 0 });
         mockedApi.getSetupPlan.mockResolvedValueOnce(COLD_BIG()).mockResolvedValue(plan([done(QWEN), done(GEMMA), done(EMBED)]));
@@ -488,9 +536,13 @@ describe('SetupScreen: the rail', () => {
     it('lets a first-time user pick the language on the first screen', async () => {
         renderSetup();
         await screen.findByRole('region', { name: 'What setup found' });
+        const reads = [mockedApi.getSetupStatus.mock.calls.length, mockedApi.getSetupPlan.mock.calls.length];
         const language = screen.getByRole('combobox', { name: 'Language' });
         fireEvent.change(language, { target: { value: 'ar' } });
         expect(document.documentElement.dir).toBe('rtl');
+        // Changing language changes words only: setup is not read, or restarted, again.
+        await new Promise((r) => setTimeout(r, 50));
+        expect([mockedApi.getSetupStatus.mock.calls.length, mockedApi.getSetupPlan.mock.calls.length]).toEqual(reads);
         expect(localStorage.getItem('gaia-chat-locale')).toBe('ar');
         act(() => useChatStore.getState().setLocale('en'));
         localStorage.removeItem('gaia-chat-locale');
@@ -608,6 +660,25 @@ describe('SetupScreen: warnings and confirmations', () => {
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
         fireEvent.click(within(sheet).getByRole('button', { name: 'Download anyway' }));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalled());
+    });
+
+    // `gaia init --profile npu` saved an NPU model this PC can't run (#6632): no confirm can make it work.
+    it('refuses a saved chat model this PC can\'t run, naming it and why, without asking', async () => {
+        const npu = {
+            ...FLM, downloaded: false, size_gb: 3.2, planned: true, selected: true, roles: ['chat' as const],
+            fits: false as const, need_gb: 3.5, capacity_gb: 16, fit_code: 'npu' as const,
+            fit_reason: 'needs an AMD Ryzen AI NPU and its driver',
+        };
+        const saved = plan([npu, GEMMA, EMBED]);
+        mockedApi.getSetupPlan.mockResolvedValue({ ...saved, chat_model: { ...saved.chat_model, id: npu.id, user_set: true } });
+        await open();
+        clickStart();
+        expect(await screen.findByText(
+            "Gemma 4 E2B (NPU) can't run on this PC. Runs only on a Ryzen AI NPU, and this PC has none that can run it. Choose another chat model.",
+        )).toBeInTheDocument();
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+        expect(mockedApi.startSetup).not.toHaveBeenCalled();
+        expect(mockedApi.chooseSetupChatModel).not.toHaveBeenCalled();
     });
 
     it('stays put on Pick a smaller one, with nothing downloading', async () => {
@@ -884,6 +955,19 @@ describe('SetupScreen: downloading', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Delete and download again' }));
         await waitFor(() => expect(mockedApi.removeSetupModel).toHaveBeenCalledWith(QWEN.id));
         await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(QWEN.id, { keepTrying: false }));
+    });
+
+    it('tests a model again without deleting it when its test failed for want of memory', async () => {
+        const failed = runStatus([
+            progress({ id: QWEN.id, state: 'failed', bytes_done: 23.3e9, bytes_total: 23.3e9, error_kind: 'memory', error: 'not enough memory', can_retry: true }),
+        ], { state: 'failed', error: 'A model failed its test' });
+        mockedApi.startSetup.mockResolvedValue(failed);
+        mockedApi.downloadSetupModel.mockResolvedValue(failed);
+        await startLocal();
+        fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(QWEN.id, { keepTrying: false }));
+        expect(mockedApi.removeSetupModel).not.toHaveBeenCalled();
     });
 
     it('asks before retrying past a disk that is still too full', async () => {

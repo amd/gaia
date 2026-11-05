@@ -17,11 +17,12 @@ from pydantic import BaseModel, Field
 
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
+    UnknownUserModelError,
     _is_local_url,
     _model_ids_match,
     cloud_model_provider,
-    find_model_requirement,
     lemonade_auth_headers,
+    pull_request_body,
     resolve_effective_ctx_size,
     resolve_lemonade_api_key,
     resolve_lemonade_base_url,
@@ -244,6 +245,37 @@ def _install_npu_backend(model_name: str) -> None:
     LemonadeClient(verbose=False).ensure_npu_backend(model_name)
 
 
+async def _pull_payload(model_name: str, base_url: str, headers: dict) -> dict:
+    """The ``/pull`` body for ``model_name``.
+
+    A ``user.`` model GAIA doesn't know is still pulled by name when Lemonade
+    already lists it, e.g. one registered in Lemonade directly.
+    """
+    import httpx  # pylint: disable=import-outside-toplevel
+
+    try:
+        return pull_request_body(model_name)
+    except UnknownUserModelError:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{base_url}/models",
+                    params={"show_all": "true"},
+                    headers=headers,
+                )
+            resp.raise_for_status()
+            listed = resp.json().get("data", [])
+        except (httpx.HTTPError, ValueError) as exc:
+            raise RuntimeError(
+                f"Can't download '{model_name}': the local model server didn't "
+                f"say whether it has this model ({exc}). Try again in a moment."
+            ) from exc
+        wanted = _norm_model_id(model_name)
+        if any(_norm_model_id(m.get("id", "")) == wanted for m in listed):
+            return {"model_name": model_name}
+        raise
+
+
 async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     """Issue ``POST /v1/pull?stream=true`` and feed the SSE event stream
     into ``_download_progress[model_name]``.
@@ -256,17 +288,6 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     import httpx  # pylint: disable=import-outside-toplevel
 
     base_url = resolve_lemonade_base_url()
-    payload: Dict[str, Any] = {"model_name": model_name, "stream": True}
-    requirement = find_model_requirement(model_name)
-    registration = requirement.pull_kwargs() if requirement is not None else {}
-    if registration:
-        # A custom model registers on its first pull, under its ``user.`` name;
-        # built-ins send nothing extra (#1655).
-        payload["model_name"] = requirement.model_id
-        payload.update({k: v for k, v in registration.items() if v is not None})
-    if force:
-        payload["force"] = True
-
     starting = {
         "state": "starting",
         "model_name": model_name,
@@ -278,9 +299,6 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
         "total_bytes": 0,
         "message": None,
     }
-    _set_download_progress(model_name, starting)
-    logger.info("Pull stream starting: %s (force=%s)", model_name, force)
-
     # Track files we've already finished so the running ``downloaded_bytes``
     # advances monotonically across the multi-file pull. Lemonade's progress
     # events carry per-file counters; we synthesise an overall counter by
@@ -297,6 +315,21 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     from gaia.llm.lemonade_client import LemonadeClientError
 
     try:
+        try:
+            payload = await _pull_payload(model_name, base_url, headers)
+        except (RuntimeError, ValueError) as exc:
+            _set_download_progress(
+                model_name,
+                {**starting, "state": "error", "message": str(exc)},
+            )
+            logger.error("Pull refused for %s: %s", model_name, exc)
+            return
+        payload["stream"] = True
+        if force:
+            payload["force"] = True
+
+        _set_download_progress(model_name, starting)
+        logger.info("Pull stream starting: %s (force=%s)", model_name, force)
         if runs_on_npu(model_name):
             # A first install downloads a release and can take minutes.
             _set_download_progress(
@@ -642,39 +675,15 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                         status.model_context_size = resolve_effective_ctx_size(
                             ctx, chat_entry.get("max_context_window")
                         )
-                elif not loaded_models:
-                    # Older Lemonade names the model only at the root.
-                    status.model_loaded = health_data.get("model_loaded") or None
 
-                # Fallback: older Lemonade versions expose context_size at root
-                # level. A newer one's root describes its last load, which may
-                # be a speech or embedding model, not the chat model.
-                if status.model_context_size is None and not loaded_models:
-                    legacy_ctx = health_data.get("context_size")
-                    if legacy_ctx is not None:
-                        status.model_context_size = legacy_ctx
-
-                # Fetch model catalog for size, labels, and fallback context size
+                # Catalog for size and labels; its ctx_size is the saved option,
+                # not the loaded window.
                 models_resp = await client.get(f"{base_url}/models", headers=_auth)
                 if models_resp.status_code == 200:
                     for m in models_resp.json().get("data", []):
                         if m.get("id") == status.model_loaded:
                             status.model_size_gb = m.get("size")
                             status.model_labels = m.get("labels")
-                            # Only use catalog ctx_size when health data didn't
-                            # provide it (e.g. model not yet fully loaded) —
-                            # clamped the same way as the health-derived value
-                            # above.
-                            if status.model_context_size is None and not (
-                                chat_entry and chat_entry.get("recipe") == "cloud"
-                            ):
-                                ctx = m.get("recipe_options", {}).get("ctx_size")
-                                if ctx is not None:
-                                    status.model_context_size = (
-                                        resolve_effective_ctx_size(
-                                            ctx, m.get("max_context_window")
-                                        )
-                                    )
                         if "embed" in m.get("id", "").lower():
                             status.embedding_model_loaded = True
 
@@ -1456,7 +1465,12 @@ async def work_in_progress(request: Request, db: ChatDatabase = Depends(get_db))
     return WorkInProgress(
         answers=answers,
         indexing=indexing,
-        setup=setup_status.get("state") in ("running", "verifying"),
+        # A model download started from Retry or Settings runs outside a setup run.
+        setup=setup_status.get("state") in ("running", "verifying")
+        or any(
+            m.get("state") in ("queued", "downloading")
+            for m in setup_status.get("models") or []
+        ),
     )
 
 
@@ -1521,6 +1535,12 @@ async def download_model_endpoint(body: DownloadModelRequest):
     model_name = body.model_name.strip()
     if not model_name:
         raise HTTPException(status_code=400, detail="model_name must not be empty")
+    base_url = resolve_lemonade_base_url()
+    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+    try:
+        await _pull_payload(model_name, base_url, headers)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     task = asyncio.create_task(_stream_lemonade_pull(model_name, body.force))
     _background_tasks.add(task)

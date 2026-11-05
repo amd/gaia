@@ -235,9 +235,26 @@ function attachWindowGuards(win, { app, guard, getTray, isQuitting, platform, re
   win.on("session-end", () => guard.allow());
 }
 
+/**
+ * SIGTERM (logout, shutdown, `kill`) quits without the question: nobody is
+ * there to answer it, so the dialog would hold the app until it is SIGKILLed.
+ * Electron's own SIGTERM handling quits through the guard, which asks.
+ *
+ * @param {{proc: NodeJS.Process, app: Electron.App,
+ *   guard: ReturnType<typeof installQuitGuard>, logger?: {log: Function}}} deps
+ */
+function quitOnTermSignal({ proc, app, guard, logger = console }) {
+  proc.on("SIGTERM", () => {
+    logger.log("[main] SIGTERM: quitting without asking about running work");
+    guard.allow();
+    app.quit();
+  });
+}
+
 module.exports = {
   QUIT_ANYWAY_MS,
   attachWindowGuards,
+  quitOnTermSignal,
   backendJson,
   fetchWorkInProgress,
   describeWork,

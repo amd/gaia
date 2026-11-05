@@ -375,10 +375,10 @@ gaia init [OPTIONS]
 | `--lemonade-url` | string | — | Use the Lemonade Server you already run at this address instead of installing GAIA's own, and save that choice. See [Use a Lemonade you already run](#use-a-lemonade-you-already-run) |
 | `--gaia-lemonade` | flag | false | Use GAIA's own Lemonade Server, without the offer to use one already running. The choice is saved once that server is installed and running |
 | `--skip-chat-model` | flag | false | Skip the profile's chat LLM but still install Lemonade and any embedding model the profile needs — for a session backed by a remote LLM (e.g. the Go TUI's `--use-claude`) that never calls the local chat model but still needs Lemonade for RAG/memory embeddings |
-| `--check` | flag | false | Report whether the profile is already set up and exit — no install, no download. A stopped GAIA Lemonade Server is started through the GAIA daemon (started too if needed), as any GAIA command would. Exit code `0` means ready, `1` means `gaia init` still has work to do. Used by the Go TUI's first-boot check and `/setup` command |
+| `--check` | flag | false | Report whether the profile is already set up and exit — no install, no download. A stopped GAIA Lemonade Server is started through the GAIA daemon (started too if needed), as any GAIA command would. For a profile that installs the GAIA agent (`gaia`, `npu`), set up includes the agent: models on the server without it still need setup. On a PC the Agent Hub has no agent build for, `gaia init` finishes without it, so the check reports ready with a warning that chat isn't available there; only then does it read the hub's agent manifest. Exit code `0` means ready, `1` means `gaia init` still has work to do. Used by the Go TUI's first-boot check and `/setup` command |
 | `--load` | flag | false | With `--check`: once everything is downloaded, load each model once — the chat model at its context size, the embedding model with a one-word embedding — so "downloaded but will not load" is caught before first use. Exit code `3` means a downloaded model would not load; re-running setup will not fix that. Used by the Go TUI's readiness gate |
 | `--chat-model` | string | — | With `--check`: the local chat model to check instead of the profile default |
-| `--json` | flag | false | With `--check`: print the result as one JSON object — `ready`, `stage` (`setup` or `load`), `reasons`, and per-model `id`, `role`, `size_gb`, `loaded`, `error`. With `--plan`: print the plan as one JSON object (see [Choosing models](#choosing-models)) |
+| `--json` | flag | false | With `--check`: print the result as one JSON object — `ready`, `stage` (`setup` or `load`), `reasons`, `agent_missing` (setup still has to install the GAIA agent), `no_agent_build` (the hub has no GAIA agent build for this PC, so chat isn't available), `warnings`, and per-model `id`, `role`, `size_gb`, `loaded`, `error`. With `--plan`: print the plan as one JSON object (see [Choosing models](#choosing-models)) |
 | `--progress-json` | flag | false | Also print setup steps and model download progress as one JSON object per line on stdout, for a tool that shows it (the desktop app's installer). Human output still prints around them. See [Progress events](#progress-events) |
 | `--plan` | flag | false | Print the models setup would download — size left to download, what each is for, whether it fits this PC, and the free space on the model drive — then exit. Downloads nothing |
 | `--use-model` | string | — | Use this chat model and save it as `default_model`: one GAIA knows, or any chat model already downloaded in Lemonade, FLM included. One that may not fit this PC exits `4` until you add `--acknowledge-no-fit` |
@@ -501,7 +501,10 @@ The exit code still says whether setup succeeded.
 device axis explicitly with `gaia init --profile npu`, which swaps the GGUF models for
 their FLM equivalents — the default never switches your backend for you. It installs
 the same flagship agent as a bare `gaia init`, and fails the same way
-when the download server can't be reached.
+when the download server can't be reached. On Linux, when the NPU's 8 MB locked-memory
+limit would stop the model from loading, it offers to raise the limit (it asks for an
+administrator password, and the change applies after a restart). It never asks under
+`--yes` or without a terminal. See [NPU on Linux](/guides/npu#the-locked-memory-limit).
 </Note>
 
 <Note>
@@ -521,7 +524,7 @@ hardware. Where Lemonade reports a GPU with enough memory for it — about 27 GB
 models, its 23.3 GB of weights and vision projector plus the context cache at its
 smallest, 64K window, so a 64 GB+ Strix Halo or a 32 GB GPU, but not a 24 GB card or a
 CPU-only PC — `gaia init` also sets up `Qwen3.6-35B-A3B-GGUF` (a 23 GB Lemonade
-built-in MoE, run with thinking on, needs Lemonade v11.7.0 or newer) as the chat model,
+built-in MoE, run with thinking on) as the chat model,
 prints why, and records it as `default_model`. It must also fit the memory free when
 setup runs, so a PC busy with other apps keeps Gemma and says why: close them and
 re-run `gaia init`. If setup's verify step fails, no default model is recorded. It loads with the largest window the
@@ -538,9 +541,8 @@ when it is missing. `--check` asks for the same models `gaia init` would downloa
 
 <Note>
 `user.Qwen3.8-Flash-Next-GGUF` (an 82 GB download, multimodal, thinking on) is
-available on a 128 GB Strix Halo and never auto-selected. It needs ~90 GB for models
-and Lemonade v2026.39.1 or newer (its llama.cpp cannot load the model otherwise;
-upgrade with `gaia init --force-reinstall`). Choose it with
+available on a 128 GB Strix Halo and never auto-selected. It needs ~90 GB for models.
+Choose it with
 `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`, or pick it in the
 terminal UI's model picker; Lemonade downloads it on first use. `gaia init` refuses it
 on a PC that cannot hold it and names the memory it needs. To measure both on your
@@ -625,7 +627,7 @@ never touches a Lemonade app you installed yourself.
     GAIA sends it as `Authorization: Bearer <key>` on every Lemonade-bound request
     (see [Lemonade docs](https://lemonade-server.ai/docs/guide/configuration/#api-key-and-security)).
 
-    1. **Checks the Server** — it must answer and meet the profile's minimum Lemonade version
+    1. **Checks the Server** — it must answer and be Lemonade v2026.44.1 or newer
     2. **Downloads Models** — downloads models on that server via its REST API
     3. **Verifies Setup** — tests each model with inference to detect corrupted downloads
   </Tab>
@@ -707,11 +709,13 @@ is removed only when it is the app's exact wrapper around this GAIA home's venv;
 </Note>
 
 <Note>
-`--purge` also undoes what the one-line installer set up. It stops a running GAIA daemon
-before deleting its state, removes `gaia-tui` and `gaia-agent` from `~/.gaia/bin`, and
+`--purge` also undoes what the one-line installer set up. It stops a running GAIA daemon,
+and any agent sidecar it left running, before deleting its state, removes `~/.gaia/bin`
+(`gaia-tui`, `gaia-agent`, the `gaia` command links the Linux and macOS installer puts
+there, and on Windows the `gaia` launchers the installer copies there), and
 removes the installer's PATH entries: the `# Added by GAIA installer` block in
-`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` or `~/.profile`, or the `~\.gaia\venv\Scripts`
-and `~\.gaia\bin` entries on the Windows user PATH. The rest of each file and every
+`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` or `~/.profile`, or the `~\.gaia\bin` entry
+on the Windows user PATH (and `~\.gaia\venv\Scripts`, which earlier installers added). The rest of each file and every
 other PATH entry are left exactly as they were. If you edited the installer's `export PATH`
 line by hand, it is kept and the command tells you to remove it yourself. A `GAIA_HOME`
 other than `~/.gaia` leaves these PATH edits alone, because they still point at `~/.gaia`.
@@ -805,7 +809,7 @@ Use `--layout hub` when authoring a package for this repo's `hub/agents/` tree, 
 | Mode | LLM required? | Checks |
 |------|:-------------:|--------|
 | `--lint` (default) | No (CI-safe) | Manifest valid + complete, package structure, Python sources parse + imports resolve, `black` + `isort` clean (Python); manifest + structure (C++) |
-| `--live` | Yes (Lemonade Server) | Agent answers each declared `conversation_starter` within `--timeout` without crashing |
+| `--live` | Yes (Lemonade Server) | Agent answers each declared `conversation_starter` within `--timeout` without crashing, and the model gives a usable reply (a turn that ends on unparsable or cut-off model output fails the gate) |
 
 The publish workflow requires `--lint` to pass; `--live` is recommended but not enforced.
 
@@ -1742,7 +1746,7 @@ gaia connectors configure mcp-github --set GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx
 ```
 
 ```bash Grant an agent scopes
-gaia connectors grants grant google builtin:chat --scopes gmail.readonly
+gaia connectors grants grant google installed:gaia --scopes https://www.googleapis.com/auth/gmail.readonly
 ```
 </CodeGroup>
 
@@ -1761,7 +1765,7 @@ environment variable; see [the Microsoft connector guide](/connectors/microsoft#
 ## AMD LLM Gateway
 
 Runs GAIA agents on gateway-hosted models — larger on-prem models and frontier
-models — alongside local inference. Requires **Lemonade Server 11.8.0+**.
+models — alongside local inference.
 
 You enter your token once. Lemonade holds it in memory and forgets it on
 restart, so GAIA keeps a copy in your **OS credential store** (DPAPI, Keychain,
@@ -1794,7 +1798,7 @@ gaia gateway uninstall                # remove the provider
 | `--allow-insecure-http` | `install` | Permit an `http://` gateway. Lemonade refuses to hold a token over plaintext otherwise; only for an on-prem gateway without TLS |
 | `--token` | `auth` | Token value — prefer the prompt, which keeps it out of shell history |
 | `--token-stdin` | `auth` | Read the token from stdin — best for scripts |
-| `--no-remember` | `auth` | Do not store the token; you are asked again after a restart |
+| `--no-remember` | `auth` | Do not store the token, and delete an older stored one; you are asked again after a restart |
 | `--forget` | `logout` | Also delete the stored token |
 | `--model` | `test` | Model to test (default: the active gateway model) |
 
@@ -1888,8 +1892,10 @@ What it does not cover:
   own copy of GAIA, so a cloud model named in a request to it isn't checked. Update
   the agent with `gaia agent install <id>`.
 - A key set in Lemonade's own environment (for example
-  `LEMONADE_FIREWORKS_API_KEY`), or a key a Lemonade you run yourself holds: GAIA's own
-  requests are still refused, but a program talking to Lemonade directly could use it.
+  `LEMONADE_FIREWORKS_API_KEY`), or a key held by a Lemonade you chose (with
+  `LEMONADE_BASE_URL` or `gaia lemonade connect`): GAIA leaves that server's keys alone
+  and its own requests are still refused, but a program talking to Lemonade directly
+  could use it.
   If GAIA can't reach its Lemonade when you turn Local only on, it says so; restart
   Lemonade to drop any key it still holds.
 
@@ -2130,6 +2136,10 @@ and no admin rights. `gaia init` installs and starts it; a Lemonade you installe
 yourself is left alone unless you choose to use it (see
 [Use a Lemonade you already run](#use-a-lemonade-you-already-run)).
 
+GAIA keeps its own server current. When an update to GAIA targets a newer
+Lemonade, the next start replaces the older one, downloading it if needed; you
+run nothing.
+
 ```bash
 gaia lemonade embedded start      # download if needed, then run
 gaia lemonade embedded status
@@ -2180,8 +2190,8 @@ gaia config set lemonade_mode gaia             # back to GAIA's own
 
 | Command | Description |
 |---------|-------------|
-| `connect [URL]` | Check the server (it must be Lemonade v10.9.0 or newer), save it as `lemonade_mode external`, and switch a running daemon. Without `URL`, uses the one `detect` finds. Asks for the API key if the server needs one; `--api-key-stdin` reads it from a pipe. The key goes to the OS credential store |
-| `detect` | Look for a Lemonade on `localhost:13305` and `localhost:8000`. Only a Lemonade `/health` answer counts, or a request for an API key on a PC with Lemonade installed. `--json` prints one object, or `null` |
+| `connect [URL]` | Check the server (it must be Lemonade v2026.44.1 or newer), save it as `lemonade_mode external`, and switch a running daemon. Without `URL`, uses the one `detect` finds. Asks for the API key if the server needs one; `--api-key-stdin` reads it from a pipe. The key goes to the OS credential store |
+| `detect` | Look for a Lemonade on `localhost:13305`. Only a Lemonade `/health` answer counts, or a request for an API key on a PC with Lemonade installed. `--json` prints one object, or `null` |
 | `status` | Print which server GAIA uses and whether `LEMONADE_BASE_URL` or the saved setting chose it. `--json` prints one object |
 
 `LEMONADE_BASE_URL` wins over the saved setting.
@@ -3711,7 +3721,7 @@ gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 |--------|---------|-------------|
 | `start` | — | Start the daemon or attach to the running one (two callers → one daemon), and start GAIA's Lemonade Server if it is installed and stopped. |
 | `status` | — | Print pid / port / uptime and the supervised sidecar list, or report if no daemon is running. |
-| `stop` | — | Shut the daemon down (tree-killing every sidecar, then GAIA's Lemonade Server, whoever started it) and release `~/.gaia/host/instance.json`. With no daemon running it still stops GAIA's Lemonade Server. |
+| `stop` | — | Shut the daemon down (tree-killing every sidecar, then GAIA's Lemonade Server, whoever started it) and release `~/.gaia/host/instance.json`. With no daemon running it still stops GAIA's Lemonade Server. It then stops any sidecar a terminated or crashed daemon left running, and exits 1 naming the pid if the daemon or a sidecar is still alive. It exits 3 when only GAIA's Lemonade Server would not stop, so an installer can tell the two apart. The desktop app runs it before updating its backend and when it is uninstalled. |
 | `restart` | — | `stop` followed by `start`. |
 | `logs` | `--lines`, `--follow` | Print (or stream) the daemon log tail. |
 | `agents` | — | List every registered sidecar agent: id, state, and (when running) mode, pid, port, contract version — never the bearer token. Dev-mode entries also show their source dir; user-mode and stopped entries always report `dev_src_dir: null`. |

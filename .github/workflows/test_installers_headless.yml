@@ -29,7 +29,8 @@
 #                 fake Lemonade with nothing downloaded: Download, Test, Ready.
 #                 A PR or a dispatch can pick a release that predates that
 #                 setup, so only the tag, whose checkout is the code under
-#                 test, runs it. test_setup_journey.yml covers the screens on
+#                 test, runs it, or a dispatch that asks for it with
+#                 setup_journey. test_setup_journey.yml covers the screens on
 #                 PRs, and test_setup_real_download.yml a real download nightly.
 #   terminal      `gaia-tui version` reports the release, and one non-interactive
 #                 turn (`gaia-tui chat --agent gaia --query ...`) completes
@@ -55,7 +56,8 @@
 # A failure that is a filed, open installer bug is listed in
 # installer/headless/known_failures.json (issue + output signature). It shows as
 # "known #N" in the table instead of failing the run, and fails it again as soon
-# as it stops reproducing, so the entry goes away with the fix.
+# as it stops reproducing, so the entry goes away with the fix. Its issue must
+# carry a release milestone that has not shipped yet, or the summary fails.
 #
 # Triggers:
 #   workflow_dispatch  any release; the default (also used by PRs) is the newest
@@ -84,6 +86,11 @@ on:
         required: false
         default: ''
         type: string
+      setup_journey:
+        description: 'Also walk first-run setup in the desktop rows. Only for a release whose app has that setup, close to the checked-out ref.'
+        required: false
+        default: false
+        type: boolean
   push:
     tags: ['v*']
   pull_request:
@@ -314,7 +321,7 @@ jobs:
       ROW: ${{ matrix.row }}
       KIND: ${{ matrix.kind }}
       COMPONENTS: ${{ matrix.components }}
-      SETUP_PHASE: ${{ github.event_name == 'push' && github.ref_type == 'tag' && matrix.setup == true }}
+      SETUP_PHASE: ${{ matrix.setup == true && ((github.event_name == 'push' && github.ref_type == 'tag') || inputs.setup_journey == true) }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -405,7 +412,7 @@ jobs:
       ROW: ${{ matrix.row }}
       KIND: ${{ matrix.kind }}
       TUI_PLATFORM: ${{ matrix.tui_platform }}
-      SETUP_PHASE: ${{ github.event_name == 'push' && github.ref_type == 'tag' && matrix.setup == true }}
+      SETUP_PHASE: ${{ matrix.setup == true && ((github.event_name == 'push' && github.ref_type == 'tag') || inputs.setup_journey == true) }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -515,6 +522,9 @@ jobs:
     if: always() && needs.resolve.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read   # check-known reads each known failure's issue and milestone
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -530,6 +540,14 @@ jobs:
           python installer/headless/journey.py summarize --dir results
           --known installer/headless/known_failures.json
           --thresholds installer/install_time_thresholds.json --out install-timings.json
+      # #5527's entry kept the .deb rows green through three releases as its milestone slipped.
+      - name: Known failures are still scheduled
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python installer/headless/journey.py check-known
+          --known installer/headless/known_failures.json --repo "${{ github.repository }}"
       - uses: actions/upload-artifact@v7
         if: always()
         with:

@@ -676,7 +676,7 @@ class TurnSummaryLiveData(BaseModel):
 class TurnSummaryCost(BaseModel):
     """What the turn cost."""
 
-    kind: str  # local | estimate | unknown
+    kind: str  # local | estimate | unknown | unreported (priced, no usage sent)
     usd: Optional[float] = None
 
 
@@ -708,6 +708,8 @@ class MessageResponse(BaseModel):
     agent_steps: Optional[List[AgentStepResponse]] = None
     stats: Optional[InferenceStatsResponse] = None
     turn_summary: Optional[TurnSummaryResponse] = None
+    # The user's Stop ended this reply before it finished.
+    stopped: bool = False
 
 
 class MessageListResponse(BaseModel):

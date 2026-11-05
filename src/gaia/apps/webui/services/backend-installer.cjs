@@ -17,6 +17,7 @@
  *   - installBackend(opts)           → Promise<void>
  *   - ensureBackend(opts)            → Promise<string>  (returns gaia bin path)
  *   - isBackendCurrent()             → boolean  (nothing to install or refresh)
+ *   - stopRunningDaemon(opts)        → Promise<void>  (before the venv is touched)
  *   - getInstalledVersion(gaiaBin)   → string | null
  *   - findGaiaBin()                  → string | null
  *   - getState() / setState()        → state machine helpers
@@ -150,7 +151,15 @@ const FAILURE_REASONS = Object.freeze({
   NETWORK: "network",
   TLS: "tls",
   LOCKED: "locked",
+  DAEMON: "daemon",
 });
+
+// `gaia daemon stop` can take about 90 s: up to 45 s for a graceful exit, then
+// terminating the daemon and its agents, then up to 20 s for GAIA's Lemonade Server.
+const DAEMON_STOP_TIMEOUT_MS = 120 * 1000;
+/** `gaia daemon stop` exit code: the daemon stopped, GAIA's Lemonade Server did not. */
+const DAEMON_STOP_LEMONADE_EXIT = 3;
+const DAEMON_INSTANCE_FILE = path.join(GAIA_HOME, "host", "instance.json");
 
 // Stage an older installer recorded while it ran `gaia init`; the package was
 // already in place by then.
@@ -459,9 +468,13 @@ function findGaiaBin() {
  *
  * `onLine(line)` sees each whole stdout line as it arrives; a line it returns
  * true for is left out of the log.
+ *
+ * When `signal` aborts, the child and everything it started are stopped and
+ * the Promise rejects with InstallCancelled once they are gone.
  */
-function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
-  return new Promise((resolve) => {
+function runCommand(cmd, args, { env, stageLabel, onLine, signal, timeoutMs } = {}) {
+  if (signal && signal.aborted) return Promise.reject(new InstallCancelled());
+  return new Promise((resolve, reject) => {
     log(`$ ${cmd} ${args.join(" ")}`);
     let proc;
     try {
@@ -477,6 +490,21 @@ function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
       resolve({ code: -1, stdout: "", stderr: String(err.message || err), error: err });
       return;
     }
+
+    let stopping = false;
+    const onAbort = () => {
+      stopping = true;
+      stopTimer();
+      log(`Stopping ${cmd}: GAIA is quitting`);
+      require("./process-tree.cjs")
+        .killProcessTree(proc, { label: stageLabel || cmd, log, logError })
+        .then(() => reject(new InstallCancelled()), reject);
+    };
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    const finish = (result) => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      if (!stopping) resolve(result);
+    };
 
     let stdout = "";
     let stderr = "";
@@ -525,16 +553,121 @@ function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
       });
     });
 
+    // From `timers`, not the globals: the installer tests run this file in a bare vm context.
+    let timer = null;
+    if (timeoutMs) {
+      timer = require("timers").setTimeout(() => {
+        logError(`${cmd} ${args.join(" ")} did not finish within ${Math.round(timeoutMs / 1000)}s — ending it`);
+        killTree(proc);
+        finish({ code: null, stdout, stderr, timedOut: true });
+      }, timeoutMs);
+    }
+    const stopTimer = () => {
+      if (timer) require("timers").clearTimeout(timer);
+    };
+
     proc.on("error", (err) => {
+      stopTimer();
       logError(`${cmd} error: ${err.message}`);
-      resolve({ code: -1, stdout, stderr, error: err });
+      finish({ code: -1, stdout, stderr, error: err });
     });
 
     proc.on("exit", (code) => {
+      stopTimer();
       log(`  exit code: ${code}`);
-      resolve({ code, stdout, stderr });
+      finish({ code, stdout, stderr });
     });
   });
+}
+
+/** End `proc` and what it started: a Windows venv launcher runs Python as a child. */
+function killTree(proc) {
+  if (IS_WINDOWS) {
+    const r = spawnSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
+      windowsHide: true,
+      timeout: 30 * 1000,
+    });
+    if (r.error || r.status !== 0) {
+      logError(`taskkill /PID ${proc.pid} /T /F failed: ${r.error ? r.error.message : `exit ${r.status}`}`);
+    }
+    return;
+  }
+  try {
+    proc.kill("SIGKILL");
+  } catch (err) {
+    logError(`Could not end pid ${proc.pid}: ${err.message}`);
+  }
+}
+
+/** The pid of the GAIA daemon ~/.gaia/host/instance.json records, when that process is alive. */
+function liveDaemonPid() {
+  let pid;
+  try {
+    pid = Number(JSON.parse(fs.readFileSync(DAEMON_INSTANCE_FILE, "utf8")).pid);
+  } catch (err) {
+    if (err.code !== "ENOENT") log(`Could not read ${DAEMON_INSTANCE_FILE}: ${err.message}`);
+    return null;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    process.kill(pid, 0);
+    return pid;
+  } catch (err) {
+    // EPERM: the process exists but belongs to someone else.
+    return err.code === "EPERM" ? pid : null;
+  }
+}
+
+/**
+ * Stop the GAIA daemon (and the agents it runs) that the existing venv may be
+ * running, so the install doesn't trip over its open files. Throws an
+ * InstallError naming the daemon only when one is still alive afterwards: a
+ * stop that fails with no daemon running (a broken venv, say) must not block
+ * the reinstall that repairs it.
+ */
+async function stopRunningDaemon({ timeoutMs = DAEMON_STOP_TIMEOUT_MS, signal } = {}) {
+  if (!fs.existsSync(GAIA_BIN) || !fs.existsSync(GAIA_PYTHON_BIN)) return;
+  const result = await runCommand(GAIA_BIN, ["daemon", "stop"], {
+    stageLabel: "daemon",
+    timeoutMs,
+    signal,
+    // gaia prints emoji, which a Windows pipe's code page can't encode.
+    env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+  });
+  if (result.code === 0) return;
+  const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+  if (result.code === 2 && /invalid choice: '?daemon'?/.test(output)) {
+    log("The installed GAIA predates the daemon — nothing to stop");
+    return;
+  }
+  const pid = liveDaemonPid();
+  if (pid === null) {
+    if (result.code === DAEMON_STOP_LEMONADE_EXIT) {
+      log(
+        "The GAIA daemon stopped, but GAIA's Lemonade Server did not (see the lines above). " +
+          "It lives outside the backend's files, so the install goes on."
+      );
+    } else {
+      log(
+        `gaia daemon stop ${result.timedOut ? "timed out" : `exited ${result.code}`}, ` +
+          "but no GAIA daemon is running — continuing"
+      );
+    }
+    return;
+  }
+  const why = result.timedOut
+    ? `did not stop within ${Math.round(timeoutMs / 1000)} seconds`
+    : `could not be stopped (gaia daemon stop exit ${result.code})`;
+  log(`To stop it by hand: ${GAIA_BIN} daemon stop`);
+  throw new InstallError(
+    `GAIA's background service (the GAIA daemon, pid ${pid}) ${why}, so its files can't be updated.`,
+    {
+      stage: STAGES.CREATE_VENV,
+      code: result.code,
+      reason: FAILURE_REASONS.DAEMON,
+      suggestion: `It has no window to close. Restart your PC, then try again. The log at ${LOG_FILE} has the details.`,
+    }
+  );
 }
 
 /**
@@ -545,6 +678,91 @@ function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
 function isFileLockedError(output) {
   if (!output) return false;
   return /os error 32/i.test(output) || /being used by another process/i.test(output);
+}
+
+/** The files uv could not replace, as absolute paths, in the order it named them. */
+function lockedFiles(output) {
+  const files = [];
+  for (const m of String(output || "").matchAll(/failed to \w+ (?:file|directory) `([^`]+)`/gi)) {
+    const file = path.resolve(m[1]);
+    if (!files.includes(file)) files.push(file);
+  }
+  return files;
+}
+
+const MOVED_ASIDE_SUFFIX = /\.old-\d+$/i;
+
+function sameFile(a, b) {
+  return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+}
+
+/**
+ * Rename each locked launcher in the venv's Scripts folder to <name>.old-<ts>
+ * so uv can write a fresh one (#6570). A launcher something is running can't
+ * be renamed; it is left alone. Returns [{ file, aside }] for those moved.
+ */
+function moveLockedAside(files) {
+  const scripts = path.join(GAIA_VENV, "Scripts");
+  const stamp = Date.now();
+  const moved = [];
+  for (const file of files) {
+    if (!/\.exe$/i.test(file) || !sameFile(path.dirname(file), scripts)) continue;
+    const aside = `${file}.old-${stamp}`;
+    try {
+      fs.renameSync(file, aside);
+      moved.push({ file, aside });
+      log(`Moved locked ${file} aside to ${path.basename(aside)}`);
+    } catch (err) {
+      log(`Could not move locked ${file} aside (${err.code || err.message}); it stays where it is`);
+    }
+  }
+  return moved;
+}
+
+/** Put back every moved launcher uv did not replace, so a failed upgrade leaves the venv whole. */
+function putBackUnreplaced(moved) {
+  for (const { file, aside } of moved) {
+    if (fs.existsSync(file)) {
+      log(`${path.basename(file)} was reinstalled; ${path.basename(aside)} is deleted on a later install`);
+      continue;
+    }
+    try {
+      fs.renameSync(aside, file);
+    } catch (err) {
+      throw new Error(`Could not put ${aside} back at ${file}: ${err.message}`);
+    }
+    log(`Put ${path.basename(file)} back from ${path.basename(aside)}`);
+  }
+}
+
+/**
+ * Tidy what an earlier upgrade moved aside. A .old file whose original was
+ * reinstalled is deleted unless still in use; one whose original is missing
+ * is put back, newest first.
+ */
+function removeMovedLaunchers() {
+  const dir = path.join(GAIA_VENV, "Scripts");
+  const stampOf = (name) => Number(/\.old-(\d+)$/i.exec(name)[1]);
+  const leftovers = listDir(dir)
+    .filter((name) => MOVED_ASIDE_SUFFIX.test(name))
+    .sort((a, b) => stampOf(b) - stampOf(a));
+  for (const name of leftovers) {
+    const aside = path.join(dir, name);
+    const file = aside.replace(MOVED_ASIDE_SUFFIX, "");
+    if (!fs.existsSync(file)) {
+      fs.renameSync(aside, file);
+      log(`Put ${path.basename(file)} back from ${name}: no newer copy was installed`);
+      continue;
+    }
+    try {
+      fs.unlinkSync(aside);
+      log(`Removed ${aside}, moved aside by an earlier upgrade`);
+    } catch (err) {
+      // Windows refuses to delete a program that is running (EPERM) or open (EBUSY).
+      if (err.code !== "EBUSY" && err.code !== "EPERM") throw err;
+      log(`Left ${aside} in place: it is still in use (${err.code})`);
+    }
+  }
 }
 
 /**
@@ -956,13 +1174,23 @@ async function runPreChecks(opts = {}) {
 // ── uv install ───────────────────────────────────────────────────────────────
 
 class InstallError extends Error {
-  constructor(message, { stage, code, suggestion, reason } = {}) {
+  constructor(message, { stage, code, suggestion, reason, lockedFiles } = {}) {
     super(message);
     this.name = "InstallError";
     this.stage = stage || null;
     this.code = code || null;
     this.suggestion = suggestion || null;
     this.reason = reason || null;
+    // The files another program held open, for main to find who holds them.
+    this.lockedFiles = lockedFiles || null;
+  }
+}
+
+/** The caller's signal stopped the install: the app is quitting, nothing failed. */
+class InstallCancelled extends Error {
+  constructor() {
+    super("The install stopped because GAIA is quitting; it continues on the next launch.");
+    this.name = "InstallCancelled";
   }
 }
 
@@ -1190,7 +1418,7 @@ function addManagedBinToPath() {
  *
  * Throws InstallError on failure.
  */
-async function ensureUv({ onProgress, isPackaged } = {}) {
+async function ensureUv({ onProgress, isPackaged, signal } = {}) {
   const report = makeProgressReporter(onProgress);
   report(STAGES.ENSURE_UV, 0, "Checking uv (Python package manager)");
 
@@ -1289,13 +1517,13 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
           "-Command",
           "irm https://astral.sh/uv/install.ps1 | iex",
         ],
-        { stageLabel: "uv-install-dev" }
+        { stageLabel: "uv-install-dev", signal }
       );
     } else {
       result = await runCommand(
         "bash",
         ["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
-        { stageLabel: "uv-install-dev" }
+        { stageLabel: "uv-install-dev", signal }
       );
     }
 
@@ -1356,7 +1584,7 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
           "-Command",
           "irm https://astral.sh/uv/install.ps1 | iex",
         ],
-        { stageLabel: "uv-install-packaged-rescue" }
+        { stageLabel: "uv-install-packaged-rescue", signal }
       );
       if (rescue.code === 0) {
         // Ensure common install locations are present on PATH for this
@@ -1382,6 +1610,7 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
         log(`Packaged Windows: automated uv installer exited ${rescue.code}`);
       }
     } catch (rescueErr) {
+      if (rescueErr instanceof InstallCancelled) throw rescueErr;
       log(`Packaged Windows: rescue installer threw: ${rescueErr.message}`);
     }
   }
@@ -1483,13 +1712,14 @@ async function installBackend(opts = {}) {
   setState(STATES.INSTALLING, { stage: STAGES.ENSURE_UV, version });
 
   // Stage 1: ensure uv
-  await ensureUv({ onProgress: opts.onProgress, isPackaged: opts.isPackaged });
+  await ensureUv({ onProgress: opts.onProgress, isPackaged: opts.isPackaged, signal: opts.signal });
 
   // Stage 2: create venv
   setState(STATES.INSTALLING, { stage: STAGES.CREATE_VENV, version });
   report(STAGES.CREATE_VENV, 0, "Creating Python 3.12 environment");
 
   ensureGaiaHome();
+  await stopRunningDaemon({ signal: opts.signal });
 
   // If the venv exists but the python binary is missing, treat as partial.
   const venvLooksValid =
@@ -1506,7 +1736,7 @@ async function installBackend(opts = {}) {
     }
 
     const venvArgs = ["venv", GAIA_VENV, "--python", "3.12"];
-    let venvResult = await runCommand("uv", venvArgs, { stageLabel: "venv" });
+    let venvResult = await runCommand("uv", venvArgs, { stageLabel: "venv", signal: opts.signal });
     // uv downloads Python 3.12 when none is installed; behind a corporate
     // proxy that fails on uv's bundled roots exactly like the pip step below.
     let venvNativeTls = false;
@@ -1529,6 +1759,7 @@ async function installBackend(opts = {}) {
       }
       venvResult = await runCommand("uv", [...venvArgs, "--native-tls"], {
         stageLabel: "venv",
+        signal: opts.signal,
       });
     }
     if (venvResult.code !== 0) {
@@ -1553,6 +1784,7 @@ async function installBackend(opts = {}) {
   // Stage 3: pip install
   setState(STATES.INSTALLING, { stage: STAGES.INSTALL_PACKAGE, version });
   report(STAGES.INSTALL_PACKAGE, 0, `Installing ${pipPackage}`);
+  if (IS_WINDOWS) removeMovedLaunchers();
 
   const pipArgs = [
     "pip",
@@ -1568,14 +1800,14 @@ async function installBackend(opts = {}) {
   // deps (numpy, faiss, pypdfium2, …) are fetched live from PyPI even
   // when the gaia wheel itself is local, so a single broken-pipe mid-download
   // would otherwise fail the whole bootstrap (and block a release). File-lock
-  // failures (Windows os-error-32) are NOT retried — they need user action.
+  // failures (Windows os-error-32) get their own single retry after this loop.
   let installResult;
   if (!localWheel && isBackendPrefetched(version)) {
     report(STAGES.INSTALL_PACKAGE, 0, `Installing ${pipPackage} from the downloaded update`);
     const offline = await runCommand(
       "uv",
       ["pip", "install", pipPackage, "--offline", "--compile-bytecode", "--python", GAIA_PYTHON_BIN],
-      { stageLabel: "pip" }
+      { stageLabel: "pip", signal: opts.signal }
     );
     fs.rmSync(_prefetchMarker(toPep440(version)), { force: true });
     if (offline.code === 0) {
@@ -1597,7 +1829,7 @@ async function installBackend(opts = {}) {
   ) {
     const attemptArgs = useNativeTls ? [...pipArgs, "--native-tls"] : pipArgs;
     if (useNativeTls) nativeTlsAttempted = true;
-    installResult = await runCommand("uv", attemptArgs, { stageLabel: "pip" });
+    installResult = await runCommand("uv", attemptArgs, { stageLabel: "pip", signal: opts.signal });
     if (installResult.code === 0) break;
     const attemptOutput = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
     // A corporate proxy's custom root CA isn't in uv's bundled webpki roots, so
@@ -1634,16 +1866,41 @@ async function installBackend(opts = {}) {
     );
     await sleep(backoffMs);
   }
+  // A launcher that is only open, not running, can be renamed out of uv's way (#6570).
+  const firstOutput = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
+  if (IS_WINDOWS && installResult.code !== 0 && isFileLockedError(firstOutput)) {
+    const moved = moveLockedAside(lockedFiles(firstOutput));
+    if (moved.length > 0) {
+      report(STAGES.INSTALL_PACKAGE, 0, "Another program has GAIA's files open — retrying the install");
+      try {
+        installResult = await runCommand("uv", useNativeTls ? [...pipArgs, "--native-tls"] : pipArgs, {
+          stageLabel: "pip",
+          signal: opts.signal,
+        });
+      } finally {
+        putBackUnreplaced(moved);
+      }
+    }
+  }
   if (installResult.code !== 0) {
-    // Windows: an upgrade can't replace gaia.exe while a previous GAIA
-    // process still holds it open (issue #1388). The orphan cleanup in
-    // main.cjs should have killed it first; if the lock persists, point the
-    // user at the live process rather than the generic manual-install hint.
     const output = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
     let suggestion;
     if (isFileLockedError(output)) {
-      suggestion =
-        "A running GAIA process is locking the install. Close GAIA completely (including any leftover gaia.exe in Task Manager), then relaunch.";
+      // pip's own line is already in the log, which the setup screen's details show.
+      const files = lockedFiles(output);
+      const names = files.map((file) => path.basename(file)).join(", ");
+      throw new InstallError(
+        `GAIA couldn't replace its own files because another program has them open${names ? ` (${names})` : ""}.`,
+        {
+          stage: STAGES.INSTALL_PACKAGE,
+          code: installResult.code,
+          reason: FAILURE_REASONS.LOCKED,
+          lockedFiles: files,
+          suggestion:
+            "Close other GAIA apps and any terminal running gaia, or restart your PC, then try again. " +
+            `The log at ${LOG_FILE} names the file.`,
+        }
+      );
     } else if (isTlsCertError(output)) {
       suggestion =
         "PyPI's certificate isn't trusted on this network — usually a corporate proxy presenting its own root CA. " +
@@ -1782,6 +2039,7 @@ async function refreshAgent(gaiaBin, opts = {}) {
   const result = await runCommand(gaiaBin, ["init", "--agent-only"], {
     stageLabel: "agent",
     env: { ...process.env, COLUMNS: "1000" },
+    signal: opts.signal,
   });
   const lastLine = `${result.stderr || ""}`.trim().split(/\r?\n/).pop();
   if (result.code === AGENT_KEPT_EXIT) {
@@ -1961,8 +2219,11 @@ function venvPackageVersion() {
  *   - version: override the pinned version
  *   - allowPartialRestart: bool (default true) — restart from scratch if
  *     the state file indicates a `partial` install.
+ *   - signal: AbortSignal — stops the running step (the app is quitting)
  *
- * Throws InstallError on failure and updates the state file.
+ * Throws InstallError on failure and updates the state file. Throws
+ * InstallCancelled when `signal` stopped it; the state file then still says
+ * installing, so the next launch runs the install again.
  */
 async function ensureBackend(opts = {}) {
   openLog({ truncate: true });
@@ -2098,6 +2359,10 @@ async function ensureBackend(opts = {}) {
     await refreshAgent(verified, opts);
     return verified;
   } catch (err) {
+    if (err instanceof InstallCancelled) {
+      log(err.message);
+      throw err;
+    }
     if (err instanceof InstallError) {
       setState(STATES.FAILED, {
         stage: err.stage || null,
@@ -2129,6 +2394,7 @@ module.exports = {
   getInstalledVersion,
   findGaiaBin,
   toPep440,
+  stopRunningDaemon,
 
   // Pre-checks
   runPreChecks,
@@ -2162,6 +2428,8 @@ module.exports = {
   STATES,
   STAGES,
   FAILURE_REASONS,
+  DAEMON_STOP_TIMEOUT_MS,
+  DAEMON_STOP_LEMONADE_EXIT,
   GAIA_HOME,
   GAIA_VENV,
   GAIA_BIN,
@@ -2169,4 +2437,5 @@ module.exports = {
 
   // Error
   InstallError,
+  InstallCancelled,
 };

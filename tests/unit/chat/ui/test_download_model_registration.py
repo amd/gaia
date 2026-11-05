@@ -31,8 +31,31 @@ class _Stream:
         return False
 
 
+class _Catalog:
+    def __init__(self, ids, status_code=200):
+        self.ids = ids
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code != 200:
+            raise httpx.HTTPStatusError(
+                f"HTTP {self.status_code}",
+                request=httpx.Request("GET", "http://lemonade/models"),
+                response=httpx.Response(self.status_code),
+            )
+
+    def json(self):
+        return {"data": [{"id": i} for i in self.ids]}
+
+
 @pytest.fixture
-def sent(monkeypatch):
+def lemonade_lists():
+    """What Lemonade's ``/models?show_all=true`` answers; edit per test."""
+    return _Catalog([])
+
+
+@pytest.fixture
+def sent(monkeypatch, lemonade_lists):
     calls = []
 
     class _Client:
@@ -49,6 +72,10 @@ def sent(monkeypatch):
             calls.append(json)
             return _Stream()
 
+        async def get(self, url, params=None, headers=None):
+            assert url.endswith("/models") and params == {"show_all": "true"}
+            return lemonade_lists
+
     monkeypatch.setattr(httpx, "AsyncClient", _Client)
     return calls
 
@@ -64,6 +91,106 @@ def test_custom_model_pull_carries_its_registration(sent):
             "reasoning": True,
         }
     ]
+
+
+def test_embedder_pull_carries_checkpoint_recipe_and_embedding(sent):
+    """The embedder is a user. model; name-only returns HTTP 500 on a cold cache."""
+    asyncio.run(system._stream_lemonade_pull(lc.DEFAULT_EMBEDDING_MODEL, False))
+    assert sent == [
+        {
+            "model_name": "user.embeddinggemma-300m-GGUF",
+            "stream": True,
+            "checkpoint": "ggml-org/embeddinggemma-300M-GGUF:Q8_0",
+            "recipe": "llamacpp",
+            "embedding": True,
+        }
+    ]
+
+
+def test_flash_pull_carries_the_registration_lemonade_cannot_infer(sent):
+    """The opt-in Qwen3.8 Flash model is the Download button's user. case."""
+    asyncio.run(system._stream_lemonade_pull(lc.FLASH_OPTION_MODEL_NAME, True))
+    assert sent == [
+        {
+            "model_name": "user.Qwen3.8-Flash-Next-GGUF",
+            "stream": True,
+            "force": True,
+            "checkpoint": "unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ3_XXS",
+            "recipe": "llamacpp",
+            "mmproj": "mmproj-F16.gguf",
+            "vision": True,
+            "reasoning": True,
+        }
+    ]
+
+
+def test_gateway_model_is_not_posted(sent, monkeypatch):
+    """A gateway model has no weights; the button must not call /pull."""
+
+    async def _keep(_model_name):
+        return None
+
+    monkeypatch.setattr(system, "_evict_progress_after_ttl", _keep)
+    lc.record_cloud_models(
+        {"data": [{"id": "other.remote-chat", "recipe": "cloud", "labels": []}]}
+    )
+    try:
+        asyncio.run(system._stream_lemonade_pull("other.remote-chat", False))
+        assert sent == []
+        progress = system._get_download_progress("other.remote-chat")
+        assert progress["state"] == "error"
+        assert "gateway" in progress["message"]
+    finally:
+        lc.record_cloud_models({"data": []})
+
+
+def test_unknown_user_model_is_not_posted(sent, monkeypatch):
+    """Name-only for an unknown user. id is the HTTP 500 this pull used to send."""
+
+    async def _keep(_model_name):
+        return None
+
+    monkeypatch.setattr(system, "_evict_progress_after_ttl", _keep)
+    asyncio.run(system._stream_lemonade_pull("user.not-a-real-model", False))
+    assert sent == []
+    progress = system._get_download_progress("user.not-a-real-model")
+    assert progress["state"] == "error"
+    assert "Add a model from Hugging Face" in progress["message"]
+
+
+def test_user_model_lemonade_lists_but_gaia_does_not_pulls_by_name(
+    sent, lemonade_lists
+):
+    """Registered in Lemonade directly: name only, as before #6566 (#6675)."""
+    lemonade_lists.ids = ["Other-Model-GGUF", "My-Own-Finetune-GGUF"]
+    asyncio.run(system._stream_lemonade_pull("user.My-Own-Finetune-GGUF", False))
+    assert sent == [{"model_name": "user.My-Own-Finetune-GGUF", "stream": True}]
+
+
+def test_unknown_user_model_error_is_plain_language(sent, monkeypatch):
+    async def _keep(_model_name):
+        return None
+
+    monkeypatch.setattr(system, "_evict_progress_after_ttl", _keep)
+    asyncio.run(system._stream_lemonade_pull("user.not-a-real-model", False))
+    message = system._get_download_progress("user.not-a-real-model")["message"]
+    for developer_text in ("MODELS", "lemonade_client", "gaia init", "gaia model"):
+        assert developer_text not in message
+
+
+def test_unreadable_catalog_refuses_instead_of_guessing(
+    sent, lemonade_lists, monkeypatch
+):
+    async def _keep(_model_name):
+        return None
+
+    monkeypatch.setattr(system, "_evict_progress_after_ttl", _keep)
+    lemonade_lists.status_code = 500
+    asyncio.run(system._stream_lemonade_pull("user.not-a-real-model", False))
+    assert sent == []
+    progress = system._get_download_progress("user.not-a-real-model")
+    assert progress["state"] == "error"
+    assert "didn't say whether it has this model" in progress["message"]
 
 
 def test_listed_name_without_the_namespace_still_registers_under_it(sent):

@@ -186,7 +186,7 @@ response = rag.query("How do I contact support?")
 print(response.text)
 ```
 
-**Key advantage:** Documents are indexed once, then you can query as many times as you want without re-processing.
+**Key advantage:** Documents are indexed once, then you can query as many times as you want without re-processing. Each question is answered only from the passages retrieved for that question.
 
 Check the `success` field returned by `index_document()`. A failed cache write
 leaves the searchable index unchanged, so retrying does not duplicate chunks.

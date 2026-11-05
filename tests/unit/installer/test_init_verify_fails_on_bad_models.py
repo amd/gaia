@@ -135,8 +135,10 @@ def test_unreported_ctx_size_is_logged(caplog):
     cmd = InitCommand(profile="chat", yes=True)
     client = MagicMock()
     client.check_model_loaded.return_value = False
-    client.list_models.return_value = {
-        "data": [{"id": "Gemma-4-E4B-it-GGUF", "recipe_options": {}}]
+    client.health_check.return_value = {
+        "all_models_loaded": [
+            {"model_name": "Gemma-4-E4B-it-GGUF", "type": "llm", "recipe_options": {}}
+        ]
     }
     client.chat_completions.return_value = {"choices": [{"message": {"content": "ok"}}]}
 

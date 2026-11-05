@@ -161,9 +161,13 @@ def _cloud_error(
     if status in (401, 403):
         return ProviderError(f"{name} rejected the key. Check it and try again.", 401)
     if status == 404:
+        from gaia.llm.lemonade_launcher import describe_upgrade_hint
+        from gaia.version import LEMONADE_MIN_VERSION
+
         return ProviderError(
-            "This Lemonade cannot register cloud providers. Update Lemonade to "
-            "11.8.1 or newer (`gaia init` installs it).",
+            "This Lemonade cannot register cloud providers, so it is older than "
+            f"v{LEMONADE_MIN_VERSION}, the oldest version GAIA supports. "
+            f"{describe_upgrade_hint()}",
             409,
         )
     if status == 409:
@@ -1692,7 +1696,8 @@ def restart_local(
                 "go ahead."
             ),
         )
-    if provider_of(model_id) != LOCAL:
+    # A stopped server is started even for a cloud model: it relays that model too.
+    if server_up and provider_of(model_id) != LOCAL:
         raise HTTPException(
             status_code=422,
             detail="The active model runs in the cloud; nothing to restart.",

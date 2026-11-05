@@ -10,6 +10,7 @@ import { DiffCard } from '../render/DiffCard';
 import { UndoHistorySettings } from '../settings/UndoHistorySettings';
 import { resetTurnChangesCache } from '../../hooks/useTurnChanges';
 import * as api from '../../services/api';
+import { useChatStore } from '../../stores/chatStore';
 import type { TurnChanges as Turn } from '../../types/changes';
 
 const turn = (over: Partial<Turn> = {}): Turn => ({
@@ -159,6 +160,19 @@ describe('TurnChanges', () => {
         vi.spyOn(api, 'listTurnChanges').mockRejectedValue(new Error('backend down'));
         render(<TurnChanges sessionId="s1" messageId={7} />);
         expect(await screen.findByRole('note')).toHaveTextContent('backend down');
+    });
+
+    it('says GAIA cannot be reached instead of the raw "Failed to fetch", in the chosen language (#6588)', async () => {
+        vi.spyOn(api, 'listTurnChanges').mockRejectedValue(new TypeError('Failed to fetch'));
+        useChatStore.setState({ locale: 'ar' });
+        try {
+            render(<TurnChanges sessionId="s1" messageId={7} />);
+            const note = await screen.findByRole('note');
+            expect(note).toHaveTextContent('تعذّر التحقق من تغييرات الملفات في هذا الدور: تعذّر الوصول إلى GAIA حاليًا.');
+            expect(note).not.toHaveTextContent('Failed to fetch');
+        } finally {
+            useChatStore.setState({ locale: 'en' });
+        }
     });
 
     it('a 409 that is not a conflict offers no undo-anyway', async () => {

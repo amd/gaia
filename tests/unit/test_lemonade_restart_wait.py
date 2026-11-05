@@ -39,6 +39,7 @@ NOT_ANSWERING = (
     "GAIA's Lemonade Server (pid 1) is running but not answering; it may still "
     "be loading a model."
 )
+from gaia.version import LEMONADE_VERSION
 
 
 class _Http:
@@ -351,7 +352,9 @@ class TestANewSessionWaitsToo:
         monkeypatch.setattr(
             lc.LemonadeClient,
             "get_status",
-            lambda self: lc.LemonadeStatus(running=True, url=self.base_url),
+            lambda self: lc.LemonadeStatus(
+                version=LEMONADE_VERSION, running=True, url=self.base_url
+            ),
         )
         return world
 
@@ -396,7 +399,8 @@ class TestNotGaiasServer:
 
         assert client.follows_gaia_lemonade is False
         assert client.wait_for_gaia_lemonade(on_status=statuses.append) is False
-        with pytest.raises(requests.exceptions.ConnectionError):
+        # Down, so the request fails at once, naming the server.
+        with pytest.raises(lc.LemonadeServerDownError, match=f"localhost:{OLD_PORT}"):
             client.chat_completions(
                 MODEL, [{"role": "user", "content": "hi"}], auto_download=False
             )

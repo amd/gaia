@@ -843,6 +843,7 @@ jobs:
       contents: read
       issues: write          # comment on issues
       pull-requests: write   # comment on PR conversations
+      actions: read          # read the CI run logs an issue cites
     # Per thread, one group for mentions and one for follow-ups: a burst of either kind
     # collapses to one running + one pending run (GitHub keeps only the newest pending),
     # and a follow-up can never displace a pending @claude run. The mention branch
@@ -959,6 +960,8 @@ jobs:
             - **FAQ:** `docs/reference/faq.mdx`
 
             ### For Bugs
+            - If the issue cites CI runs or logs, read them before naming a cause, per the
+              skill's "Before you reply". A cause read only from code is "unconfirmed".
             - Search src/gaia/ for related code
             - Check tests/ for related test cases
             - Ask for reproduction steps if not provided
@@ -1238,8 +1241,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write        # create the autofix branch + commit
-      issues: write          # comment on the issue
+      issues: write          # comment on the issue, label it needs-human
       pull-requests: write   # open the fix PR
+      actions: read          # read the CI run logs an issue cites
     # Queue, never cancel: a second start must not kill a fix mid-push. It waits, then
     # the first step skips it if the first run opened a PR.
     concurrency:
@@ -1374,8 +1378,13 @@ jobs:
 
             1. Read CLAUDE.md for project conventions.
             2. Fetch the issue content via `gh issue view`.
-            3. Search the codebase for the relevant code (Grep, Glob, Read).
-            4. Decide: is this a good candidate for an auto-fix PR (locatable root cause,
+            3. If the issue or its comments cite CI runs or logs, read the failing part
+               (`gh run view <id> --repo ${{ github.repository }} --log-failed`) before you form a
+               hypothesis. An earlier comment's cause is a guess until the logs show it; when
+               they disagree, follow the logs (#6579: the reply blamed the install path, and the
+               cited run's log showed the quit question holding SIGTERM).
+            4. Search the codebase for the relevant code (Grep, Glob, Read).
+            5. Decide: is this a good candidate for an auto-fix PR (locatable root cause,
                targeted low-risk change)?
 
             **A bug qualifies for a PR (outcome A) when ALL of these hold:**
@@ -1620,6 +1629,7 @@ jobs:
       # file is model-written from untrusted issue text: it goes to the summary only,
       # never to stdout, where a line could be read as a workflow command.
       - name: Check the auto-fix outcome
+        id: outcome
         if: steps.claude.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1632,6 +1642,7 @@ jobs:
             exit 1
           fi
           outcome=$(head -n 1 "$OUTCOME_FILE" | tr -d '\r' | sed -nE 's/^Outcome: (A|B|C|FAILED)$/\1/p')
+          echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
           {
             echo "## Auto-fix for #$ISSUE_NUMBER"
             echo
@@ -1677,21 +1688,42 @@ jobs:
       # auto-fix has no continue-on-error (a code-writing job must fail loudly), but
       # a failure here — including a dep-install abort before Claude runs — is otherwise
       # invisible to the reporter. Surface it. A clean triage decline exits 0, not here.
+      # A comment alone left #6572 and #6579 with no PR and nothing to filter on, so the
+      # issue also gets needs-human, for a failed run and for an abandoned fix (FAILED).
       - name: Notify on auto-fix failure
-        if: failure()
+        if: failure() || steps.outcome.outputs.outcome == 'FAILED'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
           EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
+          OUTCOME: ${{ steps.outcome.outputs.outcome }}
         run: |
-          echo "::warning title=Auto-fix failed::auto-fix aborted for issue #$ISSUE_NUMBER."
+          set -euo pipefail
+          echo "::warning title=Auto-fix failed::auto-fix did not finish a fix for issue #$ISSUE_NUMBER."
           # Only ping the issue when Claude actually ran and then failed — gate on
           # execution_file, which the action writes only once Claude starts. A
           # pre-Claude abort (checkout/setup/dep-install flake, or the actor gate)
           # leaves it empty: that is infra noise the reporter can't act on, so stay
           # silent. (`steps.claude.outcome` can't distinguish these — an install
           # crash sets it to 'failure' too. Same artifact check as claude-run.yml.)
-          if [ -n "$EXEC_FILE" ]; then
-            gh issue comment "$ISSUE_NUMBER" --body "⚠️ The automated fix attempt ran but didn't complete cleanly. A maintainer may need to take a look. cc @kovtcharov-amd"
+          if [ -z "$EXEC_FILE" ]; then
+            exit 0
+          fi
+          # A failed label call must not cost the issue its comment; it fails the step after.
+          labelled=1
+          { gh label create needs-human --repo "$REPO" --color D93F0B \
+              --description "An automated fix stalled; a maintainer has to pick it up" --force \
+            && gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label needs-human; } \
+            || labelled=0
+          # An abandoned fix already told the issue why.
+          if [ "$OUTCOME" != "FAILED" ]; then
+            note="labelled needs-human"
+            [ "$labelled" = 1 ] || note="the needs-human label could not be added"
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "⚠️ The automated fix attempt ran but didn't complete cleanly, so this needs a maintainer ($note). cc @kovtcharov-amd"
+          fi
+          if [ "$labelled" = 0 ]; then
+            echo "::error title=needs-human label failed::could not label issue #$ISSUE_NUMBER needs-human; add it by hand."
+            exit 1
           fi
 
   # Generate release notes when PyPi workflow completes successfully on a tag

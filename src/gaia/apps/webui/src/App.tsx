@@ -36,7 +36,7 @@ import { FLAGSHIP_AGENT_ID, hasFlagshipAgent, isFlagshipMissingError } from './u
 import { runWhileVisible } from './utils/visibleInterval';
 import { RETRY_INITIAL_MS, retryUntilOk, type Retrier } from './utils/retry';
 import { shouldShowStartupScreen } from './utils/startupGate';
-import { useT } from './i18n/useT';
+import { getT, useT } from './i18n/useT';
 import type { SetupCheck, StartCard } from './types';
 
 // Heavy, occasional screens load on first use.
@@ -78,10 +78,10 @@ async function waitForEmbeddedUpgrade(): Promise<void> {
         const status = await api.getSetupStatus();
         if (status.state === 'ready') return;
         if (status.state === 'failed' || status.state === 'cancelled') {
-            throw new UpgradeFailed(status.error || 'The update stopped before it finished.');
+            throw new UpgradeFailed(status.error || getT().bare('setup.upgrading.stopped'));
         }
         if (Date.now() >= deadline) {
-            throw new Error('Updating the local model server is taking longer than usual. Check again to keep waiting.');
+            throw new Error(getT().bare('setup.upgrading.slow'));
         }
         await sleep(RETRY_INITIAL_MS);
     }
@@ -142,6 +142,8 @@ function App() {
     agentsKnownRef.current = agentsKnown;
     // A new chat was refused because the flagship is not installed.
     const [flagshipRefused, setFlagshipRefused] = useState(false);
+    // The setup check found no GAIA agent build for this PC: nothing to install.
+    const [noAgentBuild, setNoAgentBuild] = useState(false);
     const flagshipMissing = flagshipRefused || (agentsKnown && !hasFlagshipAgent(agents));
     const flagshipMissingRef = useRef(flagshipMissing);
     flagshipMissingRef.current = flagshipMissing;
@@ -190,6 +192,7 @@ function App() {
                 }
                 // Read status and chats before showing the app, so it never flashes "lost connection" or "no chats".
                 if (waited > 0) await Promise.all([refreshStatus.current(), reloadSessions.current()]);
+                setNoAgentBuild(!!check.no_agent_build);
                 setSetup(check.ready ? { state: 'ready' } : { state: 'needed', check });
                 return;
             }
@@ -765,13 +768,13 @@ function App() {
                     </div>
                 ) : (
                     <div className="app-notice is-warning" role="status">
-                        <span>Could not check whether GAIA is set up: {setup.error}</span>
-                        <button type="button" className="link-btn" onClick={() => void checkSetup()}>Check again</button>
+                        <span>{t('setup.unknown.failed', { error: setup.error })}</span>
+                        <button type="button" className="link-btn" onClick={() => void checkSetup()}>{t('setup.unknown.retry')}</button>
                     </div>
                 ))}
                 {/* Model downloads, here when the sidebar that usually shows them is closed or collapsed. */}
                 {(!sidebarOpen || sidebarCollapsed) && <DownloadChip placement="main" />}
-                {flagshipMissing && <FlagshipAgentNotice onInstalled={loadAgents} />}
+                {flagshipMissing && <FlagshipAgentNotice onInstalled={loadAgents} noBuild={noAgentBuild} />}
                 {restoreNotice && (
                     <div className={`app-notice${restoreNotice.ok ? '' : ' is-warning'}`} role="status">
                         <span>{restoreNotice.message}</span>

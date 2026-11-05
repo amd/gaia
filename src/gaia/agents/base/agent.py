@@ -165,8 +165,8 @@ from gaia.agents.base.verification import (
 )
 
 # First-party imports
-from gaia.chat.sdk import AgentConfig, AgentSDK
-from gaia.daemon.broker_client import LeaseWaitCancelled
+from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
+from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
     budget_for_ctx,
@@ -176,8 +176,11 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.providers.lemonade import (
     CONNECTION_FAILURE_RE,
+    MODEL_SERVER_DOWN,
     LemonadeStreamCutOffError,
 )
+from gaia.llm.reasoning import split_reasoning as _split_reasoning
+from gaia.llm.reasoning import strip_reasoning
 from gaia.llm.retry import (
     RetryNotice,
     RetryState,
@@ -1239,32 +1242,6 @@ _SINGLE_TOOL_DONE_SUFFIX = (
 # A rewritten answer can make a new false claim, so it gets a second
 # correction; the same claim repeated is a disagreement, kept with a caveat.
 _MAX_TEST_CLAIM_CORRECTIONS = 2
-_THINK_BLOCK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
-# Anchored: only a reply that *opens* with an unclosed block was cut off
-# mid-thought. A `<think>` mentioned mid-sentence is prose, and treating it as
-# reasoning silently deletes everything the model said after it.
-_CUT_OFF_THINK_PATTERN = re.compile(r"\A<think>(?!.*</think>)(.*)\Z", re.DOTALL)
-
-
-def _split_reasoning(text: str) -> Tuple[str, Optional[str]]:
-    """Split inline ``<think>`` reasoning out of a reply.
-
-    Returns ``(answer_text, reasoning)``. A reply that *opens* with an unclosed
-    ``<think>`` was cut off mid-thought and is reasoning to the end, and text
-    before a lone ``</think>`` (the template opened the block in the prompt) is
-    reasoning.
-    """
-    parts: List[str] = []
-    if "</think>" in text and "<think>" not in text.split("</think>", 1)[0]:
-        head, _, text = text.partition("</think>")
-        parts.append(head.strip())
-    cut_off = _CUT_OFF_THINK_PATTERN.match(text.lstrip())
-    if cut_off:
-        parts.append(cut_off.group(1).strip())
-        text = ""
-    parts.extend(m.strip() for m in _THINK_BLOCK_PATTERN.findall(text))
-    answer = _THINK_BLOCK_PATTERN.sub("", text).strip()
-    return answer, "\n\n".join(p for p in parts if p) or None
 
 
 def _response_reasoning(response: Any) -> Optional[str]:
@@ -2553,6 +2530,8 @@ Do NOT wrap conversational replies in JSON.
             "request_retries": 0,
             "step_retries": 0,
             "unreachable": False,
+            # The model server itself accepted no connection.
+            "server_down": False,
             # The turn ended because a model call failed (any cause).
             "failed": False,
         }
@@ -3129,7 +3108,11 @@ Do NOT wrap conversational replies in JSON.
         define ``mark_turn_failed`` still prints the answer, just unmarked.
         """
         hook = getattr(self.console, "mark_turn_failed", None)
-        if hook is not None:
+        if hook is None:
+            return
+        if self._turn_model_retries.get("server_down"):
+            hook(failure=MODEL_SERVER_DOWN)
+        else:
             hook()
 
     def _uses_native_tool_calls(self) -> bool:
@@ -7662,9 +7645,7 @@ Do NOT wrap conversational replies in JSON.
                 }
             )
 
-        response = re.sub(
-            r"<think>.*?</think>", "", response or "", flags=re.DOTALL
-        ).strip()
+        response = strip_reasoning(response or "")
         if not response:
             raise _NotAnAnswer("the model returned an empty reply")
         try:
@@ -7684,6 +7665,7 @@ Do NOT wrap conversational replies in JSON.
             )
         if not answer.strip():
             raise _NotAnAnswer("the model's reply had no answer in it")
+        self._mark_errors_recovered()
         conversation.append({"role": "assistant", "content": parsed})
         return answer
 
@@ -8473,12 +8455,29 @@ Do NOT wrap conversational replies in JSON.
             cause, advice = _split_cause_and_advice(typed_msg)
         else:
             cause, advice = str(exc).strip()[:300] or type(exc).__name__, None
+        server_down = self._model_server_down(exc)
+        if server_down:
+            self._turn_model_retries["server_down"] = True
         return self._model_failure_answer(
             conversation,
             steps_taken,
             stopped_responding=stalled or retry_state_of(exc) is not None,
             cause=cause,
             advice=advice,
+            # The cloud provider behind a down server was never reached.
+            name_service=not server_down,
+        )
+
+    @staticmethod
+    def _model_server_down(exc: BaseException) -> bool:
+        """Whether *exc* is the model server accepting no connection at all."""
+        from gaia.llm.providers.lemonade import (
+            LemonadeServerUnreachableError,
+            classify_lemonade_exception,
+        )
+
+        return isinstance(
+            classify_lemonade_exception(exc), LemonadeServerUnreachableError
         )
 
     def _model_failure_answer(
@@ -8489,6 +8488,7 @@ Do NOT wrap conversational replies in JSON.
         stopped_responding: bool,
         cause: str,
         advice: Optional[str],
+        name_service: bool = True,
     ) -> str:
         """Say the turn is unfinished, why, what already ran, and what next."""
         from collections import Counter
@@ -8497,7 +8497,7 @@ Do NOT wrap conversational replies in JSON.
         cause = cause.strip().rstrip(".")
         cause = cause[:1].upper() + cause[1:]
         # pylint: disable-next=assignment-from-none
-        label = self._model_service_label()
+        label = self._model_service_label() if name_service else None
         if label and label.lower() in cause.lower():
             label = None  # the cause already names it
         lines = [
@@ -9537,7 +9537,9 @@ Do NOT wrap conversational replies in JSON.
     WARM_UP_PROMPT = "Reply with OK."
 
     def warm_up(
-        self, progress: Optional[Callable[[str], None]] = None
+        self,
+        progress: Optional[Callable[[str], None]] = None,
+        cancel: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
         """Do the first turn's one-time work now, before anyone is waiting on it.
 
@@ -9547,6 +9549,9 @@ Do NOT wrap conversational replies in JSON.
         context size and leaves the prompt prefix in the server's cache, so the
         first real question starts answering instead of reading ~10K tokens of
         instructions. Only worth it for a local model; the caller decides.
+
+        Setting *cancel* abandons the warm-up, even mid-prompt, and raises
+        ``LLMCallCancelled``: a turn on another model must not wait behind it.
 
         Raises whatever the embedder or LLM client raises: a warm-up that failed
         must say so, or the slow first turn it was meant to prevent looks
@@ -9565,12 +9570,15 @@ Do NOT wrap conversational replies in JSON.
             if core:
                 self._apply_tool_filter(core)
         say(f"Loading {self.model_id} and reading its instructions")
-        self.chat.send_messages(
-            [{"role": "user", "content": self.WARM_UP_PROMPT}],
-            system_prompt=self.system_prompt,
-            tools=self._openai_tools,
-            max_tokens=1,
-        )
+        if cancel is None:
+            self.chat.send_messages(
+                [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                system_prompt=self.system_prompt,
+                tools=self._openai_tools,
+                max_tokens=1,
+            )
+        else:
+            self._send_warm_up_cancellable(cancel)
         result: Dict[str, Any] = {"seconds": round(time.perf_counter() - started, 1)}
         client = getattr(self.chat, "llm_client", None)
         usage_of = getattr(client, "get_last_usage", None)
@@ -9579,6 +9587,33 @@ Do NOT wrap conversational replies in JSON.
             result["prompt_tokens"] = usage.get("prompt_tokens")
             result["cached_tokens"] = usage.get("cached_tokens")
         return result
+
+    def _send_warm_up_cancellable(self, cancel: threading.Event) -> None:
+        """The warm-up request, abandoned the moment *cancel* is set.
+
+        Streamed, with *cancel* as the Stop hook, so it also ends during the
+        silent prompt read and while queued for the model slot.
+        """
+        if cancel.is_set():
+            raise LLMCallCancelled("warm-up stopped before the model was reached")
+        try:
+            with (
+                model_retry_notices(lambda _notice: None, cancel.is_set),
+                lease_cancel_scope(cancel),
+            ):
+                self.chat.send_messages(
+                    [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                    system_prompt=self.system_prompt,
+                    tools=self._openai_tools,
+                    max_tokens=1,
+                    cancel=cancel,
+                )
+        except LLMCallCancelled:
+            raise
+        except Exception as e:
+            if cancel.is_set():
+                raise LLMCallCancelled(f"warm-up stopped: {e}") from e
+            raise
 
     def process_query(
         self,
@@ -9973,6 +10008,8 @@ Do NOT wrap conversational replies in JSON.
             "request_retries": 0,
             "step_retries": 0,
             "unreachable": False,
+            # The model server itself accepted no connection.
+            "server_down": False,
             # The turn ended because a model call failed (any cause).
             "failed": False,
         }
@@ -10918,6 +10955,7 @@ Do NOT wrap conversational replies in JSON.
                         steps_taken,
                         steps_limit,
                     )
+                    self._turn_model_retries["failed"] = True
                     final_answer = _CUT_OFF_FAILURE_ANSWER
                     break
                 cut_off_continuations += 1
@@ -12806,6 +12844,7 @@ Do NOT wrap conversational replies in JSON.
                 "step_retries": self._turn_model_retries["step_retries"],
             },
             "model_unreachable": self._turn_model_retries["unreachable"],
+            "model_server_down": self._turn_model_retries["server_down"],
             # Any model-call failure ended the turn; front-ends report it failed.
             "model_failed": self._turn_model_retries["failed"],
             "extraction_sources": sorted(self._extraction_ledger.results),

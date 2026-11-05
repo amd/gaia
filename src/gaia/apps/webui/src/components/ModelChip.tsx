@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { Fragment, useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { AlertCircle, Check, ChevronDown, Cloud, Cpu, Download, HelpCircle, KeyRound, Link2, Loader2 } from 'lucide-react';
 import { Popover } from './Popover';
 import './ModelPicker.css';
@@ -104,6 +104,7 @@ export function ModelChip() {
     const lastCountedList = useRef<ProviderModels[] | null>(null);
     const listId = useId();
     const list = useRef<HTMLDivElement>(null);
+    const consent = useRef<HTMLDivElement>(null);
     // The row holding the list's one Tab stop, and the row whose info bubble a key opened.
     const [activeRow, setActiveRow] = useState<string | null>(null);
     const [infoRow, setInfoRow] = useState<string | null>(null);
@@ -158,6 +159,10 @@ export function ModelChip() {
         row.focus();
         row.scrollIntoView?.({ block: 'nearest' });
     }, [open, groups]);
+
+    useEffect(() => {
+        if (pendingCloud) consent.current?.scrollIntoView?.({ block: 'nearest' });
+    }, [pendingCloud]);
 
     const onListKey = (e: KeyboardEvent<HTMLDivElement>) => {
         if (e.altKey || e.ctrlKey || e.metaKey) return;
@@ -389,74 +394,77 @@ export function ModelChip() {
                             const details = modelDetails(m, provider.remote);
                             const infoId = `${listId}-info-${provider.id}-${m.id}`;
                             return (
-                                <div key={m.id} className="popover-row">
-                                    <button
-                                        type="button"
-                                        className="popover-item"
-                                        onClick={() => {
-                                            if (!needsDownload) {
-                                                // A pick made since outranks one waiting on a download.
-                                                setPickAfterDownload(null);
-                                                return void choose(m.id, provider);
-                                            }
-                                            pollsWithoutProgress.current = 0;
-                                            setAutoSwitchError(null);
-                                            setPickAfterDownload({ model: m.id, provider });
-                                            void download(m.id);
-                                        }}
-                                        disabled={switching !== null || isDownloading(m)}
-                                        {...rowProps(m.id)}
-                                        aria-selected={current}
-                                        aria-describedby={infoRow === m.id ? infoId : undefined}
-                                    >
-                                        <span className="popover-item-check" aria-hidden="true">
-                                            {switching === m.id ? <Loader2 size={13} className="spin" /> : current ? <Check size={13} /> : null}
+                                <Fragment key={m.id}>
+                                    <div className="popover-row">
+                                        <button
+                                            type="button"
+                                            className="popover-item"
+                                            onClick={() => {
+                                                if (!needsDownload) {
+                                                    // A pick made since outranks one waiting on a download.
+                                                    setPickAfterDownload(null);
+                                                    return void choose(m.id, provider);
+                                                }
+                                                pollsWithoutProgress.current = 0;
+                                                setAutoSwitchError(null);
+                                                setPickAfterDownload({ model: m.id, provider });
+                                                void download(m.id);
+                                            }}
+                                            disabled={switching !== null || isDownloading(m)}
+                                            {...rowProps(m.id)}
+                                            aria-selected={current}
+                                            aria-describedby={infoRow === m.id ? infoId : undefined}
+                                        >
+                                            <span className="popover-item-check" aria-hidden="true">
+                                                {switching === m.id ? <Loader2 size={13} className="spin" /> : current ? <Check size={13} /> : null}
+                                            </span>
+                                            <span className="popover-item-body">
+                                                <span className="popover-item-title">{modelName}</span>
+                                            </span>
+                                        </button>
+                                        <InfoBubble
+                                            label={`About ${modelName}`}
+                                            warning={!!m.placement?.warning}
+                                            id={infoId}
+                                            pinned={infoRow === m.id}
+                                            onUnpin={closeInfo}
+                                            // The row's ArrowRight opens it, so the icon needs no Tab stop.
+                                            tabIndex={-1}
+                                        >
+                                            <div className="info-bubble-title">{modelName}</div>
+                                            {details.length > 0 && (
+                                                <ul className="info-bubble-lines">
+                                                    {details.map((d) => <li key={d}>{d}</li>)}
+                                                </ul>
+                                            )}
+                                            {m.placement?.warning && (
+                                                <ul className="info-bubble-lines">
+                                                    <li className="is-warning">{m.placement.warning}</li>
+                                                </ul>
+                                            )}
+                                            <div className="info-bubble-id">{m.id}</div>
+                                        </InfoBubble>
+                                        <span className="popover-row-state">
+                                            {!provider.remote && (
+                                                <StateMark m={m} busy={downloading !== null} onDownload={() => void download(m.id)} />
+                                            )}
                                         </span>
-                                        <span className="popover-item-body">
-                                            <span className="popover-item-title">{modelName}</span>
-                                        </span>
-                                    </button>
-                                    <InfoBubble
-                                        label={`About ${modelName}`}
-                                        warning={!!m.placement?.warning}
-                                        id={infoId}
-                                        pinned={infoRow === m.id}
-                                        onUnpin={closeInfo}
-                                        // The row's ArrowRight opens it, so the icon needs no Tab stop.
-                                        tabIndex={-1}
-                                    >
-                                        <div className="info-bubble-title">{modelName}</div>
-                                        {details.length > 0 && (
-                                            <ul className="info-bubble-lines">
-                                                {details.map((d) => <li key={d}>{d}</li>)}
-                                            </ul>
-                                        )}
-                                        {m.placement?.warning && (
-                                            <ul className="info-bubble-lines">
-                                                <li className="is-warning">{m.placement.warning}</li>
-                                            </ul>
-                                        )}
-                                        <div className="info-bubble-id">{m.id}</div>
-                                    </InfoBubble>
-                                    <span className="popover-row-state">
-                                        {!provider.remote && (
-                                            <StateMark m={m} busy={downloading !== null} onDownload={() => void download(m.id)} />
-                                        )}
-                                    </span>
-                                </div>
+                                    </div>
+                                    {pendingCloud?.model === m.id && pendingCloud.provider.id === provider.id && (
+                                        // Next to the clicked row, so a long list can't hide it.
+                                        <div ref={consent} className="popover-message" role="alert">
+                                            {pendingCloud.provider.privacy_notice}{' '}
+                                            <button type="button" className="link-btn" onClick={() => choose(pendingCloud.model, pendingCloud.provider)}>
+                                                Use {displayModelName(pendingCloud.model)}
+                                            </button>
+                                        </div>
+                                    )}
+                                </Fragment>
                             );
                         })}
                     </div>
                 ))}
                 </div>
-                )}
-                {pendingCloud && (
-                    <div className="popover-message" role="alert">
-                        {pendingCloud.provider.privacy_notice}{' '}
-                        <button type="button" className="link-btn" onClick={() => choose(pendingCloud.model, pendingCloud.provider)}>
-                            Use {displayModelName(pendingCloud.model)}
-                        </button>
-                    </div>
                 )}
                 {unavailable > 0 && (
                     <button

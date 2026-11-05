@@ -173,10 +173,12 @@ interface ChatState {
     queuedSessionIds: string[];
     /** Chats whose running turn is paused on a permission prompt or a question (#5221). */
     awaitingBySession: Record<string, AwaitingUser>;
-    /** When the last applied GET /api/chat/active was sent (ms); 0 before the first. */
+    /** When the last applied GET /api/chat/active was sent (ms); 0 before the first, or while GAIA is unreachable. */
     activeRunsAt: number;
     /** Apply one GET /api/chat/active poll, sent at `requestedAt`. */
     setActiveRuns: (runs: ActiveRuns, requestedAt: number) => void;
+    /** GAIA is unreachable: show no chat running, and treat none as idle until a poll lands. */
+    loseActiveRuns: () => void;
     /** Messages typed while a chat answered, by chat. Each goes out when that
      *  chat's turn ends, open or not, and survives a reload. */
     messageQueues: Record<string, QueuedMessage[]>;
@@ -357,6 +359,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }
             return next;
         }),
+    loseActiveRuns: () =>
+        set((state) => (state.runningSessionIds.length > 0
+            ? { activeRunsAt: 0, runningSessionIds: [] }
+            : { activeRunsAt: 0 })),
     messageQueues: readQueues(),
     updateQueue: (sessionId, fn) =>
         set((state) => {

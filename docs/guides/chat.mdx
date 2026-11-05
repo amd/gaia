@@ -301,21 +301,20 @@ print(result)
 ## Dynamic Tool Loading
 
 <Note>
-**Off by default, `doc` profile only.** This is the first stage of a phased
-rollout ([Dynamic Tool Loader plan](/plans/tool-loader)); enable it explicitly to
-try it.
+**Off by default.** This is the first stage of a phased rollout
+([Dynamic Tool Loader plan](/plans/tool-loader)); enable it explicitly to try it.
 </Note>
 
-The `doc` profile can load tools **semantically per turn** instead of showing the
-LLM every registered tool on every turn. A small always-on CORE set is combined
-with tools whose descriptions best match the conversation, which shrinks the
+The agent can load tools **semantically per turn** instead of showing the LLM
+every registered tool on every turn. A small always-on CORE set is combined with
+tools whose descriptions best match the conversation, which shrinks the
 first-turn prompt and speeds up the first reply.
 
-It activates only on the `doc` profile — the SDK with
-`ChatAgentConfig(prompt_profile="doc")`, or `gaia eval agent --agent-type doc`,
-an explicit override since the eval otherwise scores the flagship `gaia` agent.
-The `doc` id is no longer offered in the agent picker, but it still resolves, so
-the eval command is unchanged.
+It works on the flagship `gaia` agent and on a ChatAgent using the `full`
+(default) or `doc` prompt profile; the `chat` and `file` profiles ignore it.
+`gaia eval agent` scores the flagship, so an eval run measures the flagship's
+loader. The old `--agent-type doc` id now resolves to the flagship as well, so it
+no longer selects the `doc` profile.
 Turn it on with the config field, an environment variable, or the Agent UI
 **Settings → Dynamic Tools (Beta)** toggle. The env var wins over both — when it
 is set, the UI toggle reflects the effective value and disables itself — which is
@@ -327,12 +326,26 @@ from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 agent = ChatAgent(ChatAgentConfig(prompt_profile="doc", dynamic_tools=True))
 ```
 
-```bash
-# Env override (applies wherever a doc-profile ChatAgent runs)
-GAIA_DYNAMIC_TOOLS=1 gaia eval agent --category tool_selection --agent-type doc
+The env var is read by the process that runs the agent. `gaia eval agent` drives
+the agent through the Agent UI backend, so for an eval run the override goes on
+the backend, started first, not on the eval command. Setting it in front of
+`gaia eval agent` changes nothing, and with no backend running the eval stops at
+pre-flight with `Agent UI not reachable at http://localhost:4200`. See the eval
+guide's [Prerequisites](/guides/eval#prerequisites) for the rest of the setup.
 
-# Optional tuning: match threshold (cosine, inclusive) and loaded-set cap
-GAIA_DYNAMIC_TOOLS_TAU=0.20 GAIA_DYNAMIC_TOOLS_MAX=14 GAIA_DYNAMIC_TOOLS=1 ...
+```bash
+# Terminal 1: start the Agent UI backend with the override
+GAIA_DYNAMIC_TOOLS=1 gaia chat --ui
+
+# Optional tuning, also on the backend: match threshold (cosine, inclusive)
+# and loaded-set cap. The values shown are the flagship's defaults; the cap
+# counts the always-on CORE tools, and a ChatAgent's default cap is 14.
+GAIA_DYNAMIC_TOOLS_TAU=0.20 GAIA_DYNAMIC_TOOLS_MAX=29 GAIA_DYNAMIC_TOOLS=1 gaia chat --ui
+```
+
+```bash
+# Terminal 2: run the eval against it
+gaia eval agent --category tool_selection
 ```
 
 It needs memory enabled (it reuses the memory embedder). If memory is off, the

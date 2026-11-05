@@ -276,7 +276,7 @@ jobs:
           import json, sys
           sys.path.insert(0, 'src')
           from gaia.llm.lemonade_launcher import build_start_command, resolve_lemonade
-          spec = build_start_command(resolve_lemonade(), None)
+          spec = build_start_command(resolve_lemonade())
           print(json.dumps({'argv': spec.argv, 'env': spec.env}))
           ")
           echo "build_start_command() resolved: $STARTSPEC"

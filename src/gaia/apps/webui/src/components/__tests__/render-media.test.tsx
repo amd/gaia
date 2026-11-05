@@ -133,6 +133,15 @@ describe('audio card', () => {
     });
 });
 
+describe('audio card whose file cannot be played', () => {
+    it('says so instead of leaving a silent player', () => {
+        const { container } = render(<RenderCard render="audio" data={{ src: '/api/media/audio/speech_gone.wav' }} />);
+        expect(screen.queryByRole('alert')).toBeNull();
+        fireEvent.error(container.querySelector('audio')!);
+        expect(screen.getByRole('alert').textContent).toMatch(/can't be played/);
+    });
+});
+
 describe('fromApiMessages card rehydration', () => {
     const base = { id: 3, session_id: 's', role: 'assistant', content: 'Done.', created_at: '', rag_sources: null };
     const audioData = { src: '/api/media/audio/music_1.wav', duration_seconds: 2 };

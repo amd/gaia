@@ -39,7 +39,7 @@ from gaia.agents.install_hints import (
 from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
 from gaia.llm import lemonade_client as _lemonade_client_mod
 from gaia.llm.inference_location import InferenceLocation, resolve_inference_location
-from gaia.llm.providers.lemonade import classify_lemonade_exception
+from gaia.llm.providers.lemonade import MODEL_SERVER_DOWN, classify_lemonade_exception
 from gaia.security import (
     BLOCKED_DIRECTORIES,
     AllowedPathsEnvError,
@@ -2376,21 +2376,6 @@ def _probe_misses_only_another_model(
     return not _model_ids_match(probed, model_id)
 
 
-def _host_corrected_hint(hint: str | None) -> str | None:
-    """Replace a sidecar hint that names a command this host does not have.
-
-    An agent package ships its own copy of the "start Lemonade" advice, and an
-    older one still names ``lemonade-server serve`` — a CLI that Lemonade
-    10.7 removed. The host knows what is actually installed, so it substitutes
-    its own answer rather than relaying one the user cannot act on.
-    """
-    if not hint or "lemonade-server serve" not in hint:
-        return hint
-    from gaia.llm.lemonade_launcher import describe_start_hint
-
-    return describe_start_hint().instruction
-
-
 def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
     """Hand Lemonade the remembered key for a cloud model before a relayed turn.
 
@@ -2714,7 +2699,7 @@ def _dispatch_sidecar_query(
             model_id,
         )
     elif status_code != 200:
-        hint = _host_corrected_hint((init_body or {}).get("hint"))
+        hint = (init_body or {}).get("hint")
         if profile.readiness_is_blocking or not _probe_is_only_unreachable(init_body):
             msg = (
                 f"The {profile.display_name} agent isn't ready yet"
@@ -3368,6 +3353,15 @@ def _turn_failure(
     return False, None
 
 
+def _turn_failure_kind(answer_event: Optional[dict], result: Any) -> Optional[str]:
+    """The named cause of a failed turn (``"model_server_down"``), or None."""
+    if isinstance(answer_event, dict) and isinstance(answer_event.get("failure"), str):
+        return answer_event["failure"]
+    if isinstance(result, dict) and result.get("model_server_down"):
+        return MODEL_SERVER_DOWN
+    return None
+
+
 def _done_event(
     msg_id: int,
     content: str,
@@ -3375,19 +3369,23 @@ def _done_event(
     stats: Optional[dict] = None,
     turn_summary: Optional[dict] = None,
     failed: bool = False,
+    failure: Optional[str] = None,
 ) -> dict:
     """Build the closing ``done`` SSE payload for a persisted turn.
 
     ``cancelled`` is set only when the user's Stop actually ended the run, so
     the UI labels the turn from what happened rather than from the click — a
     Stop that lands after the agent already answered stays an ordinary turn.
-    ``failed`` marks a turn a model failure ended; its content explains why.
+    ``failed`` marks a turn a model failure ended; its content explains why,
+    and ``failure`` names a cause the UI offers a fix for.
     """
     event: dict = {"type": "done", "message_id": msg_id, "content": content}
     if turn_cancelled:
         event["cancelled"] = True
     elif failed:
         event["failed"] = True
+        if failure:
+            event["failure"] = failure
     if stats:
         event["stats"] = stats
     if turn_summary:
@@ -3783,7 +3781,7 @@ async def _get_chat_response(
 
         # ── Agent cache ──────────────────────────────────────────────────────
         # Reuse what a running warm-up is caching rather than read it twice.
-        wait_for_warm_up()
+        wait_for_warm_up(model=model_id)
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
         working_directory = _session_working_directory(
             load_environment(db, session_id)["folders"]
@@ -4256,7 +4254,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                 # ── Agent cache check ─────────────────────────────────────────
                 # Reuse what a running warm-up is caching rather than read it twice.
-                wait_for_warm_up(handler=sse_handler)
+                wait_for_warm_up(handler=sse_handler, model=model_id)
                 if sse_handler.cancelled.is_set():
                     return
                 cached_agent = _get_cached_agent(session_id, model_id, agent_type)
@@ -4686,6 +4684,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     )
                 elif event_type == "commentary":
                     # Those chunks narrated a tool call; the answer starts after it.
+                    full_response = ""
+                elif event_type == "thinking" and event.get("retracts_answer"):
+                    # Those chunks were reasoning a lone </think> closed.
                     full_response = ""
                 elif event_type == "agent_error" and event.get("fatal"):
                     # A relayed sidecar's terminal error: the turn ends here.
@@ -5142,6 +5143,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 model_messages=model_messages,
                 turn_summary=turn_summary,
                 ends_turn=True,
+                stopped=turn_cancelled,
             )
             link_warning = (
                 turn_box["recording"].link_message(msg_id)
@@ -5169,6 +5171,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 stats=inference_stats,
                 turn_summary=turn_summary,
                 failed=turn_failed,
+                failure=(
+                    _turn_failure_kind(answer_event, result_holder.get("result"))
+                    if turn_failed
+                    else None
+                ),
             )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
@@ -5237,6 +5244,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     model_messages=result_holder.get("model_messages"),
                     turn_summary=turn_summary,
                     ends_turn=True,
+                    stopped=turn_cancelled,
                 )
                 done_event = _done_event(
                     msg_id,
@@ -5430,7 +5438,7 @@ async def _run_chat_lifecycle(
                 await run.slot.acquire()
             except TurnCancelled:
                 msg_id = db.add_message(
-                    session_id, "assistant", "Cancelled.", ends_turn=True
+                    session_id, "assistant", "Cancelled.", ends_turn=True, stopped=True
                 )
                 _emit(_sse(_done_event(msg_id, "Cancelled.", turn_cancelled=True)))
                 return

@@ -908,6 +908,15 @@ class RAGSDK:
         else:
             self.log.error(message)
 
+    def _read_images_remedy(self, lead: str) -> str:
+        """How to get images read: a download, or why it can't happen on the NPU."""
+        if self.config.vlm_model is None:
+            return f"{lead}images aren't read here: {VISION_OFF_ON_NPU}"
+        return (
+            f"{lead}enable VLM image extraction by downloading "
+            f"{self.config.vlm_model} in Lemonade"
+        )
+
     def _note_images_skipped(self) -> None:
         """Say once per file that its images aren't read while chat is on the NPU."""
         self.log.info(f"Images in this file are not read: {VISION_OFF_ON_NPU}")
@@ -1650,7 +1659,10 @@ class RAGSDK:
                 if vlm_available and self.config.show_stats:
                     print("  🔍 VLM enabled: Will extract text from images")
                 elif (
-                    not vlm_available and self.config.use_vlm and self.config.show_stats
+                    not vlm_available
+                    and self.config.use_vlm
+                    and self.config.vlm_model is not None
+                    and self.config.show_stats
                 ):
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
@@ -1829,8 +1841,7 @@ class RAGSDK:
                     "  2. All content is rendered as images or vector glyphs\n"
                     "Suggestions:\n"
                     "  1. Run OCR on the PDF (e.g. `ocrmypdf input.pdf output.pdf`)\n"
-                    "  2. Or enable VLM image extraction by downloading "
-                    f"{self.config.vlm_model} in Lemonade"
+                    + self._read_images_remedy("  2. Or ")
                 )
                 self.log.error(f"Empty PDF (no text): {pdf_path}")
                 raise EmptyPDFError(msg)
@@ -2058,7 +2069,10 @@ class RAGSDK:
                 if vlm_available and self.config.show_stats:
                     print("  🔍 VLM enabled: Will extract text from slide images")
                 elif (
-                    not vlm_available and self.config.use_vlm and self.config.show_stats
+                    not vlm_available
+                    and self.config.use_vlm
+                    and self.config.vlm_model is not None
+                    and self.config.show_stats
                 ):
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
@@ -2209,9 +2223,8 @@ class RAGSDK:
                     f"The file has {total_slides} slide(s) but none contained text.\n"
                     "Suggestions:\n"
                     "  1. Ensure the presentation has text content (not just images)\n"
-                    "  2. Enable VLM image extraction by downloading "
-                    f"{self.config.vlm_model} in Lemonade\n"
-                    "  3. Save as PDF and index the PDF instead"
+                    + self._read_images_remedy("  2. ")
+                    + "\n  3. Save as PDF and index the PDF instead"
                 )
                 self.log.error(f"Empty PPTX (no text): {pptx_path}")
                 raise ValueError(msg)
@@ -4566,6 +4579,9 @@ These positions indicate where to split the text."""
         """
         Query the indexed documents with enhanced metadata tracking.
 
+        Each call answers from the chunks retrieved for this question. Earlier
+        queries are not included in the prompt.
+
         Args:
             question: Question to ask about the documents
             include_metadata: Whether to include detailed metadata in response
@@ -4602,8 +4618,8 @@ Question: {question}
 
 Answer:"""
 
-        # Get LLM response
-        response = self.chat.send(prompt)
+        # One question per call — stored history would resend earlier chunks.
+        response = self.chat.send(prompt, no_history=True)
 
         # Build query metadata
         query_metadata = None

@@ -718,6 +718,22 @@ def test_fold_matches_the_ui():
         assert t.content() == "Final"
 
 
+def test_reasoning_a_lone_close_tag_ended_leaves_the_answer():
+    t = TurnTracker("s", "mcp")
+    t.apply({"type": "chunk", "content": "Check the file first."})
+    t.apply(
+        {
+            "type": "thinking",
+            "content": "Check the file first.",
+            "retracts_answer": True,
+        }
+    )
+    t.apply({"type": "chunk", "content": "It says hi."})
+    with t.cond:
+        assert t.content() == "It says hi."
+        assert t.steps[-1]["detail"] == "Check the file first."
+
+
 def test_metrics_never_invent_zeros():
     t = TurnTracker("s", "mcp")
     t.apply({"type": "answer", "content": "x"})

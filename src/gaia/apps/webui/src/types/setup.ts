@@ -16,7 +16,9 @@ export interface SetupModelProgress {
     speed_bps: number;
     eta_s: number | null;
     error: string | null;
-    error_kind: 'network' | 'disk_full' | 'path_too_long' | 'lemonade' | 'verify' | null;
+    /** `verify`: the file didn't load, so Retry deletes and downloads it again. A test kind
+     *  (`memory`, `stuck`, `answer`, `window`) leaves the file alone: Retry tests it again. */
+    error_kind: 'network' | 'disk_full' | 'path_too_long' | 'lemonade' | 'verify' | 'memory' | 'stuck' | 'answer' | 'window' | null;
     can_retry: boolean;
     /** Unix seconds while a keep-trying wait runs; the state stays `downloading`. */
     retrying_until: number | null;
@@ -106,6 +108,8 @@ export interface SetupCatalogEntry {
     need_gb: number | null;
     capacity_gb: number | null;
     fit_reason: string | null;
+    /** Why it doesn't fit: too little memory, no NPU that can run it, or no backend for its kind. */
+    fit_code?: 'memory' | 'npu' | 'backend' | null;
 }
 
 /** A 409 from a setup choice that asks to be confirmed, then sent again with `acknowledge` true. */

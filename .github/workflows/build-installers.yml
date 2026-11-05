@@ -121,6 +121,7 @@ on:
       - 'setup.py'
       - 'pyproject.toml'
       - 'util/release_tag.py'
+      - 'util/check_release_assets.py'
       # custom-agent-mcp-harness runs these against the built wheel.
       - 'src/gaia/agents/base/console.py'
       - 'src/gaia/agents/registry.py'
@@ -179,6 +180,8 @@ jobs:
             artifacts: |
               src/gaia/apps/webui/dist-app/*.dmg
               src/gaia/apps/webui/dist-app/*.dmg.blockmap
+              src/gaia/apps/webui/dist-app/*.zip
+              src/gaia/apps/webui/dist-app/*.zip.blockmap
               src/gaia/apps/webui/dist-app/latest-mac.yml
           - platform: linux
             runner: ubuntu-latest
@@ -719,6 +722,27 @@ jobs:
             exit 1
           fi
           echo "All artifact validations passed."
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # Each platform's artifact must hold every file its latest*.yml names, at
+      # the size and sha512 recorded: the mac .zip was left out for months, so
+      # no Mac could update (#5682).
+      - name: Update manifests name only files the artifact carries
+        shell: bash
+        env:
+          PREFIX: ${{ inputs.artifact_prefix }}
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pyyaml
+          for platform in windows macos linux; do
+            python util/check_release_assets.py --dir "${RUNNER_TEMP}/artifacts/${PREFIX}${platform}-installer"
+          done
 
   # ─── AppImage smoke tests (issue #782) ──────────────────────────────
   # Consume the linux-installer artifact produced by the `build` matrix

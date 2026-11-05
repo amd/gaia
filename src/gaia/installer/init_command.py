@@ -31,7 +31,7 @@ import wave
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 # Rich imports for better CLI formatting
@@ -56,7 +56,6 @@ from gaia.installer._stdin import stdin_is_tty
 from gaia.llm.model_fit import MachineCapacity, format_gb
 from gaia.logger import get_logger
 from gaia.ui.build import WebuiBuildStatus
-from gaia.version import LEMONADE_MIN_VERSION
 
 log = get_logger(__name__)
 
@@ -96,20 +95,23 @@ def _model_role(model_id: str) -> str:
     return "chat"
 
 
-def _speak_once(base_url: str, model_id: str) -> None:
+def _speak_once(base_url: str, model_id: str) -> Optional["WrongAnswer"]:
     """Synthesize one word, the request the text-to-speech tool makes.
+
+    Returns:
+        None when audio came back; a :class:`WrongAnswer` when it was silent,
+        which says nothing is wrong with the model's file.
 
     Raises:
         ConnectionError: Lemonade Server is not reachable.
-        LemonadeTTSError: The server refused the request or returned no audio.
+        LemonadeTTSError: The server refused the request.
     """
-    from gaia.audio.lemonade_tts import LemonadeTTSClient, LemonadeTTSError
+    from gaia.audio.lemonade_tts import LemonadeTTSClient
 
     samples, _rate = LemonadeTTSClient(base_url=base_url, model=model_id).synthesize(
         "ok"
     )
-    if not len(samples):
-        raise LemonadeTTSError(f"{model_id} returned no audio")
+    return None if len(samples) else WrongAnswer(f"{model_id} returned no audio")
 
 
 _TROUBLESHOOTING_URL = "https://amd-gaia.ai/docs/reference/troubleshooting"
@@ -183,8 +185,6 @@ INIT_PROFILES = {
         "agent": "gaia",
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~6 GB",
-        # EmbeddingGemma loads only on Lemonade v10.9.0+ (see the chat profile).
-        "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,
         # [ui] is [rag] plus the daemon, which gaia-tui, `gaia hub install`
         # and `gaia chat --ui` all need.
@@ -195,7 +195,6 @@ INIT_PROFILES = {
         "agent": "minimal",
         "models": ["Gemma-4-E4B-it-GGUF"],
         "approx_size": "~6 GB",
-        "min_lemonade_version": LEMONADE_MIN_VERSION,
         "min_context_size": 32768,
         "pip_extras": [],
     },
@@ -207,7 +206,6 @@ INIT_PROFILES = {
             "Gemma-4-E4B-it-GGUF",  # Agentic reasoning + VLM + prompt enhancement (~6GB)
         ],
         "approx_size": "~10 GB",
-        "min_lemonade_version": LEMONADE_MIN_VERSION,
         "min_context_size": 32768,
         "pip_extras": [],
     },
@@ -216,10 +214,6 @@ INIT_PROFILES = {
         "agent": "chat",
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~6 GB",
-        # EmbeddingGemma is validated on Lemonade v10.9.0; older bundled
-        # llama.cpp builds fail to load it. Floor the version so init fails
-        # loudly instead of the embedder failing at first RAG index.
-        "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,
         "pip_extras": ["rag"],
     },
@@ -228,8 +222,6 @@ INIT_PROFILES = {
         "agent": "rag",
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~6 GB",
-        # EmbeddingGemma loads only on Lemonade v10.9.0+ (see chat profile).
-        "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,
         "pip_extras": ["rag"],
     },
@@ -238,7 +230,6 @@ INIT_PROFILES = {
         "agent": "vlm",
         "models": ["Gemma-4-E4B-it-GGUF"],
         "approx_size": "~6 GB",
-        "min_lemonade_version": LEMONADE_MIN_VERSION,
         "min_context_size": 32768,
         "pip_extras": [],
     },
@@ -247,10 +238,6 @@ INIT_PROFILES = {
         "agent": "email",
         "models": ["Gemma-4-E4B-it-GGUF"],
         "approx_size": "~6 GB",
-        # Keep in lock-step with gaia_agent_email.version.MIN_LEMONADE_VERSION
-        # and the email gaia-agent.yaml manifest (the GET /v1/email/init readiness
-        # check reads the same minimum). A test asserts the three agree.
-        "min_lemonade_version": LEMONADE_MIN_VERSION,
         "min_context_size": 32768,
         "pip_extras": [],
     },
@@ -266,7 +253,6 @@ INIT_PROFILES = {
         # The chat model is Gemma 4 E4B's NPU twin (``with_chat_model``).
         "models": ["gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"],
         "approx_size": "~10 GB",
-        "min_lemonade_version": LEMONADE_MIN_VERSION,
         # The floor every profile shares (issue #1745); the chat model itself
         # loads at its own window, 64K for the NPU twin.
         "min_context_size": 32768,
@@ -282,8 +268,6 @@ INIT_PROFILES = {
         "agent": "all",
         "models": None,
         "approx_size": "~26 GB",
-        # Includes EmbeddingGemma, which loads only on Lemonade v10.9.0+.
-        "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,  # Max requirement across all agents
         "pip_extras": ["rag"],
     },
@@ -319,6 +303,13 @@ class SetupStatus:
     stage: Optional[str] = None
     #: One ModelLoad per model the load check tried; empty unless ``load=True``.
     models: list = field(default_factory=list)
+    #: The profile's GAIA agent is one of the things setup still has to do.
+    agent_missing: bool = False
+    #: True but worth saying, e.g. no GAIA agent build exists for this PC; never
+    #: a step setup could take.
+    warnings: list = field(default_factory=list)
+    #: The hub has no GAIA agent build for this PC, so chat can't run here.
+    no_agent_build: bool = False
 
     def to_json(self) -> dict:
         return {
@@ -326,6 +317,9 @@ class SetupStatus:
             "stage": self.stage,
             "reasons": list(self.reasons),
             "models": [m.__dict__ for m in self.models],
+            "agent_missing": self.agent_missing,
+            "warnings": list(self.warnings),
+            "no_agent_build": self.no_agent_build,
         }
 
 
@@ -340,6 +334,9 @@ class ModelLoad:
     error: Optional[str] = None
     #: Whether the server already has it; None when not checked.
     downloaded: Optional[bool] = None
+    #: Why it failed, as :func:`kind_of_test_failure` names it; only
+    #: ``broken`` says the file itself is bad.
+    kind: Optional[str] = None
 
 
 @dataclass
@@ -433,15 +430,14 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
         _model_ids_match,
         find_model_requirement,
         kv_cache_for,
-        lemonade_server_version,
         runs_on_npu,
     )
     from gaia.llm.model_fit import (
         ModelFitError,
         capacity_from_system_info,
         check_fit,
-        check_server_supports,
         npu_capacity,
+        npu_not_ready_reason,
     )
 
     size = None
@@ -463,6 +459,13 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
                     "reports none on this PC. Choose a GPU model with `gaia config "
                     "set default_model <id>`, then re-run `gaia init`."
                 )
+            not_ready = npu_not_ready_reason(capacity)
+            if not_ready:
+                raise ModelFitError(
+                    f"default_model {model_id} runs on the NPU, which can't run "
+                    f"models yet. {not_ready} Then re-run `gaia init`, or choose "
+                    "a GPU model with `gaia config set default_model <id>`."
+                )
         verdict = check_fit(
             float(size), capacity, kv_cache_for(mr, capacity) if mr else 0.0
         )
@@ -472,12 +475,6 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
                 "Choose a smaller one with `gaia config set default_model <id>` "
                 "(`/provider` in the TUI lists what fits), then re-run `gaia init`."
             )
-    if mr and mr.min_lemonade_version:
-        supported = check_server_supports(
-            mr.min_lemonade_version, lemonade_server_version(client)
-        )
-        if not supported.fits:
-            raise ModelFitError(f"default_model {model_id} {supported.reason}.")
 
 
 def pending_download_sizes(client, model_ids, full: bool = False) -> dict:
@@ -622,32 +619,21 @@ def skipped_gemma(profile: str, model_ids) -> bool:
     )
 
 
-def configured_server_too_old(health: object, profile: str, url: str) -> Optional[str]:
-    """Why a user-chosen server can't serve *profile*, or None if it can.
+def configured_server_too_old(health: object, url: str) -> Optional[str]:
+    """Why a user-chosen server cannot serve GAIA, or None if it can.
 
-    Shared by `gaia init` and `gaia init --check` so they can never disagree.
-    A server that advertises no parseable version is logged and allowed, since
-    there is nothing to compare.
+    Shared by `gaia init` and `gaia init --check` so they can never disagree,
+    and the same check the client runs before loading a model: a server below
+    ``LEMONADE_MIN_VERSION``, or one reporting no version GAIA can read, is
+    refused.
     """
-    from gaia.agents.base.readiness import version_meets_min
+    from gaia.llm.lemonade_client import LemonadeVersionError, check_lemonade_version
 
     version = health.get("version") if isinstance(health, dict) else None
-    minimum = INIT_PROFILES[profile].get("min_lemonade_version")
-    verdict = version_meets_min(version, minimum)
-    if verdict is None and minimum:
-        log.warning(
-            "Could not read a version from the Lemonade Server at %s (got %r); "
-            "not checking it against the '%s' profile's minimum v%s",
-            url,
-            version,
-            profile,
-            minimum,
-        )
-    if verdict is False:
-        return (
-            f"Lemonade Server at {url} is v{version}; the '{profile}' profile "
-            f"needs v{minimum} or newer"
-        )
+    try:
+        check_lemonade_version(version, url)
+    except LemonadeVersionError as e:
+        return str(e)
     return None
 
 
@@ -660,7 +646,9 @@ def check_setup_status(
 ) -> SetupStatus:
     """Check whether `gaia init --profile <profile>` still has work to do.
 
-    Never installs, prompts, or downloads anything. A stopped GAIA Lemonade
+    Never installs, prompts, or downloads anything; with the profile's GAIA
+    agent missing it reads the hub's agent manifest, to tell "install it" from
+    "no build for this PC", which `gaia init` skips. A stopped GAIA Lemonade
     Server is started through the daemon, which every entry point does anyway,
     so a reboot does not read as "needs setup". Checks the SAME real state
     `run()` itself acts on (GAIA's Lemonade Server installed + running,
@@ -768,7 +756,7 @@ def check_setup_status(
             stage="server",
         )
     if configured:
-        too_old = configured_server_too_old(health, profile, base_url)
+        too_old = configured_server_too_old(health, base_url)
         if too_old:
             return SetupStatus(ready=False, reasons=[too_old], stage="server")
 
@@ -829,13 +817,50 @@ def check_setup_status(
         if not available:
             reasons.append(f"Model '{model_id}' is not downloaded")
 
+    agent_missing = False
+    no_agent_build = False
+    warnings: list = []
+    agent_id = profile_config.get("agent")
+    if agent_id in HUB_INSTALL_AGENTS and not _agent_ready_for_check(agent_id):
+        # Models on the server do not imply the agent.
+        command = (
+            "gaia init"
+            if profile == DEFAULT_INIT_PROFILE
+            else f"gaia init --profile {profile}"
+        )
+        no_build, unknown = _agent_build_missing(agent_id)
+        if no_build:
+            from gaia.hub.compatibility import current_platform_key
+
+            no_agent_build = True
+            # init finishes without it here, so setup has nothing left to do.
+            warnings.append(
+                f"No GAIA agent build for this PC ({current_platform_key()}) yet, "
+                f"so chat isn't available here. Run `{command}` again once one "
+                f"is published. ({no_build})"
+            )
+        else:
+            agent_missing = True
+            reason = f"The GAIA agent is not installed -- run: {command}"
+            reasons.append(f"{reason}. {unknown}" if unknown else reason)
+
     if reasons:
         # Sizes let a caller say what the download will cost before it starts;
         # ``downloaded`` lets it leave out models the server already has.
         models = _describe_models(client, model_ids, downloaded) if load else []
-        return SetupStatus(ready=False, reasons=reasons, stage="setup", models=models)
+        return SetupStatus(
+            ready=False,
+            reasons=reasons,
+            stage="setup",
+            models=models,
+            agent_missing=agent_missing,
+            warnings=warnings,
+            no_agent_build=no_agent_build,
+        )
     if not load:
-        return SetupStatus(ready=True, reasons=[])
+        return SetupStatus(
+            ready=True, reasons=[], warnings=warnings, no_agent_build=no_agent_build
+        )
 
     if chat_model and not skip_chat_model and not is_embedding_model_id(chat_model):
         model_ids = [m for m in model_ids if is_embedding_model_id(m)] + [chat_model]
@@ -844,14 +869,80 @@ def check_setup_status(
     if failed:
         return SetupStatus(
             ready=False,
-            reasons=[
-                f"Model '{m.id}' is downloaded but would not load: {m.error}"
-                for m in failed
-            ],
+            reasons=[_load_failure_reason(m) for m in failed],
             stage="load",
             models=models,
+            warnings=warnings,
+            no_agent_build=no_agent_build,
         )
-    return SetupStatus(ready=True, reasons=[], models=models)
+    return SetupStatus(
+        ready=True,
+        reasons=[],
+        models=models,
+        warnings=warnings,
+        no_agent_build=no_agent_build,
+    )
+
+
+def _terminal_installer_agent() -> Optional[Path]:
+    """The flagship install.sh / install.ps1 put in GAIA's bin dir, else None.
+
+    Those installers ship it there, on PATH, with no hub sentinel; the TUI runs
+    it from PATH.
+    """
+    from gaia.home import gaia_home
+
+    name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
+    path = gaia_home() / "bin" / name
+    if not path.is_file():
+        return None
+    if sys.platform != "win32" and not os.access(path, os.X_OK):
+        return None
+    return path
+
+
+def _agent_ready_for_check(agent_id: str) -> bool:
+    """Whether the readiness check counts *agent_id* as installed.
+
+    The hub sentinel `gaia init` writes, or for the flagship the terminal
+    installer's copy. Never touches the network.
+    """
+    if InitCommand._is_hub_agent_available(agent_id):
+        return True
+    return agent_id == FLAGSHIP_AGENT_ID and _terminal_installer_agent() is not None
+
+
+def _agent_build_missing(agent_id: str) -> Tuple[Optional[str], Optional[str]]:
+    """``(no_build, unknown)``: why `gaia init` would skip *agent_id* here for
+    lack of a build, or why that could not be told.
+
+    Not knowing is not "no build": the caller reports the agent missing, with
+    *unknown* saying what to check.
+    """
+    import requests
+
+    from gaia.hub import catalog as hub_catalog
+    from gaia.hub import installer as hub_installer
+
+    try:
+        return hub_installer.no_build_reason(agent_id), None
+    except (
+        hub_catalog.CatalogError,
+        requests.RequestException,
+        # A 200 that isn't JSON (a captive portal), or a file:// hub that
+        # isn't there.
+        ValueError,
+        OSError,
+    ) as e:
+        hub_url = hub_catalog.get_hub_base_url()
+        log.warning("Could not read %s for the '%s' agent: %s", hub_url, agent_id, e)
+        return None, (
+            f"Could not read {hub_url} to check for a build for this PC ({e}); "
+            "check your network or GAIA_HUB_URL."
+        )
+    except hub_installer.InstallError as e:
+        log.warning("Could not tell whether '%s' has a build here: %s", agent_id, e)
+        return None, str(e)
 
 
 def remaining_download_gb(full_gb, on_disk_bytes) -> Optional[float]:
@@ -905,31 +996,63 @@ def _describe_model(
     return ModelLoad(model_id, role, size_gb, False, downloaded=downloaded)
 
 
+def _load_failure_reason(m: "ModelLoad") -> str:
+    """One failed load, worded for its kind: only ``broken`` is "would not load"."""
+    if m.kind == "memory":
+        return (
+            f"Model '{m.id}' is downloaded, but this PC didn't have enough free "
+            f"memory to load it: {m.error}"
+        )
+    if m.kind == "stuck":
+        return (
+            f"Model '{m.id}' is downloaded, but the model server didn't answer "
+            f"while loading it: {m.error}"
+        )
+    if m.kind == "answer":
+        return f"Model '{m.id}' loaded but returned nothing usable: {m.error}"
+    if m.kind == "window":
+        return (
+            f"Model '{m.id}' loaded with a smaller context window than GAIA "
+            f"needs: {m.error}"
+        )
+    return f"Model '{m.id}' is downloaded but would not load: {m.error}"
+
+
 def _load_model_once(client, model_id: str) -> "ModelLoad":
     """Load one model through the same call the agent's first turn makes."""
-    from gaia.llm.lemonade_client import LemonadeClientError
+    from gaia.llm.lemonade_client import InsufficientMemoryError, LemonadeClientError
 
     role = _model_role(model_id)
     size_gb = None
+
+    def failed(error) -> "ModelLoad":
+        kind = kind_of_test_failure(error)
+        return ModelLoad(model_id, role, size_gb, False, str(error), kind=kind)
+
     try:
         size_gb = client.get_model_info(model_id)["size_gb"]
         if role == "speech":
-            _speak_once(client.base_url, model_id)
+            silent = _speak_once(client.base_url, model_id)
+            if silent is not None:
+                return failed(silent)
         elif role == "embedding":
             response = client.embeddings(["ok"], model=model_id, timeout=120)
             data = response.get("data") if isinstance(response, dict) else None
             if not data or not data[0].get("embedding"):
-                return ModelLoad(
-                    model_id, role, size_gb, False, "it returned no embedding"
-                )
+                return failed(WrongAnswer("it returned no embedding"))
         else:
             client._ensure_model_loaded(model_id)  # pylint: disable=protected-access
-    except LemonadeClientError as e:
-        return ModelLoad(model_id, role, size_gb, False, str(e))
+    except InsufficientMemoryError as e:
+        return failed(MemoryShortfall(str(e)))
     except Exception as e:  # pylint: disable=broad-exception-caught
         # Reported as this model's failure, so the caller names it — never a
         # bare traceback that leaves the check unanswered.
-        return ModelLoad(model_id, role, size_gb, False, f"{type(e).__name__}: {e}")
+        said = (
+            str(e) if isinstance(e, LemonadeClientError) else f"{type(e).__name__}: {e}"
+        )
+        if isinstance(_test_error(e), CheckTimedOut):
+            return failed(CheckTimedOut(said))
+        return failed(said)
     return ModelLoad(model_id, role, size_gb, True)
 
 
@@ -951,6 +1074,51 @@ class WrongAnswer(str):
 
 class WindowTooSmall(str):
     """The model loaded with a smaller context window than GAIA needs: not a damaged file."""
+
+
+#: A failed test's kind, by its error's class. Anything else is "broken": the
+#: file itself didn't load, and only that is worth a fresh download.
+_TEST_FAILURE_KINDS = (
+    (MemoryShortfall, "memory"),
+    (CheckTimedOut, "stuck"),
+    (WrongAnswer, "answer"),
+    (WindowTooSmall, "window"),
+)
+
+
+def kind_of_test_failure(error) -> Optional[str]:
+    """``memory``, ``stuck``, ``answer``, ``window`` or ``broken``; None for no error."""
+    if error is None:
+        return None
+    return next(
+        (k for cls, k in _TEST_FAILURE_KINDS if isinstance(error, cls)), "broken"
+    )
+
+
+def _test_error(e: Exception, limit: int = 200) -> str:
+    """A failed test's reason; a server that stopped answering is not a broken model."""
+    import requests
+
+    from gaia.llm.lemonade_client import (
+        GaiaLemonadeNotAnsweringError,
+        LemonadeUnresponsiveError,
+    )
+
+    unanswered = (
+        GaiaLemonadeNotAnsweringError,
+        LemonadeUnresponsiveError,
+        requests.ConnectionError,
+        requests.Timeout,
+        ConnectionError,
+        TimeoutError,
+    )
+    cause: Optional[BaseException] = e
+    while cause is not None:
+        if isinstance(cause, unanswered):
+            return CheckTimedOut(f"The model server didn't answer: {str(e)[:limit]}")
+        cause = cause.__cause__ or cause.__context__
+    text = str(e)
+    return text if len(text) <= limit else text[:limit] + "..."
 
 
 #: A model gets this long to load and answer, plus _TEST_S_PER_GB per GB of size.
@@ -1614,6 +1782,8 @@ class InitCommand:
                 )
                 if not self._install_backend():
                     return self._fail_before_agent(has_hub_agent_check)
+                if self.profile == "npu":
+                    self._offer_memlock_fix_for_npu_profile()
 
             # Any PC with an NPU gets its backend, so the NPU models show up in
             # the model pickers without a separate profile.
@@ -1670,7 +1840,7 @@ class InitCommand:
                 )
                 self._component("agent", "active")
                 self._ensure_hub_agent_installed()
-                self._component("agent", "failed" if self._agent_problem else "done")
+                self._component("agent", self._agent_component_state())
 
             # Build Agent UI frontend (dev/source installs only). No
             # try/except here: ensure_webui_built() never raises for an
@@ -1954,13 +2124,10 @@ class InitCommand:
             self._print(f"   Start that server, or {switch_back_hint()}.")
             return False
 
-        too_old = configured_server_too_old(health, self.profile, url)
+        too_old = configured_server_too_old(health, url)
         if too_old:
-            self._print_error(f"{too_old}.")
-            self._print(
-                "   Upgrade it from https://lemonade-server.ai, or "
-                f"{switch_back_hint()}."
-            )
+            self._print_error(too_old)
+            self._print(f"   Or {switch_back_hint()}.")
             return False
 
         version = health.get("version") if isinstance(health, dict) else None
@@ -2171,14 +2338,12 @@ class InitCommand:
         backend will not install still finishes setup — with a warning that
         says the NPU models will not be offered and how to retry.
         """
+        from gaia.llm import npu_linux
         from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
         try:
-            devices = (
-                LemonadeClient(verbose=self.verbose)
-                .get_system_info()
-                .get("devices", {})
-            )
+            info = LemonadeClient(verbose=self.verbose).get_system_info()
+            devices = info.get("devices", {})
         except LemonadeClientError as e:
             self._print_warning(
                 f"Could not ask Lemonade whether this PC has an NPU ({e}), so the "
@@ -2194,6 +2359,69 @@ class InitCommand:
                 "The NPU models will not be offered until Lemonade's NPU backend "
                 "installs. Re-run `gaia init` to retry."
             )
+            return
+        problems = npu_linux.check(info)
+        if self._offer_memlock_fix(problems):
+            problems = npu_linux.check(info)
+        if problems:
+            self._print_warning(
+                "The NPU models will not be offered until this PC is set up to run "
+                "them:"
+            )
+            for problem in problems:
+                self._print_warning(f"  - {problem.title} {problem.fix}")
+            self._print_warning(
+                "See https://amd-gaia.ai/docs/guides/npu#linux, then re-run "
+                "`gaia init`."
+            )
+
+    def _offer_memlock_fix_for_npu_profile(self) -> None:
+        """``--profile npu``: offer the locked-memory fix before the NPU model is
+        judged, so the fit check that follows doesn't stop on it unasked."""
+        from gaia.llm import npu_linux
+        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+        # Nobody to ask: the fit check that follows says what is missing.
+        if self.yes or not stdin_is_tty() or not npu_linux._on_linux():
+            return
+        try:
+            info = LemonadeClient(verbose=self.verbose).get_system_info()
+        except LemonadeClientError as e:
+            self._print_warning(
+                f"Could not ask Lemonade about this PC's NPU ({e}), so the "
+                "locked-memory check is skipped. If the NPU model will not load, "
+                "see https://amd-gaia.ai/docs/guides/npu#linux and re-run "
+                "`gaia init --profile npu`."
+            )
+            return
+        self._offer_memlock_fix(npu_linux.check(info))
+
+    def _offer_memlock_fix(self, problems) -> bool:
+        """Raise the locked-memory limit FastFlowLM needs, when someone is here
+        to enter the administrator password. True once it is in place."""
+        from gaia.llm import npu_linux
+
+        wanted = any(
+            p.code == npu_linux.MEMLOCK and dict(p.params).get("fix") == "apply"
+            for p in problems
+        )
+        if not wanted or self.yes or not stdin_is_tty():
+            return False
+        if not self._prompt_yes_no(
+            "The NPU needs an unlimited locked-memory limit. Raise it now? It asks "
+            "for the administrator password, and applies after a restart"
+        ):
+            return False
+        try:
+            npu_linux.apply_memlock_fix()
+        except npu_linux.MemlockFixError as e:
+            self._print_warning(str(e))
+            return False
+        self._print_success(
+            "Locked-memory limit raised. Restart the PC, then the NPU models are "
+            "offered."
+        )
+        return True
 
     def _component(self, component: str, state: str) -> None:
         """Report one piece setup fetches: ``active``, ``done`` or ``failed``."""
@@ -2689,8 +2917,8 @@ class InitCommand:
         try:
             if is_tts_model_id(model_id):
                 # A speech model takes no chat request; the speech call loads it.
-                _speak_once(client.base_url, model_id)
-                return (True, None)
+                silent = _speak_once(client.base_url, model_id)
+                return (True, None) if silent is None else (False, silent)
 
             # Check if profile requires specific context size for this model
             profile_config = INIT_PROFILES.get(self.profile, {})
@@ -2738,23 +2966,25 @@ class InitCommand:
                     save_options=not users_server,
                 )
 
-                # Verify context size was set correctly by reading it back
+                # Read the window back from the loaded entry; /models holds the
+                # saved options, which a user's own server leaves unchanged.
                 try:
-                    # Get full model list with recipe_options
-                    models_list = client.list_models()
-                    model_info = next(
-                        (
-                            m
-                            for m in models_list.get("data", [])
-                            if model_choice.ids_match(m.get("id"), model_id)
-                        ),
-                        None,
-                    )
+                    from gaia.llm.lemonade_client import loaded_ctx_size
 
-                    if not model_info:
-                        return (False, "Model info not found")
+                    loaded = client.health_check().get("all_models_loaded") or []
+                    if not any(
+                        model_choice.ids_match(m.get("model_name"), model_id)
+                        for m in loaded
+                        if isinstance(m, dict)
+                    ):
+                        return (
+                            False,
+                            f"Lemonade accepted the load of {model_id}, but its "
+                            f"/health does not list it as loaded, so its context "
+                            f"window is unknown",
+                        )
 
-                    actual_ctx = model_info.get("recipe_options", {}).get("ctx_size")
+                    actual_ctx = loaded_ctx_size(loaded, model_id)
 
                     if actual_ctx and actual_ctx >= min_ctx:
                         # Success - context verified
@@ -2846,12 +3076,8 @@ class InitCommand:
         except InsufficientMemoryError as e:
             # Kept whole: the remedy (close apps, or another model) is in it.
             return (False, MemoryShortfall(str(e)))
-        except Exception as e:
-            error_msg = str(e)
-            # Truncate long error messages
-            if len(error_msg) > 100:
-                error_msg = error_msg[:100] + "..."
-            return (False, error_msg)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            return (False, _test_error(e, limit=100))
 
     def _test_speech(self, client, model_id: str) -> tuple:
         """Transcribe a short tone: the request is accepted and a transcript returns."""
@@ -2878,7 +3104,9 @@ class InitCommand:
             model=model_id,
             api_key=resolve_lemonade_api_key(base_url=client.base_url),
         ).synthesize("GAIA is ready.")
-        return (True, None) if len(samples) else (False, "No audio came back")
+        return (
+            (True, None) if len(samples) else (False, WrongAnswer("No audio came back"))
+        )
 
     def _test_vision(self, client, model_id: str) -> tuple:
         """Show the model a red image and ask its colour: text alone proves no vision."""
@@ -2907,7 +3135,7 @@ class InitCommand:
         except InsufficientMemoryError as e:
             return (False, MemoryShortfall(str(e)))
         except Exception as e:  # pylint: disable=broad-exception-caught
-            return (False, str(e)[:200])
+            return (False, _test_error(e))
         choices = (response or {}).get("choices") or [{}]
         message = choices[0].get("message", {})
         said = (
@@ -2931,7 +3159,7 @@ class InitCommand:
             try:
                 results.put(test(*args))
             except Exception as e:  # pylint: disable=broad-exception-caught
-                results.put((False, str(e)[:200]))
+                results.put((False, _test_error(e)))
             except BaseException as e:  # pylint: disable=broad-exception-caught
                 results.put(e)
 
@@ -2956,16 +3184,7 @@ class InitCommand:
         seconds: Optional[float] = None,
     ) -> None:
         """One row of the Test step: ``running``, ``passed``, ``failed`` or ``skipped``."""
-        # Only "broken" means the file didn't load, so only it offers a fresh download.
-        kinds = (
-            (MemoryShortfall, "memory"),
-            (CheckTimedOut, "stuck"),
-            (WrongAnswer, "answer"),
-            (WindowTooSmall, "window"),
-        )
-        kind = None
-        if error is not None:
-            kind = next((k for cls, k in kinds if isinstance(error, cls)), "broken")
+        kind = kind_of_test_failure(error)
         self.events.emit(
             "test",
             job=job,
@@ -3358,7 +3577,7 @@ class InitCommand:
                 self._print_error(
                     "The model server stopped answering while testing "
                     f"{', '.join(m for m, _ in stuck)}. Restart it, or the PC, "
-                    "and re-run `gaia init`; nothing needs re-downloading."
+                    "then run setup again; nothing needs re-downloading."
                 )
                 return False
 
@@ -3398,6 +3617,10 @@ class InitCommand:
         from gaia.hub import installer as hub_installer
 
         return hub_installer.read_sentinel(agent_id) is not None
+
+    def _agent_component_state(self) -> str:
+        """The agent row after its step: a kept agent still answers, so it is done."""
+        return "failed" if self._agent_problem and not self._agent_kept else "done"
 
     def _profile_installs_flagship(self) -> bool:
         """Whether this profile installs the flagship agent itself."""
@@ -3884,6 +4107,42 @@ class InitCommand:
 def run_agent_refresh() -> int:
     """Entry point for `gaia init --agent-only`."""
     return InitCommand(profile=DEFAULT_INIT_PROFILE, skip_models=True).refresh_agent()
+
+
+#: The job a failed ``--check --load`` gives a model, so Retry repeats that load.
+LOAD_CHECK_JOB = "load"
+
+#: A failed load's kind, back as the error class the Test step uses.
+_KIND_ERRORS = {kind: cls for cls, kind in _TEST_FAILURE_KINDS}
+
+
+def _load_check_test(client, model_id: str) -> tuple:
+    """The load check's own probe of one model, as a Test-step result."""
+    load = _load_model_once(client, model_id)
+    if load.loaded:
+        return (True, None)
+    return (False, _KIND_ERRORS.get(load.kind, str)(load.error or ""))
+
+
+def retest_model(client, model_id: str, job: Optional[str] = None) -> tuple:
+    """Run one downloaded model's setup test again, as the Test step ran it.
+
+    *job* is the Test step's row, so a vision test repeats as a vision test.
+    Returns ``(passed, error, kind)``; *kind* is :func:`kind_of_test_failure`'s.
+    """
+    cmd = InitCommand(profile=DEFAULT_INIT_PROFILE, skip_models=True, yes=True)
+    if job == LOAD_CHECK_JOB:
+        test = _load_check_test
+    elif job == model_choice.ROLE_VISION:
+        test = cmd._test_vision
+    else:
+        test = cmd._test_model_inference
+    passed, error = cmd._within_limit(model_id, test, client, model_id)
+    return (
+        passed,
+        None if error is None else str(error),
+        None if passed else kind_of_test_failure(error),
+    )
 
 
 def run_init(

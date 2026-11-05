@@ -293,11 +293,21 @@ stop_agent_ui() {
   kill -9 $(app_pids) 2>/dev/null || true
 }
 
+# The daemon the backend started outlives the app by design, and keeps the
+# agent sidecar it supervises running, so stop it the way a user would.
+stop_daemon() {
+  local gaia="${GAIA_HOME}/venv/bin/gaia"
+  if [ ! -x "${gaia}" ]; then echo "no ${gaia}: the app installed no backend, so no daemon"; return 0; fi
+  local rc=0
+  "${gaia}" daemon stop || rc=$?
+  [ "${rc}" -eq 0 ] || die "\`gaia daemon stop\` exited ${rc}"
+}
+
 assert_gone() { for p in "$@"; do [ ! -e "${p}" ] || die "left behind: ${p}"; done; }
 
 no_gaia_processes() {
   local left
-  left="$(pgrep -fl 'gaia-desktop|gaia-tui|gaia-agent|\.gaia/venv/bin/gaia' || true)"
+  left="$(pgrep -fl 'gaia-desktop|gaia-tui|gaia-agent|\.gaia/venv/bin/|-m gaia\.daemon' || true)"
   [ -z "${left}" ] || die "still running after uninstall: ${left}"
 }
 
@@ -398,9 +408,13 @@ install)
       fi
       # Exactly the documented `curl ... | sh`, with the script from this checkout.
       sh <"${REPO}/installer/scripts/install.sh"
-      for f in "${GAIA_HOME}/venv/bin/gaia" "${GAIA_HOME}/bin/gaia-tui" "${GAIA_HOME}/bin/gaia-agent"; do
+      for f in "${GAIA_HOME}/venv/bin/gaia" "${GAIA_HOME}/bin/gaia" "${GAIA_HOME}/bin/gaia-mcp" "${GAIA_HOME}/bin/gaia-tui" "${GAIA_HOME}/bin/gaia-agent"; do
         [ -x "${f}" ] || die "install.sh finished but ${f} is not there"
       done
+      # #6603: the venv's python3 must not reach the user's PATH.
+      if grep -Fs "${GAIA_HOME}/venv/bin" "${HOME}/.bashrc" "${HOME}/.bash_profile" "${HOME}/.profile" "${HOME}/.zshrc"; then
+        die "install.sh put ${GAIA_HOME}/venv/bin on PATH in a shell startup file"
+      fi
       ;;
     *) die "no install for ${KIND}" ;;
   esac
@@ -434,7 +448,7 @@ launch)
 health)
   case "${KIND}" in
     agent-ui-dmg|agent-ui-deb|appimage) wait_agent_ui_health ;;
-    install-sh) PATH="${GAIA_HOME}/bin:${GAIA_HOME}/venv/bin:${PATH}" one_shot ;;
+    install-sh) PATH="${GAIA_HOME}/bin:${PATH}" one_shot ;;
     *) one_shot ;;
   esac
   ;;
@@ -445,6 +459,7 @@ preflight) preflight_no_lemonade ;;
 
 quit)
   stop_agent_ui
+  stop_daemon
   if [ -s "${WORK}/quit-leftovers" ]; then
     finding "processes outlived the app's quit by 30 s (killed to continue): $(tr '\n' ';' <"${WORK}/quit-leftovers")"
   fi

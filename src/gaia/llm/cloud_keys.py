@@ -189,31 +189,47 @@ def ensure_authenticated(
     return True
 
 
+def users_lemonade_url() -> Optional[str]:
+    """The Lemonade the user chose — ``LEMONADE_BASE_URL`` or the saved one — else None.
+
+    GAIA never takes keys back from it: other apps may share that server.
+
+    Raises:
+        CloudKeyError: The saved choice is unusable (external with no URL).
+    """
+    from gaia.llm.lemonade_choice import LemonadeChoiceError
+    from gaia.llm.lemonade_client import configured_lemonade_url
+
+    try:
+        return configured_lemonade_url()
+    except LemonadeChoiceError as e:
+        raise CloudKeyError(str(e)) from e
+
+
 def drop_runtime_keys() -> List[str]:
     """Take back the keys a running GAIA Lemonade holds; return those providers.
 
     Local only stops new keys at the source; this removes the ones Lemonade
     already holds in memory. A Lemonade that isn't running holds none, and a
-    server the user runs is never changed.
+    server the user chose (:func:`users_lemonade_url`) is never changed.
 
     Raises:
         CloudKeyError: Lemonade could not be asked or refused the removal.
     """
-    from gaia.llm.lemonade_choice import is_users_server
     from gaia.llm.lemonade_client import (
         resolve_lemonade_base_url,
         running_embedded_lemonade_url,
     )
     from gaia.llm.lemonade_launcher import gaia_runs_lemonade
 
+    if users_lemonade_url():
+        return []
     if gaia_runs_lemonade():
         base_url = running_embedded_lemonade_url()
         if base_url is None:
             return []
     else:
         base_url = resolve_lemonade_base_url(None)
-        if is_users_server(base_url):
-            return []
     dropped = []
     for provider in PROVIDERS:
         entry = _provider_entry(base_url, provider)
@@ -313,4 +329,5 @@ __all__ = [
     "forget_key",
     "recall_key",
     "remember_key",
+    "users_lemonade_url",
 ]
