@@ -40,6 +40,7 @@ from gaia.ui.routers import providers
 
 from ...test_custom_models import ARCH_SOURCE, SYSTEM_INFO
 from ...test_custom_models import _repo as repo_payload
+from ...test_npu_linux import linux, linux_system_info, not_set_up  # noqa: F401
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 CLOUD_GO = REPO_ROOT / "tui" / "internal" / "lemonade" / "cloud.go"
@@ -1209,6 +1210,63 @@ def test_a_picked_npu_model_is_the_model_after_a_restart(client, lemonade, keys,
     assert body["restore"]["status"] == "restored"
     assert body["model"] == npu
     assert db.get_setting("custom_model") == npu
+
+
+_NPU = "gemma4-it-e4b-FLM"
+
+
+@pytest.fixture
+def npu_blocked(lemonade, not_set_up):
+    """Fedora with a Ryzen AI NPU whose locked-memory limit is still 8 MB."""
+    lemonade.models = [
+        *_CATALOG,
+        {"id": _NPU, "downloaded": True, "recipe": "flm", "labels": ["tool-calling"]},
+    ]
+    lemonade.answers[("GET", "system-info")] = (200, linux_system_info())
+    return lemonade
+
+
+def test_settings_lists_the_blocked_npu_model_as_unavailable(client, npu_blocked):
+    models = client.get("/api/providers/local/models").json()["models"]
+    row = next(m for m in models if m["id"] == _NPU)
+    assert row["available"] is False
+    assert "8 MB" in row["unavailable_reason"]
+
+
+def test_select_refuses_a_model_settings_lists_as_unavailable(
+    client, npu_blocked, keys, db
+):
+    """The Settings list said the NPU couldn't run; Use must not pick it anyway."""
+    resp = client.post("/api/providers/select", json={"model": _NPU})
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert "locked-memory limit" in detail and "8 MB" in detail
+    assert db.get_setting("custom_model") is None
+    assert not config_mod.GAIA_CONFIG_FILE.exists()
+
+
+def test_restore_does_not_bring_back_a_model_that_cannot_run(
+    client, npu_blocked, keys, db
+):
+    _write_config({"last_model": _NPU})
+    body = client.get("/api/providers/active").json()
+    assert body["restore"]["status"] == "failed"
+    message = body["restore"]["message"]
+    assert "locked-memory limit" in message and "8 MB" in message
+    assert db.get_setting("custom_model") is None
+
+
+def test_local_unavailable_reason_matches_the_settings_list(npu_blocked):
+    assert "8 MB" in providers.local_unavailable_reason(_NPU)
+    assert providers.local_unavailable_reason("Qwen3-4B-GGUF") is None
+
+
+def test_a_loaded_npu_model_is_never_reported_unrunnable(npu_blocked):
+    npu_blocked.answers[("GET", "health")] = (
+        200,
+        {"all_models_loaded": [{"model_name": _NPU, "recipe": "flm"}]},
+    )
+    assert providers.local_unavailable_reason(_NPU) is None
 
 
 def test_select_supersedes_a_failed_restore_notice(client, lemonade, keys, db):

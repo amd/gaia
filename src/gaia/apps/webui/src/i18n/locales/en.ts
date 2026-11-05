@@ -1805,6 +1805,8 @@ export const enMessages = {
     'settings.model.measured': 'Measured: {evidence}',
     'settings.model.from': 'From {url}',
     'settings.model.inUse': 'In use',
+    'settings.model.inUseBlocked': 'In use · can’t run yet',
+    'settings.model.inUseCantRun': 'New messages use this model, but it can’t run on this PC yet. Fix what its card below says, or switch to another model.',
     'settings.model.use': 'Use',
     'settings.model.useAria': 'Use {name}',
     'settings.model.download': 'Download',

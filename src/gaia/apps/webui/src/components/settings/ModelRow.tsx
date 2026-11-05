@@ -98,7 +98,9 @@ export function ModelRow({ model: m, label, current, remote, busy, confirmingRem
                         </button>
                     )
                 )}
-                {current ? (
+                {current && m.available === false ? (
+                    <span className="model-row-current is-blocked">{t('settings.model.inUseBlocked')}</span>
+                ) : current ? (
                     <span className="model-row-current"><Check size={13} aria-hidden="true" /> {t('settings.model.inUse')}</span>
                 ) : m.available === false ? null : progress ? (
                     <span className="model-row-current"><Loader2 size={13} className="spin" /> {progress.message ? <bdi>{progress.message}</bdi> : <bdi dir="ltr">{Math.round(progress.percent)}%</bdi>}</span>

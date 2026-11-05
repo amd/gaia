@@ -642,6 +642,15 @@ def _check_model_available(model_id: str) -> Optional[str]:
             ):
                 return f"{_NAMES[provider]} has no working key"
         models = _list_models(provider)
+        found = _listed(models, model_id)
+        if found is None:
+            return "the model is no longer listed"
+        if provider != LOCAL:
+            return None
+        if not found["downloaded"]:
+            return "the model is not downloaded"
+        # The Settings list's verdict, so Use never picks a model it marks unavailable.
+        return _local_unavailable(models, model_id)
     except ProviderError as e:
         if e.status == 503:
             raise _ServerNotReady(str(e)) from e
@@ -652,12 +661,6 @@ def _check_model_available(model_id: str) -> Optional[str]:
         return str(e)
     except requests.RequestException as e:
         return str(e)
-    found = _listed(models, model_id)
-    if found is None:
-        return "the model is no longer listed"
-    if provider == LOCAL and not found["downloaded"]:
-        return "the model is not downloaded"
-    return None
 
 
 def restore_last_model(db: ChatDatabase) -> Dict[str, Any]:
@@ -690,6 +693,12 @@ def restore_last_model(db: ChatDatabase) -> Dict[str, Any]:
         except (_ServerNotReady, CredentialStoreWaiting):
             # Not cached: the UI asks again once the server is up or the OS answers.
             return {"status": "pending", "message": None}
+        except GaiaConfigError as e:
+            _restore_result = {
+                "status": "failed",
+                "message": f"Your last model was not restored: {e}. Pick a model.",
+            }
+            return _restore_result
         if reason is None:
             from gaia.llm.lemonade_client import resolve_default_chat_model
 
@@ -1088,11 +1097,16 @@ def _preferred_backend() -> Optional[str]:
         raise ProviderError(str(e), 500) from e
 
 
-def _local_report(models: List[Dict[str, Any]], db: ChatDatabase) -> Dict[str, Any]:
-    from gaia.installer.model_choice import to_decimal_gb
+def _annotate_local(
+    models: List[Dict[str, Any]],
+    *,
+    preferred_backend: Optional[str],
+    speeds: Dict[str, float],
+):
+    """``annotate_local_models`` over this Lemonade's state: (rows, capacity, error)."""
     from gaia.llm.model_fit import ModelFitError, capacity_from_system_info
 
-    from ..local_models import annotate_local_models, measured_speeds
+    from ..local_models import annotate_local_models
 
     system_info = _read_system_info()
     health = _read_health()
@@ -1101,13 +1115,42 @@ def _local_report(models: List[Dict[str, Any]], db: ChatDatabase) -> Dict[str, A
         capacity = capacity_from_system_info(system_info)
     except ModelFitError as e:
         capacity_error = str(e)
-    from .system import _get_download_progress
-
     annotated = annotate_local_models(
         models,
         health=health,
         system_info=system_info,
         capacity=capacity,
+        preferred_backend=preferred_backend,
+        speeds=speeds,
+    )
+    return annotated, capacity, capacity_error
+
+
+def _local_unavailable(models: List[Dict[str, Any]], model_id: str) -> Optional[str]:
+    """Why Settings › Model lists *model_id* as unable to run here; None if it can."""
+    # The backend preference only places a model; it never decides availability.
+    annotated, _, _ = _annotate_local(models, preferred_backend=None, speeds={})
+    row = _listed(annotated, model_id)
+    return row["unavailable_reason"] if row is not None else None
+
+
+def local_unavailable_reason(model_id: str) -> Optional[str]:
+    """Why local *model_id* can't run on this PC, by the Settings list's verdict.
+
+    None when it can, or when Lemonade doesn't list it (its load says why).
+    Raises :class:`ProviderError` when Lemonade can't be read.
+    """
+    return _local_unavailable(_list_models(LOCAL, offer_optional=False), model_id)
+
+
+def _local_report(models: List[Dict[str, Any]], db: ChatDatabase) -> Dict[str, Any]:
+    from gaia.installer.model_choice import to_decimal_gb
+
+    from ..local_models import measured_speeds
+    from .system import _get_download_progress
+
+    annotated, capacity, capacity_error = _annotate_local(
+        models,
         preferred_backend=_preferred_backend(),
         speeds=measured_speeds(db.recent_inference_stats()),
     )
@@ -1144,6 +1187,7 @@ def select_model(
                 f"{SETTINGS_HINT}"
             ),
         )
+    from gaia.config import GaiaConfigError
     from gaia.connectors.credential_wait import CredentialStoreWaiting
 
     try:
@@ -1152,6 +1196,8 @@ def select_model(
         raise HTTPException(status_code=503, detail=str(e)) from e
     except CredentialStoreWaiting as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
     if reason is not None:
         raise HTTPException(
             status_code=409,

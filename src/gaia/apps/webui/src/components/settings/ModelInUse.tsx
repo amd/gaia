@@ -42,6 +42,9 @@ export function ModelInUse({ row, providerName, choices, labels, disabled, onSwi
                 <span className="settings-hint">{t('settings.model.noneInUse')}</span>
             )}
             {active?.config_error && <p className="settings-error" role="alert"><bdi>{active.config_error}</bdi></p>}
+            {model && !remote && row?.available === false && (
+                <p className="settings-error" role="alert">{t('settings.model.inUseCantRun')}</p>
+            )}
             {model && (
                 <span className="model-chips">
                     {remote && <span className="model-badge is-device">{t('settings.model.cloud')}</span>}
