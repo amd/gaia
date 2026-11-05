@@ -510,10 +510,12 @@ def _take_model_load_lock(sse_handler=None, stopped=None) -> bool:
 
 
 def _refuse_unrunnable_model(model_id: str) -> None:
-    """Raise when Settings › Model lists *model_id* as unable to run on this PC.
+    """Raise when nothing on this PC can run *model_id*: no NPU or backend for it.
+
+    A memory estimate never refuses; the load itself says if memory runs out.
 
     Raises:
-        LemonadeModelUnavailableError: with the list's reason and where to fix it.
+        LemonadeModelUnavailableError: with the reason and where to fix it.
     """
     from gaia.ui.routers.providers import display_name, local_unavailable_reason
 

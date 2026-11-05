@@ -649,7 +649,7 @@ def _check_model_available(model_id: str) -> Optional[str]:
             return None
         if not found["downloaded"]:
             return "the model is not downloaded"
-        # The Settings list's verdict, so Use never picks a model it marks unavailable.
+        # Refuse only what nothing here can run; a memory estimate stays a caveat.
         return _local_unavailable(models, model_id)
     except ProviderError as e:
         if e.status == 503:
@@ -1077,14 +1077,21 @@ def provider_models(
 def _read_system_info() -> Dict[str, Any]:
     status, info = _lemonade("GET", "system-info")
     if status >= 400:
-        raise ProviderError(f"Lemonade answered /system-info with HTTP {status}.")
+        # A 5xx is the server's own state, not an answer about any model: 503.
+        raise ProviderError(
+            f"Lemonade answered /system-info with HTTP {status}.",
+            503 if status >= 500 else 502,
+        )
     return info
 
 
 def _read_health() -> Dict[str, Any]:
     status, health = _lemonade("GET", "health")
     if status >= 400:
-        raise ProviderError(f"Lemonade answered /health with HTTP {status}.")
+        raise ProviderError(
+            f"Lemonade answered /health with HTTP {status}.",
+            503 if status >= 500 else 502,
+        )
     return health
 
 
@@ -1103,7 +1110,10 @@ def _annotate_local(
     preferred_backend: Optional[str],
     speeds: Dict[str, float],
 ):
-    """``annotate_local_models`` over this Lemonade's state: (rows, capacity, error)."""
+    """``annotate_local_models`` over this Lemonade's state.
+
+    Returns ``(rows, capacity, capacity_error, system_info)``.
+    """
     from gaia.llm.model_fit import ModelFitError, capacity_from_system_info
 
     from ..local_models import annotate_local_models
@@ -1123,22 +1133,39 @@ def _annotate_local(
         preferred_backend=preferred_backend,
         speeds=speeds,
     )
-    return annotated, capacity, capacity_error
+    return annotated, capacity, capacity_error, system_info
 
 
 def _local_unavailable(models: List[Dict[str, Any]], model_id: str) -> Optional[str]:
-    """Why Settings › Model lists *model_id* as unable to run here; None if it can."""
+    """Why nothing on this PC can run *model_id*; None if something can.
+
+    Setup's rule: only a missing NPU or backend refuses. A model that may
+    not fit in memory still runs when picked, with the Settings list's caveat.
+    """
+    from gaia.installer import model_choice
+
     # The backend preference only places a model; it never decides availability.
-    annotated, _, _ = _annotate_local(models, preferred_backend=None, speeds={})
+    annotated, capacity, _, system_info = _annotate_local(
+        models, preferred_backend=None, speeds={}
+    )
     row = _listed(annotated, model_id)
-    return row["unavailable_reason"] if row is not None else None
+    if row is None or row["available"]:
+        return None
+    return model_choice.cant_run_reason(
+        model_choice.backend_fit(
+            model_choice.memory_fit(row["id"], row["size_gb"], capacity),
+            row.get("recipe"),
+            system_info,
+        )
+    )
 
 
 def local_unavailable_reason(model_id: str) -> Optional[str]:
-    """Why local *model_id* can't run on this PC, by the Settings list's verdict.
+    """Why nothing on this PC can run local *model_id*; None if something can.
 
-    None when it can, or when Lemonade doesn't list it (its load says why).
-    Raises :class:`ProviderError` when Lemonade can't be read.
+    A memory shortfall is not a reason. None too when Lemonade doesn't list
+    the model (its load says why). Raises :class:`ProviderError` when
+    Lemonade can't be read.
     """
     return _local_unavailable(_list_models(LOCAL, offer_optional=False), model_id)
 
@@ -1149,7 +1176,7 @@ def _local_report(models: List[Dict[str, Any]], db: ChatDatabase) -> Dict[str, A
     from ..local_models import measured_speeds
     from .system import _get_download_progress
 
-    annotated, capacity, capacity_error = _annotate_local(
+    annotated, capacity, capacity_error, _ = _annotate_local(
         models,
         preferred_backend=_preferred_backend(),
         speeds=measured_speeds(db.recent_inference_stats()),

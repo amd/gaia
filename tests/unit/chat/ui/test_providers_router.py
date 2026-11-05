@@ -1271,6 +1271,113 @@ def test_a_loaded_npu_model_is_never_reported_unrunnable(npu_blocked):
     assert providers.local_unavailable_reason(_NPU) is None
 
 
+_QWEN_35B = "Qwen3.6-35B-A3B-GGUF"
+_PC_16GB = {
+    "Physical Memory": "16.00 GB",
+    "devices": {},
+    "model_storage": {"free_bytes": 900e9},
+    "recipes": {
+        "llamacpp": {"backends": {"vulkan": {"state": "installed"}}},
+    },
+}
+
+
+@pytest.fixture
+def qwen_on_16gb(lemonade):
+    """Qwen3.6 35B downloaded on a 16 GB PC: it may not fit, but llama.cpp runs."""
+    lemonade.models = [
+        *_CATALOG,
+        {"id": _QWEN_35B, "downloaded": True, "recipe": "llamacpp", "labels": []},
+    ]
+    lemonade.answers[("GET", "system-info")] = (200, _PC_16GB)
+    return lemonade
+
+
+def test_settings_still_flags_a_model_that_may_not_fit_in_memory(client, qwen_on_16gb):
+    models = client.get("/api/providers/local/models").json()["models"]
+    row = next(m for m in models if m["id"] == _QWEN_35B)
+    assert row["fits"] is False
+    assert "needs about" in row["unavailable_reason"]
+
+
+def test_select_does_not_refuse_a_model_that_only_may_not_fit_in_memory(
+    client, qwen_on_16gb, keys, db
+):
+    """A memory estimate is a caveat to accept, never a refusal."""
+    resp = client.post("/api/providers/select", json={"model": _QWEN_35B})
+    assert resp.status_code == 200, resp.text
+    assert db.get_setting("custom_model") == _QWEN_35B
+    assert _config()["last_model"] == _QWEN_35B
+
+
+def test_restore_brings_back_a_model_that_only_may_not_fit_in_memory(
+    client, qwen_on_16gb, keys, db
+):
+    _write_config({"last_model": _QWEN_35B})
+    body = client.get("/api/providers/active").json()
+    assert body["restore"]["status"] == "restored"
+    assert db.get_setting("custom_model") == _QWEN_35B
+
+
+def test_select_refuses_a_model_no_backend_here_can_run(client, qwen_on_16gb, keys, db):
+    qwen_on_16gb.answers[("GET", "system-info")] = (
+        200,
+        {**_PC_16GB, "unavailable_recipes": ["llamacpp"]},
+    )
+    resp = client.post("/api/providers/select", json={"model": _QWEN_35B})
+    assert resp.status_code == 409
+    assert "cannot run llamacpp models" in resp.json()["detail"]
+    assert db.get_setting("custom_model") is None
+
+
+def test_an_npu_model_that_only_may_not_fit_is_not_refused(lemonade, monkeypatch):
+    """A ready NPU with less RAM than the model's estimate: a caveat, not a refusal."""
+    monkeypatch.setattr(npu_linux, "_on_linux", lambda: False)
+    lemonade.models = [
+        {"id": _NPU, "downloaded": True, "recipe": "flm", "labels": ["tool-calling"]}
+    ]
+    info = linux_system_info(flm_state="installed")
+    info["Physical Memory"] = "4.00 GB"
+    lemonade.answers[("GET", "system-info")] = (200, info)
+    (row,) = [
+        r
+        for r in providers._annotate_local(
+            providers._list_models(providers.LOCAL, offer_optional=False),
+            preferred_backend=None,
+            speeds={},
+        )[0]
+        if r["id"] == _NPU
+    ]
+    assert row["fits"] is False
+    assert providers.local_unavailable_reason(_NPU) is None
+
+
+def test_a_pc_without_an_npu_refuses_an_npu_model(lemonade):
+    lemonade.models = [
+        {"id": _NPU, "downloaded": True, "recipe": "flm", "labels": ["tool-calling"]}
+    ]
+    lemonade.answers[("GET", "system-info")] = (
+        200,
+        {**_PC_16GB, "unavailable_recipes": ["flm"]},
+    )
+    assert "cannot run flm models" in providers.local_unavailable_reason(_NPU)
+
+
+def test_restore_waits_when_lemonade_answers_system_info_with_a_5xx(
+    client, qwen_on_16gb, keys, db
+):
+    """A server error is not an answer about the model: ask again, don't fail."""
+    _write_config({"last_model": _QWEN_35B})
+    qwen_on_16gb.answers[("GET", "system-info")] = (500, {})
+    body = client.get("/api/providers/active").json()
+    assert body["restore"]["status"] == "pending"
+    assert db.get_setting("custom_model") is None
+    qwen_on_16gb.answers[("GET", "system-info")] = (200, _PC_16GB)
+    assert client.get("/api/providers/active").json()["restore"]["status"] == (
+        "restored"
+    )
+
+
 def test_select_supersedes_a_failed_restore_notice(client, lemonade, keys, db):
     _write_config({"last_model": "fireworks.gone-model"})
     lemonade.models = _CATALOG

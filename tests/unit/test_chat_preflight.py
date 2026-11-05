@@ -702,3 +702,36 @@ def test_a_turn_on_a_blocked_npu_model_says_why_instead_of_try_again(monkeypatch
     assert "locked-memory limit" in message and "8 MB" in message
     assert "Settings" in message
     assert "try" not in message.lower()
+
+
+def test_a_turn_on_an_npu_model_that_may_not_fit_still_loads(monkeypatch):
+    """A ready NPU with less RAM than the estimate: load and let Lemonade say."""
+    from gaia.llm import npu_linux
+    from gaia.ui.routers import providers
+
+    from .test_npu_linux import linux_system_info
+
+    model = "gemma4-it-e4b-FLM"
+    monkeypatch.setattr(npu_linux, "_on_linux", lambda: False)
+    info = linux_system_info(flm_state="installed")
+    info["Physical Memory"] = "4.00 GB"
+    answers = {
+        "system-info": info,
+        "health": {"all_models_loaded": []},
+        "models?show_all=true": {
+            "data": [{"id": model, "downloaded": True, "recipe": "flm", "labels": []}]
+        },
+    }
+    monkeypatch.setattr(
+        providers, "_lemonade", lambda method, path: (200, answers[path])
+    )
+
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, return_value=_health_ok([])),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        _maybe_load_expected_model(model, sse_handler=_sse())
+
+    mock_cls.return_value.load_model.assert_called_once()
