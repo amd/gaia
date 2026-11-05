@@ -19,6 +19,9 @@ unlocked.
   the count and the line of each, not a first-match replacement — the model
   cannot tell a wrong-region edit from the one it asked for, and neither can
   the human reading the diff.
+- ``new_content`` must not repeat the lines just outside ``old_content``.
+  That is a whole-file rewrite squeezed into one span, and splicing it in
+  would leave those lines twice.
 - A rejected edit carries the file's current content around the region the
   caller was aiming at, so the retry lands without a separate re-read.
 """
@@ -46,6 +49,17 @@ MAX_REPORTED_MATCHES = 5
 
 # Ceiling on a returned excerpt, so a rejection cannot flood the context window.
 MAX_EXCERPT_CHARS = 4000
+
+# Neighbouring lines on each side checked for a repeat inside new_content.
+NEIGHBOUR_LINES = 3
+
+# A repeated neighbour run must be at least this many lines and characters,
+# so closing braces and separators can recur legitimately.
+MIN_REPEATED_LINES = 2
+MIN_REPEATED_CHARS = 8
+
+# Lines of context around the change in a successful edit's ``after`` excerpt.
+AFTER_RADIUS = 2
 
 # Similarity a line needs against the probe line to anchor a not-found excerpt.
 _ANCHOR_THRESHOLD = 0.6
@@ -328,6 +342,49 @@ def _describe_matches(current_content: str, offsets: List[int]) -> List[Dict[str
     return described
 
 
+def _nonblank(text: str) -> List[str]:
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _contains_run(lines: List[str], run: List[str]) -> bool:
+    width = len(run)
+    return any(lines[i : i + width] == run for i in range(len(lines) - width + 1))
+
+
+def _repeated_neighbours(
+    current_content: str, offset: int, old_content: str, new_content: str
+) -> List[str]:
+    """Lines just outside the matched span that ``new_content`` repeats."""
+    new_lines = _nonblank(new_content)
+    old_lines = _nonblank(old_content)
+    before = _nonblank(current_content[:offset])[-NEIGHBOUR_LINES:]
+    after = _nonblank(current_content[offset + len(old_content) :])[:NEIGHBOUR_LINES]
+    repeated: List[str] = []
+    for run in (before, after):
+        if len(run) < MIN_REPEATED_LINES:
+            continue
+        if sum(len(line) for line in run) < MIN_REPEATED_CHARS:
+            continue
+        if _contains_run(new_lines, run) and not _contains_run(old_lines, run):
+            repeated.extend(run)
+    return repeated
+
+
+def after_excerpt(current_content: str, updated_content: str) -> Dict[str, Any]:
+    """The edited lines as they now read, so the caller sees what it wrote."""
+    prefix = len(os.path.commonprefix([current_content, updated_content]))
+    room = min(len(current_content), len(updated_content)) - prefix
+    suffix = len(os.path.commonprefix([current_content[::-1], updated_content[::-1]]))
+    changed_end = len(updated_content) - min(suffix, room)
+    first = updated_content.count("\n", 0, prefix)
+    last = updated_content.count("\n", 0, max(prefix, changed_end - 1))
+    lines = updated_content.splitlines()
+    start = max(0, first - AFTER_RADIUS)
+    end = min(len(lines), last + AFTER_RADIUS + 1)
+    text, _ = _clip("\n".join(lines[start:end]))
+    return {"after": text, "after_start_line": start + 1, "after_end_line": end}
+
+
 def _error(
     message: str, file_path: str, match_count: int, extra: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -439,6 +496,19 @@ def apply_unique_replacement(
         )
 
     offset = offsets[0]
+    repeated = _repeated_neighbours(current_content, offset, old_content, new_content)
+    if repeated:
+        return None, _error(
+            f"new_content repeats lines that sit outside old_content in "
+            f"{file_path} (listed in `repeated_lines`) — nothing was written, "
+            "because the file would end up with those lines twice. Pass only "
+            "the text that replaces old_content, or use write_file to replace "
+            "the whole file.",
+            file_path,
+            1,
+            {"repeated_lines": repeated, **_excerpt(current_content, old_content)},
+        )
+
     updated = (
         current_content[:offset]
         + new_content
