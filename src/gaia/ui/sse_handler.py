@@ -909,6 +909,8 @@ class SSEOutputHandler(OutputHandler):
             for key in RESULT_PATH_KEYS:
                 if isinstance(data.get(key), str):
                     event[key] = data[key]
+            if isinstance(data.get("num_chunks"), int):
+                event["num_chunks"] = data["num_chunks"]
         # The summary drops the hits a relayed turn's sources are made of.
         if self._last_tool_name == "search_web" and isinstance(data, str):
             event["sources"] = search_hits(data)

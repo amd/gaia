@@ -52,7 +52,7 @@ const ANSWER =
     '3. **Everyone**: review the volunteer schedule in `schedule-fall.xlsx` before the next meeting.\n\n' +
     'I saved these to `C:\\Users\\me\\Documents\\action-items.md`.';
 
-const MESSAGES = {
+export const MESSAGES = {
     messages: [
         {
             id: 1,
