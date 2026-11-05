@@ -462,6 +462,13 @@ def _total_ram_gb(info: Dict[str, Any], carve_out_gb: float) -> float:
 
     reported = physical_memory_gb(info)
     if reported > 0:
+        # On Linux, Lemonade reports MemTotal (RAM left visible to the OS),
+        # whereas the GPU fit calculation needs installed RAM. Add back the
+        # integrated-GPU carve-out when the response identifies itself as Linux.
+        if _platform() == "linux" and str(info.get("OS Version", "")).startswith(
+            "Linux-"
+        ):
+            return reported * GB_PER_GIB + carve_out_gb
         return reported * GB_PER_GIB
     if _platform() == "linux":
         # The OS doesn't count the carve-out; installed RAM does.

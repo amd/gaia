@@ -37,7 +37,10 @@ LIVE_PAGES = 16_384_000
 def linux_igpu(total_gb: float, gtt_gb: float, carve_gb: float = 0.5) -> dict:
     """Lemonade's /system-info for a Linux Strix Halo-class PC."""
     return {
-        "Physical Memory": f"{total_gb:g} GB",
+        "OS Version": "Linux-6.8.0 (Ubuntu 24.04)",
+        # Linux Lemonade reports the RAM visible to the OS, after the GPU
+        # carve-out; the production code adds that reservation back.
+        "Physical Memory": f"{total_gb - carve_gb:g} GB",
         "devices": {
             "amd_gpu": [
                 {
@@ -324,6 +327,14 @@ class TestLinuxSplit:
         box.info = linux_igpu(16, 7.75)
         with pytest.raises(gm.OutOfRange, match="can't give the GPU more"):
             gm.apply(8, confirm=True)
+
+    def test_linux_reported_memory_adds_back_gpu_carve_out(self, box):
+        info = linux_igpu(126.4, 62.5, carve_gb=64)
+        box.info = info
+        result = gm.describe(info, LOCAL)
+        # Lemonade reports GiB; the API exposes decimal GB after adding the
+        # 64 GiB carve-out back to the 62.4 GiB OS-visible value.
+        assert result["total_gb"] == pytest.approx(135.7, abs=0.05)
 
     def test_total_ram_from_meminfo_when_lemonade_omits_it(self, box):
         info = linux_igpu(128, 62.5)
