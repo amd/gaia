@@ -20,8 +20,8 @@ const baseMessage: Message = {
     rag_sources: null,
 };
 
-function textOf(content: string): string {
-    const { container } = render(<MessageBubble message={{ ...baseMessage, content }} />);
+function textOf(content: string, role: Message['role'] = 'assistant'): string {
+    const { container } = render(<MessageBubble message={{ ...baseMessage, role, content }} />);
     return container.querySelector('.md-content')?.textContent ?? '';
 }
 
@@ -51,6 +51,58 @@ describe('Windows paths in prose keep their backslashes', () => {
             expect(textOf(`Saved to ${path} just now.`)).toBe(`Saved to ${path} just now.`);
         },
     );
+
+    it.each([
+        'C:\\Users\\Kalin\\OneDrive - AMD\\_drafts\\plan.md',
+        'C:\\My Old Docs\\_drafts\\plan.md',
+        'C:\\Program Files (x86)\\Common Files\\.cache\\x',
+        '\\\\nas\\team share - Q3 (old)\\_tmp\\a.txt',
+        'C:\\My Old Docs\\_drafts\\my plan v2.md',
+    ])('keeps the path %s whose folders have several spaces', (path) => {
+        expect(textOf(`Saved to ${path} just now.`)).toBe(`Saved to ${path} just now.`);
+    });
+
+    it.each([
+        'C:\\Music\\Smith, John\\_old\\a.mp3',
+        'C:\\Music\\Artist; Live\\_x',
+        'C:\\a b\\c, d\\_e',
+        'C:\\Users\\Kalin\\OneDrive - AMD\\Smith, John\\_old\\a.mp3',
+    ])('keeps the path %s whose folder has a comma or semicolon', (path) => {
+        expect(textOf(`Saved to ${path} just now.`)).toBe(`Saved to ${path} just now.`);
+    });
+
+    it('ends a path at a comma when several words follow it', () => {
+        expect(textOf('Saved to C:\\foo, then use snake\\_case')).toBe('Saved to C:\\foo, then use snake_case');
+    });
+
+    it('keeps a path with several spaces in the user\'s own message', () => {
+        const path = 'C:\\gtest\\docs8\\OneDrive - AMD\\_drafts\\plan.md';
+        expect(textOf(`Summarize ${path}`, 'user')).toBe(`Summarize ${path}`);
+    });
+
+    it('keeps a path with several spaces inside Arabic prose', () => {
+        const path = 'C:\\Users\\Kalin\\OneDrive - AMD\\_drafts\\plan.md';
+        expect(textOf(`احفظ الملف في ${path} ثم أغلق.`)).toBe(`احفظ الملف في ${path} ثم أغلق.`);
+    });
+
+    it.each([
+        ['words with no backslash after them', 'See C:\\foo and then bar \\_x', 'See C:\\foo and then bar _x'],
+        ['a comma before the next words', 'Saved to C:\\foo, then use snake\\_case', 'Saved to C:\\foo, then use snake_case'],
+        ['a second drive path', 'Copy C:\\a to D:\\b\\_c', 'Copy C:\\a to D:\\b\\_c'],
+    ])('ends a spaced path before %s', (_label, content, shown) => {
+        expect(textOf(content)).toBe(shown);
+    });
+
+    it.each([
+        ['folders with spaces', `C:\\${'a b - c\\'.repeat(2000)}_x`],
+        ['words with no backslash', `C:\\${'OneDrive - AMD '.repeat(2000)}\\_x`],
+        ['unclosed brackets', `C:\\${'a (b '.repeat(2000)}\\_x`],
+        ['repeated drive letters', `${'C:\\a b '.repeat(2000)}\\_x`],
+    ])('handles 2,000 %s quickly', (_label, content) => {
+        const started = performance.now();
+        textOf(content);
+        expect(performance.now() - started).toBeLessThan(2000);
+    });
 
     it('ends a path at a space when the next word has no backslash', () => {
         expect(textOf('See C:\\me.gaia and \\_literal')).toBe('See C:\\me.gaia and _literal');
