@@ -2973,7 +2973,7 @@ def pull_request_body(model_id: str) -> Dict[str, Any]:
     """
     if is_cloud_model(model_id) or cloud_model_provider(model_id):
         raise RuntimeError(
-            f"'{model_id}' is hosted on a gateway, so there is nothing to " "download."
+            f"'{model_id}' is hosted on a gateway, so there is nothing to download."
         )
 
     requirement = find_model_requirement(model_id)
