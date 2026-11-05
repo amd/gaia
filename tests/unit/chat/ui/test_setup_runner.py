@@ -786,6 +786,7 @@ _UNREACHABLE = {
     "message": "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
     "start": "Start Lemonade Server from the Lemonade tray icon.",
     "use_gaia": True,
+    "env_url": None,
 }
 _RAW_ERROR = (
     "Lemonade Server at http://127.0.0.1:9/api/v1 is not reachable: Request "
@@ -1033,10 +1034,11 @@ def test_an_env_server_that_does_not_answer_says_so_plainly(users_server):
     assert probed == ["http://127.0.0.1:9/api/v1"]
     assert problem["message"] == "Your Lemonade Server at 127.0.0.1:9 isn't answering."
     assert problem["start"] == "Start it from the tray."
-    # Choosing GAIA's own here overrides LEMONADE_BASE_URL: no env to edit.
+    # Choosing GAIA's own here overrides LEMONADE_BASE_URL: no env to edit,
+    # and the screen names the value it will ignore.
     assert problem["use_gaia"] is True
+    assert problem["env_url"] == "http://127.0.0.1:9"
     assert "switch_hint" not in problem
-    assert "LEMONADE_BASE_URL" not in str(problem)
     assert "lemonade-server serve" not in str(problem)
 
 
@@ -1044,6 +1046,7 @@ def test_a_saved_server_that_does_not_answer_offers_gaias_own(users_server):
     users_server("http://localhost:13305/api/v1", "config")
     problem = _REAL_SERVER_PROBLEM()
     assert problem["use_gaia"] is True
+    assert problem["env_url"] is None
     assert "switch_hint" not in problem
 
 

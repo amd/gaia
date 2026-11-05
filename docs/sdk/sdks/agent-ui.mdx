@@ -2586,8 +2586,10 @@ plan and make one set of choices.
     user chose their own Lemonade Server, the first step is "Use your Lemonade
     Server" rather than an install. When that server isn't answering, `error`
     says so in one sentence and `problem` carries the next steps: `start` (how
-    to start it on this PC, or null) and `use_gaia` (setup can switch to GAIA's
-    own, also over a `LEMONADE_BASE_URL`). The raw error stays in the output lines.
+    to start it on this PC, or null), `use_gaia` (setup can switch to GAIA's
+    own, also over a `LEMONADE_BASE_URL`), and `env_url` (the `LEMONADE_BASE_URL`
+    value that picked the server, which switching ignores from then on, or null).
+    The raw error stays in the output lines.
     `gaia_lemonade` is true for a run switching to GAIA's own, so a retry
     keeps switching. `model_failed` is true when a model's download failed in
     this run: its row already says why, so the run's own `error` adds nothing.

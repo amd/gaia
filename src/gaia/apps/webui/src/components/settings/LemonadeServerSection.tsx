@@ -83,6 +83,9 @@ export function LemonadeServerSection() {
                         ? t('settings.server.usesYours', { url: target.base_url ?? '' })
                         : t('settings.server.usesOwn')}
             </p>
+            {!fromEnv && target.env_url_ignored && (
+                <p className="model-status-hint">{t('settings.server.envIgnored', { url: target.env_url_ignored })}</p>
+            )}
             {fromEnv ? (
                 <p className="model-status-hint">{t('settings.server.envUseOwn')}</p>
             ) : (

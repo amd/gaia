@@ -1055,6 +1055,8 @@ export interface SetupProblem {
     start: string | null;
     /** Setup can switch to GAIA's own server instead. */
     use_gaia: boolean;
+    /** The address set outside the app (LEMONADE_BASE_URL) that picked this server; switching ignores it. */
+    env_url?: string | null;
 }
 
 export interface SetupDevice {

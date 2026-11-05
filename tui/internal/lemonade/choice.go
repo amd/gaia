@@ -202,8 +202,9 @@ func EnvURLIgnored() bool {
 
 func envValue(c Choice) string {
 	env := strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL"))
+	// A bare origin and its /api/v1 form are the same server, as in Python.
 	if env != "" && c.EnvURLIgnored != "" &&
-		strings.TrimRight(env, "/") == strings.TrimRight(c.EnvURLIgnored, "/") {
+		normalizeBaseURL(env) == normalizeBaseURL(c.EnvURLIgnored) {
 		return ""
 	}
 	return env

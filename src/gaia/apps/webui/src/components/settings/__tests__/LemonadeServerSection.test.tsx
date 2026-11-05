@@ -31,6 +31,24 @@ beforeEach(() => {
 });
 
 describe('LemonadeServerSection', () => {
+    it('says when the address set outside the app is ignored, and how to use it again', async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue({ ...OWN, env_url_ignored: 'http://127.0.0.1:59999/api/v1' });
+        render(<LemonadeServerSection />);
+
+        expect(await screen.findByText('GAIA uses its own Lemonade Server.')).toBeInTheDocument();
+        expect(screen.getByText(
+            "GAIA ignores the address set outside the app (http://127.0.0.1:59999/api/v1) because you chose GAIA's own. Change that address to use it again.",
+        )).toBeInTheDocument();
+    });
+
+    it('says nothing about an outside address when none is ignored', async () => {
+        mockedApi.getLemonadeTarget.mockResolvedValue({ ...OWN, env_url_ignored: null });
+        render(<LemonadeServerSection />);
+
+        expect(await screen.findByText('GAIA uses its own Lemonade Server.')).toBeInTheDocument();
+        expect(screen.queryByText(/GAIA ignores the address/)).not.toBeInTheDocument();
+    });
+
     it("switches from GAIA's own to the user's server and never shows the key back", async () => {
         mockedApi.getLemonadeTarget.mockResolvedValue(OWN);
         mockedApi.setLemonadeTarget.mockResolvedValue({ ...MINE, daemon: null });

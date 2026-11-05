@@ -257,6 +257,27 @@ class TestEnvChosenAwayFrom:
         monkeypatch.setenv("LEMONADE_BASE_URL", " http://127.0.0.1:59999/api/v1/ ")
         assert choice.configured_source() is None
 
+    def test_a_bare_origin_and_its_api_path_are_the_same_value(self, monkeypatch):
+        # The TUI hands its Python child the normalized form of the user's value.
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999")
+        choice.ignore_env_url()
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        assert choice.configured_source() is None
+
+    @pytest.mark.parametrize(
+        "other",
+        [
+            "http://127.0.0.1:59998",
+            "http://127.0.0.1:59999/proxy/api/v1",
+            "https://127.0.0.1:59999",
+        ],
+    )
+    def test_a_different_server_is_not_the_ignored_value(self, monkeypatch, other):
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999")
+        choice.ignore_env_url()
+        monkeypatch.setenv("LEMONADE_BASE_URL", other)
+        assert choice.configured_source() == "env"
+
     def test_a_changed_env_value_applies_again(self, monkeypatch):
         from gaia.llm.lemonade_client import configured_lemonade_url
 

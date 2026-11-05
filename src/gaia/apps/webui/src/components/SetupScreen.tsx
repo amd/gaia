@@ -256,6 +256,9 @@ function ServerProblem({ problem, onRetry, onUseGaia }: { problem: SetupProblem;
             {problem.use_gaia && (
                 <p className="setup-hint">{t('setup.server.useGaiaNote')}</p>
             )}
+            {problem.use_gaia && problem.env_url && (
+                <p className="setup-hint">{t('setup.server.envIgnoredNote', { url: problem.env_url })}</p>
+            )}
         </>
     );
 }

@@ -509,6 +509,7 @@ def server_problem() -> Optional[Dict[str, Any]]:
 
     try:
         configured = configured_lemonade_url()
+        from_env = choice.configured_source() == "env"
     except (choice.LemonadeChoiceError, GaiaConfigError) as e:
         logger.warning("Setup failed; could not read which Lemonade it used: %s", e)
         return None
@@ -536,7 +537,14 @@ def server_problem() -> Optional[Dict[str, Any]]:
             logger.warning("Could not work out how to start Lemonade: %s", e)
             start = None
     # Choosing GAIA's own here also overrides LEMONADE_BASE_URL (start()).
-    return {"kind": kind, "message": message, "start": start, "use_gaia": True}
+    return {
+        "kind": kind,
+        "message": message,
+        "start": start,
+        "use_gaia": True,
+        # Switching ignores this value from then on; the screen says so first.
+        "env_url": configured if from_env else None,
+    }
 
 
 def _override_env_server() -> None:

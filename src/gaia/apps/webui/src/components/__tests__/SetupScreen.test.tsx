@@ -1488,6 +1488,9 @@ describe("SetupScreen: the user's server isn't answering", () => {
     it('says so plainly, says how to start it, and keeps the exception in Details', async () => {
         mockedApi.startSetup.mockResolvedValue(UNREACHABLE);
         await startLocal();
+        // A saved server's address isn't set outside the app: nothing to ignore.
+        expect(await screen.findByRole('button', { name: /Use GAIA.s own instead/ })).toBeInTheDocument();
+        expect(screen.queryByText(/set outside the app/)).not.toBeInTheDocument();
         expect(await screen.findByRole('alert')).toHaveTextContent("Your Lemonade Server at 127.0.0.1:9 isn't answering.");
         expect(screen.getByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
         expect(screen.queryByText(/HTTPConnectionPool/)).not.toBeInTheDocument();
@@ -1522,10 +1525,16 @@ describe("SetupScreen: the user's server isn't answering", () => {
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, true, expect.any(Object)));
     });
 
-    it("offers GAIA's own when an environment setting picked the server, and names no setting (#6671)", async () => {
-        mockedApi.startSetup.mockResolvedValue(UNREACHABLE);
+    it("offers GAIA's own when an environment setting picked the server, and says that address will be ignored (#6671)", async () => {
+        mockedApi.startSetup.mockResolvedValue({
+            ...UNREACHABLE,
+            problem: { ...UNREACHABLE.problem!, env_url: 'http://127.0.0.1:9' },
+        });
         await startLocal();
         const useGaia = await screen.findByRole('button', { name: /Use GAIA.s own instead/ });
+        expect(screen.getByText(
+            "This server's address (http://127.0.0.1:9) is set outside the app. If you use GAIA's own, GAIA ignores that address until it changes.",
+        )).toBeInTheDocument();
         expect(screen.queryByText(/LEMONADE_BASE_URL|unset|restart GAIA/i)).not.toBeInTheDocument();
         expect(screen.queryByText(/setting outside the app/i)).not.toBeInTheDocument();
         fireEvent.click(useGaia);
