@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MODEL_LIST, NOW, SYSTEM_STATUS, mockApi, useLocale, useTheme, withConnectors, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, MODEL_LIST, NOW, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -335,6 +335,22 @@ for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 
         await shot(page, `live-status-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const status of TOOL_STATUS) {
+        test(`a running tool's row says what its model calls are doing: ${status.name} (${locale})`, async ({ page }) => {
+            await open(page, `#${ANSWER_SESSION}`, locale, (p) => holdOnToolStatus(p, status));
+            const box = page.getByRole('textbox').first();
+            await box.fill('List every action item in the minutes');
+            await box.press('Enter');
+            const row = page.locator('.flow-tool.active').last();
+            await expect.poll(() => shownText(row.locator('.flow-tool-label'))).toContain(status[locale]);
+            expect(await row.evaluate((el) => getComputedStyle(el).direction)).toBe(locale === 'ar' ? 'rtl' : 'ltr');
+            await shot(page, `tool-status-${status.name}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+        });
+    }
 }
 
 test('documents', async ({ page }) => {

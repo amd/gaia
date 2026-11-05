@@ -6,7 +6,7 @@
  * were taken from a real backend's responses.
  */
 
-import type { Page, Route } from '@playwright/test';
+import type { Locator, Page, Route } from '@playwright/test';
 
 /** Every snapshot sees the same afternoon, so "Today" and relative times hold. */
 export const NOW = new Date('2026-10-16T15:00:00Z');
@@ -397,6 +397,37 @@ export async function useLocale(page: Page, locale: string): Promise<void> {
     await page.addInitScript((code) => {
         window.localStorage.setItem('gaia-chat-locale', code);
     }, locale);
+}
+
+/** A status the running extraction tool's own model calls send, as the backend writes it. */
+export const TOOL_STATUS = [
+    { name: 'page', phase: 'reading', message: 'Reading page 3 of 12…', en: 'Reading page 3 of 12…', ar: 'جارٍ قراءة الصفحة 3 من 12…' },
+    { name: 'restart', phase: 'model_restart', message: 'The model server stopped. GAIA is restarting it…', en: 'The model server stopped. GAIA is restarting it…', ar: 'توقف خادم النموذج. يعيد GAIA تشغيله…' },
+] as const;
+
+/** A label's text without the direction isolates the app wraps numbers and glosses in. */
+export const shownText = async (label: Locator): Promise<string> =>
+    ((await label.textContent()) ?? '').replace(/[\u2066-\u2069]/g, '');
+
+/** POST /api/chat/send starts `extract_document_items`, sends one of its statuses, then holds the turn open. */
+export async function holdOnToolStatus(page: Page, status: { phase: string; message: string }): Promise<void> {
+    await page.addInitScript(({ phase, message }) => {
+        const realFetch = window.fetch.bind(window);
+        window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+            if (!url.includes('/api/chat/send')) return realFetch(input, init);
+            const events = [
+                { type: 'tool_start', tool: 'extract_document_items', detail: '', narration: 'Extracting document items' },
+                { type: 'status', status: 'working', phase, message },
+            ];
+            const body = new ReadableStream<Uint8Array>({
+                start(controller) {
+                    for (const e of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`));
+                },
+            });
+            return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+        };
+    }, status);
 }
 
 const memoryItem = (id: string, category: string, content: string, over: Record<string, unknown> = {}) => ({
