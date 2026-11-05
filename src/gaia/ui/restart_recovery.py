@@ -109,6 +109,8 @@ class TurnJournal:
             if kind == "tool_start" and isinstance(event.get("tool"), str):
                 self._tools.append(event["tool"])
                 continue
+            if kind in ("thinking", "status") and event.get("retracts_answer"):
+                self._text = ""
             content = event.get("content")
             if not isinstance(content, str):
                 continue
@@ -117,8 +119,6 @@ class TurnJournal:
             elif kind == "answer":
                 self._text = content
                 self._answered = True
-            elif kind == "thinking" and event.get("retracts_answer"):
-                self._text = ""
             elif kind in ("error", "agent_error") and content.strip():
                 self.error = content
         if self._clock() - self._saved_at >= self._interval:

@@ -369,7 +369,12 @@ class CanonicalTranslator:
         message = str(event.get("message", ""))
         if event.get("channel") == DEBUG_CHANNEL:
             return self._debug_status(message)
-        out = self._user_status(message)
+        if event.get("retracts_answer"):
+            # Never deduplicated: each one takes back the text since the last.
+            self._last_status = message
+            out = [{"type": "status", "message": message, "retracts_answer": True}]
+        else:
+            out = self._user_status(message)
         phase = event.get("phase")
         if out and isinstance(phase, str) and phase:
             out[0]["phase"] = phase
