@@ -411,6 +411,8 @@ def check_stdio_handshake(
                 f"FAIL: expected model_backend={backend!r}, got "
                 f"{event.get('model_backend')!r}"
             )
+            _kill_tree(proc)
+            _log_stderr_tail(proc)
             return False
 
         # stdin closing is how the TUI says goodbye; a child that ignores it

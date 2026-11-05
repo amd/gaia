@@ -69,3 +69,14 @@ def test_no_exit_after_stdin_close_logs_stderr(capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "did not exit within 60s" in out
     assert STDERR_TAIL in out
+
+
+def test_backend_mismatch_logs_stderr(capsys):
+    argv = _child('{"type": "status", "model_backend": "cpu"}', then="time.sleep(60)")
+    assert (
+        smoke.check_stdio_handshake(Path(sys.executable), argv=argv, backend="vulkan")
+        is False
+    )
+    out = capsys.readouterr().out
+    assert "expected model_backend='vulkan'" in out
+    assert STDERR_TAIL in out
