@@ -3406,6 +3406,7 @@ def _done_event(
     turn_summary: Optional[dict] = None,
     failed: bool = False,
     failure: Optional[str] = None,
+    documents_added: Optional[list] = None,
 ) -> dict:
     """Build the closing ``done`` SSE payload for a persisted turn.
 
@@ -3414,6 +3415,7 @@ def _done_event(
     Stop that lands after the agent already answered stays an ordinary turn.
     ``failed`` marks a turn a model failure ended; its content explains why,
     and ``failure`` names a cause the UI offers a fix for.
+    ``documents_added`` are the library documents the turn attached to the chat.
     """
     event: dict = {"type": "done", "message_id": msg_id, "content": content}
     if turn_cancelled:
@@ -3426,7 +3428,30 @@ def _done_event(
         event["stats"] = stats
     if turn_summary:
         event["turn_summary"] = turn_summary
+    if documents_added:
+        event["documents_added"] = documents_added
     return event
+
+
+async def _add_indexed_documents_to_library(
+    db: ChatDatabase, session_id: str, sse_handler
+) -> Tuple[list, list]:
+    """Library rows for the files the agent indexed this turn, and notices.
+
+    Each file is recorded in the Document library and attached to the chat, as
+    if the user had added it there.
+    """
+    indexed = sse_handler.turn_ledger.indexed_documents()
+    if not indexed:
+        return [], []
+    from .agent_documents import add_indexed_documents
+    from .utils import doc_to_response
+
+    added = await asyncio.to_thread(add_indexed_documents, db, session_id, indexed)
+    return (
+        [doc_to_response(doc).model_dump(mode="json") for doc in added.documents],
+        added.notices,
+    )
 
 
 # Tight timeout for pre-flight load_model. The default Lemonade
@@ -5037,6 +5062,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             )
             full_response = result_holder.get("answer", "") or ""
 
+        documents_added, library_notices = await _add_indexed_documents_to_library(
+            db, request.session_id, sse_handler
+        )
+        if library_notices:
+            # One step: consecutive status steps overwrite each other in the chat.
+            notice = " ".join(library_notices)
+            yield _sse({"type": "status", "status": "warning", "message": notice})
+
         blocked_alert_steps = _blocked_policy_steps()
         if not full_response and blocked_alert_steps:
             full_response = persisted_policy_block_content or _policy_block_response(
@@ -5201,6 +5234,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     if turn_failed
                     else None
                 ),
+                documents_added=documents_added,
             )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
@@ -5277,6 +5311,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     turn_cancelled,
                     turn_summary=turn_summary,
                     failed=failed,
+                    documents_added=documents_added,
                 )
                 link_warning = (
                     turn_box["recording"].link_message(msg_id)

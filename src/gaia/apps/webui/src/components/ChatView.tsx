@@ -1088,6 +1088,18 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
                 streamBufferRef.current = '';
 
+                // The agent indexed these into the library and this chat; updated even for a backgrounded chat.
+                const added = event.documents_added ?? [];
+                if (added.length > 0) {
+                    const store = useChatStore.getState();
+                    const addedIds = new Set(added.map((d) => d.id));
+                    store.setDocuments([...added, ...store.documents.filter((d) => !addedIds.has(d.id))]);
+                    const existing = store.sessions.find((s) => s.id === sessionId)?.document_ids ?? [];
+                    updateSessionInList(sessionId, {
+                        document_ids: [...existing, ...added.map((d) => d.id).filter((id) => !existing.includes(id))],
+                    });
+                }
+
                 // A completion for a backgrounded session is persisted
                 // server-side, so don't touch the shared store (#1580).
                 if (isStale()) return;
