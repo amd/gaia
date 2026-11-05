@@ -278,8 +278,9 @@ TURN_RECALL_MIN_FIELD = 8
 TURN_RECALL_FIELD_SIZE = 200
 
 #: Size cap on the stable memory section, instructions included
-#: (4000 chars ≈ 1000 tokens).
-STABLE_MEMORY_PROMPT_CHARS = 4000
+#: (4250 chars ≈ 1060 tokens). Grow it with the instructions, so they never
+#: take room from the user's memories.
+STABLE_MEMORY_PROMPT_CHARS = 4250
 #: Rows read per category when filling that section; the size cap decides
 #: how many are shown.
 STABLE_MEMORY_FETCH_LIMIT = 200
@@ -3372,9 +3373,13 @@ class MemoryMixin(ProceduralMemoryMixin):
             "- 'Show my journal' → recall(category='note', domain='journal')\n"
             "- 'What reminders?' → recall(category='reminder')\n"
             "- Info changed → recall() old item, then update_memory()\n"
-            "- User wants to forget → recall() then forget(). Forgotten info is off-limits\n"
-            "  for the rest of the session, even though it is still in the chat: never\n"
-            "  repeat it or anything computed from it; offer to redo it if they re-share.\n"
+            "- Forget one topic ('everything about Sam') → recall() then forget() each id.\n"
+            "  Forgotten info is off-limits for the rest of the session, even though it\n"
+            "  is still in the chat: never repeat it or anything computed from it; offer\n"
+            "  to redo it if they re-share.\n"
+            "- 'Forget everything you know about me' / 'delete all my data' →\n"
+            "  forget_everything(), one call. Never say GAIA can't; if not run, point\n"
+            "  to Memory › Advanced › Delete all memories.\n"
             "- 'As I told you…' / 'you forgot X' → check with recall() or\n"
             "  search_past_conversations(). Nothing found (and not forgotten at their\n"
             "  own request) → say plainly it was never mentioned. Don't apologise or\n"
@@ -5495,7 +5500,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         @tool
         def forget(knowledge_id: str) -> dict:
-            """Remove a specific memory entry by ID."""
+            """Remove one memory entry by ID (from recall). To erase all of memory, call forget_everything instead."""
             if (gone := _store_gone()) is not None:
                 return gone
             try:
@@ -5519,7 +5524,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         @tool
         def forget_everything() -> dict:
-            """Erase all of memory: every fact, preference and reminder, sensitive ones included, and the stored past conversations. Only when the user asks to forget everything; it cannot be undone."""
+            """Erase all of memory in one call: every fact, preference and reminder, sensitive ones included, and the stored past conversations. Use when the user says 'forget everything about me', 'delete all my data' or 'wipe your memory'; for one topic use forget. The user approves it first; it cannot be undone."""
             if (gone := _store_gone()) is not None:
                 return gone
             try:

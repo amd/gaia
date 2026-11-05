@@ -131,6 +131,11 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   only the SPEC, an integrator could not see that a bad allowlist entry stops
   the sidecar at startup, or that an omitted `/query` `max_steps` runs 150
   steps (`FLAGSHIP_MAX_STEPS`; the body or `GAIA_AGENT_MAX_STEPS` still wins).
+- **"Forget everything" works on Gemma 4 E4B.** The model ran no tool and told
+  the user GAIA had no delete-all, because the only forget rule it read
+  deleted one memory at a time. It now calls `forget_everything` for "forget
+  everything about me" or "delete all my data", keeps per-item `forget` for one
+  topic, and never claims GAIA can't do what one of its tools does (#6701).
 - **"Forget everything" forgets everything.** It deleted each memory a plain
   `recall` listed, but that listing holds back sensitive ones, so a saved PIN
   survived while the agent said memory was empty. The next session then rebuilt
