@@ -2600,7 +2600,7 @@ Examples (code search):
 
 rag: `pr` is offline and deterministic: retrieval only, over documents committed
 in the gaia repository, plus the hard cases that need no LLM. `full` downloads
-FinanceBench, public AMD documents, XQuAD and Wikipedia distractors (pinned,
+public AMD documents, an arXiv paper, XQuAD and Wikipedia distractors (pinned,
 sha256-checked, cached in ~/.gaia/cache/eval-retrieval), generates answers, and
 runs the scale tiers. The labels and the `pr` documents are read from a gaia
 checkout: the current directory, or --repo-root. Needs a running Lemonade.
@@ -2660,7 +2660,7 @@ embeddings and no LLM, against a `git grep` baseline. Needs Lemonade and git.
     rag_retrieval_group.add_argument(
         "--datasets",
         default=None,
-        help="Comma-separated subset: repo_docs, technical_docs, financebench, xquad",
+        help="Comma-separated subset: repo_docs, technical_docs, xquad",
     )
     rag_retrieval_group.add_argument(
         "--retrieval-only",
@@ -2700,12 +2700,6 @@ embeddings and no LLM, against a `git grep` baseline. Needs Lemonade and git.
         type=int,
         default=None,
         help="Questions per XQuAD language (default: 40)",
-    )
-    rag_retrieval_group.add_argument(
-        "--financebench-docs",
-        type=int,
-        default=None,
-        help="Keep only the questions over the first N FinanceBench filings",
     )
     rag_retrieval_group.add_argument(
         "--no-vlm",
@@ -4139,7 +4133,6 @@ _RETRIEVAL_ONLY_FLAGS = {
         "no_hard_cases",
         "xquad_languages",
         "xquad_per_language",
-        "financebench_docs",
         "no_vlm",
         "offline",
         "fetch_only",
@@ -4225,11 +4218,14 @@ def _handle_eval_retrieval(args):
         run_hard_cases=not args.no_hard_cases,
         xquad_languages=_split(args.xquad_languages),
         xquad_per_language=args.xquad_per_language,
-        financebench_docs=args.financebench_docs,
         offline=args.offline,
         keep_work=args.keep_work,
         vlm=False if args.no_vlm else None,
     )
+    try:
+        runner.check_datasets(opts.datasets or suite.datasets)
+    except ValueError as e:
+        sys.exit(f"gaia eval retrieval: {e}")
     with exclusive_eval(f"gaia eval retrieval --suite {args.suite}"):
         results = runner.run(opts)
     print()

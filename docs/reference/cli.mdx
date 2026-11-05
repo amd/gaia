@@ -2517,7 +2517,7 @@ Scores RAG retrieval (recall@k, MRR) separately from answer accuracy, on real do
 ```bash
 gaia eval retrieval --suite pr                     # Offline, retrieval only: the PR gate
 gaia eval retrieval --suite pr --gate tests/fixtures/eval_baselines/rag-retrieval/pr.json
-gaia eval retrieval --suite full --judge           # FinanceBench, AMD docs, XQuAD, scale tiers, answers
+gaia eval retrieval --suite full --judge           # AMD docs, XQuAD, scale tiers, answers
 gaia eval retrieval --fetch-only                   # Download and verify the corpora
 ```
 
@@ -2526,14 +2526,13 @@ gaia eval retrieval --fetch-only                   # Download and verify the cor
 | `--component` | `rag` | `rag` (document Q&A) or `code` (code search, [its own options](#evaluation-commands)) |
 | `--suite` | `pr` | `pr` (offline, deterministic) or `full` |
 | `--repo-root` | the current directory | gaia checkout holding `eval/retrieval/` and the committed documents; needed when gaia is installed as a wheel and you run from elsewhere |
-| `--datasets` | the suite's | Subset of `repo_docs`, `technical_docs`, `financebench`, `xquad` |
+| `--datasets` | the suite's | Subset of `repo_docs`, `technical_docs`, `xquad` |
 | `--retrieval-only` | off | Skip answer generation |
 | `--judge` / `--judge-model` | off | Grade free-form answers with Claude; otherwise they are unscored |
 | `--model` | RAG default | Chat model that answers |
 | `--scale-tiers` / `--no-scale` | `10,100,1000` (full) | Corpus sizes for the scale phase |
 | `--no-hard-cases` | off | Skip the hard cases |
 | `--xquad-languages` / `--xquad-per-language` | `en,de,es,ru,zh,ar,hi` / `40` | Multilingual slice |
-| `--financebench-docs` | all | Keep the questions over the first N filings |
 | `--no-vlm` | off | Do not read PDF images with the VLM (`pr` never does); otherwise the VLM must read a test image before the run starts |
 | `--offline` | off | Never download; fail if a file is not cached |
 | `--fetch-only` | off | Download and verify every corpus file, then stop |
