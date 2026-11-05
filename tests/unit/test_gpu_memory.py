@@ -34,10 +34,15 @@ GB_PER_GIB = 2**30 / 1e9
 LIVE_PAGES = 16_384_000
 
 
-def linux_igpu(total_gb: float, gtt_gb: float, carve_gb: float = 0.5) -> dict:
+def linux_igpu(
+    total_gb: float,
+    gtt_gb: float,
+    carve_gb: float = 0.5,
+    os_version: str = "Linux-6.8.0 (Ubuntu 24.04)",
+) -> dict:
     """Lemonade's /system-info for a Linux Strix Halo-class PC."""
     return {
-        "OS Version": "Linux-6.8.0 (Ubuntu 24.04)",
+        "OS Version": os_version,
         # Linux Lemonade reports the RAM visible to the OS, after the GPU
         # carve-out; the production code adds that reservation back.
         "Physical Memory": f"{total_gb - carve_gb:g} GB",
@@ -328,9 +333,19 @@ class TestLinuxSplit:
         with pytest.raises(gm.OutOfRange, match="can't give the GPU more"):
             gm.apply(8, confirm=True)
 
-    def test_linux_reported_memory_adds_back_gpu_carve_out(self, box):
-        info = linux_igpu(126.4, 62.5, carve_gb=64)
+    @pytest.mark.parametrize(
+        "os_version",
+        [
+            "Linux-6.8.0 (Ubuntu 24.04)",
+            "Fedora Linux 46 (Workstation Edition Prerelease)",
+        ],
+    )
+    def test_linux_reported_memory_adds_back_gpu_carve_out(self, box, os_version):
+        # Linux distributions do not all identify themselves the same way, but
+        # Lemonade's Physical Memory matches MemTotal in both cases.
+        info = linux_igpu(126.4, 62.5, carve_gb=64, os_version=os_version)
         box.info = info
+        box.meminfo(62.4)
         result = gm.describe(info, LOCAL)
         # Lemonade reports GiB; the API exposes decimal GB after adding the
         # 64 GiB carve-out back to the 62.4 GiB OS-visible value.
