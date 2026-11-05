@@ -103,6 +103,60 @@ class TestWholeFileInsideASpanIsRefused:
         assert path.read_bytes() == b"# Notes\nIntro line here\n- first\n- second\n"
 
 
+class TestOneLineFromEachSideIsRefused:
+    """Echoing the line above and the line below is the same paste, just shorter."""
+
+    def test_both_sides_echo_is_an_error(self, edit_file, shopping):
+        result = edit_file(shopping, "- bread", "- milk\n- rye bread\n- eggs")
+        assert result["status"] == "error"
+        assert result["repeated_lines"] == ["- milk", "- eggs"]
+        assert shopping.read_bytes().decode("utf-8") == SHOPPING
+
+    def test_the_error_says_to_include_the_lines_in_old_content(
+        self, edit_file, shopping
+    ):
+        result = edit_file(shopping, "- bread", "- milk\n- rye bread\n- eggs")
+        assert "add them to old_content too" in result["error"]
+
+    def test_including_the_lines_in_old_content_lands_it(self, edit_file, shopping):
+        result = edit_file(
+            shopping, "- milk\n- bread\n- eggs", "- milk\n- rye bread\n- eggs"
+        )
+        assert result["status"] == "success"
+        assert shopping.read_bytes().decode("utf-8") == SHOPPING.replace(
+            "- bread", "- rye bread"
+        )
+
+
+class TestDuplicatingTheBlockAbove:
+    CONFIG = "[server]\nhost = localhost\nport = 8080\n[client]\n"
+
+    @pytest.fixture
+    def config(self, tmp_path) -> Path:
+        path = tmp_path / "app.ini"
+        path.write_bytes(self.CONFIG.encode("utf-8"))
+        return path
+
+    def test_without_the_block_in_old_content_it_is_refused(self, edit_file, config):
+        result = edit_file(
+            config, "[client]", "host = localhost\nport = 8080\n[client]"
+        )
+        assert result["status"] == "error"
+        assert config.read_bytes().decode("utf-8") == self.CONFIG
+
+    def test_with_the_block_in_old_content_it_lands(self, edit_file, config):
+        result = edit_file(
+            config,
+            "host = localhost\nport = 8080\n[client]",
+            "host = localhost\nport = 8080\n[client]\nhost = localhost\nport = 8080",
+        )
+        assert result["status"] == "success"
+        assert config.read_bytes().decode("utf-8") == (
+            "[server]\nhost = localhost\nport = 8080\n"
+            "[client]\nhost = localhost\nport = 8080\n"
+        )
+
+
 class TestLegitimateEditsStillWork:
     def test_changing_one_line(self, edit_file, shopping):
         assert edit_file(shopping, "- milk", "- oat milk")["status"] == "success"
@@ -152,6 +206,14 @@ class TestHelperContract:
         assert updated is None
         assert error["match_count"] == 1
         assert error["repeated_lines"]
+
+    def test_one_echoed_line_from_one_side_is_allowed(self):
+        content = "a = 1\nb = 2\nc = 3\n"
+        updated, error = apply_unique_replacement(
+            "f.py", content, "b = 2", "a = 1\nb = 9"
+        )
+        assert error is None
+        assert updated == "a = 1\na = 1\nb = 9\nc = 3\n"
 
     def test_crlf_files_are_caught_too(self):
         crlf = SHOPPING.replace("\n", "\r\n")
