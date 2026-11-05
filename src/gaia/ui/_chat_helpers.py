@@ -39,7 +39,11 @@ from gaia.agents.install_hints import (
 from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
 from gaia.llm import lemonade_client as _lemonade_client_mod
 from gaia.llm.inference_location import InferenceLocation, resolve_inference_location
-from gaia.llm.providers.lemonade import MODEL_SERVER_DOWN, classify_lemonade_exception
+from gaia.llm.providers.lemonade import (
+    MODEL_SERVER_DOWN,
+    LemonadeModelUnavailableError,
+    classify_lemonade_exception,
+)
 from gaia.llm.surface_hints import APP_RESTART_HINT
 from gaia.security import (
     BLOCKED_DIRECTORIES,
@@ -503,6 +507,28 @@ def _take_model_load_lock(sse_handler=None, stopped=None) -> bool:
             )
             shown = True
     return True
+
+
+def _refuse_unrunnable_model(model_id: str) -> None:
+    """Raise when nothing on this PC can run *model_id*: no NPU or backend for it.
+
+    A memory estimate never refuses; the load itself says if memory runs out.
+
+    Raises:
+        LemonadeModelUnavailableError: with the reason and where to fix it.
+    """
+    from gaia.ui.routers.providers import display_name, local_unavailable_reason
+
+    reason = local_unavailable_reason(model_id)
+    if reason is None:
+        return
+    raise LemonadeModelUnavailableError(
+        user_message=(
+            f"{display_name(model_id)} can't run on this PC: {reason.rstrip('.')}. "
+            "Open Settings › Model to fix it on the model's card, or switch to "
+            "another model there."
+        )
+    )
 
 
 def _load_making_room(
@@ -3485,6 +3511,7 @@ def _preflight_load(
             resolve_ctx_size,
             resolve_lemonade_api_key,
             resolve_lemonade_base_url,
+            runs_on_npu,
         )
         from gaia.llm.lemonade_manager import LemonadeManager
 
@@ -3539,6 +3566,9 @@ def _preflight_load(
                 else f"ctx={active_ctx} < required {required_ctx}"
             )
         )
+        if runs_on_npu(model_id):
+            # A blocked NPU's load fails as a retryable network error; say why first.
+            _refuse_unrunnable_model(model_id)
         logger.info("Pre-flight load: %s → loading %s", reason, model_id)
         if sse_handler is not None:
             sse_handler._emit(
@@ -3645,7 +3675,7 @@ def _preflight_load(
         # The fix is closing apps, not checking Lemonade: pass the reason on.
         logger.error("Pre-flight model load refused: %s", exc)
         raise
-    except ModelInUseError as exc:
+    except (ModelInUseError, LemonadeModelUnavailableError) as exc:
         logger.error("Pre-flight model load refused: %s", exc)
         raise
     except LeaseWaitCancelled:

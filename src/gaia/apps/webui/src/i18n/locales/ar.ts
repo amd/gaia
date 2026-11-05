@@ -1808,6 +1808,8 @@ const messages: Messages = {
     'settings.model.measured': 'القياس: {evidence}',
     'settings.model.from': 'من {url}',
     'settings.model.inUse': 'قيد الاستخدام',
+    'settings.model.inUseBlocked': 'قيد الاستخدام · لا يمكن تشغيله بعد',
+    'settings.model.inUseCantRun': 'تستخدم الرسائل الجديدة هذا النموذج، لكن لا يمكن تشغيله على هذا الجهاز بعد. أصلح ما تذكره بطاقته أدناه، أو انتقل إلى نموذج آخر.',
     'settings.model.use': 'استخدام',
     'settings.model.useAria': 'استخدام {name}',
     'settings.model.download': 'تنزيل',

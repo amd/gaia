@@ -243,6 +243,16 @@ class LemonadeNetworkError(LemonadeError):
     )
 
 
+class LemonadeModelUnavailableError(LemonadeError):
+    """The chat model can't run on this PC until something on the PC changes.
+
+    Sending the message again fails the same way, so the message says what
+    to fix rather than to try again.
+    """
+
+    retryable = False
+
+
 class LemonadeServerUnreachableError(LemonadeNetworkError):
     """Nothing accepts a connection at the Lemonade address.
 
