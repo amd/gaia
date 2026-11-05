@@ -543,6 +543,17 @@ class _ExtractionJob:
     #: ``MemoryStore.erase_count()`` when the turn began; an erase since drops
     #: what the job would store.
     erase_count: Optional[int] = None
+    #: The user's own forget or forget_everything ran in this turn.
+    user_forgot: bool = False
+
+
+@dataclass
+class _ExtractionCounts:
+    """What one extraction job changed in memory, by kind."""
+
+    stored: int = 0
+    updated: int = 0
+    deleted: int = 0
 
 
 # ============================================================================
@@ -2160,6 +2171,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         assistant_response: str,
         existing_items: List[Dict],
         tool_record: Optional[List[Dict]] = None,
+        user_forgot: bool = False,
     ) -> List[Dict]:
         """Mem0-style extraction: conversation + existing memory → operations.
 
@@ -2179,6 +2191,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             existing_items: Top-10 relevant existing knowledge items.
             tool_record: This turn's tool calls, from ``_record_tool_call``;
                 checked against, never shown to the model.
+            user_forgot: The user's own forget ran this turn. No delete is
+                kept then: the tool already erased what the user named.
+
+        A delete is kept only for an item the model was shown that shares two
+        content words with the user's message (one, if the item has only one),
+        so a model that reads "forget X" cannot point it at another memory.
 
         Returns:
             List of operation dicts with 'op' field.
@@ -2386,7 +2404,27 @@ class MemoryMixin(ProceduralMemoryMixin):
                         continue
                     valid_ops.append(op)
                 elif op_type == "delete" and "knowledge_id" in op:
-                    valid_ops.append(op)
+                    kid = op["knowledge_id"]
+                    target = next(
+                        (i for i in existing_items if i.get("id") == kid), None
+                    )
+                    if user_forgot:
+                        why = "the user's own forget ran this turn"
+                    elif target is None:
+                        why = "it was not among the memories the model was shown"
+                    elif len(
+                        (named := content_stems(str(target.get("content", ""))))
+                        & content_stems(user_input)
+                    ) < min(2, len(named)):
+                        why = "the user's message does not mention it"
+                    else:
+                        valid_ops.append(op)
+                        continue
+                    logger.info(
+                        "[MemoryMixin] extraction: not deleting memory %s, %s",
+                        kid,
+                        why,
+                    )
                 # noop is excluded from output per spec
 
             # Grounding fails closed, so a model that ignores the field stores
@@ -2546,12 +2584,12 @@ class MemoryMixin(ProceduralMemoryMixin):
         context: Optional[str] = None,
         said_at: Optional[str] = None,
         erase_count: Optional[int] = None,
-    ) -> int:
+    ) -> _ExtractionCounts:
         """Execute the operations returned by _extract_via_llm().
 
         ADD → store() + embed
         UPDATE → store new + supersede old
-        DELETE → delete()
+        DELETE → delete(): newer information replaced it, the user didn't forget it
 
         Args:
             operations: Validated ops from ``_extract_via_llm``.
@@ -2565,11 +2603,11 @@ class MemoryMixin(ProceduralMemoryMixin):
                 Once memory is erased since, nothing more is applied.
 
         Returns:
-            How many operations were applied.
+            How many memories were stored, updated and deleted.
         """
         store = self._memory_store
         target_context = context if context is not None else self._memory_context
-        applied = 0
+        applied = _ExtractionCounts()
         for op in operations:
             # Per op: an erase can land between two writes of the same job.
             if store.erased_since(erase_count):
@@ -2617,7 +2655,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         source="llm_extract",
                         context=target_context,
                     )
-                    applied += 1
+                    applied.stored += 1
                     self._embed_and_index(new_id, op["content"], "extracted memory")
 
                 elif op_type == "update":
@@ -2653,7 +2691,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         source="llm_extract",
                         context=target_context,
                     )
-                    applied += 1
+                    applied.updated += 1
                     # Only supersede when store() actually created a new row.
                     # Dedup can collapse near-identical content back into old_id,
                     # which would point superseded_by at the row itself and hide
@@ -2665,9 +2703,21 @@ class MemoryMixin(ProceduralMemoryMixin):
 
                 elif op_type == "delete":
                     kid = op["knowledge_id"]
-                    store.delete(kid)
-                    self._faiss_remove(kid)
-                    applied += 1
+                    target = store.get_item(kid)
+                    if target and target["category"] not in EXTRACTABLE_CATEGORIES:
+                        raise ValueError(
+                            "Extraction cannot delete privileged memory rows"
+                        )
+                    if store.delete(kid):
+                        self._faiss_remove(kid)
+                        applied.deleted += 1
+                        # Id only: the row may be sensitive and gaia.log is shared.
+                        logger.info(
+                            "[MemoryMixin] extraction deleted memory %s (%s), "
+                            "contradicted by this turn",
+                            kid,
+                            target["category"],
+                        )
 
             except Exception as e:
                 logger.warning(
@@ -3839,6 +3889,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._turn_failures = {}
             self._turn_lessons = []
             self._turn_tool_record = []
+            self._turn_forgot = False
             self._memory_turn_query = user_input
 
             # Recall procedures for this goal (RECALL) from the clean goal,
@@ -3867,7 +3918,15 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         # Skip logging for memory tools
         if tool_name in _MEMORY_TOOLS:
-            return super()._execute_tool(tool_name, tool_args)
+            result = super()._execute_tool(tool_name, tool_args)
+            # Only a forget that erased something stands in for extraction's delete.
+            if (
+                tool_name in ("forget", "forget_everything")
+                and isinstance(result, dict)
+                and result.get("status") in ("removed", "cleared")
+            ):
+                self._turn_forgot = True
+            return result
 
         # Log non-memory tools
         start = time.time()
@@ -4723,6 +4782,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 said_at=getattr(self, "_turn_said_at", None)
                 or datetime.now().astimezone().isoformat(),
                 erase_count=getattr(self, "_turn_erase_count", None),
+                user_forgot=getattr(self, "_turn_forgot", False),
             )
         )
 
@@ -4896,7 +4956,11 @@ class MemoryMixin(ProceduralMemoryMixin):
                 if not _is_lesson(item)
             ]
             operations = self._extract_via_llm(
-                job.user_input, job.assistant_response, existing, job.tool_record
+                job.user_input,
+                job.assistant_response,
+                existing,
+                job.tool_record,
+                user_forgot=job.user_forgot,
             )
             applied = (
                 self._execute_extraction_operations(
@@ -4907,12 +4971,14 @@ class MemoryMixin(ProceduralMemoryMixin):
                     erase_count=job.erase_count,
                 )
                 if operations
-                else 0
+                else _ExtractionCounts()
             )
             logger.info(
-                "[MemoryMixin] extraction finished: %d memor%s stored in %.1fs",
-                applied,
-                "y" if applied == 1 else "ies",
+                "[MemoryMixin] extraction finished: %d stored, %d updated, "
+                "%d deleted in %.1fs",
+                applied.stored,
+                applied.updated,
+                applied.deleted,
                 time.monotonic() - started,
             )
         except LLMCallCancelled:

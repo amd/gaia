@@ -385,6 +385,7 @@ def _extract_via_llm(
     assistant_response: str,
     existing_items: List[Dict],
     tool_record: Optional[List[Dict]] = None,
+    user_forgot: bool = False,
 ) -> List[Dict]:
 ```
 
@@ -398,6 +399,8 @@ Sends the conversation turn and existing memory to the LLM, which returns a JSON
 | `noop` | Information already captured — not included in output | — |
 
 The extraction fetches top-10 relevant existing items first via `_hybrid_search()`, so the LLM can see what already exists and decide whether to add, update, delete, or do nothing. This replaces v1's regex-based heuristic extraction.
+
+A `delete` is kept only when the turn contradicts that memory, so a model that reads "forget X" cannot point it at another one. It is dropped when the user's own `forget` or `forget_everything` removed something this turn (`user_forgot`; a forget that failed doesn't count), when its id was not among the items the model was shown, or when the memory shares fewer than two content words with the user's message (`content_stems`; one, if the memory has only one). A kept delete refuses `system`/`profile`/`permission` rows and goes through `MemoryStore.delete()`, not `forget()`: the memory was replaced, not forgotten, so older chats about it stay searchable. Each dropped or applied delete is logged by id, never by content.
 
 Memory holds what is true about the **user**, not the subject of the conversation. `grounded` must be `"user"` (the user said it about themselves); an op grounded in anything else is dropped. A document's contents, a search result, the weather, or the assistant's answer are not facts about the user, and stored as one they are replayed in every later chat as if the user had said them (#5027).
 
@@ -1123,7 +1126,7 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | `_backfill_embeddings(limit)` | Embed items missing embeddings |
 | `_hybrid_search(query, ...)` | Vector + BM25 search fused by RRF |
 | `_classify_query_complexity(query)` | Returns adaptive top_k: 3, 5, or 10 |
-| `_extract_via_llm(user_input, assistant_response, existing_items, tool_record)` | Mem0-style extraction: ADD/UPDATE/DELETE/NOOP |
+| `_extract_via_llm(user_input, assistant_response, existing_items, tool_record, user_forgot)` | Mem0-style extraction: ADD/UPDATE/DELETE/NOOP |
 | `consolidate_old_sessions(max_sessions)` | Distill old sessions to durable knowledge |
 | `reconcile_memory(max_pairs)` | Detect and resolve contradictory/reinforcing facts |
 
