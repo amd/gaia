@@ -29,6 +29,7 @@ from gaia.llm.lemonade_embedded import (
     EmbeddedStatus,
 )
 from gaia.llm.lemonade_manager import LemonadeManager
+from gaia.llm.surface_hints import APP_RESTART_HINT, CLI_RESTART_HINT
 
 OLD_PORT, OLD_KEY = 60293, "key-of-the-server-that-went-quiet"
 NEW_PORT, NEW_KEY = 60411, "key-after-the-daemon-restarted-it"
@@ -304,7 +305,7 @@ class TestItFailsLoudlyWithinTheBound:
             f"was not back within {lc.GAIA_LEMONADE_RECONNECT_SECONDS:.0f}s" in message
         )
         assert "running but not answering" in message
-        assert "gaia daemon status" in message
+        assert APP_RESTART_HINT in message
         assert "daemon log" in message
         assert world.now == pytest.approx(lc.GAIA_LEMONADE_RECONNECT_SECONDS)
         # Bounded: one ask per poll, never a tight loop.
@@ -375,7 +376,8 @@ class TestANewSessionWaitsToo:
 
         err = capsys.readouterr().err
         assert "was not back within" in err
-        assert "gaia daemon status" in err
+        assert CLI_RESTART_HINT in err
+        assert APP_RESTART_HINT not in err
         assert startup.now == pytest.approx(lc.GAIA_LEMONADE_RECONNECT_SECONDS)
 
     def test_a_failed_start_is_still_reported_at_once(self, startup, capsys):
@@ -640,7 +642,7 @@ class TestRandomizedRestartTiming:
             )
         except lc.LemonadeClientError as e:
             assert quiet_polls * poll >= bound - poll, f"gave up early: {e}"
-            assert "gaia daemon status" in str(e)
+            assert APP_RESTART_HINT in str(e)
             assert world.lemonade_posts == []
         else:
             assert world.lemonade_posts == [

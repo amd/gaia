@@ -40,6 +40,7 @@ from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
 from gaia.llm import lemonade_client as _lemonade_client_mod
 from gaia.llm.inference_location import InferenceLocation, resolve_inference_location
 from gaia.llm.providers.lemonade import MODEL_SERVER_DOWN, classify_lemonade_exception
+from gaia.llm.surface_hints import APP_RESTART_HINT
 from gaia.security import (
     BLOCKED_DIRECTORIES,
     AllowedPathsEnvError,
@@ -632,6 +633,19 @@ _GUARD_MODEL_NAME_PATTERNS = (
 _CLASSIFIER_VERDICT_RE = _re.compile(
     r"^(safe|unsafe|yes|no)([\s,:]+s\d+)*$", _re.IGNORECASE
 )
+_TITLE_INSTRUCTION = (
+    "Summarise the user's task in 3 to 6 plain words for a tab/window "
+    "title, in the language the user wrote in.  Reply with ONLY the "
+    "title, no quotes, no trailing "
+    "punctuation, no leading verbs like 'Task:' or 'Title:'.  If the "
+    "user has not asked for anything yet (only a greeting or small "
+    "talk), reply with only: none"
+)
+_WORD_RE = _re.compile(r"[^\W\d_]{4,}")
+#: Models echo "Summarise" in either spelling.
+_TITLE_INSTRUCTION_WORDS = frozenset(
+    _WORD_RE.findall(_TITLE_INSTRUCTION.lower()) + ["summarize"]
+)
 _QUESTION_TITLE_MAX_CHARS = 60
 #: A link or image the user typed: ``[text](target)`` / ``![alt](target)``.
 _MARKDOWN_LINK_RE = _re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
@@ -674,6 +688,13 @@ def _title_model_for(session_model: str) -> Optional[str]:
         title_model,
     )
     return title_model
+
+
+def _echoes_title_instruction(title: str) -> bool:
+    """True when *title* is the title prompt's own instruction, not a title."""
+    words = _WORD_RE.findall(title.lower())
+    echoed = sum(word in _TITLE_INSTRUCTION_WORDS for word in words)
+    return echoed >= 4 and echoed >= 0.75 * len(words)
 
 
 def _title_from_question(user_msg: str) -> Optional[str]:
@@ -743,9 +764,10 @@ async def _generate_session_title(
 
     Returns the cleaned title (≤ 64 chars, no quotes, no trailing
     punctuation), the first question when the model is not loaded, or None
-    when the request fails or its reply is no title (empty, or a classifier
-    verdict like "safe"). Raises :class:`_TitleModelBusy` when the model slot
-    stays taken through the 30 s wait, and :class:`_NoTopicYet` when the user
+    when the request fails or its reply is no title (empty, a classifier
+    verdict like "safe", or the prompt's instruction echoed back). Raises
+    :class:`_TitleModelBusy` when the model slot stays taken through the 30 s
+    wait, and :class:`_NoTopicYet` when the user
     has asked for nothing yet. The request itself times out at 30 s.
     """
     from contextlib import nullcontext
@@ -767,12 +789,7 @@ async def _generate_session_title(
         f"User: {latest_msg[:400]}\n" if latest_msg and latest_msg != user_msg else ""
     )
     prompt = (
-        "Summarise the user's task in 3 to 6 plain words for a tab/window "
-        "title, in the language the user wrote in.  Reply with ONLY the "
-        "title, no quotes, no trailing "
-        "punctuation, no leading verbs like 'Task:' or 'Title:'.  If the "
-        "user has not asked for anything yet (only a greeting or small "
-        "talk), reply with only: none\n\n"
+        f"{_TITLE_INSTRUCTION}\n\n"
         f"User: {user_msg[:400]}\n"
         f"{answer}"
         f"{latest}"
@@ -849,7 +866,11 @@ async def _generate_session_title(
     for prefix in ("title:", "tab:", "summary:"):
         if title.lower().startswith(prefix):
             title = title[len(prefix) :].strip()
-    if not title or _CLASSIFIER_VERDICT_RE.match(title):
+    if (
+        not title
+        or _CLASSIFIER_VERDICT_RE.match(title)
+        or _echoes_title_instruction(title)
+    ):
         logger.warning(
             "Auto-title: %s replied %r (finish_reason=%s), not a title",
             model_id,
@@ -2402,7 +2423,7 @@ def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
         sse_handler._emit(
             {
                 "type": "status",
-                "message": (
+                "message": _agent_ui_wording(
                     f"Could not reconnect {provider}: {exc}. If the answer says "
                     "the model is unavailable, reconnect it in Settings > Model."
                 ),
@@ -3661,8 +3682,8 @@ def _preflight_load(
         logger.error("Pre-flight model load could not lease the model slot: %s", exc)
         raise BrokerUnavailableError(
             f"Could not reserve the model slot for {model_id} from the GAIA "
-            f"daemon, so this turn did not start: {exc} Check `gaia daemon "
-            "status`; send the message again once the other app's turn is done.",
+            f"daemon, so this turn did not start: {exc} Send the message again "
+            f"once the other app's turn is done. {APP_RESTART_HINT}",
             status_code=exc.status_code,
         ) from exc
     except Exception as exc:
@@ -3670,9 +3691,8 @@ def _preflight_load(
             raise  # The caller reads it as the stop, not as a failure.
         logger.error("Pre-flight model load failed for %s: %s", model_id, exc)
         raise RuntimeError(
-            f"Could not load {model_id} before answering: {exc}. Check that "
-            "Lemonade is running (`gaia init --check`), then send the message "
-            "again."
+            f"Could not load {model_id} before answering: {exc}. Send the "
+            f"message again. {APP_RESTART_HINT}"
         ) from exc
 
 

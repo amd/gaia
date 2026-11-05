@@ -349,8 +349,7 @@ def sanitize_document_path(user_path: str) -> Path:
             ),
             "audio": (
                 {".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a", ".opus"},
-                "Audio files are not supported for indexing. "
-                "Tip: GAIA has a separate voice/talk mode — try `gaia talk` from the CLI.",
+                "Audio files are not supported for indexing.",
             ),
             "archive": (
                 {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".tgz"},

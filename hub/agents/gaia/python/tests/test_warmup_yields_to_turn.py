@@ -23,6 +23,7 @@ from gaia_agent import caller_auth  # noqa: E402
 from gaia_agent import server as server_mod  # noqa: E402
 
 import gaia.llm.lemonade_client as lc  # noqa: E402
+import gaia.ui.warmup as ui_warmup  # noqa: E402
 from gaia.chat.sdk import LLMCallCancelled  # noqa: E402
 
 LOCAL = "Qwen3.6-35B-A3B-GGUF"
@@ -85,6 +86,7 @@ class _TurnAgent:
 def sidecar(monkeypatch):
     """A sidecar mid-warm-up of the local default, and a client for its turns."""
     monkeypatch.setattr(lc, "resolve_default_chat_model", lambda: LOCAL)
+    monkeypatch.setattr(ui_warmup, "preload_skip_reason", lambda: None)
     monkeypatch.setattr(
         lc.LemonadeClient,
         "get_model_info",
@@ -173,6 +175,7 @@ def test_a_turn_with_no_model_runs_the_default_and_keeps_the_warm_up(sidecar):
 def test_a_turn_before_the_warm_up_picks_its_model_still_stops_it(monkeypatch):
     """The warm-up must not load its model over one a turn already uses."""
     monkeypatch.setattr(lc, "resolve_default_chat_model", lambda: LOCAL)
+    monkeypatch.setattr(ui_warmup, "preload_skip_reason", lambda: None)
     monkeypatch.setattr(
         lc.LemonadeClient,
         "get_model_info",

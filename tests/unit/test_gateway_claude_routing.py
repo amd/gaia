@@ -20,6 +20,7 @@ import pytest
 
 from gaia.llm.gateway import GatewayError
 from gaia.llm.gateway import read_stored_token as _real_read_stored_token
+from gaia.llm.surface_hints import TUI_GATEWAY_KEY_HINT
 
 GATEWAY_TOKEN = "gw-unit-test-token"
 ANTHROPIC_BASE = "https://llm-api.amd.com/Anthropic"
@@ -421,7 +422,7 @@ def test_agent_reply_cap_stays_at_the_cloud_size(fake_sdk):
 def test_missing_token_raises_and_never_falls_back(fake_sdk, monkeypatch, gateway_env):
     monkeypatch.delenv(gateway_env.GATEWAY_ENV_VAR)
     with patch("gaia.llm.providers.lemonade.LemonadeClient") as lemonade:
-        with pytest.raises(gateway_env.GatewayError, match="gaia gateway auth"):
+        with pytest.raises(gateway_env.GatewayError, match="/gateway in the TUI"):
             _gateway_client()
     lemonade.assert_not_called()
 
@@ -475,13 +476,13 @@ def test_local_only_refuses_the_gateway(fake_sdk, monkeypatch):
 @pytest.mark.parametrize(
     "status, message, expected",
     [
-        (401, "Access denied due to invalid subscription key", "gaia gateway auth"),
-        (403, "forbidden", "gaia gateway auth"),
+        (401, "Access denied due to invalid subscription key", "/gateway in the TUI"),
+        (403, "forbidden", "/gateway in the TUI"),
         (
             400,
             'Deployment of "claude-nope-9" for "AnthropicVertexChatCompletions" '
             "is not found!",
-            "gaia gateway models",
+            "/model in the TUI",
         ),
         (429, "slow down", "rate limiting"),
         (502, "bad gateway", "HTTP 502"),
@@ -622,7 +623,7 @@ def _rejected(fake_sdk, client):
     return message
 
 
-def test_401_with_a_stale_gaia_copy_says_auth_updates_both(
+def test_401_with_a_stale_gaia_copy_asks_for_a_current_key(
     fake_sdk, monkeypatch, gateway_env
 ):
     monkeypatch.delenv(gateway_env.GATEWAY_ENV_VAR)
@@ -631,7 +632,7 @@ def test_401_with_a_stale_gaia_copy_says_auth_updates_both(
     message = _rejected(fake_sdk, _gateway_client())
     assert "stored in the OS credential store" in message
     assert "GAIA's has gone stale" in message
-    assert "`gaia gateway auth`" in message and "updates both" in message
+    assert TUI_GATEWAY_KEY_HINT in message
     assert "stored-copy-tok" not in message
     assert all(c.kwargs == {"timeout": 5} for c in lemonade.status.call_args_list)
 

@@ -305,7 +305,7 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
         mockedApi.getSetupPlan.mockResolvedValue(COLD_SERVER);
         mockedApi.startSetup.mockResolvedValueOnce({
             state: 'failed', server_only: true, steps: [], error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true, switch_hint: null },
+            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true },
         }).mockResolvedValueOnce(SERVER_RUNNING);
         renderSetup();
         expect(await screen.findByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
@@ -934,7 +934,7 @@ describe('SetupScreen: downloading', () => {
         ], {
             state: 'failed',
             error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true, switch_hint: null },
+            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true },
         });
         mockedApi.startSetup.mockResolvedValue(stopped);
         await startLocal();
@@ -1478,7 +1478,6 @@ describe("SetupScreen: the user's server isn't answering", () => {
             message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
             start: 'Start Lemonade Server from the Lemonade tray icon.',
             use_gaia: true,
-            switch_hint: null,
         },
         command: 'gaia init --profile gaia',
         log_tail: [`❌ ${RAW}`],
@@ -1489,6 +1488,9 @@ describe("SetupScreen: the user's server isn't answering", () => {
     it('says so plainly, says how to start it, and keeps the exception in Details', async () => {
         mockedApi.startSetup.mockResolvedValue(UNREACHABLE);
         await startLocal();
+        // A saved server's address isn't set outside the app: nothing to ignore.
+        expect(await screen.findByRole('button', { name: /Use GAIA.s own instead/ })).toBeInTheDocument();
+        expect(screen.queryByText(/set outside the app/)).not.toBeInTheDocument();
         expect(await screen.findByRole('alert')).toHaveTextContent("Your Lemonade Server at 127.0.0.1:9 isn't answering.");
         expect(screen.getByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
         expect(screen.queryByText(/HTTPConnectionPool/)).not.toBeInTheDocument();
@@ -1509,7 +1511,7 @@ describe("SetupScreen: the user's server isn't answering", () => {
         mockedApi.startSetup.mockResolvedValueOnce({
             ...UNREACHABLE,
             error: message,
-            problem: { kind: 'server_too_old', message, start: null, use_gaia: true, switch_hint: null },
+            problem: { kind: 'server_too_old', message, start: null, use_gaia: true },
         }).mockResolvedValueOnce(READY);
         await startLocal();
         expect(await screen.findByText(/older than GAIA needs\. Update it, or use GAIA.s own instead\./)).toBeInTheDocument();
@@ -1523,13 +1525,20 @@ describe("SetupScreen: the user's server isn't answering", () => {
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, true, expect.any(Object)));
     });
 
-    it("doesn't offer a switch LEMONADE_BASE_URL would override, and says what does", async () => {
-        const hint = "LEMONADE_BASE_URL points GAIA at this server. To use GAIA's own instead, unset it and restart GAIA.";
-        mockedApi.startSetup.mockResolvedValue({ ...UNREACHABLE, problem: { ...UNREACHABLE.problem!, use_gaia: false, switch_hint: hint } });
+    it("offers GAIA's own when an environment setting picked the server, and says that address will be ignored (#6671)", async () => {
+        mockedApi.startSetup.mockResolvedValue({
+            ...UNREACHABLE,
+            problem: { ...UNREACHABLE.problem!, env_url: 'http://127.0.0.1:9' },
+        });
         await startLocal();
-        expect(await screen.findByText(hint)).toBeInTheDocument();
-        expect(screen.queryByRole('button', { name: /Use GAIA.s own instead/ })).not.toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+        const useGaia = await screen.findByRole('button', { name: /Use GAIA.s own instead/ });
+        expect(screen.getByText(
+            "This server's address (http://127.0.0.1:9) is set outside the app. If you use GAIA's own, GAIA ignores that address until it changes.",
+        )).toBeInTheDocument();
+        expect(screen.queryByText(/LEMONADE_BASE_URL|unset|restart GAIA/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/setting outside the app/i)).not.toBeInTheDocument();
+        fireEvent.click(useGaia);
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, true, expect.any(Object)));
     });
 });
 

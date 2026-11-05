@@ -291,6 +291,8 @@ class ChatAgentConfig:
     claude_model: str = "claude-sonnet-5"
     base_url: Optional[str] = None
     model_id: Optional[str] = None  # None = use default model (Gemma)
+    # True: build without starting Lemonade or preloading; the first request loads.
+    skip_lemonade: bool = False
 
     # Execution settings
     max_steps: int = field(default_factory=default_max_steps)
@@ -693,6 +695,7 @@ class ChatAgent(
             # Unset lets the base resolve the port only after starting the server.
             base_url=config.base_url,
             model_id=effective_model_id,  # Pass the effective model to parent
+            skip_lemonade=config.skip_lemonade,
             max_steps=config.max_steps,
             debug_prompts=config.debug_prompts,
             show_prompts=config.show_prompts,

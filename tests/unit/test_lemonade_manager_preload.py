@@ -1011,7 +1011,7 @@ def test_recheck_with_only_non_llm_model_warns_loudly(mock_cls, caplog, capsys):
         assert "no LLM loaded" in surface
         assert "Whisper-Large-v3-Turbo" in surface
         assert "gaia init" in surface
-        assert "server.log" in surface
+        assert "log has the full error" in surface
 
     # The silent part that must NOT happen: caching min_context_size as if a
     # chat model were up.

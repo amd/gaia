@@ -200,7 +200,7 @@ def initialize_lemonade_for_agent(
                 quiet=quiet, host=host, port=port, model=model
             )
     except LemonadeClientError as e:
-        print(f"❌ Error: {e}", file=sys.stderr)
+        print(f"❌ Error: {_cli_wording(e)}", file=sys.stderr)
         return False, None
 
     if not success:
@@ -232,6 +232,13 @@ def _lemonade_answers(base_url: str | None = None) -> bool:
     else:
         client = LemonadeClient(keep_alive=True, verbose=False)
     return _probe(client)
+
+
+def _cli_wording(e: BaseException) -> str:
+    """*e*'s message with the apps' advice swapped for the CLI's commands."""
+    from gaia.llm.surface_hints import surface_wording
+
+    return surface_wording(str(e), "cli")
 
 
 def _cli_error_text(
@@ -7395,7 +7402,7 @@ def _warn_if_default_model_unavailable(model_id: str) -> None:
     try:
         failure = GatewayState.load().unavailable(model_id)
     except GatewayError as e:
-        print(f"⚠️  {e}", file=sys.stderr)
+        print(f"⚠️  {_cli_wording(e)}", file=sys.stderr)
         return
     if failure:
         print(
@@ -7478,7 +7485,7 @@ def _claude_route_sends_another_token(token):
     except GatewayError as e:
         print(
             f"⚠️  Claude gateway models (amd.Claude-*) send the token from GAIA, "
-            f"not Lemonade, and GAIA has none: {e}",
+            f"not Lemonade, and GAIA has none: {_cli_wording(e)}",
             file=sys.stderr,
         )
         return False
@@ -7507,7 +7514,7 @@ def _test_gateway_claude(model, source, prompt):
         client = create_client("lemonade", model=model)
         content = client.chat([{"role": "user", "content": prompt}], max_tokens=256)
     except (GatewayError, RuntimeError, ImportError) as e:
-        print(f"❌ Testing {model} failed: {e}", file=sys.stderr)
+        print(f"❌ Testing {model} failed: {_cli_wording(e)}", file=sys.stderr)
         sys.exit(1)
     print(content)
     usage = client.get_last_usage() or {}
@@ -7890,12 +7897,12 @@ def handle_gateway_command(args):
             return
 
     except GatewayError as e:
-        print(f"❌ {e}", file=sys.stderr)
+        print(f"❌ {_cli_wording(e)}", file=sys.stderr)
         sys.exit(1)
     except LemonadeClientError as e:
         # `models` and `test` go through LemonadeClient, which raises its own
         # type. Letting it escape printed a traceback instead of the message.
-        print(f"❌ {e}", file=sys.stderr)
+        print(f"❌ {_cli_wording(e)}", file=sys.stderr)
         sys.exit(1)
     except ConnectorsError as e:
         # The credential store raises this for an unusable backend, and `logout
@@ -10463,6 +10470,12 @@ def handle_lemonade_choice_command(args):
             else:
                 print("GAIA uses its own Lemonade Server")
                 print("   to use one you run: gaia lemonade connect <url>")
+            if info["env_url_ignored"]:
+                print(
+                    f"   LEMONADE_BASE_URL={info['env_url_ignored']} is ignored: "
+                    "GAIA's own was chosen over it in the app. A different value "
+                    "applies again."
+                )
             return
 
         if action == "detect":

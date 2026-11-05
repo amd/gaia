@@ -31,7 +31,6 @@ from ..setup_plan import (
 )
 from ..setup_runner import (
     REPORT_NAME_RE,
-    LemonadeOverridden,
     SetupBusy,
     SetupError,
     agent_ui_chat_model,
@@ -61,10 +60,6 @@ _BUSY = (
     "Setup or that model's download is already running. Wait for it or cancel "
     "it, then try again."
 )
-_OVERRIDDEN = (
-    "LEMONADE_BASE_URL points GAIA at another server, so setup can't switch to "
-    "GAIA's own. Unset it and restart GAIA."
-)
 _START_FAILED = "Setup couldn't start. Try again. " + _LOG
 
 
@@ -85,8 +80,6 @@ def _run_error(e: SetupError) -> HTTPException:
     logger.exception("Setup could not start")
     if isinstance(e, SetupBusy):
         return HTTPException(status_code=409, detail=_BUSY)
-    if isinstance(e, LemonadeOverridden):
-        return HTTPException(status_code=409, detail=_OVERRIDDEN)
     return HTTPException(status_code=500, detail=_START_FAILED)
 
 
