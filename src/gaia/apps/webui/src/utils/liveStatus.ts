@@ -29,6 +29,8 @@ export function localizeLiveStatus(t: Translate, label: string): string {
     // A model id has no spaces, so "Downloading the embedding model …" is not one of these.
     m = /^Loading (\S+) into memory$/.exec(label);
     if (m) return t('live.loadingModel', { model: m[1] });
+    m = /^Reading page (\d+) of (\d+)…$/.exec(label);
+    if (m) return t('live.readingPage', { page: m[1], total: m[2] });
     m = /^Downloading (\S+)$/.exec(label);
     if (m) return t('live.downloadingModel', { model: m[1] });
     return label;

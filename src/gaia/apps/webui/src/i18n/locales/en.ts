@@ -225,6 +225,7 @@ export const enMessages = {
     'live.waitingStart': 'Waiting for GAIA to start this answer…',
     'live.serverRestarting': 'The model server stopped. GAIA is restarting it…',
     'live.serverStarting': 'Starting the model server…',
+    'live.readingPage': 'Reading page {page} of {total}…',
     'live.answerRestarted': 'The answer so far was cut off, so GAIA is starting it again from the top.',
     'live.modelWaitHint': 'Still waiting on the model — nothing has come back yet. A hosted model that stays silent is retried, then stopped with an error. Press Stop to end it now.',
     'live.localModelWaitHint': 'Still waiting on the model — nothing has come back yet. A long prompt can take a minute or more to read on this PC. Press Stop to end it now.',
