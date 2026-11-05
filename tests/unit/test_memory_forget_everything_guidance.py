@@ -81,6 +81,6 @@ def test_the_tool_specs_point_at_each_other(host):
 def test_the_voice_never_denies_a_tool_it_has():
     voice = VOICE_SKILL.read_text(encoding="utf-8")
 
-    assert "Never tell the user GAIA can't do something one of your tools does" in (
+    assert "If one of your tools does it, never say GAIA can't" in (
         " ".join(voice.split())
     )

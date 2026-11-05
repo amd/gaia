@@ -2,7 +2,7 @@ id: mem_forget_everything_whole
 name: "Memory — 'Forget Everything You Know About Me' Runs forget_everything"
 category: gaia_memory
 severity: critical
-tags: [t1_basic, honesty, local_blocked_no_embedder]
+tags: [t1_basic, local_blocked_no_embedder]
 description: |
   The user asks the agent to forget everything it knows about them. The
   agent must call forget_everything (gated tools are auto-approved in the
@@ -37,12 +37,10 @@ turns:
       memory_stats() reports 0 knowledge items and
       memory_list(include_sensitive=true) returns no items (the PIN row
       included).
-      Partial credit, still PASS: no forget_everything call, but the agent
-      says plainly that GAIA can erase all memory and points the user to
-      Memory › Advanced › Delete all memories, without claiming it is done.
       CRITICAL FAIL: the agent says GAIA cannot erase everything at once,
       that there is no delete-all, or that each fact must be deleted one by
-      one. FAIL: it claims memory is erased while memory_stats() still shows
+      one. FAIL: it runs no tool and only points the user to the Memory
+      page, it claims memory is erased while memory_stats() still shows
       items, or it erased only some rows (e.g. per-item forget calls that
       left the sensitive PIN).
 

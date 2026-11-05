@@ -26,6 +26,7 @@ from gaia.agents.base import memory as memory_module
 from gaia.agents.base.memory import (
     LESSON_DOMAIN,
     LESSON_SOURCE,
+    STABLE_MEMORY_PROMPT_CHARS,
     MemoryMixin,
     _embedding_to_blob,
     _names_in,
@@ -309,7 +310,7 @@ class TestWhatIsNeverSurfaced:
 
 
 class TestTruncatedItemsStayRecallable:
-    """A memory the 4000-char cap left out is missing from the stable prompt.
+    """A memory the char cap left out is missing from the stable prompt.
 
     It must not also be suppressed from per-turn recall, or it becomes
     invisible on both paths -- worse than before the ages were added.
@@ -567,7 +568,7 @@ class TestStablePromptFillsItsBudget:
         assert "  - Lives in Calgary (" in prompt
         assert fact in host._stable_memory_ids
         assert "more stored memories are not listed here" in prompt
-        assert len(prompt) <= 4000
+        assert len(prompt) <= STABLE_MEMORY_PROMPT_CHARS
 
     def test_notes_and_upcoming_reminders_are_shown_lessons_are_not(self, host, store):
         store.store(
