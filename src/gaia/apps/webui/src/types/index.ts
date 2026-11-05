@@ -262,6 +262,33 @@ export interface AgentMcpServer {
     disabled: boolean;
 }
 
+/** GET /api/home-assistant: saved state only, never a live check. */
+export interface HomeAssistantStatus {
+    connected: boolean;
+    url: string | null;
+    /** Turned on for the flagship agent. */
+    active: boolean;
+    enabled?: boolean;
+}
+
+/** POST /api/home-assistant: saved only after Home Assistant accepted the token. */
+export interface HomeAssistantConnectResult extends HomeAssistantStatus {
+    tool_count: number;
+    detail: string;
+}
+
+/** POST /api/home-assistant/test */
+export interface HomeAssistantTestResult {
+    ok: boolean;
+    detail: string;
+    tool_count?: number;
+}
+
+/** DELETE /api/home-assistant */
+export interface HomeAssistantDisconnectResult extends HomeAssistantStatus {
+    detail: string;
+}
+
 export interface InferenceStats {
     tokens_per_second: number;
     time_to_first_token: number;
@@ -849,6 +876,8 @@ export interface AgentStep {
     mcpServerLabel?: string;
     /** The server's own tool name, e.g. "git_log" (for MCP tools). */
     mcpTool?: string;
+    /** The server's title for the tool, e.g. "Turn on" (for MCP tools). */
+    mcpToolTitle?: string;
     /** The text an MCP tool returned. */
     mcpOutput?: McpOutput;
     /** Tool call latency in milliseconds. */
@@ -982,6 +1011,8 @@ export interface StreamEvent {
     mcp_server_label?: string;
     /** The server's own tool name (for tool_start of MCP tools). */
     mcp_tool?: string;
+    /** The server's title for the tool (for tool_start of MCP tools). */
+    mcp_tool_title?: string;
     /** The text an MCP tool returned (for tool_result of MCP tools). */
     mcp_output?: McpOutput;
     /** Tool call latency in milliseconds (for tool_result). */

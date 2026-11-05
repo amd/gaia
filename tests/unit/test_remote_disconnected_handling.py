@@ -50,7 +50,7 @@ def test_remote_disconnected_is_not_a_urlerror():
 
 def test_mcp_http_transport_reports_a_drop_as_runtimeerror():
     transport = HTTPTransport("http://localhost:8765")
-    with patch("urllib.request.urlopen", side_effect=_disconnect()):
+    with patch.object(transport._opener, "open", side_effect=_disconnect()):
         with pytest.raises(RuntimeError, match="dropped mid-flight"):
             transport.send_request("tools/list")
 

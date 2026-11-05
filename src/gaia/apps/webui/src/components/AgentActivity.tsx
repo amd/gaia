@@ -140,13 +140,14 @@ const named = (what: string, icon: LucideIcon): ToolMeta => ({
 const say = (t: Translate, m: MessageRef) => t(m.ref, m.params);
 
 /** Which connector an MCP call went to, as the server names it. */
-type McpIdentity = Pick<AgentStep, 'mcpServerLabel' | 'mcpTool'>;
+type McpIdentity = Pick<AgentStep, 'mcpServerLabel' | 'mcpTool' | 'mcpToolTitle'>;
 
 function getToolMeta(toolName?: string, mcp?: McpIdentity): ToolMeta {
     if (!toolName) return DEFAULT_TOOL_META;
     if (toolName.startsWith('mcp_')) {
         const server = mcp?.mcpServerLabel;
-        if (server) return named(mcp?.mcpTool ? `${server}: ${mcp.mcpTool}` : server, Globe);
+        const tool = mcp?.mcpToolTitle || mcp?.mcpTool;
+        if (server) return named(tool ? `${server}: ${tool}` : server, Globe);
         // Saved turns from before the server named the connector.
         return { label: ref('tool.mcp.done'), activeLabel: ref('tool.mcp.active'), icon: Globe };
     }

@@ -1143,6 +1143,57 @@ async def debug_turns(limit: int = 20) -> Dict[str, Any]:
     return {"turns": list(RECENT_TURNS)[-limit:]}
 
 
+class HomeAssistantConnectRequest(BaseModel):
+    """Body of ``PUT /home-assistant``: where Home Assistant is, and its token."""
+
+    model_config = ConfigDict(extra="forbid")
+    url: str = Field(..., description="Home Assistant base address, no path")
+    token: str = Field(..., description="Long-lived access token")
+
+
+@router.get("/home-assistant")
+async def home_assistant_status() -> Dict[str, Any]:
+    """Whether Home Assistant is connected, for the TUI's ``/home``."""
+    from gaia.connectors import home_assistant as ha
+
+    return await asyncio.to_thread(ha.status)
+
+
+@router.put("/home-assistant")
+async def home_assistant_connect(body: HomeAssistantConnectRequest) -> Dict[str, Any]:
+    """Check the address and token against Home Assistant, then save them.
+
+    A new chat picks the tools up; one already open keeps the tools it had.
+    """
+    from gaia.connectors import home_assistant as ha
+    from gaia.connectors.errors import ConnectorsError
+
+    try:
+        return await ha.connect(body.url, body.token)
+    except ConnectorsError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/home-assistant/test")
+async def home_assistant_test() -> Dict[str, Any]:
+    """Contact the saved Home Assistant: ``{"ok": bool, "detail": str}``."""
+    from gaia.connectors import home_assistant as ha
+
+    return await ha.check()
+
+
+@router.delete("/home-assistant")
+async def home_assistant_disconnect() -> Dict[str, Any]:
+    """Forget the saved address and token."""
+    from gaia.connectors import home_assistant as ha
+    from gaia.connectors.errors import ConnectorsError
+
+    try:
+        return await ha.disconnect()
+    except ConnectorsError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @router.get("/skills")
 async def skills() -> Dict[str, Any]:
     """The skills this agent can load, for the Agent UI's Skills settings.

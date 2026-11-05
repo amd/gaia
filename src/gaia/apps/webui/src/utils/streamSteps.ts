@@ -37,6 +37,7 @@ export function agentEventToStep(event: StreamEvent, stepIdRef: { current: numbe
                 mcpServer: event.mcp_server,
                 mcpServerLabel: event.mcp_server_label,
                 mcpTool: event.mcp_tool,
+                mcpToolTitle: event.mcp_tool_title,
             };
         case 'plan':
             return {

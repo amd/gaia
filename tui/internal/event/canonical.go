@@ -143,6 +143,10 @@ type CanonicalNeedsConfirmationEvent struct {
 	// destructive. Empty from an older agent; the client then labels by tool.
 	Risk       string `json:"risk,omitempty"`
 	ConfirmURL string `json:"confirm_url,omitempty"`
+	// MCPServerLabel and MCPToolTitle name an MCP tool the way its server
+	// does ("Home Assistant", "Turn on"). Empty for GAIA's own tools.
+	MCPServerLabel string `json:"mcp_server_label,omitempty"`
+	MCPToolTitle   string `json:"mcp_tool_title,omitempty"`
 }
 
 // CanonicalNeedsInputEvent — the run pauses on a QUESTION and resumes on this

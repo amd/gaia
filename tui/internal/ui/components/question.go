@@ -36,6 +36,9 @@ type QuestionModel struct {
 	options       []QuestionOption
 	allowFreeText bool
 	sensitive     bool
+	// escHint replaces the default "esc cancel the turn" for a host whose Esc
+	// does something else.
+	escHint string
 
 	// cursor indexes options; len(options) is the free-text row when allowed.
 	cursor int
@@ -116,6 +119,23 @@ func (m QuestionModel) Sensitive() bool { return m.sensitive }
 
 // Prompt is the question text, for a host that needs to assert on what it asked.
 func (m QuestionModel) Prompt() string { return m.question }
+
+// WithValue pre-fills the free-text answer, cursor at the end, so a host can
+// offer a default or give back what the user typed before.
+func (m QuestionModel) WithValue(v string) QuestionModel {
+	m.input.SetValue(v)
+	m.input.CursorEnd()
+	return m
+}
+
+// WithEscHint says what Esc does, for a question that is not part of a turn.
+func (m QuestionModel) WithEscHint(h string) QuestionModel {
+	m.escHint = h
+	return m
+}
+
+// Value is the free-text answer as typed so far.
+func (m QuestionModel) Value() string { return m.input.Value() }
 
 // SetWidth fits the panel to the terminal.
 func (m *QuestionModel) SetWidth(w int) {
@@ -305,7 +325,11 @@ func (m QuestionModel) layout(inner int) []questionLine {
 		}
 	}
 
-	hint := "up/down or tab move · enter answer · esc cancel the turn"
+	esc := "esc cancel the turn"
+	if m.escHint != "" {
+		esc = m.escHint
+	}
+	hint := "up/down or tab move · enter answer · " + esc
 	if len(m.options) > 0 {
 		hint = "1-" + fmt.Sprint(len(m.options)) + " pick · " + hint
 	}

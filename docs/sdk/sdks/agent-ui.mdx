@@ -2268,6 +2268,35 @@ OAuth and MCP-server connections for the Settings page and per-agent grants
   </Accordion>
 </AccordionGroup>
 
+### Home Assistant
+
+The Settings › Smart home page. The same contract is served to the TUI by the
+flagship sidecar at `/v1/gaia/home-assistant`. See
+[Home Assistant](/connectors/home-assistant).
+
+<AccordionGroup>
+  <Accordion title="GET /api/home-assistant">
+    Saved state only — `{connected, url, active, enabled}` — and never contacts
+    Home Assistant.
+  </Accordion>
+
+  <Accordion title="POST /api/home-assistant">
+    Body `{url, token}`. Checks both against Home Assistant's
+    `/api/mcp/assist`, then saves the token in the OS keyring and turns the
+    connector on for the flagship. A refusal is a `400` whose `detail` is the
+    fix to show the user; nothing is saved.
+  </Accordion>
+
+  <Accordion title="POST /api/home-assistant/test">
+    Contacts the saved Home Assistant again: `{ok, detail, tool_count?}`.
+  </Accordion>
+
+  <Accordion title="DELETE /api/home-assistant">
+    Forgets the address and token. The token stays valid in Home Assistant
+    until it is deleted there.
+  </Accordion>
+</AccordionGroup>
+
 <Note>
   `/v1/connections/*` is a separate, related surface — pre-authenticated
   connections forwarded from another process (issue #1292). See the

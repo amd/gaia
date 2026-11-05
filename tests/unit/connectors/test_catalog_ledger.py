@@ -45,6 +45,9 @@ KEPT_IDS = frozenset(
         # Added in #1003: pinned mcp-discord, covered by
         # test_discord_mcp_connector.py.
         "mcp-discord",
+        # Home Assistant's own MCP server over http (#705), covered by
+        # test_home_assistant_connector.py.
+        "mcp-home-assistant",
     }
 )
 

@@ -230,6 +230,21 @@ duplicates, ranks by severity × reach, and posts the reply once you approve it.
   on a one-time yes, with no "always". Deletes (`gh repo delete`, `gh api -X
   DELETE`) are refused outright.
 
+### home-assistant
+
+The connector-bridged example. Checks and controls the devices you share from
+Home Assistant through Home Assistant's own MCP server, then re-reads their
+state to report what actually changed.
+
+- **Demonstrates** — an `mcp:connect` permission (`mcp-home-assistant`) plus two
+  small tools of its own: `home_assistant_status` says whether the connection
+  works, and `find_home_assistant` looks for Home Assistant at its usual
+  addresses without sending a token.
+- **Configure** — connect Home Assistant in the Agent UI (Settings › Smart home)
+  or with `/home` in the terminal UI. See [Home Assistant](/connectors/home-assistant).
+- **Limit** — every change asks you first, one prompt per device, even with
+  full access on; changes asked for over Slack are refused.
+
 ### rss-digest
 
 The pack's one **tool-providing** skill: it ships a `tools.py` with a `fetch_rss`

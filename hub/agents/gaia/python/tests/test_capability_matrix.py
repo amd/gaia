@@ -111,12 +111,15 @@ _EXPECTED_REST_OP_NAMES = {
     "sessions/{session_id}/tools",
     "memory",
     "skills",
+    "home-assistant",
+    "home-assistant/test",
 }
-# One per route method: sessions/{session_id}/grants is both GET and DELETE.
-_EXPECTED_REST_FUNCTIONAL_COUNT = 12
+# One per route method: sessions/{session_id}/grants is both GET and DELETE,
+# and home-assistant is GET, PUT and DELETE.
+_EXPECTED_REST_FUNCTIONAL_COUNT = 16
 # + the init readiness probe and the three liveness/version probes
 # (/health, /version, /v1/gaia/version).
-_EXPECTED_REST_IN_CONTRACT_COUNT = 16
+_EXPECTED_REST_IN_CONTRACT_COUNT = 20
 
 _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 
@@ -272,6 +275,7 @@ def test_eval_surface_state_is_derived_not_asserted(matrix):
         "gaia_email",
         "gaia_files",
         "gaia_git",
+        "gaia_home",
         "gaia_honesty",
         "gaia_mcp",
         "gaia_media",

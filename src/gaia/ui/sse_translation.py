@@ -127,7 +127,7 @@ SUMMARY_VIEW_KEYS = (
 )
 
 #: Which connector an MCP tool call belongs to, carried from ``tool_start``.
-MCP_TOOL_FIELDS = ("mcp_server", "mcp_server_label", "mcp_tool")
+MCP_TOOL_FIELDS = ("mcp_server", "mcp_server_label", "mcp_tool", "mcp_tool_title")
 
 #: Counts a ``status`` carrying a ``phase`` may report alongside it: reasoning
 #: words so far, or characters of a tool call's arguments so far.
@@ -308,11 +308,19 @@ class CanonicalTranslator:
         self._result_seen_since_call = False
         # ``narration`` and the MCP fields are additive — ``tool`` and ``args``
         # keep their shape for clients that predate them (spec §4.1, additive-MINOR).
+        narration = derive_narration(tool, args)
+        title = (mcp or {}).get("mcp_tool_title")
+        if title and (mcp or {}).get("mcp_server_label"):
+            # Named as the server names it; the argument detail is kept.
+            _, _, detail = narration.partition(": ")
+            narration = f"{title} ({mcp['mcp_server_label']})" + (
+                f": {detail}" if detail else ""
+            )
         return {
             "type": "tool_call",
             "tool": tool,
             "args": args,
-            "narration": derive_narration(tool, args),
+            "narration": narration,
             **(mcp or {}),
         }
 
@@ -545,7 +553,10 @@ class CanonicalTranslator:
         args = event.get("args") or {}
         if not isinstance(args, dict):
             args = {}
-        summary = self._render_args_summary(tool, args)
+        title, server = event.get("mcp_tool_title"), event.get("mcp_server_label")
+        summary = self._render_args_summary(
+            tool, args, label=f"{server}: {title}" if title and server else None
+        )
         # The command, where it runs, then one plain line on what it can do.
         if tool in COMMAND_SUMMARY_TOOLS:
             note = str(args.get(RISK_NOTE_ARG) or "") or plain_risk_note(
@@ -588,6 +599,7 @@ class CanonicalTranslator:
         tool_label = event.get("tool_label")
         if tool_label:
             canonical["tool_label"] = str(tool_label)
+        canonical.update({k: event[k] for k in MCP_TOOL_FIELDS if event.get(k)})
         # The call itself, so a front-end can show all of what it is approving
         # (the summary shortens code) and word a path prompt for what is there.
         call_args = _model_call_args(event, args)
@@ -647,7 +659,9 @@ class CanonicalTranslator:
 
     # -- confirmation summary ----------------------------------------------
 
-    def _render_args_summary(self, tool: str, args: Dict[str, Any]) -> str:
+    def _render_args_summary(
+        self, tool: str, args: Dict[str, Any], label: Optional[str] = None
+    ) -> str:
         """Render a human-readable confirmation prompt for a gated tool call.
 
         Produces a plain sentence a chat user can approve rather than a raw
@@ -663,7 +677,7 @@ class CanonicalTranslator:
             return render_command_summary(tool, args)
         if tool == PATH_ACCESS_PROMPT_TOOL and isinstance(args.get("path"), str):
             return _path_access_question(args)
-        label = self._action_labels.get(tool, f"Run {tool!r}")
+        label = label or self._action_labels.get(tool, f"Run {tool!r}")
         detail = render_invocation(args)
         if not detail:
             return f"{label}?"

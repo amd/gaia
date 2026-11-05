@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -166,6 +167,9 @@ func ActionTitle(action string) string {
 	if title, ok := actionTitles[action]; ok {
 		return title
 	}
+	if verb, ok := homeAssistantVerb(action); ok {
+		return "Allow Home Assistant: " + strings.ToLower(verb) + "?"
+	}
 	return "Allow " + action + "?"
 }
 
@@ -217,7 +221,36 @@ func ClassifyActionRisk(action string) RiskTier {
 	if tier, ok := confirmationRiskTiers[action]; ok {
 		return tier
 	}
+	if homeAssistantAdjusts(action) {
+		return RiskWrite
+	}
 	return RiskDestructive
+}
+
+// homeAssistantAdjustments are Home Assistant intents that only adjust a
+// device and are undone by asking again. Turning on or off is not here: on a
+// lock it is unlock, on a garage door open, so it keeps the cautious tier.
+var homeAssistantAdjustments = map[string]bool{
+	"HassLightSet": true, "HassClimateSetTemperature": true, "HassFanSetSpeed": true,
+	"HassSetVolume": true, "HassSetVolumeRelative": true,
+	"HassMediaPause": true, "HassMediaUnpause": true, "HassMediaNext": true,
+	"HassMediaPrevious": true, "HassMediaPlayerMute": true, "HassMediaPlayerUnmute": true,
+	"HassHumidifierSetpoint": true, "HassHumidifierMode": true,
+	"HassListAddItem": true, "HassListCompleteItem": true,
+	"HassVacuumStart": true, "HassVacuumReturnToBase": true,
+}
+
+// homeAssistantAdjusts reports whether action is one of those intents,
+// with or without the newer "<domain>__" namespace.
+func homeAssistantAdjusts(action string) bool {
+	name, ok := strings.CutPrefix(action, homeAssistantToolPrefix)
+	if !ok {
+		return false
+	}
+	if i := strings.LastIndex(name, "__"); i >= 0 {
+		name = name[i+2:]
+	}
+	return homeAssistantAdjustments[name]
 }
 
 // ConfirmState is where a confirmation sits in its state machine:
@@ -374,8 +407,11 @@ type ConfirmationModel struct {
 	// modeHint is the line naming the permission mode and the key that changes
 	// it. The chat view owns the mode, so it supplies the words.
 	modeHint string
-	state    ConfirmState
-	width    int
+	// title is the server's own name for an MCP tool's question; empty uses
+	// ActionTitle.
+	title string
+	state ConfirmState
+	width int
 }
 
 // NewConfirmationModel builds the modal for one needs_confirmation event.
@@ -384,7 +420,7 @@ func NewConfirmationModel(runID, action, summary, confirmURL string) Confirmatio
 		runID:      runID,
 		seq:        confirmationSeq.Add(1),
 		action:     action,
-		summary:    summary,
+		summary:    homeAssistantSummary(action, summary),
 		confirmURL: confirmURL,
 		tier:       ClassifyActionRisk(action),
 		state:      ConfirmationPending,
@@ -411,6 +447,16 @@ func (m ConfirmationModel) WithRisk(risk string) ConfirmationModel {
 	if tier, ok := riskFromWire[risk]; ok {
 		m.tier = tier
 		m.riskFromAgent = true
+	}
+	return m
+}
+
+// WithToolTitle names an MCP tool as its server does, so the question reads
+// "Allow Home Assistant: turn on?" rather than a phrase made from the tool id.
+func (m ConfirmationModel) WithToolTitle(server, title string) ConfirmationModel {
+	server, title = strings.TrimSpace(server), strings.TrimSpace(title)
+	if server != "" && title != "" {
+		m.title = "Allow " + server + ": " + strings.ToLower(title[:1]) + title[1:] + "?"
 	}
 	return m
 }
@@ -548,7 +594,11 @@ func (m ConfirmationModel) View() string {
 	}
 
 	var lines []string
-	lines = append(lines, m.tier.Badge()+" "+confirmationTitleStyle.Render(ActionTitle(m.action)))
+	title := m.title
+	if title == "" {
+		title = ActionTitle(m.action)
+	}
+	lines = append(lines, m.tier.Badge()+" "+confirmationTitleStyle.Render(title))
 
 	// The call itself, once. The title already says what kind of action it is.
 	if summary := strings.TrimSpace(m.summary); summary != "" {
@@ -633,4 +683,53 @@ func HumanTimeout(d time.Duration) string {
 		return "1 minute"
 	}
 	return strconv.Itoa(minutes) + " minutes"
+}
+
+// homeAssistantToolPrefix is how the agent names Home Assistant's MCP tools:
+// "mcp_" + the sanitised server name "home_assistant" + HA's own tool name.
+const homeAssistantToolPrefix = "mcp_home_assistant_"
+
+// homeAssistantVerb turns "mcp_home_assistant_HassTurnOn" into "Turn on".
+func homeAssistantVerb(action string) (string, bool) {
+	name, ok := strings.CutPrefix(action, homeAssistantToolPrefix)
+	if !ok || name == "" {
+		return "", false
+	}
+	// Newer Home Assistant releases namespace tools: "intent__HassTurnOn".
+	if i := strings.LastIndex(name, "__"); i >= 0 && i+2 < len(name) {
+		name = name[i+2:]
+	}
+	if rest, ok := strings.CutPrefix(name, "Hass"); ok && rest != "" {
+		name = rest
+	}
+	var words []string
+	start := 0
+	runes := []rune(name)
+	for i := 1; i < len(runes); i++ {
+		if unicode.IsUpper(runes[i]) && !unicode.IsUpper(runes[i-1]) {
+			words = append(words, string(runes[start:i]))
+			start = i
+		}
+	}
+	words = append(words, string(runes[start:]))
+	phrase := strings.Join(strings.Fields(strings.ReplaceAll(strings.Join(words, " "), "_", " ")), " ")
+	if phrase == "" {
+		return "", false
+	}
+	return strings.ToUpper(phrase[:1]) + strings.ToLower(phrase[1:]), true
+}
+
+// homeAssistantSummary swaps the agent's generic "Run 'mcp_home_assistant_X'"
+// for the verb, keeping the arguments it lists exactly as sent.
+func homeAssistantSummary(action, summary string) string {
+	verb, ok := homeAssistantVerb(action)
+	if !ok {
+		return summary
+	}
+	for _, quoted := range []string{"'" + action + "'", "\"" + action + "\""} {
+		if rest, ok := strings.CutPrefix(summary, "Run "+quoted); ok {
+			return verb + rest
+		}
+	}
+	return summary
 }

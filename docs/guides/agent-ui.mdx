@@ -812,9 +812,18 @@ much they use now.
 One window with General (language; appearance: Light, Dark, Match system; colors; the
 [desktop app's tray switches](#the-tray-icon); shortcuts),
 Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, the `.claude/skills` folder of the project GAIA is working in, or your other Claude Code skill folders, with **Use** to try one),
-Connectors, Memory, Notifications, Privacy and Advanced (model server and
+Connectors, Smart home, Memory, Notifications, Privacy and Advanced (model server and
 llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
 back).
+
+**Settings → Smart home** connects Home Assistant. It lists the three steps to take
+in Home Assistant first (add the Model Context Protocol Server integration, expose
+the devices GAIA may use, create a long-lived access token, ideally for a non-admin
+user), then takes the address and token. GAIA checks them against Home Assistant
+before saving anything; when the check fails, the page says what to fix and keeps
+what you typed. Once connected, **Test connection** checks it again and
+**Disconnect** forgets the address and token. GAIA asks before every change to a
+device. Home Assistant isn't listed under Connectors.
 
 If you chose a cloud provider during setup and this PC has no model server yet,
 the banner, **Settings → Model** and **Settings → Advanced** offer **Set up local

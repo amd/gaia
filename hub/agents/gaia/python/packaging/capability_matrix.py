@@ -123,6 +123,8 @@ OP_EVAL_COVERAGE: Dict[str, str] = {
     "sessions/{session_id}/tools": _NO_EVAL_SENTINEL,
     "memory": _NO_EVAL_SENTINEL,
     "skills": _NO_EVAL_SENTINEL,
+    "home-assistant": _NO_EVAL_SENTINEL,
+    "home-assistant/test": _NO_EVAL_SENTINEL,
 }
 
 # The no-MCP decision is deliberate, not an oversight — pinned so it cannot

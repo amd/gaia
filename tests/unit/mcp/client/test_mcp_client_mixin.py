@@ -291,7 +291,7 @@ class TestMCPClientMixin:
 
     @patch("gaia.mcp.mixin.MCPClientManager")
     def test_connect_mcp_server_rejects_http_type(self, mock_manager_class):
-        """Test that connect_mcp_server raises for non-stdio types."""
+        """Test that connect_mcp_server raises for transports other than stdio/http."""
         mock_manager = Mock()
         mock_manager_class.return_value = mock_manager
 
@@ -301,7 +301,7 @@ class TestMCPClientMixin:
             "url": "http://localhost:8080/sse",
         }
 
-        with pytest.raises(ValueError, match="only supports stdio"):
+        with pytest.raises(ValueError, match="supports the stdio and http"):
             agent.connect_mcp_server("http_server", config)
 
 

@@ -4,6 +4,7 @@
 """HTTP transport for MCP protocol communication."""
 
 import http.client
+import ipaddress
 import json
 import urllib.error
 import urllib.request
@@ -11,11 +12,97 @@ from typing import Any, Callable, Dict, Optional, TypeVar
 
 from gaia.logger import get_logger
 
+from ..redaction import redact
 from .base import MCPTransport
 
 logger = get_logger(__name__)
 
 T = TypeVar("T")
+
+
+class MCPHTTPError(RuntimeError):
+    """An HTTP failure talking to a remote MCP server, with its status if any.
+
+    ``status`` is the HTTP status code, or None when no response came back.
+    Callers tell "bad token" (401) from "no such endpoint" (404) by it rather
+    than by parsing the message. ``refused`` marks a request GAIA itself
+    stopped (a redirect, a public peer over plain http); its message says why.
+    """
+
+    def __init__(
+        self, message: str, status: Optional[int] = None, refused: bool = False
+    ):
+        super().__init__(message)
+        self.status = status
+        self.refused = refused
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: urllib would re-send our headers to the target.
+
+    The headers carry a bearer token, and a redirect can name any host or
+    downgrade to plain http, so a 3xx is reported instead of followed.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise MCPHTTPError(
+            f"MCP server at {req.full_url} answered with a redirect (HTTP "
+            f"{code}) to {newurl}. GAIA does not follow redirects, so the "
+            f"access token is never sent to another address. Use the address "
+            f"the server redirects to.",
+            status=code,
+            refused=True,
+        )
+
+
+# Tailscale and other overlay networks hand out CGNAT addresses for LAN peers.
+_SHARED_ADDRESS_SPACE = ipaddress.ip_network("100.64.0.0/10")
+
+
+def is_private_address(address: str) -> bool:
+    """Whether ``address`` is on this machine or a private network."""
+    ip = ipaddress.ip_address(address.split("%", 1)[0])
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or (ip.version == 4 and ip in _SHARED_ADDRESS_SPACE)
+    )
+
+
+class _PrivatePeerConnection(http.client.HTTPConnection):
+    """Plain-http connection that refuses to send anything to a public address.
+
+    Checked on the connected socket, not on a lookup made earlier, so a DNS
+    answer that changes between the check and the request cannot slip the
+    token to a public host.
+    """
+
+    def connect(self):
+        super().connect()
+        peer = self.sock.getpeername()[0]
+        if not is_private_address(peer):
+            self.sock.close()
+            raise MCPHTTPError(
+                f"{self.host} resolved to the public address {peer}. GAIA only "
+                f"sends an access token over plain http to an address on this "
+                f"PC or your local network. Use the server's https address.",
+                refused=True,
+            )
+
+
+class _PrivatePeerHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PrivatePeerConnection, req)
+
+
+_OPENER = urllib.request.build_opener(_RefuseRedirects())
+# No proxy either: a proxy would be the peer, and the LAN needs none.
+_PRIVATE_HTTP_OPENER = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}), _PrivatePeerHTTPHandler(), _RefuseRedirects()
+)
 
 
 class HTTPTransport(MCPTransport):
@@ -29,16 +116,54 @@ class HTTPTransport(MCPTransport):
         url: HTTP URL of the MCP server (e.g., "http://localhost:8080/mcp")
         timeout: Request timeout in seconds (default: 30)
         debug: Enable debug logging (default: False)
+        headers: Extra headers sent on every request, such as
+            ``Authorization``. Never logged.
+        private_http_only: Refuse to send a plain-http request to anything but
+            a private, loopback or link-local address. https is unaffected.
     """
 
-    def __init__(self, url: str, timeout: int = 30, debug: bool = False):
+    def __init__(
+        self,
+        url: str,
+        timeout: int = 30,
+        debug: bool = False,
+        headers: Optional[Dict[str, str]] = None,
+        private_http_only: bool = False,
+    ):
         self.url = url.rstrip("/")
+        self.extra_headers: Dict[str, str] = dict(headers or {})
+        self._opener = (
+            _PRIVATE_HTTP_OPENER
+            if private_http_only and self.url.lower().startswith("http://")
+            else _OPENER
+        )
         self.timeout = timeout
         self.debug = debug
         self._request_id = 0
         self._connected = False
         self.session_id: Optional[str] = None
         self.protocol_version: Optional[str] = None
+
+    def redact_value(self, value: Any) -> Any:
+        """*value* with every header secret (and its bare token) removed."""
+        secrets = []
+        for header in self.extra_headers.values():
+            secrets.append(header)
+            scheme, _, token = header.partition(" ")
+            if token and scheme.lower() in ("bearer", "basic", "token"):
+                secrets.append(token)
+        if not secrets:
+            return value
+        if isinstance(value, str):
+            return redact(value, secrets)
+        if isinstance(value, dict):
+            return {
+                (redact(k, secrets) if isinstance(k, str) else k): self.redact_value(v)
+                for k, v in value.items()
+            }
+        if isinstance(value, list):
+            return [self.redact_value(v) for v in value]
+        return value
 
     def connect(self) -> bool:
         """Mark the transport ready; HTTP has no session to open.
@@ -66,8 +191,10 @@ class HTTPTransport(MCPTransport):
         """DELETE the session so the server can free it."""
         req = urllib.request.Request(self.url, headers=self._headers(), method="DELETE")
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout):
+            with self._opener.open(req, timeout=self.timeout):
                 pass
+        except MCPHTTPError as e:
+            logger.warning(f"Could not end the MCP session at {self.url}: {e}")
         except urllib.error.HTTPError as e:
             # 405: the server doesn't let clients end sessions. 404: already gone.
             if e.code not in (404, 405):
@@ -217,7 +344,7 @@ class HTTPTransport(MCPTransport):
             )
 
     def _headers(self) -> Dict[str, str]:
-        headers = {}
+        headers = dict(self.extra_headers)
         if self.session_id:
             headers["Mcp-Session-Id"] = self.session_id
         if self.protocol_version:
@@ -237,21 +364,27 @@ class HTTPTransport(MCPTransport):
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+            with self._opener.open(req, timeout=self.timeout) as response:
                 session_id = response.headers.get("Mcp-Session-Id")
                 if session_id:
                     self.session_id = session_id
                 return read(response)
-        except urllib.error.URLError as e:
-            if getattr(e, "code", None) == 404 and self.session_id:
+        except urllib.error.HTTPError as e:
+            if e.code == 404 and self.session_id:
                 self.session_id = None
                 self.protocol_version = None
                 self._connected = False
-                raise RuntimeError(
+                raise MCPHTTPError(
                     f"MCP server at {self.url} no longer knows this session. "
-                    f"Reconnect to start a new one."
+                    f"Reconnect to start a new one.",
+                    status=404,
                 ) from e
-            raise RuntimeError(f"HTTP request to {self.url} failed: {e}") from e
+            raise MCPHTTPError(
+                f"HTTP request to {self.url} failed: HTTP {e.code} {e.reason}",
+                status=e.code,
+            ) from e
+        except urllib.error.URLError as e:
+            raise MCPHTTPError(f"HTTP request to {self.url} failed: {e.reason}") from e
         except TimeoutError:
             raise TimeoutError(f"Request to {self.url} timed out after {self.timeout}s")
         except ConnectionError as e:

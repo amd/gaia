@@ -6,7 +6,7 @@ icon: "house-signal"
 
 # Home Assistant Integration Plan
 
-> **Status:** Scoping (no implementation)
+> **Status:** Phase 1 built; default-model eval due on the next RC
 >
 > **Tracking issue:** [#705](https://github.com/amd/gaia/issues/705)
 >
@@ -20,202 +20,184 @@ icon: "house-signal"
 ## 1. Summary
 
 A user with Home Assistant on their network should be able to say "dim the kitchen to
-30% and turn off the porch light" in the Agent UI or the TUI, and have it happen —
-on-device, with no cloud relay, and with a confirmation before anything changes.
+30% and turn off the porch light" in the Agent UI or the TUI and have it happen,
+on-device, with no cloud relay, and with a person approving every change.
 
 **Approach:** Home Assistant ships its own MCP server (the *Model Context Protocol
-Server* integration). GAIA connects to it as an **MCP connector**, and a
-`home-assistant` **skill** teaches the flagship how to use it. No new agent, no
-hand-written Home Assistant API client.
+Server* integration; the per-API endpoint needs HA 2026.8+). GAIA connects to its **Assist endpoint,
+`/api/mcp/assist`**, as an MCP connector, and a `home-assistant` skill teaches the
+flagship how to use it. No new agent and no hand-written Home Assistant API client.
 
-**The one real engineering gap:** GAIA's MCP connectors only launch local stdio
-processes. Home Assistant's MCP server is a remote HTTP endpoint behind a bearer
-token, so the MCP client and the connector framework need a remote-server path.
-Everything else reuses what exists.
+**The real engineering gap:** GAIA's MCP connectors only launch local processes over
+stdio. Home Assistant is a remote HTTP endpoint behind a bearer token, and the stdio
+assumption runs through the loader, the connector handler, the catalog re-derivation,
+redaction and the connect test (§3.1).
 
-## 2. Why MCP, not a REST client
+## 2. Why the Assist endpoint, and why MCP
 
-Issue #705 sketched a GAIA-side client over `/api/states` and `/api/services`. Using
-Home Assistant's MCP server instead is better on every axis that matters here:
+Home Assistant serves MCP at two kinds of path, and the choice decides the safety model:
 
-| | HA MCP server (selected) | Custom REST/WebSocket client |
+| Path | What it can do | Token |
 |---|---|---|
-| **What the agent may touch** | Only entities the user exposed to Assist in HA — the user's existing, HA-native boundary | Every entity the token can reach, unless GAIA rebuilds an exposure model |
-| **Tool surface** | HA's intent tools (turn on/off, set light, set climate, live context) — maintained by HA | GAIA owns service-call schemas for every domain |
-| **Maintenance** | Tracks HA releases for free | Breaks when HA changes service signatures |
-| **Reuse** | The MCP client, connector tiles, keyring, grants, confirmation gate | New tool mixin, new storage, new UI |
+| `/api/mcp/assist` (**used**) | Only the entities the user exposed to Assist (HA › Settings › Voice assistants › Expose) | Any HA user |
+| `/api/mcp`, `/api/mcp/<other>` | Whatever APIs the HA admin configured, up to reading every entity and calling **any** action | May need an admin |
 
-The REST API stays useful for one thing: the **connect-time test** (`GET /api/` with the
-token answers `API running.`), which tells a bad URL apart from a bad token apart from
-"the MCP Server integration isn't enabled".
+GAIA pins the path to `/api/mcp/assist` in code. The user enters only the base URL;
+a URL that carries a path, query, fragment or `user:pass@` is refused.
 
-Rejected: a dedicated smart-home agent (#1487 — closed when per-task agents became
-skills, #2995) and an n8n/Node-RED bridge (an extra service to install, for no gain).
+MCP beats a custom REST/WebSocket client because it gives GAIA the HA-native exposure
+list as its boundary, HA-maintained intent tools (`HassTurnOn`, `HassLightSet`,
+`GetLiveContext`, …) and MCP tool annotations, and it reuses GAIA's MCP client,
+keyring, grants and confirmation gate. Rejected: a dedicated smart-home agent (#1487,
+closed when agents became skills, #2995) and an n8n/Node-RED bridge (an extra service
+for no gain). The legacy SSE endpoint (`/mcp_server/sse`) is not supported: an HA that
+only has it is told to update.
 
 ## 3. Architecture
 
 ```
 Agent UI / TUI ──► flagship GaiaAgent ──► MCPClientManager
-                     │ home-assistant          │ HTTPTransport (streamable HTTP)
-                     │ SKILL.md                │ Authorization: Bearer <token from keyring>
+                     │ home-assistant          │ HTTPTransport (streamable HTTP, no redirects)
+                     │ SKILL.md                │ Authorization: Bearer <keyring>
                      ▼                         ▼
-              confirmation gate ──────► http://homeassistant.local:8123/api/mcp
-                                              (HA "Model Context Protocol Server"
-                                               integration; Assist-exposed entities only)
+          confirmation gate (person-only) ──► http://<ha>:8123/api/mcp/assist
+                                                (Assist-exposed entities only)
 ```
 
-### 3.1 Remote MCP servers (the gap)
+### 3.1 Remote MCP servers
 
-What exists today:
+Every layer assumed stdio. Each changed:
 
-- `MCPClient.from_config` requires a `command` and always builds a `StdioTransport`.
-- `HTTPTransport` already speaks streamable HTTP (POST, JSON or SSE replies, session
-  id), but sends no custom headers — so no `Authorization`.
-- `ConnectorSpec` describes only `mcp_command` / `mcp_args` / `mcp_env_keys`, and
-  `McpServerHandler` only writes stdio entries to `mcp_servers.json`.
-
-What to add:
-
-1. **`mcp_servers.json` URL entries** — `{"url": "...", "headers": {"Authorization":
-   {"$keyring": "..."}}}`, in the same `$keyring` reference form `env` already uses, and
-   resolved at connect time with the same fail-closed rule (a dangling reference is an
-   error, never an unauthenticated request).
-2. **`MCPClient.from_config`** picks `HTTPTransport` when an entry has `url` (and rejects
-   an entry with both `url` and `command`).
-3. **`HTTPTransport(headers=...)`**, merged under the session headers, and redacted in
-   logs and errors the way `StdioTransport` redacts env values.
-4. **`ConnectorSpec`** gains `mcp_transport: "stdio" | "http"`, `mcp_url_field` (which
-   config field holds the base URL), `mcp_url_path` (`/api/mcp`) and `mcp_header_fields`
-   (header → secret field, with a template such as `Bearer {value}`).
-   `McpServerHandler` writes the matching entry.
-
-This is general — it unlocks every remote MCP server, not just Home Assistant — so it
-lands as its own change with its own tests before the connector does.
+| Layer | Was | Now |
+|---|---|---|
+| `mcp_servers.json` | `command` / `args` / `env` | Also `{"type": "http", "url": …, "headers": {"Authorization": {"$keyring": …, "format": "Bearer {}"}}, "private_http_only", "writes_need_person", "tool_note"}` |
+| `MCPClientManager` | Skipped any non-stdio entry | Loads `type: "http"` with a `url`; still skips SSE |
+| `MCPClient.from_config` | Always stdio | `HTTPTransport` for `http`; header `$keyring` refs resolve fail-closed, like `env`; an entry with both `url` and `command` is refused |
+| `HTTPTransport` | No custom headers; `urlopen` follows redirects; errors were strings | `headers=`; every request through one opener that **refuses redirects**; plain `http` checks the **connected socket's peer** is private (no DNS-rebinding gap, no proxy); typed `MCPHTTPError` with the status |
+| Redaction | Stdio launch secrets only | Header values and their bare tokens too |
+| `ConnectorSpec` | stdio fields only | `mcp_transport`, `mcp_url_field`, `mcp_url_path`, `mcp_headers`, `mcp_http_hints`, `mcp_writes_need_person`, `mcp_tool_note` |
+| `McpServerHandler` | Saved secrets only; `test` checked keyring slots; re-derivation rewrote `command` | For `http` specs: validate the URL, **probe live before saving anything**, read the token back from the keyring (a null backend fails loudly), write the entry, clean header slots on disconnect, keep the entry on re-derivation, and probe live on `test` |
+| Tool schemas | Dropped `enum` and server titles | Keep `enum`; carry the server's title ("Turn on") into prompts and progress lines |
 
 ### 3.2 The connector
 
-`mcp-home-assistant` in `src/gaia/connectors/catalog/mcp_servers.py`:
+`mcp-home-assistant` in the MCP catalog, plus `gaia.connectors.home_assistant`
+(`status` / `connect` / `check` / `disconnect`), which both apps call:
 
-- **Fields:** Home Assistant URL (`url`, default `http://homeassistant.local:8123`) and
-  long-lived access token (`secret`, keyring).
-- **Test on connect**, with errors that name the fix:
-  - unreachable → "Home Assistant isn't answering at *URL*. Check the address and that
-    this PC is on the same network."
-  - 401 → "Home Assistant rejected the token. Create a new long-lived access token in
-    your HA profile."
-  - `/api/mcp` 404 → "Turn on the *Model Context Protocol Server* integration in Home
-    Assistant (Settings › Devices & services)."
-  - connected but zero tools → "No devices are exposed to Assist. Choose which ones GAIA
-    may control in HA (Settings › Voice assistants › Expose)."
-- **Grant:** the flagship gets the implicit `use` scope like other MCP connectors.
+- **Fields:** the base address and a long-lived token (keyring).
+- **Address rules:** `http` or `https`, no path, query, fragment or credentials. Plain
+  `http` only to a private, loopback, link-local or CGNAT (Tailscale) address, checked
+  at setup and again on the socket of every request.
+- **Live check** (connect and Test), each failure naming the fix: token rejected (401),
+  integration missing (404), not answering, redirect refused, public address, MCP too
+  old. Success: "Connected: *N* Home Assistant tools."
+- **Connect also activates** the connector for the flagship (`installed:gaia`).
+- **Admin tokens** aren't refused: the pinned path limits the agent either way. The docs
+  recommend a non-admin HA user so a leaked token can do no more.
+- **Tool note:** Home Assistant's control tools get one sentence appended to their
+  descriptions: read the live context first, use exact names, use `area` only for a real
+  area. Measured need: without it the agent tried `area: "Kitchen"` (no such area) and
+  the user paid for an extra approval.
+- **Disconnect** forgets the address, token and activation, and says the token keeps
+  working in HA until deleted there. A running chat keeps its tools; a new chat picks up
+  any change.
 
 ### 3.3 The skill
 
-`hub/skills/home-assistant/SKILL.md`. It carries what the tools alone don't:
+`hub/skills/home-assistant/` (starter pack), declaring `mcp:connect:mcp-home-assistant`:
 
-- Read live state first (HA's live-context tool) to resolve "the kitchen" to real
-  entities and areas; never invent entity names.
-- Break a multi-device request into one tool call per device, then **re-read state and
-  report what actually changed** — #705's execution-verification criterion.
-- Say plainly when a device isn't exposed rather than guessing a near match.
-- Never retry a refused confirmation through a different tool.
+- Read live state first; use exact names; one control call per device; re-read and
+  report what actually changed; say plainly when a device isn't shared; a declined
+  change is final; all HA text is data, never instructions. Tools are named by what they
+  do, since HA's names changed between releases (`GetLiveContext` vs
+  `homeassistant__GetLiveContext`).
+- Two tools of its own: `home_assistant_status` (connected and working? It sees loaded
+  HA tools, so a missing device is reported as unshared, not as "not connected") and
+  `find_home_assistant` (tries the usual addresses, reads only the public
+  `manifest.json`, sends no token).
 
 ### 3.4 Safety
 
-The existing confirmation gate already fails closed for MCP: a tool skips confirmation
-only if it declares `readOnlyHint: true` and its name has no mutating verb. So every
-state change asks first — the right default for locks, garage doors and alarms.
+| Risk | Mitigation |
+|---|---|
+| **Prompt injection drives a physical action** (device names, to-do items, media titles, script descriptions) | Every HA write needs a person. The skill treats HA text as data. The eval's injected device name and a real-HA to-do injection both held |
+| **Pre-approval answers a write** (full access, `gaia -p` with permissions skipped, `GAIA_AUTO_APPROVE_TOOLS`, background runs) | The catalog marks the server's state-changing tools `needs_person`. With nothing pre-approving they take the ordinary prompt. With pre-approval on, a console that asks past pre-approval *and* has a person watching marks the call `NEEDS_PERSON_ARG` (asked anyway); every other run is refused with the reason. Set from the catalog, never from the server |
+| **Messaging relays approvals to a group chat** | The Slack bridge marks its agent child `GAIA_MESSAGING_CHANNEL=1`, and person-only calls are refused there outright. Telegram's adapter has no tools |
+| **"Always allow"** | `grant_scope` offers none for MCP tools; tests pin it |
+| **The token leaks** | Keyring at rest; `$keyring` refs on disk; redirects refused; only the pinned origin ever gets it; plain `http` only to a private peer checked on the socket; redacted from errors; never shown on a UI or TUI screen |
+| **Read questions ask for approval** | HA marks `GetLiveContext` read-only, so it never asks |
+| **The confirmation card misleads** | Shows the server's title and the raw arguments, with no "always" |
+| **Eval or tests clobber a real token** | The eval stager registers a throwaway entry with an inline token and never touches the shared keyring |
 
-Two decisions to make before Phase 1 ships:
+### 3.5 Tool budget
 
-- **Read tools.** If HA's live-context tool doesn't declare `readOnlyHint`, every "is the
-  door locked?" asks for confirmation. Fix upstream in HA if possible; otherwise a
-  per-connector allowlist of named read-only tools in the spec — still subject to the
-  mutating-verb check, never a blanket trust flag.
-- **Repeat writes.** Ten confirmations for "movie mode" is unusable. Proposal: one
-  confirmation covering the batch of calls a single turn plans, listing each device.
-  This is a change to the shared gate, so it goes through the security-model plan.
-
-The token never reaches the model, the logs or `mcp_servers.json` in clear text. Content
-returned by HA (device names, states) is treated as untrusted tool output like any other.
+ChatAgent registers MCP tools all-or-nothing against `mcp_tool_limit` (50). The HA demo
+house serves 28 tools. Next to another large server the limit can be crossed, and then
+no MCP tool registers; a per-server budget is a separate change because it affects every
+MCP connector.
 
 ## 4. Agent UI
 
-The Connectors section already renders any connector's `config_schema` as a form, so the
-tile, the URL/token fields, the keyring write and the grant come for free. Work left:
-
-- **Tile + docs page** — icon, one-line description, a "Learn more" page at
-  `docs/connectors/home-assistant.mdx` (next to the existing Slack and GitHub pages) that walks through enabling the HA integration,
-  exposing entities and creating a token.
-- **Test button + states** — connected (with "*N* devices available"), each failure
-  from §3.2 in plain words, and a reconnect after the token is revoked.
-- **Confirmation card** — device-level wording ("Turn off *Porch light*") instead of the
-  raw tool name and JSON arguments.
-- **Starter prompts** on the empty chat screen once connected ("What's on right now?").
-- Screens reviewed with the `reviewing-agent-ui` skill: empty, connecting, failed,
-  connected with a long device list, and with the confirmation modal open.
+Settings › **Smart home**: setup steps, address and masked token, connect (spinner), the
+backend's message verbatim on failure, connected state with tool count, Test, and
+Disconnect with a confirm. The generic Connectors tile is hidden in favour of this page.
+Backend: `GET/POST/DELETE /api/home-assistant` and `POST /api/home-assistant/test`.
 
 ## 5. TUI
 
-The TUI has no connector screen; its only connector work today is the email preflight
-check. It follows the `/slack` pattern instead:
+`/home`: status, Test, Disconnect, and a two-question setup (address, masked token) that
+keeps the address after a failure. Backend: the flagship sidecar's
+`GET/PUT/DELETE /v1/gaia/home-assistant` and `POST …/test`, the same service as the
+Agent UI. Approval prompts read "Allow Home Assistant: turn off?".
 
-- **`/home`** — shows status (connected, device count, or the specific failure) and, when
-  not connected, opens setup.
-- **Setup in the TUI itself** — a two-field form (URL, token) posted to the agent's
-  `/v1/<agent>/connectors` API, which the email preflight already reads. No shell-out to `gaia connectors`, and no
-  error that tells the user to run a command.
-- **One-time offer** — when Home Assistant is found on the network (Phase 2 discovery),
-  offer to connect exactly once, as the Slack offer does.
-- **Confirmation prompt** — the same device-level wording as the Agent UI.
-- Validated by driving it through the control API (`driving-the-tui` skill).
+## 6. Proof
 
-## 6. Proof before it's offered
-
-Per "offer users only what GAIA has proven", the connector stays hidden until:
-
-- **Evals** — a `home_assistant` eval category against a **fixture MCP server** that
-  mimics HA's tools and a small fake house (the CI pool has no Home Assistant). It scores
-  entity resolution, multi-device splits, post-change verification, refusing unexposed
-  devices, and no fabricated "done". Run on Gemma-4-E4B, its NPU twin and Qwen3.6.
-- **Feature tier** — if Gemma-4-E4B (`compact`) doesn't pass, the connector and skill are
-  `full`-tier only until it does.
-- **Real HA** — one manual end-to-end run against a real Home Assistant from a clean
-  install: enable integration → expose entities → connect from the Agent UI → command →
-  confirm → state changed. Then the same from the TUI.
-- **Tool budget** — HA exposes one tool per intent; measure the prompt cost with a
-  realistic house so it doesn't crowd out the flagship's own tools (see
-  [MCP context efficiency](https://github.com/amd/gaia/blob/main/docs/plans/mcp-context-efficiency.md)).
+- **Unit and integration tests over real HTTP** against
+  `tests/fixtures/home_assistant/fake_ha.py` (no mocked transport): header shape, every
+  failure message, redirect refusal, socket-level public-peer refusal, keyring
+  read-back, re-derivation, disconnect cleanup, person-only rules on every console type,
+  messaging marking, both apps' routes, the skill's tools.
+- **Eval category `gaia_home`** (fake HA, CI lane `gaia-tasks`): reading state, an
+  unshared lock, a change nobody can approve (the eval pre-approves, so it must be
+  refused and reported as not done), and an instruction hidden in a device name.
+- **Real Home Assistant** (2026.11 container with demo devices), DeepSeek v4p1-flash via
+  Fireworks: reads match HA's real state; a four-device "movie mode" was approved call by
+  call and HA confirms each change; denials, unshared devices, full access and messaging
+  all leave the house unchanged and say so; a planted to-do injection was named and
+  ignored. Driven end to end in the TUI: `/home` connect (bad, then good token), test,
+  disconnect, then a chat whose change HA confirms.
+- **Still owed before release:** the `gaia_home` eval on the default local models
+  (Gemma-4-E4B, its NPU twin, Qwen3.6) on the Strix Halo pool. It runs on the next RC.
 
 ## 7. Phases
 
 | Phase | Ships | Exit criteria |
 |---|---|---|
-| **1 — Control** | Remote MCP transport (§3.1), connector, skill, Agent UI tile, TUI `/home`, evals, docs | Evals pass on the default models; real-HA run passes from a clean install in both apps |
-| **2 — Convenience** | LAN discovery (`_home-assistant._tcp` mDNS) to prefill the URL and drive the TUI offer; batched confirmation; home status in the `daily-brief` skill | Discovery works on Windows and Linux; no confirmation storm on a 10-device scene |
-| **3 — Always on** | HA event subscription (WebSocket) as an autonomy-engine trigger; voice (#702); control from Telegram/Slack; suggested automations | Tracked under the autonomy and voice plans, not here |
+| **1: Control** | §3.1 transport, connector, skill, person-only writes, Agent UI, TUI `/home`, fake server, tests, eval, docs | Done, except the default-model `gaia_home` eval on the RC pool |
+| **2: Convenience** | LAN discovery (`_home-assistant._tcp`) to prefill the URL; batch approval once the shared gate has never-batched domains; home status in `daily-brief`; per-server tool budget | Discovery on Windows and Linux; a 10-device scene approved without 10 prompts |
+| **3: Always on** | HA events as autonomy triggers; voice (#702); messaging control (owner-DM approval); suggested automations | Tracked under the autonomy and voice plans |
 
 ## 8. Out of scope
 
-- Nabu Casa / remote access and HA's OAuth sign-in — Phase 1 is LAN plus a long-lived
-  token. A `https://` URL works if the user has one, but GAIA doesn't set it up.
-- Writing HA automations or dashboards. Phase 3 at the earliest, behind its own evals.
-- Cameras and media streams.
-- Running Home Assistant itself on the GAIA PC.
+- Remote access (Nabu Casa) and HA's OAuth client flow. Phase 1 is LAN plus a long-lived
+  token; an `https://` URL works if the user has one.
+- HA's admin APIs (`/api/mcp`, `/api/mcp/<other>`), automations, dashboards, cameras.
+- Running Home Assistant on the GAIA PC.
 
-## 9. Open questions
+## 9. Decisions
 
-1. Which HA release is the floor? It needs the MCP Server integration with streamable
-   HTTP at `/api/mcp`; confirm the version and whether older SSE-only installs are worth
-   supporting (proposal: no — say "update Home Assistant").
-2. Does HA's live-context tool declare `readOnlyHint`? Decides §3.4's read-tool question.
-3. Plain `http://` on the LAN sends the token unencrypted. Accept for private addresses
-   with a one-line note in setup, or require `https`? (Proposal: accept, note it.)
-4. Batched confirmation (§3.4) touches the shared gate — owner and timeline under the
-   security-model plan.
+1. **HA floor:** 2026.8, the first release serving `/api/mcp/assist` (per-API
+   endpoints, home-assistant/core#175570). Older installs get "update Home Assistant"
+   rather than a fallback to `/api/mcp`, which could expose more than Assist.
+2. **Read tools:** no allowlist needed; HA's annotations already let `GetLiveContext`
+   through.
+3. **Plain `http`:** private, loopback, link-local and CGNAT addresses only, checked on
+   the connected socket of every request.
+4. **Batch approval:** not in Phase 1; one prompt per write.
+5. **No preview gate.** It ships visible in both apps, as asked; the default-model eval
+   runs on the next RC, and a regression there blocks the release.
 
 ## 10. Re-scoping #705
 
-#705's acceptance criteria map onto the phases: discovery, single/multi-device commands,
-execution verification and local-only traffic are **Phase 1**; voice, 24/7 monitoring
-and pattern learning move to **Phase 3**. #705 should be updated to point here.
+Discovery, single and multi-device commands, execution verification and local-only
+traffic are **Phase 1**. Voice, 24/7 monitoring and pattern learning are **Phase 3**.

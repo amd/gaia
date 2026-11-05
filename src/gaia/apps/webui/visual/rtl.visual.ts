@@ -820,6 +820,67 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const HA_URL = 'http://homeassistant.local:8123';
+
+/** Settings > Smart home, starting connected or not; connect answers 400 with `connectError`. */
+async function withHomeAssistant(page: Page, connected: boolean, connectError?: string): Promise<void> {
+    const answers: Record<string, [number, unknown]> = {
+        'GET /home-assistant': [200, connected
+            ? { connected: true, url: HA_URL, active: true, enabled: true }
+            : { connected: false, url: null, active: false }],
+        'POST /home-assistant': connectError
+            ? [400, { detail: connectError }]
+            : [200, { connected: true, url: HA_URL, active: true, enabled: true, tool_count: 28, detail: 'Connected: 28 Home Assistant tools.' }],
+        'POST /home-assistant/test': [200, { ok: true, detail: 'Connected: 28 Home Assistant tools.', tool_count: 28 }],
+    };
+    await page.route('**/api/home-assistant**', async (route) => {
+        const url = new URL(route.request().url());
+        const answer = answers[`${route.request().method()} ${url.pathname.replace(/^\/api/, '')}`];
+        if (!answer) return route.fallback();
+        await route.fulfill({ status: answer[0], json: answer[1] });
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test.describe(`settings smart home (${locale})`, () => {
+        const openSmartHome = async (page: Page, connected: boolean, connectError?: string) => {
+            await open(page, '', locale, (p) => withHomeAssistant(p, connected, connectError));
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            await page.getByRole('dialog').locator('[data-section="smartHome"]').click();
+            await expect(page.locator('.settings-pane-title')).toBeVisible();
+            await expect(page.locator('.spin')).toHaveCount(0);
+        };
+
+        test('not connected, then a rejected token', async ({ page }) => {
+            await openSmartHome(page, false, 'Home Assistant rejected this token. Create a new long-lived access token in your profile (Security tab) and paste it here.');
+            await expect(page.locator('.smart-home-steps li')).toHaveCount(3);
+            await shot(page, `smart-home-${locale}-setup`);
+            expect(await audit(page)).toEqual([]);
+
+            await page.locator('#ha-url').fill(HA_URL);
+            await page.locator('#ha-token').fill('not-a-real-token');
+            await page.locator('.smart-home form button[type="submit"]').click();
+            await expect(page.locator('.smart-home .settings-error')).toBeVisible();
+            await expect(page.locator('#ha-url')).toHaveValue(HA_URL);
+            await shot(page, `smart-home-${locale}-failed`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('connected, tested, and asking before disconnecting', async ({ page }) => {
+            await openSmartHome(page, true);
+            await page.locator('.smart-home .settings-card .btn-secondary').first().click();
+            await expect(page.locator('.smart-home .settings-ok')).toBeVisible();
+            await shot(page, `smart-home-${locale}-connected`);
+            expect(await audit(page)).toEqual([]);
+
+            await page.locator('.smart-home .settings-card .btn-secondary').nth(1).click();
+            await expect(page.locator('.smart-home-confirm')).toBeVisible();
+            await shot(page, `smart-home-${locale}-confirm`);
+            expect(await audit(page)).toEqual([]);
+        });
+    });
+}
+
 const SETTINGS_UPDATE_STATES: Array<[string, Record<string, unknown>]> = [
     ['idle', {}],
     ['available', { status: 'available', version: '0.26.0' }],

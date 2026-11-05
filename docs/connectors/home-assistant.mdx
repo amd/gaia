@@ -1,0 +1,84 @@
+---
+title: "Home Assistant"
+icon: "house-signal"
+description: "Check and control the devices you share from Home Assistant, with your approval for every change."
+---
+
+<Info>
+  **Connector ID:** `mcp-home-assistant` · **Type:** `mcp_server` (remote, over http) · **Catalog entry:** [`src/gaia/connectors/catalog/mcp_servers.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/mcp_servers.py)
+</Info>
+
+GAIA talks to Home Assistant's own **Model Context Protocol Server** on your
+local network. Ask "which lights are on?" or "movie time: dim the living room
+and turn off the kitchen" in the Agent UI or the terminal UI. Nothing goes
+through a cloud service.
+
+## What GAIA can reach
+
+Only the devices you **expose to Assist** in Home Assistant. GAIA always uses
+Home Assistant's Assist endpoint (`/api/mcp/assist`), never the admin
+endpoints, so a device you haven't shared is invisible to it. That includes
+devices behind an admin token.
+
+- **Reading state** ("is anything on downstairs?") never asks for approval.
+- **Every change** (turn on, dim, set a temperature, move a cover, pause
+  music) asks you first, one prompt per device.
+- Full access never approves them for you. Where GAIA can still show you the
+  prompt it asks anyway; anywhere else (including a scheduled run or a message
+  sent from Slack) it refuses the change and says why. Turn full access off to
+  approve changes in the terminal UI.
+
+## Set it up
+
+You need Home Assistant 2026.8 or later on the same network as your PC. Earlier
+releases don't serve the Assist-only endpoint GAIA uses.
+
+<Steps>
+  <Step title="Add the MCP Server integration">
+    In Home Assistant, open **Settings › Devices & services › Add integration**
+    and add **Model Context Protocol Server**.
+  </Step>
+  <Step title="Choose what GAIA may control">
+    Open **Settings › Voice assistants › Expose** and turn on the devices GAIA
+    should see. Leave locks, alarms and garage doors off unless you want GAIA
+    to reach them.
+  </Step>
+  <Step title="Create a token">
+    Open your Home Assistant profile, then **Security › Long-lived access
+    tokens › Create token**. For the safest setup, create a separate,
+    non-admin Home Assistant user for GAIA and make the token as that user.
+  </Step>
+  <Step title="Connect GAIA">
+    In the **Agent UI**, open **Settings › Smart home**. In the **terminal
+    UI**, type `/home`. Enter the address you open Home Assistant at (for
+    example `http://homeassistant.local:8123`) and paste the token. GAIA checks
+    both against Home Assistant before saving anything, then turns the
+    connector on. Start a new chat to use it.
+  </Step>
+</Steps>
+
+The token is stored in your operating system's keyring. GAIA's settings file
+holds only a reference to it.
+
+## If connecting fails
+
+GAIA tells you what to fix:
+
+| Message | What to do |
+|---|---|
+| Home Assistant rejected the access token | Create a new long-lived token and paste it again |
+| …has no MCP server GAIA can use | Add the **Model Context Protocol Server** integration (step 1), or update Home Assistant to 2026.8 or later |
+| Home Assistant isn't answering at … | Check the address and that your PC is on the same network |
+| …is a public address | Plain `http` is only allowed on your local network. Use the `https` address |
+| …answered with a redirect | Enter the address Home Assistant redirects to |
+| …MCP server is too old | Update Home Assistant |
+
+## Safety notes
+
+- Device names, to-do items and media titles come from your home and from
+  whoever named things there. GAIA treats them as data, not instructions.
+  Even so, review each change before you approve it.
+- Exposed Home Assistant **scripts** become tools whose descriptions their
+  author wrote. Only expose scripts you trust.
+- Disconnecting makes GAIA forget the address and token. The token keeps
+  working in Home Assistant until you delete it there (profile › Security).

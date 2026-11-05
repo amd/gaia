@@ -58,6 +58,7 @@ STARTER_PACK = frozenset(
         "document-brief",
         "file-ops",
         "github-triage",
+        "home-assistant",
         "image-gen",
         "inbox-triage",
         "music-gen",

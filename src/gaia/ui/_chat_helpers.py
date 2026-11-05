@@ -4794,6 +4794,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "mcpServer": event.get("mcp_server"),
                             "mcpServerLabel": event.get("mcp_server_label"),
                             "mcpTool": event.get("mcp_tool"),
+                            "mcpToolTitle": event.get("mcp_tool_title"),
                         }
                     )
                 elif event_type == "tool_args" and captured_steps:

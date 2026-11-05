@@ -11,6 +11,7 @@ from gaia.logger import get_logger
 from gaia.mcp.protocol import MCP_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS
 
 from .transports.base import MCPTransport
+from .transports.http import HTTPTransport
 from .transports.stdio import StdioTransport
 
 logger = get_logger(__name__)
@@ -247,6 +248,21 @@ def _name_tokens(name: str) -> Set[str]:
     return {t for t in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if t}
 
 
+def _tool_note(config: Dict[str, Any]) -> str:
+    note = config.get("tool_note")
+    return note.strip()[:400] if isinstance(note, str) else ""
+
+
+def _tool_title(tool: Dict[str, Any]) -> str:
+    """The tool's display title (MCP ``title``, else ``annotations.title``)."""
+    annotations = tool.get("annotations")
+    nested = annotations.get("title") if isinstance(annotations, dict) else None
+    for value in (tool.get("title"), nested):
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:80]
+    return ""
+
+
 def mcp_tool_requires_confirmation(name: str, annotations: Dict[str, Any]) -> bool:
     """Whether an MCP tool must be user-confirmed before GAIA executes it.
 
@@ -303,6 +319,8 @@ class MCPTool:
     description: str
     input_schema: Dict[str, Any]
     annotations: Dict[str, Any] = field(default_factory=dict)
+    # Human-readable name the server gives the tool ("Turn on"), if any.
+    title: str = ""
 
     def to_gaia_format(
         self, prefix: str, raw_server_name: Optional[str] = None
@@ -335,10 +353,14 @@ class MCPTool:
             }
             if "items" in param_schema:
                 gaia_params[param_name]["items"] = param_schema["items"]
+            if "enum" in param_schema:
+                gaia_params[param_name]["enum"] = param_schema["enum"]
 
         return {
             "name": f"mcp_{prefix}_{self.name}",
-            "display_name": f"{self.name} ({prefix})",
+            "display_name": (
+                f"{self.title} ({prefix})" if self.title else f"{self.name} ({prefix})"
+            ),
             "description": f"[MCP:{prefix}] {self.description}",
             "parameters": gaia_params,
             "atomic": True,
@@ -355,6 +377,7 @@ class MCPTool:
             "_mcp_server": raw_server_name,
             # The server's own tool name, so the UI never splits the prefixed one.
             "_mcp_tool": self.name,
+            "_mcp_title": self.title,
         }
 
 
@@ -409,6 +432,14 @@ class MCPClient:
         self.protocol_version: Optional[str] = None
         self._tools: Optional[List[MCPTool]] = None
         self.last_error: Optional[str] = None
+        # The exception behind ``last_error``, so a caller can read an HTTP
+        # status instead of parsing the message.
+        self.last_exception: Optional[BaseException] = None
+        # Set from the server's config entry, never by the server: its
+        # state-changing tools may only be approved by a person.
+        self.writes_need_person = False
+        # Catalog guidance appended to its state-changing tools' descriptions.
+        self.tool_note = ""
 
     @classmethod
     def from_command(
@@ -455,6 +486,8 @@ class MCPClient:
         Raises:
             ValueError: If config is missing required 'command' field
         """
+        if config.get("type") == "http":
+            return cls._from_http_config(name, config, timeout, debug)
         if "command" not in config:
             raise ValueError("Config must include 'command' field")
 
@@ -470,7 +503,51 @@ class MCPClient:
             debug=debug,
             name=name,
         )
-        return cls(name, transport, debug=debug)
+        client = cls(name, transport, debug=debug)
+        client.writes_need_person = config.get("writes_need_person") is True
+        client.tool_note = _tool_note(config)
+        return client
+
+    @classmethod
+    def _from_http_config(
+        cls, name: str, config: Dict[str, Any], timeout: int, debug: bool
+    ) -> "MCPClient":
+        """Build a client for a ``{"type": "http", "url": ...}`` entry.
+
+        Header values may be ``{"$keyring": ref, "format": "Bearer {}"}``; the
+        secret is resolved the same fail-closed way as ``env`` references, so
+        a missing token is an error, never an unauthenticated request.
+        """
+        url = config.get("url")
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            raise ValueError(
+                f"MCP server '{name}' has type 'http' but no http(s) 'url' "
+                f"(got {url!r})."
+            )
+        if "command" in config:
+            raise ValueError(
+                f"MCP server '{name}' sets both 'url' and 'command'. Keep one: "
+                f"'url' for a remote server, 'command' for a local one."
+            )
+        headers: Dict[str, str] = {}
+        for key, value in (config.get("headers") or {}).items():
+            if isinstance(value, dict) and "$keyring" in value:
+                secret = _resolve_keyring_refs({key: {"$keyring": value["$keyring"]}})
+                template = value.get("format", "{}")
+                headers[key] = template.replace("{}", secret[key])
+            else:
+                headers[key] = str(value)
+        transport = HTTPTransport(
+            url,
+            timeout=server_timeout(name, config, timeout),
+            debug=debug,
+            headers=headers,
+            private_http_only=config.get("private_http_only") is True,
+        )
+        client = cls(name, transport, debug=debug)
+        client.writes_need_person = config.get("writes_need_person") is True
+        client.tool_note = _tool_note(config)
+        return client
 
     def _redact(self, value: Any) -> Any:
         """A server's own reply value, with its launch secrets removed.
@@ -478,8 +555,8 @@ class MCPClient:
         A server can echo the options it was started with back in an error.
         Structured values are cleaned before anything turns them into text.
         """
-        # Only a stdio server has a command line and env to echo.
-        if isinstance(self.transport, StdioTransport):
+        # Only GAIA's own transports know which secrets they were given.
+        if isinstance(self.transport, (StdioTransport, HTTPTransport)):
             return self.transport.redact_value(value)
         return value
 
@@ -492,6 +569,7 @@ class MCPClient:
             bool: True if connection and initialization successful
         """
         self.last_error = None
+        self.last_exception = None
         logger.debug(f"Connecting to MCP server '{self.name}'...")
 
         try:
@@ -502,6 +580,7 @@ class MCPClient:
                 logger.debug(self.last_error)
                 return False
         except Exception as e:
+            self.last_exception = e
             self.last_error = f"Transport error for '{self.name}': {e}"
             logger.debug(self.last_error)
             return False
@@ -557,6 +636,7 @@ class MCPClient:
             return True
 
         except Exception as e:
+            self.last_exception = e
             self.last_error = f"Error during initialization: {e}"
             logger.debug(f"MCP server '{self.name}': {self.last_error}")
             self.disconnect()
@@ -615,6 +695,7 @@ class MCPClient:
                     if isinstance(tool.get("annotations"), dict)
                     else {}
                 ),
+                title=_tool_title(tool),
             )
             for tool in tools_data
         ]

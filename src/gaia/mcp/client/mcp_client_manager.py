@@ -63,11 +63,10 @@ class MCPClientManager:
                 "Use format: {'command': 'npx', 'args': ['-y', 'server']}"
             )
 
-        # Check transport type - only stdio is supported
         transport_type = config.get("type", "stdio")
-        if transport_type != "stdio":
+        if transport_type not in ("stdio", "http"):
             raise ValueError(
-                f"GAIA MCP client only supports stdio transport at this time. "
+                f"GAIA's MCP client supports the stdio and http transports. "
                 f"Server '{name}' uses '{transport_type}' transport which is not supported."
             )
 
@@ -253,13 +252,17 @@ class MCPClientManager:
                 logger.debug(f"Skipping disabled server: {name}")
                 continue
             transport_type = server_config.get("type", "stdio")
-            if transport_type != "stdio":
+            if transport_type not in ("stdio", "http"):
                 logger.warning(
-                    f"Skipping server '{name}': GAIA MCP client only supports stdio "
-                    f"transport at this time (found '{transport_type}')"
+                    f"Skipping server '{name}': GAIA's MCP client supports the "
+                    f"stdio and http transports (found '{transport_type}')"
                 )
                 continue
-            if "command" not in server_config:
+            if transport_type == "http":
+                if "url" not in server_config:
+                    logger.warning(f"No url specified for http server: {name}")
+                    continue
+            elif "command" not in server_config:
                 logger.warning(f"No command specified for server: {name}")
                 continue
             to_connect[name] = server_config

@@ -151,6 +151,73 @@ _DISCORD = ConnectorSpec(
     ),
 )
 
+# Home Assistant's own MCP server. Pinned to the Assist endpoint, which reaches
+# only the entities the user exposed to Assist; /api/mcp and the other API
+# endpoints can call any action with an admin token.
+_HOME_ASSISTANT = ConnectorSpec(
+    id="mcp-home-assistant",
+    display_name="Home Assistant",
+    icon="🏠",
+    category="smart-home",
+    tier=2,
+    type="mcp_server",
+    description="Check and control the devices you've shared with Assist in Home Assistant.",
+    docs_url="https://amd-gaia.ai/docs/connectors/home-assistant",
+    product_url="https://www.home-assistant.io/integrations/mcp_server/",
+    mcp_transport="http",
+    mcp_url_field="HA_URL",
+    mcp_url_path="/api/mcp/assist",
+    mcp_env_keys=("HA_TOKEN",),
+    mcp_headers=(("Authorization", "HA_TOKEN", "Bearer {}"),),
+    mcp_http_hints=(
+        (
+            "unauthorized",
+            "Home Assistant rejected the access token. Create a new long-lived "
+            "access token in your Home Assistant profile (Security tab) and "
+            "paste it here.",
+        ),
+        (
+            "not_found",
+            "Home Assistant at {url} has no MCP server GAIA can use. Add the "
+            "Model Context Protocol Server integration in Home Assistant "
+            "(Settings › Devices & services › Add integration), and update Home "
+            "Assistant if it is older than 2026.8. Then connect again.",
+        ),
+        (
+            "unreachable",
+            "Home Assistant isn't answering at {url}. Check the address, and "
+            "that this PC is on the same network.",
+        ),
+        (
+            "protocol",
+            "Home Assistant at {url} answered, but its MCP server is too old "
+            "for GAIA. Update Home Assistant, then connect again.",
+        ),
+    ),
+    mcp_writes_need_person=True,
+    mcp_tool_note=(
+        "Read the live context first and use the device's name exactly as it "
+        "lists it; set area only to an area the live context names."
+    ),
+    config_schema=(
+        ConfigField(
+            key="HA_URL",
+            label="Home Assistant address",
+            kind="url",
+            placeholder="http://homeassistant.local:8123",
+            help_md="The address you open Home Assistant at, without a path.",
+        ),
+        ConfigField(
+            key="HA_TOKEN",
+            label="Long-lived access token",
+            kind="secret",
+            placeholder="eyJ…",
+            help_md="In Home Assistant open your profile, then **Security › Long-lived access tokens › Create token**. A token from a non-admin user is safest. GAIA can only reach the devices you expose to Assist.",
+            secret=True,
+        ),
+    ),
+)
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -162,6 +229,7 @@ _ALL_SPECS = (
     _GIT,
     _SLACK,
     _DISCORD,
+    _HOME_ASSISTANT,
 )
 
 for _spec in _ALL_SPECS:

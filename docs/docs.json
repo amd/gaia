@@ -144,6 +144,7 @@
                   "connectors/memory",
                   "connectors/slack",
                   "connectors/discord",
+                  "connectors/home-assistant",
                   "security/connections",
                   "security/connectors"
                 ]

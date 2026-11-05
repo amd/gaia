@@ -92,6 +92,28 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HomeAssistantConnectRequest": {
+        "additionalProperties": false,
+        "description": "Body of ``PUT /home-assistant``: where Home Assistant is, and its token.",
+        "properties": {
+          "token": {
+            "description": "Long-lived access token",
+            "title": "Token",
+            "type": "string"
+          },
+          "url": {
+            "description": "Home Assistant base address, no path",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "token"
+        ],
+        "title": "HomeAssistantConnectRequest",
+        "type": "object"
+      },
       "InternetRequest": {
         "additionalProperties": false,
         "description": "Body of ``POST /v1/gaia/sessions/{session_id}/internet``.",
@@ -661,6 +683,142 @@
         },
         "security": [],
         "summary": "Health"
+      }
+    },
+    "/v1/gaia/home-assistant": {
+      "delete": {
+        "description": "Forget the saved address and token.",
+        "operationId": "home_assistant_disconnect_v1_gaia_home_assistant_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Home Assistant Disconnect V1 Gaia Home Assistant Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Home Assistant Disconnect",
+        "tags": [
+          "gaia-query"
+        ]
+      },
+      "get": {
+        "description": "Whether Home Assistant is connected, for the TUI's ``/home``.",
+        "operationId": "home_assistant_status_v1_gaia_home_assistant_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Home Assistant Status V1 Gaia Home Assistant Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Home Assistant Status",
+        "tags": [
+          "gaia-query"
+        ]
+      },
+      "put": {
+        "description": "Check the address and token against Home Assistant, then save them.\n\nA new chat picks the tools up; one already open keeps the tools it had.",
+        "operationId": "home_assistant_connect_v1_gaia_home_assistant_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HomeAssistantConnectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Home Assistant Connect V1 Gaia Home Assistant Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Home Assistant Connect",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/home-assistant/test": {
+      "post": {
+        "description": "Contact the saved Home Assistant: ``{\"ok\": bool, \"detail\": str}``.",
+        "operationId": "home_assistant_test_v1_gaia_home_assistant_test_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Home Assistant Test V1 Gaia Home Assistant Test Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Home Assistant Test",
+        "tags": [
+          "gaia-query"
+        ]
       }
     },
     "/v1/gaia/init": {

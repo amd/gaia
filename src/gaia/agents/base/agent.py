@@ -6757,6 +6757,53 @@ Do NOT wrap conversational replies in JSON.
             return False
         return bool(covers(tool_name, tool_args))  # pylint: disable=not-callable
 
+    def _person_only_check(
+        self, tool_name: str
+    ) -> Tuple[Optional[Dict[str, Any]], bool]:
+        """``(refusal, mark)`` for a person-only call.
+
+        Person-only calls (a connector's state-changing tools, such as Home
+        Assistant's) are never answered by pre-approval. Without pre-approval
+        they take the ordinary confirmation prompt. With it, a console that
+        asks past pre-approval while a person is watching gets the call marked
+        ``NEEDS_PERSON_ARG`` (``mark``), and every other run is refused. Runs
+        nobody watches and messaging turns, whose approvals come from a chat
+        anyone in the channel can answer, are refused outright.
+        """
+        from gaia.agents.base import console as console_mod
+
+        console = getattr(self, "console", None)
+        if os.environ.get("GAIA_MESSAGING_CHANNEL") == "1":
+            reason = "it was asked for over a messaging app"
+        elif console is None or getattr(console, "background_mode", False):
+            reason = "nobody can answer on this run"
+        else:
+            auto = getattr(console, "auto_approve_confirmations_enabled", None)
+            preapproved = (
+                getattr(console, "full_access", False) is True
+                or getattr(console, "auto_approve_gated_tools", False) is True
+                or console_mod.auto_approve_env_enabled()
+                or (callable(auto) and auto() is True)
+            )
+            if not preapproved:
+                return None, False
+            if (
+                getattr(console, "asks_past_preapproval", False) is True
+                and getattr(console, "answers_confirmations", False) is True
+            ):
+                return None, True
+            reason = (
+                "full access is on, so nothing would ask you first. Turn full "
+                "access off to approve it"
+            )
+        message = (
+            f"'{tool_name}' changes something in the real world, so a person has "
+            f"to approve each call, and {reason}. Ask for it in the GAIA Agent UI "
+            f"or terminal UI, where you can approve it."
+        )
+        logger.info("Refusing person-only call %r: %s", tool_name, reason)
+        return {**NOT_EXECUTED, "status": "error", "error": message}, False
+
     def _tool_requires_confirmation(
         self, tool_name: str, tool_args: Optional[Dict[str, Any]] = None
     ) -> bool:
@@ -7111,6 +7158,12 @@ Do NOT wrap conversational replies in JSON.
         # call runs. Display only: the tool runs with tool_args.
         shows = getattr(self, "confirmation_args_for_call", None)
         prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
+        if (self._tools_registry.get(tool_name) or {}).get("needs_person") is True:
+            refusal, mark = self._person_only_check(tool_name)
+            if refusal is not None:
+                return refusal
+            if mark and isinstance(prompt_args, dict):
+                prompt_args = {**prompt_args, NEEDS_PERSON_ARG: True}
         prompt_args = _with_resolved_target(
             prompt_args, (self._tools_registry.get(tool_name) or {}).get("preflight")
         )

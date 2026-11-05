@@ -251,6 +251,17 @@ def _translated_events():
             "always_scope": "gh issue list",
             "risk": "read",
         },
+        # An MCP tool's prompt also names it the way its server does.
+        {
+            "type": "permission_request",
+            "tool": "mcp_home_assistant_intent__HassTurnOff",
+            "args": {"name": "Kitchen Lights"},
+            "confirm_id": "c2",
+            "mcp_server": "mcp-home-assistant",
+            "mcp_server_label": "Home Assistant",
+            "mcp_tool": "intent__HassTurnOff",
+            "mcp_tool_title": "Turn off",
+        },
         {
             "type": "user_input_request",
             "message": "Which repo?",

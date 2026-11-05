@@ -27,6 +27,7 @@ and ``tests/unit/messaging/test_bridge.py`` pins its absence.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import subprocess
 import threading
@@ -297,6 +298,15 @@ class AgentChannel:
     # Lifecycle
     # ------------------------------------------------------------------
 
+    def _child_env(self) -> Dict[str, str]:
+        """The agent child's environment, read at spawn.
+
+        Marked as a messaging turn: the agent refuses person-only tools
+        (smart-home changes) on a turn anyone in the chat could approve.
+        """
+        base = os.environ if self._env is None else self._env
+        return {**base, "GAIA_MESSAGING_CHANNEL": "1"}
+
     def _default_spawn(self) -> Any:
         try:
             return subprocess.Popen(  # noqa: S603 - argv is ours, never user text
@@ -304,7 +314,7 @@ class AgentChannel:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                env=self._env,
+                env=self._child_env(),
                 text=True,
                 bufsize=1,
                 encoding="utf-8",
