@@ -913,3 +913,78 @@ class TestEmbeddingsRideARestart:
 
         assert world.daemon_posts == []
         assert world.now == 0.0
+
+
+class _Warnings:
+    def __init__(self):
+        self.lines = []
+
+    def warning(self, line):
+        self.lines.append(line)
+
+    def info(self, _line):
+        pass
+
+
+class TestSayingTheServerStopped:
+    """A chat turn shows a live line while the daemon brings a stopped server
+    back, and can tell a stopped GAIA server from any other failure."""
+
+    def test_a_server_with_no_record_reports_it_is_starting_before_the_wait(
+        self, world
+    ):
+        client = _client()
+        world.embedded.state_path.unlink()
+        world.daemon_answers = [world.restarted]
+        seen = []
+        client.model_load_listener = lambda model, state: seen.append(
+            (model, state, len(world.daemon_posts))
+        )
+
+        client.chat_completions(
+            MODEL, [{"role": "user", "content": "hi"}], auto_download=False
+        )
+
+        # Said before the daemon was asked, so the wait is never silent.
+        assert seen[0] == (MODEL, "starting_server", 0)
+        assert world.lemonade_posts[-1][0].startswith(f"http://localhost:{NEW_PORT}")
+
+    def test_a_restart_on_the_same_port_says_it_came_back(self, world):
+        world.listening = {OLD_PORT}
+        client = _client()
+        world.live_pids = {2}
+        world.record(pid=2, port=OLD_PORT, key=NEW_KEY)
+        client.log = _Warnings()
+
+        client.current_base_url()
+
+        url = f"http://localhost:{OLD_PORT}/api/v1"
+        assert client.log.lines == [
+            f"GAIA's Lemonade Server came back at {url} (the daemon restarted "
+            "it); following it."
+        ]
+
+    def test_a_move_still_names_both_addresses(self, world):
+        client = _client()
+        world.restarted()
+        client.log = _Warnings()
+
+        client.current_base_url()
+
+        assert client.log.lines == [
+            f"GAIA's Lemonade Server moved from http://localhost:{OLD_PORT}/api/v1 "
+            f"to http://localhost:{NEW_PORT}/api/v1 (the daemon restarted it); "
+            "following it."
+        ]
+
+    def test_stopped_is_true_only_for_gaias_own_server_not_answering(
+        self, world, monkeypatch
+    ):
+        client = _client()
+        assert client.gaia_lemonade_stopped() is True
+        world.listening = {OLD_PORT}
+        assert client.gaia_lemonade_stopped() is False
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://localhost:9")
+        world.listening = set()
+        assert _client().gaia_lemonade_stopped() is False

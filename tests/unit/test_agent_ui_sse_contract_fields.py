@@ -33,6 +33,30 @@ def test_a_retraction_crosses_to_the_host():
     ]
 
 
+def test_a_restarted_answer_crosses_to_the_host_every_time():
+    """A reply cut off by a model-server restart: the host drops its tokens."""
+    translator = CanonicalTranslator(run_id="run-1", agent_id="gaia")
+    event = {
+        "type": "status",
+        "status": "warning",
+        "phase": "answer_restart",
+        "message": "cut off",
+        "retracts_answer": True,
+    }
+    expected = [
+        {
+            "type": "status",
+            "message": "cut off",
+            "retracts_answer": True,
+            "phase": "answer_restart",
+        }
+    ]
+
+    assert translator.translate(event) == expected
+    # A second restart takes back the second reply; it is never deduplicated.
+    assert translator.translate(event) == expected
+
+
 def test_openapi_and_human_contract_document_emitted_final_fields():
     description = json.loads(OPENAPI.read_text(encoding="utf-8"))["paths"][
         "/v1/gaia/query"

@@ -977,6 +977,20 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
+                // The reply was cut off and starts over: drop it, and say so where it was.
+                if (event.type === 'status' && event.retracts_answer) {
+                    fullContent = '';
+                    toolOccurredRef.current = false;
+                    streamBufferRef.current = '';
+                    setStreamContent('');
+                    const step = agentEventToStep(
+                        { type: 'status', status: 'warning', message: getT()('live.answerRestarted') } as StreamEvent,
+                        stepIdRef,
+                    );
+                    if (step) addAgentStep(step);
+                    return;
+                }
+
                 // A lone </think> showed the text streamed since the last tool was reasoning.
                 if (event.type === 'thinking' && event.retracts_answer) {
                     fullContent = '';

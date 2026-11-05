@@ -734,6 +734,23 @@ def test_reasoning_a_lone_close_tag_ended_leaves_the_answer():
         assert t.steps[-1]["detail"] == "Check the file first."
 
 
+def test_a_reply_cut_off_by_a_server_restart_is_dropped():
+    t = TurnTracker("s", "mcp")
+    t.apply({"type": "chunk", "content": "The ledger bal"})
+    t.apply(
+        {
+            "type": "status",
+            "status": "warning",
+            "phase": "answer_restart",
+            "message": "The answer so far was cut off.",
+            "retracts_answer": True,
+        }
+    )
+    t.apply({"type": "chunk", "content": "The ledger balances."})
+    with t.cond:
+        assert t.content() == "The ledger balances."
+
+
 def test_metrics_never_invent_zeros():
     t = TurnTracker("s", "mcp")
     t.apply({"type": "answer", "content": "x"})

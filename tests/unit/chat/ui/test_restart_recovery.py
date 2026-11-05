@@ -463,6 +463,26 @@ async def test_reasoning_a_lone_close_tag_ended_is_not_recovered(tmp_path):
     assert reply == f"It says hi.\n\n{INTERRUPTED_TURN_NOTICE}"
 
 
+async def test_a_reply_cut_off_by_a_server_restart_is_not_recovered(tmp_path):
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    try:
+        sid = db.create_session()["id"]
+        db.begin_turn(sid, "hi")
+        journal = restart_recovery.TurnJournal(db, sid, interval=0.0)
+        journal.observe(_chunk("It sa"))
+        journal.observe(
+            'data: {"type": "status", "phase": "answer_restart", '
+            '"message": "cut off", "retracts_answer": true}\n\n'
+        )
+        journal.observe(_chunk("It says hi."))
+        with _new_server():
+            assert recover_interrupted_work(db)["turns"] == 1
+        reply = db.get_messages(sid)[-1]["content"]
+    finally:
+        db.close()
+    assert reply == f"It says hi.\n\n{INTERRUPTED_TURN_NOTICE}"
+
+
 async def test_a_failed_close_does_not_mask_the_turns_own_error(runtime, caplog):
     db, _db_path, _manager, _http_request = runtime
     sid = db.create_session()["id"]
