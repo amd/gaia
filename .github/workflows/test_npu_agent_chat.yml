@@ -22,7 +22,9 @@
 #
 # Windows runs on PRs touching the agent's LLM path; Linux runs on tags, the
 # weekly schedule and dispatch, like the other jobs on that persistent pool
-# (#5157). A final release requires both (util/check_release_ci.py).
+# (#5157). A final release requires the Windows job and reports the Linux one
+# as advisory until its runners lock enough memory for the NPU model (#6764;
+# util/check_release_ci.py).
 name: NPU Agent Chat (Hardware)
 
 on:
