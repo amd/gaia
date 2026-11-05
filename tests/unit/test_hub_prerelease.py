@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import requests
 
 from gaia.hub import installer, prerelease
 
@@ -175,6 +176,98 @@ def test_a_malformed_release_file_is_refused(release_assets, mutate, why):
             fetcher=lambda url, timeout=120: json.dumps(release).encode(),
             core_version=RC_CORE,
         )
+
+
+class TestManifestRetry:
+    """A stalled read of the release file is retried, then fails loudly."""
+
+    def _flaky(self, failures, release_assets, calls):
+        def fetch(url, timeout=120):
+            calls.append(url)
+            if failures:
+                raise failures.pop(0)
+            return (release_assets / prerelease.RELEASE_MANIFEST_NAME).read_bytes()
+
+        return fetch
+
+    def test_a_read_timeout_is_retried_then_succeeds(self, release_assets):
+        calls, sleeps = [], []
+        fails = [requests.ReadTimeout("Read timed out. (read timeout=10)")] * 2
+        with patch.object(prerelease.time, "sleep", sleeps.append):
+            source = prerelease.flagship_source(
+                "gaia",
+                fetcher=self._flaky(fails, release_assets, calls),
+                core_version=RC_CORE,
+                backoff_seconds=1.0,
+            )
+        assert source.tag == TAG
+        assert len(calls) == 3
+        assert sleeps == [1.0, 2.0]
+
+    def test_gives_up_after_the_last_attempt_with_the_actionable_error(
+        self, release_assets
+    ):
+        calls = []
+        fails = [requests.ConnectionError("reset")] * 5
+        with (
+            patch.object(prerelease.time, "sleep"),
+            pytest.raises(
+                prerelease.PrereleaseFlagshipError,
+                match=r"\(tried 3 times\): reset\. Check your network",
+            ),
+        ):
+            prerelease.flagship_source(
+                "gaia",
+                fetcher=self._flaky(fails, release_assets, calls),
+                core_version=RC_CORE,
+            )
+        assert len(calls) == 3
+
+    def test_a_404_is_not_retried(self, release_assets):
+        calls = []
+        resp = requests.Response()
+        resp.status_code = 404
+        fails = [requests.HTTPError("404 Not Found", response=resp)]
+        with (
+            patch.object(prerelease.time, "sleep") as sleep,
+            pytest.raises(prerelease.PrereleaseFlagshipError, match="404 Not Found"),
+        ):
+            prerelease.flagship_source(
+                "gaia",
+                fetcher=self._flaky(fails, release_assets, calls),
+                core_version=RC_CORE,
+            )
+        assert len(calls) == 1
+        sleep.assert_not_called()
+
+    def test_a_503_is_retried(self, release_assets):
+        calls = []
+        resp = requests.Response()
+        resp.status_code = 503
+        fails = [requests.HTTPError("503", response=resp)]
+        with patch.object(prerelease.time, "sleep"):
+            prerelease.flagship_source(
+                "gaia",
+                fetcher=self._flaky(fails, release_assets, calls),
+                core_version=RC_CORE,
+            )
+        assert len(calls) == 2
+
+    def test_install_reads_the_release_file_with_the_longer_timeout(self):
+        seen = {}
+
+        def fake_source(agent_id, *, fetcher):
+            seen["timeout"] = fetcher.keywords["timeout"]
+            return None
+
+        with (
+            patch.object(prerelease, "flagship_source", side_effect=fake_source),
+            patch.object(installer.catalog_mod, "fetch_manifest", return_value={}),
+        ):
+            installer._install_source(
+                "gaia", None, None, "https://hub", installer.catalog_mod.fetch_bytes
+            )
+        assert seen["timeout"] == prerelease.MANIFEST_READ_TIMEOUT_SECONDS
 
 
 class TestInit:

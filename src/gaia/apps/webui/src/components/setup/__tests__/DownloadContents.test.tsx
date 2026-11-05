@@ -1,8 +1,8 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { DownloadContents } from '../DownloadContents';
 import { COLD_BIG, COMPONENTS, QWEN, runStatus } from './fixtures';
 
@@ -50,6 +50,30 @@ describe('Everything coming to this PC', () => {
         expect(row("AI engine")).toHaveTextContent('Ready');
         expect(row('GAIA assistant')).not.toHaveTextContent('In progress');
         expect(row('GAIA assistant').querySelector('.spin')).toBeNull();
+    });
+
+    it('a failed row says why in plain words and offers a labelled Retry', () => {
+        const onRetry = vi.fn();
+        const run = runStatus([], { state: 'failed', error: 'Read timed out. (read timeout=10)', components: { server: 'done', agent: 'failed' } });
+        render(<DownloadContents plan={P()} run={run} onRetry={onRetry} />);
+        const agent = row('GAIA assistant');
+        expect(agent).toHaveTextContent('GAIA assistant: the download timed out or the connection dropped.');
+        expect(within(agent).getByText('Read timed out. (read timeout=10)').closest('details')).toBeInTheDocument();
+        fireEvent.click(within(agent).getByRole('button', { name: 'Retry GAIA assistant' }));
+        expect(onRetry).toHaveBeenCalledTimes(1);
+        expect(within(row('AI engine')).queryByRole('button')).not.toBeInTheDocument();
+    });
+
+    it('a failure that is not the network still says which piece and how to see why', () => {
+        const run = runStatus([], { state: 'failed', error: 'sha256 mismatch', components: { agent: 'failed' } });
+        render(<DownloadContents plan={P()} run={run} onRetry={() => {}} />);
+        expect(row('GAIA assistant')).toHaveTextContent('GAIA assistant could not be set up. Details say what happened; Retry runs setup again.');
+    });
+
+    it('offers no Retry while the run is still going', () => {
+        const run = runStatus([], { state: 'running', components: { agent: 'failed' } });
+        render(<DownloadContents plan={P()} run={run} onRetry={() => {}} />);
+        expect(within(row('GAIA assistant')).queryByRole('button')).not.toBeInTheDocument();
     });
 
     it('lists the models that will download, with size and source', () => {
