@@ -491,9 +491,13 @@ Tests never hold a candidate: it publishes as soon as its own builds and the
 smoke tests of those artifacts pass. CI on its commit (lint, the unit tests on
 every OS, the integration lanes, the release dry run) is read once and shown on
 the run as passed, failed, still running, or not run, with a warning for each
-that isn't green. A final requires all of it, waits for it, and needs a passing
-dry run on its commit, so clear an RC's warnings before tagging the final.
-`RC_REPORTED` and `FINAL_REQUIRED` in `util/check_release_ci.py` are the lists.
+that isn't green. A final requires all of it except the Linux NPU agent-chat
+check, waits for it, and needs a passing dry run on its commit, so clear an RC's
+warnings before tagging the final. The Linux NPU check still runs and shows as a
+warning on the final, but doesn't hold it until its runners can lock enough
+memory for the NPU model ([#6764](https://github.com/amd/gaia/issues/6764)).
+`RC_REPORTED`, `FINAL_REQUIRED` and `FINAL_ADVISORY` in
+`util/check_release_ci.py` are the lists.
 
 The candidate reuses the final's release notes (`docs/releases/vX.Y.Z.mdx`), and
 the `-rcN` suffix is stamped from the tag at build time, so the final `vX.Y.Z`
