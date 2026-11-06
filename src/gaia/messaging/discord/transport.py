@@ -91,6 +91,12 @@ class GatewayTransport:
         self._workers = concurrent.futures.ThreadPoolExecutor(
             max_workers=4, thread_name_prefix="gaia-discord-in"
         )
+        # DMs one at a time, in the order they arrived: a quick follow-up must
+        # land after the message it follows, or it cannot join it. Clicks stay
+        # on the pool above, so an attachment download never delays one.
+        self._messages = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="gaia-discord-dm"
+        )
         # Upkeep makes slow network calls (GitHub, the lease); on its own
         # thread it can never hold up a DM or a button click.
         self._tick_pool = concurrent.futures.ThreadPoolExecutor(
@@ -309,7 +315,7 @@ class GatewayTransport:
 
         @client.event
         async def on_message(message: Any) -> None:
-            in_worker(adapter.handle_message, self._message(message))
+            self._messages.submit(guard(adapter.handle_message, self._message(message)))
 
         @client.event
         async def on_interaction(interaction: Any) -> None:
@@ -358,6 +364,7 @@ class GatewayTransport:
             loop.run_until_complete(main())
         finally:
             self._workers.shutdown(wait=False, cancel_futures=True)
+            self._messages.shutdown(wait=False, cancel_futures=True)
             self._tick_pool.shutdown(wait=False, cancel_futures=True)
             loop.close()
             self._loop = None

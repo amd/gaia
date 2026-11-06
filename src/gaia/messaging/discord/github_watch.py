@@ -75,7 +75,7 @@ def path():
 
 
 def load() -> List[Watch]:
-    data = state.read_json(path())
+    data = state.read_json_or_set_aside(path(), "GitHub watches")
     if data is None:
         return []
     try:
@@ -401,6 +401,67 @@ class Poller:
         comments = self._fetch(f"{base}/issues/comments", params, self._token)
         reviews = self._fetch(f"{base}/pulls/comments", params, self._token)
         return third_party_items(watch, issues, comments, reviews)
+
+
+#: A run that ended these ways says nothing about the branch's health.
+_NOT_A_VERDICT = frozenset(
+    {"cancelled", "skipped", "neutral", "stale", "action_required"}
+)
+
+
+def ci_failures(repo: str, branch: str, token: Optional[str]) -> List[str]:
+    """Workflows whose latest finished run on *branch* failed, sorted.
+
+    Only pushes to the branch in *repo* itself: a fork's PR from its own
+    ``main`` is not this repo's main. Runs are grouped by workflow, not by run
+    name, which a workflow can set per run. Cancelled and skipped runs are not
+    a verdict, so a push that cancels a run never reads as a break or a fix.
+    """
+    import httpx
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "GAIA-discord-watch",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    response = httpx.get(
+        f"{API}/repos/{normalize_repo(repo)}/actions/runs",
+        params={
+            "branch": branch,
+            "event": "push",
+            "status": "completed",
+            "per_page": "100",
+        },
+        headers=headers,
+        timeout=30,
+    )
+    if response.status_code in (403, 429):
+        raise RuntimeError(
+            f"GitHub rate-limited the CI check (HTTP {response.status_code}). Sign "
+            "in to the gh CLI so GAIA checks with your account's higher limit."
+        )
+    response.raise_for_status()
+    full_name = normalize_repo(repo).lower()
+    latest: Dict[Any, Dict[str, Any]] = {}
+    for run in response.json().get("workflow_runs", []):
+        if run.get("conclusion") in _NOT_A_VERDICT:
+            continue
+        head = (run.get("head_repository") or {}).get("full_name") or full_name
+        if str(head).lower() != full_name:
+            continue
+        key = run.get("workflow_id") or run.get("path") or run.get("name")
+        if key not in latest or run.get("created_at", "") > latest[key].get(
+            "created_at", ""
+        ):
+            latest[key] = run
+    return sorted(
+        {
+            str(run.get("name") or run.get("path") or "workflow")
+            for run in latest.values()
+            if run.get("conclusion") != "success"
+        }
+    )
 
 
 def _fetch(url: str, params: Dict[str, str], token: Optional[str]) -> List[Any]:

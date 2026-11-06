@@ -159,6 +159,11 @@ class Turn:
     #: Who asked, for the audit line. Never used for authorization — the
     #: adapter has already decided that before a Turn exists.
     sender: str = ""
+    #: Set under the channel's lock once the turn leaves the queue; after that
+    #: :meth:`AgentChannel.amend` can no longer change it.
+    started: bool = False
+    #: Set by :meth:`AgentChannel.withdraw`; the queue skips it unrun.
+    withdrawn: bool = False
 
 
 @dataclass
@@ -413,6 +418,32 @@ class AgentChannel:
             self._on_busy(turn, ahead)
         return ahead
 
+    def amend(self, turn: Turn, text: str) -> bool:
+        """Replace the text of *turn* while it still waits in the queue.
+
+        Returns False once it has started, when the caller must submit a new
+        turn instead.
+        """
+        with self._active_lock:
+            if turn.started or turn.withdrawn:
+                return False
+            turn.text = text
+            return True
+
+    def withdraw(self, turn: Turn) -> bool:
+        """Take *turn* out of the queue unrun. False once it has started."""
+        with self._active_lock:
+            if turn.started:
+                return False
+            turn.withdrawn = True
+            return True
+
+    @property
+    def busy(self) -> bool:
+        """A turn is running now."""
+        with self._active_lock:
+            return self._active is not None
+
     def decide(self, decision: str, confirm_id: Optional[str] = None) -> None:
         """Answer the confirmation currently pending.
 
@@ -467,6 +498,12 @@ class AgentChannel:
             turn = self._queue.get()
             if turn is None:
                 return
+            with self._active_lock:
+                skip = turn.withdrawn
+                turn.started = not skip
+            if skip:
+                self._finish_turn()
+                continue
             self._turn_done.clear()
             state = _TurnState(turn=turn, last_progress=self._clock())
             if self._dead is not None:

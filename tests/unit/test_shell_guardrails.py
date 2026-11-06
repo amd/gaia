@@ -754,7 +754,9 @@ class TestDeveloperSetIsSeparate:
 class TestDeveloperBinariesRefusedByDefault:
     """With the flag OFF every developer binary is still refused, as today."""
 
-    @pytest.mark.parametrize("binary", DEVELOPER_BINARY_SAMPLES)
+    @pytest.mark.parametrize(
+        "binary", [b for b in DEVELOPER_BINARY_SAMPLES if b != "gh"]
+    )
     def test_refused_with_bypass_off(self, binary):
         result = check(f"{binary} --version", bypass=False)
         assert result is not None, f"{binary} leaked into the default tier"
@@ -770,13 +772,12 @@ class TestDeveloperBinariesRefusedByDefault:
         result = check("make build", bypass=False)
         assert "not in the allowed list for security reasons" in result["error"]
 
-    def test_gh_default_block_is_the_policy_one(self):
-        # gh has a BINARY_POLICIES entry, so its block comes from that policy,
-        # not the allowlist. Bypass is an additional path to gh, not a
-        # replacement for skill_granted_binaries.
-        result = check("gh issue list", bypass=False)
-        assert result["tier"] == TIER_CONFIRM
-        assert "'gh' runs only after you approve" in result["error"]
+    def test_gh_reads_run_by_default_and_the_policy_still_judges_the_rest(self):
+        # gh reads change nothing, so they need no skill (READS_WITHOUT_A_SKILL);
+        # what the read-only policy does not cover is still asked about.
+        assert check("gh issue list", bypass=False) is None
+        result = check("gh pr merge 1", bypass=False)
+        assert result["tier"] == TIER_CONFIRM_ONCE
 
 
 class TestBypassIsStillASet:

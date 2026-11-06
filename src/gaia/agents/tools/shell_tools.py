@@ -1138,6 +1138,27 @@ def skill_granted_binaries(host: Any) -> frozenset:
     return grants.binaries() if grants is not None else frozenset()
 
 
+#: CLIs whose read-only policy tier runs unasked with no skill loaded. A read
+#: of ``gh`` changes nothing, so asking about each one only trains a click;
+#: its writes still go through the policy's prompts like any granted CLI's.
+READS_WITHOUT_A_SKILL = frozenset({"gh"})
+
+
+def shell_granted_binaries(host: Any) -> frozenset:
+    """The CLIs the shell treats as granted: *host*'s skill grants plus
+    :data:`READS_WITHOUT_A_SKILL`.
+
+    Not under full access: everything is pre-approved there already, and a
+    granted CLI runs without a shell, which would break the redirects full
+    access exists to allow.
+    """
+    granted = skill_granted_binaries(host)
+    full_access = getattr(host, "full_access_active", None)
+    if callable(full_access) and full_access():
+        return granted
+    return granted | READS_WITHOUT_A_SKILL
+
+
 def _is_granted_binary(token: str, granted: frozenset) -> bool:
     """True when *token* names a CLI this agent's skills granted."""
     if not granted:
@@ -3145,7 +3166,7 @@ class ShellToolsMixin:
             }
             once_note = NOTE_UNINSPECTABLE
 
-        granted = skill_granted_binaries(self)
+        granted = shell_granted_binaries(self)
 
         # A granted CLI is handed argv, never a shell, so a redirect would reach
         # it as a literal argument. Refuse instead of answering wrongly.
@@ -3430,7 +3451,7 @@ class ShellToolsMixin:
             # two predicates to disagree about whether the call was consented to.
             return True
 
-        granted = skill_granted_binaries(self)
+        granted = shell_granted_binaries(self)
         if not granted:
             return False
 
@@ -3442,6 +3463,10 @@ class ShellToolsMixin:
         # what a segment is.
         steps, error = _parse_line(command)
         if error is not None or not steps:
+            return False
+        # A pipe runs through cmd.exe as one string, which expands %VAR% into
+        # what nobody approved; a lone command runs as argv and cannot.
+        if _pipe_dialect() == "cmd" and any(len(st.segments) > 1 for st in steps):
             return False
 
         from gaia.skills.binaries import (
@@ -3633,7 +3658,7 @@ class ShellToolsMixin:
         steps, parse_error = _parse_line(command, bypass_gates=False)
         if parse_error is not None or not steps:
             return False
-        granted = skill_granted_binaries(self)
+        granted = shell_granted_binaries(self)
         for step in steps:
             if step.is_cd:
                 return False
@@ -3705,7 +3730,7 @@ class ShellToolsMixin:
                 },
                 outside,
             )
-        granted = skill_granted_binaries(self)
+        granted = shell_granted_binaries(self)
         walk_cwd = cwd
         for step in steps:
             if refusal is not None:
@@ -5076,6 +5101,7 @@ class ShellToolsMixin:
                         command, cwd, steps, timeout, timeout_class, waited
                     )
 
+                # Skill grants only: a built-in read grant is read-only by policy.
                 granted = skill_granted_binaries(self)
                 # A skill-granted CLI is allowed without a prompt, not read-only.
                 may_write = may_write or any(

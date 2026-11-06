@@ -75,8 +75,15 @@ the PDF I just sent", "write the meeting notes to notes.md".
 - **Files:** attach a file and GAIA can read it. Files it writes come back as attachments
   (up to Discord's 10 MB).
 - **Approvals:** a prompt shows the exact command or change, with **Allow**, **Deny**, and
-  sometimes **Always allow** for that kind of call. Unanswered prompts are denied after ten
-  minutes.
+  sometimes **Always allow** for that kind of call. **Always allow** is remembered across
+  restarts until you pair again or disconnect; `gaia discord always-allowed --forget` clears
+  it. Unanswered prompts are denied after ten minutes.
+- **GitHub reads don't ask:** listing or viewing PRs, issues, runs and releases with `gh`
+  runs without a prompt. Comments, new PRs and other writes still ask.
+- **Stop:** press **Stop** under "Thinking…", or send just "stop" or "cancel". It ends what
+  is running and drops anything still waiting behind it.
+- **Quick follow-ups** sent while GAIA is busy are answered together, so "actually, only
+  the count" corrects the message before it instead of getting its own reply.
 - **Long answers** arrive as several messages, never cut off.
 
 ## Summaries and alerts
@@ -95,6 +102,18 @@ That becomes two things:
   a link. It is a plain check, not the AI, so it never makes anything up or repeats itself.
   If GitHub keeps refusing a check, GAIA tells you, and again when it works.
 - **A summary.** A schedule runs a prompt every few hours and sends you the answer.
+
+For "alert me if…", GAIA sets up a **trigger** instead of a summary:
+
+> Report the health of main on amd/gaia, and alert me if anything breaks, like a failing
+> test.
+
+A trigger runs a small read-only check on your PC every few minutes, without the AI, and
+wakes GAIA only when the result changes. You get where main stands now, then a message
+when a workflow starts failing (which test, which commit, with links) and one when it is
+green again. Nothing in between. The same works for "tell me when PR 12 is approved" or
+"when a new release is out". A check can only read; GAIA refuses one that could change
+anything, and tells you if a check keeps failing.
 
 To change or stop them, ask: "what are you watching?", "stop the summaries", "summarize
 daily instead". For GitHub, GAIA uses the GitHub CLI you are signed in to on this PC.

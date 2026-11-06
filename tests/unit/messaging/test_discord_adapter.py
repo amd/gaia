@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from gaia.messaging.discord import adapter as da
-from gaia.messaging.discord import state
+from gaia.messaging.discord import schedules, state
 
 EPOCH_MS = 1420070400000
 
@@ -80,9 +80,26 @@ class FakeChannel:
     def start(self):
         pass
 
+    #: How many turns each submit reports ahead of it; 0 means it starts now.
+    ahead = 0
+
     def submit(self, turn):
         self.turns.append(turn)
-        return 0
+        return self.ahead
+
+    busy = False
+
+    def withdraw(self, turn):
+        if turn.started:
+            return False
+        turn.withdrawn = True
+        return True
+
+    def amend(self, turn, text):
+        if turn.started:
+            return False
+        turn.text = text
+        return True
 
     def decide(self, decision, confirm_id=None):
         self.decisions.append((decision, confirm_id))
@@ -397,7 +414,9 @@ def test_an_unanswered_prompt_is_denied():
     ad.on_ready()
     _prompt(ad, clock)
     deadline = time.time() + 2
-    while not ad._agent().decisions and time.time() < deadline:
+    while time.time() < deadline and not any(
+        "no answer" in e[2] for e in ad.transport.edits
+    ):
         time.sleep(0.02)
     assert ad._agent().decisions == [("deny", "c-1")]
     assert "no answer" in ad.transport.edits[-1][2]
@@ -717,3 +736,315 @@ def test_a_recent_foreign_lease_is_left_pinned():
     )
     ad.on_ready()
     assert ad.transport.unpinned == []
+
+
+# ----------------------------------------------------------------------
+# Nothing open outlives the bridge
+# ----------------------------------------------------------------------
+
+
+def test_a_finished_turn_leaves_nothing_open():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "hi"))
+    assert state.read_status().open_messages
+    ad._on_agent_event({"type": "final", "answer": "hello"}, ad._agent().turns[-1])
+    assert state.read_status().open_messages == []
+
+
+def test_stopping_mid_turn_marks_the_placeholder_interrupted():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "hi"))
+    placeholder = ad.transport.sent[-1]["id"]
+    ad.close()
+    assert (DM, placeholder, da.INTERRUPTED_TEXT, True) in ad.transport.edits
+    assert state.read_status().open_messages == []
+
+
+def test_a_bridge_started_after_a_crash_closes_what_the_dead_one_left():
+    dead, clock = make()
+    dead.on_ready()
+    dead.handle_message(message(clock, "long job"))
+    placeholder = dead.transport.sent[-1]["id"]
+    clock.now += 0.001
+    prompt = _prompt(dead, clock)["id"]
+    # No close(): the process died.
+    fresh, _ = make(clock=clock)
+    fresh.on_ready()
+    edits = {e[1]: e for e in fresh.transport.edits}
+    assert edits[placeholder][2] == da.INTERRUPTED_TEXT
+    assert edits[prompt][2] == da.EXPIRED_PROMPT_TEXT and edits[prompt][3] is True
+    fresh.on_ready(resumed=True)
+    closed = [e for e in fresh.transport.edits if e[1] in (placeholder, prompt)]
+    assert len(closed) == 2, "orphans are closed once"
+    assert state.read_status().open_messages == []
+
+
+# ----------------------------------------------------------------------
+# "Always allow" outlives an agent restart
+# ----------------------------------------------------------------------
+
+
+def _shell_prompt(ad, clock, command, confirm_id="c-1"):
+    return _prompt(
+        ad,
+        clock,
+        action="run_shell_command",
+        confirm_id=confirm_id,
+        always_scope=command.split(" --")[0],
+        args={"command": command},
+    )
+
+
+def _click(ad, posted, button):
+    ad.handle_click(
+        da.InboundClick(
+            user_id=OWNER, channel_id=DM, message_id=posted["id"], custom_id=button
+        )
+    )
+
+
+def _allow_buttons(sent):
+    return [
+        m
+        for m in sent
+        if any(b.custom_id == da.BUTTON_ALLOW for b in m["buttons"] or [])
+    ]
+
+
+def test_always_allow_is_remembered_across_a_restart_and_not_asked_again():
+    ad, clock = make()
+    ad.on_ready()
+    posted = _shell_prompt(ad, clock, "gh pr comment 1 --body hi")
+    _click(ad, posted, da.BUTTON_ALWAYS)
+    assert (da.DECISION_ALWAYS, "c-1") in ad._agent().decisions
+    assert state.always_keys(OWNER) == {"run_shell_command:gh pr comment"}
+
+    fresh, _ = make(clock=clock)
+    fresh.on_ready()
+    clock.now += 0.001
+    sent = len(fresh.transport.sent)
+    _shell_prompt(fresh, clock, "gh pr comment 2 --body again", confirm_id="c-9")
+    assert (da.DECISION_ALWAYS, "c-9") in fresh._agent().decisions
+    shown = fresh.transport.sent[sent:]
+    assert not _allow_buttons(shown), "no prompt for a remembered grant"
+    assert any("you chose Always allow" in m["text"] for m in shown), "visible"
+
+
+def test_a_remembered_grant_never_covers_another_tool_or_command():
+    ad, clock = make()
+    ad.on_ready()
+    state.remember_always(OWNER, ["run_shell_command:gh pr comment"], "gh pr comment")
+    posted = _shell_prompt(ad, clock, "gh issue comment 1 --body hi")
+    assert _allow_buttons([posted])
+    clock.now += 0.001
+    other_tool = _prompt(
+        ad,
+        clock,
+        action="run_cli_command",
+        confirm_id="c-2",
+        always_scope="gh pr comment",
+        args={"command": "gh pr comment 1 --body hi"},
+    )
+    assert _allow_buttons([other_tool])
+
+
+def test_another_accounts_always_allow_is_ignored():
+    ad, clock = make()
+    ad.on_ready()
+    state.remember_always("someone-else", ["run_shell_command:gh pr comment"], "x")
+    posted = _shell_prompt(ad, clock, "gh pr comment 1 --body hi")
+    assert _allow_buttons([posted])
+
+
+def test_a_prompt_with_truncated_args_is_never_auto_approved():
+    ad, clock = make()
+    ad.on_ready()
+    state.remember_always(OWNER, ["run_shell_command:gh pr comment"], "x")
+    posted = _prompt(
+        ad,
+        clock,
+        action="run_shell_command",
+        always_scope="gh pr comment",
+        args={"command": "gh pr comment 1 --body hi"},
+        args_truncated=True,
+    )
+    assert _allow_buttons([posted])
+
+
+def test_re_pairing_forgets_always_allow():
+    from gaia.messaging.discord import cli
+
+    state.remember_always(OWNER, ["run_shell_command:gh pr comment"], "x")
+    cli.reset_pairing()
+    assert state.always_keys(OWNER) == set()
+
+
+def test_a_failed_save_still_answers_the_agent(monkeypatch):
+    ad, clock = make()
+    ad.on_ready()
+    posted = _shell_prompt(ad, clock, "gh pr comment 1 --body hi")
+
+    def broken(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(state, "remember_always", broken)
+    _click(ad, posted, da.BUTTON_ALWAYS)
+    assert (da.DECISION_ALWAYS, "c-1") in ad._agent().decisions
+    assert "could not save" in ad.transport.sent[-1]["text"]
+
+
+# ----------------------------------------------------------------------
+# Quick follow-ups are answered together
+# ----------------------------------------------------------------------
+
+
+def test_messages_sent_while_one_waits_are_folded_into_it():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "first"))  # running
+    ad._agent().ahead = 1
+    clock.now += 0.001
+    ad.handle_message(message(clock, "latest commit on main?"))
+    clock.now += 0.001
+    ad.handle_message(message(clock, "actually skip the commit, only the PR count"))
+    turns = ad._agent().turns
+    assert len(turns) == 2, "the follow-up joins the waiting turn"
+    assert "latest commit on main?" in turns[1].text
+    assert "only the PR count" in turns[1].text
+    assert "can change or cancel" in turns[1].text
+    assert turns[1].text.count(da.DISCORD_REPLY_NOTE) == 1
+    assert any("2 messages together" in e[2] for e in ad.transport.edits)
+
+
+def test_a_follow_up_after_the_waiting_turn_started_is_its_own_turn():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "first"))
+    ad._agent().ahead = 1
+    clock.now += 0.001
+    ad.handle_message(message(clock, "second"))
+    ad._agent().turns[-1].started = True
+    clock.now += 0.001
+    ad.handle_message(message(clock, "third"))
+    assert [t.text.splitlines()[0] for t in ad._agent().turns] == [
+        "first",
+        "second",
+        "third",
+    ]
+
+
+def test_a_schedule_is_never_folded_into_a_typed_message():
+    ad, clock = make()
+    ad.on_ready()
+    ad._agent().ahead = 1
+    ad.handle_message(message(clock, "question"))
+    schedules.add(600, "digest", now=clock.now - 601)
+    ad.tick()
+    assert len(ad._agent().turns) == 2
+
+
+# ----------------------------------------------------------------------
+# Stop
+# ----------------------------------------------------------------------
+
+
+def test_a_placeholder_carries_a_stop_button():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "long job"))
+    assert [b.custom_id for b in ad.transport.sent[-1]["buttons"]] == [da.BUTTON_STOP]
+
+
+@pytest.mark.parametrize("word", ["stop", "Stop.", "CANCEL", "never mind", "stop it!"])
+def test_a_stop_word_cancels_the_running_turn_instead_of_queuing(word):
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "long job"))
+    ad._agent().busy = True
+    clock.now += 0.001
+    ad.handle_message(message(clock, word))
+    assert ad._agent().cancelled == 1
+    assert len(ad._agent().turns) == 1, "stop is never sent to the agent"
+    assert ad.transport.sent[-1]["text"] == "-# Stopped."
+
+
+def test_stop_also_withdraws_the_message_waiting_behind():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "first"))
+    ad._agent().busy = True
+    ad._agent().ahead = 1
+    clock.now += 0.001
+    ad.handle_message(message(clock, "second"))
+    waiting = ad._agent().turns[-1]
+    clock.now += 0.001
+    ad.handle_message(message(clock, "stop"))
+    assert waiting.withdrawn
+    assert any(e[2] == "-# Cancelled — not run." for e in ad.transport.edits)
+
+
+def test_the_stop_button_works_like_the_word():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "long job"))
+    ad._agent().busy = True
+    placeholder = ad.transport.sent[-1]["id"]
+    ad.handle_click(
+        da.InboundClick(
+            message_id=placeholder,
+            channel_id=DM,
+            user_id=OWNER,
+            custom_id=da.BUTTON_STOP,
+        )
+    )
+    assert ad._agent().cancelled == 1
+
+
+def test_stop_with_nothing_running_says_so():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "stop"))
+    assert ad.transport.sent[-1]["text"] == "-# Nothing is running."
+    assert ad._agent().turns == []
+
+
+def test_a_sentence_with_stop_in_it_is_a_question():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "stop the summaries"))
+    assert len(ad._agent().turns) == 1
+
+
+def test_a_stopped_turn_ends_quietly():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "long job"))
+    turn = ad._agent().turns[-1]
+    ad._agent().busy = True
+    clock.now += 0.001
+    ad.handle_message(message(clock, "stop"))
+    sent = len(ad.transport.sent)
+    ad._on_agent_event({"type": "final", "answer": ""}, turn)
+    assert len(ad.transport.sent) == sent, "no '(no answer)' after Stopped."
+
+
+def test_a_markdown_table_becomes_a_bullet_list():
+    text = (
+        "Main:\n"
+        "| Workflow | State |\n"
+        "|---|:---:|\n"
+        "| [Unit](https://x/1) | ✅ success |\n"
+        "| Lint | ❌ failure |\n"
+        "Done."
+    )
+    assert da.untable(text) == (
+        "Main:\n• [Unit](https://x/1) · ✅ success\n• Lint · ❌ failure\nDone."
+    )
+
+
+def test_pipes_in_code_or_prose_are_left_alone():
+    code = "```\n| a | b |\n|---|---|\n```"
+    assert da.untable(code) == code
+    assert da.untable("a | b") == "a | b"

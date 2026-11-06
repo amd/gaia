@@ -1342,10 +1342,13 @@ gaia discord schedule-add --every 3h --prompt "Summarize my open PRs"
 | `gaia discord disconnect` | – | – | Stop the bridge and forget the token and the pairing. Refused if the bridge won't stop. |
 | `gaia discord schedules` | – | – | List the prompts the bridge runs on a timer (JSON). |
 | `gaia discord schedule-add` | `--every`, `--prompt` (required) | – | Run a prompt every interval (`30m`, `3h`, `1d`; at least 5 minutes) and DM the answer. |
+| `gaia discord schedule-add` | `--check` | – | Make it a trigger: run this one read-only command every interval without the model, and run the prompt only when its output changes. Runs the check once when added, prints what it shows, and starts from that. Refused if the command can write or fails when tried. |
+| `gaia discord ci-status` | `--repo` (required), `--branch` | `main` | Print, in one line, which GitHub Actions workflows are failing on a branch. Changes only when that does, so it suits `--check`. |
 | `gaia discord schedule-remove` | `--id` or `--all` | – | Remove one schedule, or all of them. |
 | `gaia discord watches` | – | – | List the GitHub repositories being watched (JSON). |
 | `gaia discord watch` | `--repo` (required), `--mine` | – | DM each new PR, issue or comment on a repo as it happens, except from `--mine` accounts and bots. |
 | `gaia discord unwatch` | `--repo` (required) | – | Stop watching a repo. |
+| `gaia discord always-allowed` | `--forget` | false | List what you answered **Always allow** to in Discord (JSON); `--forget` clears it so each is asked again. |
 
 [→ Discord Guide](/guides/discord)
 

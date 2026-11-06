@@ -71,3 +71,9 @@ def test_a_group_dm_is_not_a_dm_with_the_bot():
 def test_invite_url_asks_for_no_permissions():
     url = transport.invite_url("123")
     assert "permissions=0" in url and "scope=bot" in url and "client_id=123" in url
+
+
+def test_dms_are_handled_one_at_a_time_in_arrival_order():
+    """Parallel handling let a quick follow-up overtake the message it follows."""
+    gateway = transport.GatewayTransport()
+    assert gateway._messages._max_workers == 1

@@ -53,6 +53,28 @@ def test_a_corrupt_config_fails_loudly():
         state.load_config()
 
 
+def test_a_zeroed_status_file_is_set_aside_and_the_bridge_can_still_start():
+    state.status_path().parent.mkdir(parents=True, exist_ok=True)
+    state.status_path().write_bytes(b"\0" * 200)
+    assert state.read_status().state == state.STATE_STOPPED
+    state.write_status(state.STATE_STOPPED, "ok")
+    assert state.read_status().detail == "ok"
+    assert list(state.status_path().parent.glob("status.json.damaged-*"))
+
+
+def test_writes_reach_the_disk_before_the_rename(monkeypatch):
+    order = []
+    real_fsync, real_replace = os.fsync, os.replace
+    monkeypatch.setattr(
+        state.os, "fsync", lambda fd: (order.append("fsync"), real_fsync(fd))
+    )
+    monkeypatch.setattr(
+        state.os, "replace", lambda a, b: (order.append("replace"), real_replace(a, b))
+    )
+    state.write_json(state.discord_dir() / "x.json", {"a": 1})
+    assert order == ["fsync", "replace"]
+
+
 def test_status_keeps_fields_a_write_does_not_name():
     state.write_status(state.STATE_STOPPED, last_message_id="42")
     state.write_status(state.STATE_STOPPED, "again")

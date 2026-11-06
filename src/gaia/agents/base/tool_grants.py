@@ -535,6 +535,14 @@ def _shell_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
     if shell_command_risk(command) == DESTRUCTIVE:
         return None
 
+    # Each Discord trigger or watch runs unattended from then on; "always" for
+    # the family would approve every later one, whatever it checks or says.
+    if any(
+        binary_name(s[0]) == "gaia" and len(s) > 1 and s[1] == "discord"
+        for s in facts.segments
+    ):
+        return None
+
     segments = [s for s in facts.segments if binary_name(s[0]) not in _TRANSPARENT]
     significant = [s for s in segments if binary_name(s[0]) not in _READ_FILTERS]
     # A line that only reads (`echo hello`, `cat x | head`) is granted as itself.

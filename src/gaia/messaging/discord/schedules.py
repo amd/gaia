@@ -9,6 +9,13 @@ answer to the DM. The bridge already
 drives the flagship agent with its tools and its approval gate, which
 ``gaia schedule`` (a bare chat, no tools) cannot offer.
 
+A schedule with a ``check`` is a trigger: on each interval the bridge runs
+the check (see :mod:`gaia.messaging.discord.checks`) without the model, and
+wakes the agent only when its output differs from last time. Adding one runs
+the check once, and that output is the baseline: the setup reply already says
+where things stand, so the first tick has nothing new to report. "Alert me if main breaks" costs one ``gh`` call
+per interval, not one model turn.
+
 Stored in ``schedules.json`` beside the bridge's other files. A schedule that
 came due while the bridge was off runs once when it is next up, not once per
 missed interval.
@@ -41,6 +48,17 @@ class Schedule:
     every_seconds: int
     prompt: str
     next_at: float
+    #: A read-only command; set, the prompt runs only when its output changes.
+    check: str = ""
+    #: What the check printed last, and whether it has run at all.
+    last_output: str = ""
+    checked: bool = False
+    #: Check runs that failed in a row; the user hears at the third.
+    failures: int = 0
+
+
+#: Failed check runs in a row before the user is told.
+CHECK_FAILURES_BEFORE_ALERT = 3
 
 
 def format_interval(seconds: int) -> str:
@@ -74,7 +92,7 @@ def path():
 
 
 def load() -> List[Schedule]:
-    data = state.read_json(path())
+    data = state.read_json_or_set_aside(path(), "schedules")
     if data is None:
         return []
     try:
@@ -95,19 +113,35 @@ def _locked():
     return file_lock(path())
 
 
-def add(every_seconds: int, prompt: str, now: float) -> Schedule:
+def add(
+    every_seconds: int,
+    prompt: str,
+    now: float,
+    check: str = "",
+    baseline: Optional[str] = None,
+) -> Schedule:
     with _locked():
-        return _add(every_seconds, prompt, now)
+        return _add(every_seconds, prompt, now, check, baseline)
 
 
-def _add(every_seconds: int, prompt: str, now: float) -> Schedule:
+def _add(
+    every_seconds: int,
+    prompt: str,
+    now: float,
+    check: str = "",
+    baseline: Optional[str] = None,
+) -> Schedule:
     items = load()
     if len(items) >= MAX_SCHEDULES:
         raise ScheduleError(
             f"You already have {MAX_SCHEDULES} schedules. Send `list schedules` "
             "and stop one first."
         )
-    item = Schedule(uuid.uuid4().hex[:12], every_seconds, prompt, now + every_seconds)
+    item = Schedule(
+        uuid.uuid4().hex[:12], every_seconds, prompt, now + every_seconds, check
+    )
+    if check and baseline is not None:
+        item.last_output, item.checked = baseline, True
     items.append(item)
     save(items)
     return item
@@ -136,6 +170,23 @@ def clear() -> int:
 
 def get(schedule_id: str) -> Optional[Schedule]:
     return next((s for s in load() if s.id == schedule_id), None)
+
+
+def record_check(schedule_id: str, *, output: str = "", failed: bool = False) -> int:
+    """Store one check run; returns the failures in a row (0 after a success)."""
+    with _locked():
+        items = load()
+        item = next((s for s in items if s.id == schedule_id), None)
+        if item is None:
+            return 0
+        if failed:
+            item.failures += 1
+        else:
+            item.failures = 0
+            item.last_output = output
+            item.checked = True
+        save(items)
+        return item.failures
 
 
 def take_due(now: float) -> List[Schedule]:

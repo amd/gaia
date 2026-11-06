@@ -85,7 +85,14 @@ def test_a_due_schedule_runs_on_tick_and_answers_in_the_dm():
         "since " in turns[0].text and "UTC" in turns[0].text
     ), "the window is explicit"
     assert turns[0].context.channel_id == DM
-    assert any("Scheduled" in m["text"] for m in ad.transport.sent)
+    sent = [m["text"] for m in ad.transport.sent]
+    assert sent[-1].startswith(
+        "⏰ **summarize my PRs**"
+    ), "heading and Running, one message"
+    ad._on_agent_event({"type": "final", "answer": "3 merged."}, turns[0])
+    answer = ad.transport.sent[-1]["text"]
+    assert answer == "⏰ **summarize my PRs**\n3 merged.", answer
+    assert "Used" not in answer
 
 
 def test_a_bridge_that_lost_the_lease_runs_no_schedules():
@@ -95,6 +102,49 @@ def test_a_bridge_that_lost_the_lease_runs_no_schedules():
     ad._set_state(state.STATE_TAKEN_OVER)
     ad.tick()
     assert ad._agent().turns == []
+
+
+def _zero_fill(path):
+    # What NTFS leaves when a crash keeps the rename but not the bytes.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\0" * 971)
+
+
+def test_a_damaged_schedules_file_is_reported_once_and_watches_still_run(monkeypatch):
+    ad, clock = make()
+    ad.on_ready()
+    _zero_fill(schedules.path())
+    polled = []
+    monkeypatch.setattr(
+        ad, "_watcher", lambda: type("W", (), {"poll": lambda s: polled.append(1)})()
+    )
+    ad.tick()
+    warnings = [m["text"] for m in ad.transport.sent if "damaged" in m["text"]]
+    assert len(warnings) == 1 and "schedules again" in warnings[0]
+    assert polled == [1], "a damaged schedules file must not stop GitHub alerts"
+    assert list(schedules.path().parent.glob("schedules.json.damaged-*"))
+    ad.tick()
+    assert len([m for m in ad.transport.sent if "damaged" in m["text"]]) == 1
+    assert schedules.load() == []
+
+
+def test_a_damaged_watches_file_is_reported_and_schedules_still_run():
+    ad, clock = make()
+    ad.on_ready()
+    schedules.add(600, "digest", now=clock.now - 601)
+    _zero_fill(github_watch.path())
+    ad.tick()
+    assert len(ad._agent().turns) == 1
+    assert any("watch your repos again" in m["text"] for m in ad.transport.sent)
+
+
+def test_the_cli_explains_a_damaged_file_instead_of_a_traceback(capsys):
+    import argparse
+
+    _zero_fill(schedules.path())
+    assert cli.main(argparse.Namespace(discord_action="schedules")) == 1
+    assert "shut down while saving" in capsys.readouterr().err
+    assert cli.main(argparse.Namespace(discord_action="schedules")) == 0
 
 
 def test_a_bang_message_is_just_a_question_now():

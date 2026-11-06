@@ -509,6 +509,8 @@ def reset_pairing() -> None:
     config = state.load_config()
     config.owner_id = config.owner_name = config.dm_channel_id = ""
     state.save_config(config)
+    # Consent was given by the old pairing's account.
+    state.forget_always()
 
 
 def stop_failed_hint() -> str:
@@ -539,6 +541,7 @@ def disconnect() -> None:
     credentials.clear()
     state.clear_config()
     state.status_path().unlink(missing_ok=True)
+    state.forget_always()
     # Recorded as seen with Discord present, so the setup offer does not come
     # straight back at the next launch on a PC that has Discord installed.
     offer.record_decision(offer.STATE_SKIPPED, detected=True, path=_onboarding_path())
@@ -636,6 +639,7 @@ def run_schedules(*, emit: Callable[[str], None] = print) -> int:
                 "id": s.id,
                 "every": schedules.format_interval(s.every_seconds),
                 "prompt": s.prompt,
+                **({"check": s.check} if s.check else {}),
                 "next_run_in_minutes": max(0, int((s.next_at - time.time()) // 60)),
             }
             for s in schedules.load()
@@ -644,20 +648,41 @@ def run_schedules(*, emit: Callable[[str], None] = print) -> int:
 
 
 def run_schedule_add(
-    *, every: str, prompt: str, emit: Callable[[str], None] = print
+    *,
+    every: str,
+    prompt: str,
+    check: Optional[str] = None,
+    emit: Callable[[str], None] = print,
 ) -> int:
-    from gaia.messaging.discord import schedules
+    from gaia.messaging.discord import checks, schedules
 
+    check = (check or "").strip()
     try:
         seconds = schedules.parse_interval(every)
         if not prompt.strip():
             raise schedules.ScheduleError("--prompt is empty; say what to run.")
-        item = schedules.add(seconds, prompt.strip(), time.time())
-    except schedules.ScheduleError as e:
+        if check:
+            checks.check_argv(check)
+            # Tried now, so a check that cannot work fails here, not silently later.
+            ok, output = checks.run_check(check)
+            if not ok:
+                raise schedules.ScheduleError(f"The check failed when tried: {output}")
+        item = schedules.add(
+            seconds, prompt.strip(), time.time(), check, output if check else None
+        )
+    except (schedules.ScheduleError, checks.CheckError) as e:
         emit(f"❌ {e}")
         return 2
+    interval = schedules.format_interval(seconds)
+    if check:
+        emit(
+            f"Added a trigger (id {item.id}): every {interval} GAIA runs `{check}` "
+            f"and DMs you only when its output changes. Right now it prints:\n"
+            f"{output}\nOn a change it will: {item.prompt}"
+        )
+        return 0
     emit(
-        f"Scheduled every {schedules.format_interval(seconds)} (id {item.id}): "
+        f"Scheduled every {interval} (id {item.id}): "
         f"{item.prompt}. The answer goes to the paired Discord DM."
     )
     return 0
@@ -679,6 +704,28 @@ def run_schedule_remove(
         emit(f"❌ No schedule with id {schedule_id}.")
         return 1
     emit(f"Removed the schedule: {removed.prompt}")
+    return 0
+
+
+def run_ci_status(
+    *, repo: str, branch: str, emit: Callable[[str], None] = print
+) -> int:
+    """One stable line: what is failing on *branch*. Built to be a trigger's check."""
+    from gaia.messaging.discord import github_watch
+
+    try:
+        repo = github_watch.normalize_repo(repo)
+        failing = github_watch.ci_failures(repo, branch, github_watch.github_token())
+    except (github_watch.WatchError, RuntimeError, OSError) as e:
+        emit(f"❌ Could not read CI for {repo}@{branch}: {e}")
+        return 1
+    except Exception as e:  # noqa: BLE001 - httpx errors, reported as a failed check
+        emit(f"❌ Could not read CI for {repo}@{branch}: {e}")
+        return 1
+    if failing:
+        emit(f"{repo}@{branch}: failing — {', '.join(failing)}")
+    else:
+        emit(f"{repo}@{branch}: all workflows passing")
     return 0
 
 
@@ -733,8 +780,30 @@ def run_unwatch(*, repo: str, emit: Callable[[str], None] = print) -> int:
     return 0 if removed else 1
 
 
+def run_always_allowed(*, forget: bool, emit: Callable[[str], None] = print) -> int:
+    if forget:
+        count = state.forget_always()
+        emit(
+            f"Forgot {count} Always allow answer(s). The bridge asks again from "
+            "its next prompt; restart it to also clear what the running agent "
+            "remembers."
+        )
+        return 0
+    return _emit_json(emit, sorted(set(state.always_labels())))
+
+
 def main(args) -> int:
     """Dispatch one ``gaia discord <action>`` invocation."""
+    from gaia.messaging.discord.state import BridgeStateError
+
+    try:
+        return _dispatch(args)
+    except BridgeStateError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
+
+
+def _dispatch(args) -> int:
     action = getattr(args, "discord_action", None)
     model = getattr(args, "model", None)
     agent_command = getattr(args, "agent_command", None)
@@ -792,18 +861,24 @@ def main(args) -> int:
     if action == "schedules":
         return run_schedules()
     if action == "schedule-add":
-        return run_schedule_add(every=args.every, prompt=args.prompt)
+        return run_schedule_add(
+            every=args.every, prompt=args.prompt, check=getattr(args, "check", None)
+        )
     if action == "schedule-remove":
         return run_schedule_remove(
             schedule_id=getattr(args, "id", None),
             remove_all=getattr(args, "all", False),
         )
+    if action == "ci-status":
+        return run_ci_status(repo=args.repo, branch=args.branch)
     if action == "watches":
         return run_watches()
     if action == "watch":
         return run_watch(repo=args.repo, mine=getattr(args, "mine", None))
     if action == "unwatch":
         return run_unwatch(repo=args.repo)
+    if action == "always-allowed":
+        return run_always_allowed(forget=getattr(args, "forget", False))
     if action == "disconnect":
         try:
             disconnect()

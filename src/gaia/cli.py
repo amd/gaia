@@ -1955,12 +1955,24 @@ def build_parser():
     )
     d_sadd.add_argument("--every", required=True, help="Interval: 30m, 3h, 1d")
     d_sadd.add_argument("--prompt", required=True, help="What the agent should do")
+    d_sadd.add_argument(
+        "--check",
+        help="A read-only command run each interval without the model; the "
+        "prompt runs only when its output changes (an alert, not a digest)",
+    )
     d_srm = discord_subparsers.add_parser("schedule-remove", help="Remove a schedule")
     d_srm.add_argument("--id", help="The schedule's id (from `schedules`)")
     d_srm.add_argument("--all", action="store_true", help="Remove every schedule")
     discord_subparsers.add_parser(
         "watches", help="List the GitHub repositories being watched (JSON)"
     )
+    d_ci = discord_subparsers.add_parser(
+        "ci-status",
+        help="Print which workflows are failing on a branch, in one line that "
+        "changes only when that does (a check for schedule-add --check)",
+    )
+    d_ci.add_argument("--repo", required=True, help="owner/name, e.g. amd/gaia")
+    d_ci.add_argument("--branch", default="main", help="Branch (default: main)")
     d_watch = discord_subparsers.add_parser(
         "watch",
         help="DM new third-party PRs, issues and comments on a repo as they happen",
@@ -1972,6 +1984,15 @@ def build_parser():
     )
     d_unwatch = discord_subparsers.add_parser("unwatch", help="Stop watching a repo")
     d_unwatch.add_argument("--repo", required=True, help="owner/name")
+    d_always = discord_subparsers.add_parser(
+        "always-allowed",
+        help="List what you answered Always allow to in Discord (JSON)",
+    )
+    d_always.add_argument(
+        "--forget",
+        action="store_true",
+        help="Forget every Always allow answer, so each is asked again",
+    )
     discord_parser.set_defaults(action="discord")
 
     # Schedule command — cron-based recurring skill/prompt dispatch (issue #892)

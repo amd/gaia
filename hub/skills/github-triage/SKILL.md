@@ -1,8 +1,8 @@
 ---
 name: github-triage
-description: Triage GitHub work with the gh CLI — your unread notification inbox, or one repository's issue backlog. Groups what arrived, judges what is urgent, and posts the reply once you approve it. Use when asked to triage issues or notifications, check the GitHub inbox, see what needs attention or what you are blocking, review a backlog, comment on or label an issue, or work out what to fix first.
+description: Answer GitHub questions and triage GitHub work with the gh CLI — PRs, issues, commits, CI runs, releases, the notification inbox or a repo's backlog. Links every item; posts a reply only once you approve it. Use for any request about a GitHub repo, PR, issue, commit, CI run or release — what is open, merged, failing or changed — or to triage, check the inbox, see what needs attention or what you are blocking, comment on or label an issue, or decide what to fix first.
 license: MIT
-version: 2.3.0
+version: 2.4.0
 metadata:
   gaia:
     security_tier: community

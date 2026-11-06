@@ -18,7 +18,7 @@ import tempfile
 import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 from gaia.logger import get_logger
 
@@ -49,6 +49,18 @@ class BridgeStateError(RuntimeError):
     """A bridge file exists but cannot be read."""
 
 
+class CorruptStateFile(BridgeStateError):
+    """A bridge file exists but its bytes are not the JSON object it should hold."""
+
+
+class DamagedStateFile(BridgeStateError):
+    """A corrupt bridge file was moved aside; *moved_to* keeps its bytes."""
+
+    def __init__(self, message: str, moved_to: Path) -> None:
+        super().__init__(message)
+        self.moved_to = moved_to
+
+
 class BridgeAlreadyRunning(RuntimeError):
     """Another Discord bridge holds the lock on this machine."""
 
@@ -73,6 +85,9 @@ def write_json(path: Path, data: Dict[str, Any]) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2)
             fh.write("\n")
+            # Without it a crash can keep the rename but not the bytes: a file of zeros.
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
@@ -92,15 +107,45 @@ def read_json(path: Path) -> Optional[Dict[str, Any]]:
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
-        raise BridgeStateError(
+        raise CorruptStateFile(
             f"{path} is not valid JSON: {e}. Reconnect Discord to rewrite it."
         ) from e
     if not isinstance(data, dict):
-        raise BridgeStateError(
+        raise CorruptStateFile(
             f"{path} must hold a JSON object, got {type(data).__name__}. "
             f"Reconnect Discord to rewrite it."
         )
     return data
+
+
+def read_json_or_set_aside(path: Path, what: str) -> Optional[Dict[str, Any]]:
+    """Like :func:`read_json`, but move a corrupt file aside and say so.
+
+    For files the bridge can start over without (schedules, watches, status):
+    raises :class:`DamagedStateFile` once, naming where the bytes went; the next
+    read finds no file and starts empty.
+    """
+    try:
+        return read_json(path)
+    except CorruptStateFile as e:
+        moved = path.with_name(f"{path.name}.damaged-{time.strftime('%Y%m%d-%H%M%S')}")
+        try:
+            os.replace(path, moved)
+        except FileNotFoundError:
+            # Another reader moved it first; it reports the damage.
+            return read_json(path)
+        except OSError as move_error:
+            raise BridgeStateError(
+                f"{path} is damaged and could not be moved aside: {move_error}. "
+                f"Delete it to start over."
+            ) from e
+        log.error("Moved damaged %s to %s: %s", path, moved, e)
+        raise DamagedStateFile(
+            f"Your saved {what} could not be read — the file was damaged, most "
+            f"likely because the PC shut down while saving it. GAIA kept a copy "
+            f"at {moved} and starts over with none.",
+            moved,
+        ) from e
 
 
 def _known(cls, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -180,10 +225,21 @@ class BridgeStatus:
     pairing_expires_at: float = 0.0
     #: Strangers already told they are not authorized, so each hears it once.
     refused_user_ids: List[str] = field(default_factory=list)
+    #: ``[channel_id, message_id, kind]`` of placeholders and approval prompts
+    #: still open, so a bridge started after a crash can close them.
+    open_messages: List[List[str]] = field(default_factory=list)
 
 
 def status_path() -> Path:
     return discord_dir() / "status.json"
+
+
+def _read_status_file() -> Optional[Dict[str, Any]]:
+    try:
+        return read_json_or_set_aside(status_path(), "bridge status")
+    except DamagedStateFile:
+        # Only runtime state; the bridge rewrites it, and the move is logged.
+        return None
 
 
 def read_status() -> BridgeStatus:
@@ -191,7 +247,7 @@ def read_status() -> BridgeStatus:
 
     A live state with no lock held means the bridge died without saying so.
     """
-    data = read_json(status_path())
+    data = _read_status_file()
     status = BridgeStatus(**_known(BridgeStatus, data)) if data else BridgeStatus()
     if status.state == STATE_STARTING and _starting_process_alive(status):
         # Spawned, still importing: it takes the lock only once it is up.
@@ -223,7 +279,7 @@ def write_status(state: str, detail: str = "", **extra: Any) -> BridgeStatus:
     from gaia.utils.file_lock import file_lock
 
     with file_lock(status_path()):
-        data = read_json(status_path()) or {}
+        data = _read_status_file() or {}
         status = BridgeStatus(**_known(BridgeStatus, data))
         status.state = state
         status.detail = detail
@@ -233,6 +289,63 @@ def write_status(state: str, detail: str = "", **extra: Any) -> BridgeStatus:
             setattr(status, key, value)
         write_json(status_path(), asdict(status))
     return status
+
+
+def always_path() -> Path:
+    """The grants the paired user answered "Always allow" to, kept across restarts.
+
+    The agent keeps an "always" only for its own process; the bridge restarts
+    it, so without this file every restart asks again. Holds the agent's own
+    grant keys (tool plus exact target), never the shorter prompt label, and
+    the account that gave them: another account's consent never carries over.
+    """
+    return discord_dir() / "always.json"
+
+
+def _always_data() -> Dict[str, Any]:
+    data = read_json_or_set_aside(always_path(), '"Always allow" answers') or {}
+    grants = data.get("grants")
+    return {
+        "owner_id": str(data.get("owner_id") or ""),
+        "grants": grants if isinstance(grants, dict) else {},
+    }
+
+
+def always_keys(owner_id: str) -> Set[str]:
+    """Grant keys *owner_id* answered "Always allow" to; none for anyone else."""
+    data = _always_data()
+    if not owner_id or data["owner_id"] != owner_id:
+        return set()
+    return {k for k in data["grants"] if isinstance(k, str) and k}
+
+
+def always_labels() -> List[str]:
+    """What each remembered answer allows, as its prompt described it."""
+    return [str(label) for label in _always_data()["grants"].values()]
+
+
+def remember_always(owner_id: str, keys: Sequence[str], label: str) -> None:
+    from gaia.utils.file_lock import file_lock
+
+    with file_lock(always_path()):
+        data = _always_data()
+        grants = data["grants"] if data["owner_id"] == owner_id else {}
+        for key in keys:
+            grants[key] = label
+        write_json(always_path(), {"owner_id": owner_id, "grants": grants})
+
+
+def forget_always() -> int:
+    """Forget every "Always allow" answer; returns how many there were."""
+    from gaia.utils.file_lock import file_lock
+
+    with file_lock(always_path()):
+        try:
+            count = len(set(always_labels()))
+        except DamagedStateFile:
+            count = 0
+        always_path().unlink(missing_ok=True)
+    return count
 
 
 def lock_path() -> Path:
