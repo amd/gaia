@@ -12,7 +12,6 @@ its own files as used on a schedule, so only a dead agent's leftovers age out.
 
 from __future__ import annotations
 
-import logging
 import os
 import sys
 import threading
@@ -20,7 +19,9 @@ import time
 from pathlib import Path
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
 
 #: Well inside macOS's three-day cutoff, the shortest of the common cleaners.
 REFRESH_INTERVAL_SECONDS = 6 * 3600
@@ -42,29 +43,33 @@ def _unpacked_bundle() -> Optional[Path]:
 def _touch_tree(root: Path) -> None:
     now = time.time()
     lstat_touch = os.utime in os.supports_follow_symlinks
+    failed: list[str] = []
+    paths = [root]
     for dirpath, dirnames, filenames in os.walk(root):
-        for name in (*dirnames, *filenames):
-            path = os.path.join(dirpath, name)
+        paths.extend(Path(dirpath, name) for name in (*dirnames, *filenames))
+    for path in paths:
+        try:
             if lstat_touch:
                 os.utime(path, (now, now), follow_symlinks=False)
             else:
                 os.utime(path, (now, now))
-    os.utime(root, (now, now))
+        except OSError as exc:
+            failed.append(f"{path}: {exc}")
+    if failed:
+        logger.warning(
+            "Could not mark %d of the agent's unpacked files in %s as in use "
+            "(first: %s). The OS temp cleaner may delete them; restart the "
+            "agent if it starts failing to read its own files.",
+            len(failed),
+            root,
+            failed[0],
+        )
 
 
 def _refresh_forever(root: Path) -> None:
     while True:
         time.sleep(REFRESH_INTERVAL_SECONDS)
-        try:
-            _touch_tree(root)
-        except OSError as exc:
-            logger.warning(
-                "Could not mark the agent's unpacked files at %s as in use: %s. "
-                "The OS temp cleaner may delete them; restart the agent if it "
-                "starts failing to read its own files.",
-                root,
-                exc,
-            )
+        _touch_tree(root)
 
 
 def keep_unpacked_bundle_fresh() -> Optional[threading.Thread]:

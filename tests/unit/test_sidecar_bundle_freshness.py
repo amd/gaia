@@ -52,6 +52,24 @@ def test_a_one_file_binary_refreshes_its_unpacked_files(tmp_path, monkeypatch):
     assert not [p for p in [*paths, bundle] if _would_be_cleaned(p)]
 
 
+def test_one_untouchable_file_neither_stops_startup_nor_the_rest(tmp_path, monkeypatch):
+    bundle = tmp_path / "T" / "_MEI123"
+    manifest, skill, lib = _stale_bundle(bundle)
+    _freeze(monkeypatch, bundle, tmp_path / "agents" / "gaia" / "gaia-agent")
+    real_utime = os.utime
+
+    def utime(path, *args, **kwargs):
+        if Path(path) == manifest:
+            raise PermissionError(1, "Operation not permitted", str(path))
+        return real_utime(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "utime", utime)
+
+    assert keep_unpacked_bundle_fresh() is not None
+    assert _would_be_cleaned(manifest)
+    assert not _would_be_cleaned(skill) and not _would_be_cleaned(lib)
+
+
 def test_source_runs_and_folder_builds_leave_files_alone(tmp_path, monkeypatch):
     monkeypatch.delattr(sys, "frozen", raising=False)
     monkeypatch.delattr(sys, "_MEIPASS", raising=False)
