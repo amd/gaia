@@ -760,7 +760,7 @@ for (const locale of ['ar', 'en']) {
         });
 
         test('an environment key that is not connected says why there are no models', async ({ page }) => {
-            await openModelPage(page, locale, { fireworks: { key_source: 'environment', key_hint: null, models_discovered: false } });
+            await openModelPage(page, locale, { fireworks: { key_source: 'environment', key_from_gaia_env: true, key_hint: null, models_discovered: false } });
             await page.getByRole('radio', { name: /Fireworks AI/ }).click();
             await expect(page.locator('.settings-key-masked')).toBeVisible();
             await expect(page.locator('.settings-key-status.settings-error')).toBeVisible();
