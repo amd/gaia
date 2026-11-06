@@ -531,6 +531,18 @@ class OutputHandler(ABC):
         """
         ...
 
+    def print_skill_use(  # pylint: disable=unused-argument
+        self, name: str, loaded: List[str], how: str
+    ):
+        """A turn is running on skill *name*. Optional — no-op.
+
+        *loaded* is every skill now loaded in this chat, in load order. *how*
+        is ``"model"`` when the model called ``load_skill``, ``"auto"`` when
+        GAIA loaded it because the model called one of its ``loads_with``
+        tools, and ``"loaded"`` when it was already loaded.
+        """
+        ...
+
     @abstractmethod
     def print_repeated_tool_warning(self):
         """Print warning about repeated tool calls (loop detection)."""

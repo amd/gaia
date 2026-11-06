@@ -51,6 +51,7 @@ PROVENANCE_SOURCE = "starter-pack"
 #: AMD's starter pack. Adding a skill to the pack means adding it here.
 STARTER_PACK = frozenset(
     {
+        "analyze-recording",
         "automations",
         "check-in",
         "coding",
@@ -316,6 +317,17 @@ def test_starter_skill_tools_required_are_real_tools(
         f"{skill.name} declares tools_required that no mixin registers: "
         f"{', '.join(unknown)}"
     )
+
+
+def test_no_two_starter_skills_claim_the_same_loads_with_tool():
+    """A tool that loads a skill must say which one; shared, it can't."""
+    claims: dict[str, list[str]] = {}
+    for skill_dir in STARTER_DIRS:
+        for tool in parse_skill_file(skill_dir).gaia.loads_with:
+            claims.setdefault(tool, []).append(skill_dir.name)
+
+    shared = {tool: names for tool, names in claims.items() if len(names) > 1}
+    assert not shared, f"loads_with tools claimed by more than one skill: {shared}"
 
 
 @pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))

@@ -44,6 +44,12 @@ export function agentEventToStep(event: StreamEvent, stepIdRef: { current: numbe
                 mcpServerLabel: event.mcp_server_label,
                 mcpTool: event.mcp_tool,
             };
+        case 'skill_use':
+            return {
+                id, type: 'tool', label: 'Using tool', tool: 'use_skill',
+                detail: event.skill, narration: `Using skill: ${event.skill}`,
+                active: false, success: true, timestamp: ts,
+            };
         case 'plan':
             return {
                 id, type: 'plan', label: 'Created plan',
