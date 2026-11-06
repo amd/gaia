@@ -7,9 +7,9 @@
 # What runs where (util/select_tests.py picks the files):
 #   pull request, merge queue   Linux runs the test files the change can reach;
 #                  Windows and macOS run the ones among those that touch the OS.
-#                  The queue diffs the group against its base, so a batch selects
-#                  what its PRs would, and a group that changes nothing in the
-#                  paths filter below (docs only, say) runs no tests at all.
+#                  The queue diffs the group against its base, as if its PRs
+#                  were one, and a group that changes nothing in the paths
+#                  filter below (docs only, say) runs no tests at all.
 #   push to main   Linux runs the full suite; Windows and macOS run the
 #                  OS-touching files the merge can reach.
 #   nightly        the full suite on all three at the head of main, and Linux
@@ -213,7 +213,7 @@ jobs:
 
       # The selector reads this workflow's paths filter.
       - name: Install PyYAML
-        run: python -m pip install pyyaml
+        run: python -m pip install 'pyyaml>=6,<7'
 
       - name: Restore the coverage map
         if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'merge_group'
@@ -234,9 +234,9 @@ jobs:
           set -euo pipefail
           filter=()
           case "$EVENT" in
-            pull_request) base="origin/$BASE_REF"
-                          filter=(--trigger-paths-from .github/workflows/test_unit.yml) ;;
-            # The group's head holds every batched PR, so this diff covers them all.
+            pull_request) base="origin/$BASE_REF" ;;
+            # The group's head holds every batched PR, so this diff covers them
+            # all. The queue has no paths filter, so the selector applies ours.
             merge_group) base="$QUEUE_BASE_SHA"
                          filter=(--trigger-paths-from .github/workflows/test_unit.yml) ;;
             # Not event.before: a burst of merges drops the pending runs in

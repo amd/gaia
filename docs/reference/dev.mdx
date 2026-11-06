@@ -301,9 +301,11 @@ installs the package. That lane must name the file and run the check too.
 A pull request, and its group in the merge queue, can run part of the unit
 suite, but only when every file it changes is a unit test or modified Python
 code under `src/gaia` or a hub agent package that the nightly coverage map
-records. Files outside the workflow's `paths` filter are ignored, so a queue
-group that changes only docs runs no unit tests, and a group that batches several
-PRs runs what their own PR runs would. `util/select_tests.py` then picks
+records. A queue group runs no unit tests when none of its files is in the
+workflow's `paths` filter (a docs-only group, say), the same as such a PR; if
+any one is, every file in the group counts. `CLAUDE.md`, `AGENTS.md`,
+`CONTRIBUTING.md`, `REVIEW.md`, `.claude/` and `scripts/` always run the full
+suite, since the doc-path tests read them. `util/select_tests.py` then picks
 the test files that change can reach, from that map plus imports and
 patch-target strings. Any other change runs the full suite: data files, `util/`
 scripts, test helpers and fixtures, `eval/`, configs, workflows, any

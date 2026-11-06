@@ -41,11 +41,14 @@ everything for nearly any change.
 - A test the map never ran (added since the nightly build) follows imports
   inside functions too.
 
-**The workflow's own paths filter** (``--trigger-paths-from``) drops changed
-files that would not trigger the workflow on a pull request. A merge-queue group
-has no paths filter, so without this a docs-only change would run everything,
-and a group batching a docs PR with a code PR would too. Files that force the
-full suite are never dropped.
+**The workflow's own paths filter** (``--trigger-paths-from``) decides only
+whether anything runs, as GitHub does for a pull request: a merge-queue group
+has no paths filter, so a group none of whose files is in it (docs only) selects
+nothing. It never drops a file from a group that does run. Unit tests read many
+files outside the filter (``docs/``, ``.claude/``, the root instruction files),
+so a code change shipped beside one of those runs everything, as on its PR.
+The root instruction files, ``.claude/`` and ``scripts/`` also force the full
+suite on their own, since the doc-path tests read them.
 
 This is a speed-up for pull requests and the merge queue, not the coverage of
 record: test_unit.yml runs the full suite on Linux on every push to main, on
@@ -101,7 +104,15 @@ FULL_RUN_FILES = {
     "tox.ini",
     "util/select_tests.py",
     ".github/workflows/test_unit.yml",
+    # Outside test_unit.yml's paths filter, but read by the doc-path tests
+    # (test_ai_doc_paths_exist, test_amd_gaia_urls, test_project_instructions,
+    # test_review_gates), so a merge-queue group of only these still runs them.
+    "CLAUDE.md",
+    "AGENTS.md",
+    "CONTRIBUTING.md",
+    "REVIEW.md",
 }
+FULL_RUN_PREFIXES = (".claude/", "scripts/")
 FULL_RUN_BASENAMES = {"conftest.py"}
 # Filter syntax beyond `*` and `**`, refused rather than misread.
 _UNSUPPORTED_GLOB_RE = re.compile(r"[!?+\[\]]")
@@ -756,7 +767,11 @@ def full_run_reason(
 
 
 def forces_full_run(path: str) -> bool:
-    return path in FULL_RUN_FILES or PurePosixPath(path).name in FULL_RUN_BASENAMES
+    return (
+        path in FULL_RUN_FILES
+        or path.startswith(FULL_RUN_PREFIXES)
+        or PurePosixPath(path).name in FULL_RUN_BASENAMES
+    )
 
 
 def workflow_trigger_paths(workflow: Path) -> List[str]:
@@ -830,16 +845,15 @@ def select(
 ) -> Selection:
     changed = sorted(set(changed))
     all_tests = sorted(p for p in graph.files if is_test_file(p, test_root))
-    if trigger_paths is not None:
-        changed = triggering_changes(changed, trigger_paths)
-        if not changed:
-            return Selection(
-                full=False,
-                reason="no changed file is in the workflow's paths filter",
-                tests=[],
-                total=len(all_tests),
-                triggered=False,
-            )
+    # The filter only gates whether anything runs: tests read files outside it.
+    if trigger_paths is not None and not triggering_changes(changed, trigger_paths):
+        return Selection(
+            full=False,
+            reason="no changed file is in the workflow's paths filter",
+            tests=[],
+            total=len(all_tests),
+            triggered=False,
+        )
     reason = full_run_reason(changed, graph, graph.repo, coverage, stale, test_root)
     tests = all_tests
     if reason is None:

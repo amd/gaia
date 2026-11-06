@@ -623,21 +623,83 @@ def test_a_merge_group_outside_the_filter_runs_nothing(graph, changed):
     assert not platform.triggered and platform.tests == []
 
 
-def test_a_batched_group_selects_what_its_prs_would_have(graph):
-    # A docs PR batched with a code PR: the docs PR alone never runs the
-    # workflow, so the group runs what the code PR alone would.
+def test_a_group_that_runs_keeps_every_file_it_changed(graph):
+    # The filter decides only whether the group runs. Once it does, a file
+    # outside the filter counts as it does on the PR: tests read such files.
     triggers = st.workflow_trigger_paths(UNIT_WORKFLOW)
-    alone = st.select(graph, ["src/gaia/core/base.py"], FULL_MAP)
-    batched = st.select(
-        graph,
-        ["README.md", "src/gaia/core/base.py"],
+    changed = ["README.md", "src/gaia/core/base.py"]
+    group = st.select(graph, changed, FULL_MAP, trigger_paths=triggers)
+    on_its_pr = st.select(graph, changed, FULL_MAP)
+    assert group.triggered and group.full
+    assert (group.full, group.tests) == (on_its_pr.full, on_its_pr.tests)
+
+
+# A doc-path test like test_ai_doc_paths_exist: it walks .claude/ and reads the
+# root instruction files, none of which test_unit.yml's paths filter lists.
+DOC_PATH_TEST = "tests/unit/test_ai_doc_paths.py"
+DOC_FILES = {
+    **FILES,
+    ".claude/skills/demo/SKILL.md": "---\nname: demo\n---\n",
+    "CLAUDE.md": "# instructions",
+    "AGENTS.md": "# agents",
+    "CONTRIBUTING.md": "# contributing",
+    "scripts/install.sh": "echo hi",
+    DOC_PATH_TEST: (
+        "from pathlib import Path\n"
+        "ROOT = Path(__file__).resolve().parents[2]\n"
+        "def test_paths():\n"
+        "    for doc in ROOT.joinpath('.claude').rglob('*.md'):\n"
+        "        doc.read_text()\n"
+        "    for name in ('CLAUDE.md', 'AGENTS.md', 'CONTRIBUTING.md'):\n"
+        "        (ROOT / name).read_text()\n"
+    ),
+}
+
+
+@pytest.fixture
+def doc_graph(tmp_path):
+    for rel, text in DOC_FILES.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return st.build_graph(repo=tmp_path, files=sorted(DOC_FILES))
+
+
+@pytest.mark.parametrize(
+    "doc",
+    [
+        ".claude/skills/demo/SKILL.md",
+        "CLAUDE.md",
+        "AGENTS.md",
+        "CONTRIBUTING.md",
+        "scripts/install.sh",
+    ],
+)
+def test_code_plus_a_doc_path_file_still_runs_the_doc_path_tests(doc_graph, doc):
+    # The code change alone narrows away from the doc-path test...
+    code = "src/gaia/core/base.py"
+    assert DOC_PATH_TEST not in st.select(doc_graph, [code], FULL_MAP).tests
+    # ...but with the doc file beside it, in a PR or a queue group, it runs.
+    triggers = st.workflow_trigger_paths(UNIT_WORKFLOW)
+    for sel in (
+        st.select(doc_graph, [code, doc], FULL_MAP),
+        st.select(doc_graph, [code, doc], FULL_MAP, trigger_paths=triggers),
+    ):
+        assert DOC_PATH_TEST in sel.tests and sel.full, sel.reason
+
+
+@pytest.mark.parametrize(
+    "doc",
+    [".claude/skills/demo/SKILL.md", "CLAUDE.md", "AGENTS.md", "scripts/install.sh"],
+)
+def test_a_group_of_only_doc_path_files_runs_the_full_suite(doc_graph, doc):
+    sel = st.select(
+        doc_graph,
+        [doc],
         FULL_MAP,
-        trigger_paths=triggers,
+        trigger_paths=st.workflow_trigger_paths(UNIT_WORKFLOW),
     )
-    assert batched.triggered and not batched.full
-    assert batched.tests == alone.tests
-    # Without the filter the README alone would have forced everything.
-    assert st.select(graph, ["README.md", "src/gaia/core/base.py"], FULL_MAP).full
+    assert sel.triggered and sel.full and DOC_PATH_TEST in sel.tests, sel.reason
 
 
 @pytest.mark.parametrize(
