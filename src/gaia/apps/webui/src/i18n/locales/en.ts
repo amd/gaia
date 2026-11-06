@@ -894,7 +894,6 @@ export const enMessages = {
     'setup.checks.count': 'Checks done: {done} of {total}',
     'setup.checks.device': 'Processor, GPU and NPU',
     'setup.checks.npu': 'Ryzen AI NPU',
-    'setup.checks.memory': 'Memory',
     'setup.checks.disk': 'Disk space',
     'setup.checks.diskValue': '{size} free',
     'setup.checks.server': 'AI engine',

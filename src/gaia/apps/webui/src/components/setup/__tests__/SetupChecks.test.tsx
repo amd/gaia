@@ -12,7 +12,12 @@ const HARDWARE = {
     npu_detected: true, disk_free_gb: 399.6, lemonade_running: true,
 } as unknown as PreflightReport;
 
-const DOWN: SetupPlan = { ...COLD_BIG(), lemonade: { mode: 'gaia', url: null, reachable: false } };
+const DOWN: SetupPlan = {
+    ...COLD_BIG(),
+    lemonade: { mode: 'gaia', url: null, reachable: false },
+    memory_gb: null,
+    capacity_gb: null,
+};
 const row = (name: string) => screen.getByText(name).closest('li') as HTMLElement;
 
 function show(over: { hardware?: PreflightReport | null; hardwareError?: string | null; plan?: SetupPlan | null; serverRun?: SetupRunStatus | null; awaitingChoice?: boolean } = {}) {
@@ -39,11 +44,18 @@ describe('Checking this PC', () => {
     it('fills in what it found and counts the finished checks', () => {
         show({ hardware: HARDWARE, plan: DOWN });
         expect(row('Processor, GPU and NPU')).toHaveTextContent('AMD Radeon 8060S · Ryzen AI NPU');
-        expect(row('Memory for models')).toHaveTextContent('96.0 GB');
+        expect(row('Memory for models')).toHaveClass('is-active');
+        expect(row('Memory for models')).not.toHaveTextContent('GB');
         expect(row('Disk space')).toHaveTextContent('400 GB free');
         expect(row('AI engine')).toHaveClass('is-active');
-        expect(screen.getByText('Checks done: 3 of 5')).toBeInTheDocument();
-        expect(screen.getByRole('progressbar', { name: 'Check this PC' })).toHaveAttribute('value', '60');
+        expect(screen.getByText('Checks done: 2 of 5')).toBeInTheDocument();
+        expect(screen.getByRole('progressbar', { name: 'Check this PC' })).toHaveAttribute('value', '40');
+    });
+
+    it('keeps the memory row waiting when the server is awaiting a user choice', () => {
+        show({ hardware: HARDWARE, plan: DOWN, awaitingChoice: true });
+        expect(row('Memory for models')).toHaveClass('is-waiting');
+        expect(row('Memory for models')).not.toHaveTextContent('GB');
     });
 
     it('folds into one line once every check passed, which opens to each check', () => {

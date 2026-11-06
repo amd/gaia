@@ -51,6 +51,15 @@ export function SetupChecks({ hardware, hardwareError, plan, serverRun, awaiting
     const modelMemory = !hardwareError && plan?.capacity_gb != null
         ? formatSize(plan.capacity_gb)
         : null;
+    const memoryState: RowState = hardwareError
+        ? 'failed'
+        : modelMemory
+            ? 'done'
+            : serverFailed
+                ? 'failed'
+                : awaitingChoice
+                    ? 'waiting'
+                    : 'active';
     const rows: Row[] = [
         // A failed read says why on its first row, so the failure isn't a bare red mark.
         { id: 'device', label: t('setup.checks.device'), value: hardwareError ? `${t('setup.system.unread')} ${hardwareError}` : device || null, state: hwState },
@@ -58,7 +67,7 @@ export function SetupChecks({ hardware, hardwareError, plan, serverRun, awaiting
             id: 'memory',
             label: t('setup.found.memory'),
             value: modelMemory,
-            state: hwState,
+            state: memoryState,
         },
         {
             id: 'disk',
