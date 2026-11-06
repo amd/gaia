@@ -89,6 +89,9 @@ class _NoServer:
 
         raise LemonadeClientError("the model server is not running yet")
 
+    def check_model_available(self, _model_id: str) -> bool:
+        return False
+
 
 def _registry_size(model_id: str) -> Optional[float]:
     from gaia.llm.lemonade_client import find_model_requirement
