@@ -22,7 +22,9 @@ the new session `tools` and `grants` routes, so probe `/version` first.
   long extractions say which page they are on.
 - **A question in one language finds answers in a document in another.**
 - **Mail gains whole threads, what's waiting on you, and which account is
-  connected** (three read-only tools, 101 in total).
+  connected** (three read-only tools, 102 in total).
+- **Updating the agent on a Mac no longer asks for keychain access again**
+  when the daemon starts it.
 - **With Claude, the agent follows a repository's `CLAUDE.md`, `AGENTS.md`
   and `.claude/skills`.**
 - **The binary ships no GPL or AGPL code**, and the agent is one Python
