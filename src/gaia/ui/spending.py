@@ -176,6 +176,91 @@ def month_report(db, month: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
+def _parse_instant(text: str) -> dt.datetime:
+    """An ISO timestamp as an aware datetime; a naive one is UTC, as SQLite writes it."""
+    value = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return value if value.tzinfo else value.replace(tzinfo=dt.timezone.utc)
+
+
+def _answered_at(answer: Dict[str, Any]) -> dt.datetime:
+    try:
+        return _parse_instant(answer["created_at"])
+    except (TypeError, ValueError) as e:
+        raise RuntimeError(
+            f"Message {answer['message_id']} in chat {answer['session_id']} has an "
+            f"unreadable time {answer['created_at']!r}; inspect the messages table "
+            "in the chat database."
+        ) from e
+
+
+def _cloud_answers(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The answers a cloud model gave; a local answer cost nothing and is left out."""
+    return [
+        r for r in rows if r["cost"].get("kind") == "estimate" or r["remote"] is True
+    ]
+
+
+def _totals(answers: List[Dict[str, Any]]) -> Dict[str, Any]:
+    priced = [a["cost"]["usd"] for a in answers if a["cost"].get("kind") == "estimate"]
+    return {
+        "usd": round(sum(priced), 6),
+        "answers": len(answers),
+        # Stopped or unpriced answers are counted apart, never as $0.
+        "unpriced_answers": len(answers) - len(priced),
+    }
+
+
+def chat_spend(
+    db, session_id: str, model_id: Optional[str], since: str
+) -> Dict[str, Any]:
+    """What this chat's cloud answers cost, and every chat's since *since*.
+
+    *since* is the start of the viewer's local day as an ISO instant, so "today"
+    follows the user's clock. Costs are the ones each answer's details show.
+    ``paid`` says whether *model_id* is a priced cloud model, the only time the
+    composer shows spending.
+    """
+    try:
+        start = _parse_instant(since)
+    except ValueError as e:
+        raise ValueError(
+            f"'since' must be an ISO timestamp such as 2026-11-05T08:00:00Z, got {since!r}."
+        ) from e
+    start_utc = start.astimezone(dt.timezone.utc)
+    # Sorted by instant: old and new timestamp formats don't sort together as text.
+    chat = sorted(
+        _cloud_answers(db.answer_costs(session_id=session_id)), key=_answered_at
+    )
+    today = [
+        a
+        for a in _cloud_answers(db.answer_costs(since_day=start_utc.date().isoformat()))
+        if _answered_at(a) >= start_utc
+    ]
+    return {
+        "paid": bool(model_id) and price_card(model_id) is not None,
+        "model": model_id,
+        "chat": {
+            **_totals(chat),
+            "items": [
+                {
+                    "message_id": a["message_id"],
+                    "created_at": a["created_at"],
+                    "model": a["model"],
+                    "kind": a["cost"].get("kind"),
+                    "usd": a["cost"].get("usd"),
+                }
+                for a in chat
+            ],
+        },
+        "today": {
+            **_totals(today),
+            "chats": len({a["session_id"] for a in today}),
+            "since": start_utc.isoformat(),
+        },
+        "price_source": PRICE_SOURCE,
+    }
+
+
 def limit_refusal(db, model_id: Optional[str]) -> Optional[str]:
     """Why a turn on *model_id* must not start, or None when it may."""
     provider = cloud_provider(model_id)

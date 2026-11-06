@@ -839,6 +839,18 @@ export const enMessages = {
     'ctx.meter.warning.one': 'The conversation is filling the model\'s context. The oldest turn may drop out of the model\'s view next:',
     'ctx.meter.warning.other': 'The conversation is filling the model\'s context. The oldest {n} turns may drop out of the model\'s view next:',
     'ctx.meter.warningSaved': 'They stay saved, and you can ask GAIA to recall them.',
+    'spend.aria': 'Cloud spending: {chat} in this chat, {today} today across chats',
+    'spend.title': 'What this chat and today\'s chats cost on the cloud model',
+    'spend.today': 'today',
+    'spend.window': 'Cloud spending',
+    'spend.thisChat': 'This chat',
+    'spend.todayChats.one': 'Today, in {n} chat',
+    'spend.todayChats.other': 'Today, across {n} chats',
+    'spend.perAnswer': 'Each answer in this chat',
+    'spend.note': 'At the provider\'s list price.',
+    'spend.titleExcluded': 'At least this much: a stopped answer isn\'t counted, since its cost is unknown',
+    'spend.excluded': 'Not counted: {chat} stopped answer(s) here, {today} today. A stopped answer sends no token count, so its cost is unknown, but the provider may still bill it. The totals are a floor.',
+    'spend.month': 'This month\'s total and limit',
 
     // Settings
     'settings.title': 'Settings',
