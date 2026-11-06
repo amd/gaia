@@ -967,6 +967,9 @@ class SetupRunner:
         self._log_model: Optional[str] = None
         #: The last download that failed, which the "where to look" hint belongs to.
         self._last_failed: Optional[str] = None
+        #: Consecutive timeout failures per model. Two unanswered tests offer
+        #: the user a fresh download instead of looping forever on Retry.
+        self._test_failures: Dict[str, int] = {}
 
     def _logs(self, shown: Optional[int]) -> Dict[str, List[str]]:
         """Each stage's log, its last *shown* lines. Caller holds the lock."""
@@ -1110,6 +1113,7 @@ class SetupRunner:
                 ) from e
             self._run = run
             self._models = {}
+            self._test_failures = {}
             self._log_model = self._last_failed = None
             run.note(f"$ {command}")
             proc = self._proc
@@ -1264,6 +1268,7 @@ class SetupRunner:
                 return
             if passed:
                 entry.state, entry.error, entry.error_kind = "ready", None, None
+                self._test_failures.pop(model_id, None)
                 entry.add_log("Test passed")
             else:
                 entry.state = "failed"
@@ -1286,6 +1291,22 @@ class SetupRunner:
                         "seconds": round(time.monotonic() - started, 1),
                     },
                 )
+            # A failed run caused only by a model test can finish immediately
+            # after that model passes its retest. Previously the row turned
+            # green but the run remained failed until a full setup rerun.
+            if passed and self._run is not None and self._run.state == "failed":
+                tests_failed = any(
+                    test.get("state") == "failed" for test in self._run.tests.values()
+                )
+                models_failed = any(
+                    model.state == "failed" for model in self._models.values()
+                )
+                if not tests_failed and not models_failed:
+                    self._run.state = "ready"
+                    self._run.error = None
+                    self._run.text = "GAIA is ready"
+                    self._run.note("Setup became ready after a successful retest")
+                    mark_initialized()
 
     def _pull_one(
         self, client, model_id: str, keep_trying: bool, stop: threading.Event
@@ -1392,7 +1413,20 @@ class SetupRunner:
                 return
             if kind == "test":
                 if self._run is not None:
-                    self._record_test(self._run, event)
+                    test_event = dict(event)
+                    subject = test_event.get("subject")
+                    if test_event.get("state") == "failed" and subject:
+                        if test_event.get("kind") == "stuck":
+                            attempts = self._test_failures.get(subject, 0) + 1
+                            self._test_failures[subject] = attempts
+                            # A second timeout is actionable as a damaged/
+                            # unusable install: expose the existing redownload
+                            # flow rather than asking the user to retry forever.
+                            if attempts >= 2:
+                                test_event["kind"] = "broken"
+                    elif test_event.get("state") == "passed" and subject:
+                        self._test_failures.pop(subject, None)
+                    self._record_test(self._run, test_event)
                 return
             model_id = event.get("model")
             if not model_id:
