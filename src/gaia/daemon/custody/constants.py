@@ -31,6 +31,9 @@ CUSTODY_AUTH_SCHEME = "Bearer"
 # agent id at mint (§0.11) — it never travels through a client.
 CUSTODY_URL_ENV_VAR = "GAIA_HOST_CUSTODY_URL"
 CUSTODY_SECRET_ENV_VAR = "GAIA_HOST_CUSTODY_SECRET"
+# Path of a file holding the credential for /host/v1/keychain. The sidecar deletes
+# it on read: the routes return secrets, so it must not sit in the environment.
+KEYCHAIN_SECRET_FILE_ENV_VAR = "GAIA_HOST_KEYCHAIN_SECRET_FILE"
 
 # Explicit opt-in to the stateless Ephemeral provider (§0.37): nothing persists,
 # the caller passes context per request. Set to "1"/"true" to force it even when

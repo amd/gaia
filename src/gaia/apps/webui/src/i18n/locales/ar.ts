@@ -894,7 +894,6 @@ const messages: Messages = {
     'setup.checks.count': 'الفحوصات المكتملة: {done} من {total}',
     'setup.checks.device': 'المعالج وGPU وNPU',
     'setup.checks.npu': 'Ryzen AI NPU',
-    'setup.checks.memory': 'الذاكرة',
     'setup.checks.disk': 'مساحة القرص',
     'setup.checks.diskValue': '{size} متاحة',
     'setup.checks.server': 'محرك الذكاء الاصطناعي',
@@ -975,6 +974,7 @@ const messages: Messages = {
     'setup.key.where': 'يبقى مفتاحك على هذا الجهاز، في التخزين الآمن لنظامك.',
     'setup.key.usersServer': 'يستخدم GAIA هذا المزود كما هو مضبوط في خادم Lemonade لديك. ولا يرسل مفتاحًا إلى خادمك ولا يغيّر إعداده.',
     'setup.key.placeholder': 'الصق مفتاح API (اتركه فارغًا لاستخدام مفتاح حفظته من قبل)',
+    'setup.key.foundEnv': 'وُجد مفتاح ⁦{name}⁩ في متغيرات البيئة (ينتهي بـ ⁦…{hint}⁩). اختر «اختبار واتصال» لاستخدامه.',
     'setup.key.label': 'مفتاح API',
     'setup.key.connect': 'اختبار واتصال',
     'setup.key.testing': 'جارٍ اختبار مفتاحك…',
@@ -1694,6 +1694,15 @@ const messages: Messages = {
     // The connection banner
     'banner.serverStopped': 'خادم النماذج لا يعمل.',
     'banner.finishSetup': 'أعدّ النماذج على هذا الجهاز، أو اختر نموذجًا سحابيًا من الإعدادات.',
+    'banner.pickLoad.loading': 'جارٍ تحميل {model}…',
+    'banner.pickLoad.seconds': '{s} ث',
+    'banner.pickLoad.canType': 'يمكنك الكتابة الآن؛ ستُرسل رسالتك عندما يصبح جاهزًا.',
+    'banner.pickLoad.failed': 'تعذّر تحميل {model}.',
+    'banner.pickLoad.retry': 'أعد المحاولة',
+    'banner.pickLoad.noReason': 'توقّف التحميل دون ذكر السبب.',
+    'banner.pickLoad.lostTrack': 'تعذّر على GAIA متابعة التحميل: {reason}',
+    'banner.pickLoad.startFailed': 'تعذّر على GAIA بدء التحميل: {reason}',
+    'banner.dismiss': 'إغلاق',
 
     // The update chip
 
@@ -1885,7 +1894,8 @@ const messages: Messages = {
     'settings.key.connectedDot': 'متصل',
     'settings.key.none': 'لا يوجد مفتاح بعد.',
     'settings.key.waitingOs': 'في انتظار سماح نظام التشغيل بقراءة المفتاح المحفوظ.',
-    'settings.key.setIn': 'مضبوط في {name}',
+    'settings.key.setIn': 'من متغيرات البيئة ({name})',
+    'settings.key.notConnectedHint': 'لدى {name} مفتاحك لكنه غير متصل بعد، لذا لا تظهر أي نماذج.',
     'settings.key.savedAria': 'مفتاح API المحفوظ لـ {name}',
     'settings.key.fieldAria': 'مفتاح API لـ {name}',
     'settings.key.gatewayUrl': 'عنوان البوابة',

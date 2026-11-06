@@ -50,9 +50,9 @@ from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
-    VISION_OFF_ON_NPU,
     resident_vision_model,
     resolve_default_vision_model,
+    vision_off_reason,
 )
 from gaia.logger import get_logger
 from gaia.rag.arabic_text import extract_pdf_page_text, normalize_arabic_pdf_text
@@ -908,10 +908,14 @@ class RAGSDK:
         else:
             self.log.error(message)
 
+    def _vision_off(self) -> str:
+        """Why images aren't read while ``vlm_model`` is None."""
+        return vision_off_reason(getattr(self.config, "base_url", None))
+
     def _read_images_remedy(self, lead: str) -> str:
         """How to get images read: a download, or why it can't happen on the NPU."""
         if self.config.vlm_model is None:
-            return f"{lead}images aren't read here: {VISION_OFF_ON_NPU}"
+            return f"{lead}images aren't read here: {self._vision_off()}"
         return (
             f"{lead}enable VLM image extraction by downloading "
             f"{self.config.vlm_model} in Lemonade"
@@ -919,9 +923,10 @@ class RAGSDK:
 
     def _note_images_skipped(self) -> None:
         """Say once per file that its images aren't read while chat is on the NPU."""
-        self.log.info(f"Images in this file are not read: {VISION_OFF_ON_NPU}")
+        reason = self._vision_off()
+        self.log.info(f"Images in this file are not read: {reason}")
         if self.config.show_stats:
-            print(f"  ⚠️  Images not read: {VISION_OFF_ON_NPU}")
+            print(f"  ⚠️  Images not read: {reason}")
 
     def _safe_open(self, file_path: str, mode="rb"):
         """
@@ -2781,7 +2786,7 @@ These positions indicate where to split the text."""
         file_name = Path(image_path).name
         if self.config.vlm_model is None:
             raise ImageExtractionError(
-                f"Cannot index image {file_name}: {VISION_OFF_ON_NPU}"
+                f"Cannot index image {file_name}: {self._vision_off()}"
             )
         model = (
             resident_vision_model(self.config.vlm_model, self.config.base_url)

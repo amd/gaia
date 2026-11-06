@@ -894,7 +894,6 @@ export const enMessages = {
     'setup.checks.count': 'Checks done: {done} of {total}',
     'setup.checks.device': 'Processor, GPU and NPU',
     'setup.checks.npu': 'Ryzen AI NPU',
-    'setup.checks.memory': 'Memory',
     'setup.checks.disk': 'Disk space',
     'setup.checks.diskValue': '{size} free',
     'setup.checks.server': 'AI engine',
@@ -976,6 +975,7 @@ export const enMessages = {
     'setup.key.usersServer': "GAIA uses this provider as your Lemonade Server already has it set up. It doesn't send your server a key or change its setup.",
     'setup.key.placeholder': 'Paste your API key (leave blank to use one you saved before)',
     'setup.key.label': 'API key',
+    'setup.key.foundEnv': 'Found a {name} key in your environment (ends …{hint}). Test and connect to use it.',
     'setup.key.connect': 'Test and connect',
     'setup.key.testing': 'Testing your key…',
     'setup.download.step': 'Download',
@@ -1694,6 +1694,15 @@ export const enMessages = {
     // The connection banner
     'banner.serverStopped': "The model server isn't running.",
     'banner.finishSetup': 'Set up models on this PC, or choose a cloud model in Settings.',
+    'banner.pickLoad.loading': 'Loading {model}…',
+    'banner.pickLoad.seconds': '{s}s',
+    'banner.pickLoad.canType': 'You can type now; your message sends once it is ready.',
+    'banner.pickLoad.failed': "Couldn't load {model}.",
+    'banner.pickLoad.retry': 'Try again',
+    'banner.pickLoad.noReason': 'The load stopped without saying why.',
+    'banner.pickLoad.lostTrack': "GAIA couldn't check on the load: {reason}",
+    'banner.pickLoad.startFailed': "GAIA couldn't start the load: {reason}",
+    'banner.dismiss': 'Dismiss',
 
     // The update chip
 
@@ -1885,7 +1894,8 @@ export const enMessages = {
     'settings.key.connectedDot': 'connected',
     'settings.key.none': 'No key yet.',
     'settings.key.waitingOs': 'Waiting for the OS to allow reading the saved key.',
-    'settings.key.setIn': 'Set in {name}',
+    'settings.key.setIn': 'From your environment ({name})',
+    'settings.key.notConnectedHint': '{name} has your key but is not connected yet, so no models are listed.',
     'settings.key.savedAria': 'Saved {name} API key',
     'settings.key.fieldAria': '{name} API key',
     'settings.key.gatewayUrl': 'Gateway URL',

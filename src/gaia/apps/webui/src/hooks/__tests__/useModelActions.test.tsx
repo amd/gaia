@@ -78,6 +78,7 @@ describe('the download banner Retry', () => {
         useChatStore.setState({ systemStatus: {
             lemonade_running: true,
             default_model_name: 'amd.Some-Gateway',
+            model_loaded: 'amd.Active-Model',
             download_progress: { state: 'error', model_name: 'amd.Some-Gateway', message: 'Pull failed earlier.' },
         } as unknown as SystemStatus });
         const gateway = "'amd.Some-Gateway' is hosted on a gateway, so there is nothing to download.";
@@ -87,7 +88,7 @@ describe('the download banner Retry', () => {
 
         await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
 
-        expect(mockedApi.downloadModel).toHaveBeenCalledWith('amd.Some-Gateway', false);
+        expect(mockedApi.downloadModel).toHaveBeenCalledWith('amd.Some-Gateway', false, false);
         expect(screen.getByRole('alert')).toHaveTextContent(gateway);
         expect(screen.getByRole('alert')).not.toHaveTextContent('Pull failed earlier.');
     });
