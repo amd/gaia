@@ -57,6 +57,50 @@ def test_reap_after_stop_waits_for_a_slow_exit(monkeypatch):
     assert ledger.reap_after_stop(timeout=5) == ([11], [])
 
 
+def test_python_org_macos_relaunch_keeps_the_sidecar_identity(monkeypatch):
+    """Python.app replaces python3 but preserves the recorded uvicorn command."""
+    recorded = [
+        "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3",
+        "-m",
+        "uvicorn",
+        "server:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "45999",
+    ]
+    relaunched = (
+        "/Library/Frameworks/Python.framework/Versions/3.13/Resources/"
+        "Python.app/Contents/MacOS/Python -m uvicorn server:app --host "
+        "127.0.0.1 --port 45999"
+    )
+    monkeypatch.setattr(ledger.sys, "platform", "darwin")
+
+    assert ledger._cmdline_matches(relaunched, recorded, 45999)
+    assert not ledger._cmdline_matches(
+        relaunched.replace("server:app", "other:app"), recorded, 45999
+    )
+    assert not ledger._cmdline_matches(
+        relaunched.replace("45999", "46000"), recorded, 45999
+    )
+
+    ledger.record_spawn(
+        agent_id="gaia",
+        pid=9876,
+        port=45999,
+        mode="dev",
+        argv=recorded,
+        started_at=1.0,
+    )
+    killed = []
+    monkeypatch.setattr(ledger, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(ledger, "_pid_cmdline", lambda pid: relaunched)
+    monkeypatch.setattr(ledger, "_tree_kill", killed.append)
+
+    assert ledger.reap_stale({"gaia": object()}) == [9876]
+    assert killed == [9876]
+
+
 def test_reap_after_stop_kills_a_real_recorded_sidecar():
     """A live process the ledger records, with its argv and port, is ended."""
     port = 45999

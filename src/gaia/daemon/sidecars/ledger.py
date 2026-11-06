@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import threading
 from typing import Optional
 
@@ -182,8 +183,26 @@ def _group_kill(pid: int) -> None:
 
 
 def _cmdline_matches(cmdline: Optional[str], argv: list, port) -> bool:
+    """Whether a live command line still identifies the recorded sidecar.
+
+    python.org's macOS ``python3`` launcher replaces itself with Python.app
+    while preserving arguments after the interpreter.  Accept that one
+    relaunch form only when the complete recorded argument tail still matches;
+    the port alone is never enough to kill a potentially reused pid.
+    """
+    if not cmdline or not argv:
+        return False
+    port_arg = f"--port {port}"
+    if str(argv[0]) in cmdline and port_arg in cmdline:
+        return True
+    tail = " ".join(str(arg) for arg in argv[1:])
     return bool(
-        cmdline and argv and str(argv[0]) in cmdline and f"--port {port}" in cmdline
+        sys.platform == "darwin"
+        and tail
+        and "/Python.framework/Versions/" in cmdline
+        and "/Resources/Python.app/Contents/MacOS/Python" in cmdline
+        and tail in cmdline
+        and port_arg in cmdline
     )
 
 
@@ -194,11 +213,13 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
     are separate pieces of evidence and never conflated):
 
     - pid ALIVE → kill (tree-kill) iff the CMDLINE gate passes: the recorded
-      ``argv[0]`` AND ``--port <port>`` both appear in the live cmdline. A live
-      pid is NEVER killed on port evidence alone — the pid may have been reused
-      by an innocent process while our orphaned child still serves the port.
-      If the cmdline gate fails but the port probe confirms our service, log a
-      loud warning and leave both alone.
+      ``argv[0]`` AND ``--port <port>`` both appear in the live cmdline. On
+      macOS, python.org's Python.app relaunch is also accepted when it keeps
+      the complete recorded argument tail and port. A live pid is NEVER killed
+      on port evidence alone — the pid may have been reused by an innocent
+      process while our orphaned child still serves the port. If the cmdline
+      gate fails but the port probe confirms our service, log a loud warning
+      and leave both alone.
     - pid DEAD (a zombie counts as dead — it has already exited) but the port's
       ``/health`` answers with our ``service_id`` → the
       leader died but a re-parented child survives. POSIX: the process-group id
