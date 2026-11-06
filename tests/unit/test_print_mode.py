@@ -670,10 +670,13 @@ def test_memory_is_drained_even_when_the_turn_raises(stub_env):
 
 
 class _Outcome:
-    def __init__(self, terminal_type, final_answer=None, error_detail=None):
+    def __init__(
+        self, terminal_type, final_answer=None, error_detail=None, failed=False
+    ):
         self.terminal_type = terminal_type
         self.final_answer = final_answer
         self.error_detail = error_detail
+        self.failed = failed
 
 
 @pytest.fixture
@@ -706,6 +709,21 @@ def test_without_the_agent_package_the_turn_runs_on_the_agent_binary(
     # The agent works in the caller's folder, as an in-process -p would.
     assert kwargs["working_directory"] == str(tmp_path)
     assert kwargs["allowed_paths"] == [str(tmp_path)]
+
+
+def test_a_relayed_turn_leaves_the_model_server_to_the_daemon(relay, stub_env):
+    """The daemon brings up the model server for its agent, as it does for the
+    Agent UI; starting one here would race it."""
+    assert print_mode.run("q", model="m") == 0
+    stub_env.assert_not_called()
+
+
+def test_a_relayed_answer_reporting_a_failed_model_call_is_an_error(relay, capsys):
+    relay.outcome = _Outcome(
+        "final", final_answer="Couldn't reach the local LLM.", failed=True
+    )
+    assert print_mode.run("q", model="m") == 1
+    assert "Couldn't reach the local LLM" in capsys.readouterr().err
 
 
 def test_a_relayed_turn_that_errors_exits_1_with_the_reason(relay, capsys):

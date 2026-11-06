@@ -277,13 +277,11 @@ def _run_turn(
     log_manager.configure_agent_console(debug=False)
 
     model = _resolve_model(model)
-    detected_base_url = _start_server(model, base_url)
-
     try:
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
     except ImportError:
         # The agent ships as its own binary here, as the apps do: run the turn
-        # on it through the daemon, the way the Agent UI does.
+        # on it through the daemon, which brings up the model server for it.
         return _relay_turn(
             text,
             model=model,
@@ -293,6 +291,7 @@ def _run_turn(
             base_url=base_url,
             extra_paths=extra_paths,
         )
+    detected_base_url = _start_server(model, base_url)
 
     agent = GaiaAgent(
         GaiaAgentConfig(
@@ -371,13 +370,15 @@ def _relay_turn(
         working_directory=cwd,
         allowed_paths=[cwd, *(extra_paths or [])],
     )
-    succeeded = outcome.terminal_type == "final"
+    succeeded = outcome.terminal_type == "final" and not outcome.failed
     result: Dict[str, Any] = {
         "status": "success" if succeeded else "error",
         "result": outcome.final_answer or "",
     }
     if not succeeded:
         result["error"] = (
-            outcome.error_detail or "the GAIA agent's reply ended without an answer"
+            outcome.error_detail
+            or (outcome.final_answer if outcome.failed else "")
+            or "the GAIA agent's reply ended without an answer"
         )
     return summarize(result, model, time.time() - started)

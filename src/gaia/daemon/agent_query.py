@@ -62,6 +62,8 @@ class QueryOutcome:
     final_answer: Optional[str] = None
     error_detail: Optional[str] = None
     trace_path: Optional[str] = None  # set when run_query(trace=True)
+    # The final answer reports a failed run (the model call failed), not an answer.
+    failed: bool = False
 
 
 class ConsoleRenderer:
@@ -83,6 +85,7 @@ class ConsoleRenderer:
         # ``final`` does not reprint the full answer on top of the live tokens.
         self._answer_streamed = False
         self.final_answer: Optional[str] = None
+        self.final_failed = False
         self.error_detail: Optional[str] = None
 
     # -- dispatch ----------------------------------------------------------
@@ -136,6 +139,7 @@ class ConsoleRenderer:
     def _on_final(self, event: Dict[str, Any]) -> None:
         answer = str(event.get("answer", "") or "")
         self.final_answer = answer
+        self.final_failed = bool(event.get("failed"))
         if self._answer_streamed:
             # Tokens already printed the answer live — just end the line cleanly.
             if answer:
@@ -451,9 +455,11 @@ def run_query(
             trace_path=_trace(terminal_type=None),
         )
 
+    failed = terminal_type == "final" and renderer.final_failed
     return QueryOutcome(
-        exit_code=0 if terminal_type == "final" else 1,
+        exit_code=0 if terminal_type == "final" and not failed else 1,
         terminal_type=terminal_type,
+        failed=failed,
         final_answer=renderer.final_answer,
         error_detail=renderer.error_detail,
         trace_path=_trace(terminal_type=terminal_type),
