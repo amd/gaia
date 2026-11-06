@@ -366,6 +366,27 @@ def test_a_typed_key_gaia_could_not_keep_is_not_labelled_the_environments(
     assert fw["key_from_gaia_env"] is False
 
 
+def test_an_env_key_that_finds_no_models_can_be_replaced_by_a_typed_one(
+    client, lemonade, keys, monkeypatch
+):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    monkeypatch.setitem(providers._HANDED_ENV_KEYS, "fireworks", ENV_KEY)
+    lemonade.cloud["fireworks"] = {
+        "name": "fireworks",
+        "runtime_key_set": True,
+        "models_discovered": False,
+    }
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert fw["key_source"] == "environment"
+    assert fw["key_from_gaia_env"] is True
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 200, resp.text
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert fw["models_discovered"] is True
+    assert fw["key_source"] == "lemonade"
+    assert keys["stored"]["fireworks"] == KEY
+
+
 def test_a_runtime_key_gaia_never_handed_is_not_labelled_the_environments(
     client, lemonade, keys, monkeypatch
 ):
