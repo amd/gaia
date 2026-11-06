@@ -39,6 +39,7 @@ from gaia.llm.providers.lemonade import (
     MODEL_SERVER_DOWN,
     LemonadeModelUnavailableError,
     classify_lemonade_exception,
+    wording_for_model,
 )
 from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT, APP_RESTART_HINT
 from gaia.security import (
@@ -3449,6 +3450,37 @@ async def _add_indexed_documents_to_library(
 _PREFLIGHT_LOAD_TIMEOUT_S = 120
 
 
+def _restart_stopped_gaia_lemonade(model_id: str, sse_handler) -> None:
+    """Have the daemon start GAIA's own model server when it has stopped.
+
+    A server the user runs is never started from here. On success a cloud
+    model's provider key is handed to the new server too.
+
+    Raises:
+        GaiaLemonadeStartError: the daemon tried to start it and could not.
+        LemonadeClientError: the daemon could not be asked, or the server was
+            not back within the client's reconnect wait.
+    """
+    from gaia.llm.lemonade_client import LemonadeClient
+
+    client = LemonadeClient(verbose=False)
+    if not client.gaia_lemonade_stopped():
+        return
+    logger.warning(
+        "Pre-flight for %s: GAIA's Lemonade Server at %s has stopped; asking "
+        "the daemon to start it",
+        model_id,
+        client.base_url,
+    )
+
+    def on_status(message: str) -> None:
+        if sse_handler is not None:
+            sse_handler._emit({"type": "status", "status": "info", "message": message})
+
+    client.wait_for_gaia_lemonade(model_id, on_status=on_status)
+    logger.info("Pre-flight for %s: GAIA's Lemonade Server is back", model_id)
+
+
 def _preflight_load(
     model_id: str, sse_handler, stopped, loads: Optional[list] = None
 ) -> None:
@@ -3511,6 +3543,9 @@ def _preflight_load(
         return
     from gaia.llm.lemonade_client import InsufficientMemoryError
 
+    # Outside the catch-all below: its error is already worded, and "send the
+    # message again" would only repeat a failed start.
+    _restart_stopped_gaia_lemonade(model_id, sse_handler)
     try:
         import httpx
 
@@ -4086,7 +4121,10 @@ async def _get_chat_response(
         # classify the exception.
         classified = _classify_chat_exception(e)
         if classified is not None:
-            return _agent_ui_wording(classified.user_message)
+            chat_model = db.get_setting("custom_model") or session.get("model")
+            return _agent_ui_wording(
+                wording_for_model(classified.user_message, chat_model)
+            )
         # Same as the streamed path: the real reason, not a guess at one.
         return _agent_ui_wording(f"Agent error: {e}")
 
@@ -4594,7 +4632,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # AgentSDK that wrap the original LemonadeError.
                 classified = _classify_chat_exception(e)
                 if classified is not None:
-                    result_holder["error"] = _agent_ui_wording(classified.user_message)
+                    result_holder["error"] = _agent_ui_wording(
+                        wording_for_model(classified.user_message, model_id)
+                    )
                     result_holder["error_explained"] = True
                 else:
                     result_holder["error"] = _agent_ui_wording(str(e))
