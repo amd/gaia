@@ -2470,15 +2470,18 @@ def serve_http(argv: List[str]) -> int:
 
     # The warm-up swallows agent-build errors, so a stale GAIA_SKILL_SET or a
     # bad GAIA_ALLOWED_PATHS would otherwise leave a healthy-looking sidecar.
-    from gaia_agent.agent import check_skill_set_selection
+    from gaia_agent.agent import GaiaAgent, check_skill_set_selection
 
+    from gaia.agents.base.agent import parse_skill_manifest
     from gaia.security import AllowedPathsEnvError, env_allowed_paths
-    from gaia.skills.errors import SkillSetError
+    from gaia.skills.errors import SkillError
 
     try:
+        # Read now: a frozen build's copy can be deleted from $TMPDIR days later.
+        parse_skill_manifest(GaiaAgent.SKILL_MANIFEST)
         check_skill_set_selection()
         env_allowed_paths()
-    except (SkillSetError, AllowedPathsEnvError) as exc:
+    except (SkillError, AllowedPathsEnvError) as exc:
         print(f"gaia-agent: {exc}", file=sys.stderr)
         return 2
 
