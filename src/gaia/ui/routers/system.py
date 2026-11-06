@@ -713,11 +713,18 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                     # frontend can name it precisely in the warning banner.
                     status.default_model_name = custom_model or default_model
 
-                # When no LLM is loaded, check if the expected model is downloaded.
+                # When the expected model isn't loaded, check if it is downloaded.
                 # Respects the custom_model override.
                 # Uses show_all=true to see models that are in the catalog but not
                 # yet pulled to disk.
-                if not status.model_loaded and status.default_model_name:
+                expected_missing = (
+                    not status.model_loaded or not status.expected_model_loaded
+                )
+                if (
+                    expected_missing
+                    and status.default_model_name
+                    and not status.default_model_is_cloud
+                ):
                     _target = status.default_model_name
                     try:
                         catalog_resp = await client.get(
@@ -999,13 +1006,18 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
 
 
 @router.post("/api/system/warm-up", response_model=WarmUpStatus)
-async def request_warm_up():
+async def request_warm_up(fresh: bool = False):
     """Prime the prompt a new chat's first turn sends; returns the warm-up state.
 
     Called when the user opens a new chat. Debounced and single-flight, so a
     repeat call while one runs, or just after one finished, changes nothing.
+    ``?fresh=true`` retries a picked model's load: it skips the debounce and
+    runs after a warm-up already under way.
     """
-    warmup.request_warm_up("new chat")
+    if fresh:
+        warmup.request_warm_up("model pick retry", fresh=True)
+    else:
+        warmup.request_warm_up("new chat")
     return WarmUpStatus(**warmup.warm_up_status())
 
 
