@@ -187,7 +187,8 @@ jobs:
     if: inputs.installers
     uses: ./.github/workflows/build_core.yml
     with:
-      platforms: 'darwin-arm64 darwin-x64 linux-x64'
+      # linux-arm64 builds no package; publish.yml attaches it for install.sh.
+      platforms: 'darwin-arm64 darwin-x64 linux-x64 linux-arm64'
       version: ${{ inputs.version }}
       artifact_prefix: ${{ inputs.artifact_prefix }}tui-
 

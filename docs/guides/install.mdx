@@ -366,7 +366,8 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Chat file attachments | `~/.gaia/chat/uploads/` |
 | Configuration | `~/.gaia/electron-config.json` |
 | Logs | `~/.gaia/gaia.log` (`$GAIA_HOME/gaia.log` when `GAIA_HOME` is set), or the path in `GAIA_LOG_FILE` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |
-| Terminal UI and agent binaries (one-line installer). It also holds the `gaia`, `gaia-cli` and `gaia-mcp` commands (links on Linux and macOS, copies of the launchers on Windows), and is the only GAIA directory the installer puts on your PATH | `~/.gaia/bin/` |
+| Terminal UI and agent binaries (one-line installer). It also holds the `gaia`, `gaia-cli` and `gaia-mcp` commands (links to `~/.gaia/core` on Linux and macOS; on Windows the frozen `gaia` itself), and is the only GAIA directory the installer puts on your PATH | `~/.gaia/bin/` |
+| The frozen `gaia` the one-line installer, or an AppImage, runs (Linux and macOS) | `~/.gaia/core/` |
 | Agent run traces | `~/.gaia/traces/` |
 | Daemon state (token, custody database, logs) | `~/.gaia/host/` (`$GAIA_HOME/host/` when `GAIA_HOME` is set) |
 | Models (managed by Lemonade) | `~/.cache/lemonade/models/` |
@@ -383,7 +384,7 @@ The installer above is for using GAIA. To build agents, work on GAIA itself, or 
 
 | You want | Use |
 |---|---|
-| The Python CLI and SDK, plus the terminal UI, in one command | Windows: `irm https://amd-gaia.ai/install.ps1 \| iex` · Linux/macOS: `curl -fsSL https://amd-gaia.ai/install.sh \| sh` |
+| The `gaia` CLI, plus the terminal UI, in one command, with no Python needed | Windows: `irm https://amd-gaia.ai/install.ps1 \| iex` · Linux/macOS: `curl -fsSL https://amd-gaia.ai/install.sh \| sh` |
 | The Python package only | `uv pip install amd-gaia` — see [Setup](/setup) and the [Quickstart](/quickstart) |
 | The desktop app from npm | `npm install -g @amd-gaia/agent-ui`, then `gaia-ui` — see [Agent UI](/guides/agent-ui) |
 | The desktop app's own installer | `gaia-agent-ui-<version>-<arch>` files on [GitHub Releases](https://github.com/amd/gaia/releases/latest) |

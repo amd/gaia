@@ -223,6 +223,8 @@ def _purge_paths(home: Optional[Path] = None) -> List[Path]:
         gaia / "electron-updater.log",
         gaia / "electron-startup-failures.json",
         gaia / "bin",
+        # The frozen gaia the one-line installer, or an AppImage, keeps here.
+        gaia / "core",
         gaia / "traces",
     ]
 

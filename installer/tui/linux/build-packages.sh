@@ -220,7 +220,9 @@ FPM_COMMON=(
 # rpmbuild otherwise emits /usr/lib/.build-id/** symlinks keyed on the binary's
 # build ID. They serve debuginfo lookups we do not ship, and two packages that
 # ever share a build ID collide on those paths at install time.
-RPM_ONLY=(--rpm-rpmbuild-define '_build_id_links none')
+# rpm owns only the files it is told about, so without --directories removing
+# the package left the core's folder tree behind; dpkg tracks directories itself.
+RPM_ONLY=(--rpm-rpmbuild-define '_build_id_links none' --directories "/${CORE_DIR}")
 
 build_one() {
     target="$1"; arch="$2"; output="$3"

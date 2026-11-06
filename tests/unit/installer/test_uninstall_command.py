@@ -190,6 +190,7 @@ class TestBuildPlan:
             gaia / "electron-updater.log",
             gaia / "electron-startup-failures.json",
             gaia / "bin",
+            gaia / "core",
             gaia / "traces",
             gaia / "host",
         ]

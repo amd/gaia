@@ -134,10 +134,8 @@ Install GAIA globally with a single command:
     ```
 
     This will:
-    - ✅ Install `uv` (if not already installed)
-    - ✅ Download Python 3.12 (if needed)
-    - ✅ Create `~/.gaia/venv` virtual environment
-    - ✅ Install GAIA CLI, linked into `~/.gaia/bin`
+    - ✅ Download GAIA itself, a ready-to-run `gaia` checked against the release's checksums, into `~/.gaia/core`. No Python or pip is needed
+    - ✅ Link `gaia` into `~/.gaia/bin`
     - ✅ Add `~/.gaia/bin` to your PATH. Only GAIA's own commands live there, so your system `python3` and `pip` stay first. Re-running the installer fixes an older install that put `~/.gaia/venv/bin` on PATH
 
     <Tip>

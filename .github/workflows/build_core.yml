@@ -14,8 +14,8 @@
 #
 # The Linux build runs in a Rocky Linux 9 container (glibc 2.34), like the
 # flagship agent's, so it runs on RHEL 9, Ubuntu 22.04 and Debian 12 too.
-# darwin-x64 is best-effort, as the agent's is: a caller that finds no artifact
-# for it builds no Intel package.
+# darwin-x64 and linux-arm64 are best-effort: a caller that finds no artifact
+# for one builds nothing for it.
 
 name: Build GAIA core
 
@@ -23,10 +23,10 @@ on:
   workflow_call:
     inputs:
       platforms:
-        description: 'Space-separated platforms to freeze: win32-x64 darwin-arm64 darwin-x64 linux-x64'
+        description: 'Space-separated platforms to freeze: win32-x64 darwin-arm64 darwin-x64 linux-x64 linux-arm64'
         required: false
         type: string
-        default: 'win32-x64 darwin-arm64 darwin-x64 linux-x64'
+        default: 'win32-x64 darwin-arm64 darwin-x64 linux-x64 linux-arm64'
       tag:
         description: 'Release tag; a vX.Y.Z-rcN tag stamps that version, as the installers do'
         required: false
@@ -52,7 +52,7 @@ on:
       platforms:
         description: 'Space-separated platforms to freeze'
         required: false
-        default: 'win32-x64 darwin-arm64 darwin-x64 linux-x64'
+        default: 'win32-x64 darwin-arm64 darwin-x64 linux-x64 linux-arm64'
 
 permissions:
   contents: read
@@ -87,6 +87,13 @@ jobs:
             key: linux-x64
             exe: gaia
             required: true
+            container: rockylinux/rockylinux:9
+            glibc_floor: '2.34'
+          # Best-effort: only install.sh fetches it, for Linux on Arm.
+          - os: ubuntu-24.04-arm
+            key: linux-arm64
+            exe: gaia
+            required: false
             container: rockylinux/rockylinux:9
             glibc_floor: '2.34'
     steps:

@@ -61,18 +61,24 @@ README for the per-platform builders and payload-staging steps.
 
 ### What the one-line installers download
 
-Both scripts install the `amd-gaia[api]` package from PyPI, the terminal binary
-(`gaia-<os>-<arch>`) from a GitHub release checked against that release's
-`gaia-tui-SHA256SUMS.txt`, and the GAIA agent (`gaia-agent`). Nothing installs
-without a matching SHA-256, and there is no fallback source.
+Both scripts install the frozen `gaia` (`gaia-core-<platform>.tar.gz`, checked
+against the release's `gaia-core-SHA256SUMS.txt`), the terminal binary
+(`gaia-<os>-<arch>`, checked against `gaia-tui-SHA256SUMS.txt`), both from a
+GitHub release, and the GAIA agent (`gaia-agent`). Nothing installs without a
+matching SHA-256, there is no fallback source, and neither installs Python or a
+PyPI package. `gaia` lands in `~/.gaia/core` linked from `~/.gaia/bin` on Linux
+and macOS, and in `~\.gaia\bin` beside `gaia-tui.exe` on Windows.
 
 `GAIA_RELEASE_TAG` picks the release, and pins all three to it:
 
-| `GAIA_RELEASE_TAG` | Core package | Terminal binary | GAIA agent |
-|---|---|---|---|
-| unset | latest `amd-gaia` | latest release | Agent Hub (`hub.amd-gaia.ai`), as `gaia init` |
-| `v0.25.0` | `amd-gaia==0.25.0` | that release | Agent Hub |
-| `v0.25.1-rc2` | `amd-gaia==0.25.1rc2` | that pre-release | frozen on that pre-release (`gaia-agent-release.json`), as an RC core installs it |
+| `GAIA_RELEASE_TAG` | `gaia` and the terminal binary | GAIA agent |
+|---|---|---|
+| unset | latest release | Agent Hub (`hub.amd-gaia.ai`), as `gaia init` |
+| `v0.25.0` | that release | Agent Hub |
+| `v0.25.1-rc2` | that pre-release | frozen on that pre-release (`gaia-agent-release.json`), as an RC core installs it |
+
+A release from before GAIA shipped as a binary carries no `gaia-core` files, so
+pinning one fails before anything installs.
 
 Any other value fails before anything installs.
 

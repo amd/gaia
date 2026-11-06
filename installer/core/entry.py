@@ -1,8 +1,9 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Entry of the frozen ``gaia`` executable the desktop app ships (see freeze.py)."""
+"""Entry of the frozen ``gaia`` executable the apps ship (see freeze.py)."""
 
 import multiprocessing
+import os
 import sys
 
 if __name__ == "__main__":
@@ -11,7 +12,11 @@ if __name__ == "__main__":
 
     status = dispatch(sys.argv[1:])
     if status is None:
-        from gaia.cli import main
+        # The one-line installers link gaia-mcp to this executable too.
+        if os.path.basename(sys.argv[0]).lower().startswith("gaia-mcp"):
+            from gaia.mcp.mcp_bridge import main
+        else:
+            from gaia.cli import main
 
         status = main()
     sys.exit(status)
