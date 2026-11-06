@@ -1463,7 +1463,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             self.config, "enable_filesystem", False
         ):
             filesystem_section = """
-**FILE SYSTEM TOOLS:** browse_directory (list folder; sort_by size or modified for the largest or newest), tree (visual hierarchy), file_info (metadata), find_files (search by name/content/size/date/type), read_file (text/CSV/JSON/PDF), bookmark (save locations). Use these, not a shell command, to list or search files: they need no approval.
+**FILE SYSTEM TOOLS (no approval; use, not shell):** browse_directory (list folder, sort_by=size), tree (hierarchy), file_info (metadata), find_files (by name/content/size/date/type), read_file (text/CSV/JSON/PDF), bookmark.
 
 **FILE SEARCH AND AUTO-INDEX WORKFLOW:**
 - Use 1-2 distinctive keywords, not full phrases. WRONG: find_files("Acme Corp API reference"). RIGHT: find_files("api").
