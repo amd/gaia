@@ -399,7 +399,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         mounted.current = true;
         return () => { mounted.current = false; };
     }, []);
-    const { network: gateway, recheck: recheckGateway } = useGatewayNetwork();
+    const { network: gateway, providers, recheck: recheckGateway } = useGatewayNetwork();
+    const envKey = providers.find((p) => p.id === choice && p.key_source === 'environment' && p.key_hint);
     const unreachable = (id: ProviderId) => id === 'amd' && gateway?.reachable === false;
 
     const cloud = choice !== 'local';
@@ -1187,6 +1188,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     aria-label={t('setup.key.label')}
                                 />}
                             </div>
+                            {envKey && !usersServer && !key && (
+                                <p className="setup-hint" role="status">{t('setup.key.foundEnv', { name: envKey.name, hint: envKey.key_hint ?? '' })}</p>
+                            )}
                             {keyState.busy && !keyState.waiting && <p className="setup-hint" role="status">{t('setup.key.testing')}</p>}
                             {keyState.busy && keyState.waiting && <p className="setup-hint" role="status">{keyState.waiting}</p>}
                             {keyState.error && <p className="setup-error" role="alert">{keyState.error}</p>}
