@@ -1035,7 +1035,7 @@ jobs:
       # ── Desktop installers ─────────────────────────────────────────
       # The reusable build-installers workflow uploaded each platform's
       # artifacts to "<platform>-installer" workflow-run artifacts. Pull
-      # them here and add to release-assets/ so the softprops step
+      # them here and add to release-assets/ so the release step
       # below includes them in the published release.
       # The terminal hub. Until these are release assets the binary exists
       # only as a CI artifact that expires in 14 days, so nothing can install it
