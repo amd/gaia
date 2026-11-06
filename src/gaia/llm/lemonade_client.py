@@ -3561,6 +3561,25 @@ class CloudModelUnavailableError(LemonadeClientError):
         self.status = 404
 
 
+class CloudProviderDisconnectedError(LemonadeClientError):
+    """GAIA's Lemonade lost a cloud provider (a restart) and could not get it back.
+
+    The 404 it answered says nothing about the model, so it is not reported as one.
+    """
+
+    def __init__(self, provider: str, model_id: Optional[str], reason: str):
+        from gaia.llm.inference_location import provider_phrase
+
+        where = provider_phrase(provider)
+        super().__init__(
+            f"GAIA's AI engine lost its connection to {where} (it may have "
+            f"restarted), and {reason}. Reconnect {where} {TUI_PROVIDER_SETTINGS}, "
+            "then send your message again."
+        )
+        self.provider = provider
+        self.model_id = model_id
+
+
 def describe_version_refusal(
     found_version: Optional[str], min_version: str, url: Optional[str] = None
 ) -> str:
@@ -4894,14 +4913,14 @@ class LemonadeClient:
         Returns whether the provider is usable afterwards (True when *model*
         needs no kept key).
         """
-        from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, ensure_authenticated
+        from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, reconnect_provider
         from gaia.llm.gateway import GatewayError
 
         provider = self.cloud_model_provider(model or self.model or "")
         if provider not in PROVIDERS:
             return True
         try:
-            usable = ensure_authenticated(provider, client=self)
+            usable = reconnect_provider(provider, client=self)
         except (CloudKeyError, GatewayError, requests.RequestException) as e:
             self.log.warning(
                 f"Could not give the restarted Lemonade Server the kept {provider} "
@@ -6069,7 +6088,12 @@ class LemonadeClient:
             ),
         )
         try:
-            first = self._survive_gaia_lemonade_stop(_call, model)
+            try:
+                first = self._survive_gaia_lemonade_stop(_call, model)
+            except CloudModelUnavailableError as e:
+                if not self._reconnected_cloud_provider(e, model):
+                    raise
+                first = self._survive_gaia_lemonade_stop(_call, model)
         except Exception as e:
             call_ledger.end(noted, error=e)
             raise
@@ -6077,8 +6101,76 @@ class LemonadeClient:
             call_ledger.end(noted)
             return first
         if self.follows_gaia_lemonade:
-            first = self._stream_surviving_gaia_lemonade_stop(first, _call, model)
+            first = self._stream_surviving_cloud_disconnect(
+                self._stream_surviving_gaia_lemonade_stop(first, _call, model),
+                lambda: self._stream_surviving_gaia_lemonade_stop(
+                    _call(), _call, model
+                ),
+                model,
+            )
         return _noted_stream(first, noted)
+
+    def _stream_surviving_cloud_disconnect(
+        self,
+        first: Iterator[Dict[str, Any]],
+        start: Callable[[], Iterator[Dict[str, Any]]],
+        model: str,
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Stream *first*, starting over once with ``start()`` if it 404ed
+        before its first chunk because GAIA's server had lost the provider."""
+        yielded = False
+        try:
+            for chunk in first:
+                yielded = True
+                yield chunk
+            return
+        except CloudModelUnavailableError as e:
+            if yielded or not self._reconnected_cloud_provider(e, model):
+                raise
+        yield from start()
+
+    def _reconnected_cloud_provider(
+        self, error: CloudModelUnavailableError, model: str
+    ) -> bool:
+        """After a cloud 404: True when GAIA's server had lost the provider and
+        has it back, so the request may be sent once more; False when it still
+        held the provider's key and the 404 is about the model.
+
+        Raises:
+            CloudProviderDisconnectedError: it was lost and could not be brought back.
+        """
+        from gaia.llm.cloud_keys import (
+            PROVIDERS,
+            CloudKeyError,
+            provider_lost,
+            reconnect_provider,
+        )
+        from gaia.llm.gateway import GatewayError
+        from gaia.llm.local_only import CloudDisabledError
+
+        provider = error.provider or self.cloud_model_provider(model)
+        if not self.follows_gaia_lemonade or provider not in PROVIDERS:
+            return False
+        try:
+            if not provider_lost(provider, client=self):
+                return False
+            if reconnect_provider(provider, client=self):
+                reason = None
+            elif provider == "fireworks":
+                reason = "GAIA could not give it a working key"
+            else:
+                reason = "GAIA does not set the gateway up again on its own"
+        except (CloudKeyError, GatewayError, requests.RequestException) as e:
+            if isinstance(e, CloudDisabledError):
+                raise
+            reason = f"reconnecting failed: {str(e).rstrip('.')}"
+        if reason is not None:
+            raise CloudProviderDisconnectedError(provider, model, reason) from error
+        self.log.warning(
+            f"GAIA's Lemonade Server had lost the {provider} provider; reconnected "
+            "it and sending the request once more."
+        )
+        return True
 
     def _chat_completions_once(
         self,

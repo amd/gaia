@@ -4,6 +4,8 @@
 import { AlertTriangle, Download, Layers, Loader2, WifiOff, X } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { useChatStore } from '../stores/chatStore';
+import { useBackendStore } from '../stores/backendStore';
+import type { BackendLifecycle } from '../types/agent';
 import { useT } from '../i18n/useT';
 import { needsLocalSetup, SetUpLocalButton } from './settings/ErrorNotice';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
@@ -18,7 +20,11 @@ import './ConnectionBanner.css';
  * context window is too small. Provides clear messaging and actionable hints.
  */
 /** A retry that says it is checking until the check answers. */
-function RetryButton({ onRetry, label }: { onRetry: () => void | Promise<void>; label: string }) {
+function RetryButton({ onRetry, label, busyLabel = 'Checking…' }: {
+    onRetry: () => void | Promise<void>;
+    label: string;
+    busyLabel?: string;
+}) {
     const [checking, setChecking] = useState(false);
     const run = () => {
         setChecking(true);
@@ -26,8 +32,58 @@ function RetryButton({ onRetry, label }: { onRetry: () => void | Promise<void>; 
     };
     return (
         <button className="connection-banner__retry" onClick={run} disabled={checking}>
-            {checking ? 'Checking…' : label}
+            {checking ? busyLabel : label}
         </button>
+    );
+}
+
+/** Seconds as m:ss. */
+function formatElapsed(seconds: number): string {
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+/** The desktop app's backend crashed: it is restarting, or gave up and waits for Restart GAIA. */
+function BackendRestartBanner({ lifecycle }: { lifecycle: BackendLifecycle }) {
+    const t = useT();
+    const restart = useBackendStore((s) => s.restart);
+    const restartError = useBackendStore((s) => s.restartError);
+    const restarting = lifecycle.status === 'restarting';
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        if (!restarting) return;
+        setNow(Date.now());
+        const id = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(id);
+    }, [restarting]);
+
+    if (restarting) {
+        const elapsed = lifecycle.since ? Math.max(0, Math.floor((now - lifecycle.since) / 1000)) : 0;
+        return (
+            <div className="connection-banner connection-banner--warning" role="status">
+                <div className="connection-banner__icon">
+                    <Loader2 size={16} className="connection-banner__spinner" />
+                </div>
+                <div className="connection-banner__text" dir="auto">
+                    {t('banner.restarting')}{' '}
+                    <bdi dir="ltr" className="connection-banner__timer">{formatElapsed(elapsed)}</bdi>{' '}
+                    <span className="connection-banner__hint">{t('banner.restartingHint')}</span>
+                </div>
+            </div>
+        );
+    }
+    return (
+        <div className="connection-banner connection-banner--error" role="alert">
+            <div className="connection-banner__icon">
+                <AlertTriangle size={16} />
+            </div>
+            <div className="connection-banner__text" dir="auto">
+                {t('banner.restartStopped')}{' '}
+                <span className="connection-banner__hint">
+                    {restartError ? t('banner.restartFailed', { error: restartError }) : t('banner.restartStoppedHint')}
+                </span>
+            </div>
+            <RetryButton onRetry={restart} label={t('banner.restartButton')} busyLabel={t('banner.restartingShort')} />
+        </div>
     );
 }
 
@@ -40,6 +96,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
 }) {
     const t = useT();
     const { backendConnected, systemStatus, currentSessionId, messages } = useChatStore();
+    const lifecycle = useBackendStore((s) => s.lifecycle);
     const [dismissed, setDismissed] = useState(false);
 
     // Suppress the banner entirely while a conversation is in progress.
@@ -91,6 +148,9 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
 
         if (shouldReset) setDismissed(false);
     }, [systemStatus, hasActiveConversation]);
+
+    // A crashed backend outranks everything, even a chat in progress: nothing answers until it's back.
+    if (lifecycle && lifecycle.status !== 'running') return <BackendRestartBanner lifecycle={lifecycle} />;
 
     // ── Top-priority: an active model download ──────────────────────────
     // Render the download banner BEFORE every other check (init,
@@ -272,10 +332,8 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     <WifiOff size={16} />
                 </div>
                 <div className="connection-banner__text" dir="auto">
-                    Lost the connection to GAIA.{' '}
-                    <span className="connection-banner__hint">
-                        Check that GAIA is still running, then retry.
-                    </span>
+                    {t('banner.unreachable')}{' '}
+                    <span className="connection-banner__hint">{t('banner.unreachableHint')}</span>
                 </div>
                 {onRetry && <RetryButton onRetry={onRetry} label="Retry" />}
             </div>

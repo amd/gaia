@@ -8224,13 +8224,19 @@ Do NOT wrap conversational replies in JSON.
         """
         from gaia.llm.providers.lemonade import (
             LemonadeCloudAccountError,
+            LemonadeCloudDisconnectedError,
             LemonadeCloudModelUnavailableError,
             classify_lemonade_exception,
         )
 
         classified = classify_lemonade_exception(exc)
         if isinstance(
-            classified, (LemonadeCloudAccountError, LemonadeCloudModelUnavailableError)
+            classified,
+            (
+                LemonadeCloudAccountError,
+                LemonadeCloudDisconnectedError,
+                LemonadeCloudModelUnavailableError,
+            ),
         ):
             return classified.user_message
         return None

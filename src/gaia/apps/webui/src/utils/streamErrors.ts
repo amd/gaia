@@ -43,7 +43,7 @@ export function describeStreamError(err: Error, t: Translate = getT()): string |
                 + 'If the chat list shows this chat running, reopen it later to see the answer. Otherwise, send the message again.';
         }
         return 'GAIA did not respond when this chat reconnected to its running answer. The answer may still finish: '
-            + 'check that GAIA is still running, then reopen this chat.';
+            + 'reopen this chat once GAIA is answering again.';
     }
     if (err instanceof ApiError) {
         const detail = err.detail ? parseErrorDetail(err.detail) : '';
