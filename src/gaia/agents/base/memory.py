@@ -83,6 +83,7 @@ from gaia.agents.base.memory_store import (
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
 from gaia.agents.base.tool_outcome import (
     FAILED_STATUSES,
+    tool_result_dict,
     tool_result_error_fields,
     tool_result_failed,
 )
@@ -4778,7 +4779,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         A refusal is neither: the call never ran.
         """
-        if isinstance(result, dict) and not check_was_executed(result):
+        if self._was_refused(result):
             return
         operation = self._failure_operation(tool_name, tool_args, error_msg)
         failures = getattr(self, "_turn_failures", None)
@@ -4958,6 +4959,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             f"  - {item['content']}" for item in lessons
         )
 
+    @staticmethod
+    def _was_refused(result: Any) -> bool:
+        """Whether *result*, a dict or a JSON envelope, says the call never ran."""
+        data = tool_result_dict(result)
+        return data is not None and not check_was_executed(data)
+
     def _auto_store_error(
         self,
         tool_name: str,
@@ -4967,17 +4974,18 @@ class MemoryMixin(ProceduralMemoryMixin):
     ) -> None:
         """Store a novel tool error as knowledge for future avoidance.
 
-        A call the permission layer refused before running (``executed: False``
-        on the result) is not stored: it describes the current permission
-        settings, not the world, the tool reports it fresh on every call, and
-        replayed later it teaches the model to avoid what is now allowed.
+        A call refused before running (``executed: False`` on the result) is
+        not stored. That covers the permission layer and GAIA's own per-turn
+        limits (a search or read budget, the loop guard): each describes this
+        turn or the current settings, not the world, and replayed into every
+        later prompt it teaches the model to avoid what works.
         """
         if self._automatic_writes_off():
             return
         try:
             if self._is_unlearnable_error(error_msg):
                 return
-            if isinstance(result, dict) and not check_was_executed(result):
+            if self._was_refused(result):
                 logger.debug(
                     "[MemoryMixin] not persisting a refusal for '%s': %s",
                     tool_name,

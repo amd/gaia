@@ -223,6 +223,10 @@ class GaiaConfig:
             ``auto``) for the model's own default.
         image_steps: Generation steps, or ``None`` (``auto``) for the model's
             default. More steps add detail and time.
+        dynamic_tools: Start a flagship session on its most-used tools, in short
+            form, and move to every tool at most once, so the first reply reads
+            less and the prompt cache survives. Applies to new sessions.
+            ``GAIA_DYNAMIC_TOOLS`` overrides it.
     """
 
     profile: str = "chat"
@@ -246,6 +250,7 @@ class GaiaConfig:
     image_model: Optional[str] = None
     image_size: Optional[str] = None
     image_steps: Optional[int] = None
+    dynamic_tools: bool = True
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None
