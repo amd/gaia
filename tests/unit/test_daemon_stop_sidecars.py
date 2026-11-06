@@ -128,6 +128,45 @@ def test_a_skipped_live_pid_says_why(monkeypatch, caplog, cmdline, reason):
     assert "serve" not in caplog.text
 
 
+def test_a_cmdline_psutil_cannot_read_skips_the_pid_instead_of_crashing(
+    monkeypatch, caplog
+):
+    """psutil's macOS cmdline read can raise SystemError for a live process."""
+    import psutil
+
+    from gaia.daemon.sidecars.spec import builtin_specs
+
+    class _Unreadable:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def cmdline(self):
+            raise SystemError(
+                "<built-in function proc_cmdline> returned a result with an "
+                "exception set"
+            )
+
+    monkeypatch.setattr(ledger, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(ledger, "_probe_health", lambda port: None)
+    monkeypatch.setattr(psutil, "Process", _Unreadable)
+    killed = []
+    monkeypatch.setattr(ledger, "_tree_kill", killed.append)
+    ledger.record_spawn(
+        agent_id="gaia",
+        pid=4242,
+        port=45999,
+        mode="user",
+        argv=["/bin/python", "--port", "45999"],
+        started_at=time.time(),
+    )
+
+    with caplog.at_level("INFO", logger="gaia.daemon.sidecars.ledger"):
+        assert ledger.reap_stale(builtin_specs()) == []
+
+    assert killed == []
+    assert "cannot read pid=4242's command line (SystemError)" in caplog.text
+
+
 # --- gaia daemon stop --------------------------------------------------------
 
 

@@ -142,7 +142,8 @@ def _pid_cmdline(pid: int) -> Optional[str]:
 
     try:
         return " ".join(psutil.Process(pid).cmdline())
-    except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+    # SystemError: psutil's macOS cmdline read can raise it for a live process.
+    except (psutil.NoSuchProcess, psutil.AccessDenied, SystemError) as e:
         logger.info(
             "sidecar ledger: cannot read pid=%s's command line (%s)",
             pid,
