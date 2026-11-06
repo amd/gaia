@@ -98,6 +98,7 @@ from gaia.agents.base.extraction import (
 )
 from gaia.agents.base.grounding import (
     LOOK,
+    SCRIPT_COMPUTATION_TOOLS,
     grounding_correction,
     observed_excerpt,
     path_locator,
@@ -728,10 +729,6 @@ COMPUTATION_NOT_RUN = (
     "The computation did not run, so it produced no figures. Do not report "
     "computed figures (totals, sums, counts, averages) as if it had. Tell the "
     "user what is needed to compute them."
-)
-#: Shell commands stay out: a failing test or git run is for fixing, not reporting.
-SCRIPT_COMPUTATION_TOOLS = frozenset(
-    {"run_python", "execute_python_file", "query_data"}
 )
 COMPUTATION_FAILED = (
     "The computation failed before it printed anything, so nothing was "
@@ -6975,8 +6972,9 @@ Do NOT wrap conversational replies in JSON.
         """A denied computation, or a script that failed before printing
         anything, says plainly that nothing was computed.
 
-        A failed shell command or a script that crashed after printing
-        results is for the model to fix and re-run, so it gets no note.
+        A failed shell command (a failing test or git run) or a script that
+        crashed after printing results is for the model to fix and re-run, so
+        it gets no note.
         """
         if tool_name not in COMPUTATION_TOOLS:
             return result

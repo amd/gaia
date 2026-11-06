@@ -20,6 +20,7 @@ import pytest
 from gaia.agents.base.agent import COMPUTATION_FAILED, COMPUTATION_NOT_RUN, Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.grounding import CONTENT, content_findings, presented_values
+from gaia.agents.base.tool_outcome import tool_result_failed
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import (
     VERIFICATION_NOTE_OPENER,
@@ -97,7 +98,9 @@ def _grounded_answer() -> str:
 
 
 def _rec(tool_name, args, result):
-    record = verification_record(tool_name, args, result, errored=False)
+    record = verification_record(
+        tool_name, args, result, errored=tool_result_failed(result)
+    )
     record["args"] = args
     record["output"] = ""
     record["observed"] = observed_text(result)
@@ -254,6 +257,7 @@ class _DenyPythonConsole(AgentConsole):
 
 class _OrdersAgent(Agent):
     console_override = None
+    _summary = SUMMARY
 
     def _get_system_prompt(self) -> str:
         return "test"
@@ -267,7 +271,7 @@ class _OrdersAgent(Agent):
         @tool
         def analyze_data_file(file_path: str) -> dict:
             """Summarise a data file."""
-            return dict(SUMMARY)
+            return dict(type(self)._summary)
 
         @tool
         def execute_python_file(file_path: str) -> dict:
@@ -531,3 +535,88 @@ def test_npu_invented_table_after_a_failed_run_ships_with_the_note(make_agent):
     text = result["result"]
     assert VERIFICATION_NOTE_OPENER in text
     assert "10,342.50" in text.split(VERIFICATION_NOTE_OPENER, 1)[1]
+
+
+# ---------------------------------------------------------------------------
+# A failed run, then averages the model divided out itself (Gemma 4 E4B NPU)
+# ---------------------------------------------------------------------------
+
+AVG_QUERY = (
+    "With run_python, compute the average unit_price per region in orders.csv "
+    "and print it."
+)
+#: Region → (unit_price sum, rows), as analyze_data_file reported them.
+REGION_SUMS = {
+    "South": (2429.44, 125),
+    "North": (2322.16, 141),
+    "East": (2116.17, 117),
+    "West": (2007.94, 117),
+}
+BY_REGION = {
+    "status": "success",
+    "row_count": 500,
+    "group_by": "region",
+    "group_by_results": [
+        {"region": r, "count": n, "unit_price_sum": total}
+        for r, (total, n) in REGION_SUMS.items()
+    ],
+}
+#: South is right; North, East and West are divided wrong.
+NPU_AVERAGES = (
+    "The script couldn't run, so I divided the sums from the data summary:\n\n"
+    "- South: 2429.44 / 125 = **19.43552**\n"
+    "- North: 2322.16 / 141 = **16.40748**\n"
+    "- East: 2116.17 / 117 = **18.08606**\n"
+    "- West: 2007.94 / 117 = **17.13675**\n"
+)
+RIGHT_AVERAGES = "".join(
+    f"- {r}: {total} / {n} = **{total / n:.5f}**\n"
+    for r, (total, n) in REGION_SUMS.items()
+)
+
+
+def _average_records(script_result):
+    return [
+        _rec("run_python", {"code": "import pandas as pd"}, script_result),
+        _rec("analyze_data_file", {"file_path": "orders.csv"}, BY_REGION),
+        _rec("analyze_data_file", {"file_path": "orders.csv"}, BY_REGION),
+    ]
+
+
+def test_averages_divided_wrong_after_a_failed_run_are_flagged():
+    findings = content_findings(NPU_AVERAGES, _average_records(PANDAS_MISSING), "")
+
+    assert [f.gate for f in findings] == [CONTENT]
+    note = findings[0].note
+    assert all(v in note for v in ("16.40748", "18.08606", "17.13675"))
+    assert "19.43552" not in note, "2429.44 / 125 is right"
+    assert not any(str(total) in note for total, _ in REGION_SUMS.values())
+
+
+def test_averages_divided_right_after_a_failed_run_are_not_flagged():
+    assert content_findings(RIGHT_AVERAGES, _average_records(PANDAS_MISSING), "") == []
+
+
+def test_prose_decimals_are_not_judged_when_the_script_ran():
+    ran = {"status": "success", "stdout": "done\n", "stderr": "", "return_code": 0}
+
+    assert content_findings(NPU_AVERAGES, _average_records(ran), "") == []
+
+
+def test_npu_divided_averages_after_a_failed_run_ship_with_the_note(make_agent):
+    agent = make_agent()
+    calls = (
+        _call("run_python", code="import pandas as pd"),
+        _call("analyze_data_file", file_path="orders.csv"),
+        _call("analyze_data_file", file_path="orders.csv"),
+    )
+    answer = _answer(NPU_AVERAGES)
+    with patch.object(_OrdersAgent, "_summary", dict(BY_REGION)):
+        sent = _stub_chat(agent, *calls, answer, answer)
+        result = agent.process_query(AVG_QUERY, max_steps=12)
+
+    assert COMPUTATION_FAILED in _messages_text(sent[:4])
+    assert sent[4][-1]["content"].startswith("[check:grounding]")
+    note = result["result"].split(VERIFICATION_NOTE_OPENER, 1)[1]
+    assert "16.40748" in note
+    assert "19.43552" not in note
