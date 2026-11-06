@@ -388,6 +388,37 @@ def _forget_words(text: str) -> set:
     return words
 
 
+#: Endings that make kin of one word: allergy, allergic, allergies.
+_FORGET_ENDINGS = ("ical", "ic", "ie", "y")
+
+
+def _forget_root(word: str) -> str:
+    for ending in _FORGET_ENDINGS:
+        if word.endswith(ending) and len(word) - len(ending) >= 4:
+            return word[: -len(ending)]
+    return word
+
+
+def _forget_shared(words: set, content: str) -> set:
+    """The *words* that *content* holds, as written or as a kin word.
+
+    Only a whole word reaches its kin: "allergy" meets "allergic", "allerg"
+    meets nothing.
+    """
+    held = _forget_words(content)
+    roots = {_forget_root(w) for w in held}
+    return {
+        w
+        for w in words
+        if w in held or (_forget_root(w) != w and _forget_root(w) in roots)
+    }
+
+
+def _forget_text(item: Dict) -> str:
+    """*item*'s words in order, for telling copies of one memory apart."""
+    return " ".join(re.findall(r"[a-z0-9]+", str(item.get("content", "")).lower()))
+
+
 def _is_lesson(item: Dict) -> bool:
     """Whether *item* is a lesson this agent wrote, not one the model labelled.
 
@@ -2220,15 +2251,16 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         return results
 
-    def _forget_lookup(self, description: str) -> Tuple[Optional[Dict], List[Dict]]:
-        """The one memory *description* clearly names, if any, and the candidates.
+    def _forget_lookup(self, description: str) -> Tuple[List[Dict], List[Dict]]:
+        """The memory *description* clearly names, with its copies, and the candidates.
 
         Candidates come from the search ``recall`` runs, scoped like turn
         recall, and must share a naming word or clear the recall floor. One
         matches when it holds every naming word of the description and is
         about the same person with the same polarity (``_forget_sure_of``).
-        Two matches are no match. Meaning alone only makes a candidate for the
-        model to confirm by id: "allergic to peanuts" scores 0.62 on "User is
+        Two matches are no match, unless they are copies of the same words:
+        those are one memory stored twice, and all go. Meaning alone only
+        makes a candidate for the model to confirm by id: "allergic to peanuts" scores 0.62 on "User is
         allergic to shellfish".
         """
         ctx = self._memory_context
@@ -2249,20 +2281,26 @@ class MemoryMixin(ProceduralMemoryMixin):
             ):
                 continue
             # The search ranks the whole store; an unrelated memory is no candidate.
-            shared = words & _forget_words(str(item.get("content", "")))
-            if shared or similarity.get(item["id"], 0.0) >= TURN_RECALL_MIN_SIMILARITY:
+            if (
+                _forget_shared(words, str(item.get("content", "")))
+                or similarity.get(item["id"], 0.0) >= TURN_RECALL_MIN_SIMILARITY
+            ):
                 candidates.append(item)
         # Filler alone names no memory, whatever it scores.
         if not words:
-            return None, candidates
+            return [], candidates
         matches = [
             item
             for item in candidates
-            if words <= _forget_words(str(item.get("content", "")))
+            if _forget_shared(words, str(item.get("content", ""))) == words
         ]
-        if len(matches) == 1 and _forget_sure_of(description, matches[0]):
-            return matches[0], candidates
-        return None, candidates
+        if (
+            matches
+            and len({_forget_text(item) for item in matches}) == 1
+            and all(_forget_sure_of(description, item) for item in matches)
+        ):
+            return matches, candidates
+        return [], candidates
 
     # ==================================================================
     # Mem0-Style LLM Extraction
@@ -5748,12 +5786,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                 removed = mixin._memory_store.forget(knowledge_id)
             except ValueError as exc:
                 return {"status": "error", "message": str(exc)}
-            match: Optional[Dict] = None
+            matches: List[Dict] = []
             candidates: List[Dict] = []
+            erased_ids = [knowledge_id] if removed else []
             if not removed:
                 description = knowledge_id
                 try:
-                    match, candidates = mixin._forget_lookup(description)
+                    matches, candidates = mixin._forget_lookup(description)
                 except RuntimeError as exc:
                     return {
                         "status": "error",
@@ -5765,39 +5804,58 @@ class MemoryMixin(ProceduralMemoryMixin):
                         ),
                         "display_message": "Couldn't search memory, so nothing was erased",
                     }
-                if match is not None:
-                    knowledge_id = match["id"]
-                    removed = mixin._memory_store.forget(knowledge_id)
-            if removed:
-                mixin._faiss_remove(knowledge_id)
-                mixin._refresh_if_shown(knowledge_id)
+                for item in matches:
+                    if mixin._memory_store.forget(item["id"]):
+                        erased_ids.append(item["id"])
+            if erased_ids:
+                for kid in erased_ids:
+                    mixin._faiss_remove(kid)
+                    mixin._refresh_if_shown(kid)
+                copies = (
+                    f" It was saved {len(erased_ids)} times; all "
+                    f"{len(erased_ids)} copies are gone."
+                    if len(erased_ids) > 1
+                    else ""
+                )
                 result = {
                     "status": "removed",
-                    "knowledge_id": knowledge_id,
+                    "knowledge_id": erased_ids[0],
                     "message": (
-                        "Deleted. Don't repeat this information or anything "
-                        "derived from it for the rest of the session, even "
-                        "though it is still in the chat history."
+                        f"Deleted.{copies} Don't repeat this information or "
+                        "anything derived from it for the rest of the session, "
+                        "even though it is still in the chat history."
                     ),
                 }
-                if match is not None:
+                if len(erased_ids) > 1:
+                    result["knowledge_ids"] = erased_ids
+                if matches:
                     # Matched from words, so say which memory went.
-                    result["erased"] = mixin._redact_credentials([match])[0]["content"]
+                    result["erased"] = mixin._redact_credentials(matches[:1])[0][
+                        "content"
+                    ]
                 return result
             # An error, not a status: a miss read as success tells the user it's gone.
             if candidates:
+                listed = [
+                    {"knowledge_id": item["id"], "content": item["content"]}
+                    for item in mixin._redact_credentials(candidates)
+                ]
+                # Spelled out in the message: a small model acts on what it reads there.
+                lines = "\n".join(
+                    f'- forget(knowledge_id="{c["knowledge_id"]}"): {c["content"]}'
+                    for c in listed
+                )
                 return {
                     "status": "error",
                     "knowledge_id": knowledge_id,
-                    "candidates": [
-                        {"knowledge_id": item["id"], "content": item["content"]}
-                        for item in mixin._redact_credentials(candidates)
-                    ],
+                    "candidates": listed,
                     "message": (
                         f"'{knowledge_id}' doesn't clearly match one memory. "
-                        "Nothing was erased. Forget the id of each candidate "
-                        "the user meant, or ask which one. Don't tell the user "
-                        "it was erased."
+                        "Nothing was erased. These saved memories might be it:\n"
+                        f"{lines}\n"
+                        "Call forget with the id of each one the user meant, or "
+                        "ask the user which one. Don't tell the user it was "
+                        "erased until forget returns removed."
                     ),
                     "display_message": "Nothing erased yet: checking which memory was meant",
                 }
