@@ -478,14 +478,71 @@ def test_an_agent_argv_falls_through_to_the_agent(project, child_env):
     assert _dispatch(["--json-events"], project, child_env).returncode == 97
 
 
-@pytest.mark.parametrize("tool", ["run_python", "execute_python_file"])
-def test_the_description_names_the_bundled_libraries(tool, tools):
-    from gaia.agents.base.tools import MAX_TOOL_DESCRIPTION_CHARS
-
+def _libraries_named(tool):
     description = _TOOL_REGISTRY[tool]["description"]
     line = next(s for s in description.split("\n\n") if s.startswith("Has "))
-    named = line.removeprefix("Has ").split(";")[0].replace("\n", " ")
-
-    assert [n.strip() for n in named.split(",")] == list(BUNDLED_LIBRARIES.values())
     assert "no pip" in line
-    assert len(description) <= MAX_TOOL_DESCRIPTION_CHARS
+    named = line.removeprefix("Has ").split(";")[0].replace("\n", " ")
+    return [n.strip() for n in named.split(",")]
+
+
+@pytest.fixture
+def installed(monkeypatch):
+    """Which bundled libraries this interpreter has; all of them by default."""
+    from gaia_agent import chat_agent
+
+    have = set(BUNDLED_LIBRARIES.values())
+    real_find_spec = chat_agent.importlib.util.find_spec
+
+    def find_spec(name, *args):
+        if name in BUNDLED_LIBRARIES.values():
+            return real_find_spec("os") if name in have else None
+        return real_find_spec(name, *args)
+
+    monkeypatch.setattr(chat_agent.importlib.util, "find_spec", find_spec)
+    chat_agent.script_libraries.cache_clear()
+    yield have
+    chat_agent.script_libraries.cache_clear()
+
+
+@pytest.mark.parametrize("tool", ["run_python", "execute_python_file"])
+def test_the_description_names_the_bundled_libraries(tool, installed, tools):
+    from gaia.agents.base.tools import MAX_TOOL_DESCRIPTION_CHARS
+
+    assert _libraries_named(tool) == list(BUNDLED_LIBRARIES.values())
+    assert len(_TOOL_REGISTRY[tool]["description"]) <= MAX_TOOL_DESCRIPTION_CHARS
+
+
+@pytest.fixture
+def without_pandas(installed):
+    installed.discard("pandas")
+    return installed
+
+
+@pytest.mark.parametrize("tool", ["run_python", "execute_python_file"])
+def test_a_library_this_interpreter_lacks_is_not_advertised(
+    tool, without_pandas, tools
+):
+    named = _libraries_named(tool)
+
+    assert "pandas" not in named
+    assert named == [n for n in BUNDLED_LIBRARIES.values() if n != "pandas"]
+
+
+def test_a_frozen_build_names_every_bundled_library(without_pandas, frozen, tools):
+    assert _libraries_named("run_python") == list(BUNDLED_LIBRARIES.values())
+
+
+def test_a_failed_check_is_logged_and_the_library_left_out(installed, monkeypatch):
+    from gaia_agent import chat_agent
+
+    def broken(name, *args):
+        raise ValueError(f"{name}.__spec__ is None")
+
+    monkeypatch.setattr(chat_agent.importlib.util, "find_spec", broken)
+    chat_agent.script_libraries.cache_clear()
+    with patch.object(chat_agent.logger, "warning") as warning:
+        assert chat_agent.script_libraries() == ()
+
+    checked = [call.args[1] for call in warning.call_args_list]
+    assert checked == list(BUNDLED_LIBRARIES.values())
