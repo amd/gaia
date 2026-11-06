@@ -790,6 +790,21 @@ def test_fatal_agent_error_and_failed_done_are_reported_as_error():
     assert [s for s in view["steps"] if s["type"] == "error"][0]["success"] is False
 
 
+def test_failed_done_without_fatal_event_keeps_the_failure_reason():
+    t = TurnTracker("s", "mcp")
+    t.apply(
+        {
+            "type": "done",
+            "failed": True,
+            "content": "The model stopped before it could finish.",
+        }
+    )
+    with t.cond:
+        view = t.view()
+    assert view["outcome"] == "error"
+    assert view["error"] == "The model stopped before it could finish."
+
+
 def test_nonfatal_agent_error_does_not_fail_the_turn():
     t = TurnTracker("s", "mcp")
     t.apply({"type": "agent_error", "content": "Retrying"})

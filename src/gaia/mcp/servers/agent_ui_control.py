@@ -237,13 +237,15 @@ class TurnTracker:
             self.saw_done = True
             failed = bool(event.get("failed")) or self.error is not None
             if failed and self.error is None:
-                self.error = str(event.get("failure") or event.get("content") or "Unknown error")
+                self.error = str(
+                    event.get("failure") or event.get("content") or "Unknown error"
+                )
             self._finish_locked(
-                "cancelled"
-                if event.get("cancelled")
-                else "error"
-                if failed
-                else "completed",
+                (
+                    "cancelled"
+                    if event.get("cancelled")
+                    else "error" if failed else "completed"
+                ),
                 self.error if failed else None,
             )
             self.cancelled = bool(event.get("cancelled"))
