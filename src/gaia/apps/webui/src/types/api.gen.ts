@@ -777,6 +777,7 @@ export interface MessageResponse {
   stats?: InferenceStatsResponse | null;
   stopped?: boolean;
   turn_summary?: TurnSummaryResponse | null;
+  library_notices?: string[] | null;
 }
 /**
  * RAG source citation.

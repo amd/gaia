@@ -77,6 +77,14 @@ function HistoryNotice({ text }: { text: string }) {
     return <div className="history-notice" role="note">{text}</div>;
 }
 
+function LibraryNotices({ notices }: { notices: string[] }) {
+    return (
+        <div className="library-notices" role="note">
+            {notices.map((notice) => <div key={notice}>{notice}</div>)}
+        </div>
+    );
+}
+
 interface ChatViewProps {
     sessionId: string;
 }
@@ -1095,6 +1103,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         cards: cardsSnapshot.length > 0 ? cardsSnapshot : undefined,
                         stopState,
                         historyNotice,
+                        libraryNotices: event.library_notices,
                         failure: event.failed ? event.failure : undefined,
                     };
                     if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
@@ -1704,6 +1713,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 data-role={msg.role}
                             >
                                 {notice && <HistoryNotice text={notice} />}
+                                {msg.libraryNotices && msg.libraryNotices.length > 0 && (
+                                    <LibraryNotices notices={msg.libraryNotices} />
+                                )}
                                 <MessageBubble
                                     message={msg}
                                     agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}

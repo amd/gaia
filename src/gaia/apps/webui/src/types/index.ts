@@ -452,6 +452,8 @@ export interface Message {
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */
     turnSummary?: TurnSummary;
+    /** Notices from adding indexed files to the document library. */
+    libraryNotices?: string[];
 }
 
 /** What one turn used, wrote, and sent off this PC (`done.turn_summary`). */
@@ -937,6 +939,8 @@ export interface StreamEvent {
     turn_summary?: TurnSummary;
     /** Library documents the agent indexed and attached to the chat (done events). */
     documents_added?: Document[];
+    /** Notices explaining files that were kept or could not be added (done events). */
+    library_notices?: string[];
     /** MCP server statuses (for mcp_status events). */
     servers?: MCPServerStatus[];
     /** Structured command output (for tool_result of run_shell_command). */

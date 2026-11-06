@@ -116,6 +116,28 @@ it('does not list a document the chat already has twice', async () => {
     expect(state.documents).toEqual([MANUAL]);
 });
 
+it('keeps library notices on the finished turn', async () => {
+    const notice = "run.exe couldn't be added to your documents (.exe files are not supported).";
+    mockedApi.getMessages
+        .mockResolvedValueOnce({ messages: [], total: 0 })
+        .mockResolvedValue({
+            messages: [{
+                id: 7,
+                session_id: SESSION.id,
+                role: 'assistant',
+                content: 'Added it.',
+                created_at: '2026-11-04T00:00:01Z',
+                rag_sources: null,
+                libraryNotices: [notice],
+            }],
+            total: 1,
+        });
+    await answerWith({ library_notices: [notice] });
+
+    expect(await screen.findByRole('note')).toHaveTextContent(notice);
+    expect(useChatStore.getState().messages.slice(-1)[0]?.libraryNotices).toEqual([notice]);
+});
+
 it('leaves the chat alone when the turn indexed nothing', async () => {
     await answerWith({});
 
