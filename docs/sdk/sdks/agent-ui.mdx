@@ -2923,7 +2923,8 @@ model with no known price reads as unknown, never $0. Cloud models from
     `allowed_over`). **500** when the saved limit is unreadable.
   </Accordion>
 
-  <Accordion title="GET /api/spending/chat/{session_id}?since=&model=">
+  <Accordion title="GET /api/spending/chat/{session_id}">
+    Takes `since` and `model` as query parameters.
     What one chat's cloud answers cost, and every chat's answers since `since`
     (an ISO instant: the start of the viewer's local day). Sums the cost each
     answer's turn summary saved, cache discounts included; answers on this PC
