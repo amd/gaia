@@ -63,13 +63,17 @@ def test_reap_after_stop_kills_a_real_recorded_sidecar():
     argv = [
         sys.executable,
         "-c",
-        "import time; time.sleep(60)",
+        "import time; print('ready', flush=True); time.sleep(60)",
         "--port",
         str(port),
     ]
     # Its own session, as the daemon starts agents: the reap kills the process group.
-    proc = subprocess.Popen(argv, start_new_session=True)
+    proc = subprocess.Popen(
+        argv, start_new_session=True, stdout=subprocess.PIPE, text=True
+    )
     try:
+        # Read its cmdline only once it runs: mid-exec it may not match yet.
+        assert proc.stdout.readline().strip() == "ready"
         if os.name != "nt":
             assert os.getpgid(proc.pid) != os.getpgid(0)
         ledger.record_spawn(
@@ -91,6 +95,7 @@ def test_reap_after_stop_kills_a_real_recorded_sidecar():
         if proc.poll() is None:
             proc.kill()
             proc.wait(timeout=10)
+        proc.stdout.close()
 
 
 # --- gaia daemon stop --------------------------------------------------------
