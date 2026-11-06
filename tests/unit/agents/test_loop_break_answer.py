@@ -394,7 +394,7 @@ def test_failed_repeats_on_the_legacy_path_keep_the_research():
     [
         (
             ConnectionError("Lemonade Server not reachable at http://localhost:8000"),
-            "Lemonade Server not reachable at http://localhost:8000",
+            "Couldn't reach the local LLM",
         ),
         ("", "empty reply"),
         (
@@ -419,8 +419,9 @@ def test_failed_closing_call_returns_the_notice_and_why(agent, caplog, reply, re
     assert len(failure_lines) == 1
     assert "couldn't" in failure_lines[0]
     assert len(_scope_lines(answer)) == 1
+    # The log keeps the exception itself, whatever words the answer uses.
     assert any(
-        r.levelno == logging.WARNING and reason in r.getMessage()
+        r.levelno == logging.WARNING and "Could not write" in r.getMessage()
         for r in caplog.records
     )
 
@@ -550,8 +551,8 @@ def test_stop_during_the_closing_retry_reports_the_cancel():
     agent._cancel_event = threading.Event()
     tries = []
 
-    def _once(*_args, **kwargs):
-        tries.append(kwargs.get("offer_tools", True))
+    def _once(*args, **kwargs):
+        tries.append(args[4] if len(args) > 4 else kwargs.get("offer_tools", True))
         if len(tries) == 1:
             agent._cancel_event.set()
             raise agent_module._NotAnAnswer("the model asked to run x")

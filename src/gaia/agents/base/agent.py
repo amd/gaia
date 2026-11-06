@@ -184,7 +184,9 @@ from gaia.llm.lemonade_client import (
 from gaia.llm.providers.lemonade import (
     CONNECTION_FAILURE_RE,
     MODEL_SERVER_DOWN,
+    LemonadeContextOverflowError,
     LemonadeStreamCutOffError,
+    classify_lemonade_exception,
 )
 from gaia.llm.reasoning import split_reasoning as _split_reasoning
 from gaia.llm.reasoning import strip_reasoning
@@ -918,6 +920,13 @@ _NO_TOOLS_RETRY_NOTE = (
 
 class _NotAnAnswer(ValueError):
     """The closing reply came back, but it was a tool call or nothing."""
+
+
+class _ClosingOverflow(RuntimeError):
+    """The closing call, and its one trimmed retry, were both too long."""
+
+    def __init__(self) -> None:
+        super().__init__(_CONTEXT_STILL_OVERFLOWING_MESSAGE)
 
 
 # Stands in for a call the loop stopped before it ran, so the transcript
@@ -7785,13 +7794,15 @@ Do NOT wrap conversational replies in JSON.
         # Before the closing call, whose stats must not be taken for this step's.
         self._record_unrecorded_step(conversation)
         try:
-            return self._closing_answer_once(messages, conversation, instruction, step)
+            return self._closing_answer_recovering_overflow(
+                messages, conversation, instruction, step
+            )
         except _NotAnAnswer as first:
             logger.info(
                 "Closing reply was not an answer (%s); retrying without tools", first
             )
             try:
-                return self._closing_answer_once(
+                return self._closing_answer_recovering_overflow(
                     messages,
                     conversation,
                     f"{instruction}\n\n{_NO_TOOLS_RETRY_NOTE}",
@@ -7801,11 +7812,112 @@ Do NOT wrap conversational replies in JSON.
             except _NotAnAnswer:
                 raise first from None
             except Exception as second:  # noqa: BLE001 - report the first reason
+                if isinstance(second, _ClosingOverflow):
+                    raise
                 cancel_event = getattr(self, "_cancel_event", None)
                 if cancel_event is not None and cancel_event.is_set():
                     raise
                 logger.warning("Closing retry without tools failed: %s", second)
                 raise first from None
+
+    def _closing_answer_recovering_overflow(
+        self,
+        messages: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
+        instruction: str,
+        step: int,
+        offer_tools: bool = True,
+    ) -> Optional[str]:
+        """One closing request, with the loop's own overflow recovery.
+
+        This request carries the whole conversation and is the turn's biggest,
+        so it is the likeliest to overflow (#5064). It gets what a loop step
+        gets: a model loaded with a too-small window is re-raised for the chat
+        helper to reload, and a full conversation is trimmed once and asked
+        again. Anything still refused as too long reaches the caller as
+        ``_CONTEXT_STILL_OVERFLOWING_MESSAGE``, so the answer names the limit
+        instead of repeating the backend's status code and JSON body.
+        """
+        try:
+            return self._closing_answer_once(
+                messages, conversation, instruction, step, offer_tools
+            )
+        except _NotAnAnswer:
+            raise
+        except Exception as exc:  # noqa: BLE001 - overflow or a real failure
+            # Classified, not string-matched: only a length refusal earns a
+            # trim and retry; a network failure whose words happen to include
+            # "context size" would be retried against a full history.
+            if not isinstance(
+                classify_lemonade_exception(exc), LemonadeContextOverflowError
+            ):
+                raise
+            if self._is_loaded_ctx_too_small():
+                self.error_history.append(
+                    {
+                        "step": step,
+                        "error": str(exc),
+                        "type": "llm_wrong_ctx_loaded_reraise",
+                    }
+                )
+                logger.warning(
+                    "Wrong ctx_size loaded at the closing call — re-raising so "
+                    "the chat helper can reload the model: %s",
+                    exc,
+                )
+                raise
+            shrunk = self._shrink_messages_for_overflow(messages)
+            if not self._closing_retry_frees_room(messages, shrunk, str(exc)):
+                raise _ClosingOverflow() from exc
+            logger.warning(
+                "Context overflow at the closing call: putting older results "
+                "away freed enough room; asking once more"
+            )
+            # Only the closing request is trimmed; the caller's list is shared
+            # with the turn record and the saved history.
+            try:
+                return self._closing_answer_once(
+                    shrunk, conversation, instruction, step, offer_tools
+                )
+            except _NotAnAnswer:
+                raise
+            except Exception as retried:  # noqa: BLE001 - given up outside
+                logger.warning(
+                    "The closing call failed again after trimming: %s", retried
+                )
+                # Only a second overflow means the trimmed request is still too
+                # long; anything else is a real failure and is reported as such.
+                if not isinstance(
+                    classify_lemonade_exception(retried),
+                    LemonadeContextOverflowError,
+                ):
+                    raise
+                raise _ClosingOverflow() from retried
+
+    def _closing_retry_frees_room(
+        self,
+        messages: List[Dict[str, Any]],
+        shrunk: List[Dict[str, Any]],
+        error_text: str,
+    ) -> bool:
+        """Whether the trimmed request can fit, by the loop's own rule.
+
+        A retry is worth it only when the shrink freed more than the request
+        was over by, or, with no numbers in the error, a tenth of the prompt.
+        """
+        system_prompt, tools = self.system_prompt, self._openai_tools
+        before = request_tokens(messages, system_prompt, tools)
+        after = request_tokens(shrunk, system_prompt, tools)
+        freed = max(0, before - after)
+        numbers = overflow_numbers(error_text)
+        if numbers is not None:
+            requested, available = numbers
+            # Freed is in our tokens; the backend counted in its own.
+            projected = (
+                requested - int(freed * requested / before) if before else requested
+            )
+            return projected <= int(available * 0.95)
+        return before > 0 and freed >= before * 0.1
 
     def _closing_answer_once(
         self,
@@ -8422,11 +8534,7 @@ Do NOT wrap conversational replies in JSON.
         Returns ``None`` for unrelated exceptions so the caller falls
         through to its normal generic copy.
         """
-        from gaia.llm.providers.lemonade import (
-            LemonadeError,
-            classify_lemonade_exception,
-            wording_for_model,
-        )
+        from gaia.llm.providers.lemonade import LemonadeError, wording_for_model
 
         model = getattr(self, "model_id", None)
 
@@ -8468,7 +8576,6 @@ Do NOT wrap conversational replies in JSON.
             LemonadeCloudAccountError,
             LemonadeCloudDisconnectedError,
             LemonadeCloudModelUnavailableError,
-            classify_lemonade_exception,
         )
 
         classified = classify_lemonade_exception(exc)
@@ -8704,10 +8811,7 @@ Do NOT wrap conversational replies in JSON.
     @staticmethod
     def _engine_start_failure(exc: BaseException):
         """The typed error when *exc* is GAIA's server failing to start, else None."""
-        from gaia.llm.providers.lemonade import (
-            LemonadeEngineStartError,
-            classify_lemonade_exception,
-        )
+        from gaia.llm.providers.lemonade import LemonadeEngineStartError
 
         typed = classify_lemonade_exception(exc)
         return typed if isinstance(typed, LemonadeEngineStartError) else None
@@ -8809,10 +8913,7 @@ Do NOT wrap conversational replies in JSON.
     @staticmethod
     def _model_server_down(exc: BaseException) -> bool:
         """Whether *exc* is the model server accepting no connection at all."""
-        from gaia.llm.providers.lemonade import (
-            LemonadeServerUnreachableError,
-            classify_lemonade_exception,
-        )
+        from gaia.llm.providers.lemonade import LemonadeServerUnreachableError
 
         return isinstance(
             classify_lemonade_exception(exc), LemonadeServerUnreachableError
@@ -13068,7 +13169,7 @@ Do NOT wrap conversational replies in JSON.
                     self._generate_max_steps_message(
                         conversation, tool_steps, steps_limit, findings=True
                     ).rstrip()
-                    + f"\n\nThe summary of what I found couldn't be written: {e}"
+                    + f"\n\n{self._closing_failure_note(e, 'The summary of what I found')}"
                 )
             else:
                 if cap_answer is None:
@@ -13470,8 +13571,8 @@ Do NOT wrap conversational replies in JSON.
         except Exception as e:  # noqa: BLE001 - the reason goes in the answer
             logger.warning("Could not write the loop-break summary: %s", e)
             return (
-                f"{summary.rstrip()}\n\nThe summary of what I did couldn't be "
-                f"written: {e}",
+                f"{summary.rstrip()}\n\n"
+                f"{self._closing_failure_note(e, 'The summary of what I did')}",
                 steps_taken,
             )
         # Raw, like the summary branches above — the caller finalizes once.
@@ -13523,10 +13624,36 @@ Do NOT wrap conversational replies in JSON.
             logger.warning("Could not write the closing answer: %s", e)
             return (
                 "I stopped because I had started work this request did not ask "
-                f"for, and the closing answer couldn't be written: {e}",
+                f"for, and {self._closing_failure_note(e, 'the closing answer')}",
                 steps_taken,
             )
         return answer, steps_taken
+
+    def _closing_failure_note(self, exc: BaseException, subject: str) -> str:
+        """Why *subject* couldn't be written, in words the user can act on.
+
+        The raw exception went into the answer before this, so a refused
+        closing call put ``status 400`` and a JSON body in front of the reader
+        (#5064). A trim that could not free enough room says so; any other
+        failure of the model service is reported in the provider's own words.
+        """
+        classified = classify_lemonade_exception(exc)
+        if isinstance(exc, _ClosingOverflow) or isinstance(
+            classified, LemonadeContextOverflowError
+        ):
+            return (
+                "there wasn't enough room left in the model's context window to "
+                f"write it. {_CONTEXT_STILL_OVERFLOWING_MESSAGE}"
+            )
+        reason = self._extract_lemonade_user_message(exc)
+        if reason:
+            return f"{subject} couldn't be written. {reason}"
+        if classified is not None:
+            return f"{subject} couldn't be written. {classified.user_message}"
+        return (
+            f"{subject} couldn't be written: "
+            f"{(str(exc).strip()[:300] or type(exc).__name__)}"
+        )
 
     def _dedup_mutation_call(
         self,
