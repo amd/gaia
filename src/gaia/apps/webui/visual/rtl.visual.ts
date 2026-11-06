@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -1178,6 +1178,29 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['ar', 'en']) {
+    test(`a crashed backend says it is restarting, with a timer, and no raw error (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withCrashedBackend(p, 'restarting', NOW.getTime() - 75_000));
+        const banner = page.locator('.connection-banner');
+        await expect(banner).toContainText(locale === 'ar' ? 'يُعاد تشغيله' : 'is restarting');
+        await expect(banner.locator('bdi')).toHaveText('1:15');
+        await expect(page.getByText(/Failed to fetch|still running/)).toHaveCount(0);
+        await shot(page, `backend-restarting-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.connection-banner')).toEqual([]);
+    });
+
+    test(`restarts ran out: a plain message and Restart GAIA (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withCrashedBackend(p, 'stopped', NOW.getTime() - 300_000));
+        const banner = page.locator('.connection-banner');
+        await expect(banner.getByRole('button', { name: locale === 'ar' ? /إعادة تشغيل GAIA/ : /Restart GAIA/ })).toBeVisible();
+        await expect(page.getByText(/Failed to fetch|still running/)).toHaveCount(0);
+        await shot(page, `backend-stopped-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.connection-banner')).toEqual([]);
+    });
+}
+
 /** The reply's text asks the user to press Try again, so the button must be on screen, labelled, without a hover. */
 async function expectVisibleTryAgain(page: Page, locale: string): Promise<void> {
     const retry = page.getByRole('button', { name: /Try again/ });
@@ -2102,6 +2125,36 @@ for (const locale of ['ar', 'en']) {
             await checkMemory(page, locale, 'advanced');
             await page.locator('.memory-dashboard-body').evaluate((el) => { el.scrollTop = el.scrollHeight; });
             await checkMemory(page, locale, 'advanced-end');
+        });
+
+        test('advanced, a tool-recorded error next to one the user wrote', async ({ page }) => {
+            await openMemory(page, locale);
+            await memoryTab(page, /Advanced/);
+            const badge = (text: string) => page.locator('.mem-knowledge-table tbody tr', { hasText: text }).locator('.mem-cat-badge');
+            const learned = badge('note-taker');
+            await expect(learned).toContainText(locale === 'ar' ? 'تعلّمه GAIA' : 'Learned by GAIA');
+            await expect(badge('hotel wifi')).toContainText(locale === 'ar' ? 'خطأ' : 'Error');
+            await expect(badge('hotel wifi')).not.toContainText(locale === 'ar' ? 'تعلّمه' : 'Learned');
+            if (locale === 'ar') {
+                // Read right to left: the Arabic verb sits right of "GAIA".
+                const [verbLeft, gaiaLeft] = await learned.evaluate((el) => {
+                    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+                    let node = walker.nextNode() as Text | null;
+                    while (node && !node.data.includes('تعلّمه')) node = walker.nextNode() as Text | null;
+                    if (!node) throw new Error('no Arabic label in the badge');
+                    const at = (word: string) => {
+                        const start = node!.data.indexOf(word);
+                        const range = document.createRange();
+                        range.setStart(node!, start);
+                        range.setEnd(node!, start + word.length);
+                        return range.getBoundingClientRect().left;
+                    };
+                    return [at('تعلّمه'), at('GAIA')];
+                });
+                expect(gaiaLeft).toBeLessThan(verbLeft);
+            }
+            await learned.scrollIntoViewIfNeeded();
+            await checkMemory(page, locale, 'advanced-errors');
         });
 
         test('advanced, a row open and the add form', async ({ page }) => {

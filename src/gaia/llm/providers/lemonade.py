@@ -20,12 +20,14 @@ from ..lemonade_client import (
     DEFAULT_MODEL_NAME,
     KV_CACHE_SHARED_PHRASES,
     CloudModelUnavailableError,
+    CloudProviderDisconnectedError,
     GaiaLemonadeStartError,
     LemonadeAuthError,
     LemonadeClient,
     LemonadeClientError,
     LemonadeServerDownError,
     active_profile_ctx_size,
+    cloud_model_provider,
     is_tool_calling_model,
     lemonade_log_hint,
     local_sampling_defaults,
@@ -38,6 +40,7 @@ from ..surface_hints import (
     APP_WEDGED_SERVER_HINT,
     TUI_MODEL_SWITCH_HINT,
     TUI_PROVIDER_AUTH_HINT,
+    TUI_PROVIDER_SETTINGS,
     TUI_SETUP_HINT,
 )
 
@@ -322,6 +325,21 @@ _ENGINE_START_RE = re.compile(
 #: How a failed turn names this cause to a front-end, which offers the fix.
 MODEL_SERVER_DOWN = "model_server_down"
 
+#: How these messages name the local server.
+_LOCAL_SERVER_RE = re.compile(r"\bthe local (?:LLM|model)(?: server)?\b", re.IGNORECASE)
+
+
+def wording_for_model(message: str, model_id: Optional[str]) -> str:
+    """*message* as a chat on *model_id* should read it.
+
+    A cloud chat still goes through GAIA's Lemonade, so a failure there is
+    real, but "the local LLM" would tell the user their model runs here.
+    """
+    if not message or cloud_model_provider(model_id) is None:
+        return message
+    return _LOCAL_SERVER_RE.sub("GAIA's AI engine", message)
+
+
 #: The wording of :class:`LemonadeServerDownError`, once a wrapper flattened it.
 _SERVER_DOWN_RE = re.compile(
     r"the (?:local )?model server(?: at (\S+))? isn't answering[^\n]*",
@@ -449,6 +467,19 @@ class LemonadeCloudModelUnavailableError(LemonadeError):
             ),
             payload=payload,
         )
+
+
+class LemonadeCloudDisconnectedError(LemonadeError):
+    """GAIA's model server restarted, lost the cloud provider, and GAIA could
+    not reconnect it. The message names the fix; a resend fails the same way."""
+
+    retryable = False
+    user_message = (
+        "GAIA's AI engine lost its cloud provider connection (it may have "
+        "restarted). "
+        f"Reconnect the provider {TUI_PROVIDER_SETTINGS}, then send your message "
+        "again."
+    )
 
 
 class LemonadeAuthRejectedError(LemonadeError):
@@ -869,6 +900,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
             return LemonadeServerUnreachableError(str(cur), cur.endpoint)
         if isinstance(cur, LemonadeAuthError):
             return LemonadeAuthRejectedError(user_message=str(cur))
+        if isinstance(cur, CloudProviderDisconnectedError):
+            return LemonadeCloudDisconnectedError(user_message=str(cur))
         if isinstance(cur, CloudModelUnavailableError):
             return LemonadeCloudModelUnavailableError(cur.model_id, cur.provider)
         if isinstance(cur, CloudDisabledError):
