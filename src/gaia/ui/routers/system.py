@@ -1467,7 +1467,7 @@ async def work_in_progress(request: Request, db: ChatDatabase = Depends(get_db))
         # A model download started from Retry or Settings runs outside a setup run.
         setup=setup_status.get("state") in ("running", "verifying")
         or any(
-            m.get("state") in ("queued", "downloading")
+            m.get("state") in ("queued", "downloading", "verifying")
             for m in setup_status.get("models") or []
         ),
     )
