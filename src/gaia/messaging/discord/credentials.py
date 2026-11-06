@@ -39,10 +39,38 @@ def _keyring():
     return keyring
 
 
+#: Said when this PC has nowhere secure to keep the token.
+NO_STORE_HINT = (
+    "This PC has no secure place to keep the Discord bot token ({detail}). On a "
+    "Linux desktop, log in to your desktop session so its keyring (GNOME Keyring "
+    "or KWallet) is running, then connect again. On a server or in WSL, set "
+    f"{BOT_TOKEN_ENV_VAR} to the token in the environment GAIA starts in, then "
+    "connect again. Docs: https://amd-gaia.ai/docs/guides/discord"
+)
+
+
 def save(bot_token: str) -> None:
-    """Store the bot token in the OS keyring."""
-    _keyring().set_password(SERVICE_NAME, BOT_TOKEN_KEY, bot_token)
+    """Store the bot token in the OS keyring.
+
+    Nothing to store when the environment already supplies this very token:
+    that is the way to run where there is no keyring.
+
+    Raises:
+        DiscordCredentialsError: the keyring cannot keep it, with what to do.
+    """
+    if os.environ.get(BOT_TOKEN_ENV_VAR) == bot_token:
+        log.info("The Discord bot token comes from %s; not stored", BOT_TOKEN_ENV_VAR)
+        return
+    try:
+        _keyring().set_password(SERVICE_NAME, BOT_TOKEN_KEY, bot_token)
+    except Exception as e:  # noqa: BLE001 - re-raised with the remedy below
+        raise DiscordCredentialsError(NO_STORE_HINT.format(detail=_short(e))) from e
     log.info("Stored the Discord bot token in the OS keyring under %s", SERVICE_NAME)
+
+
+def _short(error: Exception) -> str:
+    text = str(error).split(". ")[0].strip()
+    return text[:120] or type(error).__name__
 
 
 def clear() -> None:
@@ -92,6 +120,11 @@ def connector_token() -> Optional[str]:
     """The ``mcp-discord`` connector's token, if one is saved.
 
     Read only to refuse sharing it: two Gateway sessions on one bot both receive
-    every DM, so the bridge needs a bot of its own.
+    every DM, so the bridge needs a bot of its own. With no usable keyring the
+    connector could not have saved one either, so the answer is "none".
     """
-    return _keyring().get_password(SERVICE_NAME, CONNECTOR_TOKEN_KEY)
+    try:
+        return _keyring().get_password(SERVICE_NAME, CONNECTOR_TOKEN_KEY)
+    except Exception as e:  # noqa: BLE001 - no keyring means no saved connector token
+        log.info("No keyring to look up the Discord connector's token in: %s", e)
+        return None
