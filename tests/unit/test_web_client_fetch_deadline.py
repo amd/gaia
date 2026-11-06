@@ -35,7 +35,9 @@ class _RedirectHandler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 - http.server naming
         if self.path == "/redirect":
             self.send_response(302)
-            self.send_header("Location", f"http://localhost:{self.server.target_port}/fast")
+            self.send_header(
+                "Location", f"http://localhost:{self.server.target_port}/fast"
+            )
             self.end_headers()
             return
         self.send_response(200)
@@ -166,7 +168,9 @@ def test_a_fast_fetch_is_unaffected(server):
     assert response.text == "<html>ok</html>"
 
 
-def test_cross_host_redirect_rate_limit_does_not_consume_fetch_deadline(server, monkeypatch):
+def test_cross_host_redirect_rate_limit_does_not_consume_fetch_deadline(
+    server, monkeypatch
+):
     """A long pacing interval between redirect hops is outside the fetch clock."""
     monkeypatch.setenv("GAIA_WEB_ALLOWED_HOSTS", "127.0.0.1,localhost")
     redirect = ThreadingHTTPServer(("127.0.0.1", 0), _RedirectHandler)
@@ -184,11 +188,15 @@ def test_cross_host_redirect_rate_limit_does_not_consume_fetch_deadline(server, 
     redirect.daemon_threads = True
     threading.Thread(target=redirect.serve_forever, daemon=True).start()
     client = WebClient(timeout=10, rate_limit=1.5, fetch_deadline=1)
+    # Seed the redirect target as just visited so its hop really waits ~1.5s.
+    client._domain_last_request["localhost"] = time.monotonic()
+    started = time.monotonic()
     try:
         response = client.get(f"http://127.0.0.1:{redirect.server_address[1]}/redirect")
     finally:
         redirect.shutdown()
         redirect.server_close()
+    assert time.monotonic() - started >= 1.4
     assert response.text == "<html>ok</html>"
 
 

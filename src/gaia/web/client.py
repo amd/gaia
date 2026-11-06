@@ -192,6 +192,7 @@ class _Deadline:
         self._thread_id = threading.get_ident()
         self._response = None
         self._done = False
+        self._paused = False
         self._timer = threading.Timer(seconds, self._fire)
         self._timer.daemon = True
 
@@ -240,7 +241,7 @@ class _Deadline:
 
     def _fire(self) -> None:
         with _SOCKETS_LOCK:
-            if self._done or getattr(self, "_paused", False):
+            if self._done or self._paused:
                 return
             self.fired.set()
             sock = _THREAD_SOCKETS.get(self._thread_id)
@@ -997,7 +998,9 @@ class WebClient:
             # Rate limit for new domain
             new_domain = urlparse(redirect_url).hostname
             if new_domain != domain:
-                deadline.run_without_clock(lambda: self._rate_limit_wait(new_domain))
+                deadline.run_without_clock(
+                    lambda domain=new_domain: self._rate_limit_wait(domain)
+                )
                 domain = new_domain
 
             current_url = redirect_url
