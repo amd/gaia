@@ -71,6 +71,11 @@ export interface ApiSchemas {
   LimitRequest: LimitRequest;
   LoadModelRequest: LoadModelRequest;
   LoadedModelInfo: LoadedModelInfo;
+  LogFileInfo: LogFileInfo;
+  LogLineInfo: LogLineInfo;
+  LogReadResponse: LogReadResponse;
+  LogSourceInfo: LogSourceInfo;
+  LogSourcesResponse: LogSourcesResponse;
   McpOutputResponse: McpOutputResponse;
   MemorySettingsBody: MemorySettingsBody;
   MessageListResponse: MessageListResponse;
@@ -747,6 +752,50 @@ export interface LoadedModelInfo {
   model_type?: string | null;
   name?: string | null;
   recipe?: string | null;
+}
+/**
+ * One log file a source offers.
+ */
+export interface LogFileInfo {
+  modified?: number | null;
+  name: string;
+  path: string;
+  size_bytes?: number | null;
+}
+/**
+ * One redacted log line.
+ */
+export interface LogLineInfo {
+  severity?: string | null;
+  tag?: string | null;
+  text: string;
+}
+/**
+ * A log's recent lines for the viewer, or a reason code when it can't be read.
+ */
+export interface LogReadResponse {
+  available?: boolean;
+  base_url?: string | null;
+  cursor?: string | null;
+  detail?: string | null;
+  dropped?: number;
+  lines?: LogLineInfo[];
+  log_path?: string | null;
+  owner?: string | null;
+  reason?: string | null;
+  reset?: boolean;
+  server_answering?: boolean | null;
+  source?: string | null;
+}
+/**
+ * A group of logs: model_server | gaia | service | agent | desktop | other.
+ */
+export interface LogSourceInfo {
+  files?: LogFileInfo[];
+  id: string;
+}
+export interface LogSourcesResponse {
+  sources: LogSourceInfo[];
 }
 /**
  * Typed request body for PUT /api/memory/settings.
