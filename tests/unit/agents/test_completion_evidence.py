@@ -1349,3 +1349,108 @@ def test_a_unc_path_in_a_save_claim_never_touches_the_network(
     ledger.snapshot("run_python", {"code": f"open(r'{share}', 'w')"})
     found = gaps(ledger, f"I saved the report to {share}.")
     assert any("f.pdf" in gap for gap in found)
+
+
+_ORDERS = "order_id,region,product,units,unit_price\n492,South,Doohickey,30,47.00\n"
+
+
+def _report_turn(tmp_path):
+    """The user grants only orders.csv, then names a report beside it."""
+    from gaia.security import PathValidator
+
+    fx = tmp_path / "fx"
+    (fx / "work").mkdir(parents=True)
+    orders = fx / "orders.csv"
+    orders.write_text(_ORDERS)
+    report = fx / "work" / "report.md"
+    validator = PathValidator(allowed_paths=[str(orders)])
+    cwd = tmp_path / "server"
+    cwd.mkdir()
+    ledger = CompletionEvidence(
+        f"Create {report} with a markdown table of the 3 largest orders in "
+        f"{orders} (order_id, region, product, revenue), then read it back to "
+        "confirm.",
+        str(cwd),
+        validator=validator,
+    )
+    return ledger, validator, report
+
+
+def _run_python(ledger, validator, code):
+    args = {"code": code}
+    before = ledger.snapshot("run_python", args, validator)
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    result = {"status": "success", "stdout": done.stdout, "return_code": 0}
+    ledger.record("run_python", args, result, True, before=before)
+
+
+def _report_code(report):
+    """The shape Gemma wrote: inline CSV, the output path held in a variable."""
+    return (
+        f'csv_data = """{_ORDERS}"""\n'
+        "rows = [line.split(',') for line in csv_data.strip().splitlines()[1:]]\n"
+        "table = '| order_id | region | product | revenue |\\n|---|---|---|---|\\n'\n"
+        "for r in rows:\n"
+        "    revenue = int(r[3]) * float(r[4])\n"
+        "    table += f'| {r[0]} | {r[1]} | {r[2]} | {revenue:.2f} |\\n'\n"
+        f"report_path = r'{report}'\n"
+        "with open(report_path, 'w') as f:\n"
+        "    f.write(table)\n"
+        "print('written')\n"
+    )
+
+
+def _claimed(ledger, report):
+    return gaps(ledger, f"The report has been successfully created at `{report}`.")
+
+
+def test_script_write_to_a_named_file_outside_the_read_grant_counts(tmp_path):
+    ledger, validator, report = _report_turn(tmp_path)
+    _run_python(ledger, validator, _report_code(report))
+    assert "| 492 | South | Doohickey | 1410.00 |" in report.read_text()
+    found = _claimed(ledger, report)
+    assert not any("No successful write" in gap for gap in found), found
+    # Written but never read back: that note is still true.
+    assert any("read back" in gap for gap in found), found
+
+
+def test_script_that_leaves_the_named_file_alone_is_still_flagged(tmp_path):
+    ledger, validator, report = _report_turn(tmp_path)
+    _run_python(ledger, validator, "print(1 + 1)")
+    assert not report.exists()
+    assert any("No successful write" in gap for gap in _claimed(ledger, report))
+
+
+def test_named_file_unchanged_since_before_the_turn_is_still_flagged(tmp_path):
+    ledger, validator, report = _report_turn(tmp_path)
+    report.write_text("| old |\n")
+    _run_python(ledger, validator, f"print(open(r'{report}').read())")
+    assert any("No successful write" in gap for gap in _claimed(ledger, report))
+
+
+def test_an_unchanged_snapshot_beats_an_mtime_inside_the_run(tmp_path):
+    ledger, validator, report = _report_turn(tmp_path)
+    report.write_text("| old |\n")
+    _run_python(ledger, validator, "print(1 + 1)")
+    # A coarse file clock can date the earlier write inside the run's window.
+    _, end, ok, run = ledger.exec_windows[0]
+    ledger.exec_windows[0] = (0, end, ok, run)
+    assert any("No successful write" in gap for gap in _claimed(ledger, report))
+    assert ledger.key(str(report)) not in ledger.written_files()
+
+
+def test_a_withheld_named_file_is_never_probed(tmp_path, monkeypatch):
+    ledger, validator, report = _report_turn(tmp_path)
+    validator.withhold_path(str(report.parent))
+    monkeypatch.setattr(ledger, "_stamp", lambda p: pytest.fail(f"probed {p}"))
+    assert ledger.snapshot("run_python", {}, validator) == {}
+
+
+def test_a_script_literal_outside_the_read_grant_is_never_probed(tmp_path):
+    ledger, validator, report = _report_turn(tmp_path)
+    other = report.parent / "other.md"
+    code = f"open(r'{other}', 'w')"
+    assert ledger.key(str(other)) not in ledger.snapshot(
+        "run_python", {"code": code}, validator
+    )
