@@ -117,7 +117,6 @@ def start_env(config_dir: Path) -> Dict[str, str]:
         return {}
     from gaia.llm.cloud_keys import recall_key
     from gaia.llm.local_only import cloud_blocked
-    from gaia.llm.providers.fireworks import API_KEY_ENV_VARS
 
     if cloud_blocked():
         return {}
