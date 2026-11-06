@@ -214,7 +214,18 @@ func (c *voiceClient) Send(ctx context.Context, q string) (<-chan interface{}, e
 	close(ch)
 	return ch, nil
 }
-func (c *voiceClient) Close() error                                 { return nil }
+
+// sent is how many queries were sent and the first one with its style.
+func (c *voiceClient) sent() (int, string, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.queries) == 0 {
+		return 0, "", ""
+	}
+	return len(c.queries), c.queries[0], c.styles[0]
+}
+
+func (c *voiceClient) Close() error                                { return nil }
 func (c *voiceClient) CheckVoiceReplies(ctx context.Context) error { return c.refuse }
 
 func readyStatus() voice.Status {
@@ -258,11 +269,14 @@ func TestVoiceTurnSpeaksTheSummaryAndStatusLines(t *testing.T) {
 	}
 
 	srv.Push(voice.Event{Type: "final", Text: "what's on today"})
-	r.until("the turn to end", func(m ChatModel) bool { return m.voice != nil && !m.voice.turn && !m.streaming && len(c.queries) == 1 })
+	r.until("the turn to end", func(m ChatModel) bool {
+		n, _, _ := c.sent()
+		return m.voice != nil && !m.voice.turn && !m.streaming && n == 1
+	})
 	waitFor(t, "speak_end", func() bool { return srv.Saw("speak_end") })
 
-	if c.styles[0] != client.ReplyStyleVoice || c.queries[0] != "what's on today" {
-		t.Fatalf("sent %q with style %q", c.queries[0], c.styles[0])
+	if _, q, style := c.sent(); style != client.ReplyStyleVoice || q != "what's on today" {
+		t.Fatalf("sent %q with style %q", q, style)
 	}
 	if got := srv.Spoken(voice.KindSpoken); got != "You have two meetings today." {
 		t.Fatalf("spoken = %q (narration before the tool must not be said)", got)
@@ -298,7 +312,10 @@ func TestVoiceTurnWithoutASpokenBlockSaysTheFixedLine(t *testing.T) {
 	r := voiceModel(t, c)
 	r.until("listening", listening)
 	srv.Push(voice.Event{Type: "final", Text: "hi"})
-	r.until("the turn to end", func(m ChatModel) bool { return len(c.queries) == 1 && !m.voice.turn && !m.streaming })
+	r.until("the turn to end", func(m ChatModel) bool {
+		n, _, _ := c.sent()
+		return n == 1 && !m.voice.turn && !m.streaming
+	})
 	waitFor(t, "speak_end", func() bool { return srv.Saw("speak_end") })
 	if got := srv.Spoken(voice.KindSpoken); got != voice.MissingSpokenLine {
 		t.Fatalf("spoken = %q", got)
