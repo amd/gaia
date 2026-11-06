@@ -97,6 +97,12 @@ CLI_RESTART_HINT = (
     "If it keeps happening, run `gaia daemon status` and check the daemon log."
 )
 
+#: What an app user does when GAIA's model server was down for a chat: the
+#: next message has the daemon start it.
+APP_SERVER_DOWN_HINT = (
+    f"Send your message again and GAIA will start its model server. {APP_RESTART_HINT}"
+)
+
 #: When GAIA's background service is not running at all, so the CLI must start
 #: it: `gaia daemon status` (the restart hint) would only report it is down.
 APP_SERVICE_DOWN_HINT = "Close GAIA and open it again so its background service starts."

@@ -4616,6 +4616,9 @@ class LemonadeClient:
         handoff.pending = False
         if not self.follows_gaia_lemonade:
             return False
+        # The daemon already tried to start it and said why it can't.
+        if isinstance(error, GaiaLemonadeStartError):
+            return False
         # Handed off as gone, it is resent even if it is back by now: the
         # retries that would have covered a quick restart were skipped.
         if not handed_off and not self._gaia_lemonade_gone():

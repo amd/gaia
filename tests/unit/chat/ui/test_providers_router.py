@@ -221,17 +221,30 @@ def test_list_when_lemonade_is_unreachable(client, lemonade, keys):
     assert body["active"]["is_default"] is True
 
 
-def test_unreachable_lemonade_gives_this_machines_start_hint(
+def test_unreachable_lemonade_names_the_app_fix_not_a_command(
+    client, lemonade, keys, monkeypatch
+):
+    from gaia.llm import lemonade_launcher
+    from gaia.llm.surface_hints import APP_RESTART_HINT
+
+    monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: True)
+    lemonade.down = True
+    error = client.get("/api/providers").json()["lemonade_error"]
+    assert error.endswith(APP_RESTART_HINT)
+    assert "gaia " not in error
+
+
+def test_unreachable_user_run_lemonade_gives_this_machines_start_hint(
     client, lemonade, keys, monkeypatch
 ):
     from gaia.llm import lemonade_launcher
 
-    hint = lemonade_launcher.StartHint(instruction="Run `gaia init` to install it.")
+    hint = lemonade_launcher.StartHint(instruction="Start Lemonade from its tray icon.")
+    monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
     monkeypatch.setattr(lemonade_launcher, "describe_start_hint", lambda: hint)
     lemonade.down = True
     error = client.get("/api/providers").json()["lemonade_error"]
     assert error.endswith(hint.instruction)
-    assert "gaia daemon start" not in error
 
 
 def test_list_does_not_repeat_a_provider_when_a_later_lookup_fails(
