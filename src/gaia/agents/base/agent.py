@@ -1407,35 +1407,78 @@ _PLAN_HEADING_PATTERN = re.compile(
 )
 # "Before finalizing, I will perform one final search…": a step never taken.
 _ANNOUNCED_ACTION_PATTERN = re.compile(
-    r"^(?:[^,;:]{1,60},\s+)?"
+    r"^(?P<lead>[^,;:]{1,60},\s+)?"
     r"(?:i'll|i will|i'm going to|i am going to|we'll|we will)\s+"
     r"(?:(?:now|next|then|also|first|quickly|immediately|go ahead and"
     r"|proceed to|need to|try to|attempt to)\s+)*"
     r"(?:perform|run|re-?run|search|check|re-?check|fetch|look(?!\s+forward)"
     r"|read|open|call|query|compute|calculate|analy[sz]e|execute|start|begin"
-    r"|proceed|continue"
+    r"|proceed|continue|try"
     r"|verify|gather|pull|download|compare|create|write|generate|list|scan"
     r"|review|examine|investigate|test|find|retrieve|browse|visit|load|index"
     r"|process|plot|chart|build|extract|count|sum|total|confirm|dig)\b",
     re.IGNORECASE,
 )
-# An offer or a promise about a later turn is an answer, not an unfinished step.
+# What makes an announcement mean "this turn": "now", "one final search",
+# "Before finalizing, …", "… next", "… to confirm".
+_IMMEDIACY_PATTERN = re.compile(
+    r"\b(?:now|right away|immediately|straight away)\b"
+    r"|\b(?:one|a)\s+(?:more|final|last|quick|further)\b"
+    r"|\bnext\s*[.!]?\s*$|\bto (?:confirm|verify|double-check|make sure|be sure)\b"
+    r"|^(?:next|then|first|finally|now|before\s+\w+ing\b[^,]*|to (?:confirm|verify"
+    r"|be sure|make sure|double-check)[^,]*),"
+    r"|^(?:i'll|i will|i'm going to|i am going to|we'll|we will)\s+"
+    r"(?:next|then|first|now)\b",
+    re.IGNORECASE,
+)
+# An offer, a condition, or a promise about later is an answer, not a step.
 _DEFERRED_ACTION_PATTERN = re.compile(
     r"\b(?:if|when|whenever|once|after|unless|should)\s+(?:you|you'd|you're"
     r"|you've|needed|necessary|asked|required|wanted|desired)\b"
+    r"|^(?:if|when|whenever|once|after|unless|in case|as soon as)\b"
+    r"|\bas soon as\b|\b(?:approv|allow|grant|permi|go-ahead)\w*"
     r"|\b(?:let me know|tell me|say the word)\b"
     r"|\bnext time\b|\bin the future\b|\bfrom now on\b|\bgoing forward\b"
-    r"|\blater\b|\btomorrow\b|\?\s*$",
+    r"|\blater\b|\btomorrow\b|\?\s*$"
+    r"|\bby (?:(?:mon|tues|wednes|thurs|fri|satur|sun)day|eod|cob|tonight|noon"
+    r"|the end of|end of|next)\b"
+    r"|\b(?:on|this|next) (?:mon|tues|wednes|thurs|fri|satur|sun)day\b"
+    r"|\bthis (?:week|weekend|morning|afternoon|evening|month|quarter)\b"
+    r"|\bnext (?:week|month|sprint|quarter|meeting|release|rc|year|run)\b"
+    r"|\b(?:continue to|keep you|keep an eye)\b",
     re.IGNORECASE,
 )
+# A drafted email, message or post speaks in the user's voice; its closing
+# commitment ("I will review it by Friday") is content, not a pending step.
+_DRAFT_PATTERN = re.compile(
+    r"\A\s*(?:hi|hello|hey|dear|good (?:morning|afternoon|evening)|greetings)\b"
+    r"[^\n]{0,40}$"
+    r"|^\s*subject\s*:"
+    r"|\bhere(?:'s| is)\s+(?:a|an|the|your)\s+(?:[\w-]+\s+){0,3}(?:draft|reply"
+    r"|email|message|response|post|note|letter|update|announcement|notes)\b"
+    r"|\A[^\n]*\bdraft\b[^\n]*:\s*$"
+    r"|^\s*(?:best|thanks|thank you|regards|kind regards|best regards|cheers"
+    r"|sincerely|warmly|all the best)\s*[,!.]?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_LIST_ITEM_PATTERN = re.compile(r"^\s*(?:[-*+•]|\d+[.)])\s")
 _UNFINISHED_STEP_QUOTE_MAX_CHARS = 200
 
 
-def _announces_action(sentence: str) -> bool:
-    return bool(
-        _ANNOUNCED_ACTION_PATTERN.match(sentence)
-        and not _DEFERRED_ACTION_PATTERN.search(sentence)
-    )
+def _announces_action(sentence: str, short: bool = True) -> bool:
+    """*sentence* announces an action for this turn rather than for later.
+
+    Past the short-paragraph limit it needs an immediacy cue; within it, a bare
+    "I'll check X." counts, but a lead clause ("As the owner, …") must be one.
+    """
+    match = _ANNOUNCED_ACTION_PATTERN.match(sentence)
+    if not match or _DEFERRED_ACTION_PATTERN.search(sentence):
+        return False
+    if re.search(r":\s*\S", sentence[match.end() :]):
+        return False  # "I'll start with the summary: sales are up 8%."
+    if _IMMEDIACY_PATTERN.search(sentence):
+        return True
+    return short and not match.group("lead")
 
 
 def _is_json(text: str) -> bool:
@@ -1490,7 +1533,14 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
         return "narration"
 
     sentences = re.split(r"(?<=[.!?])\s+", last_line)
-    if _announces_action(sentences[-1]):
+    if (
+        not _DRAFT_PATTERN.search(text)
+        and not _LIST_ITEM_PATTERN.match(last_line)
+        and _announces_action(
+            sentences[-1],
+            short=len(paragraphs[-1]) <= _UNFINISHED_PARAGRAPH_MAX_CHARS,
+        )
+    ):
         return "narration"
     if len(paragraphs[-1]) > _UNFINISHED_PARAGRAPH_MAX_CHARS:
         return None
@@ -12342,8 +12392,14 @@ Do NOT wrap conversational replies in JSON.
                 #   1. post-index planning (index_document → "Let me now search...")
                 #   2. no-tool planning on follow-up turns ("I'll check the remote work policy")
                 #   3. post-tool planning after getting results ("I need more info... Let me query")
-                is_planning_text = len(answer_candidate) < 500 and any(
-                    phrase in answer_candidate.lower() for phrase in _PLANNING_PHRASES
+                # The honest ending quotes the announcement; it is final, not planning.
+                is_planning_text = (
+                    not stopped_on_announced_step
+                    and len(answer_candidate) < 500
+                    and any(
+                        phrase in answer_candidate.lower()
+                        for phrase in _PLANNING_PHRASES
+                    )
                 )
                 if is_planning_text and steps_taken < steps_limit - 1:
                     # Inject a correction message and continue the loop to force the answer

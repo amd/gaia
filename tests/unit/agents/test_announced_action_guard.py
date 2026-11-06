@@ -1,10 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """A final answer that only announces its next action ("I will perform one
-final search…") is re-prompted, and never handed to the user as the answer.
-
-Seen on Gemma 4 E4B (NPU) in v0.25.4-rc13 and in the ai-pc-evals data tasks
-(amd/gaia#6753, thread 1).
+final search…") is re-prompted, and never handed to the user as the answer.\n\nSeen on Gemma 4 E4B (NPU) in v0.25.4-rc13 and in the ai-pc-evals data tasks\n(amd/gaia#6753, thread 1).\n
 """
 
 import json
@@ -44,8 +41,16 @@ ANNOUNCED_ACTIONS = [
     pytest.param(
         "I've read the first PDF. "
         + "It covers the Q2 results in detail. " * 20
-        + "I will perform the same extraction on the second PDF.",
+        + "Next, I will perform the same extraction on the second PDF.",
         id="long-paragraph",
+    ),
+    pytest.param(
+        "The search returned nothing useful. I'll try a different query.",
+        id="ill-try",
+    ),
+    pytest.param(
+        "I have the list of files. I'll read the config next.",
+        id="trailing-next",
     ),
 ]
 
@@ -93,6 +98,85 @@ REAL_ANSWERS = [
     pytest.param(
         "Revenue grew 12% in Q3. I'll be happy to break it down by region.",
         id="ill-be-happy",
+    ),
+    # Drafted content speaks in the user's voice: its closing commitment is
+    # part of the answer.
+    pytest.param(
+        "Hi Sam,\n\nThanks for the contract. I will review it and send comments "
+        "by Friday.",
+        id="email-draft-no-signoff",
+    ),
+    pytest.param(
+        "Here's a draft reply:\n\nHi Priya,\n\nThanks for flagging the outage. "
+        "I'll check with the infra team and get back to you.\n\nBest,\nAlex",
+        id="email-draft-signoff",
+    ),
+    pytest.param(
+        "Meeting notes - Q4 planning\n\n- Budget approved\n- Launch moved to "
+        "Dec 2\n\nAs the owner, I will create the Jira tickets and share the "
+        "timeline.",
+        id="action-item-lead-clause",
+    ),
+    pytest.param(
+        "Your goals for next week:\n1. Finish the slides\n2. I will review the "
+        "budget with finance",
+        id="list-item",
+    ),
+    pytest.param(
+        "Your PR is merged. I will continue to monitor the CI.", id="continue-to"
+    ),
+    pytest.param(
+        "Slack reply draft:\n\nThanks all! I'll review the PR this afternoon.",
+        id="this-afternoon",
+    ),
+    pytest.param("We will review the results in the next sprint.", id="next-sprint"),
+    pytest.param(
+        "The tests pass on Linux and macOS. I will test it again on the next RC.",
+        id="next-rc",
+    ),
+    pytest.param(
+        "I've restarted the service and it is healthy. If the error returns, "
+        "I'll check the logs.",
+        id="conditional-lead",
+    ),
+    pytest.param(
+        "I'll start with the summary: sales are up 8%, mostly from the East "
+        "region, and returns fell.",
+        id="announces-then-answers",
+    ),
+    pytest.param(
+        "Dear Hiring Manager,\n\n"
+        + "In my current role I built dashboards that cut reporting time by 40%. " * 12
+        + "I will review your roadmap closely.\n\nSincerely,\nJordan",
+        id="long-cover-letter",
+    ),
+    # After a denied run, an honest answer waits on the user; pushing it to
+    # "do it now" would retry the declined step.
+    pytest.param(
+        "I'll compute the totals as soon as you allow the Python run.",
+        id="denied-as-soon-as",
+    ),
+    pytest.param(
+        "I'll run the analysis once the Python step is approved.",
+        id="denied-once-approved",
+    ),
+    pytest.param(
+        "I can't compute this without running code. I'll calculate it if you "
+        "approve the run.",
+        id="denied-if-you-approve",
+    ),
+    pytest.param(
+        "Running the calculation was declined, so I'll need your approval to "
+        "compute the totals.",
+        id="denied-need-approval",
+    ),
+    pytest.param(
+        "I will check the logs after you grant access.", id="denied-after-grant"
+    ),
+    pytest.param(
+        "Python was denied, so nothing was computed. I'll calculate the regional "
+        "totals when the run is allowed.",
+        id="denied-when-allowed",
     ),
 ]
 
@@ -234,3 +318,21 @@ def test_announcement_on_the_last_step_ends_honestly(agent):
 
     assert len(sent) == 1
     assert _final_text(result).startswith("I didn't finish:")
+
+
+def test_honest_ending_is_not_mistaken_for_planning_text(agent):
+    # Once the re-prompts are spent, the honest ending quotes "I'll check…",
+    # which is also a planning phrase; it must reach the user, not loop again.
+    sent = _script(
+        agent,
+        _answer("I'll run the trend analysis now."),
+        _answer("I'll run the trend analysis now."),
+        *[_answer("I'll check the sales file now.")] * 6,
+    )
+
+    result = agent.process_query("Show the sales trend", max_steps=20)
+
+    assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
+    final = _final_text(result)
+    assert final.startswith("I didn't finish:")
+    assert "I'll check the sales file now." in final
