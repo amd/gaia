@@ -130,6 +130,23 @@ def test_dollar_figures_in_a_bullet_list_are_presented_data():
     assert {"2,708.95", "2,334.24", "1,379.87", "1,375.25", "7,798.31"} <= shown
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "North is USD 2,708.95.",
+        "North is 2,708.95 USD.",
+        "North is 2,708.95 dollars.",
+    ],
+)
+def test_currency_codes_and_words_do_not_hide_unsourced_prose_amounts(answer):
+    assert {v.text for v in presented_values(answer)} == {"2,708.95"}
+
+    findings = content_findings(answer, _turn_records(DENIED), QUERY)
+
+    assert [f.gate for f in findings] == [CONTENT]
+    assert "2,708.95" in findings[0].note
+
+
 def test_invented_totals_after_a_denied_run_are_flagged():
     findings = content_findings(INVENTED, _turn_records(DENIED), QUERY)
 
