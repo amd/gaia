@@ -6,6 +6,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **The first reply reads far less, and the prompt cache stays warm.**
+  A session now starts on the 26 most-used tools in short form and moves to every
+  tool at most once, with the full list kept ready so a first task starts as fast
+  as a first "hello". `search_tools` replaces `load_tools` and also finds
+  installed skills. It is on by default; `gaia config set dynamic_tools false` or
+  `GAIA_DYNAMIC_TOOLS=0` turns it off, and the Agent UI toggle under Settings now
+  reaches this agent. The toggle is now kept in `~/.gaia/config.json`, so a
+  choice made under the old Beta toggle, which only reached the `doc` profile,
+  is not carried over. `GAIA_DYNAMIC_TOOLS_TAU` and `GAIA_DYNAMIC_TOOLS_MAX` no
+  longer do anything. Chat models now load with three llama.cpp slots.
+- **A spent per-turn limit is no longer saved as a lesson.** Running out of
+  the mail-reading budget used to store that refusal under "Problems seen
+  before", so every later chat started with it in its prompt. It, and the new
+  `search_tools` cap, are now marked as not run, like a permission refusal, and
+  memory skips them.
+
 ## [0.3.5]
 
 Released with GAIA 0.25.4, and requires the `gaia` Python CLI 0.25.4+ on `PATH`
@@ -171,17 +187,6 @@ the new session `tools` and `grants` routes, so probe `/version` first.
 - **Docs name the terminal UI binary correctly.** README, SPEC and SKILL said
   a core install runs it as `gaia tui`; the binary is `gaia-tui`, and the
   Python `gaia` CLI rejects `gaia tui`.
-- **The first reply reads less than half as much, and the prompt cache stays warm.**
-  A session now starts on the 26 most-used tools in short form and moves to every
-  tool at most once, with the full list kept ready so a first task starts as fast
-  as a first "hello". On Qwen3.6-35B-A3B a cold first turn read 8,900 tokens instead
-  of 21,300. `search_tools` replaces `load_tools` and also finds installed skills.
-  It is on by default; `gaia config set dynamic_tools false` or
-  `GAIA_DYNAMIC_TOOLS=0` turns it off, and the Agent UI toggle under Settings now
-  reaches this agent. The toggle is now kept in `~/.gaia/config.json`, so a
-  choice made under the old Beta toggle, which only reached the `doc` profile,
-  is not carried over. `GAIA_DYNAMIC_TOOLS_TAU` and `GAIA_DYNAMIC_TOOLS_MAX` no
-  longer do anything. Chat models now load with three llama.cpp slots.
 - **The agent ships as one Python package.** `ChatAgent`, the class the agent
   builds on, moved into `gaia-agent-gaia` (`gaia_agent.chat_agent`), so the
   binary and a pip install no longer need `gaia-agent-chat`. Prompts and tools

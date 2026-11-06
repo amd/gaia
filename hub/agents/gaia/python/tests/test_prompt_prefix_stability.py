@@ -124,6 +124,8 @@ class _ScriptedModel:
 def flagship(monkeypatch, tmp_path):
     monkeypatch.setenv("GAIA_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("GAIA_DAEMON_HOME", str(tmp_path / "daemon"))
+    # Outranks GAIA_HOME, and conftest points it at one DB for the session.
+    monkeypatch.setenv("GAIA_MEMORY_DB", str(tmp_path / "home" / "memory.db"))
     monkeypatch.setenv("GAIA_PROJECT_MAP_AUTO_INDEX", "0")
     # Unroutable: nothing here may reach a developer's running server.
     monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9/api/v1")
@@ -225,6 +227,8 @@ def flagship_config_off(monkeypatch, tmp_path):
     """The flagship with ``dynamic_tools`` off in the user's config file."""
     monkeypatch.setenv("GAIA_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("GAIA_DAEMON_HOME", str(tmp_path / "daemon"))
+    # Outranks GAIA_HOME, and conftest points it at one DB for the session.
+    monkeypatch.setenv("GAIA_MEMORY_DB", str(tmp_path / "home" / "memory.db"))
     monkeypatch.setenv("GAIA_PROJECT_MAP_AUTO_INDEX", "0")
     monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9/api/v1")
     monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)

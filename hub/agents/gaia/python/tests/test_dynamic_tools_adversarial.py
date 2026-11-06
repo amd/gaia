@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import threading
+from pathlib import Path
 
 import pytest
 from test_prompt_prefix_stability import (  # noqa: F401  # pylint: disable=unused-import
@@ -97,9 +98,10 @@ def test_a_gated_tool_off_the_list_still_asks(flagship, monkeypatch, approve):
     assert bool(ran) is approve
 
 
-def test_a_planted_search_flood_is_capped_and_jumps_at_most_once(flagship):
+def test_a_planted_search_flood_is_capped_and_jumps_at_most_once(flagship, tmp_path):
     """A document telling the model to search forever costs a bounded turn."""
     agent, model, _doc = flagship
+    assert tmp_path in Path(agent._memory_store._db_path).parents
     _turn(agent, model, "hello", ["Hi."])
     flood = [
         {"id": f"s{i}", "name": "search_tools", "args": {"query": f"tool number {i}"}}
@@ -119,6 +121,9 @@ def test_a_planted_search_flood_is_capped_and_jumps_at_most_once(flagship):
     lists = {json.dumps(tools) for _messages, tools in model.requests}
     assert len(lists) <= 2
     assert "delete_everything" not in agent._tools_registry
+    # The cap is ours, not a fact to replay into every later chat.
+    stored = agent._memory_store.get_by_category("error", limit=100)
+    assert not [r for r in stored if "times this turn" in r["content"]], stored
 
 
 @pytest.mark.parametrize(

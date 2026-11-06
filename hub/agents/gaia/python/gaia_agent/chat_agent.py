@@ -73,6 +73,7 @@ from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F401
 from gaia.agents.base.tool_loader import ToolLoader, format_tool_docs
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
@@ -1260,7 +1261,9 @@ class ChatAgent(
         if not query:
             return {"status": "error", "error": "Say what you want to do in `query`."}
         if self._tool_searches >= MAX_TOOL_SEARCHES:
+            # Our own cap, not a fact about the world: memory must not learn it.
             return {
+                **NOT_EXECUTED,
                 "status": "error",
                 "error": f"Searched {MAX_TOOL_SEARCHES} times this turn. Use a tool "
                 "from your list, or tell the user what is missing.",
