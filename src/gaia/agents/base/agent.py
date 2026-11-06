@@ -15,6 +15,7 @@ import datetime
 import inspect
 import json
 import math
+import hashlib
 import os
 import queue
 import re
@@ -213,6 +214,9 @@ if TYPE_CHECKING:
 # Set up logging via the project logger; importing this module must not
 # reconfigure the root logger.
 logger = get_logger(__name__)
+
+#: A message this long is also saved to a file the model can read with tools.
+LONG_MESSAGE_CHARS = 20_000
 
 
 def _skill_validation_error(message: str) -> Exception:
@@ -10234,6 +10238,38 @@ Do NOT wrap conversational replies in JSON.
             logger.info("Folded a mid-turn follow-up into the running turn")
         return taken
 
+    def _with_long_message_file(self, user_input: str) -> str:
+        """*user_input*, led by where its full text is saved when it is huge.
+
+        A model asked to count or search a long paste otherwise tries to copy
+        it into a tool call, which no output budget fits.
+        """
+        raw = getattr(self, "_original_user_input", None) or user_input
+        if not isinstance(raw, str) or len(raw) < LONG_MESSAGE_CHARS:
+            return user_input
+        scratch = getattr(self._read_validator(), "scratch_dir", None)
+        if not scratch:
+            logger.warning(
+                "A %d-character message was not saved to a file: this agent "
+                "has no scratch folder",
+                len(raw),
+            )
+            return user_input
+        digest = hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:12]
+        path = Path(scratch) / f"message-{digest}.txt"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(raw, encoding="utf-8")
+        except OSError as e:
+            logger.warning("Could not save a long message to %s: %s", path, e)
+            return user_input
+        note = (
+            f"[GAIA: the user's message is {len(raw):,} characters long. Its full "
+            f"text is saved at {path}. To count, search or process it, read that "
+            "file with a tool; never copy the message into a tool call.]"
+        )
+        return f"{note}\n\n{user_input}"
+
     def _process_query_impl(
         self,
         user_input: str,
@@ -10451,7 +10487,9 @@ Do NOT wrap conversational replies in JSON.
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
         messages.recorded.clear()
-        messages.append({"role": "user", "content": user_input})
+        messages.append(
+            {"role": "user", "content": self._with_long_message_file(user_input)}
+        )
 
         # Use provided max_steps or fall back to class default
         steps_limit = max_steps if max_steps is not None else self.max_steps
