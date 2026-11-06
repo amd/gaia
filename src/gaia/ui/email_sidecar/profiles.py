@@ -499,6 +499,8 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     # Media / desktop
     "transcribe_media": "Transcribing recording",
     "refine_transcript": "Refining transcript",
+    "analyze_transcript": "Analyzing transcript",
+    "export_transcript": "Exporting transcript",
     "take_screenshot": "Taking screenshot",
     "generate_image": "Generating image",
     "generate_music": "Generating music",

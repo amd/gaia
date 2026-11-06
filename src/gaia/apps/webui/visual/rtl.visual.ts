@@ -78,8 +78,18 @@ const audit = (page: Page): Promise<string[]> =>
                 problems.push(`off screen: ${label(el)}`);
             }
 
+            // A flex row can squeeze an icon to a speck when its neighbours are long.
+            if (el.tagName.toLowerCase() === 'svg' && box.width < 8 && el.closest('.composer-attachment')) {
+                problems.push(`icon squeezed to ${box.width.toFixed(1)}px: ${label(el.parentElement!)}`);
+            }
+
             const text = el.textContent?.trim() ?? '';
             if (el.querySelector(':scope > :not(i18n-label)') || !text) continue;
+
+            // A long name that shrinks to nothing tells the reader nothing.
+            if (style.textOverflow === 'ellipsis' && box.width < 40 && el.scrollWidth > box.width + 1) {
+                problems.push(`text squeezed to ${Math.round(box.width)}px: ${label(el)}`);
+            }
 
             // An English name cut off in rtl keeps its end and loses its start.
             if (style.textOverflow === 'ellipsis' && style.direction === 'rtl' && latin.test(text) && !arabic.test(text)) {
@@ -273,6 +283,120 @@ const audit = (page: Page): Promise<string[]> =>
         }
         return [...new Set(problems)];
     });
+
+// A reply that never ends, so the card stays up for the screenshot.
+const RECORDING_EVENTS = [
+    { type: 'status', status: 'working', message: 'x', phase: 'recording', stage: 0, state: 1 },
+    { type: 'status', status: 'working', message: 'x', phase: 'recording', stage: 2, state: 0, percent: 42, eta_seconds: 330 },
+];
+
+for (const [title, locale] of [
+    ['recording in progress, Arabic', 'ar'],
+    ['recording in progress, English', 'en'],
+] as const) {
+    test(title, async ({ page }, info) => {
+        await page.addInitScript((events) => {
+            const real = window.fetch;
+            window.fetch = (input, init) => {
+                if (!String(input).includes('/chat/send')) return real(input, init);
+                const body = new ReadableStream({
+                    start(controller) {
+                        for (const event of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                    },
+                });
+                return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+            };
+        }, RECORDING_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+        await page.locator('textarea').first().fill('Transcribe this');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.recording-progress-track')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        const fill = page.locator('.recording-progress-fill');
+        const track = page.locator('.recording-progress-track');
+        const [fillBox, trackBox] = [await fill.boundingBox(), await track.boundingBox()];
+        expect(fillBox!.width / trackBox!.width).toBeCloseTo(0.42, 1);
+        const startsAtStart = locale === 'ar'
+            ? Math.abs(fillBox!.x + fillBox!.width - (trackBox!.x + trackBox!.width))
+            : Math.abs(fillBox!.x - trackBox!.x);
+        expect(startsAtStart).toBeLessThan(1);
+        await page.screenshot({ path: info.outputPath(`recording-progress-${locale}.png`) });
+    });
+}
+
+// Sections read so far while the rest are analyzed, one in each script.
+const FOUND_EVENTS = [
+    { type: 'status', status: 'working', message: 'x', phase: 'recording', stage: 5, state: 0, percent: 67, eta_seconds: 40 },
+    {
+        type: 'status', status: 'working', message: 'x', phase: 'recording_found',
+        section: 1, sections: 3, start: '00:00', end: '03:31',
+        summary: 'The speaker introduces the talk and begins his first story about dropping out of college.',
+        items: [{ title: 'Introduction and three stories', start: '00:21', seconds: 21 }, { title: 'Story 1: connecting the dots', start: '00:55', seconds: 55 }],
+    },
+    {
+        type: 'status', status: 'working', message: 'x', phase: 'recording_found',
+        section: 2, sections: 3, start: '02:06', end: '1:08:54',
+        summary: 'يتحدث عن تركه الجامعة وعن دروس الخط العربي.',
+        items: [{ title: 'ترك الجامعة واتباع الفضول', start: '02:06', seconds: 126 }],
+    },
+];
+
+for (const [title, locale] of [
+    ['recording found so far, Arabic', 'ar'],
+    ['recording found so far, English', 'en'],
+] as const) {
+    test(title, async ({ page }, info) => {
+        await page.addInitScript((events) => {
+            const real = window.fetch;
+            window.fetch = (input, init) => {
+                if (!String(input).includes('/chat/send')) return real(input, init);
+                const body = new ReadableStream({
+                    start(controller) {
+                        for (const event of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                    },
+                });
+                return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+            };
+        }, FOUND_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+        await page.locator('textarea').first().fill('Transcribe this');
+        await page.keyboard.press('Enter');
+        const found = page.locator('.recording-found');
+        await expect(found.locator('.recording-found-section')).toHaveCount(2);
+        expect(await audit(page)).toEqual([]);
+        // Times read left to right in both directions, and sit at the start edge.
+        const span = found.locator('.recording-found-span .recording-found-time').nth(1);
+        await expect(span).toHaveText('02:06–1:08:54');
+        await expect(span).toHaveAttribute('dir', 'ltr');
+        const row = found.locator('.recording-found-items li').first();
+        const [time, rowBox] = [await row.locator('.recording-found-time').boundingBox(), await row.boundingBox()];
+        const atStart = locale === 'ar'
+            ? Math.abs(time!.x + time!.width - (rowBox!.x + rowBox!.width))
+            : Math.abs(time!.x - rowBox!.x);
+        expect(atStart).toBeLessThan(1);
+        await found.screenshot({ path: info.outputPath(`recording-found-${locale}.png`) });
+    });
+}
+
+for (const [title, locale, name] of [
+    ['recording ready to send', 'ar', 'Quarterly business review recording with a very long file name 2026.mp4'],
+    ['recording with an Arabic name, in English', 'en', 'تسجيل مراجعة الأعمال الفصلية.m4a'],
+] as const) {
+    test(title, async ({ page }, info) => {
+        await open(page, '', locale);
+        await page.route('**/api/files/upload', (route) =>
+            route.fulfill({
+                json: { filename: 'r.mp4', original_name: name, url: '/api/files/uploads/r.mp4', size: 5, content_type: 'video/mp4', is_image: false },
+            }),
+        );
+        await page.locator('input[type="file"]').first().setInputFiles({ name, mimeType: 'video/mp4', buffer: Buffer.from('media') });
+        await expect(page.locator('.composer-attachment-state')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath('recording.png') });
+    });
+}
 
 test('new chat', async ({ page }) => {
     await open(page);
