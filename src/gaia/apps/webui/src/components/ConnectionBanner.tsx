@@ -8,7 +8,8 @@ import { useT } from '../i18n/useT';
 import { needsLocalSetup, SetUpLocalButton } from './settings/ErrorNotice';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
-import { modelServerHealth } from '../services/statusPoll';
+import { isStarting, modelServerHealth } from '../services/statusPoll';
+import { displayModelName, useModelNames, useModelStore } from '../stores/modelStore';
 import './ConnectionBanner.css';
 
 /**
@@ -48,6 +49,10 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
 
     const modelName = systemStatus?.default_model_name ?? DEFAULT_MODEL_NAME;
     const { isDownloadingModel, downloadError, downloadModel } = useModelActions(modelName);
+    const pickLoad = useModelStore((s) => s.pickLoad);
+    const retryPickLoad = useModelStore((s) => s.retryPickLoad);
+    const dismissPickLoad = useModelStore((s) => s.dismissPickLoad);
+    useModelNames();
 
     // Track previous warning-worthy states so the banner reappears when
     // a new issue is detected after being dismissed.
@@ -193,11 +198,53 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
         );
     }
 
+    // A model picked from the list is loading, or its load failed. Shown mid-chat
+    // too: the pick is what the next message waits on.
+    if (pickLoad) {
+        const name = displayModelName(pickLoad.model);
+        if (pickLoad.error) {
+            return (
+                <div className="connection-banner connection-banner--error" role="alert">
+                    <div className="connection-banner__icon">
+                        <AlertTriangle size={16} />
+                    </div>
+                    <div className="connection-banner__text" dir="auto">
+                        {t('banner.pickLoad.failed', { model: name })}{' '}
+                        <span className="connection-banner__hint" dir="auto">
+                            {pickLoad.error.key ? t(pickLoad.error.key, { reason: pickLoad.error.reason }) : pickLoad.error.reason}
+                        </span>
+                    </div>
+                    <RetryButton onRetry={retryPickLoad} label={t('banner.pickLoad.retry')} />
+                    <button
+                        className="connection-banner__dismiss"
+                        onClick={dismissPickLoad}
+                        aria-label={t('banner.dismiss')}
+                    >
+                        <X size={14} />
+                    </button>
+                </div>
+            );
+        }
+        return (
+            <div className="connection-banner connection-banner--init" role="status">
+                <div className="connection-banner__icon">
+                    <Loader2 size={16} className="connection-banner__spinner" />
+                </div>
+                <div className="connection-banner__text" dir="auto">
+                    {t('banner.pickLoad.loading', { model: name })}{' '}
+                    <bdi dir="ltr">{t('banner.pickLoad.seconds', { s: pickLoad.seconds })}</bdi>{' '}
+                    <span className="connection-banner__hint">{t('banner.pickLoad.canType')}</span>
+                </div>
+            </div>
+        );
+    }
+
     // Case 0: Boot-time initialization in progress.
     // Takes priority over all other cases (including dismiss and active-conversation suppression)
-    // because the system is not yet ready to serve requests.
-    if (systemStatus?.init_state === 'initializing') {
-        const runningTask = systemStatus.init_tasks?.find(t => t.status === 'running');
+    // because the system is not yet ready to serve requests. A status the backend
+    // can't refresh (slow or failing) is not proof the boot is still running.
+    if (isStarting(systemStatus) && !backendSlow && !backendError) {
+        const runningTask = systemStatus?.init_tasks?.find(t => t.status === 'running');
         const label = runningTask?.name || 'Preparing AI system';
         return (
             <div className="connection-banner connection-banner--init" role="status">
