@@ -2903,6 +2903,17 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+def _insert_skill_step(steps: list, step: dict) -> None:
+    """Put a skill step before the running tool call that brought the skill in."""
+    for i in range(len(steps) - 1, -1, -1):
+        if steps[i].get("type") == "tool":
+            if steps[i].get("active"):
+                steps.insert(i, step)
+                return
+            break
+    steps.append(step)
+
+
 def _close_reasoning(steps: list, now_ms: int) -> None:
     """Record how long the reasoning just before the answer ran, on its last piece."""
     run = []
@@ -4859,6 +4870,23 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "mcpServerLabel": event.get("mcp_server_label"),
                             "mcpTool": event.get("mcp_tool"),
                         }
+                    )
+                elif event_type == "skill_use" and event.get("how") != "model":
+                    # A load_skill call is already its own step.
+                    step_id += 1
+                    _insert_skill_step(
+                        captured_steps,
+                        {
+                            "id": step_id,
+                            "type": "tool",
+                            "label": "Using use_skill",
+                            "tool": "use_skill",
+                            "detail": event.get("skill"),
+                            "narration": f"Using skill: {event.get('skill')}",
+                            "active": False,
+                            "success": True,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        },
                     )
                 elif event_type == "tool_args" and captured_steps:
                     # Update the last TOOL step (not just last step, since thinking

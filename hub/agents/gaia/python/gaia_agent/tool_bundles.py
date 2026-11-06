@@ -567,7 +567,7 @@ FULL_BUNDLES = [
     # index_document and summarize_document ride along on purpose. They live in
     # the rag bundles too, but a recording turn does not reliably select those,
     # and without them in reach the model pulled chunks with query_documents and
-    # asked the user what to dig into instead of summarizing. The four tools are
+    # asked the user what to dig into instead of summarizing. These tools are
     # one pipeline; they have to arrive together.
     ToolBundle(
         name="media_transcription",
@@ -575,17 +575,21 @@ FULL_BUNDLES = [
             {
                 "transcribe_media",
                 "refine_transcript",
+                "analyze_transcript",
+                "export_transcript",
                 "index_document",
                 "summarize_document",
             }
         ),
         description=(
             "Transcribe speech from an audio or video recording (mp4, mkv, "
-            "mov, m4a, mp3, wav) into a text transcript, then correct "
-            "mis-hearings and label the speakers — meetings, calls, "
-            "interviews, voice memos. Use for any request to transcribe, "
-            "summarize, take notes on, or pull action items out of a "
-            "recording."
+            "mov, m4a, mp3, wav) or a video link such as a YouTube URL into a "
+            "timestamped text transcript, then "
+            "label the speakers, list everything of a kind with timestamps, "
+            "or write subtitles — meetings, calls, interviews, voice memos, "
+            "lectures, workshops, tutorials, podcasts. Use for any request to "
+            "transcribe, summarize, take notes on, or pull action items or a "
+            "structured list out of a recording."
         ),
     ),
 ]

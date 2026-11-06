@@ -4,7 +4,7 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
-import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode, ProviderId } from '../types';
+import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode, ProviderId, FoundItem } from '../types';
 import { applyTheme, resolveTheme, syncTitleBar, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
@@ -130,6 +130,23 @@ export interface LiveQuestion {
     expiresAt: number | null;
 }
 
+/** One stage of a recording: 0 running, 1 done, 2 skipped. */
+export interface RecordingStage {
+    state: number;
+    percent?: number;
+    etaSeconds?: number;
+}
+
+/** One section of a recording, read while the rest are still being read. */
+export interface RecordingSection {
+    section: number;
+    sections: number;
+    start: string;
+    end: string;
+    summary: string;
+    items: FoundItem[];
+}
+
 interface ChatState {
     /** Registered agents; Settings → Connectors grants scopes to them. */
     agents: AgentInfo[];
@@ -198,12 +215,22 @@ interface ChatState {
     appendThinkingContent: (content: string) => void;
     /** Update the last tool step (not the absolute last step). */
     updateLastToolStep: (updates: Partial<AgentStep>) => void;
+    /** Note a skill_use event; with a step, add it before the running tool call that brought the skill in. */
+    addSkillStep: (step: AgentStep | null) => void;
+    /** Counts skill_use events, so the session panel's Skills section re-reads mid-reply. */
+    skillUses: number;
     clearAgentSteps: () => void;
     /** What the model is doing right now, from the latest phase status event; null before one arrives. */
     liveStatus: string | null;
     /** The backend's phase for `liveStatus` (`loading_model`, `reasoning`, `tool`…); null when it sent none. */
     livePhase: string | null;
     setLiveStatus: (status: string | null, phase?: string | null) => void;
+    /** Where the recording being worked on stands, by stage; null when there is none. */
+    recordingStages: Record<number, RecordingStage> | null;
+    setRecordingStage: (stage: number, report: RecordingStage) => void;
+    /** Sections of the recording already read, by section number; null when none yet. */
+    recordingSections: Record<number, RecordingSection> | null;
+    addRecordingSection: (section: RecordingSection) => void;
     /** The run is blocked on the user's approval or answer, not on the model. */
     awaitingUser: boolean;
     setAwaitingUser: (awaiting: boolean) => void;
@@ -424,7 +451,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setStreaming: (streaming) => set({ isStreaming: streaming }),
     setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
-    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null, livePhase: null, awaitingUser: false }),
+    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),
 
     // Agent activity
     agentSteps: [],
@@ -474,10 +501,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // No tool step found — don't corrupt non-tool steps
             return state;
         }),
-    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, awaitingUser: false }),
+    addSkillStep: (step) =>
+        set((state) => {
+            if (!step) return { skillUses: state.skillUses + 1 };
+            const steps = [...state.agentSteps];
+            let at = steps.length;
+            for (let i = steps.length - 1; i >= 0; i--) {
+                if (steps[i].type !== 'tool') continue;
+                if (steps[i].active) at = i;
+                break;
+            }
+            steps.splice(at, 0, step);
+            return { agentSteps: steps, skillUses: state.skillUses + 1 };
+        }),
+    skillUses: 0,
+    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),
     liveStatus: null,
     livePhase: null,
     setLiveStatus: (status, phase = null) => set({ liveStatus: status, livePhase: phase }),
+    recordingStages: null,
+    setRecordingStage: (stage, report) => set((state) => {
+        const next: Record<number, RecordingStage> = { ...state.recordingStages };
+        // Reaching a stage means the earlier ones are behind it, reused or finished.
+        for (let earlier = 1; earlier < stage; earlier++) {
+            if (next[earlier]?.state !== 2) next[earlier] = { state: 1 };
+        }
+        next[stage] = report;
+        return { recordingStages: next };
+    }),
+    recordingSections: null,
+    addRecordingSection: (section) => set((state) => ({
+        recordingSections: { ...state.recordingSections, [section.section]: section },
+    })),
     awaitingUser: false,
     setAwaitingUser: (awaiting) => set({ awaitingUser: awaiting }),
     liveQuestions: {},
