@@ -606,13 +606,7 @@ error. To run the chat model in the cloud instead, see
 
 <AccordionGroup>
   <Accordion title="Missing RAG dependencies" icon="puzzle-piece">
-    `gaia init` installs the RAG extra and fails, showing the installer's error, if that install fails. To install it yourself into the one-line installer's environment (no `pip`, not activated):
-    ```bash
-    uv pip install --python ~/.gaia/venv/bin/python "amd-gaia[rag]"
-    # Windows: uv pip install --python "$env:USERPROFILE\.gaia\venv\Scripts\python.exe" "amd-gaia[rag]"
-    ```
-
-    In an activated virtualenv of your own:
+    The apps and the one-line installer need nothing extra: documents are read by the GAIA agent, which ships with what it needs. On a `pip` install, `gaia init` installs the RAG extra and fails, showing the installer's error, if that install fails. To install it yourself in an activated virtualenv of your own:
     ```bash
     uv pip install "amd-gaia[rag]"
     ```

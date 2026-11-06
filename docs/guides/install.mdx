@@ -316,9 +316,9 @@ Each part you installed has its own entry in **Settings → Apps → Installed a
 - **GAIA** — the desktop app. Removes the app, its Start Menu / Desktop shortcuts, and the autostart registry entry.
 - **GAIA Terminal UI** — the terminal. Stops GAIA's background service, then removes `gaia-tui`, `gaia-agent`, `gaia`, the PATH entry, the Windows Terminal profile, the font if the installer added it, and its shortcuts.
 
-Each uninstaller shows the cleanup prompt above; decline it and `~/.gaia/` is left alone. For tiered cleanup instead of deleting the whole shared folder, open a terminal (PowerShell or `cmd`) and run:
+Each uninstaller shows the cleanup prompt above; decline it and `~/.gaia/` is left alone. For tiered cleanup instead of deleting the whole shared folder, open PowerShell before you uninstall and run the `gaia` inside the desktop app (with the terminal installed, plain `gaia uninstall --purge` does the same):
 ```powershell
-~\.gaia\venv\Scripts\gaia uninstall --purge
+& "$env:LOCALAPPDATA\Programs\gaia-desktop\resources\core\gaia.exe" uninstall --purge
 ```
 
 ### macOS
@@ -367,7 +367,8 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Configuration | `~/.gaia/electron-config.json` |
 | Logs | `~/.gaia/gaia.log` (`$GAIA_HOME/gaia.log` when `GAIA_HOME` is set), or the path in `GAIA_LOG_FILE` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |
 | Terminal UI and agent binaries (one-line installer). It also holds the `gaia`, `gaia-cli` and `gaia-mcp` commands (links to `~/.gaia/core` on Linux and macOS; on Windows the frozen `gaia` itself), and is the only GAIA directory the installer puts on your PATH | `~/.gaia/bin/` |
-| The frozen `gaia` the one-line installer, or an AppImage, runs (Linux and macOS) | `~/.gaia/core/` |
+| The frozen `gaia` the one-line installer runs (Linux and macOS) | `~/.gaia/core/` |
+| The copy of its `gaia` an AppImage runs, which outlives the AppImage's mount | `~/.gaia/app-core/` |
 | Agent run traces | `~/.gaia/traces/` |
 | Daemon state (token, custody database, logs) | `~/.gaia/host/` (`$GAIA_HOME/host/` when `GAIA_HOME` is set) |
 | Models (managed by Lemonade) | `~/.cache/lemonade/models/` |

@@ -75,6 +75,27 @@ def test_the_desktop_app_keeps_its_own_daemon(tmp_path, monkeypatch):
     )
 
 
+@pytest.mark.parametrize(
+    "theirs, ours, replaced",
+    [
+        ("0.25.3", "0.25.4", True),
+        ("0.25.4rc3", "0.25.4", True),
+        ("0.25.4rc3", "0.25.4rc4", True),
+        ("", "0.25.4", True),
+        ("0.25.5", "0.25.4", False),
+        ("0.25.4", "0.25.4rc4", False),
+    ],
+)
+def test_a_frozen_gaia_replaces_only_an_older_daemon(
+    tmp_path, monkeypatch, theirs, ours, replaced
+):
+    # Two installs of different releases would otherwise restart each other's daemon.
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(version, "__version__", ours)
+    why = runs_replaced_install(_inst(gaia_version=theirs, version_file=""))
+    assert bool(why) is replaced
+
+
 def test_the_record_round_trips_through_instance_json(tmp_path, monkeypatch):
     monkeypatch.setattr(instance.paths, "instance_path", lambda: tmp_path / "i.json")
     monkeypatch.setattr(instance.paths, "ensure_host_dir", lambda: None)

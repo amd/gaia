@@ -133,15 +133,21 @@ describe("a packaged app's bundled core", () => {
   });
 
   test("in an AppImage runs from a copy that outlives the app's mount", async () => {
-    const copy = "/fixture/.gaia/core/0.25.4rc3/gaia";
+    const copy = "/fixture/.gaia/app-core/0.25.4rc3/gaia";
     const { installer, files, fakeFs } = load({
       env: { APPIMAGE: "/home/u/GAIA.AppImage" },
-      files: { "/app/resources/core/_internal/libpython3.12.so": "", "/fixture/.gaia/core/0.25.3/gaia": "" },
+      files: {
+        "/app/resources/core/_internal/libpython3.12.so": "",
+        "/fixture/.gaia/app-core/0.25.3/gaia": "",
+        // The one-line installer's own gaia, which the AppImage must leave alone.
+        "/fixture/.gaia/core/gaia": "",
+      },
     });
     expect(installer.isBackendCurrent()).toBe(false);
     await expect(installer.ensureBackend({ isPackaged: true })).resolves.toBe(copy);
-    expect(files.has("/fixture/.gaia/core/0.25.4rc3/_internal/libpython3.12.so")).toBe(true);
-    expect(files.has("/fixture/.gaia/core/0.25.3/gaia")).toBe(false);
+    expect(files.has("/fixture/.gaia/app-core/0.25.4rc3/_internal/libpython3.12.so")).toBe(true);
+    expect(files.has("/fixture/.gaia/app-core/0.25.3/gaia")).toBe(false);
+    expect(files.has("/fixture/.gaia/core/gaia")).toBe(true);
     expect(installer.findGaiaBin()).toBe(copy);
     expect(installer.isBackendCurrent()).toBe(true);
     await installer.ensureBackend({ isPackaged: true });

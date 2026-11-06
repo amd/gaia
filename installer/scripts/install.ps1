@@ -93,19 +93,27 @@ function Install-Core {
         if (Test-Path "$GAIA_BIN\gaia.exe") {
             & "$GAIA_BIN\gaia.exe" daemon stop *> $null
             if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3) {
-                Write-GaiaWarning "Could not stop the running GAIA daemon (exit $LASTEXITCODE); it keeps the old version until it restarts."
+                Write-GaiaError "Could not stop the running GAIA daemon (exit $LASTEXITCODE), so its files can't be replaced."
+                Write-Host "  Fix:  close the GAIA apps, then re-run this installer." -ForegroundColor $COLOR_YELLOW
+                throw "GAIA install failed - see the error above."
             }
         }
 
         if (-not (Test-Path $GAIA_BIN)) {
             New-Item -ItemType Directory -Path $GAIA_BIN -Force | Out-Null
         }
-        # Launchers an earlier upgrade renamed aside; one still running is removed next time.
+        # What an earlier upgrade moved aside; one still in use is removed next time.
         Get-ChildItem -LiteralPath $GAIA_BIN -Filter "*.exe*.old" -File |
             Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -LiteralPath $GAIA_BIN -Filter "_internal.*.old" -Directory |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        # The old install is moved aside, never deleted, so a failed swap can put it back.
+        $oldInternal = $null
+        $asides = @()
         try {
             if (Test-Path "$GAIA_BIN\_internal") {
-                Remove-Item -LiteralPath "$GAIA_BIN\_internal" -Recurse -Force
+                $oldInternal = "$GAIA_BIN\_internal.$PID.old"
+                Move-Item -LiteralPath "$GAIA_BIN\_internal" -Destination $oldInternal
             }
             Move-Item -LiteralPath "$stage\_internal" -Destination "$GAIA_BIN\_internal"
             foreach ($name in $GAIA_COMMANDS) {
@@ -115,15 +123,33 @@ function Install-Core {
                     $aside = "$dest.old"
                     if (Test-Path -LiteralPath $aside) { $aside = "$dest.$PID.old" }
                     Move-Item -LiteralPath $dest -Destination $aside -Force
+                    $asides += ,@($dest, $aside)
                 }
                 Copy-Item -LiteralPath "$stage\gaia.exe" -Destination $dest -Force
             }
         }
         catch {
-            Write-GaiaError "Could not put GAIA in $GAIA_BIN`: $_"
+            $swapError = $_
+            try {
+                foreach ($pair in $asides) {
+                    if (Test-Path -LiteralPath $pair[0]) { Remove-Item -LiteralPath $pair[0] -Force }
+                    Move-Item -LiteralPath $pair[1] -Destination $pair[0]
+                }
+                if ($oldInternal) {
+                    if (Test-Path "$GAIA_BIN\_internal") { Remove-Item -LiteralPath "$GAIA_BIN\_internal" -Recurse -Force }
+                    Move-Item -LiteralPath $oldInternal -Destination "$GAIA_BIN\_internal"
+                }
+            }
+            catch {
+                Write-GaiaError "Could not restore the previous GAIA in $GAIA_BIN`: $_"
+            }
+            Write-GaiaError "Could not put GAIA in $GAIA_BIN`: $swapError"
             Write-Host "  Fix:  close any running GAIA (and any tool scanning that" -ForegroundColor $COLOR_YELLOW
             Write-Host "        folder), then re-run this installer." -ForegroundColor $COLOR_YELLOW
             throw "GAIA install failed - see the error above."
+        }
+        if ($oldInternal) {
+            Remove-Item -LiteralPath $oldInternal -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
     finally {

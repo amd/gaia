@@ -119,6 +119,18 @@ def read_instance(path: Optional[Path] = None) -> Optional[DaemonInstance]:
         return None
 
 
+_RELEASE_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-?rc\.?(\d+))?$")
+
+
+def _release_key(text: str) -> Optional[Tuple[int, int, int, float]]:
+    """Order GAIA releases (0.25.4rc3 < 0.25.4); None for an unknown version."""
+    match = _RELEASE_RE.match((text or "").strip())
+    if not match:
+        return None
+    major, minor, patch, rc = match.groups()
+    return (int(major), int(minor), int(patch), float(rc) if rc else float("inf"))
+
+
 def runs_replaced_install(inst: DaemonInstance) -> Optional[str]:
     """Why *inst* runs a GAIA release since replaced on disk, or None.
 
@@ -126,13 +138,16 @@ def runs_replaced_install(inst: DaemonInstance) -> Optional[str]:
     from, gets the same answer. A daemon that predates the record is judged
     only by a client from its own Python, against that install's files.
 
-    The frozen app is the install the user just put on this PC, so a daemon
-    running any other GAIA release is out of date to it.
+    A frozen gaia replaces a daemon from an older release, or one that records
+    no version, and leaves a newer one alone, so two installs never take turns
+    restarting each other's daemon.
     """
     if getattr(sys, "frozen", False):
         from gaia import version
 
-        if inst.gaia_version != version.__version__:
+        theirs = _release_key(inst.gaia_version)
+        ours = _release_key(version.__version__)
+        if theirs is None or (ours is not None and theirs < ours):
             return (
                 f"it runs GAIA {inst.gaia_version or 'of an unknown version'}, "
                 f"and this app ships {version.__version__}"

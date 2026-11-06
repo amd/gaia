@@ -61,7 +61,8 @@ const GAIA_PYTHON_BIN = IS_WINDOWS
 const BUNDLED_GAIA_BIN = process.resourcesPath
   ? path.join(process.resourcesPath, "core", IS_WINDOWS ? "gaia.exe" : "gaia")
   : null;
-const APPIMAGE_CORE_ROOT = path.join(GAIA_HOME, "core");
+// Not ~/.gaia/core: install.sh unpacks its own gaia there.
+const APPIMAGE_CORE_ROOT = path.join(GAIA_HOME, "app-core");
 // Written last, so a copy a quit cut short is redone.
 const APPIMAGE_CORE_DONE = ".copied";
 
