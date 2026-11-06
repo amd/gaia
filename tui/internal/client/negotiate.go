@@ -118,6 +118,15 @@ const (
 // surfaceAgentID is the only agent whose `/query` takes `surface`.
 const surfaceAgentID = "gaia"
 
+// replyStyleContract is the contract version from which the flagship's
+// `/query` takes `reply_style` (schema 2.28): "voice" asks for a spoken
+// <spoken> summary first and a status sentence before each tool call. Gaia
+// only, like surface.
+const (
+	replyStyleContractMajor = 2
+	replyStyleContractMinor = 28
+)
+
 // versionProbeTimeout bounds the negotiation round-trip. Short: it is a local
 // daemon relay, and the probe must never be the reason a turn feels slow. On
 // failure the client assumes the peer is old, which is the answer that keeps
@@ -143,6 +152,8 @@ type peerContract struct {
 	supportsToolDecision bool
 	// supportsSurface is true only when the peer is the gaia agent at >= 2.20.
 	supportsSurface bool
+	// supportsReplyStyle is true only when the peer is the gaia agent at >= 2.28.
+	supportsReplyStyle bool
 	// answered is true only when the /version probe actually heard from the
 	// peer: a parsed 200 body, or a 404 (no such route -- which is itself a
 	// definitive "old enough to predate every contract this file tracks").
@@ -260,6 +271,8 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 		contractAtLeast(payload.APIVersion, toolDecisionContractMajor, toolDecisionContractMinor)
 	supportsSurface := s.agentID == surfaceAgentID &&
 		contractAtLeast(payload.APIVersion, surfaceContractMajor, surfaceContractMinor)
+	supportsReplyStyle := s.agentID == surfaceAgentID &&
+		contractAtLeast(payload.APIVersion, replyStyleContractMajor, replyStyleContractMinor)
 	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t, mid-run follow-ups: %t, tool decisions: %t)",
 		s.agentID, payload.APIVersion, supports, supportsSession, supportsFollowUp, supportsDecision)
 	agentVersion := payload.Version
@@ -274,6 +287,7 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 		supportsFollowUp:     supportsFollowUp,
 		supportsToolDecision: supportsDecision,
 		supportsSurface:      supportsSurface,
+		supportsReplyStyle:   supportsReplyStyle,
 		answered:             true,
 	}
 }
@@ -383,6 +397,20 @@ func noticeForMissingMemory(agentID, version string) string {
 			"memory view when the next one publishes.",
 		agentID, have, memoryContractMajor, memoryContractMinor,
 		updateCommand("install", agentID))
+}
+
+// noticeForMissingReplyStyle is why voice mode refuses to start: the agent
+// can't be asked for a spoken reply, and voice mode without one would read
+// the whole on-screen answer aloud.
+func noticeForMissingReplyStyle(agentID, version string) string {
+	have := "an older contract"
+	if version != "" {
+		have = "contract " + version
+	}
+	return fmt.Sprintf(
+		"Voice mode needs a newer GAIA agent: the installed '%s' agent speaks %s, and "+
+			"spoken replies need %d.%d or newer. GAIA updates its agent with the next release.",
+		agentID, have, replyStyleContractMajor, replyStyleContractMinor)
 }
 
 // updateCommand names the AGENT-scoped hub command, never the bare verb.

@@ -27,6 +27,7 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/modelsetup"
 	"github.com/amd/gaia/tui/internal/ui/providers"
 	"github.com/amd/gaia/tui/internal/ui/theme"
+	"github.com/amd/gaia/tui/internal/voice"
 )
 
 // eventMsg and doneMsg carry the channel they came from. Bubble Tea cannot
@@ -152,6 +153,12 @@ var (
 	answerPanelStyle = lipgloss.NewStyle().
 				Foreground(theme.Text).
 				PaddingLeft(answerGutter)
+
+	// What GAIA said aloud, above the detail it put on screen.
+	spokenLeadStyle = lipgloss.NewStyle().
+			Foreground(theme.Text).
+			Bold(true).
+			PaddingLeft(answerGutter)
 )
 
 // answerGutter is the answer's left padding; userPrefix labels a question.
@@ -187,8 +194,15 @@ type ChatModel struct {
 	// the /agents case below refuses with an actionable message instead of
 	// silently doing nothing.
 	hubClient agents.HubAgentLister
-	messages  []Message
-	activity  []ActivityItem
+	// dictation is Ctrl+R / /dictate recording into the composer; voice is
+	// the /talk screen. Each owns one daemon voice session, told apart by id.
+	dictation *dictationState
+	voice     *voiceMode
+	voiceSeq  int
+	// nextReplyStyle is the reply style the next startTurn asks for, once.
+	nextReplyStyle string
+	messages       []Message
+	activity       []ActivityItem
 	// expandWork shows every work log in full — narration, stage lines and
 	// multi-row outcomes — instead of one row per step. Ctrl+O toggles it.
 	expandWork bool
@@ -322,6 +336,13 @@ type ChatModel struct {
 	// acceptEdits is the "accept edits" permission mode: file edits in the
 	// workspace run unasked. Set only after the transport confirmed it.
 	acceptEdits bool
+
+	// readAloud is the reply being read aloud, nil when none is; readAloudSeq
+	// tells a stopped reading's late messages from the current one's.
+	readAloud    *readAloudRun
+	readAloudSeq int
+	// readAloudAuto mirrors read_aloud_auto: read each finished reply.
+	readAloudAuto bool
 
 	// warming is the warm-up stage before the first chat turn — see warmup.go.
 	// warmHidden is Esc on the stage: the chat shows while the warm-up turn
@@ -676,6 +697,7 @@ func (m ChatModel) Init() tea.Cmd {
 		// or /memory has already run negotiate once — see
 		// probeCapabilitiesCmd.
 		m.probeCapabilitiesCmd(),
+		loadReadAloudAutoCmd,
 	}
 	if m.agentID == setupAgentID {
 		// Whether /gpu applies here: only a PC with an integrated GPU has a
@@ -836,6 +858,8 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Once per Update, so every path that opens or closes a prompt is timed.
 	next.trackUserWait(time.Now())
+	// Here, like the queue drain below: a voice turn can end down any path.
+	next.settleVoiceTurn()
 
 	// Reconciled once per Update, here rather than at every call site that
 	// can open or close an overlay (a keystroke, a canonical needs_input
@@ -906,6 +930,12 @@ func queuedSendWatchdogAfter(turnSeq int, d time.Duration) tea.Cmd {
 }
 
 func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if next, cmd, handled := m.routeVoiceMsg(msg); handled {
+		return next, cmd
+	}
+	if next, cmd, handled := m.handleReadAloudMsg(msg); handled {
+		return next, cmd
+	}
 	var setupCmd tea.Cmd
 	if m.modelSetup != nil {
 		next, cmd, handled := m.updateModelSetup(msg)
@@ -1107,6 +1137,7 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.lastEventAt = time.Now()
+		m.observeVoiceTurn(msg.event)
 		return m.handleEvent(msg.event)
 
 	case doneMsg:
@@ -1413,6 +1444,19 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// The /talk screen owns the keyboard, but Ctrl+C keeps its meaning.
+	if m.voice != nil && msg.Type != tea.KeyCtrlC {
+		return m.handleVoiceKey(msg)
+	}
+	// Dictation stops on Esc and Enter (Enter never sends what is still
+	// being transcribed); every other key edits the composer as usual.
+	if m.dictation != nil && (msg.Type == tea.KeyEsc || msg.Type == tea.KeyEnter) {
+		if m.dictation.missing != "" && !m.dictation.downloading {
+			return m.endDictation(""), nil
+		}
+		return m.stopDictation()
+	}
+
 	// /copy's picker owns the arrows, Enter and Esc while it is open; any
 	// other key closes it and then does what it always does.
 	if m.pick.open {
@@ -1538,9 +1582,9 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Reset()
 		m.syncComposerHeight()
 
-		// Copying is local and read-only: there is no reason to make it wait
-		// for the turn to end.
-		if isCopyCommand(query) {
+		// Copying and reading aloud are local: there is no reason to make
+		// them wait for the turn to end.
+		if isCopyCommand(query) || isReadAloudCommand(query) || isVoiceCommand(query) {
 			return m.submit(query)
 		}
 
@@ -1576,6 +1620,9 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyCtrlT:
 		return m.toggleAppMouse()
+
+	case tea.KeyCtrlR:
+		return m.toggleDictation()
 
 	case tea.KeyCtrlO:
 		return m.toggleWorkDetail()
@@ -1816,6 +1863,13 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	if isUpdateCommand(query) {
 		return m.runUpdateCommand(updateCommandArg(query))
 	}
+	// Free-form arguments too (a voice id, a speed), so also before the switch.
+	if isReadAloudCommand(query) {
+		return m.runReadAloudCommand(commandArg(query, readAloudCommand))
+	}
+	if isVoiceCommand(query) {
+		return m.runVoiceCommand(commandArg(query, voiceCommand))
+	}
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched
 	// here instead, still before anything falls through to sendQuery.
@@ -1901,6 +1955,12 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 
 	case "/gateway":
 		return m, func() tea.Msg { return OpenGatewayMsg{} }
+
+	case "/dictate":
+		return m.toggleDictation()
+
+	case "/talk":
+		return m.openVoiceMode()
 
 	case "/clear":
 		return m.clearConversation()
@@ -2048,6 +2108,10 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFn = cancel
+	if m.nextReplyStyle != "" {
+		ctx = client.WithReplyStyle(ctx, m.nextReplyStyle)
+		m.nextReplyStyle = ""
+	}
 
 	m.turnSeq++
 	seq := m.turnSeq
@@ -2279,8 +2343,12 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		})
 		m.streaming = false
 		m.totalSteps = e.Steps
+		readable := !m.cancelPending && !m.awaitingModelSwitch && !m.warming
 		m.settleTurn()
 		m.updateViewport()
+		if readable {
+			return m.autoReadAloud(content)
+		}
 		return m, nil
 
 	case event.ChunkEvent:
@@ -2653,8 +2721,17 @@ func (m *ChatModel) updateViewport() {
 	// — same indent, same wrap — so the text does not jump when `final` replaces
 	// the streamed tokens with the authoritative copy.
 	if buf := m.buffer; m.streaming && buf != "" {
-		sb.WriteString(answerPanelStyle.Width(m.answerWidth()).Render(buf))
-		sb.WriteString("\n")
+		if lead, detail := voice.DisplayParts(buf); lead != "" || detail != buf {
+			if lead != "" {
+				sb.WriteString(spokenLeadStyle.Width(m.answerWidth()).Render(lead))
+				sb.WriteString("\n\n")
+			}
+			buf = detail
+		}
+		if buf != "" {
+			sb.WriteString(answerPanelStyle.Width(m.answerWidth()).Render(buf))
+			sb.WriteString("\n")
+		}
 	}
 
 	m.vpContent = linkify(sb.String(), m.viewport.Width)
@@ -2895,15 +2972,22 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 		return userStyle.Render(prefix + strings.ReplaceAll(body, "\n", "\n"+indent))
 
 	case RoleAssistant:
-		content := msg.Content
-		if msg.Rendered != "" {
-			if wrap := m.answerWidth() - 2; msg.renderedWrap != wrap {
-				msg.Rendered = components.RenderMarkdown(msg.Content)
+		// A voice turn's answer opens with the <spoken> summary GAIA said;
+		// it reads as a bold lead line above the detail, tags removed.
+		lead, detail := voice.DisplayParts(msg.Content)
+		content := detail
+		if msg.Rendered != "" || lead != "" {
+			if wrap := m.answerWidth() - 2; msg.renderedWrap != wrap || msg.leadSplit != (lead != "") {
+				msg.Rendered = components.RenderMarkdown(detail)
 				msg.renderedWrap = wrap
+				msg.leadSplit = lead != ""
 			}
 			content = trimBlankLines(msg.Rendered)
 		}
 		panel := answerPanelStyle.Width(m.answerWidth()).Render(content)
+		if lead != "" {
+			panel = spokenLeadStyle.Width(m.answerWidth()).Render(lead) + "\n\n" + panel
+		}
 
 		if stats := m.answerStats(msg); stats != "" {
 			panel += "\n" + activityStyle.Render("  "+stats)
@@ -3706,6 +3790,9 @@ func (m ChatModel) View() string {
 	if m.width == 0 {
 		return m.renderWelcome()
 	}
+	if m.voice != nil {
+		return m.help.Render(m.voiceView(), m.width, m.height)
+	}
 
 	header := m.renderHeader()
 	divider := dividerStyle.Render(strings.Repeat("─", m.width))
@@ -3776,7 +3863,11 @@ func (m ChatModel) View() string {
 	if m.confirmation != nil && m.confirmRows > 0 {
 		rows = append(rows, clipConfirmation(m.confirmation.View(), m.confirmRows))
 	}
-	rows = append(rows, divider, inputView, statusBar)
+	composerTop := divider
+	if m.dictation != nil {
+		composerTop = m.renderDictationBorder()
+	}
+	rows = append(rows, composerTop, inputView, statusBar)
 	base := lipgloss.JoinVertical(lipgloss.Left, rows...)
 
 	// The "/" palette draws over everything the same way the help panel does

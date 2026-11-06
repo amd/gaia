@@ -14,6 +14,7 @@ import { SkillsSettings } from './SkillsSettings';
 import { MemorySettings } from './MemorySettings';
 import { PrivacySettings } from './PrivacySettings';
 import { NotificationSettings } from './NotificationSettings';
+import { VoiceSettings } from './VoiceSettings';
 import '../SettingsModal.css';
 import './SettingsDialog.css';
 import { useT } from '../../i18n/useT';
@@ -24,7 +25,7 @@ const ConnectorsPane = lazy(() => import('./ConnectorsPane').then((m) => ({ defa
 const AdvancedPane = lazy(() => import('./AdvancedSettings').then((m) => ({ default: m.AdvancedSettings })));
 
 const SECTIONS: SettingsSection[] = [
-    'general', 'setup', 'model', 'permissions', 'skills', 'connectors', 'memory', 'notifications', 'privacy', 'advanced',
+    'general', 'setup', 'model', 'permissions', 'skills', 'connectors', 'memory', 'notifications', 'voice', 'privacy', 'advanced',
 ];
 
 /** One settings window with a section list on the left. */
@@ -55,6 +56,7 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
             case 'connectors': return <ConnectorsPane />;
             case 'memory': return <MemorySettings />;
             case 'notifications': return <NotificationSettings />;
+            case 'voice': return <VoiceSettings />;
             case 'privacy': return <PrivacySettings />;
             case 'advanced': return <AdvancedPane />;
         }

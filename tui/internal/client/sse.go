@@ -236,6 +236,9 @@ type queryRequest struct {
 	SessionID string `json:"session_id,omitempty"`
 	// Sent only to a peer proven >= 2.20 (negotiate.go); empty omits it.
 	Surface string `json:"surface,omitempty"`
+	// "voice" for a spoken turn (WithReplyStyle), sent only to a peer proven
+	// >= 2.28; empty omits it.
+	ReplyStyle string `json:"reply_style,omitempty"`
 }
 
 // Send starts one turn. The returned channel carries the canonical event types
@@ -301,6 +304,10 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	if peer.supportsSurface {
 		surface = "tui"
 	}
+	replyStyle := ReplyStyleFrom(ctx)
+	if replyStyle != "" && !peer.supportsReplyStyle {
+		return nil, fmt.Errorf("%s", noticeForMissingReplyStyle(s.agentID, peer.version))
+	}
 
 	payload, err := json.Marshal(queryRequest{
 		Query:              query,
@@ -311,6 +318,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		CanAnswerQuestions: canAnswer,
 		SessionID:          sessionID,
 		Surface:            surface,
+		ReplyStyle:         replyStyle,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not encode the '%s' query request: %w", s.agentID, err)
@@ -1415,3 +1423,23 @@ func (s *SSEClient) SetFullAccess(enabled bool) error {
 			s.agentID, daemon.ErrorDetail(resp))
 	}
 }
+
+// CheckVoiceReplies reports whether this agent takes reply_style "voice",
+// probing its contract first if no turn has yet.
+func (s *SSEClient) CheckVoiceReplies(ctx context.Context) error {
+	inst, err := s.daemon.EnsureAgent(ctx, s.agentID)
+	if err != nil {
+		return err
+	}
+	peer := s.negotiate(ctx, inst)
+	if !peer.answered {
+		return fmt.Errorf("couldn't read the '%s' agent's version, so voice mode can't tell "+
+			"whether it can answer aloud. The TUI log has the reason", s.agentID)
+	}
+	if !peer.supportsReplyStyle {
+		return fmt.Errorf("%s", noticeForMissingReplyStyle(s.agentID, peer.version))
+	}
+	return nil
+}
+
+var _ VoiceReplier = (*SSEClient)(nil)

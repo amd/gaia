@@ -21,6 +21,7 @@ import { localizeLiveStatus } from '../utils/liveStatus';
 import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
+import { ReadAloudButton, ReadAloudError } from './ReadAloudButton';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
@@ -29,6 +30,7 @@ import {
     buildCitationIndex, docForToken, findCitations, findPages,
     type CitationIndex, type FoundPage, type LibraryDoc,
 } from '../utils/citations';
+import { leadLine } from '../voice/spoken';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
@@ -380,7 +382,7 @@ function stripUnverifiedScope(content: string): string {
     }
 }
 
-function cleanToolCallContent(content: string, streaming = false): string {
+export function cleanToolCallContent(content: string, streaming = false): string {
     if (!content) return content;
     content = stripUnverifiedScope(content);
     let cleaned = content;
@@ -500,6 +502,14 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
             : cleanToolCallContent(cutOff ? cutOff.body : message.content, Boolean(isStreaming))),
         [message.content, message.role, isStreaming, cutOff],
     );
+    // A voice turn's answer opens with its spoken summary: shown as a lead line, never as tags.
+    const { lead, body } = useMemo(
+        () => (message.role === 'assistant' ? leadLine(cleanedContent) : { lead: '', body: cleanedContent }),
+        [cleanedContent, message.role],
+    );
+    const plainText = lead ? `${lead}\n\n${body}`.trim() : message.content;
+    const readText = lead ? `${lead}\n\n${body}`.trim() : cleanedContent;
+    const readAloudId = `${message.session_id}:${message.id}`;
     const [copied, setCopied] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const collapsibleUser = message.role === 'user' && isLongUserMessage(message.content);
@@ -530,11 +540,11 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
 
     const handleCopy = useCallback(() => {
         if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(message.content).catch(() => {});
+            navigator.clipboard.writeText(plainText).catch(() => {});
         } else {
             // Fallback for non-HTTPS contexts (common for localhost)
             const textarea = document.createElement('textarea');
-            textarea.value = message.content;
+            textarea.value = plainText;
             textarea.style.position = 'fixed';
             textarea.style.opacity = '0';
             document.body.appendChild(textarea);
@@ -545,7 +555,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         setCopied(true);
         if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
         copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-    }, [message.content]);
+    }, [plainText]);
 
     const handleDelete = useCallback(() => {
         if (!confirmDelete) {
@@ -594,6 +604,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 </button>
                             )}
                             {extraActions}
+                            {message.role === 'assistant' && !isError && readText.trim() && (
+                                <ReadAloudButton messageId={readAloudId} content={readText} />
+                            )}
                             <button
                                 className={`msg-copy ${copied ? 'copied' : ''}`}
                                 onClick={handleCopy}
@@ -625,7 +638,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             running={!!isStreaming}
                             awaitingUser={awaitingUser}
                             toolStatus={isStreaming ? toolStatus : null}
-                            answer={isStreaming ? undefined : cleanedContent}
+                            answer={isStreaming ? undefined : body}
                             liveLine={isStreaming && (
                                 <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} />
                             )}
@@ -664,7 +677,10 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             />
                         </>
                     ) : !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
-                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} />
+                        <>
+                            {lead && <p className="msg-spoken-lead" dir="auto">{lead}</p>}
+                            <RenderedContent content={body} showCursor={isStreaming && !!(lead || body) && !agentStepsActive} isStreaming={isStreaming} />
+                        </>
                     )}
                     {stopState && (
                         <div className={`msg-stopped${stopState === 'unconfirmed' || message.stopError ? ' is-unconfirmed' : ''}`} role="note">
@@ -712,6 +728,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
                         <TurnChanges sessionId={message.session_id} messageId={message.id} />
                     )}
+                    {message.role === 'assistant' && <ReadAloudError messageId={readAloudId} />}
                 </div>
             </div>
         </div>

@@ -81,6 +81,24 @@
 .msg-copy:hover { background: var(--bg-hover); color: var(--text-primary); }
 .msg-copy.copied { color: var(--accent-green); }
 
+/* A reply being read stays stoppable without hovering it. */
+.msg-actions:has(.msg-read-aloud.is-active) { opacity: 1; }
+.msg-read-aloud.is-active { color: var(--accent); }
+
+.msg-read-aloud-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin-block-start: 8px;
+    font-size: 12px;
+    color: var(--danger);
+}
+.msg-read-aloud-detail {
+    display: block;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+
 .msg-delete:hover { color: var(--danger); }
 .msg-delete.confirm {
     color: var(--danger);
@@ -673,4 +691,13 @@
 .citation-icon {
     vertical-align: -2px;
     margin-inline-end: 3px;
+}
+
+/* A voice turn's spoken summary: what GAIA said, above the detail. */
+.msg-spoken-lead {
+    margin: 0 0 6px;
+    color: var(--text-primary);
+    font-size: var(--fs-prose);
+    font-weight: 600;
+    line-height: 1.5;
 }

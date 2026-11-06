@@ -77,6 +77,9 @@ type Message struct {
 	// rendered before the window narrowed keeps rows wider than the pane, and
 	// the viewport clips them; renderMessage re-renders when this differs.
 	renderedWrap int
+	// leadSplit records that Rendered holds only the detail of a voice answer,
+	// its <spoken> lead drawn separately.
+	leadSplit bool
 }
 
 // renderCard draws the card at w, reusing the last render when the width has not

@@ -1,0 +1,44 @@
+id: voice_mode_t1_spoken_block
+name: "Voice mode — A Spoken Summary Opens the Answer"
+category: gaia_voice_mode
+severity: high
+tags: [t1_basic]
+description: |
+  A voice-mode turn (reply_style "voice") must open its answer with a
+  <spoken>...</spoken> block: one or two plain sentences, at most 40 words,
+  with no markdown, file paths, URLs, code or lists inside it. The detailed
+  answer follows. The block is what GAIA speaks, so a missing or bloated one
+  is audible to the user.
+
+persona: home_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "SEND AS A VOICE TURN: call send_message with reply_style=\"voice\". Ask for a tip calculation"
+    user_message: "what's an eighteen percent tip on eighty four dollars?"
+    ground_truth:
+      expected_answer: "$15.12"
+    success_criteria: |
+      The response text starts (after optional whitespace) with <spoken> and
+      has a matching </spoken>. Inside it: says $15.12 (or "fifteen dollars
+      and twelve cents"), at most 40 words, no markdown (*, #, `), no URL, no
+      list. FAIL if the block is missing, unclosed, over 40 words, or gives a
+      different amount. Detail after the block is allowed but must agree with
+      it.
+
+  - turn: 2
+    objective: "SEND AS A VOICE TURN: call send_message with reply_style=\"voice\". Ask a short everyday question"
+    user_message: "and roughly how much is that per person if we split it four ways?"
+    ground_truth:
+      expected_answer: "About $3.78 each"
+    success_criteria: |
+      Opens with a <spoken> block of at most 40 words that gives about $3.78
+      (3.78 exactly, or "just under four dollars"). FAIL if the block is
+      missing or the amount is wrong.
+
+expected_outcome: |
+  Every voice turn opens with a short, plain spoken summary that a speaker can
+  read aloud as is, and the rest of the answer agrees with it.

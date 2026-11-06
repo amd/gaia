@@ -125,6 +125,7 @@ const { installWindowKeys } = require("./services/window-keys.cjs");
 const { installQuitCleanup } = require("./services/quit-cleanup.cjs");
 const { chromiumSwitches } = require("./services/chromium-switches.cjs");
 const { titleBarKind, titleBarOptions } = require("./services/window-frame.cjs");
+const { installMediaPermissions } = require("./services/media-permissions.cjs");
 
 // No ozone switch: Electron 38+ already picks Wayland or X11, and users override with --ozone-platform=x11.
 for (const [name, value] of chromiumSwitches({ platform: process.platform, env: process.env })) {
@@ -1146,6 +1147,13 @@ app.whenReady().then(async () => {
   // The window, and the tray that keeps a closed one reachable, come before
   // anything that can take time, so an install runs in plain sight.
   titleDownloadSaveDialogs();
+  installMediaPermissions({
+    session: session.defaultSession,
+    ipcMain,
+    shell,
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+  });
   createWindow();
   initializeServices();
   engineInstall = createEngineInstall({

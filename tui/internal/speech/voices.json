@@ -1,0 +1,31 @@
+{
+  "default": "af_bella",
+  "voices": [
+    {"id": "af_alloy", "name": "American Female - Alloy"},
+    {"id": "af_aoede", "name": "American Female - Aoede"},
+    {"id": "af_bella", "name": "American Female - Bella"},
+    {"id": "af_jessica", "name": "American Female - Jessica"},
+    {"id": "af_kore", "name": "American Female - Kore"},
+    {"id": "af_nicole", "name": "American Female - Nicole"},
+    {"id": "af_nova", "name": "American Female - Nova"},
+    {"id": "af_river", "name": "American Female - River"},
+    {"id": "af_sarah", "name": "American Female - Sarah"},
+    {"id": "af_sky", "name": "American Female - Sky"},
+    {"id": "am_adam", "name": "American Male - Adam"},
+    {"id": "am_echo", "name": "American Male - Echo"},
+    {"id": "am_eric", "name": "American Male - Eric"},
+    {"id": "am_fenrir", "name": "American Male - Fenrir"},
+    {"id": "am_liam", "name": "American Male - Liam"},
+    {"id": "am_michael", "name": "American Male - Michael"},
+    {"id": "am_onyx", "name": "American Male - Onyx"},
+    {"id": "am_puck", "name": "American Male - Puck"},
+    {"id": "bf_alice", "name": "British Female - Alice"},
+    {"id": "bf_emma", "name": "British Female - Emma"},
+    {"id": "bf_isabella", "name": "British Female - Isabella"},
+    {"id": "bf_lily", "name": "British Female - Lily"},
+    {"id": "bm_daniel", "name": "British Male - Daniel"},
+    {"id": "bm_fable", "name": "British Male - Fable"},
+    {"id": "bm_george", "name": "British Male - George"},
+    {"id": "bm_lewis", "name": "British Male - Lewis"}
+  ]
+}

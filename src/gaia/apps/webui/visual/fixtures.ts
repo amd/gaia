@@ -129,6 +129,19 @@ export const SYSTEM_STATUS = {
     data_dir: 'C:\\Users\\you\\.gaia\\chat',
 };
 
+/** Voice settings and readiness on a PC with every speech model downloaded. */
+export const VOICE_SETTINGS = {
+    language: null, asr_model: 'auto', turn_taking: 'hands_free', silence_ms: 500, status_updates: true, captions: true,
+};
+export const VOICE_STATUS = {
+    ready: true, error: null, error_code: null, language: 'en', asr_model: 'Moonshine-Tiny-Streaming', tts_model: 'kokoro-v1',
+    speaks: true, turn_taking: 'hands_free', silence_ms: 500, status_updates: true, captions: true,
+    models: [
+        { id: 'Moonshine-Tiny-Streaming', purpose: 'transcription', downloaded: true, size_gb: 0.1 },
+        { id: 'kokoro-v1', purpose: 'tts', downloaded: true, size_gb: 0.34 },
+    ],
+};
+
 const ROUTES: Record<string, unknown> = {
     'GET /sessions': { sessions: SESSIONS, total: SESSIONS.length },
     [`GET /sessions/${ANSWER_SESSION}/messages`]: MESSAGES,
@@ -176,7 +189,19 @@ const ROUTES: Record<string, unknown> = {
     'GET /memory/settings': { memory_enabled: true },
     'GET /skills': { skills: [] },
     'GET /system/model-server': { reachable: true, error: null, base_url: 'http://127.0.0.1:13305', port: 13305, owner: 'gaia' },
+    'GET /speech/settings': {
+        voice: 'bf_emma', speed: 125, auto: true, min_speed: 50, max_speed: 200,
+        voices: [
+            { id: 'af_bella', name: 'Bella', accent: 'american', gender: 'female', quality: 'A-' },
+            { id: 'af_nicole', name: 'Nicole', accent: 'american', gender: 'female', quality: 'B-' },
+            { id: 'am_michael', name: 'Michael', accent: 'american', gender: 'male', quality: 'C+' },
+            { id: 'bf_emma', name: 'Emma', accent: 'british', gender: 'female', quality: 'B-' },
+            { id: 'bm_george', name: 'George', accent: 'british', gender: 'male', quality: 'C' },
+        ],
+    },
     'GET /lemonade/target': { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: 'http://127.0.0.1:13305', saved_base_url: null, api_key_stored: false, env_override: null },
+    'GET /voice/settings': VOICE_SETTINGS,
+    'GET /voice/status': VOICE_STATUS,
 };
 
 /**

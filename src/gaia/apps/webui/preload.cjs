@@ -84,6 +84,8 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
   // ── System metrics for the observability dashboard (#2007) ────────────
   system: {
     getMetrics: () => ipcRenderer.invoke("system:get-metrics"),
+    // Opens the OS microphone privacy pane; resolves false where there is none.
+    openMicSettings: () => ipcRenderer.invoke("system:open-mic-settings"),
   },
 
   // ── OS folder picker; resolves the chosen path, or null on cancel ─────
