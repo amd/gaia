@@ -706,9 +706,19 @@ def test_snowflake_time_round_trips():
     assert abs(da.snowflake_time(snowflake(now)) - now) < 0.01
 
 
-def test_the_transport_never_listens_for_edits():
+def test_an_edit_never_starts_a_turn():
+    """A message edited after its approval must not run again."""
     source = Path(da.__file__).with_name("transport.py").read_text(encoding="utf-8")
-    assert "on_message_edit" not in source and "on_raw_message_edit" not in source
+    assert "on_raw_message_edit" not in source
+    assert "adapter.handle_message, edited" not in source
+    ad, clock = make()
+    ad.on_ready()
+    first = message(clock, "delete build/")
+    ad.handle_message(first)
+    turns = len(ad._agent().turns)
+    clock.now += 5
+    ad.handle_edit(message(clock, "delete dist/", id=first.id, edited_at=clock.now))
+    assert len(ad._agent().turns) == turns
 
 
 def test_the_bridge_has_no_way_to_disarm_the_gate():
@@ -1237,3 +1247,38 @@ def test_no_gaia_launcher_says_how_to_restore_it(monkeypatch):
     monkeypatch.setattr(da, "_gaia_launcher", lambda: None)
     with pytest.raises(RuntimeError, match="Reinstall GAIA"):
         da._agent_env()
+
+
+# ----------------------------------------------------------------------
+# An edited message
+# ----------------------------------------------------------------------
+
+
+def _edit(clock, original, text, author=OWNER):
+    return message(clock, text, author=author, id=original.id, edited_at=clock.now)
+
+
+def test_an_edited_typo_is_told_it_did_not_run():
+    ad, clock = make()
+    ad.on_ready()
+    first = message(clock, "newest PRs in amd/gaai?")
+    ad.handle_message(first)
+    clock.now += 20
+    ad.handle_edit(_edit(clock, first, "newest PRs in amd/gaia?"))
+    ad.handle_edit(_edit(clock, first, "newest PRs in amd/gaia please"))
+    notices = [m for m in ad.transport.sent if m["text"] == da.EDIT_NOTICE]
+    assert len(notices) == 1, "said once per message, not per keystroke"
+
+
+@pytest.mark.parametrize(
+    "late,author",
+    [(da.EDIT_WINDOW_SECONDS + 60, OWNER), (10, "222")],
+)
+def test_an_old_or_foreign_edit_gets_no_notice(late, author):
+    ad, clock = make()
+    ad.on_ready()
+    first = message(clock, "a", author=author)
+    ad.handle_message(first)
+    clock.now += late
+    ad.handle_edit(_edit(clock, first, "b", author=author))
+    assert not [m for m in ad.transport.sent if m["text"] == da.EDIT_NOTICE]

@@ -66,8 +66,8 @@ can add the bot to a server and DM it. Those strangers only ever get one refusal
 - **Gateway only.** An outbound WebSocket. Buttons arrive as `INTERACTION_CREATE` because no
   Interactions Endpoint URL is set. No inbound port and no public URL.
 - **DM-only.** Accept only DM channels (no `guild_id`). Drop messages from any bot,
-  including this one. Ignore edits (`MESSAGE_UPDATE`): a message edited after approval must
-  not run again.
+  including this one. Never run an edit (`MESSAGE_UPDATE`): a message edited after approval
+  must not run again. A recent edit gets one line saying so, so a fixed typo is not a dead end.
 - **Nothing stale runs.** A message or click older than 2 minutes (by its snowflake
   timestamp) is never executed. That covers Gateway RESUME replays and a PC waking from
   sleep. The bridge says it missed the message and asks for it to be resent.

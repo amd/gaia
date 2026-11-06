@@ -110,6 +110,12 @@ MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 
 #: A message or click older than this is never executed.
 STALE_SECONDS = 120.0
+#: An edit to a message older than this is a tidy-up and gets no notice.
+EDIT_WINDOW_SECONDS = 600.0
+EDIT_NOTICE = (
+    "-# I don't act on edited messages, so nothing ran again. Send the new "
+    "wording as a new message."
+)
 
 CONFIRM_TIMEOUT_SECONDS = 600.0
 #: Long enough to walk through setup without racing a rotation; the code is
@@ -213,6 +219,8 @@ class InboundMessage:
     is_dm: bool = False
     content: str = ""
     attachments: List[Attachment] = field(default_factory=list)
+    #: When the user last edited it (epoch seconds); 0 for a new message.
+    edited_at: float = 0.0
 
 
 @dataclass
@@ -1035,6 +1043,32 @@ class DiscordAdapter:
         if self._fold_into_waiting(question):
             return
         self._start_turn(msg.channel_id, msg.id, question, "-# Thinking…")
+
+    def handle_edit(self, msg: InboundMessage) -> None:
+        """Say, once, that an edit was not acted on.
+
+        An edit never runs: a message changed after its approval must not run
+        again. Ignoring it silently left a fixed typo unanswered with no hint
+        why, so the user is told to send the new wording as a new message.
+        """
+        if (
+            msg.author_is_bot
+            or not msg.is_dm
+            or msg.author_id != self.config.owner_id
+            or self._state != state.STATE_CONNECTED
+        ):
+            return
+        now = self._clock()
+        try:
+            age = now - snowflake_time(msg.id)
+        except ValueError:
+            return
+        if age > EDIT_WINDOW_SECONDS or now - msg.edited_at > STALE_SECONDS:
+            return
+        if not self._first_sight(f"edit:{msg.id}"):
+            return
+        audit.info("Did not run edited Discord message %s: edits never run", msg.id)
+        self._send(msg.channel_id, EDIT_NOTICE)
 
     def _stop_work(self, channel_id: str) -> None:
         """Withdraw the waiting message and cancel the running one."""

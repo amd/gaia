@@ -352,6 +352,15 @@ class GatewayTransport:
             self._messages.submit(guard(adapter.handle_message, self._message(message)))
 
         @client.event
+        async def on_message_edit(before: Any, after: Any) -> None:
+            # A link preview arriving is an edit too; only changed words count.
+            if before.content == after.content:
+                return
+            edited = self._message(after)
+            edited.edited_at = after.edited_at.timestamp() if after.edited_at else 0.0
+            self._messages.submit(guard(adapter.handle_edit, edited))
+
+        @client.event
         async def on_interaction(interaction: Any) -> None:
             if interaction.type != discord.InteractionType.component:
                 return
