@@ -240,7 +240,7 @@ class _Deadline:
 
     def _fire(self) -> None:
         with _SOCKETS_LOCK:
-            if self._done:
+            if self._done or getattr(self, "_paused", False):
                 return
             self.fired.set()
             sock = _THREAD_SOCKETS.get(self._thread_id)
@@ -249,6 +249,33 @@ class _Deadline:
             response = self._response
             if response is not None:
                 _abort_stream(response)
+
+    def run_without_clock(self, operation):
+        """Run a non-network pause without charging it to this deadline.
+
+        Rate-limit waits happen between requests, while no socket is open. The
+        wait still needs to be enforced, but it must not make a valid redirect
+        fail merely because the per-domain pacing interval is longer than the
+        overall fetch deadline.
+        """
+        with _SOCKETS_LOCK:
+            if self._done or self.fired.is_set():
+                raise self.error()
+            self._paused = True
+            self._timer.cancel()
+        started = time.monotonic()
+        try:
+            return operation()
+        finally:
+            elapsed = time.monotonic() - started
+            with _SOCKETS_LOCK:
+                self._at += elapsed
+                self._paused = False
+                if not self._done and not self.fired.is_set():
+                    remaining = max(0.0, self._at - time.monotonic())
+                    self._timer = threading.Timer(remaining, self._fire)
+                    self._timer.daemon = True
+                    self._timer.start()
 
 
 #: What a read cut short by the deadline (its timeout, or the timer's
@@ -970,7 +997,7 @@ class WebClient:
             # Rate limit for new domain
             new_domain = urlparse(redirect_url).hostname
             if new_domain != domain:
-                self._rate_limit_wait(new_domain)
+                deadline.run_without_clock(lambda: self._rate_limit_wait(new_domain))
                 domain = new_domain
 
             current_url = redirect_url
