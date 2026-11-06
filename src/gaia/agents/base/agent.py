@@ -720,6 +720,16 @@ DECLINED_HINT = (
     "to do and why, then stop."
 )
 
+#: Tools whose output is a computed result: when one did not run, nothing was computed.
+COMPUTATION_TOOLS = frozenset(
+    {"run_python", "execute_python_file", "run_shell_command", "query_data"}
+)
+COMPUTATION_NOT_RUN = (
+    "The computation did not run, so it produced no figures. Do not report "
+    "computed figures (totals, sums, counts, averages) as if it had. Tell the "
+    "user what is needed to compute them."
+)
+
 # Tools whose result is nothing but a receipt for what the agent itself just
 # did. EVERY other tool is treated as bringing in content the user did not type
 # — including the skill-library reads, whose text comes from third-party
@@ -6903,6 +6913,7 @@ Do NOT wrap conversational replies in JSON.
         if (recorder is None and step_timer is None) or not outermost:
             result = self._execute_tool(tool_name, tool_args)
             self._note_verification_signal(tool_name, tool_args, result, before=before)
+            result = self._with_computation_note(tool_name, result)
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
@@ -6918,6 +6929,7 @@ Do NOT wrap conversational replies in JSON.
             result = self._execute_tool(tool_name, tool_args)
             ok = not self._is_error_result(result)
             self._note_verification_signal(tool_name, tool_args, result, before=before)
+            result = self._with_computation_note(tool_name, result)
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
@@ -6944,6 +6956,17 @@ Do NOT wrap conversational replies in JSON.
                     )
                 except Exception as e:  # noqa: BLE001 - never displace a tool error
                     logger.warning("could not record tool timing: %s", e)
+
+    @staticmethod
+    def _with_computation_note(tool_name: str, result: Any) -> Any:
+        """A computation that was denied or failed says plainly that nothing was computed."""
+        if (
+            tool_name not in COMPUTATION_TOOLS
+            or not isinstance(result, dict)
+            or not tool_result_failed(result, FAILED_STATUSES)
+        ):
+            return result
+        return {**result, "computation": COMPUTATION_NOT_RUN}
 
     def _with_task_lessons(self, tool_name: str, tool_args: Any, result: Any) -> Any:
         """A failed result carries what this task has already learned."""

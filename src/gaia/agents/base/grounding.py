@@ -437,7 +437,8 @@ _VERSION_LEAD = re.compile(
     r"|(?i:\b(?:version|python|node|py)[ -]?)$"
 )
 _ESTIMATE_LEAD = re.compile(
-    r"(?:~|\b(?:about|approximately|approx\.?|around|roughly|nearly|almost))\s*$",
+    r"(?:~|\b(?:about|approximately|approx\.?|around|roughly|nearly|almost))\s*"
+    r"(?:(?:US|C|A)?[$€£¥]\s*)?$",
     re.I,
 )
 
@@ -571,7 +572,14 @@ def _prose_values(text: str) -> List[_Value]:
         values.append(value)
     for match, _ in reversed(scaled):
         text = text[: match.start()] + " " + text[match.end() :]
-    for match in list(_GROUPED.finditer(text)) + list(_PLAIN.finditer(text)):
+    grouped = list(_GROUPED.finditer(text))
+    # "37,160.80" is one figure, not 37 and 160.80.
+    plain = [
+        m
+        for m in _PLAIN.finditer(text)
+        if not any(g.start() <= m.start() < g.end() for g in grouped)
+    ]
+    for match in grouped + plain:
         raw = match.group(0)
         after = text[match.end() : match.end() + 1]
         if after == "+" or not ("." in raw or "," in raw or after == "%"):
@@ -584,13 +592,30 @@ def _prose_values(text: str) -> List[_Value]:
     return values
 
 
+#: "$2,708.95", "€1,379.87", "USD 1,375.25": an amount to the cent or the thousand.
+_PROSE_MONEY = re.compile(
+    r"(?:(?:US|C|A)?\$|€|£|¥|\b(?:USD|EUR|GBP|CAD|AUD|JPY|CHF|CNY|INR)\s?)\s?"
+    r"(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+)(?![\d,])"
+)
+
+
+def _states_money(text: str) -> bool:
+    """*text* states an exact amount of money that is not an estimate."""
+    for match in _PROSE_MONEY.finditer(text):
+        lead = text[max(0, match.start() - 24) : match.start()]
+        if not _ESTIMATE_LEAD.search(lead):
+            return True
+    return False
+
+
 def presented_values(answer: str) -> List[_Value]:
     """Values *answer* presents as data, in order, without duplicates.
 
     Table cells that are one value, fields of an untagged/CSV/JSON code block,
-    and — only when the answer has one of those — decimals, dates and
-    percentages in its prose. Code blocks in a language, inline code, small
-    whole numbers, estimates and version numbers are left alone.
+    and — only when the answer has one of those or states an exact amount of
+    money — decimals, dates and percentages in its prose. Code blocks in a
+    language, inline code, small whole numbers, estimates and version numbers
+    are left alone.
     """
     values: List[_Value] = []
 
@@ -609,9 +634,9 @@ def presented_values(answer: str) -> List[_Value]:
     text = re.sub(r"`[^`\n]*`", " ", text)
     lines = text.splitlines()
     values.extend(_table_values(lines))
-    if not values:
-        return []  # no table or data block: prose numbers are not presented data
     prose = "\n".join(line for line in lines if not line.strip().startswith("|"))
+    if not values and not _states_money(prose):
+        return []  # no table, data block or amount: prose numbers are not data
     values.extend(_prose_values(prose))
     seen: Set["tuple[str, Optional[str]]"] = set()
     unique = []
@@ -727,6 +752,16 @@ def _derived(value: _Value, operands: Sequence[Set[float]]) -> bool:
     return False
 
 
+def _total_of(value: _Value, grounded: Sequence[_Value]) -> bool:
+    """*value* is the sum of every grounded value the answer shows to its precision."""
+    parts = [
+        v.number
+        for v in grounded
+        if v.number is not None and v.decimals == value.decimals and v.unit is None
+    ]
+    return len(parts) > 2 and _rounds_to(sum(parts), value)
+
+
 def content_findings(
     answer: str, records: Sequence[Dict[str, Any]], context: str = ""
 ) -> List[Finding]:
@@ -760,7 +795,10 @@ def content_findings(
     missing = [
         v.text
         for v in values
-        if v not in grounded and not (v.number is not None and _derived(v, operands))
+        if v not in grounded
+        and not (
+            v.number is not None and (_derived(v, operands) or _total_of(v, grounded))
+        )
     ]
     if not missing:
         return []
