@@ -14,6 +14,7 @@ import pytest
 
 from gaia.llm.lemonade_client import InsufficientMemoryError, LemonadeStatus
 from gaia.llm.lemonade_manager import LemonadeManager
+from gaia.version import LEMONADE_VERSION
 
 REFUSAL = (
     "Not enough free memory to load Gemma-4-E4B-it-GGUF at 32,768 tokens: it "
@@ -35,7 +36,7 @@ def idle_server(monkeypatch):
     client = MagicMock()
     client.base_url = "http://localhost:45678/api/v1"
     client.get_status.return_value = LemonadeStatus(
-        running=True, context_size=0, loaded_models=[]
+        version=LEMONADE_VERSION, running=True, context_size=0, loaded_models=[]
     )
     client.get_model_max_context_window.return_value = None
     client.load_model.side_effect = InsufficientMemoryError(REFUSAL)

@@ -26,7 +26,7 @@ import { Popover } from './Popover';
 import gaiaRobot from '../assets/gaia-robot.png';
 import { useSidebarWidth } from './SidebarResizer';
 import type { Session } from '../types';
-import { ref, type MessageKey } from '../i18n/registry';
+import { pluralKey, ref, type MessageKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
 import type { SessionSearchResult } from '../types/api.gen';
 import { foldText, splitMatch, type MatchParts } from '../utils/chatSearch';
@@ -134,7 +134,6 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
     const label = dot ? [t(STATUS_LABEL[dot]), place].filter(Boolean).join(', ') : undefined;
     const waiting = failed > 0 ? `${failed} not sent` : unsent > 0 ? `${unsent} to send` : null;
     const note = [place, waiting].filter(Boolean).join(' · ');
-    const unsentWords = `${unsent} unsent message${unsent === 1 ? '' : 's'}`;
     const snippetText = snippet ? `${snippet.before}${snippet.match}${snippet.after}` : null;
     const title = <span className="sb-row-title">{titleMatch ? <Highlight parts={titleMatch} /> : session.title}</span>;
 
@@ -237,7 +236,7 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                             >
                                 <Trash2 size={15} aria-hidden="true" />
                                 {confirm
-                                    ? t('row.tapAgain', { label: unsent > 0 ? `Delete ${unsent} unsent?` : ref('row.deleteConfirm') })
+                                    ? t('row.tapAgain', { label: unsent > 0 ? ref(pluralKey('row.deleteUnsent', unsent), { n: unsent }) : ref('row.deleteConfirm') })
                                     : t('row.delete')}
                             </button>
                             {confirm && <p className="sb-row-menu-note">{t('row.deleteMemoryNote')}</p>}
@@ -273,15 +272,15 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                         onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}
                         aria-label={confirm
                             ? (unsent > 0
-                                ? `Confirm delete ${session.title} and its ${unsentWords}`
+                                ? t.plural('row.confirmDeleteUnsentAria', unsent, { title: session.title })
                                 : t('row.confirmDeleteAria', { title: session.title }))
                             : t('row.deleteAria', { title: session.title })}
                         title={confirm
-                            ? `${unsent > 0 ? `Click again to delete this chat and its ${unsentWords}` : t('row.clickAgain')}\n${t('row.deleteMemoryNote')}`
+                            ? `${unsent > 0 ? t.plural('row.clickAgainUnsent', unsent) : t('row.clickAgain')}\n${t('row.deleteMemoryNote')}`
                             : t('row.delete')}
                     >
                         {confirm
-                            ? <span className="sb-row-delete-label">{unsent > 0 ? `Delete ${unsent} unsent?` : t('row.deleteConfirm')}</span>
+                            ? <span className="sb-row-delete-label">{unsent > 0 ? t.plural('row.deleteUnsent', unsent) : t('row.deleteConfirm')}</span>
                             : <Trash2 size={13} />}
                     </button>
                 </>

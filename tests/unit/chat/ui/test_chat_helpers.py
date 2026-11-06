@@ -18,6 +18,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT
 from gaia.ui import _chat_helpers
 from gaia.ui._chat_helpers import (
     _EMPTY_MODEL_ANSWER_MSG,
@@ -469,10 +470,18 @@ class TestEmptyAnswerOutcome:
 _BASE = "http://lemonade.test:8000/api/v1"
 
 
-def _probe(model_id, handler):
+def _probe(model_id, handler, gaias_own=True):
     """Run the backend probe against a fake Lemonade served by ``handler``."""
     real_client = httpx.AsyncClient
     with (
+        patch(
+            "gaia.llm.lemonade_launcher.gaia_runs_lemonade",
+            return_value=gaias_own,
+        ),
+        patch(
+            "gaia.llm.lemonade_launcher.describe_start_hint",
+            return_value=MagicMock(instruction="START-HINT"),
+        ),
         patch.object(_chat_helpers, "_eval_provider_kwargs", return_value={}),
         patch(
             "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
@@ -481,10 +490,6 @@ def _probe(model_id, handler):
         patch(
             "httpx.AsyncClient",
             lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
-        ),
-        patch(
-            "gaia.llm.lemonade_launcher.describe_start_hint",
-            return_value=MagicMock(instruction="START-HINT"),
         ),
     ):
         return asyncio.run(_empty_answer_backend_problem(model_id))
@@ -511,13 +516,20 @@ class TestEmptyAnswerBackendProblem:
         problem = _probe("Gemma-4-E4B-it-GGUF", refuse)
         assert _BASE in problem
         assert "isn't responding" in problem
+        assert problem.endswith(APP_SERVER_DOWN_HINT)
+        assert "gaia " not in problem
+
+    def test_a_server_the_user_runs_gets_its_start_hint(self):
+        def refuse(request):
+            raise httpx.ConnectError("connection refused", request=request)
+
+        problem = _probe("Gemma-4-E4B-it-GGUF", refuse, gaias_own=False)
         assert problem.endswith("START-HINT")
-        assert "lemonade-server serve" not in problem
 
     def test_unhealthy_status_names_the_http_code(self):
         problem = _probe("M-GGUF", lambda request: httpx.Response(503))
         assert "HTTP 503" in problem
-        assert problem.endswith("START-HINT")
+        assert problem.endswith(APP_SERVER_DOWN_HINT)
 
     @pytest.mark.parametrize("status", [401, 403])
     def test_a_rejected_key_names_the_key_not_a_start_hint(self, status):
@@ -660,7 +672,6 @@ class TestSessionAgentKwargsShape:
             "allowed_paths",
             "working_directory",
             "ui_session_id",
-            "dynamic_tools",
             "memory_incognito",
             "surface",
         }
@@ -685,28 +696,6 @@ class TestSessionAgentKwargsShape:
             memory_incognito=True,
         )
         assert kwargs["memory_incognito"] is True
-
-    def test_dynamic_tools_defaults_off_and_forwards_when_set(self):
-        """The Beta tool-loader toggle (#1798) defaults off and round-trips
-        through the helper — the field that makes the UI toggle apply."""
-        from gaia.ui._chat_helpers import _session_agent_kwargs
-
-        off = _session_agent_kwargs(
-            rag_file_paths=[],
-            library_paths=[],
-            allowed=["/root"],
-            session_id="s",
-        )
-        assert off["dynamic_tools"] is False
-
-        on = _session_agent_kwargs(
-            rag_file_paths=[],
-            library_paths=[],
-            allowed=["/root"],
-            session_id="s",
-            dynamic_tools=True,
-        )
-        assert on["dynamic_tools"] is True
 
     def test_empty_rag_file_paths_propagates_to_rag_documents(self):
         """Invariant checked by ``test_streaming_registered_agent_does_not_double_index``.
@@ -1327,6 +1316,72 @@ class TestGuardModelTitles:
     )
     def test_chat_and_cloud_models_title_themselves(self, model):
         assert self._titling_model(model) == model
+
+
+class TestEchoedInstructionTitles:
+    """Gemma on the NPU sometimes answers the title prompt with the prompt itself."""
+
+    QUESTION = r"Read C:\gtest\run-rc9\fx\notes.txt"
+
+    def _title_reply(self, content):
+        from gaia.ui import _chat_helpers as ch
+
+        client = _resident_title_client("gemma4-it-e4b-FLM", content)
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            return asyncio.run(
+                ch._generate_session_title(
+                    "http://localhost:13305/api/v1",
+                    "gemma4-it-e4b-FLM",
+                    self.QUESTION,
+                    "ok",
+                )
+            )
+
+    @pytest.mark.parametrize(
+        "echo",
+        [
+            "Summarise user task in 3 to 6 plain words for a tab/window title",
+            "Summarise the user's task in 3 to 6 plain words for a tab/window title,",
+            "Summarize the user's task in plain words",
+            "Reply with ONLY the title, no quotes, no trailing punctuation",
+        ],
+    )
+    def test_echoed_instruction_is_not_a_title(self, echo):
+        assert self._title_reply(echo) is None
+
+    @pytest.mark.parametrize(
+        "title",
+        ["Read notes.txt file", "Translate the task for a user", "Plain Words Title"],
+    )
+    def test_titles_sharing_a_few_prompt_words_are_kept(self, title):
+        assert self._title_reply(title) == title
+
+    def test_chat_keeps_its_first_question_as_the_title(self):
+        from gaia.ui import _chat_helpers as ch
+
+        question_title = ch._title_from_question(self.QUESTION)
+        db = MagicMock()
+        sid = "echoed-instruction-title"
+        db.get_session.return_value = {"id": sid, "title": question_title}
+        db.get_messages.return_value = []
+        client = _resident_title_client(
+            "gemma4-it-e4b-FLM",
+            "Summarise user task in 3 to 6 plain words for a tab/window title",
+        )
+        with (
+            patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client),
+            patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
+                return_value="http://localhost:13305/api/v1",
+            ),
+        ):
+            asyncio.run(
+                ch._maybe_update_session_title(
+                    db, sid, self.QUESTION, "ok", "gemma4-it-e4b-FLM"
+                )
+            )
+        client.chat_completions.assert_called_once()
+        db.replace_auto_title.assert_not_called()
 
 
 async def test_spawn_background_keeps_the_task_alive_until_done():

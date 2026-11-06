@@ -24,9 +24,9 @@ Tests cover:
 from __future__ import annotations
 
 import json
-from typing import Dict
 from unittest.mock import patch
 
+import keyring
 import pytest
 
 from gaia.connectors.errors import ConnectorsError
@@ -82,29 +82,22 @@ class TestConfigure:
     async def test_stores_env_vars_in_keyring(self, tmp_path):
         spec = _make_spec()
         handler = McpServerHandler()
-        stored: Dict[str, str] = {}
 
-        def fake_set_password(service, username, value):
-            stored[(service, username)] = value
+        await handler.configure(spec, {"GITHUB_TOKEN": "ghp_secret"})
 
-        with (
-            patch(
-                "gaia.connectors.mcp_server.keyring.set_password",
-                side_effect=fake_set_password,
-            ),
-            patch("gaia.connectors.mcp_server.keyring.get_password", return_value=None),
-        ):
-            await handler.configure(spec, {"GITHUB_TOKEN": "ghp_secret"})
-
-        assert stored[(SERVICE_NAME, "mcp-github:GITHUB_TOKEN")] == "ghp_secret"
+        # The package conftest installs a real in-memory keyring backend, so
+        # this reads back what configure() actually stored.
+        assert (
+            keyring.get_password(SERVICE_NAME, "mcp-github:GITHUB_TOKEN")
+            == "ghp_secret"
+        )
 
     @pytest.mark.asyncio
     async def test_writes_keyring_refs_not_plaintext(self, tmp_path):
         spec = _make_spec()
         handler = McpServerHandler()
 
-        with patch("gaia.connectors.mcp_server.keyring.set_password"):
-            await handler.configure(spec, {"GITHUB_TOKEN": "ghp_secret"})
+        await handler.configure(spec, {"GITHUB_TOKEN": "ghp_secret"})
 
         path = tmp_path / ".gaia" / "mcp_servers.json"
         assert path.exists()
@@ -119,8 +112,7 @@ class TestConfigure:
         spec = _make_spec()
         handler = McpServerHandler()
 
-        with patch("gaia.connectors.mcp_server.keyring.set_password"):
-            await handler.configure(spec, {"GITHUB_TOKEN": "tok"})
+        await handler.configure(spec, {"GITHUB_TOKEN": "tok"})
 
         path = tmp_path / ".gaia" / "mcp_servers.json"
         data = json.loads(path.read_text())
@@ -135,8 +127,7 @@ class TestConfigure:
         reload_calls = []
         handler = McpServerHandler(reload_callback=lambda: reload_calls.append(1))
 
-        with patch("gaia.connectors.mcp_server.keyring.set_password"):
-            await handler.configure(spec, {"GITHUB_TOKEN": "tok"})
+        await handler.configure(spec, {"GITHUB_TOKEN": "tok"})
 
         assert len(reload_calls) == 1
 
@@ -428,8 +419,7 @@ class TestSecretHygiene:
             "SLACK_TOKEN": "super_secret_slack",
         }
 
-        with patch("gaia.connectors.mcp_server.keyring.set_password"):
-            await handler.configure(spec, secrets)
+        await handler.configure(spec, secrets)
 
         path = tmp_path / ".gaia" / "mcp_servers.json"
         content = path.read_text()

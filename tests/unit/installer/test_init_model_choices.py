@@ -75,7 +75,7 @@ class FakeLemonade(LemonadeClient):
         self.deleted = []
 
     def health_check(self):
-        return {"status": "ok", "version": "11.8.0"}
+        return {"status": "ok", "version": "2026.44.1"}
 
     def get_system_info(self, timeout=None):
         devices = {"amd_igpu": {"available": True, "vram_gb": self.vram_gb}}
@@ -145,6 +145,9 @@ def home(tmp_path, monkeypatch):
 @pytest.fixture
 def lemonade(monkeypatch, tmp_path):
     """Point init and the setup plan at a :class:`FakeLemonade`."""
+    # These tests exercise model selection; keep the independent flagship
+    # installation prerequisite satisfied unless a readiness test opts into it.
+    monkeypatch.setattr(InitCommand, "_is_hub_agent_available", lambda *_: True)
     store = tmp_path / "hub"
     store.mkdir()
 
@@ -412,6 +415,62 @@ def test_check_does_not_count_a_skipped_model_as_missing(lemonade, home, monkeyp
     assert check_setup_status("gaia").ready
     lemonade(downloaded=[EMBEDDER])
     home.write_text(json.dumps({"skipped_models": [DEFAULT_EMBEDDING_MODEL]}))
+    assert not check_setup_status("gaia").ready
+
+
+def test_check_accepts_the_local_model_picked_after_a_cloud_setup(
+    lemonade, home, monkeypatch
+):
+    """Cloud setup sets no default_model; the local model picked later counts."""
+    from gaia.installer.init_command import check_setup_status
+
+    lemonade(downloaded=[EMBEDDER, FLM])
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+    home.write_text(json.dumps({"last_provider": "local", "last_model": FLM}))
+    assert check_setup_status("gaia").ready
+
+
+def test_npu_profile_ignores_a_downloaded_gpu_last_model(lemonade, home, monkeypatch):
+    """An NPU setup must not silently select the GPU model from the last chat."""
+    from gaia.installer.init_command import resolve_init_chat_model
+
+    fake = lemonade(downloaded=[EMBEDDER, DEFAULT_MODEL_NAME, FLM], npu=True)
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+    home.write_text(
+        json.dumps({"last_provider": "local", "last_model": DEFAULT_MODEL_NAME})
+    )
+
+    choice = resolve_init_chat_model(
+        fake, reset_corrupt=False, enforce_fit=True, profile="npu"
+    )
+    assert choice.model_id == NPU_DEFAULT_MODEL_NAME
+    assert choice.user_set is False
+
+
+def test_init_keeps_the_local_model_picked_after_a_cloud_setup(lemonade, home):
+    """`gaia init` must agree with the check and not pull the hardware default."""
+    from gaia.installer.init_command import resolve_init_chat_model
+
+    fake = lemonade(downloaded=[EMBEDDER, FLM])
+    home.write_text(json.dumps({"last_provider": "local", "last_model": FLM}))
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=True)
+    assert (choice.model_id, choice.user_set) == (FLM, True)
+    assert _download(InitCommand(profile="gaia", yes=True))
+    assert DEFAULT_MODEL_NAME not in _pulled(fake)
+    assert LARGE_DEFAULT_MODEL_NAME not in _pulled(fake)
+
+
+def test_check_ignores_a_last_model_that_is_not_downloaded_or_not_local(
+    lemonade, home, monkeypatch
+):
+    from gaia.installer.init_command import check_setup_status
+
+    lemonade(downloaded=[EMBEDDER])
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+    home.write_text(json.dumps({"last_provider": "local", "last_model": FLM}))
+    assert not check_setup_status("gaia").ready
+    lemonade(downloaded=[EMBEDDER, FLM])
+    home.write_text(json.dumps({"last_provider": "fireworks", "last_model": FLM}))
     assert not check_setup_status("gaia").ready
 
 

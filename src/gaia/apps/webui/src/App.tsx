@@ -31,12 +31,13 @@ import { getSessionHash } from './utils/format';
 import { lastSessionTarget, readUrlTarget, rememberLastSession, resolveUrlNavTarget } from './utils/sessionNav';
 import { NEW_CHAT_DRAFT_KEY, chatDraftKey, clearSavedDraft, readSavedDraft, writeSavedDraft } from './utils/savedDraft';
 import { getApiBase } from './utils/apiBase';
+import { followBackendLifecycle } from './stores/backendStore';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
 import { FLAGSHIP_AGENT_ID, hasFlagshipAgent, isFlagshipMissingError } from './utils/newTask';
 import { runWhileVisible } from './utils/visibleInterval';
 import { RETRY_INITIAL_MS, retryUntilOk, type Retrier } from './utils/retry';
 import { shouldShowStartupScreen } from './utils/startupGate';
-import { useT } from './i18n/useT';
+import { getT, useT } from './i18n/useT';
 import type { SetupCheck, StartCard } from './types';
 
 // Heavy, occasional screens load on first use.
@@ -78,10 +79,10 @@ async function waitForEmbeddedUpgrade(): Promise<void> {
         const status = await api.getSetupStatus();
         if (status.state === 'ready') return;
         if (status.state === 'failed' || status.state === 'cancelled') {
-            throw new UpgradeFailed(status.error || 'The update stopped before it finished.');
+            throw new UpgradeFailed(status.error || getT().bare('setup.upgrading.stopped'));
         }
         if (Date.now() >= deadline) {
-            throw new Error('Updating the local model server is taking longer than usual. Check again to keep waiting.');
+            throw new Error(getT().bare('setup.upgrading.slow'));
         }
         await sleep(RETRY_INITIAL_MS);
     }
@@ -142,6 +143,8 @@ function App() {
     agentsKnownRef.current = agentsKnown;
     // A new chat was refused because the flagship is not installed.
     const [flagshipRefused, setFlagshipRefused] = useState(false);
+    // The setup check found no GAIA agent build for this PC: nothing to install.
+    const [noAgentBuild, setNoAgentBuild] = useState(false);
     const flagshipMissing = flagshipRefused || (agentsKnown && !hasFlagshipAgent(agents));
     const flagshipMissingRef = useRef(flagshipMissing);
     flagshipMissingRef.current = flagshipMissing;
@@ -167,10 +170,10 @@ function App() {
         try {
             for (;;) {
                 await useModelStore.getState().refresh();
-                const active = useModelStore.getState().active;
+                const remote = !!useModelStore.getState().active?.remote;
                 let check: SetupCheck;
                 try {
-                    check = await api.checkSetup(!!active?.remote);
+                    check = await api.checkSetup(remote);
                 } catch (err) {
                     if (!waitForStart || !isRefused(err) || waited >= BACKEND_START_WAIT_MS) throw err;
                     // A refused local connection is cheap; poll steadily so the app opens as soon as it listens.
@@ -179,17 +182,18 @@ function App() {
                     continue;
                 }
                 // A new pinned embedded server is an update, not first-run setup: the models stay.
-                if (!check.ready && check.stage === 'upgrade' && !active?.remote) {
+                if (!check.ready && check.stage === 'upgrade') {
                     setSetup({ state: 'upgrading' });
                     // A re-check after the wait timed out finds that update still going: follow it.
                     const run = await api.getSetupStatus();
                     const updating = run.upgrade_embedded && (run.state === 'running' || run.state === 'verifying');
-                    if (!updating) await api.startSetup(false, false, { upgradeEmbedded: true });
+                    if (!updating) await api.startSetup(remote, false, { upgradeEmbedded: true });
                     await waitForEmbeddedUpgrade();
-                    check = await api.checkSetup(false);
+                    check = await api.checkSetup(remote);
                 }
                 // Read status and chats before showing the app, so it never flashes "lost connection" or "no chats".
                 if (waited > 0) await Promise.all([refreshStatus.current(), reloadSessions.current()]);
+                setNoAgentBuild(!!check.no_agent_build);
                 setSetup(check.ready ? { state: 'ready' } : { state: 'needed', check });
                 return;
             }
@@ -342,6 +346,8 @@ function App() {
     refreshStatus.current = checkSystemStatus;
 
     useEffect(() => runWhileVisible(statusPoller.start), [statusPoller]);
+    // The desktop app restarts a crashed backend on a new port; re-check once it's back.
+    useEffect(() => followBackendLifecycle(() => { void checkSystemStatus(); }), [checkSystemStatus]);
 
     // ── Chats ───────────────────────────────────────────────────────────
     const sessionFingerprint = useRef('');
@@ -765,13 +771,13 @@ function App() {
                     </div>
                 ) : (
                     <div className="app-notice is-warning" role="status">
-                        <span>Could not check whether GAIA is set up: {setup.error}</span>
-                        <button type="button" className="link-btn" onClick={() => void checkSetup()}>Check again</button>
+                        <span>{t('setup.unknown.failed', { error: setup.error })}</span>
+                        <button type="button" className="link-btn" onClick={() => void checkSetup()}>{t('setup.unknown.retry')}</button>
                     </div>
                 ))}
                 {/* Model downloads, here when the sidebar that usually shows them is closed or collapsed. */}
                 {(!sidebarOpen || sidebarCollapsed) && <DownloadChip placement="main" />}
-                {flagshipMissing && <FlagshipAgentNotice onInstalled={loadAgents} />}
+                {flagshipMissing && <FlagshipAgentNotice onInstalled={loadAgents} noBuild={noAgentBuild} />}
                 {restoreNotice && (
                     <div className={`app-notice${restoreNotice.ok ? '' : ' is-warning'}`} role="status">
                         <span>{restoreNotice.message}</span>

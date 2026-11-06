@@ -449,6 +449,31 @@ def test_a_closing_tool_call_is_retried_without_tools(agent, reply):
     assert "no longer available" in retry["messages"][-1]["content"]
 
 
+_PLAN = "Three passed, so report that."
+
+
+@pytest.mark.parametrize(
+    "reply, retried",
+    [
+        (f"<think>{_PLAN}</think>{_ANSWER}", False),
+        (f"<think>{_PLAN}", True),
+        (f"{_PLAN}</think>{_ANSWER}", False),
+        (_ANSWER, False),
+    ],
+    ids=["paired", "unclosed", "lone-close", "no-tags"],
+)
+def test_the_closing_answer_leaves_the_reasoning_out(agent, reply, retried):
+    retry = (_ANSWER,) if retried else ()
+    chat = _stub_chat(agent, *_repeat_then(reply, *retry))
+
+    result = agent.process_query("fix the loader and run the tests")
+
+    assert result["result"].startswith(_ANSWER)
+    assert _PLAN not in result["result"]
+    assert "think>" not in result["result"]
+    assert len(_model_calls(agent, chat)) == _CALLS + 1 + retried
+
+
 # ---------------------------------------------------------------------------
 # Cancellation is honoured, not papered over with a summary
 # ---------------------------------------------------------------------------

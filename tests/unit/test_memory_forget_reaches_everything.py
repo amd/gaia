@@ -63,6 +63,15 @@ def test_forget_everything_takes_sensitive_rows_and_past_conversations(store):
     assert _tool("search_past_conversations")(query="Lisbon")["count"] == 0
 
 
+def test_forget_everything_reply_names_only_the_lesson_reset_command(store):
+    """No UI clears kept lessons yet, so the reply keeps the one command."""
+    _Host(store, [])
+    message = _tool("forget_everything")()["message"]
+    assert "run `gaia skill deltas <skill> --reset` in a terminal" in message
+    assert message.count("gaia ") == 1
+    assert message.count("`") == 2
+
+
 def test_forget_everything_needs_the_users_approval():
     assert "forget_everything" in TOOLS_REQUIRING_CONFIRMATION
 
@@ -113,7 +122,7 @@ def test_learning_queued_before_forget_everything_does_not_refill_memory(store):
         erase_count=began,
     )
 
-    assert applied == 0
+    assert applied.stored == 0
     assert store._conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0] == 0
 
 
@@ -127,7 +136,7 @@ def test_something_said_after_forget_everything_is_learned(store):
         erase_count=store.erase_count(),
     )
 
-    assert applied == 1
+    assert applied.stored == 1
 
 
 def _on_disk(tmp_path) -> bytes:
@@ -376,7 +385,7 @@ def test_an_erase_between_two_extracted_memories_stops_the_second(
         erase_count=began,
     )
 
-    assert applied == 1
+    assert applied.stored == 1
     assert _rows(store, "knowledge") == 0
 
 

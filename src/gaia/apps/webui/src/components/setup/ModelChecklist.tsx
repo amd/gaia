@@ -46,7 +46,10 @@ function fitLine(e: SetupCatalogEntry, t: Say): string | null {
     return t('setup.models.fit.ok', { need: formatFitGb(e.need_gb), have: formatFitGb(e.capacity_gb) });
 }
 
+/** Why a model doesn't fit: its real reason, never "too big" for one no backend here runs. */
 export function tooBigText(e: SetupCatalogEntry, t: Translate): string {
+    if (e.fit_code === 'npu') return t('setup.models.warn.npu');
+    if (e.fit_code === 'backend') return t('setup.models.warn.backend');
     return e.need_gb != null && e.capacity_gb != null
         ? t('setup.models.warn.tooBig', { need: formatFitGb(e.need_gb), have: formatFitGb(e.capacity_gb) })
         : t('setup.models.warn.tooBigNoNumbers');

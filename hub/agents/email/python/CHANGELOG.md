@@ -7,8 +7,29 @@ contract version is tracked separately as
 
 ## [Unreleased]
 
+### Changed
+
+- **Needs Lemonade Server 2026.44.1 or newer.** `GET /v1/email/init` now
+  reports `min_version: "2026.44.1"` (was `10.2.0`) and answers not-ready on
+  anything older. GAIA updates its own Lemonade Server itself; the `hint` for
+  a user-run server points at https://lemonade-server.ai instead of a command.
+  `gaia-agent.yaml`'s `requirements.min_lemonade_version` moves with it.
+### Added
+
+- **The published OpenAPI contract now includes the sidecar's stateful Agent UI
+  routes (#6043, schema 2.15).** Session creation/deletion/history, memory and
+  autonomy controls, pending-tool confirmation, cancellation, and the SSE query
+  route were already served but absent from `openapi.email.json`; generated
+  clients can now discover and negotiate the complete supported surface.
+
 ### Fixed
 
+- **A sidecar left running for days keeps working.** The one-file binary
+  unpacks its files into the OS temp folder, and macOS deletes files there
+  that are older than three days, so a long-running sidecar lost files it
+  still read. It now marks its own unpacked files as in use at startup and
+  every six hours. Leftovers from a sidecar that has exited still get
+  cleaned (#6850).
 - **A chat that switches model mid-conversation gets the model it asked
   for.** `POST /v1/email/query` with a `session_id` used to keep running the
   session's agent on whatever model it was first built with, even when a later

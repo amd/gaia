@@ -28,7 +28,7 @@ import { SetupChecks } from './setup/SetupChecks';
 import { SetupRail, type RailStep } from './setup/SetupRail';
 import { TestStep } from './setup/TestStep';
 import {
-    canCreateImages, catalogOf, extraModels, initialSelection, isEmbedding, isNpu, isOptional, overallFromPlan,
+    canCreateImages, cantRunHere, catalogOf, extraModels, initialSelection, isEmbedding, isNpu, isOptional, overallFromPlan,
     pendingDownloads, resolveVision, savedVision, shortfall, skipChanges, toggle, tooBig, totals, type Selection,
 } from './setup/selection';
 import type {
@@ -80,7 +80,7 @@ const OFFERED: ReadonlyArray<LemonadeFound['status']> = ['ok', 'needs_key', 'too
  * First run on a PC that already runs Lemonade: offer it, so GAIA does not
  * install a second server and a second copy of every model.
  */
-function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChosen: (mode: 'external' | 'gaia') => void; onNothingToOffer?: () => void; onFound?: (found: LemonadeFound) => void }) {
+function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound, canInstallOwn = true }: { onChosen: (mode: 'external' | 'gaia') => void; onNothingToOffer?: () => void; onFound?: (found: LemonadeFound) => void; canInstallOwn?: boolean }) {
     const t = useT();
     const [offer, setOffer] = useState<{ target: LemonadeTarget; found: LemonadeFound } | null>(null);
     const [checkError, setCheckError] = useState<string | null>(null);
@@ -112,12 +112,12 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
                 onFound?.(found);
                 setNeedsKey(found.status === 'needs_key');
                 if (found.status === 'too_old') onNothingToOffer?.();
-            } else {
+            } else if (missed.length === 0) {
                 onNothingToOffer?.();
             }
+            // Unanswered or failed: the user decides, so GAIA's own isn't installed beside theirs.
         } catch (err) {
             if (live.current) setCheckError(err instanceof Error ? err.message : String(err));
-            onNothingToOffer?.();
         } finally {
             if (live.current) setChecking(false);
         }
@@ -164,6 +164,12 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound }: { onChos
                     <button type="button" className="btn-secondary" disabled={checking} onClick={() => void detect()}>
                         {checking && <Loader2 size={13} className="spin" />} {t('setup.offer.checkAgain')}
                     </button>
+                    {/* Only before GAIA's own server starts: after, it is already running. */}
+                    {onNothingToOffer && canInstallOwn && (
+                        <button type="button" className="btn-primary" disabled={checking} onClick={onNothingToOffer}>
+                            {t('setup.offer.useOwn')}
+                        </button>
+                    )}
                 </SetupFooter>
             </>
         );
@@ -250,14 +256,8 @@ function ServerProblem({ problem, onRetry, onUseGaia }: { problem: SetupProblem;
             {problem.use_gaia && (
                 <p className="setup-hint">{t('setup.server.useGaiaNote')}</p>
             )}
-            {problem.switch_hint && (
-                <>
-                    <p className="setup-hint">{t('setup.server.setOutside')}</p>
-                    <details className="dl-details">
-                        <summary>{t('setup.progress.details')}</summary>
-                        <pre dir="ltr">{problem.switch_hint}</pre>
-                    </details>
-                </>
+            {problem.use_gaia && problem.env_url && (
+                <p className="setup-hint">{t('setup.server.envIgnoredNote', { url: problem.env_url })}</p>
             )}
         </>
     );
@@ -399,7 +399,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         mounted.current = true;
         return () => { mounted.current = false; };
     }, []);
-    const { network: gateway, recheck: recheckGateway } = useGatewayNetwork();
+    const { network: gateway, providers, recheck: recheckGateway } = useGatewayNetwork();
+    const envKey = providers.find((p) => p.id === choice && p.key_source === 'environment' && p.key_hint);
     const unreachable = (id: ProviderId) => id === 'amd' && gateway?.reachable === false;
 
     const cloud = choice !== 'local';
@@ -467,7 +468,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             })
             .catch((err) => setStartError(errorText(err)))
             .finally(() => setStatusRead(true));
-    }, [loadHardware, loadPlan, again, t]);
+    }, [loadHardware, loadPlan, again]);
 
     // The plan seeds the selection once, from what is planned and on disk.
     useEffect(() => {
@@ -602,8 +603,15 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         setActionError(null);
         setAckDisk(acknowledgeLowDisk);
         const catalog = catalogOf(plan);
+        const big = cloud ? [] : tooBig(catalog, selection).filter((e) => !e.downloaded || e.id === selection.defaultChat);
+        // Nothing here can run it: no confirm can make it work, so it blocks the download.
+        const cantRun = big.find(cantRunHere);
+        if (cantRun) {
+            const key = cantRun.id === selection.defaultChat ? 'setup.models.cantRun.chat' : 'setup.models.cantRun.other';
+            setActionError(t(key, { name: cantRun.name, why: tooBigText(cantRun, t) }));
+            return;
+        }
         if (!cloud && !acknowledgeNoFit) {
-            const big = tooBig(catalog, selection).filter((e) => !e.downloaded || e.id === selection.defaultChat);
             if (big.length > 0 && big.every((e) => e.need_gb != null)) {
                 setConfirm({ kind: 'no_fit', models: big });
                 return;
@@ -642,7 +650,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             committing.current = false;
             setBusy(false);
         }
-    }, [plan, selection, cloud, noFitAcked, download]);
+    }, [plan, selection, cloud, noFitAcked, download, t]);
 
     const stepTo = useCallback((id: Stage) => {
         setActionError(null);
@@ -801,15 +809,15 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const finish = useCallback(async (first?: StartCard) => {
         setActionError(null);
         try {
-            // Setup leaves the active model alone, so a cloud user would stay on the cloud.
-            if (onClose && !cloud && answering) await selectModel(answering);
+            // Chat opens on the model setup set up and tested, not an older pick; a cloud setup keeps its model.
+            if (!cloud && answering) await selectModel(answering);
             await refreshModel();
         } catch (err) {
             setActionError(errorText(err));
             return;
         }
         onReady(first);
-    }, [answering, cloud, onClose, onReady, refreshModel, selectModel]);
+    }, [answering, cloud, onReady, refreshModel, selectModel]);
 
     useEffect(() => {
         if (!canFinish) return;
@@ -829,6 +837,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         && (fullRun.models ?? []).length > 0
         && (fullRun.models ?? []).every((m) => m.state === 'ready' || m.state === 'skipped' || m.state === 'verifying' || m.state === 'unchecked')
         && !moving;
+    // Its row in the download list says why and offers Retry, so nothing below repeats it.
+    const componentFailed = !!fullRun && runFailed && !fullRun.problem
+        && Object.values(fullRun.components ?? {}).includes('failed');
 
     const catalog = catalogOf(plan);
     const pending = selection ? pendingDownloads(catalog, selection) : [];
@@ -941,7 +952,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
 
     const optional = selection && !cloud ? catalog.filter((e) => isOptional(e) && !selection.ticked.has(e.id) && !e.downloaded
         && (canCreateImages(chatEntry) || !e.roles.includes('image_creation'))) : [];
-    const biggerOption = catalog.find((e) => e.fits === false && e.chat_choice && e.support === 'verified');
+    const biggerOption = catalog.find((e) => e.fit_code === 'memory' && e.chat_choice && e.support === 'verified');
 
     return (
         <main className="setup" aria-labelledby="setup-title">
@@ -1009,10 +1020,17 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 </>
                             )}
                             {startError && <SetupAlert text={startError} />}
+                            {/* The server start was refused before any run existed: nothing else offers a retry. */}
+                            {startError && !serverRun && plan && !plan.lemonade.reachable && (
+                                <SetupFooter>
+                                    <button type="button" className="btn-primary" onClick={() => void start(false, { serverOnly: true })}>{t('setup.tryAgain')}</button>
+                                </SetupFooter>
+                            )}
                             {/* Before GAIA starts its own server, and after, so the user can still switch to theirs. */}
                             {statusRead && plan && ((!plan.lemonade.reachable && !serverRun) || (checksDone && viewing == null && plan.lemonade.mode !== 'external')) && (
                                 <ExistingLemonadeOffer
                                     onNothingToOffer={lemonadeNothing}
+                                    canInstallOwn={!plan.lemonade.reachable && !serverRun}
                                     onFound={setLemonadeFound}
                                     onChosen={(mode) => { setUsersServer(mode === 'external'); setLemonadeChoice(mode); setLemonadeSettled(true); loadHardware(); void loadPlan(); }}
                                 />
@@ -1092,7 +1110,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     {stage === 'models' && (
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.models.title')}</h1>
-                            {plan && selection && <BackendChoice plan={plan} selection={selection} onSelection={setSelection} disabled={busy || runGoing} />}
+                            {plan && selection && <BackendChoice plan={plan} selection={selection} onSelection={setSelection} disabled={busy || runGoing} onRecheck={() => void loadPlan()} />}
                             {showGpu && gpu?.total_gb != null && gpu.gpu_gb != null && (
                                 <p className="setup-hint setup-gpu-option">
                                     {t('setup.models.gpu', { gpu: formatSize(gpu.gpu_gb), total: formatSize(gpu.total_gb) })}{' '}
@@ -1170,6 +1188,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     aria-label={t('setup.key.label')}
                                 />}
                             </div>
+                            {envKey && !usersServer && !key && (
+                                <p className="setup-hint" role="status">{t('setup.key.foundEnv', { name: envKey.name, hint: envKey.key_hint ?? '' })}</p>
+                            )}
                             {keyState.busy && !keyState.waiting && <p className="setup-hint" role="status">{t('setup.key.testing')}</p>}
                             {keyState.busy && keyState.waiting && <p className="setup-hint" role="status">{keyState.waiting}</p>}
                             {keyState.error && <p className="setup-error" role="alert">{keyState.error}</p>}
@@ -1195,7 +1216,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.download.title')}</h1>
                             <p className="setup-lede">{t('setup.download.lede')}</p>
-                            {plan && <section className="setup-card" aria-label={t('setup.contents.title')}><DownloadContents plan={plan} run={fullRun} /></section>}
+                            {plan && <section className="setup-card" aria-label={t('setup.contents.title')}><DownloadContents plan={plan} run={fullRun} onRetry={retryRun} retryDisabled={busy} /></section>}
                             {(fullRun.models?.length ?? 0) > 0 ? (
                                 <div className={lostContact ? 'is-stale' : undefined}>
                                     <DownloadProgress
@@ -1246,7 +1267,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     </SetupFooter>
                                 </>
                             )}
-                            {runFailed && downloadDone && fullRun.state === 'failed' && !fullRun.model_failed && (
+                            {runFailed && downloadDone && !componentFailed && fullRun.state === 'failed' && !fullRun.model_failed && (
                                 fullRun.problem
                                     ? <ServerProblem problem={fullRun.problem} onRetry={retryRun} onUseGaia={() => void start(true, lastRun.current.options)} />
                                     : (
@@ -1261,7 +1282,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         </div>
                                     )
                             )}
-                            {runFailed && downloadDone && (
+                            {runFailed && downloadDone && !componentFailed && (
                                 <>
                                     <p className="setup-hint">{t('setup.download.finishNote')}</p>
                                     <SetupFooter>
@@ -1269,7 +1290,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     </SetupFooter>
                                 </>
                             )}
-                            {runFailed && !downloadDone && !(fullRun.models ?? []).some((m) => m.state === 'failed' || m.state === 'cancelled') && (
+                            {runFailed && !downloadDone && !componentFailed && !(fullRun.models ?? []).some((m) => m.state === 'failed' || m.state === 'cancelled') && (
                                 <>
                                     <RunError run={fullRun} />
                                     {fullRun.problem
@@ -1295,7 +1316,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 names={names}
                                 catalog={catalog}
                                 onRetry={retryRun}
-                                onChooseAnother={customize}
+                                onChooseAnother={cloud ? undefined : customize}
                                 onCancel={() => void cancel()}
                                 // GAIA never deletes a model on the user's own server.
                                 onDownloadAgain={plan?.lemonade.mode === 'external' ? undefined : (id) => void retryModel(id, 'verify')}

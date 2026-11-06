@@ -19,6 +19,7 @@ import math
 import os
 import secrets
 import socket
+import sys
 import time
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -91,7 +92,9 @@ def _load_extra_specs() -> dict:
     return specs
 
 
-def _build_registry(specs, forwarder, *, custody_auth=None, custody_base_url=None):
+def _build_registry(
+    specs, forwarder, *, custody_auth=None, custody_base_url=None, keychain_auth=None
+):
     """The daemon's sidecar registry, wired to the crash-reap ledger and the
     OAuth forward-out on-spawn push (#2154).
 
@@ -128,6 +131,7 @@ def _build_registry(specs, forwarder, *, custody_auth=None, custody_base_url=Non
         on_started=_on_started,
         custody_auth=custody_auth,
         custody_base_url=custody_base_url,
+        keychain_auth=keychain_auth,
     )
 
 
@@ -258,6 +262,19 @@ def _build_deregister(
     return _deregister
 
 
+def _keychain_auth():
+    """The /host/v1/keychain credential store, or ``None`` off macOS.
+
+    Only macOS ties keychain approval to the build asking; elsewhere the
+    sidecar keeps reading the OS store itself and the routes are not mounted.
+    """
+    if sys.platform != "darwin":
+        return None
+    from gaia.daemon.custody.auth import CustodyAuth
+
+    return CustodyAuth()
+
+
 def run(host: str = HOST) -> None:
     """Start the daemon and serve until shutdown. Blocks."""
     from gaia.logger import configure
@@ -305,6 +322,7 @@ def run(host: str = HOST) -> None:
     # callback URL is the daemon's own loopback address.
     custody_store = CustodyStore(custody_db_path())
     custody_auth = CustodyAuth()
+    keychain_auth = _keychain_auth()
     custody_base_url = f"http://{host}:{port}"
 
     specs = {**builtin_specs(), **_load_extra_specs()}
@@ -314,6 +332,7 @@ def run(host: str = HOST) -> None:
         forwarder,
         custody_auth=custody_auth,
         custody_base_url=custody_base_url,
+        keychain_auth=keychain_auth,
     )
 
     from gaia.daemon.forward_refresh import ForwardRefresher
@@ -439,6 +458,7 @@ def run(host: str = HOST) -> None:
         broker=broker,
         custody_auth=custody_auth,
         custody_store=custody_store,
+        keychain_auth=keychain_auth,
         clock=clock,
         lemonade=lemonade,
         lemonade_owner=lemonade_owner,

@@ -633,6 +633,9 @@ class _ParkingSidecar:
         self.answer = value
         self.answered.set()
 
+    def cancel_query(self, run_id):  # noqa: ARG002
+        self.answered.set()
+
 
 def _relay_through(sidecar):
     from gaia.ui.email_sidecar import relay

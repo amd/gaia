@@ -217,14 +217,14 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 
 | `type` | Payload | UI effect |
 |---|---|---|
-| `status` | `{message, phase?, words?, chars?, queue?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label |
+| `status` | `{message, phase?, words?, chars?, queue?, retracts_answer?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label. `retracts_answer: true` (phase `answer_restart`) means the reply was cut off and the step starts over: drop the `token` text since the last `tool_call` and show `message` in its place |
 | `token` | `{delta}` | stream assistant text |
-| `reasoning` | `{delta}` | stream the model's reasoning, apart from the answer. Sent only when the request asked for it (`reasoning: true`, contract ≥ 2.22); pieces keep their own spacing, so a client joins them as they come |
+| `reasoning` | `{delta, retracts_answer?}` | stream the model's reasoning, apart from the answer. Sent only when the request asked for it (`reasoning: true`, contract ≥ 2.22); pieces keep their own spacing, so a client joins them as they come. `retracts_answer: true` means the `token` text since the last `tool_call` was this reasoning (a model whose template opened the block sends only `</think>`): drop it from the answer shown so far |
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
 | `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) and `risk_note` (why the agent's checks don't cover the call) |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
-| `final` | `{answer, usage?, failed?, performance?, context?, context_error?, model_messages?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done. `performance` reports measured turn timings, `context` reports the context-meter payload, `context_error` explains why that measurement was unavailable, and `model_messages` carries the model-facing trace when the caller sent `turns` (contract >= 2.25) |
+| `final` | `{answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done. `failure: "model_server_down"` means the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `performance` reports measured turn timings, `context` reports the context-meter payload, `context_error` explains why that measurement was unavailable, and `model_messages` carries the model-facing trace when the caller sent `turns` (contract >= 2.25) |
 | `error` | `{detail, status}` | surface the actionable error verbatim; terminal |
 
 A `:`-prefixed SSE comment may appear at any point as a heartbeat. It carries no
@@ -244,7 +244,8 @@ indistinguishable from a dead one.
     "phase":   { "type": "string" },   // optional, §4.4
     "words":   { "type": "integer" },  // with phase "reasoning"
     "chars":   { "type": "integer" },  // with phase "tool_call"
-    "queue":   { "type": "object" }    // with phase "model_queue", §4.4
+    "queue":   { "type": "object" },   // with phase "model_queue", §4.4
+    "retracts_answer": { "type": "boolean" }  // with phase "answer_restart", §4.4
   } }
 
 // token
@@ -332,7 +333,8 @@ indistinguishable from a dead one.
   "required": ["type", "delta"],
   "properties": {
     "type":  { "const": "reasoning" },
-    "delta": { "type": "string" }
+    "delta": { "type": "string" },
+    "retracts_answer": { "type": "boolean" }  // the tokens since the last tool_call were this reasoning
   } }
 
 // final
@@ -432,10 +434,14 @@ is on the wire. It is sent when the phase actually starts, never on a timer, and
 
 | `phase` | Sent when | Count |
 |---|---|---|
-| `reading` | a model call is sent (again after a load finishes) | — |
+| `reading` | a model call is sent (again after a load finishes); while `extract_document_items` runs, before each page's call ("Reading page 4 of 12…") | — |
 | `loading_model` / `downloading_model` | the agent starts loading (or first downloading) the model | — |
 | `reasoning` | the model's first reasoning output, then about once a second | `words` reasoned so far |
 | `tool_call` | a long tool call's arguments are still streaming | `chars` so far |
+| `reconnecting` | GAIA's own Lemonade Server stopped mid-request or during a `/model` switch: sent once while the agent waits for the daemon to bring it back, then it retries. A server the user runs, or a remote `LEMONADE_BASE_URL`, is never waited on | — |
+| `model_restart` | GAIA's own Lemonade Server stopped under a model call, the answer's or one a tool makes itself: sent while the step waits to retry and again while the daemon starts it (`message` "The model server stopped. GAIA is restarting it…"), or before the daemon starts a server that was never running ("Starting the model server…") | — |
+| `model_retry` | a model call failed for another reason (the model service was busy, timed out, stopped sending, or the connection dropped) and is retried: once per retry, `message` naming the trouble, the wait and the attempt ("The model service is busy — retrying in 8s (2/4)") | — |
+| `answer_restart` | a reply was cut off part-way (the model server stopped or the connection dropped) and the step starts over; carries `retracts_answer: true` | — |
 | `model_queue` | the turn is queued for the model behind another request, then every ~2 s while it waits, then once when it gets the model | `queue` (below) |
 
 `model_queue` is the one phase sent on a timer: the steady updates are what let a
@@ -625,7 +631,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 |---|---|---|---|---|
 | `status` | `print_processing_start`, `print_goal`, `print_warning`, `print_info`, `start_progress`, `print_repeated_tool_warning`, `print_completion`, confirm-timeout | **map** | `status` | Already the canonical shape; keep `message`, drop the `status`/`steps`/`elapsed` sub-fields (progress-only). |
 | `step` | `print_step_header` | **fold** | `status` | Step counter is progress narration; render as a `status` line (e.g. `"Step 3/20"`). No dedicated canonical type. |
-| `thinking` | `print_thought`, `print_streaming_text` (`<think>…</think>`) | **fold** / **map** | `status`, or `reasoning` | Reasoning narration, not final assistant text — never `token` (which is answer text the UI commits to the message). Folds to `status` unless the request set `reasoning: true` (contract ≥ 2.22), which maps it to `reasoning` unchanged. See §9 Q1, now resolved. |
+| `thinking` | `print_thought`, `print_streaming_text` (`<think>…</think>`) | **fold** / **map** | `status`, or `reasoning` | Reasoning narration, not final assistant text — never `token` (which is answer text the UI commits to the message). Folds to `status` unless the request set `reasoning: true` (contract ≥ 2.22), which maps it to `reasoning` unchanged, `retracts_answer` included. See §9 Q1, now resolved. |
 | `commentary` | `_emit` (before a `tool_start`) | **drop** | — | Re-derived from the `token` text by the receiving host's own handler, so the sidecar's copy would double it. |
 | `plan` | `print_plan` | **fold** | `status` | Plan preview is progress narration; join `steps` into one `status` message. |
 | `tool_args` | `pretty_print_json` (`title == "Arguments"`) | **fold** | `tool_call` | Merged into the preceding `tool_call` as `args` (§6.3), not a standalone event. |

@@ -102,6 +102,28 @@ tool calls, model loads, model memory and cost. Hover a number for the exact
 value. Anything that was not measured says "unknown". The panel reads nothing
 until you open it.
 
+### Watch Your PC's Resources
+
+A strip under the chat's title shows this PC's CPU, memory, GPU, NPU and
+network use, each with a graph of the last minute, so you can see the model
+working while it answers. The numbers match Windows Task Manager: CPU with its
+clock speed, memory in use out of the total, for a GPU or NPU the load of its
+busiest engine and the memory it holds, and for each connected network adapter
+what it sends (S, the dashed line) and receives (R). A PC with several GPUs
+numbers them from 0. Virtual adapters, such as Hyper-V, WSL and VPN ones, are
+left out, as Task Manager leaves them out.
+
+The strip is on in every chat. Close it with **✕**, and bring it back with the
+pulse button in the chat's header or **Settings › General › Show resource
+usage in chats**. GAIA remembers the choice. While the strip is closed or the
+window is hidden, GAIA stops measuring about 15 seconds later.
+
+On Linux the GPU tile appears for AMD GPUs, and macOS shows CPU, memory and
+network only. When usage can't be read, the strip says so and dims the last readings
+until it can read them again. If only the GPU or network can't be read, as in
+a virtual machine or over Remote Desktop, CPU and memory keep showing and that
+tile says **Unavailable**, with the reason when you point at it.
+
 ### Type While GAIA Works
 
 You can keep typing while a reply runs. Press Enter and the message waits in a
@@ -156,6 +178,11 @@ library, so one chat's files don't leak into another's answers. The library
 says where the documents you add go: the open chat, or your next new chat. A
 new chat lists the library's documents and offers to attach them; picking
 **Ask about your documents** attaches them all.
+
+A document you ask the agent to index ("add this file to my documents") goes
+into the library and is attached to the chat you asked in, the same as one you
+add from the library. A file outside the folders the library reads from goes in
+as a copy, and the chat says so: edits to the original don't reach the copy.
 
 While a large document indexes, its row in the library shows how far it has
 got: "Reading page 37 of 229" for a PDF, then "Embedding 412 of 1,180", each
@@ -327,8 +354,10 @@ Pick the install path that fits you best:
     on the cloud model when you chose one.
     Setup says it's ready only when the required tests pass. A failed test
     shows the error with **Test again**, **Choose another model** and, for a
-    broken model, an option to download it again. A test that doesn't finish
-    in time stops with an error instead of hanging. Running `gaia init`
+    broken model, an option to download it again. A model that failed for
+    any other reason, such as too little free memory or an empty answer,
+    keeps its file: its **Retry** tests it again without downloading it. A
+    test that doesn't finish in time stops with an error instead of hanging. Running `gaia init`
     yourself beforehand also works.
 
     Each step keeps a log, collapsed under it until you open it. **Save a
@@ -521,6 +550,12 @@ as you flip it:
   from the next launch. On Windows a launch at sign-in always starts in the
   tray.
 
+On a Linux desktop that shows no tray icons, such as stock GNOME, closing the
+window minimizes GAIA instead, with your model still loaded. Click GAIA in the
+dock to bring it back. To quit, right-click it there and choose Quit. **Start in
+the tray** stays off there, because there's no tray to open the window from.
+No extension is needed.
+
 ## Models and where they run
 
 Open **Settings → Model** (or the model chip in the message box):
@@ -622,8 +657,8 @@ The same setting from a terminal:
 gaia config set llamacpp_backend vulkan   # vulkan | auto
 ```
 
-**Change model** opens Settings → Model. To use a different server, set
-`LEMONADE_BASE_URL`.
+**Change model** opens Settings → Model. To use a different server, enter its
+address under **Settings → Advanced → Model server** (see [Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run)).
 
 ## Permissions
 
@@ -832,7 +867,13 @@ pick from 32K up to the window it was trained for. GAIA can't check those fit
 first, so a size too large fails to load and says so.
 
 The model chip in the composer opens the same list. While GAIA is answering,
-a model you pick there applies to your next message. The model pill
+a model you pick there applies to your next message. On most PCs, a local
+model you pick starts loading right away, and a banner counts the seconds; you
+can type meanwhile, and a message waits for the load. On a PC with under 24 GB
+of RAM, or when the GAIA agent runs as a Hub install, it loads with your first
+message instead. If the model can't load, for
+example because other apps hold the memory it needs, the banner says why and
+offers **Try again**. The model pill
 at the bottom of the sidebar shows whether the model is loaded, warming up or
 stopped, where it runs, memory in use and free, and its context window, with a
 **Restart** button. On a Lemonade you run yourself, GAIA asks before Restart
@@ -875,6 +916,17 @@ cloud and tells you how to go on: raise the limit, allow more for this month,
 or use a model on this PC. The total is an estimate at list price: it leaves
 out cache discounts, and turns that fail or are stopped before a reply, so
 your provider's bill is the final word.
+
+While a chat runs on a priced cloud model, the composer shows what it has cost
+so far and what all your chats have cost today, such as "$0.04 · today $0.31".
+Click it for each answer's cost, newest first, and a link to this month's total
+and limit. The amounts add up the cost each answer's details show, cache
+discounts included, so they can sit a little below the monthly total. "Today"
+is your own calendar day and counts the chats you still have. A stopped answer
+sends no token count, so its cost is unknown: it shows "Not reported", the
+total it belongs to reads as a floor, such as "≥ $0.04", and the breakdown says
+how many were left out, since the provider may still bill them. On a model on
+this PC, or a cloud model with no known price, nothing is shown.
 
 **Settings → Advanced → Model server** switches between GAIA's own Lemonade
 Server and one you already run: enter its address (and its API key, if it needs
@@ -983,7 +1035,7 @@ Chats, documents and schedules are saved on disk as you go. What happens to work
 | What happened | A reply being written | A document being indexed |
 |---------------|-----------------------|--------------------------|
 | You switch chats, open Memory or Scheduled tasks, or close the browser tab | Keeps going; reopen the chat to watch it finish | Keeps going |
-| You close the desktop window | Keeps going: the window hides to the tray (unless you turned that off) and GAIA keeps running | Keeps going |
+| You close the desktop window | Keeps going: the window hides to the tray (or, on a desktop with no tray, minimizes to the dock) and GAIA keeps running. With that turned off, closing quits (next row) | Keeps going |
 | You quit GAIA, it crashes, or the PC shuts down | Stops. On the next start the reply shows what it had written so far, which tools it had started, then "This answer was interrupted when GAIA closed. Send again to retry." A scheduled run cut short shows the same in its chat. | Stops. On the next start it shows as **Failed** with **Retry**, and "Indexing was interrupted when GAIA closed" under the document |
 
 GAIA never re-runs an interrupted reply by itself: it may already have run tools, and running them twice is not safe. Send the message again to retry.

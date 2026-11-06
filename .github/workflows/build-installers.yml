@@ -72,6 +72,13 @@ on:
         required: false
         type: string
         default: ''
+      # A release candidate is never held by tests; the smoke jobs that check
+      # the built installers still run.
+      skip_source_tests:
+        description: 'Skip the custom-agent MCP harness, which tests the source tree rather than the built installers'
+        required: false
+        type: boolean
+        default: false
     # Explicit secret declarations. Callers (publish.yml) must forward
     # each one explicitly via `secrets:` — we intentionally do NOT use
     # `secrets: inherit` on the caller side so forks / PRs can't leak
@@ -121,6 +128,7 @@ on:
       - 'setup.py'
       - 'pyproject.toml'
       - 'util/release_tag.py'
+      - 'util/check_release_assets.py'
       # custom-agent-mcp-harness runs these against the built wheel.
       - 'src/gaia/agents/base/console.py'
       - 'src/gaia/agents/registry.py'
@@ -179,6 +187,8 @@ jobs:
             artifacts: |
               src/gaia/apps/webui/dist-app/*.dmg
               src/gaia/apps/webui/dist-app/*.dmg.blockmap
+              src/gaia/apps/webui/dist-app/*.zip
+              src/gaia/apps/webui/dist-app/*.zip.blockmap
               src/gaia/apps/webui/dist-app/latest-mac.yml
           - platform: linux
             runner: ubuntu-latest
@@ -720,6 +730,27 @@ jobs:
           fi
           echo "All artifact validations passed."
 
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # Each platform's artifact must hold every file its latest*.yml names, at
+      # the size and sha512 recorded: the mac .zip was left out for months, so
+      # no Mac could update (#5682).
+      - name: Update manifests name only files the artifact carries
+        shell: bash
+        env:
+          PREFIX: ${{ inputs.artifact_prefix }}
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pyyaml
+          for platform in windows macos linux; do
+            python util/check_release_assets.py --dir "${RUNNER_TEMP}/artifacts/${PREFIX}${platform}-installer"
+          done
+
   # ─── AppImage smoke tests (issue #782) ──────────────────────────────
   # Consume the linux-installer artifact produced by the `build` matrix
   # and run structural + distro-level smoke checks against the AppImage.
@@ -1178,7 +1209,8 @@ jobs:
   custom-agent-mcp-harness:
     name: Custom agent MCP harness (${{ matrix.os }})
     needs: build
-    if: always() && needs.build.result == 'success'
+    # !skip, not == false: on a PR the input is unset (null), and null == false.
+    if: always() && needs.build.result == 'success' && !inputs.skip_source_tests
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:

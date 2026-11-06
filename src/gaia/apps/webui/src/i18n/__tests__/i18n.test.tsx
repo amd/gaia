@@ -27,7 +27,9 @@ describe('locale registry', () => {
         for (const key of EN_KEYS as MessageKey[]) {
             expect(locale.messages[key].trim(), key).not.toBe('');
             // A dropped or misspelled {param} would render raw or throw at runtime.
-            expect(placeholders(locale.messages[key]), key).toEqual(placeholders(enMessages[key]));
+            // A plural form for one exact number may leave {n} out ("دقيقتين", two minutes).
+            const own = (text: string) => placeholders(text).filter((p) => p !== 'n' || !/\.(zero|one|two)$/.test(key));
+            expect(own(locale.messages[key]), key).toEqual(own(enMessages[key]));
         }
     });
 

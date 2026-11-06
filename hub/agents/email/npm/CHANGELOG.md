@@ -9,6 +9,9 @@ behind any entry — API shapes, endpoints, and version semantics — see
 - **The drafting eval's judge prefers your Claude Code login.** It now uses
   the subscription before `ANTHROPIC_API_KEY`, and prints which credential
   it uses. Only the eval changes; the agent itself does not call Claude.
+- **Needs Lemonade Server 2026.44.1 or newer.** `init()` reports the agent
+  not ready on an older Lemonade, and its hint says how to update it. GAIA
+  updates the Lemonade it installs on its own.
 - **Switching model mid-chat takes effect.** In a conversation that keeps its
   session, a turn that asks for a different model now runs on that model
   instead of the one the conversation started with.
@@ -20,6 +23,11 @@ behind any entry — API shapes, endpoints, and version semantics — see
   own modules and Python's `readline` and `dbm` modules, which link GNU
   Readline (GPL-3.0) and GDBM (GPL-3.0). They are excluded now, and the release
   fails if any of them comes back. Nothing the agent does depended on them.
+- **Stateful agent routes are now in the published API description.** The
+  session, memory, autonomy, confirmation, cancel and streaming-query routes
+  under `/v1/email/agent/*` were always served but missing from
+  `openapi.email.json`, so generated clients can now discover them. The client
+  pins schema 2.15 to match (#6043).
 - **No stray "unmapped agent event" line.** A sentence the model wrote before
   checking your mail showed up in the Agent UI as
   `[unmapped agent event: commentary]`. It no longer does.

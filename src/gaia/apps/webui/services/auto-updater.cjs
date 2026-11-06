@@ -1705,10 +1705,10 @@ function init(mainWindow, options = {}) {
     isBackendPrefetchedRef = options.isBackendPrefetched;
   }
 
-  // Disabled path — short-circuit BEFORE touching any Electron APIs so
-  // this works in plain Node tests where require('electron') returns a
-  // string and the electron-updater singleton throws on access.
+  // Disabled path — short-circuit before electron-updater, whose singleton
+  // throws on access in plain Node tests.
   if (isDisabled()) {
+    _initDisabled();
     setState({ status: STATES.DISABLED });
     log("info", "Auto-updater disabled via GAIA_DISABLE_UPDATE=1");
     return;
@@ -1842,6 +1842,29 @@ function init(mainWindow, options = {}) {
     "info",
     `Auto-updater initialized; first check in ${CHECK_DELAY_MS}ms`
   );
+}
+
+/**
+ * Settings still needs the running version and the disabled status, so record
+ * the one and answer the status request. Plain Node's require("electron") is a
+ * path string, so a missing app or ipcMain leaves the updater as it is.
+ */
+function _initDisabled() {
+  let electron;
+  try {
+    // eslint-disable-next-line global-require
+    electron = require("electron");
+  } catch (err) {
+    log("warn", "Electron unavailable — Settings can't show the running version:", err && err.message);
+    return;
+  }
+  if (!electron || !electron.app || !electron.ipcMain) return;
+  electronApi = { app: electron.app, ipcMain: electron.ipcMain, dialog: electron.dialog, net: electron.net };
+  state.currentVersion = electron.app.getVersion() || null;
+  if (!ipcHandlersRegistered) {
+    electron.ipcMain.handle("gaia:update:get-status", () => getState());
+    ipcHandlersRegistered = true;
+  }
 }
 
 function _onBeforeQuit(event) {

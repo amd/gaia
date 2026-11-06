@@ -38,12 +38,13 @@ Every row below was checked against the workflow or the code, not the docs. Runt
 
 | Tier | What it covers | Trigger | Hardware | Runtime | Blocks a release? |
 |---|---|---|---|---|---|
-| Unit tests (`test_unit.yml`) | ~22,500 tests, mostly against fakes | PR, merge | Hosted: Linux, macOS arm64, Windows | 11–18 min after #5161 | **Yes.** `util/check_release_ci.py` requires `lint`, `test_unit`, `test_gaia_cli_linux` |
-| Offline integration (`test_unit.yml` job) | Daemon, CLI tool-confirmation, wheel journey, TLS, checksum pins | PR, merge | Hosted Linux only | Minutes | Yes, as part of `test_unit` |
+| Unit tests (`test_unit.yml`) | ~22,500 tests, mostly against fakes | PR, merge | Hosted: Linux, macOS arm64, Windows | 11–18 min after #5161 | **Final: yes**, every job. **RC: no**; every job is reported as a warning (`util/check_release_ci.py`) |
+| Offline integration (`test_unit.yml` job) | Daemon, CLI tool-confirmation, wheel journey, TLS, checksum pins | PR, merge | Hosted Linux only | Minutes | Final only, as part of `test_unit` |
 | Electron (`test_electron.yml`) | Jest suites. Real-process tree and quit tests only since #5438 | PR, merge | Hosted Linux | ≤15 min | No |
 | TUI (`build_tui.yml`) | ~240 Go test files | PR, merge | Hosted, 3 OSes | Minutes | No |
 | Distributed seams (`test_distributed_seams.yml`) | Checks that event and error vocabularies match across daemon, relay and sidecar | PR, merge | Hosted Linux | ≤20 min | No |
 | `gaia init` on hardware (`test_gaia_init_hw.yml`) | Fresh-profile init against real Lemonade | PR, merge, weekly | Strix Halo | ≤60 min | No |
+| NPU agent chat (`test_npu_agent_chat.yml`) | Cold `gaia init --profile npu`, then one Agent UI turn on the NPU model | Windows: PR, merge. Linux: tags, weekly, dispatch | Strix Halo, Windows and Linux | ≤150 min | **Final: Windows yes; Linux advisory** until its runners lock enough memory for the model (#6764). **RC: no**; both reported |
 | **Flagship scenario eval** (`eval_flagship.yml`) | 29 categories in 12 lanes (`eval/ci_lanes.json`): 343 scenarios, Claude as the user and the judge | Release and RC tags, dispatch | **12 Strix Halo machines** | 3.3 h wall, ~26 machine-hours | **No.** Report mode by default. Only a dispatch can `enforce` |
 | Task outcomes (`gaia eval tasks`, same workflow) | `everyday`, `therock`. The `adversarial` suite (9 traps: red suite, flaky test, hang, lying README, injected note) runs only on dispatch | Tags, dispatch | Strix Halo, Qwen3.6-35B | ~1.5 h | No. No expectations are committed |
 | Release subset (`test_gaia_agent_eval.yml`) | 5 categories, from `release_agent_gaia.yml` | Agent-package tags | Strix Halo | Hours | No, advisory. Compares against the flagship baseline since #5197 was fixed |

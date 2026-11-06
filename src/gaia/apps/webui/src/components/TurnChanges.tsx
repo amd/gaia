@@ -5,6 +5,7 @@ import { useCallback, useState } from 'react';
 import { AlertTriangle, FileDiff as FileDiffIcon, Undo2 } from 'lucide-react';
 import * as api from '../services/api';
 import { useTurnChanges } from '../hooks/useTurnChanges';
+import { useT } from '../i18n/useT';
 import { announceUndo } from '../utils/undoEvents';
 import { groupUntracked, untrackedWarning } from '../utils/untrackedWork';
 import { ChangesReview } from './ChangesReview';
@@ -18,6 +19,7 @@ type Phase = 'idle' | 'confirm' | 'working' | 'conflict' | 'done';
 
 /** "Undo this turn" and "Review changes" under an answer whose turn changed files. */
 export function TurnChanges({ sessionId, messageId }: { sessionId: string; messageId: number }) {
+    const t = useT();
     const { turn, error: loadError, refresh } = useTurnChanges(sessionId, messageId);
     const [phase, setPhase] = useState<Phase>('idle');
     const [message, setMessage] = useState<string | null>(null);
@@ -51,7 +53,7 @@ export function TurnChanges({ sessionId, messageId }: { sessionId: string; messa
         return (
             <div className="turn-changes is-error" role="note">
                 <AlertTriangle size={12} aria-hidden="true" />
-                <span>Could not check this turn's file changes: {loadError}</span>
+                <span>{t('turnChanges.loadError', { error: loadError })}</span>
             </div>
         );
     }

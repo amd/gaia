@@ -10,11 +10,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
+import { requestErrorParam } from '../../utils/requestErrors';
 import { log } from '../../utils/logger';
 import { useTurnEnd } from '../../hooks/useTurnEnd';
 import { PanelSection } from './PanelSection';
 import type { AgentTool } from '../../types/sessionPanel';
-import type { MessageKey } from '../../i18n/registry';
+import type { MessageKey, Param } from '../../i18n/registry';
 import { useT, type Translate } from '../../i18n/useT';
 
 const NAMED_CATEGORIES: Record<string, MessageKey> = {
@@ -58,7 +59,7 @@ export function AgentInfoSection({ sessionId, busy }: AgentInfoSectionProps) {
     );
 }
 
-type Failure = { notRunning: boolean; text: string };
+type Failure = { notRunning: boolean; text: Param };
 
 function ToolList({ sessionId, busy }: AgentInfoSectionProps) {
     const t = useT();
@@ -82,7 +83,7 @@ function ToolList({ sessionId, busy }: AgentInfoSectionProps) {
                 setTools(null);
                 setFailure({
                     notRunning: status === 409,
-                    text: detail || (err instanceof Error ? err.message : String(err)),
+                    text: detail || requestErrorParam(err),
                 });
             });
         return () => { live = false; };

@@ -701,6 +701,9 @@ class ProceduralMemoryMixin:
         unmarked so the next pass retries them.  No smaller-model fallback in
         any path.
 
+        "Forget everything" mid-pass voids the pass: no procedure, mark, or
+        watermark derived from the erased history is written.
+
         Args:
             since: ISO 8601 watermark override; only ``tool_history`` newer than
                 this is considered.  None reads the stored watermark.
@@ -742,6 +745,10 @@ class ProceduralMemoryMixin:
             logger.info("[MemoryMixin] no chat SDK available; skipping skill synthesis")
             return result
 
+        # Read before the window: an erase from another chat mid-pass voids
+        # every write derived from it, so each write re-checks under the lock.
+        erase_count = store.erase_count()
+
         # DETECT — cheap SQL; no LLM, no embedder.  The watermark bounds it to
         # what no previous pass has consumed.
         watermark = since
@@ -759,7 +766,9 @@ class ProceduralMemoryMixin:
         # A session with no user turn has no goal, so CLUSTER can never take it.
         # Left unmarked it pins the watermark and every later pass re-reads the
         # whole history behind it.
-        pending, consumed_now = self._mark_unclusterable_episodes(store, pending)
+        pending, consumed_now = self._mark_unclusterable_episodes(
+            store, pending, erase_count
+        )
 
         # CLUSTER — embedder failure RE-RAISES here (fail-loud).
         clusters = (
@@ -777,6 +786,8 @@ class ProceduralMemoryMixin:
 
         calls = 0
         for cluster in clusters[: config.max_clusters_per_pass]:
+            if store.erased_since(erase_count):
+                break
             if calls >= config.max_distill_calls_per_pass:
                 result["capped"] = True
                 logger.info(
@@ -806,6 +817,9 @@ class ProceduralMemoryMixin:
                 )
                 break
 
+            if store.erased_since(erase_count):
+                break
+
             if candidate is None:
                 # SKIP sentinel, malformed, or truncated at the model's output
                 # cap. Marked, so it is not re-attempted every session start.
@@ -815,6 +829,7 @@ class ProceduralMemoryMixin:
                         store,
                         cluster,
                         "unusable",
+                        erase_count,
                         detail=(
                             "distiller returned SKIP or a document that did not "
                             "parse (a response truncated at the output cap lands "
@@ -834,21 +849,32 @@ class ProceduralMemoryMixin:
 
             # Embed when_to_use (its own corpus).  Embedder failure RE-RAISES.
             vec = self._embed_text(candidate.when_to_use)
+            if store.erased_since(erase_count):
+                break
             res = reconcile_and_store(
                 candidate,
                 cluster,
                 store,
                 embedding=_embedding_to_blob(vec),
                 similarity_tau=config.similarity_tau,
+                erase_count=erase_count,
             )
+            if res.action == "erased":
+                break
             consumed_now.update(
-                self._mark_cluster_consumed(store, cluster, "distilled")
+                self._mark_cluster_consumed(store, cluster, "distilled", erase_count)
             )
             if res.action in ("add", "update") and res.skill_id:
                 self._proc_faiss_add(res.skill_id, vec)
                 result["stored"] += 1
 
         result["consumed"] = len(consumed_now)
+        if store.erased_since(erase_count):
+            logger.info(
+                "[MemoryMixin] skill synthesis: all memory was erased during the "
+                "pass; nothing from it was kept"
+            )
+            return result
         self._advance_synthesis_watermark(
             store, window, already_consumed | consumed_now
         )
@@ -902,7 +928,7 @@ class ProceduralMemoryMixin:
 
     @staticmethod
     def _mark_unclusterable_episodes(
-        store, pending: List[Dict]
+        store, pending: List[Dict], erase_count: Optional[int] = None
     ) -> Tuple[List[Dict], Set[str]]:
         """Consume the episodes CLUSTER is structurally unable to take.
 
@@ -930,6 +956,7 @@ class ProceduralMemoryMixin:
             ids,
             "unusable",
             detail="no user turn, so there is no goal to cluster on",
+            erase_count=erase_count,
         )
         logger.debug(
             "[MemoryMixin] skill synthesis: %d episode(s) have no goal to "
@@ -941,12 +968,20 @@ class ProceduralMemoryMixin:
 
     @staticmethod
     def _mark_cluster_consumed(
-        store, cluster: GoalCluster, outcome: str, detail: Optional[str] = None
+        store,
+        cluster: GoalCluster,
+        outcome: str,
+        erase_count: Optional[int] = None,
+        detail: Optional[str] = None,
     ) -> List[str]:
         """Record a cluster's episodes as consumed; return their session ids."""
         session_ids = cluster.from_sessions
         store.mark_sessions_synthesized(
-            session_ids, outcome, goal=cluster.goal, detail=detail
+            session_ids,
+            outcome,
+            goal=cluster.goal,
+            detail=detail,
+            erase_count=erase_count,
         )
         return session_ids
 

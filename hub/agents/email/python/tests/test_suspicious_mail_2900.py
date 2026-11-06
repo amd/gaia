@@ -750,7 +750,11 @@ class TestRewriteSuspiciousMailAnswer:
         """A clean negative carries no list to render, so the model's own
         (already-correct) prose is left alone — mirrors
         render_needs_you_list's ``if not items: return ""`` behavior."""
-        envelope = {"kind": "email_suspicious_scan", "suspicious": [], "suspicious_total": 0}
+        envelope = {
+            "kind": "email_suspicious_scan",
+            "suspicious": [],
+            "suspicious_total": 0,
+        }
         conversation = [_tool_entry("check_suspicious_mail", envelope)]
         model_answer = "Nothing flagged this scan."
         out = rewrite_suspicious_mail_answer(model_answer, conversation)
@@ -1160,7 +1164,7 @@ class TestRewriteSuspiciousMailAnswerZeroFindingsCoverageGap:
 
 class TestContractAdditivity:
     def test_schema_version_bumped(self):
-        assert SCHEMA_VERSION == "2.14"
+        assert SCHEMA_VERSION == "2.15"
 
     def test_pre_scan_item_accepts_phishing_and_spam_flags(self):
         item = PreScanItem(

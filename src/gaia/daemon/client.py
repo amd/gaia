@@ -33,6 +33,7 @@ from gaia.daemon.errors import (
     DaemonStartError,
     DaemonVersionError,
     LemonadeNotAnsweringError,
+    LemonadeStartFailedError,
 )
 from gaia.daemon.instance import (
     DaemonInstance,
@@ -601,7 +602,10 @@ def _daemon_env(drop: tuple = ()) -> dict:
             os.path.abspath(entry) if entry else entry
             for entry in env["PYTHONPATH"].split(os.pathsep)
         )
-    return env
+    from gaia.llm.lemonade_choice import child_lemonade_env
+
+    # It and every sidecar it spawns would otherwise inherit an ignored address.
+    return child_lemonade_env(env)
 
 
 def _is_spawned_daemon(registered_pid: int, spawned_pid: int) -> bool:
@@ -897,9 +901,15 @@ def ensure_lemonade(
         ) from e
     if r.status_code == 503 and r.headers.get("Retry-After"):
         raise LemonadeNotAnsweringError(_error_detail(r))
-    if r.status_code != 200:
+    if r.status_code == 409:
         raise DaemonError(
-            f"the daemon could not start Lemonade Server: {_error_detail(r)}"
+            f"the daemon has no Lemonade Server of its own to start: "
+            f"{_error_detail(r)}"
+        )
+    if r.status_code != 200:
+        reason = _error_detail(r)
+        raise LemonadeStartFailedError(
+            f"the daemon could not start Lemonade Server: {reason}", reason=reason
         )
     return r.json()
 

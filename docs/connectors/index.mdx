@@ -96,8 +96,8 @@ After you connect an account, grant individual agents the scopes they
 need:
 
 ```bash
-# CLI
-gaia connectors grants grant google builtin:chat \
+# CLI — flagship agent; mail tools read this grant
+gaia connectors grants grant google installed:gaia \
   --scopes https://www.googleapis.com/auth/gmail.readonly
 
 # Or in the UI: open the connector tile → "Per-agent grants" section.

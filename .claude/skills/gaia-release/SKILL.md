@@ -378,6 +378,17 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    ```
    **AppImage smoke jobs (`appimage-distro-matrix`, `appimage-userns-restricted`) are the most flaky** — `appimage-userns-restricted` has a 300s `state: ready` poll (raised from 90s to cover a first-run model download). On real failure, **stop** and fix root cause; on transient flake (timeout-only, no logic error), `gh run rerun $RUN_ID --failed` is acceptable.
 
+6. **Check the last RC's findings are fixed or deferred.** rc4 shipped rc3's bugs because their fix PRs (#6544–#6547, #6554) were still open when it was tagged. An open fix PR is not a fix. Skip the second query for `-rc1`.
+   ```bash
+   MS=$(gh api repos/amd/gaia/milestones --jq '.[] | select(.title | test("^v<version>( |$)")) | .title')
+   gh issue list --repo amd/gaia --milestone "$MS" --state open --limit 200
+   PREV=$(git tag --list 'v<version>-rc*' --sort=-v:refname | head -n 1)
+   # Bugs filed since the last RC without a milestone (#6540, #6551 slipped through this way)
+   gh issue list --repo amd/gaia --state open --label bug --limit 200 \
+     --search "no:milestone created:>=$(git log -1 --format=%cs "$PREV")"
+   ```
+   Each one is merged and closed, or moved to a later milestone with a comment giving the reason. Release-test findings carry the milestone because the testing skill's issue template files them with it.
+
 ### Gate 3 — green run on the merged commit
 
 Required before continuing:
@@ -385,6 +396,7 @@ Required before continuing:
 - `__version__` matches the target.
 - `validate_release_notes.py` passes.
 - For a final, `check_flagship_release.py` passes.
+- No open issue in the release milestone, and no unmilestoned bug since the last RC, unless deferred with a reason.
 - Build Installers run on the merged commit is **green** (not yellow, not "mostly green except smoke tests").
 
 Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the **merged SHA** (`$MERGED_SHA`). Ask: **"Pre-tag verification green on `<sha>` (release PR #N). Push tag `v<version>`?"** — the SHA and PR number being in the question text means Phase 4 can re-derive them even if the user resumes in a fresh shell.
@@ -425,7 +437,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
    git push origin v<version>-rc1
    ```
 
-3. **Monitor exactly as in Phase 5, minus the approval:** an RC publishes as soon as its builds and `ci-green` pass. Tagging `-rc(N+1)` does not cancel `-rcN`; if `-rcN` is still building, it stops itself right before publishing (red, "superseded by"), so only the newest RC reaches `next`. `redeploy-website` asks the website to rebuild so the RC entry appears (it does the same for a final).
+3. **Monitor exactly as in Phase 5, minus the approval:** an RC publishes as soon as its builds pass; `ci-green` only reports CI on an RC (warnings, never a block). Tagging `-rc(N+1)` does not cancel `-rcN`; if `-rcN` is still building, it stops itself right before publishing (red, "superseded by"), so only the newest RC reaches `next`. `redeploy-website` asks the website to rebuild so the RC entry appears (it does the same for a final).
 
 4. **Personal test pass** on a machine that does not already have the release installed (CLAUDE.md: test from the user's real initial state):
    ```bash
@@ -481,7 +493,16 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
 
    The flow is: `validate → build (build-pypi + build-npm + build-desktop-installers + tui-installers → windows-setup) + ci-green → approve-publish (manual gate for a final; none for an RC) → publish (publish-pypi + publish-npm) → post-publish-smoke → github-release (attaches the Windows setup) → github-release-installers (the .pkg/.deb/.rpm) → release-assets-complete + redeploy-website`. The installer jobs run for a final too and take no environment, so `approve-publish` is the final's only approval in this run. Surface the run URL.
 
-   `ci-green` requires a passing run of `lint.yml`, `test_unit.yml` and `test_gaia_cli_linux.yml` on the tagged commit (`util/check_release_ci.py`). Most main commits have none (the next merge cancels their runs), so it dispatches the missing ones against the tag and waits up to ~80 min alongside the builds. A red one stops the release before anything publishes.
+   `ci-green` (`util/check_release_ci.py`) checks CI on the tagged commit. What it does depends on the tag, and that file is the only list:
+
+   | | Blocks publishing | Reported only (job summary + warning) |
+   |---|---|---|
+   | **RC** `vX.Y.Z-rcN` (`RC_REPORTED`) | nothing — tests never hold a candidate | `lint.yml`; the Linux and import-floor jobs of `test_unit.yml`; its macOS, Windows and offline-integration jobs; `test_gaia_cli_linux.yml`; `release_train_dryrun.yml`; the Windows and Linux jobs of `test_npu_agent_chat.yml` |
+   | **Final** `vX.Y.Z` (`FINAL_REQUIRED`, `FINAL_ADVISORY`) | every job of `lint.yml`, `test_unit.yml`, `test_gaia_cli_linux.yml`; the Windows job of `test_npu_agent_chat.yml` (an agent turn on the NPU); plus `release_train_dryrun.yml` | the Linux job of `test_npu_agent_chat.yml`, read once with no dispatch or wait, until the Linux Strix Halo runners lock enough memory for the NPU model (#6764) |
+
+   On an RC the gate reads each check once, with no dispatch and no wait, writes each one's state (passed / failed / still running / no run on this commit) to the job summary with a `::warning::` for each that is not green, and exits 0; `approve-publish` does not need `ci-green` on an RC either. What still holds an RC is its own build and the smoke tests of those artifacts (`build-pypi`, `build-npm`, `build-desktop-installers` with its installer smoke jobs, `rc-flagship`, `tui-installers-complete`). The two source-tree test runs inside the build (`build-npm`'s backend pytest and the installers' custom-agent MCP harness) run on finals only. Evals never gate (`eval_flagship.yml` reports separately).
+
+   On a final, most main commits have no runs of their own (the next merge cancels them), so a required check with none is dispatched once against the tag and waited for, up to ~80 min alongside the builds. The gate never starts a dry run: before tagging a final, run it on the candidate's commit (`gh workflow run release_train_dryrun.yml --repo amd/gaia --ref v<version>-rcN -f rc_tag=v<version>-rcN`) and let it pass, or the final fails and prints the command. An RC's warnings are the final's blockers, except the Linux NPU row, so fix them before tagging the final.
 
 ---
 
