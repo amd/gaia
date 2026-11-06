@@ -467,6 +467,8 @@ const MEMORY_ITEMS = [
     memoryItem('k3', 'reminder', 'Dentist appointment', { due_at: '2026-10-23', context: 'personal' }),
     memoryItem('k4', 'fact', 'Bank PIN hint', { sensitive: true }),
     memoryItem('k5', 'note', 'يفضّل الاجتماعات الصباحية', { source: 'consolidation' }),
+    memoryItem('k6', 'error', "load_skill: No skill named 'note-taker'.", { source: 'error_auto' }),
+    memoryItem('k7', 'error', 'The VPN drops on hotel wifi', { source: 'user' }),
 ];
 
 const GOAL = {
