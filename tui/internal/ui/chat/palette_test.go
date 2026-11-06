@@ -378,6 +378,11 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 	if !known["/update"] {
 		t.Error("paletteCommands does not offer /update")
 	}
+	// /discord and its sub-forms go through handleDiscordCommand (discord.go).
+	seen["/discord"] = true
+	if !known["/discord"] {
+		t.Error("paletteCommands does not offer /discord")
+	}
 
 	// The other direction: an entry nobody dispatches is a stale row that
 	// will mislead exactly the discoverability this feature exists for.

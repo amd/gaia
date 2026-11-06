@@ -1330,6 +1330,34 @@ def _formatter(
 
 
 BINARY_POLICIES: dict[str, BinaryPolicy] = {
+    # GAIA's own CLI, for the discord-automation skill only: the Discord
+    # bridge's schedules and GitHub watches. Nothing else of `gaia` is reachable
+    # from a skill — no setup, no config, no connectors.
+    "gaia": BinaryPolicy(
+        binary="gaia",
+        confirm_summary="changes what GAIA runs and reports in your Discord DM",
+        summary=(
+            "GAIA's own CLI — lists, adds and removes the Discord bridge's "
+            "schedules and GitHub watches; every change asks first."
+        ),
+        install_hint=(
+            "The `gaia` command ships with GAIA. Reinstall GAIA from "
+            "https://amd-gaia.ai/docs/guides/install to restore it."
+        ),
+        subcommands={
+            "discord": Subcommand(
+                actions=frozenset({"schedules", "watches"}),
+                confirm_actions=frozenset(
+                    {"schedule-add", "schedule-remove", "watch", "unwatch"}
+                ),
+                value_flags=frozenset(
+                    {"--every", "--prompt", "--id", "--repo", "--mine"}
+                ),
+                allowed_flags=frozenset({"--all"}),
+                strict_flags=True,
+            ),
+        },
+    ),
     "gh": BinaryPolicy(
         binary="gh",
         confirm_summary="writes to GitHub",

@@ -1776,6 +1776,16 @@ TIERS = [
     ("black --config /tmp/evil.toml src", REFUSE),
     ("isort --settings-path /tmp/evil.cfg src", REFUSE),
     ("ruff check --stdin-filename /etc/passwd", REFUSE),
+    # gaia — the Discord bridge's schedules and watches, nothing else of the CLI
+    ("gaia discord schedules", ALLOW),
+    ("gaia discord watches", ALLOW),
+    ('gaia discord schedule-add --every 3h --prompt "summarize my PRs"', CONFIRM),
+    ("gaia discord watch --repo amd/gaia --mine kovtcharov", CONFIRM),
+    ("gaia discord schedule-remove --all", CONFIRM),
+    ("gaia discord disconnect", REFUSE),
+    ('gaia discord start --agent-command "python evil.py"', REFUSE),
+    ("gaia config set default_model x", REFUSE),
+    ("gaia init", REFUSE),
 ]
 
 

@@ -88,6 +88,7 @@ setup(
         "gaia.apps.webui",
         "gaia.messaging",
         "gaia.messaging.slack",
+        "gaia.messaging.discord",
         "gaia.connectors",
         "gaia.connectors.catalog",
         "gaia.connectors.providers",
@@ -165,6 +166,9 @@ setup(
         "tomli>=2.0.0; python_version < '3.11'",
         # gaia connectors is a base CLI command; keyring is its OS credential store (OAuth tokens #915). #1621
         "keyring>=24.0.0,<26.0.0",
+        # The Discord bridge is set up from the TUI and Agent UI, whose installs
+        # never add extras; it needs only aiohttp (already core) and audioop-lts on 3.13+.
+        "discord.py>=2.7,<3",
         "tavily-python>=0.5.0",
         # Gateway Claude models (amd.Claude-*) call the gateway's Anthropic
         # route through this SDK, so a base install can pick one. 0.49 is the

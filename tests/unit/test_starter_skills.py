@@ -55,6 +55,7 @@ STARTER_PACK = frozenset(
         "coding",
         "daily-brief",
         "data-explore",
+        "discord-automation",
         "document-brief",
         "file-ops",
         "github-triage",

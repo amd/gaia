@@ -19,6 +19,7 @@ export type SettingsSection =
     | 'permissions'
     | 'skills'
     | 'connectors'
+    | 'messaging'
     | 'memory'
     | 'privacy'
     | 'notifications'

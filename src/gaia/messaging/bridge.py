@@ -101,6 +101,29 @@ DEFAULT_CANCEL_GRACE_SECONDS = 30.0
 _IDLE_POLL_SECONDS = 0.5
 
 
+def resolve_agent_argv() -> List[str]:
+    """The flagship agent to drive: the Hub-installed binary, else PATH.
+
+    An app install puts the agent under ``~/.gaia/agents/gaia/`` and never on
+    PATH, so PATH alone would leave every app user with a bridge that cannot
+    answer. A tampered install raises rather than falling through to PATH.
+    """
+    import shutil
+
+    from gaia.daemon.sidecars.errors import PlatformError
+    from gaia.daemon.sidecars.fetch import hub_installed_binary
+
+    try:
+        installed = hub_installed_binary("gaia")
+    except PlatformError as e:
+        log.info("No Hub agent binary for this platform (%s); using PATH", e)
+        installed = None
+    if installed is not None:
+        return [str(installed)]
+    found = shutil.which(DEFAULT_AGENT_BINARY)
+    return [found] if found else [DEFAULT_AGENT_BINARY]
+
+
 def _format_duration(seconds: float) -> str:
     whole = int(seconds)
     for unit, size in (("hour", 3600), ("minute", 60)):
@@ -298,6 +321,8 @@ class AgentChannel:
     # ------------------------------------------------------------------
 
     def _default_spawn(self) -> Any:
+        if self._argv == [DEFAULT_AGENT_BINARY]:
+            self._argv = resolve_agent_argv()
         try:
             return subprocess.Popen(  # noqa: S603 - argv is ours, never user text
                 self._argv,

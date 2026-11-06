@@ -365,6 +365,33 @@ export async function withConnectors(page: Page, connectors: unknown[] = CONNECT
     });
 }
 
+const DISCORD_BASE = {
+    connected: false, paired: false, running: false, state: 'stopped', detail: '',
+    bot_name: '', owner_name: '', autostart: false, model: null,
+    portal_url: 'https://discord.com/developers/applications',
+    bot_page_url: '', invite_url: '', bot_profile_url: '',
+    pairing_code: '', pairing_expires_at: 0, discord_installed: true, should_offer_setup: true,
+};
+const DISCORD_BOT = {
+    connected: true, running: true, autostart: true, bot_name: 'GAIA on the office desktop',
+    bot_page_url: 'https://discord.com/developers/applications/1300000000000000001/bot',
+    invite_url: 'https://discord.com/oauth2/authorize?client_id=1300000000000000001&scope=bot&permissions=0',
+    bot_profile_url: 'https://discord.com/users/1300000000000000002',
+};
+
+/** Settings > Messaging, one answer per Discord bridge state. */
+export const DISCORD_STATES: Record<string, Record<string, unknown>> = {
+    none: DISCORD_BASE,
+    pairing: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'pairing', pairing_code: 'K7QX4M9P', pairing_expires_at: 1e10, detail: 'DM the code to the bot to pair it with your Discord account.' },
+    connected: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'connected', paired: true, owner_name: 'someone_with_a_long_name', model: 'Qwen3.6-35B-A3B-GGUF' },
+    taken_over: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'taken_over', paired: true, owner_name: 'kalin', detail: 'Another PC is answering this Discord bot.' },
+    token_invalid: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'token_invalid', paired: true, owner_name: 'kalin', detail: 'Discord rejected the bot token (HTTP 401). Reset the token in the Developer Portal and paste the new one.' },
+};
+
+export async function withDiscord(page: Page, status: Record<string, unknown>): Promise<void> {
+    await page.route('**/api/messaging/discord', (route) => route.fulfill({ json: status }));
+}
+
 /** The Electron bridges the browser lacks, so desktop-only settings render. */
 export async function withDesktopBridges(page: Page, update: Record<string, unknown> = {}): Promise<void> {
     await page.addInitScript((state) => {

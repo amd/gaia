@@ -1863,6 +1863,117 @@ def build_parser():
 
     slack_parser.set_defaults(action="slack")
 
+    discord_parser = subparsers.add_parser(
+        "discord",
+        help="Drive the GAIA agent from a Discord DM "
+        "(setup|connect|start|stop|restart|pair|status|disconnect)",
+        parents=[parent_parser],
+    )
+    discord_subparsers = discord_parser.add_subparsers(
+        dest="discord_action", help="discord action to perform"
+    )
+    d_setup = discord_subparsers.add_parser(
+        "setup", help="Paste a bot token, start the bridge, and show the pairing code"
+    )
+    d_setup.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Print the Developer Portal link instead of opening a browser",
+    )
+    d_setup.add_argument("--model", help="Chat model the agent runs")
+    discord_subparsers.add_parser(
+        "connect",
+        help=(
+            "Store a bot token read from stdin and print JSON. For a caller that "
+            "collected the token itself, such as the TUI's setup panel."
+        ),
+    )
+    d_start = discord_subparsers.add_parser("start", help="Start the Discord bridge")
+    d_start.add_argument(
+        "--detach",
+        action="store_true",
+        help="Run as its own process that outlives this one, and print JSON status",
+    )
+    d_start.add_argument("--model", help="Chat model the agent runs (remembered)")
+    d_start.add_argument(
+        "--take-over",
+        action="store_true",
+        help="Answer from this PC even if another PC holds the lease",
+    )
+    d_start.add_argument(
+        "--agent-command",
+        help="Command that starts the agent child (default: the installed gaia-agent)",
+    )
+    d_start.add_argument(
+        "--deny-gated-tools",
+        action="store_true",
+        help="Run read-only: auto-deny every tool that would ask for confirmation",
+    )
+    d_start.add_argument(
+        "--upload-root",
+        action="append",
+        help="Directory a file may be sent back to Discord from (repeatable; default: home)",
+    )
+    discord_subparsers.add_parser("stop", help="Stop the Discord bridge")
+    d_restart = discord_subparsers.add_parser(
+        "restart", help="Restart the Discord bridge"
+    )
+    d_restart.add_argument("--model", help="Chat model the agent runs (remembered)")
+    d_restart.add_argument(
+        "--take-over",
+        action="store_true",
+        help="Answer from this PC even if another PC holds the lease",
+    )
+    discord_subparsers.add_parser(
+        "pair", help="Forget the paired account and show a new pairing code"
+    )
+    discord_subparsers.add_parser(
+        "autostart",
+        help="Start the bridge if it is connected, set to autostart, and not running",
+    )
+    d_status = discord_subparsers.add_parser(
+        "status", help="Show connection, pairing, and bridge state"
+    )
+    d_status.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON"
+    )
+    d_decline = discord_subparsers.add_parser(
+        "decline", help="Record that you do not want Discord set up"
+    )
+    d_decline.add_argument(
+        "--never", action="store_true", help="Never offer Discord setup again"
+    )
+    discord_subparsers.add_parser(
+        "disconnect", help="Stop the bridge and forget the token and pairing"
+    )
+    discord_subparsers.add_parser(
+        "schedules", help="List the prompts the bridge runs on a timer (JSON)"
+    )
+    d_sadd = discord_subparsers.add_parser(
+        "schedule-add",
+        help="Run a prompt on a timer and send the answer to the paired DM",
+    )
+    d_sadd.add_argument("--every", required=True, help="Interval: 30m, 3h, 1d")
+    d_sadd.add_argument("--prompt", required=True, help="What the agent should do")
+    d_srm = discord_subparsers.add_parser("schedule-remove", help="Remove a schedule")
+    d_srm.add_argument("--id", help="The schedule's id (from `schedules`)")
+    d_srm.add_argument("--all", action="store_true", help="Remove every schedule")
+    discord_subparsers.add_parser(
+        "watches", help="List the GitHub repositories being watched (JSON)"
+    )
+    d_watch = discord_subparsers.add_parser(
+        "watch",
+        help="DM new third-party PRs, issues and comments on a repo as they happen",
+    )
+    d_watch.add_argument("--repo", required=True, help="owner/name, e.g. amd/gaia")
+    d_watch.add_argument(
+        "--mine",
+        help="Comma-separated GitHub accounts that are yours; their activity is not alerted",
+    )
+    d_unwatch = discord_subparsers.add_parser("unwatch", help="Stop watching a repo")
+    d_unwatch.add_argument("--repo", required=True, help="owner/name")
+    discord_parser.set_defaults(action="discord")
+
     # Schedule command — cron-based recurring skill/prompt dispatch (issue #892)
     schedule_parser = subparsers.add_parser(
         "schedule",
@@ -5080,6 +5191,12 @@ def main():
         from gaia.messaging.slack.cli import main as slack_main
 
         sys.exit(slack_main(args))
+
+    # Handle discord command — see gaia.messaging.discord.cli for the flow
+    if args.action == "discord":
+        from gaia.messaging.discord.cli import main as discord_main
+
+        sys.exit(discord_main(args))
 
     # Handle telegram scaffold command
     if args.action == "telegram":

@@ -1,0 +1,117 @@
+---
+title: "Discord"
+description: "Message GAIA from Discord on any device. It answers from your PC, and anything that changes the PC waits for you to press Allow."
+icon: "discord"
+---
+
+<Info>
+  **First time here?** Complete the [Setup](/setup) guide first to install GAIA.
+</Info>
+
+DM GAIA from Discord on your phone and it answers from your PC. It can read your files and
+documents, look things up, and send files back. It can also keep an eye on things for you:
+summaries every few hours, and an instant message when someone acts on a GitHub repository
+you care about.
+
+<Warning>
+  **This drives the real GAIA agent on your PC.** Shell commands, file changes and code
+  arrive in Discord as **Allow / Deny** buttons, and nothing runs until you press one.
+  **Reading doesn't ask:** the paired account can read what GAIA can read, which is your
+  home folder by default.
+</Warning>
+
+## Only you can use it
+
+- **One account, paired by a code.** After you connect a bot, GAIA shows a one-time code on
+  this PC. Whoever DMs that code to the bot becomes the only person it answers. Anyone else
+  gets one "not authorized" reply.
+- **DMs only.** GAIA ignores everything posted in servers, even ones the bot is in.
+- **Nothing old runs.** A message older than two minutes (say, one sent while the PC was
+  asleep) is never acted on. GAIA tells you it missed it and asks you to resend.
+- **One PC per bot.** If the same bot is connected on two PCs, only one answers. The other
+  steps aside, and **Answer from this PC** takes over.
+- **No inbound connection.** GAIA connects out to Discord, so there is no port to open and
+  no public address.
+
+## Set it up
+
+About two minutes. Discord bots can only be created in Discord's Developer Portal, so one
+part is manual. GAIA opens each page for you.
+
+<Tabs>
+  <Tab title="Agent UI">
+    1. Open **Settings → Messaging → Discord**.
+    2. Click **Open Discord Developer Portal**, then **New Application**. Name it (GAIA
+       works) and click **Create**.
+    3. Open **Bot** in the left menu, click **Reset Token**, then **Copy**. You don't need
+       to turn on any intents or permissions.
+    4. Paste the token into **Paste the token** and click **Connect**. It is stored in your
+       OS keyring, never in a file.
+    5. **Add the bot to a private server.** Discord only lets you DM a bot you share a server
+       with. In Discord, click **+** (Add a Server) → **Create My Own**, then click
+       **Open invite page** and pick that server. The bot gets no permissions there.
+    6. Click **Open the bot in Discord** → **Message**, and send the code shown in Settings.
+       The card switches to **Answering &lt;you&gt;** once it arrives.
+  </Tab>
+  <Tab title="Terminal app">
+    1. Type `/discord setup`. Your browser opens the Discord Developer Portal.
+    2. Click **New Application**, name it, then **Bot → Reset Token → Copy**.
+    3. Paste the token into the masked prompt.
+    4. Your browser opens the invite page: add the bot to a private server (see step 5 of
+       the Agent UI tab).
+    5. Open the bot's profile from the link shown, click **Message**, and send the code
+       shown. The terminal app says **Paired with …** as soon as it arrives.
+  </Tab>
+</Tabs>
+
+Once it is set up, GAIA starts answering whenever the Agent UI or the terminal app opens,
+and it keeps answering after you close them.
+
+## Using it
+
+Just DM the bot as you would GAIA on your PC: "what's in my Downloads folder?", "summarize
+the PDF I just sent", "write the meeting notes to notes.md".
+
+- **Files:** attach a file and GAIA can read it. Files it writes come back as attachments
+  (up to Discord's 10 MB).
+- **Approvals:** a prompt shows the exact command or change, with **Allow**, **Deny**, and
+  sometimes **Always allow** for that kind of call. Unanswered prompts are denied after ten
+  minutes.
+- **Long answers** arrive as several messages, never cut off.
+
+## Summaries and alerts
+
+Ask in plain words, and GAIA sets it up after you approve it:
+
+> Monitor PRs and issues on github.com/amd/gaia. kovtcharov and kovtcharov-amd are my
+> accounts, so summarize their activity every few hours. Tell me right away when anyone
+> else opens a PR or issue or comments.
+
+That becomes two things:
+
+- **An instant alert.** A watch on the repository checks GitHub every couple of minutes
+  (every 10 minutes per watched repo if the GitHub CLI isn't signed in on this PC) and
+  DMs you each new PR, issue or comment from anyone except your own accounts and bots, with
+  a link. It is a plain check, not the AI, so it never makes anything up or repeats itself.
+  If GitHub keeps refusing a check, GAIA tells you, and again when it works.
+- **A summary.** A schedule runs a prompt every few hours and sends you the answer.
+
+To change or stop them, ask: "what are you watching?", "stop the summaries", "summarize
+daily instead". For GitHub, GAIA uses the GitHub CLI you are signed in to on this PC.
+
+## Troubleshooting
+
+| What you see | What to do |
+|---|---|
+| **Discord no longer accepts this token** | The token was reset or the bot deleted. Copy a new one under **Bot → Reset Token** and paste it in Settings → Messaging. |
+| **Another PC is answering this bot** | Click **Answer from this PC**, or give each PC its own bot. |
+| **The token is the Discord connector's bot** | The bridge needs a bot of its own. Create a second application in the Developer Portal. |
+| **The bot doesn't reply to the code** | Make sure you DM'd the bot (not a server channel), and that you sent the code shown *now*. Codes change after an hour or a few wrong tries. |
+| **Couldn't read the token from your keyring** | Unlock your keyring (on Linux, log in to your desktop session), then click **Try again**. |
+
+## Limits
+
+- One Discord account per PC. It is a single agent with one conversation, so a second
+  person would see the first one's history.
+- No server channels, voice or slash commands.
+- GAIA answers only while the PC is on and awake.

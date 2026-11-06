@@ -46,6 +46,9 @@ DEFERRED: dict[str, str] = {
     "check-in": "Scheduled-trigger skill; needs a clock fixture the runner lacks.",
     "coding": "Overlaps the code_index scenarios; needs its own corpus first.",
     "daily-brief": "Composes other skills; cover its parts before the composite.",
+    "discord-automation": (
+        "Needs a paired Discord bridge; its CLI, policy and bridge are unit-tested."
+    ),
     "github-triage": "Requires a live GitHub connector; not available in the lane.",
     "image-gen": "Needs Stable Diffusion loaded; out of scope for the text lanes.",
     "inbox-triage": "Requires a mailbox connector; covered by the email eval lane.",

@@ -287,9 +287,9 @@ const chatHelpText = `  GAIA Chat
   Esc twice   Give up waiting on the cancel
   Ctrl+C      Quit
 
-  Commands    /help /clear /full-access /slack /setup
+  Commands    /help /clear /full-access /setup
               /memory /model /provider /gateway /agents
-              /models /gpu
+              /models /gpu /slack /discord
   /cost       Session spend · /cost help for rates
   /update     New GAIA release? · /update now
   /           Browse commands on an empty line: ↑/↓ or
