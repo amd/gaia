@@ -112,7 +112,7 @@ describe('a slow backend', () => {
         useChatStore.setState({ systemStatus: null });
         render(<ConnectionBanner backendSlow />);
         expect(screen.getByText(/GAIA is slow to answer/)).toBeInTheDocument();
-        expect(screen.queryByText(/Lost the connection/)).toBeNull();
+        expect(screen.queryByText(/Can’t reach GAIA’s assistant/)).toBeNull();
     });
 });
 

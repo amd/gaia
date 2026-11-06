@@ -17,6 +17,7 @@ import { displayModelName, useModelNames, useModelStore } from '../stores/modelS
 import * as messageQueue from '../utils/messageQueue';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { log } from '../utils/logger';
+import { requestErrorText } from '../utils/requestErrors';
 import { durationMs, prefersReducedMotion } from '../utils/motion';
 import { deviceLabel } from '../utils/modelLabels';
 import type { StartScreen } from '../types';
@@ -191,7 +192,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
             })
             .catch((err) => {
                 log.api.warn('New-chat start screen unavailable', err);
-                if (live.current) setStartError(err instanceof Error ? err.message : String(err));
+                if (live.current) setStartError(requestErrorText(err));
             });
     }, []);
 
@@ -246,7 +247,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
             // Nothing was sent, so every message goes back in the box.
             const held = heldRef.current.splice(0);
             setText([draft || message, ...held].join('\n\n'));
-            setError(err instanceof Error ? err.message : String(err));
+            setError(requestErrorText(err));
         } finally {
             sendingRef.current = false;
             setSending(false);

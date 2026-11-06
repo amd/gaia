@@ -906,6 +906,20 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
     if log is None:
         log = get_logger(__name__)
 
+    from gaia.ui.fault_log import enable_fault_log
+
+    try:
+        fault_log = enable_fault_log()
+        # The desktop app logs the launcher's pid; the parent here ties the two together.
+        log.info(
+            f"Agent UI backend pid {os.getpid()} (parent {os.getppid()}); "
+            f"a hard crash writes its stack to {fault_log}"
+        )
+    except OSError as e:
+        log.warning(
+            f"Backend fault log unavailable, so a hard crash leaves no stack: {e}"
+        )
+
     _ensure_webui_built(log=log)
 
     from gaia.config import UnsafeGaiaHomeError
@@ -943,6 +957,16 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
             log_level="debug" if debug else "info",
             access_log=debug,
         )
+        log.warning(
+            "Agent UI server stopped: uvicorn returned after a shutdown signal "
+            "(Ctrl+C or Ctrl+Break reached this process)"
+        )
+    except KeyboardInterrupt:
+        log.warning("Agent UI server interrupted by KeyboardInterrupt")
+        raise
+    except SystemExit as e:
+        log.error(f"Agent UI server exiting with code {e.code}", exc_info=True)
+        raise
     except UnsafeGaiaHomeError as e:
         # The user's misconfiguration to fix: print the remedy, not a traceback.
         # 64 is EX_USAGE, matching gaia uninstall's exit code for the same fault.
@@ -972,7 +996,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
             print(f"Error: {e}")
         sys.exit(1)
     except Exception as e:
-        log.error(f"Error starting Agent UI: {e}")
+        log.exception(f"Agent UI server failed: {e}")
         print(f"Error: {e}")
         sys.exit(1)
 

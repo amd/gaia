@@ -11,8 +11,6 @@ import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
 
-const API_BASE = getApiBase();
-
 // -- Helpers -------------------------------------------------------------------
 
 /**
@@ -150,7 +148,7 @@ export async function apiFetch<T>(
     extraHeaders?: Record<string, string>,
     signal?: AbortSignal,
 ): Promise<T> {
-    const url = `${API_BASE}${path}`;
+    const url = `${getApiBase()}${path}`;
     const t = log.api.time();
 
     log.api.info(`${method} ${url}`, body !== undefined ? { body: redactSecrets(body) } : '');
@@ -618,7 +616,7 @@ export function sendMessageStream(
     log.stream.info(`Starting SSE stream for session=${sessionId}`, { messageLength: message.length });
 
     const headers = watchHeaders(controller, callbacks, SEND_HEADER_TIMEOUT_MS, SEND_WAITING_NOTICE_MS);
-    fetch(`${API_BASE}/chat/send`, {
+    fetch(`${getApiBase()}/chat/send`, {
         method: 'POST',
         headers: { ...UI_HEADER, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -905,7 +903,7 @@ export function attachToRun(
     log.stream.info(`Attaching to background run for session=${sessionId}`);
 
     const headers = watchHeaders(controller, callbacks, ATTACH_HEADER_TIMEOUT_MS);
-    fetch(`${API_BASE}/chat/attach?session_id=${encodeURIComponent(sessionId)}`, {
+    fetch(`${getApiBase()}/chat/attach?session_id=${encodeURIComponent(sessionId)}`, {
         method: 'GET',
         signal: controller.signal,
     })
@@ -964,7 +962,7 @@ export async function uploadDocumentByPath(filepath: string): Promise<Document> 
  * consistent with the rest of the app.
  */
 export async function uploadDocumentBlob(file: File): Promise<Document> {
-    const url = `${API_BASE}/documents/upload`;
+    const url = `${getApiBase()}/documents/upload`;
     const t = log.api.time();
     log.api.info(`POST ${url}`, { fileName: file.name, size: file.size });
 
@@ -1020,7 +1018,7 @@ export async function getDocumentStatus(id: string): Promise<{
  * system browser (the shell hands http links to it).
  */
 export function documentFileUrl(id: string, page?: number): string {
-    const url = new URL(`${API_BASE}/documents/${encodeURIComponent(id)}/file`, window.location.href);
+    const url = new URL(`${getApiBase()}/documents/${encodeURIComponent(id)}/file`, window.location.href);
     if (page) url.hash = `page=${page}`;
     return url.href;
 }
@@ -1077,7 +1075,7 @@ export async function uploadFile(file: File): Promise<{
     content_type: string;
     is_image: boolean;
 }> {
-    const url = `${API_BASE}/files/upload`;
+    const url = `${getApiBase()}/files/upload`;
     const t = log.api.time();
     log.api.info(`POST ${url}`, { fileName: file.name, size: file.size });
 

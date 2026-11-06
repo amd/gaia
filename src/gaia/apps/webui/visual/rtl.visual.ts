@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -1165,6 +1165,29 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.sb-dot.is-running')).toHaveCount(0);
         await shot(page, `gaia-stopped-mid-answer-${locale}`);
         expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a crashed backend says it is restarting, with a timer, and no raw error (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withCrashedBackend(p, 'restarting', NOW.getTime() - 75_000));
+        const banner = page.locator('.connection-banner');
+        await expect(banner).toContainText(locale === 'ar' ? 'يُعاد تشغيله' : 'is restarting');
+        await expect(banner.locator('bdi')).toHaveText('1:15');
+        await expect(page.getByText(/Failed to fetch|still running/)).toHaveCount(0);
+        await shot(page, `backend-restarting-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.connection-banner')).toEqual([]);
+    });
+
+    test(`restarts ran out: a plain message and Restart GAIA (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withCrashedBackend(p, 'stopped', NOW.getTime() - 300_000));
+        const banner = page.locator('.connection-banner');
+        await expect(banner.getByRole('button', { name: locale === 'ar' ? /إعادة تشغيل GAIA/ : /Restart GAIA/ })).toBeVisible();
+        await expect(page.getByText(/Failed to fetch|still running/)).toHaveCount(0);
+        await shot(page, `backend-stopped-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.connection-banner')).toEqual([]);
     });
 }
 
