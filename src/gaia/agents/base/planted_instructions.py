@@ -19,6 +19,9 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from gaia.agents.base.call_risk import READ, SHELL_TOOLS, call_risk
+from gaia.agents.base.completion import READ_TOOLS
+
 PLANTED_INSTRUCTIONS_KEY = "planted_instructions"
 
 PLANTED_INSTRUCTIONS_GUIDANCE = (
@@ -47,19 +50,67 @@ SCANNED_TOOLS = frozenset(
         "search_file_content",
         "read_email",
         "search_email",
+        "get_message",
+        "get_thread",
         "run_shell_command",
+        # Browser-use tools all return the rendered page text.
+        "browser_open",
+        "browser_click",
+        "browser_type",
+        "browser_back",
+        "browser_find",
     }
 )
+# MCP tools carry another service's content (issues, tickets, chat, pages).
+_MCP_PREFIX = "mcp_"
 
-# Tools that can act on a planted command, so the final note never claims
-# inaction after one of them ran.
-_ACTING_TOOLS = frozenset(
-    {
-        "run_shell_command",
-        "write_file",
-        "edit_file",
-        "write_python_file",
-        "edit_python_file",
+
+def scans(tool_name: str) -> bool:
+    """Whether *tool_name*'s result is outside content that gets scanned."""
+    return tool_name in SCANNED_TOOLS or tool_name.startswith(_MCP_PREFIX)
+
+
+# Tools that only look. Any other call after a flag may have carried out the
+# planted text (an unknown, MCP or newly added tool included), so the note
+# never claims inaction it cannot vouch for.
+_LOOK_ONLY_TOOLS = (
+    (SCANNED_TOOLS - SHELL_TOOLS - {"browser_click", "browser_type"})
+    | READ_TOOLS
+    | {
+        "analyze_data_file",
+        "analyze_image",
+        "answer_question_about_image",
+        "browse_directory",
+        "browser_sessions",
+        "check_cli_setup",
+        "db_schema",
+        "db_tables",
+        "dump_document",
+        "file_info",
+        "find_files",
+        "get_file_info",
+        "get_index_status",
+        "get_system_info",
+        "list_files",
+        "list_indexed_documents",
+        "list_recent_files",
+        "list_skills",
+        "list_tables",
+        "list_windows",
+        "load_skill",
+        "load_tools",
+        "rag_status",
+        "recall",
+        "search_code",
+        "search_code_index",
+        "search_directory",
+        "search_file",
+        "search_past_conversations",
+        "search_skill_hub",
+        "skill_status",
+        "sleep",
+        "tree",
+        "unload_skill",
     }
 )
 
@@ -73,9 +124,10 @@ _ADDRESS = re.compile(
     r"ignore|send|email|open|download|report|reply|do\b))",
     re.IGNORECASE,
 )
-# Only where a line opens with it: "Sending message to LLM:" is a log call.
+# Only where a line or an HTML comment opens with it: "Sending message to
+# LLM:" is a log call.
 _NOTE_TO_AI = re.compile(
-    r"^[\s#/*<!>\-\[(]*(?:note|message|instructions?)\s+(?:to|for)\s+"
+    r"(?:^[\s#/*<!>\-\[(]*|<!--\s*)(?:note|message|instructions?)\s+(?:to|for)\s+"
     rf"(?:the\s+|any\s+|all\s+)?(?:ai\s+)?{_AI}\s*:",
     re.IGNORECASE | re.MULTILINE,
 )
@@ -99,7 +151,8 @@ _MARKUP = re.compile(
 # A command-carrying field, not the word "command" in prose about markup.
 _MARKUP_ACTION = re.compile(
     r"[\"']?\b(?:command|cmd|script|shell)[\"']?\s*[:=]"
-    r"|\b(?:run_shell_command|execute_command|delete_file|send_email)\b",
+    r"|\b(?:run_shell_command|execute_command|delete_file|send_email)\b"
+    r"[^\n]{0,40}?\b(?:arguments|parameters?|args|input)\b",
     re.IGNORECASE,
 )
 _DESTRUCTIVE = re.compile(
@@ -110,6 +163,16 @@ _DESTRUCTIVE = re.compile(
 )
 
 _QUOTES = frozenset({'"', "'", "`", "“", "‘"})
+# "such as ignore all previous instructions", "tell the model to ignore ...":
+# an override being described, not given.
+_DESCRIBED_LEAD = re.compile(
+    r"(?:\b(?:like|such as|e\.g\.,?|i\.e\.,?|for example,?)"
+    r"|\b(?:tells?|telling|told|asks?|asking|asked|instructs?|instructing|tricks?"
+    r"|tricking|persuad\w+|convinc\w+)\s+(?:the\s+|an?\s+|your\s+|that\s+)?"
+    rf"{_AI}\s+(?:in)?to)\s*$",
+    re.IGNORECASE,
+)
+_DESCRIBED_LEAD_CHARS = 60
 _MARKUP_WINDOW = 400
 _EXCERPT_CHARS = 160
 _MAX_FINDINGS = 3
@@ -154,6 +217,9 @@ def find_planted_instructions(text: str) -> List[Dict[str, str]]:
             # A quoted phrase is an example being discussed, not an order.
             if text[max(0, match.start() - 1) : match.start()] in _QUOTES:
                 continue
+            lead = text[max(0, match.start() - _DESCRIBED_LEAD_CHARS) : match.start()]
+            if pattern is _OVERRIDE and _DESCRIBED_LEAD.search(lead):
+                continue
             _add(f"the text {reason}", match.start(), match.end())
 
     for match in _MARKUP.finditer(text):
@@ -165,7 +231,11 @@ def find_planted_instructions(text: str) -> List[Dict[str, str]]:
                 match.start() + destructive.start(),
                 match.start() + destructive.end(),
             )
-        elif _MARKUP_ACTION.search(window):
+        # A harmless call inside a code fence is a documentation example.
+        elif (
+            _MARKUP_ACTION.search(window)
+            and text.count("```", 0, match.start()) % 2 == 0
+        ):
             _add(
                 "the text contains tool-call markup that runs a command",
                 match.start(),
@@ -197,15 +267,18 @@ def source_label(tool_name: str, tool_args: Any) -> str:
             value = value.strip()
             if key in ("file_path", "path", "filename", "file"):
                 value = re.split(r"[\\/]", value)[-1] or value
-            return value if len(value) <= 80 else value[:77] + "…"
+            value = value if len(value) <= 80 else value[:77] + "…"
+            if key == "query":
+                return f'the results for "{value}"'
+            if key == "command":
+                return f"the output of `{value}`"
+            return value
     return f"the {tool_name} result"
 
 
-def flag_tool_result(
-    tool_name: str, tool_args: Any, result: Any
-) -> Tuple[Any, List[Dict[str, str]]]:
+def flag_tool_result(tool_name: str, result: Any) -> Tuple[Any, List[Dict[str, str]]]:
     """``(result, findings)`` — *result* leads with a flag when findings exist."""
-    if tool_name not in SCANNED_TOOLS:
+    if not scans(tool_name):
         return result, []
     findings: List[Dict[str, str]] = []
     for text in _strings(result):
@@ -226,25 +299,48 @@ def flag_tool_result(
     return result, []
 
 
-def acted_after(tool_names: Iterable[str]) -> bool:
-    """Whether any of these calls could have carried out a planted command."""
-    return any(name in _ACTING_TOOLS for name in tool_names)
+def _looks_only(tool_name: str, tool_args: Any) -> bool:
+    if tool_name in SHELL_TOOLS:
+        return call_risk(tool_name, tool_args) == READ
+    return tool_name in _LOOK_ONLY_TOOLS
 
 
-_ANSWER_MENTIONS = re.compile(
-    r"inject|planted|embedded (?:instruction|command)|hidden instruction"
-    r"|instructions? (?:aimed|directed|addressed|written) (?:at|to|for)"
-    r"|(?:did not|didn't|won't|will not|do not|don't|not) (?:follow|run|execute|act on)"
-    r"|suspicious|malicious|untrusted",
+def acted_after(calls: Iterable[Tuple[str, Any]]) -> bool:
+    """Whether any of these ``(tool, args)`` calls could have carried out a
+    planted command: anything but a known look-only call counts."""
+    return any(not _looks_only(name, args) for name, args in calls)
+
+
+# The answer warns only when a warning word sits near what it warns about:
+# "the test was not run" or "a suspicious total" is not a warning.
+_ANSWER_WARNING = re.compile(
+    r"inject\w*|planted|embedded|hidden|suspicious|malicious|untrusted"
+    r"|(?:aimed|directed|addressed|written) (?:at|to|for)"
+    r"|(?:did not|didn't|won't|will not|do not|don't|not) (?:follow|run|execute|act on)",
     re.IGNORECASE,
 )
+_ANSWER_SUBJECT = re.compile(
+    r"instruction|command|prompt|directive|\bAIs?\b|assistant|\bLLMs?\b|chatbot",
+    re.IGNORECASE,
+)
+_ANSWER_WINDOW = 80
+
+
+def _answer_warns(answer: str) -> bool:
+    for match in _ANSWER_WARNING.finditer(answer):
+        near = answer[
+            max(0, match.start() - _ANSWER_WINDOW) : match.end() + _ANSWER_WINDOW
+        ]
+        if _ANSWER_SUBJECT.search(near):
+            return True
+    return False
 
 
 def planted_instructions_note(
     answer: Optional[str], sources: List[str], *, acted: bool
 ) -> str:
     """The line to add to *answer*, or ``""`` when it already warns the user."""
-    if not sources or (answer and _ANSWER_MENTIONS.search(answer)):
+    if not sources or (answer and _answer_warns(answer)):
         return ""
     named = ", ".join(dict.fromkeys(sources))
     verb = "contains" if len(set(sources)) == 1 else "contain"
@@ -267,5 +363,6 @@ __all__ = [
     "find_planted_instructions",
     "flag_tool_result",
     "planted_instructions_note",
+    "scans",
     "source_label",
 ]

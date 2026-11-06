@@ -2531,6 +2531,8 @@ Do NOT wrap conversational replies in JSON.
         self._tool_reported_usage: List[Dict[str, Any]] = []
         # Same rationale for the verification-scope log.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # (source, tool-log index) per result that carried planted instructions.
+        self._turn_planted_sources: List[Tuple[str, int]] = []
         # Whether a project root has tests, walked once per root per turn.
         self._has_tests_cache: Dict[Optional[str], bool] = {}
         # Same rationale for the per-turn record of edited files.
@@ -6957,7 +6959,7 @@ Do NOT wrap conversational replies in JSON.
         self, tool_name: str, tool_args: Any, result: Any
     ) -> Any:
         """Lead a result with a flag when its content instructs an AI."""
-        flagged, findings = flag_tool_result(tool_name, tool_args, result)
+        flagged, findings = flag_tool_result(tool_name, result)
         sources = getattr(self, "_turn_planted_sources", None)
         if findings and sources is not None:
             logger.warning(
@@ -6977,7 +6979,9 @@ Do NOT wrap conversational replies in JSON.
         executions = getattr(self, "_turn_tool_executions", None) or []
         first = min(index for _, index in sources)
         acted = acted_after(
-            record.get("tool", "") for record in executions[first:] if record.get("ran")
+            (record.get("tool", ""), record.get("args"))
+            for record in executions[first:]
+            if record.get("ran")
         )
         return planted_instructions_note(
             answer, [source for source, _ in sources], acted=acted
