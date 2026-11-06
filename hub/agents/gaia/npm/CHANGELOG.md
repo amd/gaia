@@ -6,7 +6,27 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
+## [0.3.4]
+
+Released with GAIA 0.25.4, and requires the `gaia` Python CLI 0.25.4+ on `PATH`
+and Lemonade Server 2026.44.1+. Integrators: the sidecar contract is now
+**2.27**; clients built for 2.18 keep working, and older binaries don't have
+the new session `tools` and `grants` routes, so probe `/version` first.
+
+- **A model server that stops mid-reply is named, not waited out.** The
+  cut-off text is taken back, the turn shows the restart, and a server that
+  doesn't come back ends the turn within seconds.
+- **"Forget everything" forgets everything**, stored conversations included,
+  and deleting a chat removes it from Memory.
+- **Listing every section that mentions a term reads only those pages**, and
+  long extractions say which page they are on.
+- **A question in one language finds answers in a document in another.**
+- **Mail gains whole threads, what's waiting on you, and which account is
+  connected** (three read-only tools, 101 in total).
+- **With Claude, the agent follows a repository's `CLAUDE.md`, `AGENTS.md`
+  and `.claude/skills`.**
+- **The binary ships no GPL or AGPL code**, and the agent is one Python
+  package.
 
 ### Changed
 
