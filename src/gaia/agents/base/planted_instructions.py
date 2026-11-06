@@ -17,6 +17,7 @@ a sign that the text is addressed to an AI or wants to run something.
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from gaia.agents.base.call_risk import READ, SHELL_TOOLS, call_risk
@@ -123,7 +124,7 @@ _AI_QUALIFIER = (
     r"|(?:large\s+)?language\s+model|chatbot|copilot)"
 )
 _AI_ADDRESSEE = (
-    rf"(?:{_AI_QUALIFIER}[\s-]+(?:agent|assistant|model|bot)s?"
+    rf"(?:{_AI_QUALIFIER}(?:-\w+)?[\s-]+(?:agent|assistant|model|bot)s?"
     r"|(?:ais?|a\.i\.|llms?|gpts?|(?:large\s+)?language\s+models?|chatbots?"
     r"|copilots?)(?![\w-]))"
 )
@@ -141,6 +142,11 @@ _ADDRESS = re.compile(
 _NOTE_TO_AI = re.compile(
     r"(?:^[\s#/*<!>\-\[(]*|<!--\s*)(?:note|message|instructions?)\s+(?:to|for)\s+"
     rf"(?:the\s+|any\s+|all\s+)?{_AI_ADDRESSEE}\s*:",
+    re.IGNORECASE | re.MULTILINE,
+)
+_BARE_ROLE_NOTE = re.compile(
+    r"(?:^[\s#/*<!>\-\[(]*|<!--\s*)(?:note|message|instructions?)\s+(?:to|for)\s+"
+    r"(?:the\s+|any\s+|all\s+)?(?:agent|assistant|model|bot)s?\s*:",
     re.IGNORECASE | re.MULTILINE,
 )
 _TAG = re.compile(
@@ -191,6 +197,78 @@ _MAX_FINDINGS = 3
 # Long results are scanned in full; this only bounds pathological sizes.
 _MAX_SCAN_CHARS = 2_000_000
 
+# NFKC folds full-width characters, while the explicit map catches Cyrillic and
+# Greek letters that are visually interchangeable with Latin ones.
+_CONFUSABLES = str.maketrans(
+    {
+        "А": "A",
+        "В": "B",
+        "Е": "E",
+        "К": "K",
+        "М": "M",
+        "Н": "H",
+        "О": "O",
+        "Р": "P",
+        "С": "C",
+        "Т": "T",
+        "У": "Y",
+        "Х": "X",
+        "І": "I",
+        "Ј": "J",
+        "Ѕ": "S",
+        "а": "a",
+        "е": "e",
+        "о": "o",
+        "р": "p",
+        "с": "c",
+        "т": "t",
+        "у": "y",
+        "х": "x",
+        "і": "i",
+        "ј": "j",
+        "ѕ": "s",
+        "Α": "A",
+        "Β": "B",
+        "Ε": "E",
+        "Η": "H",
+        "Ι": "I",
+        "Κ": "K",
+        "Μ": "M",
+        "Ν": "N",
+        "Ο": "O",
+        "Ρ": "P",
+        "Τ": "T",
+        "Υ": "Y",
+        "Χ": "X",
+        "α": "a",
+        "ε": "e",
+        "ι": "i",
+        "κ": "k",
+        "ν": "v",
+        "ο": "o",
+        "ρ": "p",
+        "τ": "t",
+        "υ": "u",
+        "χ": "x",
+    }
+)
+_ZERO_WIDTH = re.compile(
+    r"[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]"
+)
+_PLAIN_DESTRUCTIVE = re.compile(
+    r"\b(?:delete|remove|erase|wipe|destroy|overwrite|send|share|upload|publish)\b"
+    r"[^.\n]{0,80}?\b(?:backup(?:s)?|folder|directory|file|key|token|password|secret|credential)s?\b",
+    re.IGNORECASE,
+)
+
+
+def _canonical(text: str) -> str:
+    """Fold compatibility/look-alike text and remove invisible separators."""
+    return _ZERO_WIDTH.sub("", unicodedata.normalize("NFKC", text)).translate(
+        _CONFUSABLES
+    )
+
+
 _CHANNELS: Tuple[Tuple[re.Pattern, str], ...] = (
     (_ADDRESS, "addresses an AI assistant directly"),
     (_NOTE_TO_AI, "leaves a note for an AI assistant"),
@@ -214,6 +292,7 @@ def find_planted_instructions(text: str) -> List[Dict[str, str]]:
     if not text:
         return []
     text = text[:_MAX_SCAN_CHARS]
+    scan_text = _canonical(text)
     findings: List[Dict[str, str]] = []
     seen: set = set()
 
@@ -225,18 +304,29 @@ def find_planted_instructions(text: str) -> List[Dict[str, str]]:
         findings.append({"reason": reason, "excerpt": excerpt})
 
     for pattern, reason in _CHANNELS:
-        for match in pattern.finditer(text):
+        for match in pattern.finditer(scan_text):
             # A quoted phrase is an example being discussed, not an order.
             if text[max(0, match.start() - 1) : match.start()] in _QUOTES:
                 continue
-            lead = text[max(0, match.start() - _DESCRIBED_LEAD_CHARS) : match.start()]
+            lead = scan_text[
+                max(0, match.start() - _DESCRIBED_LEAD_CHARS) : match.start()
+            ]
             if pattern is _OVERRIDE and _DESCRIBED_LEAD.search(lead):
                 continue
             _add(f"the text {reason}", match.start(), match.end())
 
-    for match in _MARKUP.finditer(text):
-        window = text[match.start() : match.start() + _MARKUP_WINDOW]
-        destructive = _DESTRUCTIVE.search(window)
+    for match in _BARE_ROLE_NOTE.finditer(scan_text):
+        window = scan_text[match.start() : match.start() + _MARKUP_WINDOW]
+        if _PLAIN_DESTRUCTIVE.search(window):
+            _add(
+                "the text leaves a destructive note for an agent",
+                match.start(),
+                match.end(),
+            )
+
+    for match in _MARKUP.finditer(scan_text):
+        window = scan_text[match.start() : match.start() + _MARKUP_WINDOW]
+        destructive = _DESTRUCTIVE.search(window) or _PLAIN_DESTRUCTIVE.search(window)
         if destructive:
             _add(
                 "the text contains tool-call markup that runs a destructive command",
