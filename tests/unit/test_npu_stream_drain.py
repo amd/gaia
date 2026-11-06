@@ -115,6 +115,42 @@ def test_a_drain_that_outlives_its_limit_is_cut_off(monkeypatch):
     assert _wait_for(lambda: activity.aborted)
 
 
+def test_a_drain_that_ends_early_cancels_its_cutoff_timer(monkeypatch):
+    """An old drain timer must not abort an already-finished later request."""
+    monkeypatch.setattr(stream_watchdog, "DRAIN_LIMIT_S", 0.1)
+    produce, activity = _Produce(count=2), ByteActivity()
+
+    _leave_after_first(
+        watch_stream(
+            produce,
+            limits=FAR,
+            activity=activity,
+            is_output=lambda _: True,
+            drain_on_abandon=True,
+        )
+    )
+
+    assert produce.ended.wait(5)
+    time.sleep(0.15)
+    assert not activity.aborted
+
+
+def test_a_drain_honors_the_callers_model_wait_limit():
+    """A title/background call can time out behind a stopped NPU reply."""
+    from gaia.daemon import broker_client
+
+    end = lemonade_client._begin_drain(NPU_MODEL)
+    try:
+        with broker_client.lease_wait_limit(0.05):
+            with pytest.raises(broker_client.BrokerUnavailableError) as error:
+                lemonade_client._wait_for_drains(NPU_MODEL)
+    finally:
+        end()
+
+    assert error.value.status_code == 504
+    assert "finishing" in str(error.value)
+
+
 def test_a_stalled_stream_is_cut_off_even_when_drained():
     release = threading.Event()
 
