@@ -6,6 +6,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **The package description and integration guide no longer say nothing leaves the
+  machine.** Local inference is still the default; both now say a cloud provider
+  receives the conversation when you pick one.
 - **A Python snippet that fails on a missing library says how to retry with
   the standard library, and teaches the next chat what worked instead.** The
   Python tools list only the libraries this install can import.
