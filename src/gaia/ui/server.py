@@ -344,11 +344,6 @@ def _run_scheduled_prompt(
     except ImportError as e:
         raise RuntimeError(_scheduled_import_error(e)) from e
 
-    # Beta dynamic tool loader (#1798). Inert here: scheduled runs
-    # use the default "full" prompt profile and the loader only
-    # activates on the "doc" profile — wired for future-proofing so
-    # this path doesn't silently diverge if that ever changes.
-    dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
     # Nobody is watching a scheduled run, so confirmation-gated tools
     # (shell, file writes) are denied here — same posture as an
     # autonomous background tick (#2210).
@@ -357,7 +352,6 @@ def _run_scheduled_prompt(
         max_steps=_SCHEDULED_MAX_STEPS,
         silent_mode=True,
         debug=False,
-        dynamic_tools=dynamic_tools,
         memory_incognito=not memory_enabled(db),
     )
     with writing_tool_registry():

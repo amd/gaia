@@ -202,6 +202,10 @@ class GaiaConfig:
         read_aloud_speed: How fast replies are read aloud, as a percentage of
             normal speed (50-200).
         read_aloud_auto: Read every finished reply aloud without being asked.
+        dynamic_tools: Start a flagship session on its most-used tools, in short
+            form, and move to every tool at most once, so the first reply reads
+            less and the prompt cache survives. Applies to new sessions.
+            ``GAIA_DYNAMIC_TOOLS`` overrides it.
     """
 
     profile: str = "chat"
@@ -225,6 +229,7 @@ class GaiaConfig:
     read_aloud_voice: Optional[str] = None
     read_aloud_speed: int = 100
     read_aloud_auto: bool = False
+    dynamic_tools: bool = True
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None

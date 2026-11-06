@@ -1254,7 +1254,7 @@ export interface SettingsUpdateRequest {
    */
   custom_model?: string | null;
   /**
-   * Beta: enable the semantic dynamic tool loader (#1798), which trims each turn's tool prompt to a matched subset to cut first-turn TTFT. Default off. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.
+   * Dynamic tool loading: send the tool list in short form and full docs only as needed, to cut first-turn TTFT without breaking the prompt cache. Applies to new chats. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.
    */
   dynamic_tools?: boolean | null;
 }
