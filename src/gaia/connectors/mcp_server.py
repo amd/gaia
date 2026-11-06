@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from gaia.config import mcp_servers_path
 from gaia.connectors._keyring import keyring  # actionable error if missing (#1621)
-from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.errors import ConnectorsError, InvalidConfigValueError
 from gaia.connectors.handler import register_handler
 from gaia.connectors.spec import ConnectorSpec
 from gaia.connectors.store import SERVICE_NAME
@@ -45,6 +45,20 @@ def _mcp_servers_path() -> Path:
 def _keyring_ref(connector_id: str, env_key: str) -> str:
     """Return the ``$keyring`` reference string for a given env key."""
     return f"{SERVICE_NAME}:{connector_id}:{env_key}"
+
+
+def _checked_value(spec: ConnectorSpec, env_key: str, raw: Any) -> str:
+    # A pasted token often carries a stray space or newline, which the service rejects.
+    value = str(raw).strip()
+    field = next((f for f in spec.config_schema if f.key == env_key), None)
+    prefix = field.prefix if field else ""
+    if not value or not value.startswith(prefix):
+        label = field.label if field else env_key
+        expected = f" should start with {prefix}" if prefix else " is empty"
+        raise InvalidConfigValueError(
+            f"The {label}{expected}. Copy it again from the setup steps."
+        )
+    return value
 
 
 def _write_mcp_servers_json(servers: Dict[str, Any]) -> None:
@@ -297,10 +311,12 @@ class McpServerHandler:
                 "Supply them in the config dict."
             )
 
+        values = {k: _checked_value(spec, k, config[k]) for k in spec.mcp_env_keys}
+
         # Store secret env values in keyring + build $keyring reference env block.
         env_block: Dict[str, Any] = {}
         for env_key in spec.mcp_env_keys:
-            value = config[env_key]
+            value = values[env_key]
             username = f"{spec.id}:{env_key}"
             keyring.set_password(SERVICE_NAME, username, str(value))
             env_block[env_key] = {"$keyring": _keyring_ref(spec.id, env_key)}

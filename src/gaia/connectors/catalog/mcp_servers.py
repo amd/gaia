@@ -176,6 +176,7 @@ _SLACK = ConnectorSpec(
             label="Slack bot token",
             kind="secret",
             placeholder="xoxb-…",
+            prefix="xoxb-",
             help_md=(
                 "GAIA reads Slack through a small app you add to your workspace. "
                 "You need permission to install apps there; guest accounts can't, "

@@ -52,6 +52,7 @@ class ConfigField:
     help_md: str = ""
     options: tuple[str, ...] | None = None
     secret: bool = False
+    prefix: str = ""
 
     def __post_init__(self) -> None:
         if not self.key or not self.key.strip():

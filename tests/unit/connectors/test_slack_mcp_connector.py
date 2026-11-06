@@ -166,6 +166,46 @@ async def test_awkward_token_round_trips_without_touching_disk(fake_home, token)
 
 
 @pytest.mark.asyncio
+async def test_pasted_token_is_saved_without_surrounding_spaces(fake_home):
+    # Slack rejects a padded token, so the server would fail to start.
+    await McpServerHandler().configure(_SLACK, {TOKEN_VAR: f"  {TOKEN}\n"})
+
+    assert keyring.get_password(SERVICE_NAME, SLOT) == TOKEN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "token",
+    ["xapp-1-A0-signing", "8f14e45fceea167a5a36dedd4bea2543", "   "],
+    ids=["app-level-token", "signing-secret", "only-spaces"],
+)
+async def test_a_value_that_is_not_a_bot_token_is_refused(fake_home, token):
+    with pytest.raises(ConnectorsError, match="xoxb-"):
+        await McpServerHandler().configure(_SLACK, {TOKEN_VAR: token})
+
+    assert keyring.get_password(SERVICE_NAME, SLOT) is None
+    assert _SLACK.id not in _read_mcp_servers_json()
+
+
+def test_the_tile_refuses_a_wrong_token_with_a_clear_message(ui_api_client):
+    resp = ui_api_client.post(
+        "/api/connectors/mcp-slack/configure",
+        json={"config": {TOKEN_VAR: "xapp-1-A0-signing"}},
+        headers={"X-Gaia-UI": "1"},
+    )
+    assert resp.status_code == 400
+    assert "xoxb-" in resp.json()["detail"]
+    tile = ui_api_client.get("/api/connectors/mcp-slack").json()
+    assert tile["configured"] is False
+
+
+def test_the_tile_learns_the_token_prefix(ui_api_client):
+    tile = ui_api_client.get("/api/connectors/mcp-slack").json()
+    (field,) = tile["config_fields"]
+    assert field["prefix"] == "xoxb-"
+
+
+@pytest.mark.asyncio
 async def test_disconnect_clears_keyring_entry_and_grants(fake_home):
     handler = McpServerHandler()
     await handler.configure(_SLACK, {TOKEN_VAR: TOKEN})

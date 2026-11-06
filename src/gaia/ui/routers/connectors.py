@@ -60,6 +60,7 @@ from gaia.connectors.errors import (
     ConsentDeniedError,
     FlowInProgressError,
     FlowTimeoutError,
+    InvalidConfigValueError,
     NoDeclaredScopesError,
     ScopeMismatchError,
     ScopeNotAllowedError,
@@ -269,6 +270,8 @@ def _raise_http_for(exc: ConnectorsError) -> HTTPException:
         )
     if isinstance(exc, ConfigurationError):
         return HTTPException(status_code=503, detail=str(exc))
+    if isinstance(exc, InvalidConfigValueError):
+        return HTTPException(status_code=400, detail=str(exc))
     if isinstance(exc, ScopeNotAllowedError):
         return HTTPException(
             status_code=400,
@@ -551,6 +554,7 @@ def _field_summary(f: ConfigField) -> Dict[str, Any]:
         "required": f.required,
         "placeholder": f.placeholder,
         "help_md": f.help_md,
+        "prefix": f.prefix,
     }
 
 
