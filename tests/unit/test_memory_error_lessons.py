@@ -9,13 +9,16 @@ error" (nothing to act on), "no such table: sales_top_product" (a table the
 model made up once), and an NPU vision message whose advice was later fixed —
 the stored copy kept steering turns after the fix shipped.
 
-Two rules:
+Three rules:
 
 * errors with nothing to act on are not stored;
 * each error is stamped with the GAIA version that saw it, and errors stamped
   by another version (or not stamped at all) are dropped when memory opens:
   the tool's wording may have changed, and a real error is re-learned the next
-  time it happens.
+  time it happens;
+* each error is stamped with the chat model that saw it, and is replayed only
+  while that model is chatting. "Vision is off on the NPU", recorded under the
+  FLM model, made a later Qwen chat (which reads images) refuse to try.
 """
 
 from __future__ import annotations
@@ -162,3 +165,63 @@ def test_opening_memory_drops_errors_from_an_older_version(tmp_path, monkeypatch
         assert _errors(agent.memory_store) == []
     finally:
         agent.memory_store.close()
+
+
+FLM = "gemma4-it-e4b-FLM"
+QWEN = "Qwen3.6-35B-A3B-GGUF"
+NPU_LESSON = (
+    "answer_question_about_image: No image-reading model is installed on this "
+    "PC, and the chat model runs on the NPU, which doesn't read images."
+)
+
+
+class TestErrorsStayWithTheirModel:
+    def _record_under(self, store, model):
+        host = _Host(store)
+        host.model_id = model
+        host._auto_store_error(
+            "answer_question_about_image", NPU_LESSON.split(": ", 1)[1], {}
+        )
+        return host
+
+    def test_stored_error_carries_the_chat_model(self, store):
+        self._record_under(store, FLM)
+        (entry,) = _errors(store)
+        assert entry["metadata"]["model"] == FLM
+
+    def test_a_lesson_recorded_under_flm_is_not_shown_on_a_qwen_turn(self, store):
+        self._record_under(store, FLM)
+        qwen = _Host(store)
+        qwen.model_id = QWEN
+        assert "No image-reading model" not in qwen.get_memory_system_prompt()
+
+    def test_the_same_model_still_sees_it(self, store):
+        self._record_under(store, FLM)
+        flm = _Host(store)
+        flm.model_id = FLM
+        assert "No image-reading model" in flm.get_memory_system_prompt()
+
+    def test_switching_model_rerenders_the_frozen_section(self, store):
+        host = self._record_under(store, FLM)
+        assert "No image-reading model" in host.get_memory_system_prompt()
+        host.model_id = QWEN
+        assert "No image-reading model" not in host.get_memory_system_prompt()
+
+    def test_an_error_the_user_wrote_shows_under_any_model(self, store):
+        store.store(
+            category="error",
+            content="The office printer jams on duplex jobs",
+            source="user",
+        )
+        host = _Host(store)
+        host.model_id = QWEN
+        assert "printer jams" in host.get_memory_system_prompt()
+
+    def test_turn_recall_skips_an_error_from_another_model(self, store):
+        self._record_under(store, FLM)
+        (entry,) = _errors(store)
+        host = _Host(store)
+        host.model_id = QWEN
+        assert not host._replayable_now(entry)
+        host.model_id = FLM
+        assert host._replayable_now(entry)

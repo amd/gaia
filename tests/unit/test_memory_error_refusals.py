@@ -190,6 +190,7 @@ class TestRefusalsAreNotStored:
         assert rows[0]["metadata"] == {
             "operation": "load_skill coding",
             "gaia_version": get_package_version(),
+            "model": None,
         }
 
 

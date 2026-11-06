@@ -3301,9 +3301,26 @@ class MemoryMixin(ProceduralMemoryMixin):
         if getattr(self, "_memory_store", None) is None:
             return ""
 
-        if getattr(self, "_stable_memory_prompt", None) is None:
+        model = getattr(self, "model_id", None)
+        # Tool errors are shown per chat model, so a model switch re-renders.
+        if (
+            getattr(self, "_stable_memory_prompt", None) is None
+            or getattr(self, "_stable_memory_model", None) != model
+        ):
             self._stable_memory_prompt = self._build_stable_memory_prompt()
+            self._stable_memory_model = model
         return self._stable_memory_prompt
+
+    def _replayable_now(self, item: Dict) -> bool:
+        """False for a tool-recorded error another chat model saw.
+
+        Such errors often describe that model's device or setup ("the NPU
+        doesn't read images"), which another model doesn't share.
+        """
+        if item.get("category") != "error" or item.get("source") != "error_auto":
+            return True
+        recorded = (item.get("metadata") or {}).get("model")
+        return recorded == getattr(self, "model_id", None)
 
     def _refresh_stable_memory_prompt(self) -> None:
         """Re-render the stable memory section now and recompose the prompt."""
@@ -3484,7 +3501,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 for item in self._get_context_items(
                     category, ctx, limit=STABLE_MEMORY_FETCH_LIMIT, newest_first=True
                 )
-                if not _is_lesson(item)
+                if not _is_lesson(item) and self._replayable_now(item)
                 # A session summary is dated history ("in March, lived in
                 # Calgary"); always on, it would contradict newer facts.
                 and not (
@@ -3608,6 +3625,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 # domain string and will tag an ordinary fact "lesson" if the
                 # turn mentioned one, which would suppress that fact forever.
                 or _is_lesson(item)
+                or not self._replayable_now(item)
                 or (contexts is not None and item.get("context") not in contexts)
             ):
                 continue
@@ -4721,6 +4739,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 metadata={
                     "operation": self._operation_key(tool_name, tool_args),
                     "gaia_version": get_package_version(),
+                    "model": getattr(self, "model_id", None),
                 },
             )
             self._embed_and_index(kid, error_content, "tool-error memory")
