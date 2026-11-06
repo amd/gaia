@@ -411,7 +411,8 @@ _UNIT_SCALES: Dict[str, "tuple[str, tuple[float, ...]]"] = {
 _UNIT = r"ns|us|µs|μs|ms|secs|sec|s|kib|mib|gib|kb|mb|gb|b"
 #: A cell or field that is one value and nothing else: "181.0", "12%", "3.5s".
 _PURE_VALUE = re.compile(
-    r"^\s*\**\s*(-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*"
+    r"^\s*\**\s*(?:(?:US|C|A)?\$|€|£|¥)?\s?"
+    r"(-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*"
     rf"(%|{_UNIT})?\s*\**\s*$",
     re.I,
 )
