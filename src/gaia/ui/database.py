@@ -270,6 +270,7 @@ _CHAT_SCHEMA_COLUMNS = {
     "messages": {
         "agent_steps",
         "inference_stats",
+        "library_notices",
         "model_messages",
         "search_text",
         "stopped",

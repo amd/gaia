@@ -80,7 +80,7 @@ function HistoryNotice({ text }: { text: string }) {
 function LibraryNotices({ notices }: { notices: string[] }) {
     return (
         <div className="library-notices" role="note">
-            {notices.map((notice) => <div key={notice}>{notice}</div>)}
+            {notices.map((notice, index) => <div key={`${index}-${notice}`}>{notice}</div>)}
         </div>
     );
 }
