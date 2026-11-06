@@ -416,6 +416,8 @@ class McpServerHandler:
 
         A server that checks its token at startup (Slack) fails here on a bad
         one. A server that only checks it on a tool call (GitHub) still passes.
+        ``reason`` is ``"timeout"`` when it was too slow to tell (a first
+        ``npx`` download), so callers don't blame the token.
         """
         missing = [k for k in spec.mcp_env_keys if _saved_secret(spec, k) is None]
         if missing:
@@ -424,6 +426,12 @@ class McpServerHandler:
         entry = rederive_catalog_entries(_read_mcp_servers_json()).get(spec.id)
         if entry is None:
             return {"ok": False, "detail": "not configured"}
+        if entry.get("disabled"):
+            return {
+                "ok": False,
+                "reason": "disabled",
+                "detail": "turned off; turn it on to use and check it",
+            }
         return await asyncio.to_thread(_start_once, spec.id, entry)
 
 
@@ -444,7 +452,11 @@ def _start_once(name: str, entry: Dict[str, Any]) -> Dict[str, Any]:
         count = len(client.list_tools())
         return {"ok": True, "detail": f"started, {count} tool{'s' * (count != 1)}"}
     except FutureTimeoutError:
-        return {"ok": False, "detail": f"did not start within {deadline:.0f} seconds"}
+        return {
+            "ok": False,
+            "reason": "timeout",
+            "detail": f"did not start within {deadline:.0f} seconds",
+        }
     finally:
         # Stopping the process also unblocks a connect still waiting on it.
         client.disconnect()

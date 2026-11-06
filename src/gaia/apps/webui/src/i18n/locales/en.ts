@@ -1682,6 +1682,7 @@ export const enMessages = {
     'settings.connectors.checkOk': '{name} started without errors.',
     'settings.connectors.checkFailed': "{name} didn't start.",
     'settings.connectors.checkFailedKey': "{name} didn't start. Check the token, then save it again.",
+    'settings.connectors.checkSlow': '{name} took too long to start. The first start can be slow while it downloads, so try Check again in a minute.',
     'settings.connectors.checkDetails': 'Details',
     'settings.connectors.docs': 'Docs',
     'settings.connectors.via': 'via {name}',

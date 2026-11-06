@@ -70,7 +70,7 @@ export async function configureConnector(
 /** Start the connector once and report whether it started. */
 export async function testConnector(
     connectorId: string,
-): Promise<{ ok: boolean; detail: string }> {
+): Promise<{ ok: boolean; detail: string; reason?: 'timeout' | 'disabled' }> {
     return apiFetch('POST', `/connectors/${connectorId}/test`, undefined, UI_HEADER);
 }
 

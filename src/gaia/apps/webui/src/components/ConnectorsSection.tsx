@@ -257,7 +257,10 @@ export function ConnectorsSection() {
 
 // ── ConnectorTile ────────────────────────────────────────────────────────────
 
-type McpCheck = { state: 'checking' } | { state: 'ok' } | { state: 'failed'; detail: string };
+type McpCheck =
+    | { state: 'checking' }
+    | { state: 'ok' }
+    | { state: 'failed'; detail: string; slow?: boolean };
 
 function ConnectorTile({
     connector,
@@ -892,7 +895,11 @@ function MCPServerConfigureBody({
         onCheck({ state: 'checking' });
         try {
             const result = await api.testConnector(connector.id);
-            onCheck(result.ok ? { state: 'ok' } : { state: 'failed', detail: result.detail });
+            onCheck(
+                result.ok
+                    ? { state: 'ok' }
+                    : { state: 'failed', detail: result.detail, slow: result.reason === 'timeout' },
+            );
         } catch (e) {
             onCheck({ state: 'failed', detail: e instanceof Error ? e.message : String(e) });
         }
@@ -1002,7 +1009,7 @@ function MCPServerConfigureBody({
                         )}
                     </button>
                 )}
-                {connector.configured && (
+                {connector.configured && connector.enabled !== false && (
                     <button
                         className="btn-secondary"
                         disabled={busy || check?.state === 'checking'}
@@ -1046,9 +1053,11 @@ function MCPServerConfigureBody({
             {check?.state === 'failed' && (
                 <div className="connector-check connector-check--failed" role="alert">
                     <p>
-                        {keyless
-                            ? t('settings.connectors.checkFailed', { name: connector.display_name })
-                            : t('settings.connectors.checkFailedKey', { name: connector.display_name })}
+                        {check.slow
+                            ? t('settings.connectors.checkSlow', { name: connector.display_name })
+                            : keyless
+                              ? t('settings.connectors.checkFailed', { name: connector.display_name })
+                              : t('settings.connectors.checkFailedKey', { name: connector.display_name })}
                     </p>
                     <details>
                         <summary>{t('settings.connectors.checkDetails')}</summary>

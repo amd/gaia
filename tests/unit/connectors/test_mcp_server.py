@@ -311,6 +311,16 @@ class TestHealthCheck:
 
         assert result["ok"] is False
         assert "Authentication failed" in result["detail"]
+        assert "reason" not in result
+
+    @pytest.mark.asyncio
+    async def test_a_turned_off_server_is_not_started(self, fake_home):
+        spec = _configured_fake(fake_home, "works", disabled=True)
+
+        result = await McpServerHandler().test(spec)
+
+        assert result["ok"] is False
+        assert result["reason"] == "disabled"
 
     @pytest.mark.asyncio
     async def test_a_server_that_never_answers_fails_at_its_timeout(self, fake_home):
@@ -318,7 +328,11 @@ class TestHealthCheck:
 
         result = await McpServerHandler().test(spec)
 
-        assert result == {"ok": False, "detail": "did not start within 1 seconds"}
+        assert result == {
+            "ok": False,
+            "reason": "timeout",
+            "detail": "did not start within 1 seconds",
+        }
 
     @pytest.mark.asyncio
     async def test_an_unconfigured_server_fails(self):

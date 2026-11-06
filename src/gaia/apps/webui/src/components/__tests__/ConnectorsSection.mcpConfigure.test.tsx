@@ -140,4 +140,28 @@ describe('MCP connector configure panel', () => {
         ).toBeInTheDocument();
         expect(screen.getByText('Authentication failed - check your Slack tokens')).toBeInTheDocument();
     });
+
+    it('does not blame the token when the server was only slow to start', async () => {
+        mocked.testConnector.mockResolvedValue({
+            ok: false,
+            reason: 'timeout',
+            detail: 'did not start within 10 seconds',
+        });
+        await openTile(
+            mcpRow({ id: 'mcp-slack', display_name: 'Slack', configured: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'] }),
+        );
+
+        fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+
+        expect(await screen.findByText(/Slack took too long to start/)).toBeInTheDocument();
+        expect(screen.queryByText(/Check the token/)).not.toBeInTheDocument();
+    });
+
+    it('offers no Check on a server that is turned off', async () => {
+        await openTile(
+            mcpRow({ id: 'mcp-slack', display_name: 'Slack', configured: true, enabled: false, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'] }),
+        );
+
+        expect(screen.queryByRole('button', { name: 'Check' })).not.toBeInTheDocument();
+    });
 });

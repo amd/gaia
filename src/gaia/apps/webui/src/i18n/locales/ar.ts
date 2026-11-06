@@ -1682,6 +1682,7 @@ const messages: Messages = {
     'settings.connectors.checkOk': 'بدأ {name} بلا أخطاء.',
     'settings.connectors.checkFailed': '{name} لم يبدأ.',
     'settings.connectors.checkFailedKey': '{name} لم يبدأ. تحقّق من الرمز، ثم احفظه مرة أخرى.',
+    'settings.connectors.checkSlow': '{name} استغرق وقتًا طويلًا للبدء. قد يكون التشغيل الأول بطيئًا أثناء التنزيل، لذا أعد الفحص بعد دقيقة.',
     'settings.connectors.checkDetails': 'التفاصيل',
     'settings.connectors.docs': 'التوثيق',
     'settings.connectors.via': 'عبر {name}',

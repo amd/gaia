@@ -89,7 +89,9 @@ Settings → Connectors. GAIA also runs it right after you save a key.
   whether it started. A server that checks its key at startup, like Slack,
   fails on a revoked or wrong key. Others, like GitHub and Tavily, only check
   the key when a tool runs, so they start fine even with a bad one. A passing
-  check means the server starts; it doesn't prove the key works.
+  check means the server starts; it doesn't prove the key works. If it says
+  the server took too long to start, the first start may still be downloading
+  the server; check again in a minute.
 
 Every agent that needs a connector
 declares it, so the connector's **Per-agent grants** section in Settings →
