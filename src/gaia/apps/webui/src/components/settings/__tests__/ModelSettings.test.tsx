@@ -122,6 +122,14 @@ describe('ModelSettings provider keys', () => {
         expect(within(card).queryByRole('button', { name: 'Remove key' })).not.toBeInTheDocument();
     });
 
+    it('an environment key GAIA handed over can be replaced but not removed', async () => {
+        withProviders(fireworks({ key_source: 'environment', key_from_gaia_env: true }));
+        const card = await openFireworks();
+        fireEvent.click(within(card).getByRole('button', { name: 'Replace' }));
+        expect(within(card).getByLabelText('Fireworks AI API key')).toBeInTheDocument();
+        expect(within(card).queryByRole('button', { name: 'Remove key' })).not.toBeInTheDocument();
+    });
+
     it('a key that is not connected says why there are no models and offers to connect', async () => {
         withProviders(fireworks({ key_source: 'environment', models_discovered: false }));
         mockedApi.connectProviderWaitingForOs.mockResolvedValue({ ...fireworks({ key_source: 'environment', models_discovered: true }), remembered: false, remember_error: null });

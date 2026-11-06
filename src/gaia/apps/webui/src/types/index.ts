@@ -1050,6 +1050,8 @@ export interface ProviderInfo {
     /** The provider's model list is down, so GAIA offers models it already knows. */
     known_models?: boolean;
     env_var?: string;
+    /** An environment key GAIA handed Lemonade itself, so a typed key can replace it. */
+    key_from_gaia_env?: boolean;
     base_url?: string | null;
     error?: string;
     /** AMD gateway only: whether its host answers from this network. */

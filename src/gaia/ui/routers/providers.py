@@ -260,13 +260,21 @@ def _env_key(provider: str) -> Optional[Tuple[str, str]]:
     return None
 
 
+#: The environment key GAIA last handed Lemonade, per provider, so a key the
+#: user typed is never labelled as the environment's.
+_HANDED_ENV_KEYS: Dict[str, str] = {}
+
+
 def _usable_key(provider: str) -> Optional[str]:
     """The key to hand Lemonade: the one the user saved in GAIA, else the environment's."""
     stored = _bounded_recall(provider)
     if stored:
         return stored
     env = _env_key(provider)
-    return env[1] if env else None
+    if not env:
+        return None
+    _HANDED_ENV_KEYS[provider] = env[1]
+    return env[1]
 
 
 def _known_models_active(provider: str) -> bool:
@@ -296,8 +304,8 @@ def _key_source(
         return "environment"
     env = _env_key(provider)
     if entry and entry.get("runtime_key_set"):
-        # With nothing saved in GAIA, the key Lemonade holds came from the environment.
-        return "environment" if env and not _bounded_recall(provider) else "lemonade"
+        handed = bool(env) and _HANDED_ENV_KEYS.get(provider) == env[1]
+        return "environment" if handed and not _bounded_recall(provider) else "lemonade"
     if _bounded_recall(provider):
         return "stored"
     return "environment" if env else None
@@ -342,6 +350,7 @@ def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, 
         key_source, key_state, key_message = None, KEY_WAITING, str(e)
     env = _env_key(provider)
     lemond_env = bool(entry and entry.get("env_var_set"))
+    from_gaia_env = bool(env) and key_source == "environment" and not lemond_env
     view.update(
         {
             "registered": entry is not None,
@@ -351,11 +360,9 @@ def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, 
             "key_message": key_message,
             "models_discovered": bool(entry and entry.get("models_discovered")),
             "known_models": known_models,
-            "env_var": (
-                env[0]
-                if env and key_source == "environment" and not lemond_env
-                else env_var_for(provider)
-            ),
+            "env_var": env[0] if from_gaia_env else env_var_for(provider),
+            # GAIA handed this key over, so a key the user types can replace it.
+            "key_from_gaia_env": from_gaia_env,
             "base_url": entry.get("base_url") if entry else None,
         }
     )
@@ -955,6 +962,7 @@ def connect_provider(
         _install(provider, body)
         remembered, remember_error = False, None
         if key:
+            _HANDED_ENV_KEYS.pop(provider, None)
             status, result = _lemonade(
                 "POST", "cloud/auth", {"provider": provider, "api_key": key}
             )

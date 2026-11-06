@@ -311,6 +311,7 @@ def _no_fireworks_env(monkeypatch):
     """The developer's own FIREWORKS_API_KEY must not leak into these tests."""
     for name in ("FIREWORKS_API_KEY", "LEMONADE_FIREWORKS_API_KEY"):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(providers, "_HANDED_ENV_KEYS", {})
 
 
 @pytest.fixture
@@ -344,9 +345,49 @@ def test_env_key_with_no_provider_registered_is_connected_at_startup(
     assert replay == [ENV_KEY]
     assert fw["models_discovered"] is True
     assert fw["key_source"] == "environment"
+    assert fw["key_from_gaia_env"] is True
     assert fw["env_var"] == "FIREWORKS_API_KEY"
     assert fw["key_hint"] is None
     assert ENV_KEY not in resp.text
+
+
+def test_a_typed_key_gaia_could_not_keep_is_not_labelled_the_environments(
+    client, lemonade, keys, replay, monkeypatch
+):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    assert client.get("/api/providers").json()["providers"][1]["key_source"] == (
+        "environment"
+    )
+    keys["remember_error"] = "The OS credential store did not keep the key"
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 200, resp.text
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert fw["key_source"] == "lemonade"
+    assert fw["key_from_gaia_env"] is False
+
+
+def test_a_runtime_key_gaia_never_handed_is_not_labelled_the_environments(
+    client, lemonade, keys, monkeypatch
+):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    lemonade.cloud["fireworks"] = {
+        "name": "fireworks",
+        "runtime_key_set": True,
+        "models_discovered": True,
+    }
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert fw["key_source"] == "lemonade"
+
+
+def test_lemonades_own_env_key_is_not_gaias_to_replace(client, lemonade, keys):
+    lemonade.cloud["fireworks"] = {
+        "name": "fireworks",
+        "env_var_set": True,
+        "models_discovered": True,
+    }
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert fw["key_source"] == "environment"
+    assert fw["key_from_gaia_env"] is False
 
 
 def test_stored_key_with_no_provider_registered_is_connected_at_startup(
