@@ -2094,6 +2094,36 @@ for (const locale of ['ar', 'en']) {
             await checkMemory(page, locale, 'advanced-end');
         });
 
+        test('advanced, a tool-recorded error next to one the user wrote', async ({ page }) => {
+            await openMemory(page, locale);
+            await memoryTab(page, /Advanced/);
+            const badge = (text: string) => page.locator('.mem-knowledge-table tbody tr', { hasText: text }).locator('.mem-cat-badge');
+            const learned = badge('note-taker');
+            await expect(learned).toContainText(locale === 'ar' ? 'تعلّمه GAIA' : 'Learned by GAIA');
+            await expect(badge('hotel wifi')).toContainText(locale === 'ar' ? 'خطأ' : 'Error');
+            await expect(badge('hotel wifi')).not.toContainText(locale === 'ar' ? 'تعلّمه' : 'Learned');
+            if (locale === 'ar') {
+                // Read right to left: the Arabic verb sits right of "GAIA".
+                const [verbLeft, gaiaLeft] = await learned.evaluate((el) => {
+                    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+                    let node = walker.nextNode() as Text | null;
+                    while (node && !node.data.includes('تعلّمه')) node = walker.nextNode() as Text | null;
+                    if (!node) throw new Error('no Arabic label in the badge');
+                    const at = (word: string) => {
+                        const start = node!.data.indexOf(word);
+                        const range = document.createRange();
+                        range.setStart(node!, start);
+                        range.setEnd(node!, start + word.length);
+                        return range.getBoundingClientRect().left;
+                    };
+                    return [at('تعلّمه'), at('GAIA')];
+                });
+                expect(gaiaLeft).toBeLessThan(verbLeft);
+            }
+            await learned.scrollIntoViewIfNeeded();
+            await checkMemory(page, locale, 'advanced-errors');
+        });
+
         test('advanced, a row open and the add form', async ({ page }) => {
             await openMemory(page, locale);
             await memoryTab(page, /Advanced/);
