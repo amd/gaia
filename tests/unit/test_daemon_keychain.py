@@ -196,8 +196,13 @@ def test_create_app_mounts_the_keychain_routes_only_when_asked(tmp_path, mounted
             custody_store=store,
             keychain_auth=CustodyAuth() if mounted else None,
         )
-        paths = {getattr(r, "path", None) for r in app.routes}
-        assert ("/host/v1/keychain/get" in paths) is mounted
+        # Ask over HTTP: newer FastAPI nests included routers in app.routes.
+        resp = TestClient(app).post(
+            "/host/v1/keychain/get", json={"service": SERVICE_NAME, "username": "s"}
+        )
+        assert resp.status_code == (403 if mounted else 404)
+        if mounted:
+            assert "custody secret" in resp.text
     finally:
         store.close()
 
