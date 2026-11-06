@@ -111,6 +111,12 @@ from gaia.agents.base.model_features import (
     features_for_model,
     withheld_tools,
 )
+from gaia.agents.base.planted_instructions import (
+    acted_after,
+    flag_tool_result,
+    planted_instructions_note,
+    source_label,
+)
 from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.task_lessons import TaskLessons
@@ -2544,6 +2550,8 @@ Do NOT wrap conversational replies in JSON.
         self._tool_reported_usage: List[Dict[str, Any]] = []
         # Same rationale for the verification-scope log.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # (source, tool-log index) per result that carried planted instructions.
+        self._turn_planted_sources: List[Tuple[str, int]] = []
         # Whether a project root has tests, walked once per root per turn.
         self._has_tests_cache: Dict[Optional[str], bool] = {}
         # Same rationale for the per-turn record of edited files.
@@ -6930,6 +6938,8 @@ Do NOT wrap conversational replies in JSON.
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
+            if outermost:
+                result = self._flag_planted_instructions(tool_name, tool_args, result)
             return result
 
         started = time.perf_counter()
@@ -6946,7 +6956,7 @@ Do NOT wrap conversational replies in JSON.
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
-            return result
+            return self._flag_planted_instructions(tool_name, tool_args, result)
         finally:
             self._tool_timing_depth = 0
             elapsed = time.perf_counter() - started
@@ -6969,6 +6979,38 @@ Do NOT wrap conversational replies in JSON.
                     )
                 except Exception as e:  # noqa: BLE001 - never displace a tool error
                     logger.warning("could not record tool timing: %s", e)
+
+    def _flag_planted_instructions(
+        self, tool_name: str, tool_args: Any, result: Any
+    ) -> Any:
+        """Lead a result with a flag when its content instructs an AI."""
+        flagged, findings = flag_tool_result(tool_name, result)
+        sources = getattr(self, "_turn_planted_sources", None)
+        if findings and sources is not None:
+            logger.warning(
+                "Planted instructions in %s result: %s",
+                tool_name,
+                [f["excerpt"] for f in findings],
+            )
+            executions = getattr(self, "_turn_tool_executions", None) or []
+            sources.append((source_label(tool_name, tool_args), len(executions)))
+        return flagged
+
+    def _planted_instructions_note(self, answer: str) -> str:
+        """The heads-up line for this turn's flagged content, or ``""``."""
+        sources = getattr(self, "_turn_planted_sources", None)
+        if not sources:
+            return ""
+        executions = getattr(self, "_turn_tool_executions", None) or []
+        first = min(index for _, index in sources)
+        acted = acted_after(
+            (record.get("tool", ""), record.get("args"))
+            for record in executions[first:]
+            if record.get("ran")
+        )
+        return planted_instructions_note(
+            answer, [source for source, _ in sources], acted=acted
+        )
 
     @staticmethod
     def _with_computation_note(tool_name: str, result: Any) -> Any:
@@ -9607,6 +9649,9 @@ Do NOT wrap conversational replies in JSON.
         if not body.strip():
             # Never surface the stale echo as this turn's answer.
             return statement or self.ECHO_ONLY_ANSWER
+        note = self._planted_instructions_note(body)
+        if note:
+            body = f"{body.rstrip()}\n\n{note}"
         if not statement:
             return body
         return f"{body.rstrip()}\n\n{statement}"
@@ -10138,6 +10183,8 @@ Do NOT wrap conversational replies in JSON.
         # Executed tool calls this turn, classified for the verification-scope
         # statement. Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # (source, tool-log index) per result that carried planted instructions.
+        self._turn_planted_sources: List[Tuple[str, int]] = []
         self._has_tests_cache = {}
         self._turn_ungrounded = []
         self._deliverable_cache = {}
