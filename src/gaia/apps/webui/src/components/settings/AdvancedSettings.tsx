@@ -269,7 +269,7 @@ export function AdvancedSettings() {
                                     <span className="force-redownload-label">{t('settings.advanced.corrupted')}</span>
                                     <button
                                         className="btn-force-redownload"
-                                        onClick={() => downloadModel(true)}
+                                        onClick={() => downloadModel(true, undefined, !status.model_loaded)}
                                         disabled={isDownloadingModel}
                                     >
                                         {isDownloadingModel ? (
