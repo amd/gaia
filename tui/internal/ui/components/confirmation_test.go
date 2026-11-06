@@ -189,6 +189,19 @@ func TestProjectTrustPromptAsksInWords(t *testing.T) {
 	}
 }
 
+// The yes is kept for the folder, so the key must not promise "once".
+func TestProjectTrustPromptNamesWhatYesKeeps(t *testing.T) {
+	m := NewConfirmationModel("run-1", "trust_project_folder", "Trust this folder?", "").
+		WithLiveChannel("cid-1", "")
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "y trust this folder") {
+		t.Errorf("trust prompt should offer y to trust the folder:\n%s", view)
+	}
+	if strings.Contains(view, "y once") {
+		t.Errorf("trust prompt must not say once; the answer is saved:\n%s", view)
+	}
+}
+
 // An action this client has never heard of still gated the sidecar on
 // confirmation, so it gets the MORE cautious tier, not less.
 func TestClassifyActionRiskUnknownDefaultsToDestructive(t *testing.T) {

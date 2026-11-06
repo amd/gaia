@@ -164,6 +164,12 @@ var actionTitles = map[string]string{
 	"trust_project_folder": "Trust this folder's instructions and skills?",
 }
 
+// approveLabels names what y grants for a prompt whose yes outlasts the call.
+var approveLabels = map[string]string{
+	// Saved for the folder, so later sessions there are not asked again.
+	"trust_project_folder": "trust this folder",
+}
+
 // ActionTitle is the prompt's question for a gated action.
 func ActionTitle(action string) string {
 	if title, ok := actionTitles[action]; ok {
@@ -602,7 +608,11 @@ func (m ConfirmationModel) resultOrHint(inner int) string {
 // empty scope hides the choice entirely.
 func (m ConfirmationModel) styledKeyHint() string {
 	type choice struct{ key, label string }
-	choices := []choice{{"y", "once"}}
+	approve, ok := approveLabels[m.action]
+	if !ok {
+		approve = "once"
+	}
+	choices := []choice{{"y", approve}}
 	if m.allowAlways() {
 		choices = append(choices, choice{"a", "always: " + m.alwaysScope + " (this session)"})
 	}

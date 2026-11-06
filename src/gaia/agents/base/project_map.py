@@ -919,6 +919,11 @@ class ProjectMapMixin:
         setting, wanted = self._project_context_choice()
         return wanted and (setting != AUTO or self._project_folder_trusted())
 
+    def _compose_system_prompt(self) -> str:
+        # Remembered so a turn can tell the cached prompt was built under other trust.
+        self._project_context_composed = self._full_project_context()
+        return super()._compose_system_prompt()
+
     def _project_context_choice(self) -> Tuple[str, bool]:
         """The ``project_context`` setting, and whether it gives this model the context."""
         from gaia.project_context import (
@@ -997,9 +1002,10 @@ class ProjectMapMixin:
     def _ask_project_trust(self) -> None:
         """Ask once per session and folder whether to read its guidance.
 
-        Runs before the prompt is composed. Unknown folders are left unloaded
-        where nobody can be asked. An answer is saved; a timeout or a cancelled
-        run is not, so the next session asks again.
+        Runs at the start of a turn, once that turn's console is in place.
+        Unknown folders are left unloaded where nobody can be asked. An answer
+        is saved; a timeout or a cancelled run is not, so the next session asks
+        again.
         """
         from gaia.agents.base.tool_grants import PROJECT_TRUST_PROMPT_TOOL
         from gaia.project_trust import (
@@ -1008,6 +1014,12 @@ class ProjectMapMixin:
             ProjectTrustError,
             remember_folder_trust,
         )
+
+        # A prompt built before this turn's console (e.g. without Full access) is stale.
+        composed = getattr(self, "_project_context_composed", None)
+        if composed is not None and composed != self._full_project_context():
+            if hasattr(self, "_system_prompt_cache"):
+                del self._system_prompt_cache
 
         setting, wanted = self._project_context_choice()
         folder = self._trust_check_folder()

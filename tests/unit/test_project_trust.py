@@ -261,6 +261,9 @@ class _Base:
     def _on_task_start(self, user_input: str) -> None:
         pass
 
+    def _compose_system_prompt(self) -> str:
+        return "composed prompt"
+
 
 class _FakeAgent(ProjectMapMixin, _Base):
     _path_access_grants_unasked = Agent._path_access_grants_unasked
@@ -341,6 +344,26 @@ def test_full_access_overrides_a_declined_folder(repo):
     remember_folder_trust(repo, DECLINED)
     agent = _FakeAgent(repo, _Console(full_access=True))
     assert agent._full_project_context() is True
+
+
+def test_full_access_recomposes_a_prompt_built_before_it_was_on(repo):
+    # The TUI sizes the history, composing the prompt, before the turn's console is attached.
+    agent = _FakeAgent(repo, _Console())
+    agent._system_prompt_cache = agent._compose_system_prompt()
+    agent.console = _Console(answer=True, full_access=True)
+    agent._on_task_start("hi")
+    assert agent.console.asked == []
+    assert agent._full_project_context() is True
+    assert not hasattr(agent, "_system_prompt_cache")
+    assert folder_trust(repo) is None
+
+
+def test_a_prompt_built_under_the_same_trust_is_kept(repo):
+    remember_folder_trust(repo, TRUSTED)
+    agent = _FakeAgent(repo, _Console())
+    agent._system_prompt_cache = agent._compose_system_prompt()
+    agent._on_task_start("hi")
+    assert agent._system_prompt_cache == "composed prompt"
 
 
 def test_an_interactive_console_is_asked_which_files_and_the_yes_is_saved(repo):
