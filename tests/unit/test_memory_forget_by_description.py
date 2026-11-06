@@ -262,3 +262,191 @@ def test_the_ui_step_never_quotes_the_model_instructions(store, contents, shown_
     assert "recall" not in shown
     assert "Don't tell the user" not in shown
     assert result["message"] not in shown
+
+
+# --- Adversarial: a forget by words must never erase the wrong memory ------
+
+
+def _forget(store, contents, words, *, vectors=None):
+    """Save *contents*, forget by *words*; return the result and the survivors."""
+    host = _Host(store)
+    ids = [host.save(content) for content in contents]
+    host.vectors.update(vectors or {})
+    with _tools(host) as tools:
+        result = tools["forget"](knowledge_id=words)
+    kept = [kid for kid in ids if store.get_item(kid) is not None]
+    return result, ids, kept
+
+
+@pytest.mark.parametrize("words", ["", "   ", "x", "that", "forget that thing", "my"])
+def test_words_that_name_nothing_erase_nothing(store, words):
+    result, ids, kept = _forget(store, [SHELLFISH, TEA, CAT], words)
+
+    assert result["status"] == "error"
+    assert tool_result_failed(result)
+    assert kept == ids
+
+
+def test_words_naming_nothing_erase_nothing_even_on_a_high_score(store):
+    """Filler alone names no memory, whatever the embedder makes of it."""
+    result, ids, kept = _forget(
+        store, [SHELLFISH], "that thing", vectors={"that thing": _hashed(SHELLFISH)}
+    )
+
+    assert result["status"] == "error"
+    assert kept == ids
+
+
+@pytest.mark.parametrize("words", ["fish", "shell", "allerg", "shellfis"])
+def test_part_of_a_word_is_not_a_match(store, words):
+    result, ids, kept = _forget(store, [SHELLFISH, TEA], words)
+
+    assert result["status"] == "error"
+    assert kept == ids
+
+
+@pytest.mark.parametrize(
+    "words",
+    ["ALLERGIC TO SHELLFISH", "Allergic, to shellfish!", "shellfish allergic"],
+)
+def test_case_punctuation_and_order_still_find_the_one_memory(store, words):
+    result, ids, kept = _forget(store, [SHELLFISH, TEA, CAT], words)
+
+    assert result["status"] == "removed"
+    assert kept == ids[1:]
+
+
+def test_a_fact_and_a_preference_both_matching_ask(store):
+    host = _Host(store)
+    fact = host.save("User drinks coffee every morning")
+    pref = store.store(
+        category="preference", content="User prefers coffee black", context="global"
+    )
+    host._embed_and_index(pref, "User prefers coffee black", "test memory")
+
+    with _tools(host) as tools:
+        result = tools["forget"](knowledge_id="coffee")
+
+    assert result["status"] == "error"
+    assert {c["knowledge_id"] for c in result["candidates"]} >= {fact, pref}
+    assert store.get_item(fact) is not None
+    assert store.get_item(pref) is not None
+
+
+def test_many_memories_sharing_the_words_ask(store):
+    places = [
+        "Paris airport",
+        "Berlin office",
+        "Tokyo station",
+        "Lisbon harbour",
+        "Austin campus",
+        "Toronto mall",
+        "Oslo library",
+        "Cairo hotel",
+        "Seoul gym",
+        "Lima market",
+        "Dublin pub",
+        "Quito plaza",
+    ]
+    contents = [f"User orders a coffee latte at the {p}" for p in places]
+    result, ids, kept = _forget(store, contents, "coffee latte")
+
+    assert len(set(ids)) == len(places)
+    assert result["status"] == "error"
+    assert kept == ids
+
+
+def test_someone_elses_memory_is_not_erased_for_the_users_words(store):
+    """Only Sam's allergy is saved; "my" allergy must not erase Sam's."""
+    result, ids, kept = _forget(
+        store, [PARTNER_SHELLFISH, TEA], "that I'm allergic to shellfish"
+    )
+
+    assert result["status"] == "error"
+    assert "candidates" in result
+    assert kept == ids
+
+
+def test_a_relative_without_a_name_is_not_the_user(store):
+    result, ids, kept = _forget(
+        store,
+        ["User's sister is allergic to shellfish", TEA],
+        "allergic to shellfish",
+    )
+
+    assert result["status"] == "error"
+    assert kept == ids
+
+
+def test_naming_the_other_person_erases_their_memory(store):
+    result, ids, kept = _forget(store, [PARTNER_SHELLFISH, TEA], "Sam shellfish")
+
+    assert result["status"] == "removed"
+    assert kept == [ids[1]]
+
+
+def test_naming_the_other_person_never_erases_the_users_own(store):
+    result, ids, kept = _forget(
+        store, [SHELLFISH, PARTNER_SHELLFISH], "that Sam is allergic to shellfish"
+    )
+
+    assert ids[0] in kept
+    if result["status"] == "removed":
+        assert kept == [ids[0]]
+
+
+def test_the_opposite_statement_is_not_a_match(store):
+    """ "I don't like coffee" must not erase "User likes coffee", however close."""
+    likes = "User likes coffee"
+    result, ids, kept = _forget(
+        store,
+        [likes, TEA],
+        "that I don't like coffee",
+        vectors={"that I don't like coffee": _hashed(likes)},
+    )
+
+    assert result["status"] == "error"
+    assert kept == ids
+
+
+def test_a_negated_memory_is_not_erased_by_the_plain_words(store):
+    result, ids, kept = _forget(
+        store, ["User does not eat shellfish", TEA], "eat shellfish"
+    )
+
+    assert result["status"] == "error"
+    assert kept == ids
+
+
+def test_a_score_just_under_the_bar_is_not_a_match(store):
+    host = _Host(store)
+    shellfish, tea = host.save(SHELLFISH), host.save(TEA)
+    off = _hashed("crustacean reaction")
+    target = _hashed(SHELLFISH)
+    # Mix toward the memory until it scores just under the bar.
+    for weight in np.linspace(0.0, 1.0, 201):
+        vec = weight * target + (1 - weight) * off
+        vec = vec / np.linalg.norm(vec)
+        if float(vec @ target) >= FORGET_SURE_SIMILARITY:
+            break
+        under = vec
+    host.vectors["crustacean reaction"] = under
+    assert float(under @ target) < FORGET_SURE_SIMILARITY
+
+    with _tools(host) as tools:
+        result = tools["forget"](knowledge_id="crustacean reaction")
+
+    assert result["status"] == "error"
+    assert store.get_item(shellfish) is not None
+    assert store.get_item(tea) is not None
+
+
+def test_an_id_of_a_privileged_row_is_still_refused(store):
+    host = _Host(store)
+    kid = store.store(category="system", content=SHELLFISH, allow_privileged=True)
+
+    with _tools(host) as tools:
+        result = tools["forget"](knowledge_id=kid)
+
+    assert result["status"] == "error"
+    assert store.get_item(kid) is not None

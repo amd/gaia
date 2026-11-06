@@ -350,6 +350,36 @@ def _names_in(text: str) -> set:
     return names
 
 
+#: Words that make a memory about someone other than the user.
+_FORGET_OTHER_PEOPLE = frozenset(
+    "partner wife husband spouse girlfriend boyfriend fiance fiancee son daughter "
+    "child children kid mother mom mum father dad parent brother sister sibling "
+    "grandmother grandma grandfather grandpa aunt uncle cousin niece nephew friend "
+    "boss manager colleague coworker roommate neighbor neighbour sons daughters "
+    "kids parents brothers sisters siblings friends colleagues".split()
+)
+_NEGATION = re.compile(r"\b(?:not|no|never|none|nor|cannot|without)\b|n't\b", re.I)
+
+
+def _forget_sure_of(description: str, item: Dict) -> bool:
+    """Whether *description* could only mean *item*: same person, same polarity.
+
+    A memory about someone (a name, its entity, or a relation like "sister")
+    the description doesn't mention is about them, not the user; a memory that
+    says the opposite of the description is not the one it names.
+    """
+    content = str(item.get("content", ""))
+    named = {w.lower() for w in re.findall(r"[A-Za-z0-9]+", description)}
+    others = {name.lower() for name in _names_in(content)}
+    entity = str(item.get("entity") or "")
+    if entity and not entity.lower().startswith("user"):
+        others |= set(re.findall(r"[a-z0-9]+", entity.split(":", 1)[-1].lower()))
+    others |= _FORGET_OTHER_PEOPLE & set(re.findall(r"[a-z]+", content.lower()))
+    if others and not others & named:
+        return False
+    return bool(_NEGATION.search(description)) == bool(_NEGATION.search(content))
+
+
 def _forget_words(text: str) -> set:
     """The words in *text* that pick out a memory, plural ``s`` dropped."""
     words = set()
@@ -2190,7 +2220,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         Candidates come from the search ``recall`` runs, scoped like turn
         recall, and must share a naming word or clear the recall floor. One
         matches when it holds every naming word of the description, or scores
-        FORGET_SURE_SIMILARITY on meaning. Two matches are no match.
+        FORGET_SURE_SIMILARITY on meaning, and is about the same person with
+        the same polarity (``_forget_sure_of``). Two matches are no match.
         """
         ctx = self._memory_context
         contexts = None if ctx == "global" else (ctx, "global")
@@ -2213,13 +2244,19 @@ class MemoryMixin(ProceduralMemoryMixin):
             shared = words & _forget_words(str(item.get("content", "")))
             if shared or similarity.get(item["id"], 0.0) >= TURN_RECALL_MIN_SIMILARITY:
                 candidates.append(item)
+        # Filler alone names no memory, whatever it scores.
         matches = [
             item
             for item in candidates
-            if (words and words <= _forget_words(str(item.get("content", ""))))
-            or similarity.get(item["id"], 0.0) >= FORGET_SURE_SIMILARITY
+            if words
+            and (
+                words <= _forget_words(str(item.get("content", "")))
+                or similarity.get(item["id"], 0.0) >= FORGET_SURE_SIMILARITY
+            )
         ]
-        return (matches[0] if len(matches) == 1 else None), candidates
+        if len(matches) == 1 and _forget_sure_of(description, matches[0]):
+            return matches[0], candidates
+        return None, candidates
 
     # ==================================================================
     # Mem0-Style LLM Extraction
