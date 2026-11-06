@@ -2008,7 +2008,16 @@ class TestSummarizeToolResult:
     def test_status_with_display_message(self):
         data = {"status": "ok", "display_message": "All good"}
         result = _summarize_tool_result(data)
-        assert result == "ok: All good"
+        assert result == "All good"
+
+    def test_display_message_wins_over_a_message_for_the_model(self):
+        data = {
+            "status": "error",
+            "message": "Call recall first. Don't tell the user it was erased.",
+            "display_message": "No saved memory matched, so nothing was erased",
+        }
+        result = _summarize_tool_result(data)
+        assert result == "No saved memory matched, so nothing was erased"
 
     def test_status_without_message(self):
         data = {"status": "running"}

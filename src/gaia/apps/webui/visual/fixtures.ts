@@ -36,7 +36,7 @@ const session = (id: string, title: string, minutesAgo: number, messages: number
     inference_description: 'Using Gemma-4-E4B-it-GGUF on this machine.',
 });
 
-const SESSIONS = [
+export const SESSIONS = [
     session(ANSWER_SESSION, 'Rainier weather and Aug 28 action items', 2, 2),
     session('a1b2c3d4-0000-4000-8000-000000000002', 'Draft volunteer email to the Kestrel trail crew', 20, 4),
     session('a1b2c3d4-0000-4000-8000-000000000003', 'kestrel: fix flaky upload test in CI', 95, 6),
@@ -160,6 +160,12 @@ const ROUTES: Record<string, unknown> = {
         error: null, base_url: 'http://127.0.0.1:13305', owner: 'gaia', busy: false, restarting: false, restart_error: null,
     },
     [`GET /chat/context/${ANSWER_SESSION}`]: { session_id: ANSWER_SESSION, context: null },
+    // A model on this PC: the composer shows no spending.
+    [`GET /spending/chat/${ANSWER_SESSION}`]: {
+        paid: false, model: 'Gemma-4-E4B-it-GGUF', price_source: 'list price',
+        chat: { usd: 0, answers: 0, unpriced_answers: 0, items: [] },
+        today: { usd: 0, answers: 0, unpriced_answers: 0, chats: 0, since: NOW.toISOString() },
+    },
     [`GET /sessions/${ANSWER_SESSION}/changes`]: { turns: [] },
     [`GET /sessions/${ANSWER_SESSION}/changes/total`]: {
         files: [], totals: { files: 0, additions: 0, deletions: 0, uncounted: 0 }, turns: 0, pending: false, untracked: [], incomplete: false,
@@ -467,6 +473,8 @@ const MEMORY_ITEMS = [
     memoryItem('k3', 'reminder', 'Dentist appointment', { due_at: '2026-10-23', context: 'personal' }),
     memoryItem('k4', 'fact', 'Bank PIN hint', { sensitive: true }),
     memoryItem('k5', 'note', 'يفضّل الاجتماعات الصباحية', { source: 'consolidation' }),
+    memoryItem('k6', 'error', "load_skill: No skill named 'note-taker'.", { source: 'error_auto' }),
+    memoryItem('k7', 'error', 'The VPN drops on hotel wifi', { source: 'user' }),
 ];
 
 const GOAL = {

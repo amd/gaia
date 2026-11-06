@@ -114,6 +114,17 @@ def _isolate_gaia_config(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_failure_records(request, monkeypatch):
+    """A real problem report probes Lemonade and scans every process (~2 s); only its own tests save one."""
+    if request.node.get_closest_marker("failure_records"):
+        return
+    from gaia.llm import failure_record
+
+    monkeypatch.setattr(failure_record, "record_failure", lambda *_a, **_k: None)
+    monkeypatch.setattr(failure_record, "record_local_failure", lambda *_a, **_k: None)
+
+
+@pytest.fixture(autouse=True)
 def _forget_crashed_loads(monkeypatch):
     """A load one test crashed must not be refused, unsent, in the next."""
     from gaia.llm import lemonade_client
@@ -316,6 +327,10 @@ def pytest_configure(config):
         "real_lemonade: keep the caller's LEMONADE_BASE_URL; with "
         "GAIA_TEST_ALLOW_REAL_LEMONADE=1 also let the test spawn or kill a "
         "real Lemonade server",
+    )
+    config.addinivalue_line(
+        "markers",
+        "failure_records: save real problem reports (see _no_failure_records)",
     )
 
 
