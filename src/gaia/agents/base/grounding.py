@@ -595,17 +595,18 @@ def _prose_values(text: str) -> List[_Value]:
 #: "$2,708.95", "€1,379.87", "USD 1,375.25": an amount to the cent or the thousand.
 _PROSE_MONEY = re.compile(
     r"(?:(?:US|C|A)?\$|€|£|¥|\b(?:USD|EUR|GBP|CAD|AUD|JPY|CHF|CNY|INR)\s?)\s?"
-    r"(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+)(?![\d,])"
+    r"(?P<n>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+)(?!\d|,\d)"
 )
 
 
-def _states_money(text: str) -> bool:
-    """*text* states an exact amount of money that is not an estimate."""
+def _stated_money(text: str) -> Set[str]:
+    """The exact amounts of money *text* states, as written, estimates aside."""
+    amounts = set()
     for match in _PROSE_MONEY.finditer(text):
         lead = text[max(0, match.start() - 24) : match.start()]
-        if not _ESTIMATE_LEAD.search(lead):
-            return True
-    return False
+        if not _ESTIMATE_LEAD.search(lead) and float(match["n"].replace(",", "")):
+            amounts.add(match.group("n"))
+    return amounts
 
 
 def _tables_and_prose(answer: str) -> "tuple[List[_Value], str]":
@@ -635,15 +636,22 @@ def presented_values(answer: str) -> List[_Value]:
     """Values *answer* presents as data, in order, without duplicates.
 
     Table cells that are one value, fields of an untagged/CSV/JSON code block,
-    and — only when the answer has one of those or states an exact amount of
-    money — decimals, dates and percentages in its prose. Code blocks in a
-    language, inline code, small whole numbers, estimates and version numbers
-    are left alone.
+    and — only when the answer has one of those — decimals, dates and
+    percentages in its prose. Without a table or block, only the exact amounts
+    of money its prose states are data. Code blocks in a language, inline
+    code, small whole numbers, estimates and version numbers are left alone.
     """
     values, prose = _tables_and_prose(answer)
-    if not values and not _states_money(prose):
-        return []  # no table, data block or amount: prose numbers are not data
-    values.extend(_prose_values(prose))
+    if values:
+        values.extend(_prose_values(prose))
+    else:
+        # A date or percentage beside a price in a chat reply is not data.
+        money = _stated_money(prose)
+        values = [
+            v
+            for v in _prose_values(prose)
+            if v.text in money or (v.mantissa is not None and v.mantissa.text in money)
+        ]
     seen: Set["tuple[str, Optional[str]]"] = set()
     unique = []
     for value in values:

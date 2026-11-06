@@ -167,6 +167,54 @@ def test_estimates_and_small_amounts_in_prose_are_not_judged(answer):
     assert content_findings(answer, _turn_records(ran)) == []
 
 
+def _search(text):
+    return _rec(
+        "search_web",
+        {"query": "price"},
+        {"status": "success", "results": [{"title": "r", "snippet": text}]},
+    )
+
+
+@pytest.mark.parametrize(
+    "answer,source",
+    [
+        (
+            "The card is $599.99. It launched on 2025-03-06.",
+            "Radeon RX 9070 XT $599.99 at Newegg",
+        ),
+        (
+            "Q3 revenue was $6,819.00 million, up 18%, for the quarter ending "
+            "2025-09-27.",
+            "Revenue was $6,819.00 million, up 18%, quarter ended September 27, 2025",
+        ),
+        (
+            "Chicken is $8.49, rice $2.99 and spices $3.25, for a total of $14.73.",
+            "Chicken thighs $8.49/lb. Jasmine rice $2.99. Spice mix $3.25.",
+        ),
+        (
+            "Python 3.13.1 shipped on 2024-12-03 and costs $0.00.",
+            "Python 3.13.1 released Dec. 3, 2024",
+        ),
+        (
+            "Your bill of $142.87 is due November 20; autopay runs 2026-11-18.",
+            "Your bill of $142.87 is due November 20. Autopay scheduled Nov 18.",
+        ),
+    ],
+    ids=["launch-date", "reformatted-date", "comma-after-amount", "zero", "bill"],
+)
+def test_a_sourced_price_does_not_put_the_rest_of_a_chat_reply_on_trial(answer, source):
+    assert content_findings(answer, [_search(source)]) == []
+
+
+def test_an_amount_followed_by_a_comma_is_still_judged():
+    answer = "North is $2,708.95, South is $2,334.24, and West is $1,375.25."
+
+    findings = content_findings(answer, _turn_records(DENIED), QUERY)
+
+    assert [f.gate for f in findings] == [CONTENT]
+    assert "2,334.24" in findings[0].note
+
+
 def test_an_estimate_beside_an_exact_amount_is_left_alone():
     answer = "North came to $1,500.25, so the year is about $18,000.50."
     ran = {"status": "success", "stdout": "North 1500.25\n", "return_code": 0}
@@ -322,13 +370,13 @@ def test_totals_from_the_script_that_ran_get_no_note(make_agent):
 @pytest.mark.parametrize(
     "tool_name,result",
     [
-        ("run_python", {"status": "error", "error": "SyntaxError", "has_errors": True}),
-        ("execute_python_file", {"status": "success", "return_code": 1}),
+        ("run_python", {"status": "denied", "error": "denied by the user"}),
+        ("execute_python_file", {"status": "denied", "error": "declined"}),
         ("run_shell_command", {"status": "denied", "error": "denied by the user"}),
-        ("query_data", {"status": "error", "error": "no such table: orders"}),
+        ("query_data", {"status": "denied", "error": "denied by the user"}),
     ],
 )
-def test_a_computation_that_did_not_run_says_so_in_its_result(tool_name, result):
+def test_a_denied_computation_says_so_in_its_result(tool_name, result):
     out = Agent._with_computation_note(tool_name, dict(result))
 
     assert out["computation"] == COMPUTATION_NOT_RUN
@@ -339,6 +387,30 @@ def test_a_computation_that_did_not_run_says_so_in_its_result(tool_name, result)
     [
         ("run_python", {"status": "success", "stdout": "4\n", "return_code": 0}),
         ("read_file", {"status": "error", "error": "File not found"}),
+        ("read_file", {"status": "denied", "error": "denied by the user"}),
+        # A failing test run is for the model to fix and re-run.
+        (
+            "run_shell_command",
+            {
+                "status": "success",
+                "command": "python -m pytest tests/",
+                "stdout": "1 failed, 12 passed in 0.80s",
+                "return_code": 1,
+            },
+        ),
+        ("run_shell_command", {"status": "error", "error": "git: not a repo"}),
+        # A script that printed totals, then crashed, did compute those totals.
+        (
+            "run_python",
+            {
+                "status": "error",
+                "stdout": "North 1500.25\n",
+                "error": "KeyError: 'West'",
+                "has_errors": True,
+            },
+        ),
+        ("execute_python_file", {"status": "success", "return_code": 1}),
+        ("query_data", {"status": "error", "error": "no such table: orders"}),
     ],
 )
 def test_other_results_are_left_alone(tool_name, result):

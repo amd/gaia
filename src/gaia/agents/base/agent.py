@@ -720,7 +720,7 @@ DECLINED_HINT = (
     "to do and why, then stop."
 )
 
-#: Tools whose output is a computed result: when one did not run, nothing was computed.
+#: Tools whose output is a computed result: when one was denied, nothing was computed.
 COMPUTATION_TOOLS = frozenset(
     {"run_python", "execute_python_file", "run_shell_command", "query_data"}
 )
@@ -6959,11 +6959,15 @@ Do NOT wrap conversational replies in JSON.
 
     @staticmethod
     def _with_computation_note(tool_name: str, result: Any) -> Any:
-        """A computation that was denied or failed says plainly that nothing was computed."""
+        """A denied computation says plainly that nothing was computed.
+
+        Only a denial: a failed test run or a script that crashed after
+        printing results is for the model to fix and re-run, not to report.
+        """
         if (
             tool_name not in COMPUTATION_TOOLS
             or not isinstance(result, dict)
-            or not tool_result_failed(result, FAILED_STATUSES)
+            or str(result.get("status", "")).lower() != "denied"
         ):
             return result
         return {**result, "computation": COMPUTATION_NOT_RUN}
