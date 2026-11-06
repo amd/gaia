@@ -136,7 +136,8 @@ actions (`archive` / `quarantine`), and the calendar actions (view / create / re
 need a connected mailbox whose relevant scope was granted. Mint the gate token with
 `draft` (for `send`), `confirmAction` (for `archive` / `quarantine`), or
 `previewCalendarEvent` (for `createCalendarEvent`); `archive` and `quarantine` are
-reversible inside the undo window (120 s by default, `GAIA_EMAIL_UNDO_WINDOW_SECONDS` to change) via the ungated `unarchive` / `unquarantine`. Every
+reversible inside the undo window (120 s by default, `GAIA_EMAIL_UNDO_WINDOW_SECONDS`
+to change) via the ungated `unarchive` / `unquarantine`. Every
 non-2xx response throws `HttpError` (`status`, `url`, `bodyText`) — handle it; there is
 no silent null.
 
