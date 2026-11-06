@@ -39,7 +39,7 @@ class LinkResult(NamedTuple):
 
 # Regex patterns for extracting links
 # Matches [text](url) but not ![image](url) image tags with broken links
-MD_LINK_RE = re.compile(r"(?<!!)\[([^\]]*)\]\(([^)]+)\)")
+MD_LINK_RE = re.compile(r'(?<!!)\[([^\]]*)\]\(([^)]+)\)')
 # Matches bare URLs in text
 BARE_URL_RE = re.compile(r'(?<=["\s(])https?://[^\s)"\'<>]+')
 # Matches href="url" in HTML/JSX
@@ -145,7 +145,7 @@ def extract_links(filepath: Path) -> List[Tuple[int, str]]:
                 links.append((i, url))
 
         # Bare URLs (only if not already captured)
-        existing_urls = {u for _, u in links if _ == i}  # noqa: E741
+        existing_urls = {u for _, u in links if _== i}  # noqa: E741
         for match in BARE_URL_RE.finditer(line):
             url = match.group(0).strip().rstrip(".,;:)")
             if url not in existing_urls:
@@ -196,14 +196,12 @@ def check_internal_link(
     # Try with and without extensions
     candidates = [target]
     if not target.suffix:
-        candidates.extend(
-            [
-                target.with_suffix(".mdx"),
-                target.with_suffix(".md"),
-                target / "index.mdx",
-                target / "index.md",
-            ]
-        )
+        candidates.extend([
+            target.with_suffix(".mdx"),
+            target.with_suffix(".md"),
+            target / "index.mdx",
+            target / "index.md",
+        ])
     elif target.suffix == ".mdx":
         candidates.append(target.with_suffix(".md"))
 
@@ -276,20 +274,17 @@ def check_external_link(url: str, timeout: int = 15) -> Tuple[str, str]:
                     return "broken", f"HTTP {code}"
             except urllib.error.HTTPError as e2:
                 if e2.code in (403, 408, 429) or e2.code >= 500:
-                    return (
-                        "warning",
-                        f"HTTP {e2.code} (may require auth or be rate limited)",
-                    )
+                    return "warning", f"HTTP {e2.code} (may require auth or be rate limited)"
                 return "broken", f"HTTP {e2.code}"
             except (OSError, http.client.HTTPException) as e2:
                 return "warning", f"connection error on GET fallback: {e2}"
             except Exception as e2:
                 return "broken", str(e2)
+        # 408 is the server timing out on us (shields.io under CI load).
+        if e.code == 408:
+            return "warning", "HTTP 408 (server timed out)"
         if e.code == 429:
             return "warning", "HTTP 429 (rate limited)"
-        # 408 is the server timing out on us (shields.io under load), not a dead link.
-        if e.code == 408:
-            return "warning", "HTTP 408 (request timed out)"
         if e.code >= 500:
             return "warning", f"HTTP {e.code} (server error)"
         return "broken", f"HTTP {e.code}"

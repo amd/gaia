@@ -55,17 +55,6 @@ def test_real_404_is_still_broken():
     assert "404" in detail
 
 
-def test_a_server_timeout_408_is_warning_not_broken():
-    """shields.io answers 408 under load; that is a timeout, not a dead badge."""
-    err = urllib.error.HTTPError(
-        "https://img.shields.io/x", 408, "Request Timeout", hdrs=None, fp=None
-    )
-    with patch("urllib.request.urlopen", side_effect=err):
-        status, detail = cdl.check_external_link("https://img.shields.io/x")
-    assert status == "warning"
-    assert "408" in detail
-
-
 def test_unrelated_exception_stays_broken():
     """The catch-all must still fire for genuinely unexpected errors."""
     with patch("urllib.request.urlopen", side_effect=ValueError("bad url")):
@@ -150,6 +139,21 @@ def test_retry_never_escalates_broken(monkeypatch):
     )
     assert status == "broken"
     assert calls["n"] == 1  # no retries spent on a real failure
+
+
+def test_request_timeout_408_is_warning_and_retried(monkeypatch):
+    """shields.io answers 408 under CI load; that is a blip, not a dead badge."""
+    err = urllib.error.HTTPError(
+        "https://img.shields.io/x.svg", 408, "Request Timeout", hdrs=None, fp=None
+    )
+    monkeypatch.setattr(cdl.time, "sleep", lambda s: None)
+    with patch("urllib.request.urlopen", side_effect=err) as urlopen:
+        status, detail = cdl.check_external_link_with_retries(
+            "https://img.shields.io/x.svg"
+        )
+    assert status == "warning"
+    assert "408" in detail
+    assert urlopen.call_count == 1 + cdl.EXTERNAL_LINK_RETRIES
 
 
 if __name__ == "__main__":
