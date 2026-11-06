@@ -293,12 +293,11 @@ Output format: Clean markdown with the ACTUAL text from the image."""
         if self._vlm_catalog_checked:
             return
         from gaia.llm.lemonade_client import (
-            AGENT_PROFILES,
-            MODELS,
             LemonadeClientError,
             _model_ids_match,
             cloud_model_provider,
         )
+        from gaia.llm.surface_hints import VISION_DOWNLOAD_HINT
 
         try:
             catalog = self.client.list_models(show_all=True)
@@ -326,16 +325,10 @@ Output format: Clean markdown with the ACTUAL text from the image."""
 
         size = entry.get("size")
         size_hint = f" (about {size:g} GB)" if isinstance(size, (int, float)) else ""
-        vlm_agent_models = {MODELS[k].model_id for k in AGENT_PROFILES["vlm"].models}
-        cli_hint = (
-            ", or run `gaia download --agent vlm`"
-            if any(_model_ids_match(m, self.vlm_model) for m in vlm_agent_models)
-            else ""
-        )
         raise VLMExtractionError(
-            f"Vision model '{self.vlm_model}' is not downloaded{size_hint}. "
-            f"Download it from Settings → Model in the Agent UI{cli_hint}, then "
-            "retry. GAIA will not download it during image analysis.",
+            f"Vision model '{self.vlm_model}' is not downloaded{size_hint}, so "
+            "GAIA can't read images yet; it will not download it during image "
+            f"analysis. {VISION_DOWNLOAD_HINT}",
             page_num,
             image_num,
         )

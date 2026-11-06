@@ -71,6 +71,7 @@ import sqlite3
 import sys
 import threading
 import traceback
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia_agent import __version__ as agent_version

@@ -459,6 +459,16 @@ jobs:
           echo ""
           pytest tests/integration/test_lemonade_embeddable_assets.py -v --tb=short
 
+      - name: Run Linux Lemonade glibc/OpenSSL check
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+          GAIA_REQUIRE_RELEASE_API: ${{ startsWith(github.head_ref, 'deps/lemonade-') && '1' || '' }}
+        run: |
+          echo "=== Checking the pinned Linux lemond needs nothing newer than Ubuntu 24.04 ==="
+          echo "Lemonade 2026.45.3 needed GLIBC_2.43 and broke every Linux user (#6766)"
+          echo ""
+          pytest tests/integration/test_lemonade_linux_abi.py -v --tb=short
+
       - name: Run daemon integration tests
         env:
           GAIA_MEMORY_DISABLED: "1"

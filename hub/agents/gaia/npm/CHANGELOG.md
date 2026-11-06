@@ -30,6 +30,10 @@ the new session `tools` and `grants` routes, so probe `/version` first.
 
 ### Changed
 
+- **Updating the agent on a Mac no longer asks for keychain access again.** When
+  the daemon starts the sidecar, the daemon now reads saved keys for it. A sidecar
+  started without the daemon still reads the keychain itself. Requires a daemon
+  and agent from this release or later.
 - **"Every section that mentions X" no longer reads the whole document.**
   Listing the one section of a 37 KB manual that names a code took ~18 min on
   the NPU, because extraction sent all 10 pages through the model twice.
