@@ -100,17 +100,20 @@ describe("TrayManager without a tray host", () => {
     expect(mgr.trayHost).toEqual({ available: false, reason: "checking" });
     expect(mgr.minimizeToTray).toBe(false);
     expect(mgr.startMinimized).toBe(false);
+    expect(mgr.closeAction).toBe("minimize");
     mgr.setHost({ available: true, reason: null });
     expect(mgr.minimizeToTray).toBe(true);
     expect(mgr.startMinimized).toBe(true);
+    expect(mgr.closeAction).toBe("hide");
   });
 
-  test("no host: close-to-tray and start-hidden are off, the saved choice is kept", async () => {
+  test("no host: closing minimizes, start-hidden is off, the saved choice is kept", async () => {
     setPlatform("linux");
     const mgr = newTray();
     mgr.config.tray = { ...ON };
     mgr.setHost({ available: false, reason: "no-host", detail: "nothing owns it" });
     expect(mgr.minimizeToTray).toBe(false);
+    expect(mgr.closeAction).toBe("minimize");
     expect(mgr.startMinimized).toBe(false);
     const cfg = await electronMock.ipcMain.simulateInvoke("tray:get-config");
     expect(cfg.tray).toEqual(ON);
@@ -125,6 +128,25 @@ describe("TrayManager without a tray host", () => {
     expect(cfg.host).toEqual({ available: true, reason: null });
   });
 
+  test.each([["no-host"], ["check-failed"]])("with keep-running off, closing quits (%s)", (reason) => {
+    setPlatform("linux");
+    const mgr = newTray();
+    mgr.config.tray = { ...ON, minimizeToTray: false };
+    mgr.setHost({ available: false, reason });
+    expect(mgr.closeAction).toBe("quit");
+  });
+
+  test("the notice points at the dock, not a tray that isn't there", () => {
+    setPlatform("linux");
+    const mgr = newTray();
+    mgr.config.tray = { ...ON };
+    mgr.setHost({ available: false, reason: "no-host" });
+    const { message, detail } = mgr.closeNoticeText();
+    expect(message).toBe("GAIA is still running in the dock.");
+    expect(detail).toMatch(/right-click GAIA there and choose Quit/);
+    expect(`${message} ${detail}`).not.toMatch(/tray|AppIndicator/i);
+  });
+
   test("a malformed host result is refused loudly", () => {
     setPlatform("linux");
     expect(() => newTray().setHost({ reason: "no-host" })).toThrow(/setHost expects/);
@@ -135,6 +157,8 @@ describe("closing the window on a desktop without a tray", () => {
   function closeWith(mgr) {
     const win = new EventEmitter();
     win.hide = jest.fn();
+    win.minimize = jest.fn();
+    win.isMinimized = jest.fn(() => false);
     const app = { quit: jest.fn() };
     attachWindowGuards(win, {
       app,
@@ -149,13 +173,15 @@ describe("closing the window on a desktop without a tray", () => {
     return { win, app };
   }
 
-  test("quits instead of hiding", () => {
+  test("minimizes and keeps running instead of quitting", () => {
     setPlatform("linux");
     const mgr = new TrayManager(new electronMock.BrowserWindow(), { reopenWindow: jest.fn() });
     mgr.setHost({ available: false, reason: "no-host" });
+    jest.spyOn(mgr, "showCloseNotice").mockResolvedValue(false);
     const { win, app } = closeWith(mgr);
     expect(win.hide).not.toHaveBeenCalled();
-    expect(app.quit).toHaveBeenCalledTimes(1);
+    expect(win.minimize).toHaveBeenCalledTimes(1);
+    expect(app.quit).not.toHaveBeenCalled();
   });
 
   test("hides to the tray once a host is there", () => {

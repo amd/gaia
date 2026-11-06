@@ -891,7 +891,8 @@ for (const locale of ['ar', 'en']) {
         await expect(desktop).toBeVisible();
         await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
         await desktop.scrollIntoViewIfNeeded();
-        await expect(desktop.locator('#desktop-minimizeToTray-hint')).toContainText('AppIndicator');
+        await expect(desktop.locator('#desktop-minimizeToTray-hint')).not.toContainText('AppIndicator');
+        await expect(desktop.locator('#desktop-minimizeToTray-hint')).toContainText(locale === 'ar' ? 'شريط التطبيقات' : 'dock');
         await shot(page, `desktop-${locale}-no-tray`);
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page)).toEqual([]);

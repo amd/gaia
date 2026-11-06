@@ -338,6 +338,16 @@ class TrayManager {
     return this.config.tray.minimizeToTray && this.trayHost.available;
   }
 
+  /**
+   * What closing the window does. With no tray to find a hidden window in,
+   * GAIA minimizes instead, so the dock still shows it and offers Quit.
+   * @returns {"hide" | "minimize" | "quit"}
+   */
+  get closeAction() {
+    if (!this.config.tray.minimizeToTray) return "quit";
+    return this.trayHost.available ? "hide" : "minimize";
+  }
+
   /** @returns {boolean} Whether app should start minimized, which also needs a tray. */
   get startMinimized() {
     return this.config.tray.startMinimized && this.trayHost.available;
@@ -356,7 +366,7 @@ class TrayManager {
     this._host = { available: host.available, reason: host.available ? null : host.reason };
     if (!host.available) {
       console.log(
-        `[tray] No tray icon host (${host.reason}: ${host.detail || "no detail"}); closing the window quits GAIA`
+        `[tray] No tray icon host (${host.reason}: ${host.detail || "no detail"}); closing the window minimizes GAIA`
       );
     }
   }
@@ -386,18 +396,34 @@ class TrayManager {
     const next = { ...this.config, notices: { ...this.config.notices, firstClose: true } };
     this._saveConfig(next);
     this.config = next;
-    const where = process.platform === "darwin" ? "menu bar" : "tray";
+    const { message, detail } = this.closeNoticeText();
     const { response } = await dialog.showMessageBox({
       type: "info",
       title: "GAIA is still running",
-      message: `GAIA is still running in the ${where}.`,
-      detail: `Quit from the ${where} menu to stop it. Closing the window keeps your model loaded, so the next chat starts quickly.`,
+      message,
+      detail,
       buttons: ["OK", "Quit GAIA"],
       defaultId: 0,
       cancelId: 0,
       noLink: true,
     });
     return response === 1;
+  }
+
+  /** @returns {{message: string, detail: string}} Where the closed window went and how to quit. */
+  closeNoticeText() {
+    const loaded = "Closing the window keeps your model loaded, so the next chat starts quickly.";
+    if (this.closeAction === "minimize") {
+      return {
+        message: "GAIA is still running in the dock.",
+        detail: `${loaded} Click GAIA in the dock to bring it back. To stop it, right-click GAIA there and choose Quit.`,
+      };
+    }
+    const where = process.platform === "darwin" ? "menu bar" : "tray";
+    return {
+      message: `GAIA is still running in the ${where}.`,
+      detail: `Quit from the ${where} menu to stop it. ${loaded}`,
+    };
   }
 
   // ── Private: Rendering ───────────────────────────────────────────────
