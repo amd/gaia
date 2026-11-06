@@ -215,6 +215,35 @@ def test_an_amount_followed_by_a_comma_is_still_judged():
     assert "2,334.24" in findings[0].note
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "North came to USD 2,708.95 and West to USD 1,375.25.",
+        "North came to 2,708.95 USD and West to 1,375.25 USD.",
+        "North came to 2,708.95 dollars and West to 1,375.25 dollars.",
+        "North came to EUR 2,708.95 and West to 1,375.25 euros.",
+    ],
+)
+def test_amounts_written_with_a_currency_code_or_word_are_judged(answer):
+    findings = content_findings(answer, _turn_records(DENIED), QUERY)
+
+    assert [f.gate for f in findings] == [CONTENT]
+    for figure in ("2,708.95", "1,375.25"):
+        assert figure in findings[0].note
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "A typical plan costs about USD 1,200.50 a month.",
+        "A typical plan costs roughly 1,200.50 dollars a month.",
+        "Python 3.12.1 is out.",
+    ],
+)
+def test_estimates_and_versions_beside_currency_words_are_left_alone(answer):
+    assert presented_values(answer) == []
+
+
 def test_an_estimate_beside_an_exact_amount_is_left_alone():
     answer = "North came to $1,500.25, so the year is about $18,000.50."
     ran = {"status": "success", "stdout": "North 1500.25\n", "return_code": 0}

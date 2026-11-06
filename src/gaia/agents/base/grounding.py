@@ -432,6 +432,9 @@ _ORDINAL_HEADER = re.compile(
     r"^\s*\**\s*(?:#|no\.?|n|rank|priority|step|order|id|line|lines|severity|position|pos)\s*\**\s*$",
     re.I,
 )
+_CURRENCY_CODES = r"USD|EUR|GBP|CAD|AUD|JPY|CHF|CNY|INR"
+#: "USD 1,375.25" leads with a currency code, not a product name.
+_CURRENCY_LEAD = re.compile(rf"\b(?:{_CURRENCY_CODES})\s?$")
 #: A version or model name is not a measurement: "Python 3.12", "gpt-4.1".
 _VERSION_LEAD = re.compile(
     r"(?:\b[A-Z][\w-]*[ -]?|\bv[ -]?|\b[\w-]*\d[\w-]*[ -]?|[A-Za-z]-)$"
@@ -439,9 +442,13 @@ _VERSION_LEAD = re.compile(
 )
 _ESTIMATE_LEAD = re.compile(
     r"(?:~|\b(?:about|approximately|approx\.?|around|roughly|nearly|almost))\s*"
-    r"(?:(?:US|C|A)?[$€£¥]\s*)?$",
+    rf"(?:(?:(?:US|C|A)?[$€£¥]|\b(?:{_CURRENCY_CODES}))\s*)?$",
     re.I,
 )
+
+
+def _version_lead(lead: str) -> bool:
+    return bool(_VERSION_LEAD.search(lead)) and not _CURRENCY_LEAD.search(lead)
 
 
 @dataclass(frozen=True)
@@ -568,7 +575,7 @@ def _prose_values(text: str) -> List[_Value]:
         lead = text[max(0, match.start() - 24) : match.start()]
         if not ("." in raw or "," in raw):
             continue
-        if _VERSION_LEAD.search(lead) or _ESTIMATE_LEAD.search(lead):
+        if _version_lead(lead) or _ESTIMATE_LEAD.search(lead):
             continue
         values.append(value)
     for match, _ in reversed(scaled):
@@ -586,7 +593,7 @@ def _prose_values(text: str) -> List[_Value]:
         if after == "+" or not ("." in raw or "," in raw or after == "%"):
             continue  # "3.11+" is a version floor
         lead = text[max(0, match.start() - 24) : match.start()]
-        if _VERSION_LEAD.search(lead) or _ESTIMATE_LEAD.search(lead):
+        if _version_lead(lead) or _ESTIMATE_LEAD.search(lead):
             continue
         unit = _PROSE_UNIT.match(text, match.end())
         values.append(_value(raw, _unit(unit.group(1)) if unit else None))
@@ -595,15 +602,20 @@ def _prose_values(text: str) -> List[_Value]:
 
 #: "$2,708.95", "€1,379.87", "USD 1,375.25": an amount to the cent or the thousand.
 _PROSE_MONEY = re.compile(
-    r"(?:(?:US|C|A)?\$|€|£|¥|\b(?:USD|EUR|GBP|CAD|AUD|JPY|CHF|CNY|INR)\s?)\s?"
+    rf"(?:(?:US|C|A)?\$|€|£|¥|\b(?:{_CURRENCY_CODES})\s?)\s?"
     r"(?P<n>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+)(?!\d|,\d)"
+)
+#: "2,708.95 USD", "2,708.95 dollars": the same amount with its currency after it.
+_PROSE_MONEY_AFTER = re.compile(
+    r"(?<![\w.,])(?P<n>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+)\s?"
+    rf"(?:{_CURRENCY_CODES}|dollars?|euros?)\b"
 )
 
 
 def _stated_money(text: str) -> Set[str]:
     """The exact amounts of money *text* states, as written, estimates aside."""
     amounts = set()
-    for match in _PROSE_MONEY.finditer(text):
+    for match in (*_PROSE_MONEY.finditer(text), *_PROSE_MONEY_AFTER.finditer(text)):
         lead = text[max(0, match.start() - 24) : match.start()]
         if not _ESTIMATE_LEAD.search(lead) and float(match["n"].replace(",", "")):
             amounts.add(match.group("n"))
