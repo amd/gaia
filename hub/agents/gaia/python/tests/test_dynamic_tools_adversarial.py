@@ -13,11 +13,7 @@ import json
 import threading
 
 import pytest
-from test_prompt_prefix_stability import (  # noqa: F401  # pylint: disable=unused-import
-    _assert_each_extends_the_last,
-    _turn,
-    flagship,
-)
+from test_prompt_prefix_stability import _assert_each_extends_the_last, _turn
 
 from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION
 from gaia.agents.base.model_features import TIER_ENV, features_for_model, withheld_tools
