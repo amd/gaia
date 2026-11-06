@@ -1,0 +1,190 @@
+---
+title: "Discord"
+description: "Chat with GAIA from Discord on your phone or any other device. GAIA answers from your PC and asks before it changes anything."
+icon: "discord"
+---
+
+<Info>
+  **First time here?** Complete the [Setup](/setup) guide first to install GAIA.
+</Info>
+
+Send GAIA a private message on Discord from your phone, and it answers from your PC. You can
+ask about your files, send it a document to read, have it look something up, or ask it to
+keep an eye on something and tell you when it changes.
+
+GAIA does the work on your PC, so the PC has to be on. Discord only carries the messages.
+
+## Before you start
+
+You need:
+
+- **A Discord account** and the Discord app on your phone (or any device you'll chat from).
+- **GAIA installed on your PC**, with the GAIA app or the GAIA terminal app.
+- **About five minutes.** You'll create your own private Discord bot. It's free, and you don't
+  need to know anything about bots: GAIA opens each page for you and tells you what to click.
+
+<Note>
+  A *bot* is just a Discord account that a program controls. Yours is controlled only by GAIA on
+  your PC. A *DM* (direct message) is a private chat between two accounts, here you and your bot.
+</Note>
+
+## Set it up
+
+<Tabs>
+  <Tab title="GAIA app">
+    1. Open **Settings → Messaging → Discord**.
+    2. **Create your bot.** Click **Open Discord Developer Portal** and sign in with your
+       Discord account if asked. Click **New Application**, name it *GAIA*, and click
+       **Create**. Then click **Bot** in the left menu, click **Reset Token**, and click
+       **Copy**. The copied text is your bot's *token*, which works like its password.
+    3. **Connect it.** Back in GAIA, paste the token and click **Connect**. GAIA keeps it in your
+       PC's secure password store. This can take up to a minute.
+
+       <Frame caption="Steps 2 and 3: create the bot, then paste its token.">
+         <img src="/images/discord/messaging-none.png" alt="Settings, Messaging, Discord card with a button to open the Discord Developer Portal and a box to paste the bot token" />
+       </Frame>
+    4. **Add the bot to a private server.** Discord only lets you message a bot that shares a
+       server with you, so make a server just for this: in Discord, click **+** in the server
+       list, then **Create My Own**, then **For me and my friends**. Back in GAIA, click
+       **Open invite page** and pick that server. The bot can't do anything in the server;
+       it's only there so you can message it.
+    5. **Claim the bot.** GAIA shows a short code. Click **Open the bot in Discord**, click
+       **Message**, and send the code. Whoever sends the code becomes the only person GAIA
+       answers, so send it yourself.
+
+       <Frame caption="Steps 4 and 5: invite the bot to your server, then send it the code.">
+         <img src="/images/discord/messaging-pairing.png" alt="Discord card showing the invite button and a one-time code with a Copy code button" />
+       </Frame>
+
+    When the screen says **Answering *you***, you're done. Say hi to your bot.
+
+    <Frame caption="Set up: GAIA answers your Discord messages from this PC.">
+      <img src="/images/discord/messaging-connected.png" alt="Discord card saying Answering, with Open in Discord, Stop and Pair a different account buttons" />
+    </Frame>
+  </Tab>
+  <Tab title="Terminal app">
+    1. Type `/discord setup`. Your browser opens the Discord Developer Portal.
+    2. Click **New Application**, name it *GAIA*, and click **Create**. Then click **Bot**,
+       **Reset Token** and **Copy**.
+    3. Paste the token when the terminal app asks for it. It stays hidden as you paste.
+    4. Your browser opens the invite page. Add the bot to a private server: see step 4 of the
+       **GAIA app** tab.
+    5. Open the bot from the link shown, click **Message**, and send the code shown.
+
+    When the terminal app says **Paired with *you***, you're done.
+  </Tab>
+</Tabs>
+
+<Tip>
+  To stop strangers from adding your bot to their own servers, open the bot's page in the
+  Developer Portal and turn off **Public Bot**. GAIA wouldn't answer them anyway; this just
+  keeps the bot to yourself.
+</Tip>
+
+## Chatting with GAIA
+
+Message your bot the way you'd talk to GAIA on your PC:
+
+- "What's in my Downloads folder?"
+- "Summarize this PDF" (with the file attached)
+- "Write today's meeting notes to notes.md"
+- "Are there new comments on my pull request?"
+
+A few things that help:
+
+- **Files go both ways.** Attach a file and GAIA can read it. When GAIA makes a file for you,
+  it sends it back in the chat (up to 10 MB).
+- **Send corrections as a new message.** A quick follow-up such as "actually, only the
+  count" is answered together with the message before it. Editing a message you already
+  sent doesn't change anything, and GAIA tells you so.
+- **To stop GAIA,** press **Stop** under "Thinking…", or send *stop*.
+- **Long answers** arrive as several messages.
+
+## GAIA asks before it changes anything
+
+Reading your files and looking things up don't need your OK. Before GAIA changes something,
+such as running a program, saving or deleting a file, or posting on GitHub, it sends you the
+exact action with buttons:
+
+- **Allow** does it once.
+- **Deny** skips it.
+- **Always allow** appears for some actions, so GAIA stops asking about that kind of action
+  from then on.
+
+You can also just reply *yes* or *no*. If you don't answer within ten minutes, GAIA treats it
+as *no*.
+
+<Warning>
+  Whoever controls the paired Discord account can see anything GAIA can read on your PC,
+  which by default is everything in your user folder. Keep your Discord account secure, and
+  turn on two-factor authentication in Discord's settings.
+</Warning>
+
+## Reminders, summaries and alerts
+
+GAIA can message you on its own. Just ask:
+
+- "Remind me at 5pm to call the dentist."
+- "Every weekday at 8am, summarize what changed in my project."
+- "Tell me right away when someone opens an issue on github.com/my-org/my-app."
+- "Check in every 30 minutes, but only message me if something needs my attention."
+
+GAIA confirms each one before it sets it up. To see or change them later, ask "what are you
+watching?", "pause the summaries", or "stop the 5pm reminder". There's no settings screen for
+them: you manage them by asking. See [Automations](/guides/automations) for more examples.
+
+## Privacy
+
+- Your messages, and GAIA's replies, pass through Discord's servers like any other Discord
+  chat. Don't send passwords or other secrets. If GAIA ever needs one, it asks you to type it on
+  the PC instead.
+- The work itself happens on your PC: your files stay there unless GAIA sends you one.
+- GAIA ignores every server channel, even in your private server. Only your DMs reach it.
+
+## Stopping, pausing and disconnecting
+
+All of these are in **Settings → Messaging → Discord** (or type `/discord` in the terminal
+app):
+
+- **Stop** pauses GAIA on Discord. **Start** turns it back on.
+- **Pair a different account** shows a new code, so another Discord account can take over.
+  This also clears every **Always allow** you chose.
+- **Disconnect** forgets the bot and the paired account. Your bot still exists in the
+  Developer Portal, and you can delete it there.
+
+## If something goes wrong
+
+<AccordionGroup>
+  <Accordion title="GAIA doesn't answer my messages">
+    Check that the PC is on and awake. After the PC restarts, open the GAIA app or the
+    terminal app once, and GAIA starts answering again. You can close it afterwards. A
+    message sent while the PC was off or asleep isn't run later; GAIA says so, and you can
+    send it again.
+  </Accordion>
+  <Accordion title="The bot doesn't reply to the code">
+    Make sure you sent it as a direct message to the bot, not in the server. Codes expire
+    after an hour or a few wrong tries: click **Show a pairing code** and send the new one.
+  </Accordion>
+  <Accordion title="Discord no longer accepts this token">
+    The token was reset, or the bot was deleted. In the Developer Portal, open your
+    application, click **Bot → Reset Token → Copy**, and paste the new token in Settings.
+  </Accordion>
+  <Accordion title="Another PC is answering this bot">
+    The same bot is connected on two PCs, and only one can answer. Click **Answer from this
+    PC** on the one you want, or create a second bot for the other PC.
+  </Accordion>
+  <Accordion title="GAIA's Discord connector already uses this bot">
+    That bot is already used for a different GAIA feature. Create a second application in
+    the Developer Portal and use its token here.
+  </Accordion>
+  <Accordion title="GAIA couldn't read the saved bot token">
+    Your PC's password store is locked. On Linux, log in to your desktop session; then click
+    **Try again**.
+  </Accordion>
+</AccordionGroup>
+
+## Good to know
+
+- GAIA answers one Discord account per PC. It's one assistant with one conversation, so a
+  second person would see the first person's chat.
+- It works in direct messages only: no server channels, voice or slash commands.

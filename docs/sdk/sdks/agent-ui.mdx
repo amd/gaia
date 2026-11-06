@@ -2347,6 +2347,49 @@ OAuth and MCP-server connections for the Settings page and per-agent grants
   [Connectors infrastructure doc](/sdk/infrastructure/connectors) for it.
 </Note>
 
+### Messaging
+
+Settings → Messaging: connect, pair and run the Discord bridge
+([Discord guide](/guides/discord)). The routes call the same functions as
+`gaia discord`. **Every route is local-PC only, reads included:** the status
+carries the pairing code, so a request over mobile access or from another
+computer gets a 403. Mutating routes also require the `X-Gaia-UI: 1` header.
+
+<AccordionGroup>
+  <Accordion title="GET /api/messaging/discord">
+    Connection, pairing and bridge state, plus every link setup opens:
+    `connected`, `paired`, `running`, `state`, `detail`, `bot_name`,
+    `owner_name`, `pairing_code`, `portal_url`, `invite_url`,
+    `bot_profile_url` and more.
+  </Accordion>
+
+  <Accordion title="POST /api/messaging/discord/connect">
+    Body `{token, model?}`. Checks the bot token with Discord, stores it in the
+    OS keyring, and starts the bridge in pairing mode. 400 when Discord refuses
+    the token or it belongs to the Discord connector's bot; 502 when Discord
+    can't be reached.
+  </Accordion>
+
+  <Accordion title="POST /api/messaging/discord/start">
+    Body `{model?, take_over?}`. Starts the bridge; `take_over` answers from this
+    PC even when another PC holds the bot's lease.
+  </Accordion>
+
+  <Accordion title="POST /api/messaging/discord/stop">
+    Stops the bridge. 500 when it does not stop.
+  </Accordion>
+
+  <Accordion title="POST /api/messaging/discord/pair">
+    Forgets the paired account and starts over with a new code. 500, keeping
+    the pairing, when the bridge does not stop.
+  </Accordion>
+
+  <Accordion title="POST /api/messaging/discord/disconnect">
+    Stops the bridge and forgets the token, the pairing and the status. 500,
+    keeping everything, when the bridge does not stop.
+  </Accordion>
+</AccordionGroup>
+
 ### Goals
 
 Autonomous goal/task tracking (`GoalStore`) behind the Agent UI's Goals panel.

@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -1114,6 +1114,44 @@ for (const locale of ['ar', 'en']) {
             await shot(page, `connectors-${locale}-phone`);
             expect(await audit(page)).toEqual([]);
         });
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    for (const [state, status] of Object.entries(DISCORD_STATES)) {
+        test(`settings messaging: discord ${state} (${locale})`, async ({ page }) => {
+            await open(page, '', locale, (p) => withDiscord(p, status));
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            await page.getByRole('dialog').locator('[data-section="messaging"]').click();
+            await expect(page.locator('.messaging-card')).toBeVisible();
+            await expect(page.locator('.settings-pane > .settings-hint .spin')).toHaveCount(0);
+            await shot(page, `messaging-${locale}-${state}`);
+            await scrollPane(page, 'bottom');
+            await shot(page, `messaging-${locale}-${state}-end`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+        });
+    }
+
+    test(`settings messaging: disconnect confirmation (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withDiscord(p, DISCORD_STATES.connected));
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="messaging"]').click();
+        await page.locator('.messaging-footer .btn-danger').click();
+        await expect(page.getByRole('alertdialog')).toBeVisible();
+        await shot(page, `messaging-${locale}-disconnect`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`settings messaging: phone width while pairing (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await open(page, '', locale, (p) => withDiscord(p, DISCORD_STATES.pairing));
+        await page.getByRole('button', { name: /Open sidebar/ }).click();
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="messaging"]').click();
+        await page.locator('.messaging-code').scrollIntoViewIfNeeded();
+        await shot(page, `messaging-${locale}-phone`);
+        expect(await audit(page)).toEqual([]);
     });
 }
 

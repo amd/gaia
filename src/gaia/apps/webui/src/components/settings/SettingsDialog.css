@@ -880,3 +880,133 @@
 [dir='rtl'] .settings-setup-chevron {
     transform: scaleX(-1);
 }
+
+/* ── Messaging ─────────────────────────────────────────────────── */
+
+.messaging-card-title {
+    font-size: 15px;
+}
+
+.messaging-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.messaging-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+}
+
+.messaging-step-number {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    inline-size: 24px;
+    block-size: 24px;
+    border-radius: 50%;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 12.5px;
+    font-weight: 600;
+}
+
+.messaging-step-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 8px;
+    min-inline-size: 0;
+}
+
+.messaging-step-body > p {
+    margin: 0;
+    line-height: 1.5;
+}
+
+.messaging-substeps {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0;
+    padding-inline-start: 20px;
+    line-height: 1.5;
+}
+
+.messaging-link {
+    text-decoration: none;
+}
+
+.messaging-link:hover {
+    text-decoration: none;
+}
+
+[dir='rtl'] .messaging-link-icon {
+    transform: scaleX(-1);
+}
+
+.messaging-code-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}
+
+.messaging-code {
+    padding: 8px 14px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 26px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    user-select: all;
+}
+
+.messaging-status {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 13.5px;
+}
+
+.messaging-status p,
+.settings-notice p {
+    margin: 0;
+}
+
+.messaging-answering {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.messaging-answering-text {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    min-inline-size: 0;
+}
+
+.messaging-model {
+    font-weight: 400;
+    overflow-wrap: anywhere;
+}
+
+.messaging-footer {
+    padding-block-start: 12px;
+    border-block-start: 1px solid var(--border-light);
+}

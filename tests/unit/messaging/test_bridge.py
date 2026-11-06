@@ -346,3 +346,28 @@ def test_cancel_sends_the_stop_verb(channel):
     ch, proc, _ = channel
     ch.cancel()
     assert json.loads(proc.stdin.lines[-1]) == {CONTROL_KEY: CONTROL_CANCEL}
+
+
+def test_amend_changes_a_waiting_turn_but_never_one_that_started():
+    ch = AgentChannel(on_event=lambda e, t: None)
+    turn = Turn(text="first")
+    assert ch.amend(turn, "first and second") is True
+    assert turn.text == "first and second"
+    turn.started = True
+    assert ch.amend(turn, "too late") is False
+    assert turn.text == "first and second"
+
+
+def test_withdraw_takes_a_waiting_turn_out_but_never_a_started_one():
+    ch = AgentChannel(on_event=lambda e, t: None)
+    waiting = Turn(text="later")
+    assert ch.withdraw(waiting) is True and waiting.withdrawn
+    running = Turn(text="now", started=True)
+    assert ch.withdraw(running) is False and not running.withdrawn
+
+
+def test_a_withdrawn_turn_cannot_be_amended():
+    ch = AgentChannel(on_event=lambda e, t: None)
+    turn = Turn(text="later")
+    ch.withdraw(turn)
+    assert ch.amend(turn, "later, and more") is False

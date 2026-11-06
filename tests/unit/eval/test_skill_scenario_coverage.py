@@ -43,6 +43,10 @@ MIN_SCENARIOS_PER_SKILL = 2
 #: ~4.2 min/scenario, so covering all sixteen at two scenarios each would add
 #: over two hours to a suite already being split for length.
 DEFERRED: dict[str, str] = {
+    "automations": (
+        "Runs later through a delivery channel; its store, runner, CLI and policy "
+        "are unit-tested."
+    ),
     "check-in": "Scheduled-trigger skill; needs a clock fixture the runner lacks.",
     "coding": "Overlaps the code_index scenarios; needs its own corpus first.",
     "daily-brief": "Composes other skills; cover its parts before the composite.",

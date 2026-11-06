@@ -1914,6 +1914,182 @@ def build_parser():
 
     slack_parser.set_defaults(action="slack")
 
+    discord_parser = subparsers.add_parser(
+        "discord",
+        help="Drive the GAIA agent from a Discord DM "
+        "(setup|connect|start|stop|restart|pair|status|disconnect)",
+        parents=[parent_parser],
+    )
+    discord_subparsers = discord_parser.add_subparsers(
+        dest="discord_action", help="discord action to perform"
+    )
+    d_setup = discord_subparsers.add_parser(
+        "setup", help="Paste a bot token, start the bridge, and show the pairing code"
+    )
+    d_setup.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Print the Developer Portal link instead of opening a browser",
+    )
+    d_setup.add_argument("--model", help="Chat model the agent runs")
+    discord_subparsers.add_parser(
+        "connect",
+        help=(
+            "Store a bot token read from stdin and print JSON. For a caller that "
+            "collected the token itself, such as the TUI's setup panel."
+        ),
+    )
+    d_start = discord_subparsers.add_parser("start", help="Start the Discord bridge")
+    d_start.add_argument(
+        "--detach",
+        action="store_true",
+        help="Run as its own process that outlives this one, and print JSON status",
+    )
+    d_start.add_argument("--model", help="Chat model the agent runs (remembered)")
+    d_start.add_argument(
+        "--take-over",
+        action="store_true",
+        help="Answer from this PC even if another PC holds the lease",
+    )
+    d_start.add_argument(
+        "--agent-command",
+        help="Command that starts the agent child (default: the installed gaia-agent)",
+    )
+    d_start.add_argument(
+        "--deny-gated-tools",
+        action="store_true",
+        help="Run read-only: auto-deny every tool that would ask for confirmation",
+    )
+    d_start.add_argument(
+        "--upload-root",
+        action="append",
+        help="Directory a file may be sent back to Discord from (repeatable; default: home)",
+    )
+    discord_subparsers.add_parser("stop", help="Stop the Discord bridge")
+    d_restart = discord_subparsers.add_parser(
+        "restart", help="Restart the Discord bridge"
+    )
+    d_restart.add_argument("--model", help="Chat model the agent runs (remembered)")
+    d_restart.add_argument(
+        "--take-over",
+        action="store_true",
+        help="Answer from this PC even if another PC holds the lease",
+    )
+    discord_subparsers.add_parser(
+        "pair", help="Forget the paired account and show a new pairing code"
+    )
+    discord_subparsers.add_parser(
+        "autostart",
+        help="Start the bridge if it is connected, set to autostart, and not running",
+    )
+    d_status = discord_subparsers.add_parser(
+        "status", help="Show connection, pairing, and bridge state"
+    )
+    d_status.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON"
+    )
+    d_decline = discord_subparsers.add_parser(
+        "decline", help="Record that you do not want Discord set up"
+    )
+    d_decline.add_argument(
+        "--never", action="store_true", help="Never offer Discord setup again"
+    )
+    discord_subparsers.add_parser(
+        "disconnect", help="Stop the bridge and forget the token and pairing"
+    )
+    discord_subparsers.add_parser(
+        "watches", help="List the GitHub repositories being watched (JSON)"
+    )
+    d_watch = discord_subparsers.add_parser(
+        "watch",
+        help="DM new third-party PRs, issues and comments on a repo as they happen",
+    )
+    d_watch.add_argument("--repo", required=True, help="owner/name, e.g. amd/gaia")
+    d_watch.add_argument(
+        "--mine",
+        help="Comma-separated GitHub accounts that are yours; their activity is not alerted",
+    )
+    d_unwatch = discord_subparsers.add_parser("unwatch", help="Stop watching a repo")
+    d_unwatch.add_argument("--repo", required=True, help="owner/name")
+    d_always = discord_subparsers.add_parser(
+        "always-allowed",
+        help="List what you answered Always allow to in Discord (JSON)",
+    )
+    d_always.add_argument(
+        "--forget",
+        action="store_true",
+        help="Forget every Always allow answer, so each is asked again",
+    )
+    discord_parser.set_defaults(action="discord")
+
+    # Automation command — reminders, alerts, triggers and summaries GAIA runs
+    # on its own; see gaia.automations.
+    automation_parser = subparsers.add_parser(
+        "automation",
+        help="Reminders, alerts, triggers and summaries GAIA runs on its own "
+        "(list|add|edit|pause|resume|run|remove)",
+        parents=[parent_parser],
+    )
+    automation_sub = automation_parser.add_subparsers(
+        dest="automation_action", help="automation action to perform"
+    )
+    a_list = automation_sub.add_parser("list", help="List every automation (JSON)")
+    a_list.add_argument("--plain", action="store_true", help="One line each, not JSON")
+    a_add = automation_sub.add_parser(
+        "add",
+        help="Add a reminder (--at), a summary (--every), a trigger (--every "
+        "--check) or an alert (--every --alert)",
+    )
+    a_add.add_argument("--name", required=True, help="A short name to find it by")
+    a_add.add_argument("--prompt", help="What GAIA does each time it runs")
+    a_add.add_argument("--say", help="A reminder's exact text, sent without the AI")
+    a_add.add_argument(
+        "--at",
+        help="Once: 10m, in 2 hours, 17:30, 5pm, tomorrow 9am. With --every: "
+        "when the first run is, which sets the time of day for the rest",
+    )
+    a_add.add_argument("--every", help="Repeat: 30m, 6h, 1d")
+    a_add.add_argument(
+        "--check",
+        help="A read-only GitHub read run each interval without the AI; the "
+        "prompt runs only when its output changes",
+    )
+    a_add.add_argument(
+        "--alert",
+        action="store_true",
+        help="Message only when the prompt finds something worth your attention",
+    )
+    a_add.add_argument("--quiet", help="Quiet hours, like 22:00-07:00")
+    a_add.add_argument("--days", help="Only these days: mon-fri, weekends, mon,wed,fri")
+    a_edit = automation_sub.add_parser("edit", help="Change an automation")
+    a_edit.add_argument("ref", help="Its name or id")
+    a_edit.add_argument("--rename", help="A new name")
+    a_edit.add_argument("--prompt", help="New instructions")
+    a_edit.add_argument("--say", help="New reminder text")
+    a_edit.add_argument("--every", help="New interval")
+    a_edit.add_argument("--at", help="New time, for a one-time reminder")
+    a_edit.add_argument("--check", help="New check, for a trigger")
+    a_edit.add_argument("--quiet", help="New quiet hours; empty to remove them")
+    a_edit.add_argument("--days", help="New days, like mon-fri; empty for every day")
+    for verb, text in (
+        ("pause", "Pause an automation"),
+        ("resume", "Resume a paused automation"),
+        ("run", "Run an automation now"),
+    ):
+        automation_sub.add_parser(verb, help=text).add_argument(
+            "ref", help="Its name or id"
+        )
+    a_rm = automation_sub.add_parser("remove", help="Remove an automation")
+    a_rm.add_argument("ref", nargs="?", help="Its name or id")
+    a_rm.add_argument("--all", action="store_true", help="Remove every automation")
+    a_ci = automation_sub.add_parser(
+        "ci-status",
+        help="Print which workflows are failing on a branch, in one line that "
+        "changes only when that does (a check for add --check)",
+    )
+    a_ci.add_argument("--repo", required=True, help="owner/name, e.g. amd/gaia")
+    a_ci.add_argument("--branch", default="main", help="Branch (default: main)")
+
     # Schedule command — cron-based recurring skill/prompt dispatch (issue #892)
     schedule_parser = subparsers.add_parser(
         "schedule",
@@ -5131,6 +5307,18 @@ def main():
         from gaia.messaging.slack.cli import main as slack_main
 
         sys.exit(slack_main(args))
+
+    # Handle automation command — see gaia.automations.cli
+    if args.action == "automation":
+        from gaia.automations.cli import main as automation_main
+
+        sys.exit(automation_main(args))
+
+    # Handle discord command — see gaia.messaging.discord.cli for the flow
+    if args.action == "discord":
+        from gaia.messaging.discord.cli import main as discord_main
+
+        sys.exit(discord_main(args))
 
     # Handle telegram scaffold command
     if args.action == "telegram":

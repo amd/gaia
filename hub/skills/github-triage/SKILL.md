@@ -1,8 +1,8 @@
 ---
 name: github-triage
-description: Triage GitHub work with the gh CLI — your unread notification inbox, or one repository's issue backlog. Groups what arrived, judges what is urgent, and posts the reply once you approve it. Use when asked to triage issues or notifications, check the GitHub inbox, see what needs attention or what you are blocking, review a backlog, comment on or label an issue, or work out what to fix first.
+description: Answer GitHub questions and triage GitHub work with the gh CLI — PRs, issues, commits, CI runs, releases, the notification inbox or a repo's backlog. Links every item; posts a reply only once you approve it. Use for any request about a GitHub repo, PR, issue, commit, CI run or release — what is open, merged, failing or changed — or to triage, check the inbox, see what needs attention or what you are blocking, comment on or label an issue, or decide what to fix first.
 license: MIT
-version: 2.2.0
+version: 2.4.0
 metadata:
   gaia:
     security_tier: community
@@ -132,7 +132,7 @@ name a number and a verb. An empty inbox is a finding — say so, never pad it.
 1. **Pull the backlog.** Ask for the repository if the user did not name one.
 
    ```bash
-   gh issue list --repo <owner>/<repo> --limit 30 --json number,title,labels,createdAt
+   gh issue list --repo <owner>/<repo> --limit 30 --json number,title,labels,createdAt,url
    ```
 
    Narrow with `--label bug`, `--search`, or `--state`.
@@ -168,6 +168,10 @@ name a number and a verb. An empty inbox is a finding — say so, never pad it.
 
 ## Rules
 
+- Link everything you name. Every issue, PR, run or release in your answer is a
+  Markdown link to its page, like
+  `[#6779](https://github.com/amd/gaia/pull/6779)`, never a bare number. Ask
+  `gh` for the `url` field (`--json ...,url`) so you have it.
 - Never close an issue on your own judgement — GAIA refuses `gh issue close`
   outright for exactly this reason. Recommend the close; let a human do it.
 - Do not paste tokens, private URLs, or user emails into a public comment. The

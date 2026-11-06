@@ -136,6 +136,15 @@ _UNSET = object()
 #: Longest request_user_input waits for an answer, in seconds.
 USER_INPUT_MAX_WAIT_S = 600
 
+#: request_user_input's answer where nobody can reply mid-run (a Discord DM, a
+#: one-shot run): no choice was made, so the question goes in the reply.
+NO_QUESTION_CHANNEL = (
+    "__NO_RESPONSE__ The user cannot answer a question mid-run here, so nothing "
+    "was chosen; do not act on a default. End your turn by asking the question "
+    "in your reply, with what they need to decide (such as the list); their "
+    "next message is the answer."
+)
+
 #: ``search_tools``: searches a turn before it must get on with the job, longest
 #: query embedded, tools and skills returned, and tools returned with full docs.
 MAX_TOOL_SEARCHES = 3
@@ -1728,7 +1737,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             self.config, "enable_filesystem", False
         ):
             filesystem_section = """
-**FILE SYSTEM TOOLS:** browse_directory (list folder), tree (visual hierarchy), file_info (metadata), find_files (search by name/content/size/date/type), read_file (text/CSV/JSON/PDF), bookmark (save locations).
+**FILE SYSTEM TOOLS:** no approval; use over shell. browse_directory (list folder, sort_by=size), tree (hierarchy), file_info (metadata), find_files (by name/content/size/date/type), read_file (text/CSV/JSON/PDF), bookmark.
 
 **FILE SEARCH AND AUTO-INDEX WORKFLOW:**
 - Use 1-2 distinctive keywords, not full phrases. WRONG: find_files("Acme Corp API reference"). RIGHT: find_files("api").
@@ -3401,6 +3410,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             """
             timeout_seconds = min(int(timeout_seconds), USER_INPUT_MAX_WAIT_S)
             console = _agent.console
+            if not getattr(console, "answers_questions", True):
+                # The default would read as the user's choice ("cancel").
+                return NO_QUESTION_CHANNEL
             if hasattr(console, "request_user_input_blocking"):
                 return console.request_user_input_blocking(
                     message=message,
