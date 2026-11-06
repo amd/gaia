@@ -49,6 +49,7 @@ import requests
 from openai import OpenAI
 
 from gaia.env import child_env, load_env
+from gaia.llm import stream_watchdog
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
@@ -79,7 +80,6 @@ from gaia.llm.retry import (
     sleep_unless_cancelled,
     tag_http_failure,
 )
-from gaia.llm import stream_watchdog
 from gaia.llm.stream_watchdog import (
     STREAM_READ_BACKSTOP,
     ByteActivity,
