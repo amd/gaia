@@ -917,9 +917,7 @@ class EmbeddedLemonade:
             and parse_version(d.name) is not None
             and (d / name).is_file()
         ]
-        return max(
-            found, key=lambda v: parse_version(v) or (), default=None
-        )
+        return max(found, key=lambda v: parse_version(v) or (), default=None)
 
     # -- install ----------------------------------------------------------
 
