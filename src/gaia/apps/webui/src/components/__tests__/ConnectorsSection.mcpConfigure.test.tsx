@@ -15,6 +15,8 @@ vi.mock('../../services/api', () => ({
     disableConnector: vi.fn(),
     listConnectorGrants: vi.fn(),
     listConnectorActivations: vi.fn(),
+    activateConnectorAgent: vi.fn(),
+    deactivateConnectorAgent: vi.fn(),
 }));
 
 vi.mock('../../hooks/useConnectorsSSE', () => ({
@@ -110,6 +112,43 @@ describe('MCP connector configure panel', () => {
         );
     });
 
+    it('refuses a token with the wrong prefix and trims a padded one', async () => {
+        const row = mcpRow({
+            id: 'mcp-slack',
+            display_name: 'Slack',
+            mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'],
+            config_fields: [
+                {
+                    key: 'SLACK_MCP_XOXB_TOKEN',
+                    label: 'Slack bot token',
+                    kind: 'secret',
+                    required: true,
+                    placeholder: 'xoxb-…',
+                    help_md: '',
+                    prefix: 'xoxb-',
+                },
+            ],
+        });
+        await openTile(row);
+        const input = screen.getByPlaceholderText('xoxb-…');
+        const save = screen.getByRole('button', { name: 'Save' });
+
+        fireEvent.change(input, { target: { value: 'xapp-1-A0-signing' } });
+        fireEvent.click(save);
+        expect(
+            await screen.findByText(/Slack bot token should start with xoxb-/),
+        ).toBeInTheDocument();
+        expect(mocked.configureConnector).not.toHaveBeenCalled();
+
+        fireEvent.change(input, { target: { value: '  xoxb-good  ' } });
+        fireEvent.click(save);
+        await waitFor(() =>
+            expect(mocked.configureConnector).toHaveBeenCalledWith('mcp-slack', {
+                SLACK_MCP_XOXB_TOKEN: 'xoxb-good',
+            }),
+        );
+    });
+
     it('shows the field label, help and setup link from the catalog', async () => {
         const row = mcpRow({
             id: 'mcp-slack',
@@ -167,21 +206,44 @@ describe('MCP connector configure panel', () => {
         expect(screen.queryByText(/Click/)).toBeNull();
     });
 
-    it('shows one plain switch for GAIA instead of an empty grants list', async () => {
-        useChatStore.setState({
-            agents: [
-                { id: 'gaia', name: 'GAIA', namespaced_agent_id: 'installed:gaia', consumes_mcp_servers: true },
-            ] as never,
-        });
+    const GAIA = { id: 'gaia', name: 'GAIA', namespaced_agent_id: 'installed:gaia', consumes_mcp_servers: true };
+
+    it('shows a single switch when GAIA is the only assistant', async () => {
+        useChatStore.setState({ agents: [GAIA] as never });
         mocked.listConnectorActivations.mockResolvedValue({
             activations: { 'installed:gaia': true },
         } as never);
         await openTile(mcpRow({ id: 'mcp-slack', display_name: 'Slack', configured: true }));
 
-        expect(await screen.findByText('Who can use it')).toBeInTheDocument();
-        expect(screen.getByRole('checkbox', { name: 'Can use Slack in chat' })).toBeChecked();
+        expect(await screen.findByRole('checkbox', { name: 'GAIA can use Slack in chat' })).toBeChecked();
+        expect(screen.getAllByRole('checkbox')).toHaveLength(1);
+        expect(screen.queryByText('Who can use it')).toBeNull();
         expect(screen.queryByText('No agents require access to this connector.')).toBeNull();
-        expect(screen.queryByText(/agent/i)).toBeNull();
+        useChatStore.setState({ agents: [] as never });
+    });
+
+    it('turning the single switch on also resumes a paused connector', async () => {
+        useChatStore.setState({ agents: [GAIA] as never });
+        mocked.enableConnector.mockResolvedValue({} as never);
+        mocked.activateConnectorAgent.mockResolvedValue({} as never);
+        await openTile(mcpRow({ id: 'mcp-slack', display_name: 'Slack', configured: true, enabled: false }));
+
+        const sw = await screen.findByRole('checkbox', { name: 'GAIA can use Slack in chat' });
+        expect(sw).not.toBeChecked();
+        fireEvent.click(sw);
+        await waitFor(() => expect(mocked.activateConnectorAgent).toHaveBeenCalledWith('mcp-slack', 'installed:gaia', ['use']));
+        expect(mocked.enableConnector).toHaveBeenCalledWith('mcp-slack');
+        useChatStore.setState({ agents: [] as never });
+    });
+
+    it('keeps the per-assistant list when there is more than one', async () => {
+        const other = { id: 'notes', name: 'Notes', namespaced_agent_id: 'custom:notes', consumes_mcp_servers: true };
+        useChatStore.setState({ agents: [GAIA, other] as never });
+        await openTile(mcpRow({ id: 'mcp-slack', display_name: 'Slack', configured: true }));
+
+        expect(await screen.findByText('Who can use it')).toBeInTheDocument();
+        expect(screen.getAllByRole('checkbox', { name: "Can't use Slack in chat" })).toHaveLength(2);
+        expect(screen.getByRole('checkbox', { name: /this MCP server/ })).toBeInTheDocument();
         useChatStore.setState({ agents: [] as never });
     });
 });

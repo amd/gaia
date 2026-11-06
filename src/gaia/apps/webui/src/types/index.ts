@@ -250,6 +250,8 @@ export interface ConnectorConfigField {
     required: boolean;
     placeholder: string;
     help_md: string;
+    /** The value must start with this, e.g. `xoxb-` for a Slack bot token. */
+    prefix?: string;
 }
 
 /**

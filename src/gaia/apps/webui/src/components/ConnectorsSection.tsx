@@ -267,6 +267,8 @@ function ConnectorTile({
     onChanged: () => void;
 }) {
     const t = useT();
+    const { agents } = useChatStore();
+    const soleAgent = connector.type === 'mcp_server' ? soleMcpAgent(agents, connector.id) : null;
     // Status for the tile header (#1004): an unconfigured connector's group already says so,
     // so it only flags one that needs setup first.
     const renderStatus = () => {
@@ -312,13 +314,20 @@ function ConnectorTile({
                     {connector.type === 'oauth_pkce' ? (
                         <OAuthConfigureBody connector={connector} onChanged={onChanged} />
                     ) : (
-                        <MCPServerConfigureBody connector={connector} onChanged={onChanged} />
+                        <MCPServerConfigureBody
+                            connector={connector}
+                            onChanged={onChanged}
+                            showEnabledToggle={!soleAgent}
+                        />
                     )}
                     {connector.configured && (
                         <ConnectorAgentGrants
                             connectorId={connector.id}
                             connectorName={connector.display_name}
                             connectorType={connector.type}
+                            connectorEnabled={connector.enabled !== false}
+                            soleAgent={soleAgent}
+                            onConnectorChanged={onChanged}
                         />
                     )}
                 </div>
@@ -829,9 +838,11 @@ function OAuthClientEditor({
 function MCPServerConfigureBody({
     connector,
     onChanged,
+    showEnabledToggle = true,
 }: {
     connector: ConnectorRow;
     onChanged: () => void;
+    showEnabledToggle?: boolean;
 }) {
     const t = useT();
     const [values, setValues] = useState<Record<string, string>>(() =>
@@ -852,9 +863,18 @@ function MCPServerConfigureBody({
 
     const handleSave = async () => {
         const filled = Object.fromEntries(
-            Object.entries(values).filter(([, v]) => v.trim() !== ''),
+            Object.entries(values)
+                .map(([k, v]) => [k, v.trim()])
+                .filter(([, v]) => v !== ''),
         );
         if (!keyless && Object.keys(filled).length === 0) return;
+        const wrong = connector.config_fields?.find(
+            (f) => f.prefix && f.key in filled && !filled[f.key].startsWith(f.prefix),
+        );
+        if (wrong) {
+            setErr(t('settings.connectors.wrongPrefix', { label: wrong.label, prefix: wrong.prefix ?? '' }));
+            return;
+        }
         setBusy(true);
         setErr(null);
         setSaved(false);
@@ -917,7 +937,7 @@ function MCPServerConfigureBody({
                     <AlertCircle size={12} /> {err}
                 </div>
             )}
-            {connector.configured && (
+            {connector.configured && showEnabledToggle && (
                 <div className="connector-toggle-row">
                     <span className="connector-toggle-label">{t('settings.connectors.active')}</span>
                     <span className="toggle-switch">
@@ -936,7 +956,7 @@ function MCPServerConfigureBody({
                     </span>
                 </div>
             )}
-            {connector.configured && connector.enabled === false && (
+            {connector.configured && showEnabledToggle && connector.enabled === false && (
                 <p className="connector-toggle-help">{t('settings.connectors.disabledHelp')}</p>
             )}
             {connector.setup_url && !connector.configured && (
@@ -1207,10 +1227,16 @@ function ConnectorAgentGrants({
     connectorId,
     connectorName,
     connectorType,
+    connectorEnabled,
+    soleAgent,
+    onConnectorChanged,
 }: {
     connectorId: string;
     connectorName: string;
     connectorType: string;
+    connectorEnabled: boolean;
+    soleAgent: SoleAgent | null;
+    onConnectorChanged: () => void;
 }) {
     const t = useT();
     const { agents } = useChatStore();
@@ -1255,6 +1281,25 @@ function ConnectorAgentGrants({
     );
 
     if (loading) return null;
+
+    if (soleAgent) {
+        return (
+            <div className="connection-grants">
+                <SoleAgentSwitch
+                    agent={soleAgent}
+                    connectorId={connectorId}
+                    connectorName={connectorName}
+                    connectorEnabled={connectorEnabled}
+                    active={Boolean(activations[soleAgent.namespaced_agent_id])}
+                    hasGrant={(grants[soleAgent.namespaced_agent_id] ?? []).length > 0}
+                    onChanged={() => {
+                        onConnectorChanged();
+                        void load();
+                    }}
+                />
+            </div>
+        );
+    }
 
     // Every agent that declares a requirement for this connector — granted or not.
     // Drives the per-agent (credential) grants section below.
@@ -1324,6 +1369,97 @@ function ConnectorAgentGrants({
                 </>
             )}
         </div>
+    );
+}
+
+// ── SoleAgentSwitch ──────────────────────────────────────────────────────────
+
+type SoleAgent = { name: string; namespaced_agent_id: string };
+
+/**
+ * The one assistant that can use this MCP server, when GAIA is the only one.
+ * Most people have no other assistant, and two switches (server on, GAIA may
+ * use it) that must both be on read as the same thing twice.
+ */
+function soleMcpAgent(
+    agents: ReturnType<typeof useChatStore.getState>['agents'],
+    connectorId: string,
+): SoleAgent | null {
+    const usable = agents.filter(
+        (a) =>
+            a.namespaced_agent_id &&
+            (a.consumes_mcp_servers || a.required_connections?.some((rc) => rc.connector_id === connectorId)),
+    );
+    const needsGrant = agents.some((a) => a.required_connections?.some((rc) => rc.connector_id === connectorId));
+    if (usable.length !== 1 || usable[0].id !== 'gaia' || needsGrant) return null;
+    return { name: usable[0].name, namespaced_agent_id: usable[0].namespaced_agent_id! };
+}
+
+/** On means the server runs and GAIA sees its tools; off hides them from GAIA. */
+function SoleAgentSwitch({
+    agent,
+    connectorId,
+    connectorName,
+    connectorEnabled,
+    active,
+    hasGrant,
+    onChanged,
+}: {
+    agent: SoleAgent;
+    connectorId: string;
+    connectorName: string;
+    connectorEnabled: boolean;
+    active: boolean;
+    hasGrant: boolean;
+    onChanged: () => void;
+}) {
+    const t = useT();
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState<string | null>(null);
+    const on = connectorEnabled && active;
+
+    const toggle = async () => {
+        if (busy) return;
+        setBusy(true);
+        setErr(null);
+        try {
+            if (on) {
+                await api.deactivateConnectorAgent(connectorId, agent.namespaced_agent_id);
+            } else {
+                if (!connectorEnabled) await api.enableConnector(connectorId);
+                if (!active) {
+                    await api.activateConnectorAgent(
+                        connectorId,
+                        agent.namespaced_agent_id,
+                        hasGrant ? undefined : [...MCP_DEFAULT_GRANT_SCOPES],
+                    );
+                }
+            }
+            onChanged();
+        } catch (e) {
+            setErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <>
+            <label className="connector-toggle-row">
+                <span className="connector-toggle-label">
+                    {t('settings.connectors.agentCanUse', { agent: agent.name, name: connectorName })}
+                </span>
+                <span className="toggle-switch">
+                    <input type="checkbox" checked={on} onChange={() => void toggle()} disabled={busy} />
+                    <span className="toggle-track" />
+                </span>
+            </label>
+            {err && (
+                <div className="grant-scope-warning grant-scope-warning--error">
+                    <AlertCircle size={11} /> {err}
+                </div>
+            )}
+        </>
     );
 }
 

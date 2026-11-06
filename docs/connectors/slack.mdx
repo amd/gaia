@@ -74,8 +74,8 @@ in plaintext.
 
 ## Step 3 — Use it
 
-Saving the token doesn't yet let GAIA use Slack. Turn on the **GAIA** switch
-under **Who can use it** on the Slack tile. From the CLI, grant **and**
+Saving the token doesn't yet let GAIA use Slack. Turn on the **GAIA can use
+Slack in chat** switch on the Slack tile. From the CLI, grant **and**
 activate the connector; activation is off by default:
 
 ```bash
@@ -99,6 +99,12 @@ can only read channels you invite it to.
 
 The bot hasn't been invited to that channel. Run `/invite @your-app-name` in
 the channel and ask again.
+
+### "The Slack bot token should start with xoxb-"
+
+You copied a different value from Slack's app page, such as the signing
+secret or an app-level token (`xapp-…`). Open **OAuth & Permissions** and
+copy the **Bot User OAuth Token** instead.
 
 ### `invalid_auth` / `missing_scope`
 

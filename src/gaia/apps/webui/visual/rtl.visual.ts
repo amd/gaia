@@ -858,7 +858,7 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
-        test('a connected server shows one switch for GAIA that names the service', async ({ page }) => {
+        test('with only GAIA, a connected server has one switch that names the service', async ({ page }) => {
             await openConnectors(page, [{
                 id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', description: 'Read channels, threads, and DMs in your Slack workspace.',
                 configured: true, configurable: true, enabled: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [],
@@ -868,12 +868,13 @@ for (const locale of ['ar', 'en']) {
             });
             await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
             await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
-            const card = page.locator('.grant-agent-card');
-            await expect(card).toBeVisible();
-            await expect(page.locator('.grants-empty')).toHaveCount(0);
-            await expect(card.locator('.grant-scope-label')).toContainText('Slack');
-            await expect(page.locator('.connection-grants')).not.toContainText(/agent|وكيل/i);
-            await card.scrollIntoViewIfNeeded();
+            const tile = page.locator('.connector-tile', { hasText: 'Slack' });
+            const row = tile.locator('.connection-grants .connector-toggle-row');
+            await expect(row).toContainText('GAIA');
+            await expect(row).toContainText('Slack');
+            await expect(tile.locator('input[type=checkbox]')).toHaveCount(1);
+            await expect(tile.locator('.grant-agent-card, .grants-empty')).toHaveCount(0);
+            await row.scrollIntoViewIfNeeded();
             await shot(page, `connectors-${locale}-mcp-switch`);
             expect(await audit(page)).toEqual([]);
         });
