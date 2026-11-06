@@ -1925,7 +1925,15 @@ class TestStreamingGeneratorEdgeCases:
             ]
 
         assert any('"type": "policy_alert"' in chunk for chunk in chunks)
-        assert any('"type": "error"' in chunk for chunk in chunks)
+        # The error rides on the closing `done`, so the user sees it once.
+        done = [
+            json.loads(c[len("data: ") :].splitlines()[0])
+            for c in chunks
+            if '"type": "done"' in c
+        ]
+        assert len(done) == 1 and done[0]["failed"] is True
+        assert "stream exploded" in done[0]["content"]
+        assert not any('"type": "error"' in chunk for chunk in chunks)
 
         assistant_messages = [
             message
