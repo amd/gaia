@@ -130,6 +130,15 @@ _UNSET = object()
 #: Longest request_user_input waits for an answer, in seconds.
 USER_INPUT_MAX_WAIT_S = 600
 
+#: request_user_input's answer where nobody can reply mid-run (a Discord DM, a
+#: one-shot run): no choice was made, so the question goes in the reply.
+NO_QUESTION_CHANNEL = (
+    "__NO_RESPONSE__ The user cannot answer a question mid-run here, so nothing "
+    "was chosen; do not act on a default. End your turn by asking the question "
+    "in your reply, with what they need to decide (such as the list); their "
+    "next message is the answer."
+)
+
 # Tools that create files; an agent with none of them gets no scratch directory.
 _FILE_CREATING_TOOLS = frozenset(
     {"write_file", "write_python_file", "write_markdown_file"}
@@ -3165,6 +3174,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             """
             timeout_seconds = min(int(timeout_seconds), USER_INPUT_MAX_WAIT_S)
             console = _agent.console
+            if not getattr(console, "answers_questions", True):
+                # The default would read as the user's choice ("cancel").
+                return NO_QUESTION_CHANNEL
             if hasattr(console, "request_user_input_blocking"):
                 return console.request_user_input_blocking(
                     message=message,
