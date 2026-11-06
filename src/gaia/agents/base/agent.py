@@ -1417,8 +1417,9 @@ _PLAN_HEADING_PATTERN = re.compile(
 )
 # "Before finalizing, I will perform one final search…": a step never taken.
 _ANNOUNCED_ACTION_PATTERN = re.compile(
-    r"^(?P<lead>[^,;:]{1,60},\s+)?"
-    r"(?:i'll|i will|i'm going to|i am going to)\s+"
+    r"^(?P<lead>[^,;:]{1,60},\s+|(?:next|then|now)\s+)?"
+    r"(?:i'll|i will|i'm going to|i am going to"
+    r"|(?P<we>we'll|we will|let's|let us))\s+"
     r"(?:(?:now|next|then|also|first|quickly|immediately|go ahead and"
     r"|proceed to|need to|try to|attempt to)\s+)*"
     r"(?:perform|run|re-?run|search|check|re-?check|fetch|look(?!\s+forward)"
@@ -1479,6 +1480,13 @@ _FUTURE_ACTION_PATTERN = re.compile(
     r"\b(?:i'll|i will|i'm going to|i am going to|we'll|we will)\s+\w",
     re.IGNORECASE,
 )
+# A last sentence tied to this turn is a step even after a plan-like lead-in
+# ("I'll keep this short. I'll check the releases page now.").
+_THIS_TURN_PATTERN = re.compile(
+    r"\bnow\b|\bbefore\s+\w+ing\b"
+    r"|\bto (?:confirm|verify|double-check|make sure|be sure)\b",
+    re.IGNORECASE,
+)
 _UNFINISHED_STEP_QUOTE_MAX_CHARS = 200
 
 
@@ -1491,6 +1499,8 @@ def _announces_action(sentence: str, short: bool = True) -> bool:
     match = _ANNOUNCED_ACTION_PATTERN.match(sentence)
     if not match or _DEFERRED_ACTION_PATTERN.search(sentence):
         return False
+    if match.group("we") and not re.search(r"\bnow\b", sentence, re.IGNORECASE):
+        return False  # "Next, we'll run the migration." is a tutorial step.
     if re.search(r":\s*\S", sentence[match.end() :]):
         return False  # "I'll start with the summary: sales are up 8%."
     if _IMMEDIACY_PATTERN.search(sentence):
@@ -1551,7 +1561,9 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
 
     sentences = re.split(r"(?<=[.!?])\s+", last_line)
     plain_paragraph = re.sub(r"[*_`#>]", "", paragraphs[-1])
-    is_plan = len(_FUTURE_ACTION_PATTERN.findall(plain_paragraph)) >= 2
+    is_plan = len(
+        _FUTURE_ACTION_PATTERN.findall(plain_paragraph)
+    ) >= 2 and not _THIS_TURN_PATTERN.search(sentences[-1])
     if (
         not is_plan
         and not _DRAFT_PATTERN.search(text)

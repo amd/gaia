@@ -52,6 +52,26 @@ ANNOUNCED_ACTIONS = [
         "I have the list of files. I'll read the config next.",
         id="trailing-next",
     ),
+    pytest.param(
+        "The build log shows one warning. Then I'll fetch the full log to confirm.",
+        id="then-ill-no-comma",
+    ),
+    # A second "I'll" must not pass for a plan when the last step is this turn's.
+    pytest.param(
+        "I'll check the releases page now, then I'll summarize what I find.",
+        id="two-actions-now",
+    ),
+    pytest.param(
+        "I'll summarize what I found below. Before finalizing, I will perform "
+        "one final search to confirm the date.",
+        id="promise-then-rc13",
+    ),
+    pytest.param(
+        "I'll keep this short. I'll check the releases page now.",
+        id="promise-then-step-now",
+    ),
+    pytest.param("We'll now check the logs to find the error.", id="well-now"),
+    pytest.param("Let's check the logs now.", id="lets-now"),
 ]
 
 
@@ -212,6 +232,13 @@ REAL_ANSWERS = [
         "restart the service.",
         id="tutorial-finally-we-need-to",
     ),
+    pytest.param(
+        "Suggested commit message:\n\nfix(memory): drop stale tool errors\n\n"
+        "We now retire errors from older versions. We'll re-learn real ones "
+        "next time they happen.",
+        id="commit-message-we-now",
+    ),
+    pytest.param("Next, let's run the migration.", id="tutorial-lets"),
 ]
 
 
