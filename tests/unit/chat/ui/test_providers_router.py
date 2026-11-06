@@ -452,10 +452,20 @@ def test_stored_key_with_no_provider_registered_is_connected_at_startup(
     assert KEY not in resp.text
 
 
-def test_a_stored_key_wins_over_the_environment(
+def test_a_saved_key_wins_over_a_process_environment_key(
     client, lemonade, keys, replay, monkeypatch
 ):
     monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    keys["stored"]["fireworks"] = KEY
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert replay == [KEY]
+    assert fw["key_source"] == "lemonade"
+    assert fw["key_from_gaia_env"] is False
+
+
+def test_a_stored_key_is_used_when_no_process_environment_key_exists(
+    client, lemonade, keys, replay
+):
     keys["stored"]["fireworks"] = KEY
     fw = client.get("/api/providers").json()["providers"][1]
     assert replay == [KEY]
@@ -521,14 +531,17 @@ def test_connect_blank_key_uses_the_env_key(
 @pytest.fixture
 def keychain_prompt(monkeypatch, keys):
     """The Fireworks key read blocks, as macOS does while its access dialog is open."""
-    state = {"answered": threading.Event(), "reads": 0}
+    state = {"answered": threading.Event(), "returned": threading.Event(), "reads": 0}
 
     def recall_key(provider):
         if provider != "fireworks":
             return keys["stored"].get(provider)
         state["reads"] += 1
-        state["answered"].wait(timeout=30)
-        return keys["stored"].get(provider)
+        try:
+            state["answered"].wait(timeout=30)
+            return keys["stored"].get(provider)
+        finally:
+            state["returned"].set()
 
     monkeypatch.setattr(cloud_keys, "recall_key", recall_key)
     monkeypatch.setattr(credential_wait, "WAIT_SECONDS", 0.2)
@@ -536,6 +549,12 @@ def keychain_prompt(monkeypatch, keys):
     state["answered"].set()
     _wait_for_reads_to_drain()
     credential_wait._in_flight.clear()  # a finished, unconsumed read
+
+
+def _answered_with_the_dialog_open(prompt):
+    """The response came back while the key read was still blocked on the dialog."""
+    assert prompt["reads"] >= 1, "the key was never read"
+    assert not prompt["returned"].is_set(), "the request waited on the keychain dialog"
 
 
 def _wait_for_reads_to_drain():
@@ -556,9 +575,8 @@ def test_a_keychain_prompt_is_reported_as_waiting_not_as_no_key(
 
     with caplog.at_level(logging.WARNING):
         for _ in range(3):
-            started = time.monotonic()
             body = client.get("/api/providers").json()
-            assert time.monotonic() - started < 2
+            _answered_with_the_dialog_open(keychain_prompt)
             fw = body["providers"][1]
             assert fw["key_state"] == "waiting_for_os_permission"
             assert fw["key_source"] is None
@@ -587,9 +605,8 @@ def test_restore_waits_for_a_keychain_prompt_then_restores(
     lemonade.models = _cloud_models()
     keys["stored"]["fireworks"] = KEY
 
-    started = time.monotonic()
     body = client.get("/api/providers/active").json()
-    assert time.monotonic() - started < 2
+    _answered_with_the_dialog_open(keychain_prompt)
     assert body["restore"] == {"status": "pending", "message": None}
     assert db.get_setting("custom_model") is None
 
@@ -607,9 +624,8 @@ def test_select_while_a_keychain_prompt_is_open_says_so(
     lemonade.models = _cloud_models()
     keys["stored"]["fireworks"] = KEY
 
-    started = time.monotonic()
     resp = client.post("/api/providers/select", json={"model": model})
-    assert time.monotonic() - started < 2
+    _answered_with_the_dialog_open(keychain_prompt)
     assert resp.status_code == 409, resp.text
     assert "Look for a system dialog" in resp.json()["detail"]
     assert db.get_setting("custom_model") is None
@@ -966,6 +982,32 @@ def test_a_stored_key_is_checked_when_no_models_come_back(
     assert model_list["restarts"] == [1]
 
 
+def test_reconnect_outage_replays_a_saved_key_and_keeps_it(
+    client, lemonade, keys, model_list, monkeypatch
+):
+    from gaia.llm import fireworks_known_models as known
+
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    keys["stored"]["fireworks"] = KEY
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    model_list["check"] = _list_failing()
+
+    def serve_known_models(_):
+        model_list["restarts"].append(1)
+        lemonade.cloud["fireworks"]["models_discovered"] = True
+
+    monkeypatch.setattr(known, "use_known_models", serve_known_models)
+
+    resp = client.post("/api/providers/fireworks/connect", json={})
+
+    assert resp.status_code == 200, resp.text
+    assert model_list["keys_checked"] == [KEY]
+    assert model_list["restarts"] == [1]
+    assert keys["remembered"] == [("fireworks", KEY)]
+    assert keys["stored"]["fireworks"] == KEY
+    assert ENV_KEY not in resp.text
+
+
 def test_connect_drops_a_key_that_discovers_no_models(
     client, lemonade, keys, model_list
 ):
@@ -1080,9 +1122,8 @@ def test_connect_blank_key_while_a_keychain_prompt_is_open_says_so(
     lemonade.cloud["fireworks"] = {"name": "fireworks", "models_discovered": True}
     keys["stored"]["fireworks"] = KEY
 
-    started = time.monotonic()
     resp = client.post("/api/providers/fireworks/connect", json={})
-    assert time.monotonic() - started < 2, "connect hung on the keychain dialog"
+    _answered_with_the_dialog_open(keychain_prompt)
     assert resp.status_code == 409, resp.text
     assert "Look for a system dialog" in resp.json()["detail"]
 

@@ -27,6 +27,7 @@ from ..lemonade_client import (
     LemonadeClientError,
     LemonadeServerDownError,
     active_profile_ctx_size,
+    cloud_model_provider,
     is_tool_calling_model,
     lemonade_log_hint,
     local_sampling_defaults,
@@ -323,6 +324,21 @@ _ENGINE_START_RE = re.compile(
 
 #: How a failed turn names this cause to a front-end, which offers the fix.
 MODEL_SERVER_DOWN = "model_server_down"
+
+#: How these messages name the local server.
+_LOCAL_SERVER_RE = re.compile(r"\bthe local (?:LLM|model)(?: server)?\b", re.IGNORECASE)
+
+
+def wording_for_model(message: str, model_id: Optional[str]) -> str:
+    """*message* as a chat on *model_id* should read it.
+
+    A cloud chat still goes through GAIA's Lemonade, so a failure there is
+    real, but "the local LLM" would tell the user their model runs here.
+    """
+    if not message or cloud_model_provider(model_id) is None:
+        return message
+    return _LOCAL_SERVER_RE.sub("GAIA's AI engine", message)
+
 
 #: The wording of :class:`LemonadeServerDownError`, once a wrapper flattened it.
 _SERVER_DOWN_RE = re.compile(

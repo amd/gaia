@@ -197,9 +197,11 @@ function installQuitGuard({ app, updater, shouldAsk, confirm, onQuitting, onErro
 }
 
 /**
- * What closing the window does: hide it to the tray (telling the user once),
- * or, when closing quits, run the quit guard first and keep the window open
- * until it agrees. An OS sign-out (Windows' session-end) never waits on it.
+ * What closing the window does: hide it to the tray, or minimize it where
+ * there is no tray (telling the user once either way), or, when closing quits,
+ * run the quit guard first and keep the window open until it agrees. A close
+ * while GAIA sits minimized is a dock Quit, so it quits. An OS sign-out
+ * (Windows' session-end) never waits on the guard.
  *
  * @param {Electron.BrowserWindow} win
  * @param {{app: Electron.App, guard: ReturnType<typeof installQuitGuard>,
@@ -207,13 +209,30 @@ function installQuitGuard({ app, updater, shouldAsk, confirm, onQuitting, onErro
  *   reportNoticeError: (err: Error) => void}} deps
  */
 function attachWindowGuards(win, { app, guard, getTray, isQuitting, platform, reportNoticeError }) {
+  let minimizedByClose = false;
+  // On Wayland a restore from the dock may arrive only as focus, so that counts too.
+  for (const back of ["restore", "focus", "show"]) {
+    win.on(back, () => {
+      minimizedByClose = false;
+    });
+  }
   win.on("close", (event) => {
     if (isQuitting()) return;
     const tray = getTray();
-    if (tray && tray.minimizeToTray) {
+    const action = tray ? tray.closeAction : "quit";
+    // Focus wins over isMinimized(), which Wayland can leave stale after a dock restore.
+    const dockQuit =
+      action === "minimize" && !win.isFocused() && (minimizedByClose || win.isMinimized());
+    if (action === "hide" || (action === "minimize" && !dockQuit)) {
       event.preventDefault();
-      win.hide();
-      console.log("[main] Window hidden to tray");
+      if (action === "hide") {
+        win.hide();
+        console.log("[main] Window hidden to tray");
+      } else {
+        win.minimize();
+        minimizedByClose = true;
+        console.log("[main] Window minimized; no tray to hide it in");
+      }
       if (tray.closeNoticeDue) {
         Promise.resolve()
           .then(() => tray.showCloseNotice())

@@ -151,3 +151,30 @@ describe('MemoryDashboard layout contract', () => {
         expect(css).toMatch(/inset-inline-end:\s*0/);
     });
 });
+
+describe('MemoryDashboard tool-error rows', () => {
+    const LESSON = { ...ENTRY, id: 'k2', category: 'error', source: 'error_auto', content: 'load_skill: No skill named note-taker' };
+
+    it('labels a tool error as something GAIA learned, and keeps it out of About you', async () => {
+        mockedApi.getKnowledge.mockResolvedValue({ items: [ENTRY, LESSON], total: 2, offset: 0, limit: 25 });
+        render(<MemoryDashboard />);
+        expect(await screen.findByText('Prefers dark mode')).toBeInTheDocument();
+        expect(screen.queryByText('load_skill: No skill named note-taker')).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
+        const cell = await screen.findByText('load_skill: No skill named note-taker', { selector: '.mem-content-cell *, .mem-content-cell' });
+        expect(within(cell.closest('tr')!).getByText('Learned by GAIA')).toBeInTheDocument();
+    });
+
+    it('keeps the Error label for an error the user wrote, and in the category picker', async () => {
+        const OWN = { ...LESSON, id: 'k3', source: 'user', content: 'The VPN drops on hotel wifi' };
+        mockedApi.getKnowledge.mockResolvedValue({ items: [ENTRY, LESSON, OWN], total: 3, offset: 0, limit: 25 });
+        render(<MemoryDashboard />);
+        fireEvent.click(await screen.findByRole('tab', { name: /Advanced/ }));
+        const cell = await screen.findByText('The VPN drops on hotel wifi', { selector: '.mem-content-cell *, .mem-content-cell' });
+        const row = within(cell.closest('tr')!);
+        expect(row.getByText('Error')).toBeInTheDocument();
+        expect(row.queryByText('Learned by GAIA')).not.toBeInTheDocument();
+        expect(screen.queryByRole('option', { name: 'Learned by GAIA' })).not.toBeInTheDocument();
+    });
+});

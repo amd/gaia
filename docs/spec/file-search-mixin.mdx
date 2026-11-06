@@ -279,6 +279,9 @@ class FileSearchToolsMixin:
         different mtime or size. Otherwise the edit is refused before anything
         is written, and before any confirmation prompt; read the file again
         to proceed. A file this agent created or already edited needs no read.
+        An edit identical to one already applied to the same file this turn
+        (same old_content and new_content) is refused the same way: when
+        old_content sits inside new_content, a repeat would duplicate text.
 
         old_content must match exactly one location. Matching several is an
         error, not a first-match replacement: picking one would edit a region
@@ -346,11 +349,11 @@ class FileSearchToolsMixin:
                 "file_path": str
             }
 
-            On a read-first refusal:
+            On a read-first or repeated-edit refusal:
             {
                 "status": "error",
                 "error": str,           # names the file and says to read it
-                "error_type": "not_read" | "changed_since_read",
+                "error_type": "not_read" | "changed_since_read" | "already_applied",
                 "file_path": str,
                 "executed": False,
                 "operation": "edit_file"
