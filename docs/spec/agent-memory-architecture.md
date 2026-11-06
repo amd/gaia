@@ -954,7 +954,7 @@ writes nothing, still gets no repeats). This used to be a prompt instruction
 asking the model to call `update_memory` itself; it did not, and the same item was
 re-injected every turn for days.
 
-**Example dynamic context prepended to each user message:**
+**Example user message with the dynamic context in front of it:**
 
 ```
 [GAIA Memory Context]
@@ -963,10 +963,13 @@ Current time: 2026-04-01T10:30:00-07:00 (Tuesday)
 Upcoming/overdue:
   - [OVERDUE 2026-03-28] Follow up on deployment review
   - [DUE 2026-04-03] Online course starts this week
-After mentioning a time-sensitive item, call update_memory to set reminded_at.
+Raise these only if they fit what the user just said, or if the conversation is just starting. Never derail an unrelated turn with them. They are already marked as raised — do not call update_memory for that.
+[End GAIA Memory Context — the rest of this message is from the user]
 
 <actual user message here>
 ```
+
+The closing line keeps a short message such as "Reply with just: restored" from reading as the block's last line, which models otherwise refuse as an instruction planted in memory. `frame_user_message()` (`gaia.agents.base.history`) builds this shape and `user_text_of()` strips it back to the user's text.
 
 ### process_query Override
 
@@ -980,7 +983,7 @@ def process_query(self, user_input, **kwargs):
     """
     self._original_user_input = user_input
     dynamic = self.get_memory_dynamic_context()
-    augmented = f"{dynamic}\n\n{user_input}" if dynamic else user_input
+    augmented = frame_user_message(dynamic, user_input)
     return super().process_query(augmented, **kwargs)
 ```
 
