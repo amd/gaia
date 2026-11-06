@@ -114,6 +114,9 @@ def test_a_planted_search_flood_is_capped_and_jumps_at_most_once(flagship):
     agent.process_query(query)
     # The loop refuses the repeated failing call and ends the turn early.
     assert len(model.requests) - 1 < len(flood) + 1
+    # A budget the model ran out of is not a problem to warn the next chat about.
+    learned = agent._memory_store.get_by_category("error")
+    assert not [k for k in learned if "search_tools" in k["content"]]
     results = _tool_results(model)
     assert any("Searched" in r and "times this turn" in r for r in results)
     lists = {json.dumps(tools) for _messages, tools in model.requests}

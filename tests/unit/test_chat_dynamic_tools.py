@@ -195,16 +195,24 @@ class TestOffStates:
 
     def test_a_hosted_model_keeps_every_tool_in_full(self):
         a = _active_agent()
-        a._hosted_native_tool_caller = lambda: True
+        a._hosted_model = lambda: True
         assert a._thin_tool_schemas() is False
         assert a._dynamic_tools_active() is False
         assert a._select_tools_for_turn("run_shell_command please") is None
 
     def test_a_hosted_model_is_never_pinned_to_the_full_list_slot(self):
         a = _active_agent()
-        a._hosted_native_tool_caller = lambda: True
+        a._hosted_model = lambda: True
         a.tool_loader.jump("search")
         assert a._conversation_request_kwargs() == {}
+
+    def test_a_cloud_model_on_text_tool_calls_keeps_every_tool(self):
+        """Cloud means full, whether or not the catalog says it calls tools natively."""
+        a = _active_agent(model_id="fireworks.deepseek-v4p1-flash")
+        a._use_claude = False
+        a._uses_native_tool_calls = lambda: False
+        assert a._thin_tool_schemas() is False
+        assert a._select_tools_for_turn("run_shell_command please") is None
 
     def test_memory_off_means_every_tool(self):
         a = _active_agent(_memory_store=None)

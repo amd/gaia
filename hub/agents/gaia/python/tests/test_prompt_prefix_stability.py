@@ -123,6 +123,8 @@ class _ScriptedModel:
 @pytest.fixture
 def flagship(monkeypatch, tmp_path):
     monkeypatch.setenv("GAIA_HOME", str(tmp_path / "home"))
+    # Outranks GAIA_HOME, and conftest points it at one file for the session.
+    monkeypatch.setenv("GAIA_MEMORY_DB", str(tmp_path / "home" / "memory.db"))
     monkeypatch.setenv("GAIA_DAEMON_HOME", str(tmp_path / "daemon"))
     monkeypatch.setenv("GAIA_PROJECT_MAP_AUTO_INDEX", "0")
     # Unroutable: nothing here may reach a developer's running server.
@@ -537,7 +539,7 @@ def test_an_embedder_that_dies_offers_every_tool(flagship, monkeypatch):
 
 def test_a_hosted_model_gets_every_tool_in_full(flagship, monkeypatch):
     agent, _model, _doc = flagship
-    monkeypatch.setattr(agent, "_hosted_native_tool_caller", lambda: True)
+    monkeypatch.setattr(agent, "_hosted_model", lambda: True)
 
     agent._refresh_active_tool_filter("hello")
 

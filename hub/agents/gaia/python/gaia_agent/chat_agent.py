@@ -73,6 +73,7 @@ from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F401
 from gaia.agents.base.tool_loader import ToolLoader, format_tool_docs
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
@@ -1084,7 +1085,7 @@ class ChatAgent(
         """Thin ``tools=`` on local models, where the prompt is read token by token."""
         return (
             getattr(self, "tool_loader", None) is not None
-            and not self._hosted_native_tool_caller()
+            and not self._hosted_model()
         )
 
     def _tool_docs(self, names: List[str]) -> str:
@@ -1257,13 +1258,19 @@ class ChatAgent(
     def _search_tools(self, query: str) -> Dict[str, Any]:
         """Find tools and installed skills for *query*; ``search_tools``'s body."""
         query = " ".join(str(query).split())[:MAX_TOOL_SEARCH_CHARS]
+        # Not run, so never learned: they describe this call, not the world.
         if not query:
-            return {"status": "error", "error": "Say what you want to do in `query`."}
+            return {
+                "status": "error",
+                "error": "Say what you want to do in `query`.",
+                **NOT_EXECUTED,
+            }
         if self._tool_searches >= MAX_TOOL_SEARCHES:
             return {
                 "status": "error",
                 "error": f"Searched {MAX_TOOL_SEARCHES} times this turn. Use a tool "
                 "from your list, or tell the user what is missing.",
+                **NOT_EXECUTED,
             }
         self._tool_searches += 1
         loader = self.tool_loader
