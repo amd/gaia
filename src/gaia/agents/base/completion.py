@@ -575,7 +575,13 @@ class CompletionEvidence:
         """
         if path.startswith(("\\\\", "//")):
             return False
-        if path not in {self.key(p) for p in self.requested}:
+        typed = [
+            os.path.join(self.root, os.path.expandvars(os.path.expanduser(p)))
+            for p in self.requested
+            if self.key(p) == path
+        ]
+        # The user named the link, not wherever it points.
+        if not typed or any(os.path.islink(p) for p in typed):
             return False
         if validator is None:
             return True

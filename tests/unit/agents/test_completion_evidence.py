@@ -1447,6 +1447,47 @@ def test_a_withheld_named_file_is_never_probed(tmp_path, monkeypatch):
     assert ledger.snapshot("run_python", {}, validator) == {}
 
 
+def _assert_named_link_never_probed(ledger, validator, monkeypatch):
+    monkeypatch.setattr(ledger, "_stamp", lambda p: pytest.fail(f"probed {p}"))
+    assert ledger.snapshot("run_python", {}, validator) == {}
+    ledger.exec_windows.append((0, 2**62, True, 0))  # any mtime is "in the run"
+    found = gaps(ledger, "Done.")
+    assert any("No successful write" in gap for gap in found), found
+
+
+def test_a_named_file_that_links_outside_the_grant_is_never_probed(
+    tmp_path, monkeypatch
+):
+    ledger, validator, report = _report_turn(tmp_path)
+    outside = tmp_path / "private.md"
+    outside.write_text("secret")
+    try:
+        report.symlink_to(outside)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("symlink creation requires elevated privilege on this host")
+        raise
+    _assert_named_link_never_probed(ledger, validator, monkeypatch)
+
+
+def test_a_named_link_is_refused_even_where_symlinks_cannot_be_made(
+    tmp_path, monkeypatch
+):
+    from gaia.agents.base import completion
+
+    ledger, validator, report = _report_turn(tmp_path)
+    report.write_text("| row |\n")
+    real = completion.os.path.islink
+    monkeypatch.setattr(
+        completion.os.path,
+        "islink",
+        lambda p: completion.os.path.normcase(str(p))
+        == completion.os.path.normcase(str(report))
+        or real(p),
+    )
+    _assert_named_link_never_probed(ledger, validator, monkeypatch)
+
+
 def test_a_script_literal_outside_the_read_grant_is_never_probed(tmp_path):
     ledger, validator, report = _report_turn(tmp_path)
     other = report.parent / "other.md"
