@@ -11,6 +11,7 @@
 
 import { create } from 'zustand';
 import * as api from '../services/api';
+import * as speechApi from '../services/speechApi';
 import { log } from '../utils/logger';
 import { speechPieces } from '../utils/speechText';
 
@@ -48,12 +49,12 @@ interface ReadAloudState {
     /** Why the last reading stopped early, for the message it was reading. */
     error: ReadAloudError | null;
     /** The saved voice settings, once read from the server. */
-    settings: api.SpeechSettings | null;
+    settings: speechApi.SpeechSettings | null;
     /** The voice model is known to be on this PC, so reads skip the check. */
     voiceReady: boolean;
     /** Size of the voice model being downloaded for the current read, in GB. */
     downloadGb: number | null;
-    setSettings: (settings: api.SpeechSettings) => void;
+    setSettings: (settings: speechApi.SpeechSettings) => void;
     read: (messageId: string, markdown: string) => Promise<void>;
     stop: () => void;
     clearError: () => void;
@@ -115,13 +116,13 @@ export const useReadAloudStore = create<ReadAloudState>((set, get) => ({
 
     read: async (messageId, markdown) => {
         get().stop();
-        const pieces = speechPieces(markdown, api.MAX_SPEECH_CHARS);
+        const pieces = speechPieces(markdown, speechApi.MAX_SPEECH_CHARS);
         if (pieces.length === 0) return;
         const mine: Run = { abort: new AbortController(), audio: null, urls: [] };
         run = mine;
         set({ messageId, status: 'loading', error: null });
         const fetchPiece = (text: string) => {
-            const pending = api.speak(text, { signal: mine.abort.signal });
+            const pending = speechApi.speak(text, { signal: mine.abort.signal });
             // Awaited in turn below; this only keeps a piece fetched ahead of a
             // stop from being reported as an unhandled rejection.
             pending.catch(() => undefined);
@@ -130,7 +131,7 @@ export const useReadAloudStore = create<ReadAloudState>((set, get) => ({
         try {
             if (!get().voiceReady) {
                 // The first speech request pulls a missing model; say so instead of a bare spinner.
-                const model = await api.getSpeechModel();
+                const model = await speechApi.getSpeechModel();
                 if (run !== mine) return;
                 if (!model.downloaded) set({ status: 'downloading', downloadGb: model.size_gb });
             }

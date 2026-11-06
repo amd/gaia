@@ -5,16 +5,17 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReadAloudSettings } from '../ReadAloudSettings';
 import * as api from '../../../services/api';
+import * as speechApi from '../../../services/speechApi';
 import { useReadAloudStore } from '../../../stores/readAloudStore';
 
-vi.mock('../../../services/api', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../../../services/api')>();
+vi.mock('../../../services/speechApi', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../../services/speechApi')>();
     return { ...actual, getSpeechSettings: vi.fn(), updateSpeechSettings: vi.fn(), speak: vi.fn() };
 });
 
-const mockedApi = vi.mocked(api);
+const mockedApi = vi.mocked(speechApi);
 
-const SETTINGS: api.SpeechSettings = {
+const SETTINGS: speechApi.SpeechSettings = {
     voice: 'af_bella',
     speed: 100,
     auto: false,

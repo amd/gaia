@@ -3,17 +3,17 @@
 
 import { renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import * as api from '../../services/api';
+import * as speechApi from '../../services/speechApi';
 import { useReadAloudStore } from '../../stores/readAloudStore';
 import { useReadAloudSettings } from '../useReadAloudSettings';
 
-vi.mock('../../services/api', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../../services/api')>();
+vi.mock('../../services/speechApi', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../services/speechApi')>();
     return { ...actual, getSpeechSettings: vi.fn() };
 });
 
-const getSpeechSettings = vi.mocked(api.getSpeechSettings);
-const settings = (auto: boolean): api.SpeechSettings => ({
+const getSpeechSettings = vi.mocked(speechApi.getSpeechSettings);
+const settings = (auto: boolean): speechApi.SpeechSettings => ({
     voice: 'af_bella', speed: 100, auto, min_speed: 50, max_speed: 200, voices: [],
 });
 

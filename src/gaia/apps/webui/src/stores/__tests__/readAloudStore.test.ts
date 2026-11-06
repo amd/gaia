@@ -3,15 +3,16 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
+import * as speechApi from '../../services/speechApi';
 import { useReadAloudStore } from '../readAloudStore';
 
-vi.mock('../../services/api', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../../services/api')>();
+vi.mock('../../services/speechApi', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../services/speechApi')>();
     return { ...actual, speak: vi.fn(), getSpeechModel: vi.fn() };
 });
 
-const speak = vi.mocked(api.speak);
-const getSpeechModel = vi.mocked(api.getSpeechModel);
+const speak = vi.mocked(speechApi.speak);
+const getSpeechModel = vi.mocked(speechApi.getSpeechModel);
 
 /** Plays instantly, or never ends when `hang` is set, so a test can stop mid-piece. */
 class FakeAudio {

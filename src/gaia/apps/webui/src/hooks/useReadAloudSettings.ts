@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect } from 'react';
-import * as api from '../services/api';
+import * as speechApi from '../services/speechApi';
 import { useReadAloudStore } from '../stores/readAloudStore';
 import { log } from '../utils/logger';
 
@@ -16,7 +16,7 @@ export function useReadAloudSettings(): void {
         let live = true;
         const load = async () => {
             try {
-                const settings = await api.getSpeechSettings();
+                const settings = await speechApi.getSpeechSettings();
                 if (live && settings) useReadAloudStore.getState().setSettings(settings);
             } catch (err) {
                 log.ui.error('Could not load the read-aloud settings; replies will not be read automatically', err);
