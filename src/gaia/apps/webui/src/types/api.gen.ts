@@ -82,6 +82,7 @@ export interface ApiSchemas {
   ParseScheduleRequest: ParseScheduleRequest;
   ParseScheduleResponse: ParseScheduleResponse;
   PermissionModeRequest: PermissionModeRequest;
+  PolicyNotice: PolicyNotice;
   PreflightReport: PreflightReport;
   PullRequestRequest: PullRequestRequest;
   QuickLink: QuickLink;
@@ -959,6 +960,15 @@ export interface PermissionModeRequest {
   mode: string;
 }
 /**
+ * Structured Local only notice translated by the Agent UI.
+ */
+export interface PolicyNotice {
+  code: string;
+  reason?: string | null;
+  severity: "info" | "warning";
+  url?: string | null;
+}
+/**
  * Result of the first-run hardware scan.
  */
 export interface PreflightReport {
@@ -1143,6 +1153,7 @@ export interface SettingsResponse {
   dynamic_tools_locked?: boolean;
   model_status?: ModelStatus | null;
   network_policy?: "cloud_allowed" | "local_ai_only";
+  policy_notices?: PolicyNotice[];
   policy_warnings?: string[];
 }
 /**

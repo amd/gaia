@@ -250,6 +250,7 @@ def apply_policy(value: str) -> Dict[str, Any]:
         "dropped": [],
         "users_url": None,
         "warnings": [],
+        "notices": [],
     }
     if stored is not NetworkPolicy.LOCAL_AI_ONLY:
         return result
@@ -257,6 +258,13 @@ def apply_policy(value: str) -> Dict[str, Any]:
     try:
         result["cleared"] = clear_saved_cloud_models()
     except GaiaConfigError as e:
+        result["notices"].append(
+            {
+                "code": "saved_models_not_checked",
+                "severity": "warning",
+                "reason": str(e),
+            }
+        )
         result["warnings"].append(f"Saved models were not checked: {e}")
 
     from gaia.llm.cloud_keys import CloudKeyError, drop_runtime_keys, users_lemonade_url
@@ -264,13 +272,23 @@ def apply_policy(value: str) -> Dict[str, Any]:
     try:
         result["users_url"] = users_lemonade_url()
         if result["users_url"]:
-            result["warnings"].append(
-                f"Your Lemonade Server at {result['users_url']} keeps any cloud keys it holds. "
-                "GAIA will not send it cloud requests."
+            result["notices"].append(
+                {
+                    "code": "users_server_keeps_keys",
+                    "severity": "info",
+                    "url": result["users_url"],
+                }
             )
         else:
             result["dropped"] = drop_runtime_keys()
     except CloudKeyError as e:
+        result["notices"].append(
+            {
+                "code": "runtime_keys_not_dropped",
+                "severity": "warning",
+                "reason": str(e),
+            }
+        )
         result["warnings"].append(
             f"Lemonade still holds any cloud key GAIA gave it ({e}); restart Lemonade to drop it."
         )

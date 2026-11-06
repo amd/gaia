@@ -519,6 +519,7 @@ export interface Settings {
     /** Shared network policy controlling cloud AI use. */
     network_policy: 'cloud_allowed' | 'local_ai_only';
     policy_warnings?: string[];
+    policy_notices?: Array<{ code: string; severity: 'info' | 'warning'; url?: string; reason?: string }>;
 }
 
 /**

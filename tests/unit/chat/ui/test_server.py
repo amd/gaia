@@ -1156,6 +1156,7 @@ class TestNetworkPolicySetting:
 
         assert turned_on.status_code == 200
         assert turned_on.json()["network_policy"] == "local_ai_only"
+        assert turned_on.json()["policy_notices"] == []
         assert db.get_setting("custom_model") is None
         db.set_setting("custom_model", "Qwen3.6-35B-A3B-GGUF")
         assert (
@@ -1179,6 +1180,30 @@ class TestNetworkPolicySetting:
         response = client.put("/api/settings", json={"network_policy": "local_ai_only"})
         assert response.status_code == 200
         assert "server refused" in response.json()["policy_warnings"][0]
+        assert response.json()["policy_notices"] == [
+            {
+                "code": "runtime_keys_not_dropped",
+                "severity": "warning",
+                "url": None,
+                "reason": "server refused",
+            }
+        ]
+
+    def test_user_server_notice_is_structured_for_translation(self, client, monkeypatch, tmp_path):
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        monkeypatch.setattr("gaia.llm.cloud_keys.users_lemonade_url", lambda: "http://127.0.0.1:1234")
+        monkeypatch.setattr("gaia.ui.routers.system.security.require_local_pc", lambda _request: None)
+        response = client.put("/api/settings", json={"network_policy": "local_ai_only"})
+        assert response.status_code == 200
+        assert response.json()["policy_warnings"] == []
+        assert response.json()["policy_notices"] == [
+            {
+                "code": "users_server_keeps_keys",
+                "severity": "info",
+                "url": "http://127.0.0.1:1234",
+                "reason": None,
+            }
+        ]
 
     def test_policy_changes_are_local_pc_only(self, client):
         response = client.put(

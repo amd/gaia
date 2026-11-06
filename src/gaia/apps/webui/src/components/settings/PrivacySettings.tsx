@@ -40,11 +40,23 @@ export function PrivacySettings() {
         try {
             const settings = await api.updateSettings({ network_policy: next ? 'local_ai_only' : 'cloud_allowed' });
             setLocalOnly(settings.network_policy === 'local_ai_only');
-            const warnings = settings.policy_warnings ?? [];
-            setResult({
-                ok: warnings.length === 0,
-                text: warnings.length ? warnings.join(' ') : t(next ? 'settings.privacy.localOnlyOn' : 'settings.privacy.localOnlyOff'),
-            });
+            const notices = settings.policy_notices ?? [];
+            const hasWarning = notices.some((notice) => notice.severity === 'warning');
+            const text = notices.length
+                ? notices.map((notice) => {
+                    if (notice.code === 'users_server_keeps_keys') {
+                        return t('settings.privacy.usersServerKeepsKeys', { url: notice.url ?? '' });
+                    }
+                    if (notice.code === 'runtime_keys_not_dropped') {
+                        return t('settings.privacy.runtimeKeysNotDropped', { reason: notice.reason ?? '' });
+                    }
+                    if (notice.code === 'saved_models_not_checked') {
+                        return t('settings.privacy.savedModelsNotChecked', { reason: notice.reason ?? '' });
+                    }
+                    return t('settings.privacy.policyNoticeUnknown');
+                }).join(' ')
+                : t(next ? 'settings.privacy.localOnlyOn' : 'settings.privacy.localOnlyOff');
+            setResult({ ok: !hasWarning, text });
         } catch (err) {
             setLocalOnly(previous);
             setResult({ ok: false, text: err instanceof Error ? err.message : String(err) });

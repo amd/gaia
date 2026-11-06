@@ -3020,6 +3020,51 @@
     "title": "PermissionModeRequest",
     "type": "object"
   },
+  "PolicyNotice": {
+    "description": "Structured Local only notice translated by the Agent UI.",
+    "properties": {
+      "code": {
+        "title": "Code",
+        "type": "string"
+      },
+      "reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Reason"
+      },
+      "severity": {
+        "enum": [
+          "info",
+          "warning"
+        ],
+        "title": "Severity",
+        "type": "string"
+      },
+      "url": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Url"
+      }
+    },
+    "required": [
+      "code",
+      "severity"
+    ],
+    "title": "PolicyNotice",
+    "type": "object"
+  },
   "PreflightReport": {
     "description": "Result of the first-run hardware scan.",
     "properties": {
@@ -3989,6 +4034,13 @@
         ],
         "title": "Network Policy",
         "type": "string"
+      },
+      "policy_notices": {
+        "items": {
+          "$ref": "#/components/schemas/PolicyNotice"
+        },
+        "title": "Policy Notices",
+        "type": "array"
       },
       "policy_warnings": {
         "items": {

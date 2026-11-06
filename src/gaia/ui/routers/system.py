@@ -1234,6 +1234,7 @@ async def update_settings(
         logger.info("Dynamic tools setting persisted: %s", request.dynamic_tools)
 
     policy_warnings: List[str] = []
+    policy_notices: List[Dict[str, Any]] = []
     if (
         "network_policy" in request.model_fields_set
         and request.network_policy is not None
@@ -1246,6 +1247,7 @@ async def update_settings(
         except (ValueError, OSError) as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         policy_warnings = result["warnings"]
+        policy_notices = result["notices"]
         if result["policy"] is local_only.NetworkPolicy.LOCAL_AI_ONLY:
             # Preserve a local custom model; only a cloud selection would keep
             # the UI pointing at a model the shared cleanup has removed.
@@ -1275,6 +1277,7 @@ async def update_settings(
         dynamic_tools_locked=dynamic_tools_locked,
         network_policy="local_ai_only" if cloud_blocked() else "cloud_allowed",
         policy_warnings=policy_warnings,
+        policy_notices=policy_notices,
     )
 
 

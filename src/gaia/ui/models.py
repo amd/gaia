@@ -264,6 +264,15 @@ class ModelStatus(BaseModel):
     loaded: bool = False
 
 
+class PolicyNotice(BaseModel):
+    """Structured Local only notice translated by the Agent UI."""
+
+    code: str
+    severity: Literal["info", "warning"]
+    url: Optional[str] = None
+    reason: Optional[str] = None
+
+
 class SettingsResponse(BaseModel):
     """Current user settings."""
 
@@ -285,6 +294,9 @@ class SettingsResponse(BaseModel):
     # saved cloud selections and removes runtime cloud keys when it is enabled.
     network_policy: Literal["cloud_allowed", "local_ai_only"] = "cloud_allowed"
     policy_warnings: List[str] = Field(default_factory=list)
+    # Structured informational or warning notices for the Agent UI; the UI
+    # translates these rather than rendering backend prose verbatim.
+    policy_notices: List[PolicyNotice] = Field(default_factory=list)
 
 
 class SettingsUpdateRequest(BaseModel):
