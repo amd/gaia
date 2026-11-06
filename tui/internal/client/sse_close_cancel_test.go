@@ -173,10 +173,11 @@ func TestSSEClientCloseReportsAnUndeliverableCancel(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 	<-started
-	// Listener first: dropping the stream starts the cancel, which must not
-	// find the daemon still accepting.
+	// Leave the stream open: dropping it lets the reader settle the run as
+	// ended before Close, which then has nothing to cancel. With keep-alives
+	// off, the cancel needs a new connection, and the closed listener refuses it.
+	f.srv.Config.SetKeepAlivesEnabled(false)
 	f.srv.Listener.Close()
-	f.srv.CloseClientConnections()
 	err := c.Close()
 	if err == nil || !strings.Contains(err.Error(), "could not tell the 'email' agent to stop run") {
 		t.Fatalf("Close error = %v, want an undeliverable-cancel report", err)
