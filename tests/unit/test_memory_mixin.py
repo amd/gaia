@@ -1518,17 +1518,21 @@ class TestUpdateMemoryTool:
         assert not any(r["id"] == entry_id for r in results)
 
     def test_update_nonexistent_returns_error(self, mixin_with_tools):
-        """update_memory with bad ID returns error status."""
+        """A miss is a failed call, so the model can't claim the memory changed."""
+        from gaia.agents.base.tool_outcome import tool_result_failed
+        from gaia.ui.sse_handler import tool_result_failed as ui_step_failed
+
         func = mixin_with_tools._registered_tools["update_memory"]["function"]
         result = func(
             knowledge_id=str(uuid.uuid4()),
             content="new content",
         )
-        assert (
-            result.get("status") in ("error", "not_found")
-            or "not found" in str(result).lower()
-            or "error" in str(result).lower()
-        )
+
+        assert result["status"] == "error"
+        assert tool_result_failed(result)
+        assert ui_step_failed(result)
+        assert "recall" in result["message"]
+        assert "Nothing was updated" in result["message"]
 
 
 # ===========================================================================
@@ -1554,13 +1558,23 @@ class TestForgetTool:
         assert not any(r["id"] == entry_id for r in results)
 
     def test_forget_nonexistent_returns_error(self, mixin_with_tools):
-        """forget with bad ID returns error/not_found."""
-        func = mixin_with_tools._registered_tools["forget"]["function"]
-        result = func(knowledge_id=str(uuid.uuid4()))
-        assert (
-            result.get("status") in ("error", "not_found")
-            or "not found" in str(result).lower()
+        """A miss is a failed call, so the UI step and the model can't read it as erased."""
+        from gaia.agents.base.tool_outcome import tool_result_failed
+        from gaia.ui.sse_handler import tool_result_failed as ui_step_failed
+
+        entry_id = mixin_with_tools.memory_store.store(
+            category="fact", content="User is allergic to peanuts"
         )
+        func = mixin_with_tools._registered_tools["forget"]["function"]
+
+        result = func(knowledge_id="2026-11-04T22:48:51-0800")
+
+        assert result["status"] == "error"
+        assert tool_result_failed(result)
+        assert ui_step_failed(result)
+        assert "recall" in result["message"]
+        assert "Nothing was erased" in result["message"]
+        assert mixin_with_tools.memory_store.get_item(entry_id) is not None
 
 
 # ===========================================================================
@@ -3021,7 +3035,7 @@ class TestLLMExtraction:
             valid = extract_host._extract_via_llm("user text", "assistant reply", [])
         applied = extract_host._execute_extraction_operations(valid, [])
 
-        assert applied == 2
+        assert applied.stored == 2
         rows = extract_host._memory_store._conn.execute(
             "SELECT content, domain, entity FROM knowledge"
         ).fetchall()

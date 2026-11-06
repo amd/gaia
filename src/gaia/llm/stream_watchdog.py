@@ -18,7 +18,8 @@ so a server that trickles keep-alives or a slow SSE frame is never cut off.
 The stream is read on a worker thread and handed over through a queue, so the
 consumer regains control on a stall (or on Stop) even while the socket read is
 still blocked. The worker's reads wait in short slices, so once the stream is
-abandoned it stops within one slice and closes its own connection.
+abandoned it stops within one slice and closes its own connection, unless it
+is drained instead (see :func:`watch_stream`).
 """
 
 from __future__ import annotations
@@ -39,15 +40,21 @@ from gaia.llm.retry import (
     current_cancel_check,
     stream_idle_timeout,
 )
+from gaia.logger import get_logger
 from gaia.utils import awake_clock
 
 T = TypeVar("T")
+
+logger = get_logger(__name__)
 
 #: Longest stretch between two checks of Stop, or of an abandoned reader's flag.
 _POLL_INTERVAL = 0.25
 #: Seconds the HTTP client's own read timeout runs past the stall limit, so the
 #: watchdog, with its actionable message, is always the one that fires.
 STREAM_READ_BACKSTOP = 30
+#: Longest a stream left early is read on before it is cut off after all, so a
+#: long reply cannot hold the model for minutes after Stop.
+DRAIN_LIMIT_S = 60.0
 
 
 @dataclass(frozen=True)
@@ -256,6 +263,8 @@ def watch_stream(
     limits: StallLimits,
     activity: ByteActivity,
     is_output: Callable[[T], bool],
+    drain_on_abandon: bool = False,
+    on_drain: Optional[Callable[[], Callable[[], None]]] = None,
 ) -> Iterator[T]:
     """Yield from ``produce()``, raising :class:`StreamStalledError` once it
     has been silent longer than *limits* allow, and
@@ -264,21 +273,38 @@ def watch_stream(
     *activity* must be the one fed by the connection ``produce`` reads from;
     every item ``produce`` yields counts as activity too. Silence is measured
     on *activity*'s clock, so time the PC spends asleep is not counted.
+
+    With *drain_on_abandon*, a stream the consumer leaves early (Stop, close,
+    an exception) is read to its end on the worker thread instead of being cut
+    off, for up to ``DRAIN_LIMIT_S``; a stalled one is still cut off.
+    *on_drain* is called when such a drain starts and returns the callback that
+    is run once it has ended.
     """
     handoff: "queue.Queue[tuple]" = queue.Queue()
     stop = threading.Event()
+    drain_guard = threading.Lock()
+    drain_ends: list = []
+    worker_done = False
 
     def run() -> None:
+        nonlocal worker_done
         try:
             for item in produce():
                 activity.touch()
-                handoff.put((_ITEM, item))
-                if stop.is_set():
+                if not stop.is_set():
+                    handoff.put((_ITEM, item))
+                elif not drain_on_abandon:
                     return
         except BaseException as error:  # noqa: BLE001 - re-raised by the consumer
             handoff.put((_ERROR, error))
         else:
             handoff.put((_DONE, None))
+        finally:
+            with drain_guard:
+                worker_done = True
+                ends = list(drain_ends)
+            for end in ends:
+                end()
 
     context = contextvars.copy_context()
     worker = threading.Thread(
@@ -289,6 +315,7 @@ def watch_stream(
     is_cancelled = current_cancel_check()
     seen_output = False
     finished = False
+    stalled = False
     clock = activity.clock
     try:
         while True:
@@ -302,6 +329,7 @@ def watch_stream(
                 limit = limits.idle if seen_output else limits.first_output
                 remaining = limit - (clock() - activity.last)
                 if remaining <= 0:
+                    stalled = True
                     raise StreamStalledError(
                         limit=limit,
                         remote=limits.remote,
@@ -324,4 +352,35 @@ def watch_stream(
     finally:
         stop.set()
         if not finished and worker.is_alive():
+            if drain_on_abandon and not stalled:
+                logger.info(
+                    "Model stream left before its end; reading the rest so the "
+                    "server is not cut off mid-reply"
+                )
+                if on_drain is not None:
+                    end = on_drain()
+                    with drain_guard:
+                        ended = worker_done
+                        if not ended:
+                            drain_ends.append(end)
+                    if ended:
+                        end()
+                _cut_off_after(DRAIN_LIMIT_S, worker, activity)
+            else:
+                activity.abort()
+
+
+def _cut_off_after(seconds: float, worker: threading.Thread, activity: ByteActivity):
+    """Abort *activity* if *worker* is still reading it *seconds* from now."""
+
+    def cut_off() -> None:
+        if worker.is_alive():
+            logger.warning(
+                "Model stream still running %.0fs after it was left; cutting it off",
+                seconds,
+            )
             activity.abort()
+
+    timer = threading.Timer(seconds, cut_off)
+    timer.daemon = True
+    timer.start()

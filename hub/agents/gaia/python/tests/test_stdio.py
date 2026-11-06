@@ -362,24 +362,40 @@ def test_an_agent_exception_becomes_a_terminal_error():
     assert "tool exploded" in terminals[0]["detail"]
 
 
-def test_unreachable_lemonade_gets_actionable_copy(monkeypatch):
-    """The raw urllib3 repr tells a user nothing; name the fix instead."""
+@pytest.mark.parametrize("gaias_own", [True, False])
+def test_unreachable_lemonade_gets_actionable_copy(monkeypatch, gaias_own):
+    """The raw urllib3 repr tells a user nothing; name the problem instead."""
     monkeypatch.setattr(
         "gaia.llm.lemonade_launcher.describe_start_hint",
         lambda *a, **k: StartHint(instruction="Run: lemond --port 13305"),
+    )
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda *a: gaias_own
     )
     detail = stdio._terminal_error(
         ConnectionError("Max retries exceeded ... Connection refused")
     )["detail"]
 
-    assert "Lemonade" in detail
-    # A real next step, not a specific launch command. Pinning a literal here
-    # is how `lemonade-server serve` stayed asserted-as-real for releases after
-    # Lemonade 10.7 removed it (CLAUDE.md, "Never hardcode how Lemonade is
-    # started") — the manual fallback is resolved per machine, so there is no
-    # single launch string to assert.
-    assert "gaia daemon start" in detail
-    assert "lemonade-server serve" not in detail
+    assert "local LLM" in detail
+    assert "Max retries" not in detail
+    # The daemon restarts GAIA's own server; one the user runs is theirs to start.
+    assert ("Run: lemond --port 13305" in detail) is not gaias_own
+
+
+def test_gaias_engine_that_cannot_start_names_the_setup_fix():
+    from gaia.llm.lemonade_client import GaiaLemonadeStartError
+    from gaia.llm.surface_hints import TUI_SETUP_HINT
+
+    failed = GaiaLemonadeStartError(
+        "Could not start GAIA's Lemonade Server: start failed",
+        reason="lemond.exe is missing",
+        log_file=None,
+    )
+    wrapped = RuntimeError("agent build failed")
+    wrapped.__cause__ = failed
+    detail = stdio._terminal_error(wrapped)["detail"]
+    assert detail.startswith("GAIA's AI engine couldn't start: lemond.exe is missing")
+    assert TUI_SETUP_HINT in detail
 
 
 def test_an_anthropic_outage_is_not_blamed_on_lemonade():

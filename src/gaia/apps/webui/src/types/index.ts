@@ -935,6 +935,8 @@ export interface StreamEvent {
     stats?: InferenceStats;
     /** Per-turn sources, files and data flow (attached to done events). */
     turn_summary?: TurnSummary;
+    /** Library documents the agent indexed and attached to the chat (done events). */
+    documents_added?: Document[];
     /** MCP server statuses (for mcp_status events). */
     servers?: MCPServerStatus[];
     /** Structured command output (for tool_result of run_shell_command). */
@@ -1048,6 +1050,8 @@ export interface ProviderInfo {
     /** The provider's model list is down, so GAIA offers models it already knows. */
     known_models?: boolean;
     env_var?: string;
+    /** An environment key GAIA handed Lemonade itself, so a typed key can replace it. */
+    key_from_gaia_env?: boolean;
     base_url?: string | null;
     error?: string;
     /** AMD gateway only: whether its host answers from this network. */
@@ -1076,7 +1080,8 @@ export interface ActiveModel {
     inference_remote?: boolean | null;
     inference_description?: string | null;
     /** `pending` while the model server is still starting; ask again. */
-    restore?: { status: 'restored' | 'failed' | 'none' | 'pending'; message: string | null };
+    /** `retry`: a failed cloud restore the backend checks again on the next read. */
+    restore?: { status: 'restored' | 'failed' | 'none' | 'pending'; message: string | null; retry?: boolean };
 }
 
 export interface ProvidersResponse {

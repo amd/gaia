@@ -732,6 +732,10 @@
     white-space: nowrap;
 }
 
+.model-row-current.is-blocked {
+    color: var(--accent-yellow);
+}
+
 .grant-row {
     display: flex;
     align-items: center;

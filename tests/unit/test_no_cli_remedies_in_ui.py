@@ -243,3 +243,61 @@ def test_a_failed_key_replay_tells_an_app_user_where_to_fix_it(monkeypatch):
     assert surface_hints.AGENT_UI_GATEWAY_KEY_HINT in event["message"]
     assert not COMMAND.search(event["message"])
     assert "/gateway" not in event["message"]
+
+
+def test_setup_log_offers_vision_in_settings_not_a_command():
+    """``gaia init`` prints its terminal advice; the app's setup log rewords it."""
+    pytest.importorskip("fastapi")
+    from gaia.ui import setup_runner as sr
+
+    run = sr.SetupRun(False)
+    sr.SetupRunner()._consume(  # pylint: disable=protected-access
+        run,
+        "   Not downloading Gemma-4-E4B-it-GGUF: your default_model is "
+        f"gemma4-it-e4b-FLM. {surface_hints.CLI_VISION_DOWNLOAD_HINT}",
+    )
+
+    (line,) = run.log
+    assert surface_hints.AGENT_UI_VISION_DOWNLOAD_HINT in line
+    assert not COMMAND.search(line)
+    assert "gaia download --agent vlm" in surface_wording(
+        surface_hints.CLI_VISION_DOWNLOAD_HINT, "cli"
+    )
+
+
+@pytest.mark.parametrize("agent_id", ["gaia", "chat"])
+def test_a_missing_flagship_points_at_setup_not_a_selector(agent_id):
+    pytest.importorskip("fastapi")
+    from gaia.ui._chat_helpers import _agent_unavailable_message
+
+    msg = _agent_unavailable_message(agent_id, None)
+
+    assert surface_hints.AGENT_UI_SETUP_HINT in msg
+    assert "selector" not in msg
+    assert "re-creat" not in msg
+    assert not COMMAND.search(msg)
+
+
+def test_a_path_outside_the_document_roots_names_no_env_var(tmp_path, monkeypatch):
+    fastapi = pytest.importorskip("fastapi")
+    from gaia.ui import utils
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.delenv(utils.DOCUMENT_ROOTS_ENV, raising=False)
+
+    with pytest.raises(fastapi.HTTPException) as caught:
+        utils.ensure_document_path_allowed(tmp_path / "elsewhere" / "report.pdf")
+
+    detail = caught.value.detail
+    assert caught.value.status_code == 403
+    assert "move or copy it" in detail
+    assert utils.DOCUMENT_ROOTS_ENV not in detail
+    assert "restart GAIA" not in detail
+
+
+def test_the_vision_download_hint_names_the_agent_ui_path():
+    worded = surface_wording(surface_hints.VISION_DOWNLOAD_HINT, "agent_ui")
+    assert worded == surface_hints.AGENT_UI_VISION_DOWNLOAD_STEP
+    assert "TUI" not in worded and not COMMAND.search(worded)

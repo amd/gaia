@@ -242,9 +242,8 @@ def _parse_pull_event_block(block: str) -> Optional[Dict[str, Any]]:
 async def _auto_load_after_download(model_name: str) -> None:
     """Issue a Lemonade ``/v1/load`` for ``model_name`` at our default ctx.
 
-    Called from ``_stream_lemonade_pull`` once the pull completes so the
-    user doesn't have to take a second action ("model downloaded — now go
-    click Load") to actually start chatting. We use the same
+    Called from ``_stream_lemonade_pull`` only when the requester opts in
+    with ``load_after``. We use the same
     ``DEFAULT_CONTEXT_SIZE`` (32K) the rest of GAIA expects, otherwise
     Lemonade falls back to its own much smaller default and the next
     chat hits the "ctx too small" reload branch.
@@ -275,7 +274,9 @@ def _install_npu_backend(model_name: str) -> None:
     LemonadeClient(verbose=False).ensure_npu_backend(model_name)
 
 
-async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
+async def _stream_lemonade_pull(
+    model_name: str, force: bool, load_after: bool = False
+) -> None:
     """Issue ``POST /v1/pull?stream=true`` and feed the SSE event stream
     into ``_download_progress[model_name]``.
 
@@ -461,18 +462,17 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
                                 },
                             )
                             logger.info("Pull stream complete: %s", model_name)
-                            # Kick off auto-load so the user doesn't have to
-                            # manually click "Load" after a multi-minute pull.
-                            # We hand off to a separate task because the load
-                            # itself can take ~30 s (the 4B GGUFs warm-load
-                            # quickly, but mmap + KV-cache alloc is real work)
-                            # and we want this stream's TTL eviction to fire
-                            # on schedule rather than waiting on the load.
-                            load_task = asyncio.create_task(
-                                _auto_load_after_download(payload["model_name"])
-                            )
-                            _background_tasks.add(load_task)
-                            load_task.add_done_callback(_background_tasks.discard)
+                            if load_after:
+                                # The missing-model banner opts in because
+                                # there is no active model for the pull to
+                                # displace. Settings downloads deliberately
+                                # leave the current model untouched until the
+                                # user chooses it.
+                                load_task = asyncio.create_task(
+                                    _auto_load_after_download(payload["model_name"])
+                                )
+                                _background_tasks.add(load_task)
+                                load_task.add_done_callback(_background_tasks.discard)
                         elif ev == "error":
                             err_msg = (
                                 data.get("error")
@@ -1516,6 +1516,7 @@ async def unload_model_endpoint(body: UnloadModelRequest, request: Request):
 class DownloadModelRequest(BaseModel):
     model_name: str
     force: bool = False
+    load_after: bool = False
 
 
 @router.post("/api/system/download-model", status_code=202)
@@ -1539,7 +1540,9 @@ async def download_model_endpoint(body: DownloadModelRequest):
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    task = asyncio.create_task(_stream_lemonade_pull(model_name, body.force))
+    task = asyncio.create_task(
+        _stream_lemonade_pull(model_name, body.force, body.load_after)
+    )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return {"status": "downloading", "model": model_name}

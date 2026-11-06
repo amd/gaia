@@ -1842,6 +1842,23 @@ def test_a_brand_new_single_download_is_not_called_resumed():
 # ── Stage logs and the troubleshooting report ──────────────────────────────
 
 
+def test_a_failed_piece_reports_whether_a_retry_may_help():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event({"event": "component", "component": "server", "state": "done"})
+    runner._on_event({"event": "component", "component": "agent", "state": "active"})
+    runner._on_event(
+        {"event": "component", "component": "agent", "state": "failed", "kind": "other"}
+    )
+    view = run.view()
+    assert view["components"] == {"server": "done", "agent": "failed"}
+    assert view["component_kinds"] == {"agent": "other"}
+
+    runner._on_event({"event": "component", "component": "agent", "state": "done"})
+    assert run.view()["component_kinds"] == {}
+
+
 def test_each_stage_keeps_its_own_log():
     runner = sr.SetupRunner()
     check = sr.SetupRun(skip_chat_model=False, server_only=True)

@@ -140,7 +140,7 @@
   gap: 10px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border-light);
-  border-left: 3px solid transparent;
+  border-inline-start: 3px solid transparent;
   cursor: pointer;
   position: relative;
   transition: background var(--duration-fast) var(--ease);
@@ -176,31 +176,31 @@
 .notification-unread-dot {
   position: absolute;
   top: 16px;
-  left: 6px;
+  inset-inline-start: 6px;
   width: 6px;
   height: 6px;
   border-radius: var(--radius-full);
   background: var(--accent);
 }
 
-/* ── Type-based left border colors ───────────────────────────────────── */
+/* ── Type-based start border colors ───────────────────────────────────── */
 .notification-item.notif-type-permission {
-  border-left-color: var(--accent);
+  border-inline-start-color: var(--accent);
 }
 .notification-item.notif-type-security {
-  border-left-color: var(--accent-yellow);
+  border-inline-start-color: var(--accent-yellow);
 }
 .notification-item.notif-type-policy {
-  border-left-color: var(--accent-yellow);
+  border-inline-start-color: var(--accent-yellow);
 }
 .notification-item.notif-type-status {
-  border-left-color: var(--accent-green);
+  border-inline-start-color: var(--accent-green);
 }
 .notification-item.notif-type-info {
-  border-left-color: var(--accent-blue);
+  border-inline-start-color: var(--accent-blue);
 }
 .notification-item.notif-type-error {
-  border-left-color: var(--danger);
+  border-inline-start-color: var(--danger);
 }
 
 /* ── Type-based icon colors ──────────────────────────────────────────── */
@@ -298,8 +298,8 @@
 
 .notification-policy-reason {
   display: block;
-  padding-left: 8px;
-  border-left: 2px solid color-mix(in srgb, var(--accent-yellow) 45%, transparent);
+  padding-inline-start: 8px;
+  border-inline-start: 2px solid color-mix(in srgb, var(--accent-yellow) 45%, transparent);
   color: var(--text-secondary);
   line-height: 1.45;
 }

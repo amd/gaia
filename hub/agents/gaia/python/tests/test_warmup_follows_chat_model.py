@@ -155,6 +155,22 @@ def test_a_turn_with_no_model_keeps_a_warm_up_of_the_default(sidecar):
     assert not state.cancel.is_set()
 
 
+def test_an_npu_warm_up_that_only_loads_says_so(sidecar, monkeypatch, caplog):
+    """No "0 of ? prompt tokens cached": the first turn reads the prompt."""
+    configure, built, _ = sidecar
+    configure(last_model=NPU)
+    monkeypatch.setattr(
+        _Agent, "warm_up", lambda self, cancel=None: {"seconds": 4.0, "primed": False}
+    )
+
+    with caplog.at_level("INFO", logger=server_mod.logger.name):
+        server_mod._warmup_blocking()
+
+    [said] = [r.getMessage() for r in caplog.records if NPU in r.getMessage()]
+    assert said.startswith(f"GAIA sidecar: loaded {NPU} in 4.0s")
+    assert "prompt tokens cached" not in said
+
+
 def test_a_chat_agent_built_with_skip_lemonade_preloads_nothing():
     from unittest.mock import patch
 

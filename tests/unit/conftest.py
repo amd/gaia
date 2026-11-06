@@ -132,6 +132,14 @@ def _forget_crashed_loads(monkeypatch):
     monkeypatch.setattr(lemonade_client, "_CRASHED_LOADS", {})
 
 
+@pytest.fixture(autouse=True)
+def _forget_engine_start_failure(monkeypatch):
+    """A failed start one test staged must not fail the next test's model call."""
+    from gaia.llm import lemonade_client
+
+    monkeypatch.setattr(lemonade_client, "_ENGINE_START_FAILURE", None)
+
+
 #: The home this run started with; a test that moves it keeps ``<its home>/.gaia``.
 _RUN_HOME = Path.home()
 

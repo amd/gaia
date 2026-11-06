@@ -12,6 +12,7 @@
 import { create } from 'zustand';
 import type { GaiaNotification, NotificationType } from '../types/agent';
 import { confirmTool } from '../services/api';
+import { useChatStore } from './chatStore';
 import { ref } from '../i18n/registry';
 import { tEn, type Translate } from '../i18n/useT';
 
@@ -270,6 +271,11 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
           : n
       ),
     }));
+    // The run goes on, often silently (a long tool), so the answer itself ends the wait.
+    const chat = useChatStore.getState();
+    if (notification.sessionId && notification.sessionId === chat.currentSessionId && chat.awaitingUser) {
+      chat.setAwaitingUser(false);
+    }
   },
 }));
 

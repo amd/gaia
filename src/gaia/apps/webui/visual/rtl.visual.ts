@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MODEL_LIST, NOW, SYSTEM_STATUS, mockApi, useLocale, useTheme, withConnectors, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -303,6 +303,33 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** A quoted path with " - " and double spaces; the chip and the prompt must show it as typed. */
+const QUOTED_PATH = 'C:\\gtest\\run-rc11\\fx\\Team Docs  -  AMD Shared\\budget.txt';
+
+async function withQuotedPath(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: `Please index "${QUOTED_PATH}" into my document library`, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a quoted path with double spaces is one chip, spaces kept (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withQuotedPath);
+        const chips = page.locator('.file-path-link');
+        await expect(chips).toHaveCount(1);
+        // innerText follows white-space, so collapsed spaces would show here; toHaveText would hide them.
+        expect(await chips.evaluateAll((els) => els.map((el) => (el as HTMLElement).innerText))).toEqual([QUOTED_PATH]);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath('quoted-path.png') });
+    });
+}
+
 /** POST /api/chat/send answers with one "Reading your request" status, then holds the turn open. */
 function holdOnReading(): void {
     const realFetch = window.fetch.bind(window);
@@ -335,6 +362,22 @@ for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 
         await shot(page, `live-status-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const status of TOOL_STATUS) {
+        test(`a running tool's row says what its model calls are doing: ${status.name} (${locale})`, async ({ page }) => {
+            await open(page, `#${ANSWER_SESSION}`, locale, (p) => holdOnToolStatus(p, status));
+            const box = page.getByRole('textbox').first();
+            await box.fill('List every action item in the minutes');
+            await box.press('Enter');
+            const row = page.locator('.flow-tool.active').last();
+            await expect.poll(() => shownText(row.locator('.flow-tool-label'))).toContain(status[locale]);
+            expect(await row.evaluate((el) => getComputedStyle(el).direction)).toBe(locale === 'ar' ? 'rtl' : 'ltr');
+            await shot(page, `tool-status-${status.name}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+        });
+    }
 }
 
 test('documents', async ({ page }) => {
@@ -613,10 +656,11 @@ interface ModelPageOptions {
     models?: unknown[];
     status?: unknown;
     theme?: 'light' | 'dark';
+    fireworks?: Record<string, unknown>;
 }
 
-async function openModelPage(page: Page, locale: string, { models = MODEL_LIST, status, theme = 'light' }: ModelPageOptions = {}): Promise<void> {
-    await open(page, '', locale, (p) => withModelPage(p, models, SETUP_PLAN, status), theme);
+async function openModelPage(page: Page, locale: string, { models = MODEL_LIST, status, theme = 'light', fireworks }: ModelPageOptions = {}): Promise<void> {
+    await open(page, '', locale, (p) => withModelPage(p, models, SETUP_PLAN, status, fireworks), theme);
     const sidebar = page.getByRole('button', { name: /Open sidebar/ });
     if (await sidebar.isVisible()) await sidebar.click();
     await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -712,6 +756,15 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('.settings-card .model-row').first()).toBeVisible();
             await expect(page.locator('.model-in-use .is-device')).toHaveText('GPU');
             await shot(page, `model-${locale}-cloud`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('an environment key that is not connected says why there are no models', async ({ page }) => {
+            await openModelPage(page, locale, { fireworks: { key_source: 'environment', key_from_gaia_env: true, key_hint: null, models_discovered: false } });
+            await page.getByRole('radio', { name: /Fireworks AI/ }).click();
+            await expect(page.locator('.settings-key-masked')).toBeVisible();
+            await expect(page.locator('.settings-key-status.settings-error')).toBeVisible();
+            await shot(page, `model-${locale}-cloud-env-key-not-connected`);
             expect(await audit(page)).toEqual([]);
         });
 
@@ -827,6 +880,22 @@ for (const locale of ['ar', 'en']) {
             if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
         });
     }
+
+    test(`desktop app on a desktop with no tray (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await withDesktopBridges(p, {}, { available: false, reason: 'no-host' });
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const desktop = page.locator('.settings-disclosure', { hasText: /Desktop app|تطبيق سطح المكتب/ });
+        await expect(desktop).toBeVisible();
+        await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+        await desktop.scrollIntoViewIfNeeded();
+        await expect(desktop.locator('#desktop-minimizeToTray-hint')).toContainText('AppIndicator');
+        await shot(page, `desktop-${locale}-no-tray`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
 
     test(`notifications on the desktop app (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withDesktopBridges(p); });
@@ -1684,6 +1753,18 @@ for (const locale of ['ar', 'en']) {
         if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre')).toEqual([]);
         await shot(page, `permission-path-${locale}`);
     });
+
+    test(`a path-access prompt keeps a path's double spaces (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, [{ ...PATH_PROMPT[0], args: { path: QUOTED_PATH, kind: 'file' } }]);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('index my budget');
+        await page.keyboard.press('Enter');
+        const shown = page.locator('.perm-card-question bdi[dir="ltr"]').first();
+        await expect(shown).toBeVisible();
+        expect(await shown.evaluate((el) => (el as HTMLElement).innerText)).toBe(QUOTED_PATH);
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `permission-path-spaced-${locale}`);
+    });
 }
 
 const REPEATED_PROMPTS = ['c1', 'c2', 'c3'].map((id) => ({
@@ -1705,6 +1786,42 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.perm-card-hint')).toContainText(locale === 'ar' ? 'من قبل: 2.' : 'allowed this 2 times');
         expect(await audit(page)).toEqual([]);
         await shot(page, `permission-repeated-${locale}`);
+    });
+}
+
+const PANEL_EVENTS = [
+    { ...PYTHON_PROMPT[0], confirm_id: 'n-denied' },
+    { ...PATH_PROMPT[0], confirm_id: 'n-pending' },
+    {
+        type: 'policy_alert', tool: 'run_shell_command', decision: 'BLOCK', reason: 'Shell commands are blocked here.',
+        rule_ids: ['no-shell'], policy_version: 'v7', receipt_id: 'rcpt-7',
+    },
+];
+
+for (const locale of ['ar', 'en']) {
+    test(`the notification panel's tabs, labels and buttons are in the UI language (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, PANEL_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route('**/api/chat/confirm-tool', (route) => route.fulfill({ json: { status: 'ok', approved: false, granted: null } }));
+        });
+        await page.locator('textarea').first().fill('summarize my sales data');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.perm-card-title')).toBeVisible();
+        await page.locator('.sb-bottom-actions .sb-icon-btn').first().click();
+        const panel = page.locator('.notification-center');
+        await expect(panel.locator('.notification-item')).toHaveCount(3);
+        // Newest first, so the last permission item is the Python prompt.
+        await panel.locator('.notification-item.notif-type-permission').last().locator('.notification-action-deny').click();
+        await expect(panel.locator('.notification-response-badge')).toHaveCount(1);
+        const ar = locale === 'ar';
+        await expect(panel.locator('.notification-center-title')).toContainText(ar ? 'الإشعارات' : 'Notifications');
+        await expect(panel.getByRole('tab').first()).toContainText(ar ? 'الكل' : 'All');
+        await expect(panel.locator('.notification-response-badge')).toContainText(ar ? 'تم الرفض' : 'Denied');
+        await expect(panel.locator('.notification-footer-btn').first()).toContainText(ar ? 'تعليم الكل كمقروء' : 'Mark All Read');
+        expect(await audit(page)).toEqual([]);
+        // Agent names, titles, bodies and policy reasons are the notification's own text, not the panel's.
+        if (ar) expect(await untranslated(page, '.notification-center', '.notification-agent, .notification-title, .notification-message, .notification-policy-reason')).toEqual([]);
+        await shot(page, `notification-panel-${locale}`);
     });
 }
 
@@ -2060,5 +2177,54 @@ for (const locale of ['ar', 'en']) {
             await expect(page.getByText('run_shell')).toBeVisible();
             await checkMemory(page, locale, 'advanced-phone');
         });
+    });
+}
+
+const INDEXED_MANUAL = {
+    id: 'd-manual', filename: 'plant_manual.md', filepath: 'C:\\Users\\you\\.gaia\\documents\\3f9a1c2b_plant_manual.md',
+    file_size: 2_048, chunk_count: 3, indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1,
+    indexing_status: 'complete',
+};
+
+const COPY_NOTICE = 'plant_manual.md is outside the folders your documents are read from, so your documents hold a copy '
+    + 'of it. Changes to D:\\gtest\\plant_manual.md won\'t reach the copy.';
+const INDEX_REQUEST = 'Add D:\\gtest\\plant_manual.md to my documents';
+const INDEX_ANSWER = 'Added plant_manual.md to your documents.';
+
+/** "Add it to my documents" on a file outside the document folders, as the backend streams it. */
+const INDEXED_OUTSIDE = [
+    { type: 'tool_start', tool: 'index_document', detail: '', narration: '' },
+    { type: 'tool_result', summary: 'Indexed plant_manual.md (3 chunks)', success: true },
+    { type: 'status', status: 'warning', message: COPY_NOTICE },
+    { type: 'chunk', content: INDEX_ANSWER },
+    { type: 'done', message_id: 4, content: INDEX_ANSWER, documents_added: [INDEXED_MANUAL] },
+];
+
+/** The chat as saved once that turn ends, which the app reloads. */
+const SAVED_AFTER_INDEXING = {
+    messages: [
+        ...MESSAGES.messages,
+        { id: 3, session_id: ANSWER_SESSION, role: 'user', content: INDEX_REQUEST, created_at: NOW.toISOString(), rag_sources: null },
+        {
+            id: 4, session_id: ANSWER_SESSION, role: 'assistant', content: INDEX_ANSWER, created_at: NOW.toISOString(), rag_sources: null,
+            agent_steps: [
+                { id: 1, type: 'tool', label: 'Using tool', tool: 'index_document', result: 'Indexed plant_manual.md (3 chunks)', active: false, success: true, latencyMs: 900 },
+            ],
+        },
+    ],
+    total: 4,
+};
+
+for (const locale of ['ar', 'en']) {
+    test(`a document the agent indexes joins the chat's document bar (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, INDEXED_OUTSIDE);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill(INDEX_REQUEST);
+        await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({ json: SAVED_AFTER_INDEXING }));
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.doc-pill-name')).toHaveText('plant_manual.md');
+        await expect(page.getByText(INDEX_ANSWER)).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `agent-indexed-document-${locale}`);
     });
 }

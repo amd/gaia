@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Iterator, List, Optional, Tuple, Union
 
 from gaia.llm.local_only import CloudDisabledError
@@ -19,6 +20,7 @@ from ..lemonade_client import (
     DEFAULT_MODEL_NAME,
     KV_CACHE_SHARED_PHRASES,
     CloudModelUnavailableError,
+    GaiaLemonadeStartError,
     LemonadeAuthError,
     LemonadeClient,
     LemonadeClientError,
@@ -243,6 +245,16 @@ class LemonadeNetworkError(LemonadeError):
     )
 
 
+class LemonadeModelUnavailableError(LemonadeError):
+    """The chat model can't run on this PC until something on the PC changes.
+
+    Sending the message again fails the same way, so the message says what
+    to fix rather than to try again.
+    """
+
+    retryable = False
+
+
 class LemonadeServerUnreachableError(LemonadeNetworkError):
     """Nothing accepts a connection at the Lemonade address.
 
@@ -265,6 +277,47 @@ class LemonadeServerUnreachableError(LemonadeNetworkError):
         self.endpoint = endpoint
         super().__init__(user_message=user_message)
 
+
+class LemonadeEngineStartError(LemonadeError):
+    """GAIA's own model server is down and the daemon could not start it.
+
+    Not :class:`LemonadeNetworkError`: the daemon's reason often quotes
+    refused connections, but resending repeats the same failed start.
+    """
+
+    retryable = False
+    headline = "GAIA's AI engine couldn't start"
+
+    def __init__(
+        self,
+        reason: Optional[str] = None,
+        log_file: Optional[Path] = None,
+        payload: Optional[dict] = None,
+    ):
+        if log_file is None:
+            from gaia.daemon.paths import log_path
+
+            log_file = log_path()
+        self.reason = (reason or "").strip().rstrip(".") or None
+        self.log_file = log_file
+        #: What to do; :data:`TUI_SETUP_HINT` stays verbatim for ``surface_wording``.
+        self.advice = (
+            "Sending the message again won't help until it is repaired. "
+            f"{TUI_SETUP_HINT} Details are in the daemon log at {log_file}"
+        )
+        detail = f": {self.reason}" if self.reason else ""
+        super().__init__(
+            user_message=f"{self.headline}{detail}. {self.advice}", payload=payload
+        )
+
+
+#: :class:`~gaia.llm.lemonade_client.GaiaLemonadeStartError`'s wording, once a
+#: wrapper flattened it. Other daemon failures share only its first clause.
+_ENGINE_START_RE = re.compile(
+    r"could not start gaia's lemonade server: "
+    r"the daemon could not start lemonade server: (?P<reason>.+)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 #: How a failed turn names this cause to a front-end, which offers the fix.
 MODEL_SERVER_DOWN = "model_server_down"
@@ -810,6 +863,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         seen.add(id(cur))
         if isinstance(cur, LemonadeError):
             return cur
+        if isinstance(cur, GaiaLemonadeStartError):
+            return LemonadeEngineStartError(cur.reason, cur.log_file)
         if isinstance(cur, LemonadeServerDownError):
             return LemonadeServerUnreachableError(str(cur), cur.endpoint)
         if isinstance(cur, LemonadeAuthError):
@@ -856,6 +911,9 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         load_error = _model_load_error(envelope[1], context=raw)
         if load_error is not None:
             return load_error
+    engine_start = _ENGINE_START_RE.search(raw)
+    if engine_start:
+        return LemonadeEngineStartError(engine_start.group("reason"))
     down = _SERVER_DOWN_RE.search(raw)
     if down:
         return LemonadeServerUnreachableError(down.group(0).strip(), down.group(1))
@@ -1323,6 +1381,12 @@ class LemonadeProvider(LLMClient):
     def unload_model(self, model_name: Optional[str] = None) -> None:
         self._backend.unload_model(model_name)
 
+    def ensure_model_loaded(self, model_name: str) -> None:
+        """Load *model_name* as a request's own pre-flight would (same window,
+        same lease), or do nothing when it is already resident."""
+        # pylint: disable=protected-access
+        self._backend._ensure_model_loaded(model_name)
+
     def _extract_text(self, response: dict) -> str:
         return response["choices"][0]["text"]
 
@@ -1447,7 +1511,7 @@ class LemonadeProvider(LLMClient):
                 "%s kept writing after its tool call; stopped the stream there",
                 self._last_model,
             )
-            # Closing the stream stops the server generating the rest.
+            # The client reads out the rest: cutting FastFlowLM off restarts it.
             close = getattr(response, "close", None)
             if close is not None:
                 close()
