@@ -643,52 +643,122 @@ def _basename(path: str) -> str:
     return re.split(r"[\\/]", path.rstrip("\\/"))[-1].lower()
 
 
-#: Tools whose output can be a result they computed, and the argument holding
-#: the code that would show the computation.
-_COMPUTE_TOOLS = {"run_python": "code", "query_data": "query"}
-_PY_ARITHMETIC = re.compile(
-    r"[\w)\]]\s*(?:\*\*?|/|\+|-)\s*[\w(\[]"
-    r"|\b(?:sum|mean|prod|round|agg|groupby|cumsum|nlargest|nsmallest)\s*\(",
-    re.I,
-)
-_STRING_LITERAL = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"")
-_PY_STRING = re.compile(r"(?<!\w)([rRbBuUfF]{0,2})('[^'\n]*'|\"[^\"\n]*\")")
-_FSTRING_FIELD = re.compile(r"\{([^{}]*)\}")
-_PY_COMMENT = re.compile(r"#[^\n]*")
-#: "i+1", "len(s)-1": a counter or an index, not a computed figure.
-_PY_COUNTER = re.compile(r"\blen\s*\([^()]*\)\s*[-+]\s*\d+|\b\w+\s*[-+]\s*1\b(?!\.)")
-_SQL_STAR = re.compile(r"\bselect\s+(?:\w+\.)?\*|\(\s*\*\s*\)", re.I)
-_SQL_ARITHMETIC = re.compile(
-    r"\b(?:sum|avg|total|round)\s*\(|[\w)]\s*(?:\*|/|\+|-)\s*[\w(]", re.I
-)
+#: Calls that bring a file into a script; each must name it as a literal.
+_PY_READERS = {
+    "open",
+    "read_csv",
+    "read_excel",
+    "read_json",
+    "read_table",
+    "read_parquet",
+    "load_workbook",
+    "Path",
+    "PdfReader",
+    "Document",
+    "Presentation",
+    "loadtxt",
+    "genfromtxt",
+}
+#: Ways a script reaches data without naming a file the turn read.
+_PY_UNSEEN = {
+    "glob",
+    "iglob",
+    "rglob",
+    "listdir",
+    "scandir",
+    "walk",
+    "iterdir",
+    "requests",
+    "urllib",
+    "urlopen",
+    "httpx",
+    "subprocess",
+    "system",
+    "popen",
+    "environ",
+    "getenv",
+    "input",
+    "stdin",
+    "sqlite3",
+    "eval",
+    "exec",
+    "compile",
+}
+#: The largest figure a script may type itself: a count, an index, a rounding.
+_SMALL_INT = 10
+_NUMERIC_STRING = re.compile(r"\s*[-+]?\d[\d,]*(?:\.\d+)?\s*")
 
 
-def _computed(record: Dict[str, Any]) -> bool:
-    """*record* ran code that does arithmetic; a script that only prints a
-    file, or a ``SELECT *``, echoes figures rather than computing them."""
-    arg = _COMPUTE_TOOLS.get(_name(record))
-    code = (record.get("args") or {}).get(arg) if arg else None
+def _computed(record: Dict[str, Any], read_names: Set[str]) -> bool:
+    """*record* is a script whose output can only come from files read this turn.
+
+    Every file it opens is named and was read this turn, it reaches no other
+    data, and it types no figure beyond a small count — ``v*40`` or
+    ``1500 - 90`` invents its result rather than computing it.
+    """
+    if _name(record) != "run_python":
+        return False
+    code = (record.get("args") or {}).get("code")
     if not isinstance(code, str):
         return False
-    if arg == "query":
-        code = _STRING_LITERAL.sub("''", code)
-        return bool(_SQL_ARITHMETIC.search(_SQL_STAR.sub(" ", code)))
-    code = _PY_COMMENT.sub(" ", _PY_STRING.sub(_code_in_literal, code))
-    return bool(_PY_ARITHMETIC.search(_PY_COUNTER.sub(" ", code)))
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return False
+    opened = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant):
+            value = node.value
+            if isinstance(value, str) and value.lower().startswith(("http:", "https:")):
+                return False
+            # Decimal('95.00') types a price as surely as 95 does.
+            if isinstance(value, str) and _NUMERIC_STRING.fullmatch(value):
+                if abs(_number(value)) > _SMALL_INT:
+                    return False
+            if isinstance(value, (int, float, complex)) and not isinstance(value, bool):
+                if not isinstance(value, int) or abs(value) > _SMALL_INT:
+                    return False
+        elif isinstance(node, (ast.Name, ast.Attribute)):
+            if (node.id if isinstance(node, ast.Name) else node.attr) in _PY_UNSEEN:
+                return False
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            modules = [a.name for a in node.names] + [
+                getattr(node, "module", None) or ""
+            ]
+            if any(m.split(".")[0] in _PY_UNSEEN for m in modules):
+                return False
+        if isinstance(node, ast.Call):
+            func = node.func
+            if getattr(func, "id", getattr(func, "attr", None)) not in _PY_READERS:
+                continue
+            target = (node.args or [k.value for k in node.keywords] or [None])[0]
+            if not (isinstance(target, ast.Constant) and isinstance(target.value, str)):
+                return False
+            opened.append(_basename(target.value))
+    return bool(opened) and all(name in read_names for name in opened)
 
 
-def _code_in_literal(match: "re.Match[str]") -> str:
-    """The code inside a string literal: an f-string's fields, else none."""
-    if "f" not in match.group(1).lower():
-        return "''"
-    return " ".join(_FSTRING_FIELD.findall(match.group(2))) or "''"
+def _read_names(records: Sequence[Dict[str, Any]], written: Set[str]) -> Set[str]:
+    """Names of the files a read tool returned this turn, other than *written*."""
+    names = set()
+    for record in records:
+        name = _name(record)
+        if not _ran(record) or record.get("failed"):
+            continue
+        if _has(name, _WRITE_WORDS + _EXEC_WORDS):
+            continue
+        args = record.get("args") or {}
+        for key in _PATH_ARGS:
+            if isinstance(args, dict) and isinstance(args.get(key), str):
+                names.add(_basename(args[key]))
+    return names - written
 
 
 def _evidence_texts(
-    records: Sequence[Dict[str, Any]], written: Set[str]
+    records: Sequence[Dict[str, Any]], written: Set[str], read_names: Set[str]
 ) -> List[Tuple[str, bool]]:
     """``(text, computed)`` per tool result this turn that can source a figure
-    in *written*; *computed* marks a script's or query's output.
+    in *written*; *computed* marks a script that computed from *read_names*.
 
     Not a write tool's reply, not a failed call, and not a read of a written
     file once it was written — a read-back shows the file, not its source.
@@ -719,7 +789,9 @@ def _evidence_texts(
             for name_ in written
         ):
             continue
-        texts.append((evidence_text(record, code_literals=True), _computed(record)))
+        texts.append(
+            (evidence_text(record, code_literals=True), _computed(record, read_names))
+        )
     return texts
 
 
@@ -950,27 +1022,35 @@ def file_findings(
     query: str = "",
     context: str = "",
     inputs: Sequence[str] = (),
+    input_names: Sequence[str] = (),
     answer: str = "",
 ) -> List[Finding]:
     """Figures in *files* (path → blocks) that nothing this turn supports.
 
     Evidence is the tool results in *records*, the text of *inputs* (files
     the tools were pointed at), the request (*query*) and earlier turns
-    (*context*). An answer that says its figures are unverified and names a
+    (*context*). A script's output sources an amount only when it computed
+    from files read this turn (*input_names* are the files *inputs* hold).
+    An answer that says its figures are unverified and names a
     value has already told the user about it.
     """
     if not files:
         return []
     written = {_basename(path) for path in files}
-    found = [(_spelled_out(t), c) for t, c in _evidence_texts(records, written)]
+    read_names = _read_names(records, written) | (
+        {_basename(n) for n in input_names} - written
+    )
+    found = [
+        (_spelled_out(t), c) for t, c in _evidence_texts(records, written, read_names)
+    ]
     input_texts = [_spelled_out(t) for t in inputs]
     texts = [t for t, _ in found] + input_texts
     query = _spelled_out(query or "")
     context = _spelled_out(context or "")
     # "27W", "8GB": a unit glued to its number still shows the number.
     general = _Corpus(_GLUED_UNIT.sub(r"\1 \2", "\n".join([context, query] + texts)))
-    # An amount a script or query computed sources a money figure; one it
-    # echoed from a file the turn read, or a "60 Hz", still doesn't.
+    # An amount a script computed from this turn's files sources a money
+    # figure; one it echoed from them, or a "60 Hz", still doesn't.
     seen = {
         _number(n)
         for t in [context] + [t for t, c in found if not c] + input_texts

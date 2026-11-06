@@ -9427,7 +9427,7 @@ Do NOT wrap conversational replies in JSON.
             return []
         records = getattr(self, "_turn_tool_executions", None) or []
         written_keys = {evidence.key(p) for p in written}
-        inputs = []
+        inputs, input_names = [], []
         for raw in input_paths(records) + mentioned_paths(query):
             path = path_locator(roots)(raw)
             if path is None or evidence.key(path) in written_keys:
@@ -9438,7 +9438,10 @@ Do NOT wrap conversational replies in JSON.
                 and not validator.validate_read(path, prompt_user=False)[0]
             ):
                 continue
-            inputs.append(blocks_text(self._deliverable_blocks(path)))
+            text = blocks_text(self._deliverable_blocks(path))
+            inputs.append(text)
+            if text.strip():
+                input_names.append(path)
             if len(inputs) >= _MAX_CHECKED_DELIVERABLES:
                 break
         return file_findings(
@@ -9447,6 +9450,7 @@ Do NOT wrap conversational replies in JSON.
             query=query,
             context=history,
             inputs=inputs,
+            input_names=input_names,
             answer=answer,
         )
 

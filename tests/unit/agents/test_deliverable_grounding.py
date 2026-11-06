@@ -367,33 +367,121 @@ def test_a_script_that_opens_and_echoes_a_file_is_not_a_price(code):
     assert _check(_md(ECHOED_TABLE), [_run_python(code, ECHOED_SHEET)])
 
 
+def _bom_script(code, stdout):
+    # The script opens a file the turn read, so only its typed figures fail it.
+    code = "sheet = open('cm5-datasheet.pdf').read()\n" + code
+    return _check(
+        _md(INVENTED_BOM),
+        [_read("cm5-datasheet.pdf", DATASHEET), _run_python(code, stdout)],
+    )
+
+
 @pytest.mark.parametrize(
     "code,stdout",
     [
-        ("for r, u, p in rows:\n    print(f'{r} {u*p:,.2f}')", "North 1,410.00\n"),
-        ("net = 1500.25 - 90.25  # minus refunds\nprint(net)", "1410.0\n"),
-        ("for i, (u, p) in enumerate(rows):\n    print(i+1, u*p)", "1 1410.00\n"),
+        (
+            "prices = {'CM5108032': 95, 'CM5 IO Board': 60, '27W PSU': 12}\n"
+            "for k, v in prices.items(): print(k, v, v*40)\n"
+            "print(sum(v*40 for v in prices.values()))",
+            "CM5108032 95 3800\nCM5 IO Board 60 2400\n27W PSU 12 480\n6680\n",
+        ),
+        ("print(95*40, 60*40, 12*40, 95*40 + 60*40 + 12*40)", "3800 2400 480 6680\n"),
+        ("print(3900 - 100, 2500 - 100, 580 - 100)", "3800 2400 480\n"),
+        (
+            "from decimal import Decimal\n"
+            "for p in ('95.00', '60.00', '12.00'): print(Decimal(p) * len('x' * 40))",
+            "3800.00\n2400.00\n480.00\n",
+        ),
+        ("print(eval('95*40'), eval('60*40'), eval('12*40'))", "3800 2400 480\n"),
     ],
-    ids=["math-in-fstring", "math-beside-comment", "math-beside-counter"],
+    ids=["line-items", "inline-math", "subtraction", "price-as-string", "eval"],
 )
-def test_arithmetic_a_script_really_did_still_sources_its_output(code, stdout):
-    table = "| Region | Revenue |\n|---|---|\n| North | 1410.00 |\n"
+def test_prices_the_model_typed_into_a_script_are_still_flagged(code, stdout):
+    findings = _bom_script(code, stdout)
 
-    assert _check(_md(table), [_run_python(code, stdout)], name="r.md") == []
+    assert [f.gate for f in findings] == [FILE]
+    assert "$95.00" in findings[0].correction
 
 
-def test_a_computing_script_that_also_echoes_a_read_file_does_not_source_it():
-    code = "print(open('cm5.txt').read())\nprint(40 * price)"
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import glob\nfor f in glob.glob('*.txt'): print(open(f).read(), 2*3)",
+        "import requests\nprint(requests.get('https://x.test/cm5').text, 2*3)",
+        "import os\nprint(open(os.path.join('d', 'cm5.txt')).read(), 2*3)",
+        "print(open('cm5.pdf', 'rb').read(), 2*3)",
+        "for i, l in enumerate(open('cm5.txt')): print(i*1, l)",
+        "s = open('cm5.txt').read(); n = len(s); print(s[:n-5], 2+2)",
+    ],
+    ids=["glob", "requests", "path-join", "unread-pdf", "i-times-1", "slice"],
+)
+def test_a_script_reading_data_the_turn_never_saw_sources_nothing(code):
+    assert _check(_md(ECHOED_TABLE), [_run_python(code, ECHOED_SHEET)])
+
+
+def test_a_script_echoing_a_file_the_turn_read_does_not_source_its_numbers():
+    code = "for i, l in enumerate(open('cm5.txt')): print(i+1, l, 2*3)"
     records = [_read("cm5.txt", ECHOED_SHEET), _run_python(code, ECHOED_SHEET)]
 
     assert _check(_md(ECHOED_TABLE), records)
 
 
-def test_a_scratchpad_query_result_is_a_source():
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import csv\nfor r in csv.DictReader(open('orders.csv')):\n"
+        "    print(f\"{r['region']} {float(r['units'])*float(r['unit_price']):,.2f}\")",
+        "import pandas as pd\ndf = pd.read_csv('orders.csv')\n"
+        "df['rev'] = df.units * df.unit_price\nprint(df.nlargest(3, 'rev'))",
+    ],
+    ids=["csv-fstring", "pandas"],
+)
+def test_a_script_computing_from_a_file_the_turn_read_sources_its_result(code):
+    table = "| Region | Revenue |\n|---|---|\n| South | 1410.00 |\n"
+    records = [_read("orders.csv", ORDERS_CSV), _run_python(code, "South 1,410.00\n")]
+
+    assert _check(_md(table), records, name="r.md") == []
+
+
+def test_a_file_only_the_script_opened_counts_once_the_check_has_read_it():
+    code = "import pandas as pd\nprint(pd.read_csv('orders.csv').units.mul(2).sum())"
+    table = "| Region | Revenue |\n|---|---|\n| South | 1410.00 |\n"
+    records = [_run_python(code, "1410.00\n")]
+
+    assert _check(_md(table), records, name="r.md") != []
+    assert (
+        _check(
+            _md(table),
+            records,
+            name="r.md",
+            inputs=[ORDERS_CSV],
+            input_names=["C:/data/orders.csv"],
+        )
+        == []
+    )
+
+
+def test_a_computing_script_that_also_echoes_a_read_file_does_not_source_it():
+    code = "print(open('cm5.txt').read())\nprint(4 * len(rows))"
+    records = [_read("cm5.txt", ECHOED_SHEET), _run_python(code, ECHOED_SHEET)]
+
+    assert _check(_md(ECHOED_TABLE), records)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT region, SUM(units*unit_price) FROM orders GROUP BY 1",
+        "SELECT * FROM orders WHERE units*unit_price > 1000",
+    ],
+    ids=["aggregate", "arithmetic-in-where"],
+)
+def test_a_scratchpad_query_is_not_a_source_for_an_amount(query):
+    # The scratchpad holds rows the model inserted, not data it read.
     records = [
         _rec(
             "query_data",
-            {"query": "SELECT region, SUM(units*unit_price) FROM orders GROUP BY 1"},
+            {"query": query},
             {"status": "success", "result": "East 41572.25\nNorth 45043.62\n"},
         )
     ]
@@ -401,7 +489,7 @@ def test_a_scratchpad_query_result_is_a_source():
         "| Region | Revenue |\n|---|---|\n| East | 41572.25 |\n| North | 45043.62 |\n"
     )
 
-    assert _check(_md(table), records, name="regions.md") == []
+    assert _check(_md(table), records, name="regions.md")
 
 
 def test_dates_ids_and_quantities_the_user_stated_are_not_figures():
