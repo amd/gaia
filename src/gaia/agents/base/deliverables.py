@@ -721,7 +721,72 @@ def _computed(
 
 def _script_opens(record: Dict[str, Any]) -> Optional[List[str]]:
     """The files a ``run_python`` script opens, or ``None`` when its figures
-    may not come from them.
+    may not come from them."""
+    io = _script_io(record)
+    return None if io is None else io[0]
+
+
+def _script_wrote(record: Dict[str, Any]) -> Set[str]:
+    """The files a computing script created or overwrote, not just read or
+    appended to."""
+    io = _script_io(record)
+    return set() if io is None else io[1]
+
+
+#: Methods that replace the file their path names: ``df.to_csv(path)``.
+_PY_SAVERS = {
+    "to_csv",
+    "to_excel",
+    "to_markdown",
+    "to_json",
+    "to_html",
+    "to_parquet",
+    "save",
+}
+
+
+def _literal_path(node: Any, named: Dict[str, str]) -> Optional[str]:
+    if isinstance(node, ast.Name) and node.id in named:
+        return named[node.id]
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _call_arg(call: ast.Call, index: int, keyword: str) -> Any:
+    if len(call.args) > index:
+        return call.args[index]
+    return next((k.value for k in call.keywords if k.arg == keyword), None)
+
+
+def _truncates(call: ast.Call, named: Dict[str, str]) -> Optional[str]:
+    """The path *call* replaces: ``open(p, 'w')``, ``Path(p).write_text``,
+    ``df.to_csv(p)``. Not a read, and not an append."""
+    func = call.func
+    ident = getattr(func, "id", getattr(func, "attr", None))
+    if ident == "open" and isinstance(func, ast.Name):
+        mode = _call_arg(call, 1, "mode")
+        if isinstance(mode, ast.Constant) and isinstance(mode.value, str):
+            if set(mode.value) & {"w", "x"}:
+                return _literal_path(_call_arg(call, 0, "file"), named)
+        return None
+    if ident in ("write_text", "write_bytes") and isinstance(func, ast.Attribute):
+        receiver = func.value
+        if isinstance(receiver, ast.Call) and receiver.args:
+            return _literal_path(receiver.args[0], named)
+        return None
+    if ident in _PY_SAVERS:
+        mode = next((k.value for k in call.keywords if k.arg == "mode"), None)
+        if isinstance(mode, ast.Constant) and "a" in str(mode.value):
+            return None
+        target = (call.args or [k.value for k in call.keywords] or [None])[0]
+        return _literal_path(target, named)
+    return None
+
+
+def _script_io(record: Dict[str, Any]) -> Optional[Tuple[List[str], Set[str]]]:
+    """``(files opened, files replaced)`` by a ``run_python`` script, or
+    ``None`` when its figures may not come from those files.
 
     Each file it opens is named, as a literal or a name bound once to one; it
     reaches no other data; and it types no figure beyond a small count —
@@ -736,7 +801,8 @@ def _script_opens(record: Dict[str, Any]) -> Optional[List[str]]:
         tree = ast.parse(code)
     except SyntaxError:
         return None
-    opened = []
+    opened: List[str] = []
+    replaced: Set[str] = set()
     named = _string_names(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant):
@@ -760,18 +826,18 @@ def _script_opens(record: Dict[str, Any]) -> Optional[List[str]]:
             if any(m.split(".")[0] in _PY_UNSEEN for m in modules):
                 return None
         if isinstance(node, ast.Call):
+            wrote = _truncates(node, named)
+            if wrote is not None:
+                replaced.add(_basename(wrote))
             func = node.func
             if getattr(func, "id", getattr(func, "attr", None)) not in _PY_READERS:
                 continue
             target = (node.args or [k.value for k in node.keywords] or [None])[0]
-            if isinstance(target, ast.Name) and target.id in named:
-                path = named[target.id]
-            elif isinstance(target, ast.Constant) and isinstance(target.value, str):
-                path = target.value
-            else:
+            path = _literal_path(target, named)
+            if path is None:
                 return None
             opened.append(_basename(path))
-    return opened
+    return opened, replaced
 
 
 def _script_written(
@@ -783,7 +849,8 @@ def _script_written(
     """What a computing script wrote straight into a file in *files*, minus
     its own literals — the file was its output, as stdout would have been.
 
-    Only when the script opened that file and nothing wrote it after.
+    Only when the script created or overwrote that file and nothing wrote it
+    after: a script that read or appended to it did not write what is there.
     """
     texts = []
     for path, blocks in files.items():
@@ -792,9 +859,7 @@ def _script_written(
         for record in records:
             if not _ran(record) or record.get("failed"):
                 continue
-            if _computed(record, read_names, written) and name in (
-                _script_opens(record) or ()
-            ):
+            if _computed(record, read_names, written) and name in _script_wrote(record):
                 last = record
             elif _has(_name(record), _WRITE_WORDS + _EXEC_WORDS) and (
                 name in _args_text(record)

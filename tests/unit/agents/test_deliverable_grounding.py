@@ -504,6 +504,53 @@ def test_prices_typed_into_a_script_that_writes_the_report_are_still_flagged():
     assert "1410.00 (Revenue)" in findings[0].note
 
 
+@pytest.mark.parametrize(
+    "report_open",
+    ["rep = open('bom.md').read()", "open('bom.md', 'a').write('checked')"],
+    ids=["read-back", "append"],
+)
+def test_a_script_that_did_not_write_the_report_does_not_source_it(report_open):
+    records = [
+        _read("cm5-datasheet.pdf", DATASHEET),
+        _rec("write_file", {"file_path": "bom.md", "content": INVENTED_BOM}, {"ok": 1}),
+        _run_python(
+            f"sheet = open('cm5-datasheet.pdf').read()\n{report_open}\n"
+            "print('Compute' in sheet)",
+            "True\n",
+        ),
+    ]
+
+    findings = _check(_md(INVENTED_BOM), records)
+
+    assert [f.gate for f in findings] == [FILE]
+    assert "$95.00" in findings[0].correction
+
+
+@pytest.mark.parametrize(
+    "write",
+    [
+        "Path(report_path).write_text(table)",
+        "pd.DataFrame(top).to_markdown(report_path)",
+        "open(report_path, mode='x').write(table)",
+    ],
+    ids=["write-text", "to-markdown", "exclusive-create"],
+)
+def test_a_report_the_script_wrote_another_way_is_its_output(write):
+    code = (
+        "import csv\nfrom pathlib import Path\nimport pandas as pd\n"
+        'csv_path = r"C:\\gtest\\fx\\orders.csv"\n'
+        'report_path = r"C:\\gtest\\fx\\work\\report_gm15.md"\n'
+        "rows = list(csv.DictReader(open(csv_path)))\n"
+        "top = [float(r['units']) * float(r['unit_price']) for r in rows]\n"
+        f"table = str(top)\n{write}\n"
+    )
+    report, records = _gm15_turn(code)
+
+    assert (
+        file_findings({report: _md(GM15_TABLE)}, records, query=TOP_ORDERS_QUERY) == []
+    )
+
+
 @pytest.mark.parametrize("tool", ["write_file", "run_python"])
 def test_a_report_rewritten_after_the_computing_script_is_checked_again(tool):
     report, records = _gm15_turn()
