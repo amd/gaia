@@ -39,6 +39,7 @@ setup(
         "gaia.llm",
         "gaia.llm.providers",
         "gaia.audio",
+        "gaia.automations",
         "gaia.chat",
         "gaia.schedule",
         "gaia.daemon",

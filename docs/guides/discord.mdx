@@ -103,20 +103,10 @@ That becomes two things:
   If GitHub keeps refusing a check, GAIA tells you, and again when it works.
 - **A summary.** A schedule runs a prompt every few hours and sends you the answer.
 
-For "alert me if…", GAIA sets up a **trigger** instead of a summary:
-
-> Report the health of main on amd/gaia, and alert me if anything breaks, like a failing
-> test.
-
-A trigger runs a small read-only check on your PC every few minutes, without the AI, and
-wakes GAIA only when the result changes. You get where main stands now, then a message
-when a workflow starts failing (which test, which commit, with links) and one when it is
-green again. Nothing in between. The same works for "tell me when PR 12 is approved" or
-"when a new release is out". A check can only read; GAIA refuses one that could change
-anything, and tells you if a check keeps failing.
-
-To change or stop them, ask: "what are you watching?", "stop the summaries", "summarize
-daily instead". For GitHub, GAIA uses the GitHub CLI you are signed in to on this PC.
+Reminders, alerts that wait for something to change, and a heartbeat that checks in
+only when something needs you work the same way: see [Automations](/guides/automations).
+To change or stop any of them, ask: "what are you watching?", "pause the summaries",
+"check daily instead". For GitHub, GAIA uses the GitHub CLI you are signed in to on this PC.
 
 ## Troubleshooting
 

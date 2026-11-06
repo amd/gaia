@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 
+from gaia.automations import store
 from gaia.messaging.discord import adapter as da
-from gaia.messaging.discord import schedules, state
+from gaia.messaging.discord import state
 
 EPOCH_MS = 1420070400000
 
@@ -940,7 +941,16 @@ def test_a_schedule_is_never_folded_into_a_typed_message():
     ad.on_ready()
     ad._agent().ahead = 1
     ad.handle_message(message(clock, "question"))
-    schedules.add(600, "digest", now=clock.now - 601)
+    store.add(
+        store.Automation(
+            "",
+            "Digest",
+            store.KIND_SUMMARY,
+            prompt="digest",
+            every_seconds=600,
+            next_at=clock.now - 1,
+        )
+    )
     ad.tick()
     assert len(ad._agent().turns) == 2
 

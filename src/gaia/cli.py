@@ -1977,32 +1977,8 @@ def build_parser():
         "disconnect", help="Stop the bridge and forget the token and pairing"
     )
     discord_subparsers.add_parser(
-        "schedules", help="List the prompts the bridge runs on a timer (JSON)"
-    )
-    d_sadd = discord_subparsers.add_parser(
-        "schedule-add",
-        help="Run a prompt on a timer and send the answer to the paired DM",
-    )
-    d_sadd.add_argument("--every", required=True, help="Interval: 30m, 3h, 1d")
-    d_sadd.add_argument("--prompt", required=True, help="What the agent should do")
-    d_sadd.add_argument(
-        "--check",
-        help="A read-only command run each interval without the model; the "
-        "prompt runs only when its output changes (an alert, not a digest)",
-    )
-    d_srm = discord_subparsers.add_parser("schedule-remove", help="Remove a schedule")
-    d_srm.add_argument("--id", help="The schedule's id (from `schedules`)")
-    d_srm.add_argument("--all", action="store_true", help="Remove every schedule")
-    discord_subparsers.add_parser(
         "watches", help="List the GitHub repositories being watched (JSON)"
     )
-    d_ci = discord_subparsers.add_parser(
-        "ci-status",
-        help="Print which workflows are failing on a branch, in one line that "
-        "changes only when that does (a check for schedule-add --check)",
-    )
-    d_ci.add_argument("--repo", required=True, help="owner/name, e.g. amd/gaia")
-    d_ci.add_argument("--branch", default="main", help="Branch (default: main)")
     d_watch = discord_subparsers.add_parser(
         "watch",
         help="DM new third-party PRs, issues and comments on a repo as they happen",
@@ -2024,6 +2000,74 @@ def build_parser():
         help="Forget every Always allow answer, so each is asked again",
     )
     discord_parser.set_defaults(action="discord")
+
+    # Automation command — reminders, alerts, triggers and summaries GAIA runs
+    # on its own; see gaia.automations.
+    automation_parser = subparsers.add_parser(
+        "automation",
+        help="Reminders, alerts, triggers and summaries GAIA runs on its own "
+        "(list|add|edit|pause|resume|run|remove)",
+        parents=[parent_parser],
+    )
+    automation_sub = automation_parser.add_subparsers(
+        dest="automation_action", help="automation action to perform"
+    )
+    a_list = automation_sub.add_parser("list", help="List every automation (JSON)")
+    a_list.add_argument("--plain", action="store_true", help="One line each, not JSON")
+    a_add = automation_sub.add_parser(
+        "add",
+        help="Add a reminder (--at), a summary (--every), a trigger (--every "
+        "--check) or an alert (--every --alert)",
+    )
+    a_add.add_argument("--name", required=True, help="A short name to find it by")
+    a_add.add_argument("--prompt", help="What GAIA does each time it runs")
+    a_add.add_argument("--say", help="A reminder's exact text, sent without the AI")
+    a_add.add_argument(
+        "--at",
+        help="Once: 10m, in 2 hours, 17:30, 5pm, tomorrow 9am. With --every: "
+        "when the first run is, which sets the time of day for the rest",
+    )
+    a_add.add_argument("--every", help="Repeat: 30m, 6h, 1d")
+    a_add.add_argument(
+        "--check",
+        help="A read-only GitHub read run each interval without the AI; the "
+        "prompt runs only when its output changes",
+    )
+    a_add.add_argument(
+        "--alert",
+        action="store_true",
+        help="Message only when the prompt finds something worth your attention",
+    )
+    a_add.add_argument("--quiet", help="Quiet hours, like 22:00-07:00")
+    a_add.add_argument("--days", help="Only these days: mon-fri, weekends, mon,wed,fri")
+    a_edit = automation_sub.add_parser("edit", help="Change an automation")
+    a_edit.add_argument("ref", help="Its name or id")
+    a_edit.add_argument("--rename", help="A new name")
+    a_edit.add_argument("--prompt", help="New instructions")
+    a_edit.add_argument("--say", help="New reminder text")
+    a_edit.add_argument("--every", help="New interval")
+    a_edit.add_argument("--at", help="New time, for a one-time reminder")
+    a_edit.add_argument("--check", help="New check, for a trigger")
+    a_edit.add_argument("--quiet", help="New quiet hours; empty to remove them")
+    a_edit.add_argument("--days", help="New days, like mon-fri; empty for every day")
+    for verb, text in (
+        ("pause", "Pause an automation"),
+        ("resume", "Resume a paused automation"),
+        ("run", "Run an automation now"),
+    ):
+        automation_sub.add_parser(verb, help=text).add_argument(
+            "ref", help="Its name or id"
+        )
+    a_rm = automation_sub.add_parser("remove", help="Remove an automation")
+    a_rm.add_argument("ref", nargs="?", help="Its name or id")
+    a_rm.add_argument("--all", action="store_true", help="Remove every automation")
+    a_ci = automation_sub.add_parser(
+        "ci-status",
+        help="Print which workflows are failing on a branch, in one line that "
+        "changes only when that does (a check for add --check)",
+    )
+    a_ci.add_argument("--repo", required=True, help="owner/name, e.g. amd/gaia")
+    a_ci.add_argument("--branch", default="main", help="Branch (default: main)")
 
     # Schedule command — cron-based recurring skill/prompt dispatch (issue #892)
     schedule_parser = subparsers.add_parser(
@@ -5242,6 +5286,12 @@ def main():
         from gaia.messaging.slack.cli import main as slack_main
 
         sys.exit(slack_main(args))
+
+    # Handle automation command — see gaia.automations.cli
+    if args.action == "automation":
+        from gaia.automations.cli import main as automation_main
+
+        sys.exit(automation_main(args))
 
     # Handle discord command — see gaia.messaging.discord.cli for the flow
     if args.action == "discord":

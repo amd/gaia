@@ -109,6 +109,7 @@
                     "pages": [
                       "guides/email",
                       "guides/discord",
+                      "guides/automations",
                       "guides/slack",
                       "guides/telegram-adapter"
                     ]

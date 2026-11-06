@@ -43,12 +43,13 @@ MIN_SCENARIOS_PER_SKILL = 2
 #: ~4.2 min/scenario, so covering all sixteen at two scenarios each would add
 #: over two hours to a suite already being split for length.
 DEFERRED: dict[str, str] = {
+    "automations": (
+        "Runs later through a delivery channel; its store, runner, CLI and policy "
+        "are unit-tested."
+    ),
     "check-in": "Scheduled-trigger skill; needs a clock fixture the runner lacks.",
     "coding": "Overlaps the code_index scenarios; needs its own corpus first.",
     "daily-brief": "Composes other skills; cover its parts before the composite.",
-    "discord-automation": (
-        "Needs a paired Discord bridge; its CLI, policy and bridge are unit-tested."
-    ),
     "github-triage": "Requires a live GitHub connector; not available in the lane.",
     "image-gen": "Needs Stable Diffusion loaded; out of scope for the text lanes.",
     "inbox-triage": "Requires a mailbox connector; covered by the email eval lane.",

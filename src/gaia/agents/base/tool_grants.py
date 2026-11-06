@@ -535,10 +535,10 @@ def _shell_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
     if shell_command_risk(command) == DESTRUCTIVE:
         return None
 
-    # Each Discord trigger or watch runs unattended from then on; "always" for
-    # the family would approve every later one, whatever it checks or says.
+    # Each automation or watch runs unattended from then on; "always" for the
+    # family would approve every later one, whatever it checks or says.
     if any(
-        binary_name(s[0]) == "gaia" and len(s) > 1 and s[1] == "discord"
+        binary_name(s[0]) == "gaia" and len(s) > 1 and s[1] in ("automation", "discord")
         for s in facts.segments
     ):
         return None

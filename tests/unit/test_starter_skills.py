@@ -51,11 +51,11 @@ PROVENANCE_SOURCE = "starter-pack"
 #: AMD's starter pack. Adding a skill to the pack means adding it here.
 STARTER_PACK = frozenset(
     {
+        "automations",
         "check-in",
         "coding",
         "daily-brief",
         "data-explore",
-        "discord-automation",
         "document-brief",
         "file-ops",
         "github-triage",

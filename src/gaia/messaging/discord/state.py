@@ -12,14 +12,22 @@
 
 from __future__ import annotations
 
-import json
 import os
-import tempfile
 import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set
 
+from gaia.automations.files import (  # noqa: F401 - re-exported for the bridge
+    CorruptStateFile,
+    DamagedStateFile,
+    StateFileError,
+)
+from gaia.automations.files import read_json as _read_json
+from gaia.automations.files import (  # noqa: F401 - re-exported for the bridge
+    read_json_or_set_aside,
+    write_json,
+)
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -45,20 +53,8 @@ LIVE_STATES = frozenset(
 )
 
 
-class BridgeStateError(RuntimeError):
-    """A bridge file exists but cannot be read."""
-
-
-class CorruptStateFile(BridgeStateError):
-    """A bridge file exists but its bytes are not the JSON object it should hold."""
-
-
-class DamagedStateFile(BridgeStateError):
-    """A corrupt bridge file was moved aside; *moved_to* keeps its bytes."""
-
-    def __init__(self, message: str, moved_to: Path) -> None:
-        super().__init__(message)
-        self.moved_to = moved_to
+# One copy of the crash-safe JSON helpers, shared with gaia.automations.
+BridgeStateError = StateFileError
 
 
 class BridgeAlreadyRunning(RuntimeError):
@@ -77,75 +73,9 @@ def inbox_dir() -> Path:
     return discord_dir() / "inbox"
 
 
-def write_json(path: Path, data: Dict[str, Any]) -> None:
-    """Write atomically so a reader never sees half a file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2)
-            fh.write("\n")
-            # Without it a crash can keep the rename but not the bytes: a file of zeros.
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-
-
 def read_json(path: Path) -> Optional[Dict[str, Any]]:
     """Return the object at *path*, ``None`` when absent; raise when unusable."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return None
-    except OSError as e:
-        raise BridgeStateError(
-            f"Cannot read {path}: {e}. Check its permissions."
-        ) from e
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as e:
-        raise CorruptStateFile(
-            f"{path} is not valid JSON: {e}. Reconnect Discord to rewrite it."
-        ) from e
-    if not isinstance(data, dict):
-        raise CorruptStateFile(
-            f"{path} must hold a JSON object, got {type(data).__name__}. "
-            f"Reconnect Discord to rewrite it."
-        )
-    return data
-
-
-def read_json_or_set_aside(path: Path, what: str) -> Optional[Dict[str, Any]]:
-    """Like :func:`read_json`, but move a corrupt file aside and say so.
-
-    For files the bridge can start over without (schedules, watches, status):
-    raises :class:`DamagedStateFile` once, naming where the bytes went; the next
-    read finds no file and starts empty.
-    """
-    try:
-        return read_json(path)
-    except CorruptStateFile as e:
-        moved = path.with_name(f"{path.name}.damaged-{time.strftime('%Y%m%d-%H%M%S')}")
-        try:
-            os.replace(path, moved)
-        except FileNotFoundError:
-            # Another reader moved it first; it reports the damage.
-            return read_json(path)
-        except OSError as move_error:
-            raise BridgeStateError(
-                f"{path} is damaged and could not be moved aside: {move_error}. "
-                f"Delete it to start over."
-            ) from e
-        log.error("Moved damaged %s to %s: %s", path, moved, e)
-        raise DamagedStateFile(
-            f"Your saved {what} could not be read — the file was damaged, most "
-            f"likely because the PC shut down while saving it. GAIA kept a copy "
-            f"at {moved} and starts over with none.",
-            moved,
-        ) from e
+    return _read_json(path, "Reconnect Discord to rewrite it.")
 
 
 def _known(cls, data: Dict[str, Any]) -> Dict[str, Any]:

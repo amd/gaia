@@ -1351,40 +1351,50 @@ def _formatter(
 
 
 BINARY_POLICIES: dict[str, BinaryPolicy] = {
-    # GAIA's own CLI, for the discord-automation skill only: the Discord
-    # bridge's schedules and GitHub watches. Nothing else of `gaia` is reachable
-    # from a skill — no setup, no config, no connectors.
+    # GAIA's own CLI, for the automations skill only: its automations and the
+    # Discord bridge's GitHub watches. Nothing else of `gaia` is reachable from
+    # a skill — no setup, no config, no connectors.
     "gaia": BinaryPolicy(
         binary="gaia",
-        confirm_summary="changes what GAIA runs and reports in your Discord DM",
+        confirm_summary="changes what GAIA does on its own and reports to you",
         summary=(
-            "GAIA's own CLI — lists, adds and removes the Discord bridge's "
-            "schedules and GitHub watches; every change asks first."
+            "GAIA's own CLI — lists and changes its reminders, alerts, triggers "
+            "and summaries, and the Discord bridge's GitHub watches; every "
+            "change asks first."
         ),
         install_hint=(
             "The `gaia` command ships with GAIA. Reinstall GAIA from "
             "https://amd-gaia.ai/docs/guides/install to restore it."
         ),
         subcommands={
-            "discord": Subcommand(
-                actions=frozenset(
-                    {"schedules", "watches", "ci-status", "always-allowed"}
-                ),
+            "automation": Subcommand(
+                actions=frozenset({"list", "ci-status"}),
                 confirm_actions=frozenset(
-                    {"schedule-add", "schedule-remove", "watch", "unwatch"}
+                    {"add", "edit", "pause", "resume", "run", "remove"}
                 ),
                 value_flags=frozenset(
                     {
-                        "--every",
+                        "--name",
                         "--prompt",
+                        "--say",
+                        "--at",
+                        "--every",
                         "--check",
-                        "--id",
+                        "--quiet",
+                        "--days",
+                        "--rename",
                         "--repo",
-                        "--mine",
                         "--branch",
                     }
                 ),
-                allowed_flags=frozenset({"--all"}),
+                allowed_flags=frozenset({"--alert", "--all", "--plain"}),
+                strict_flags=True,
+            ),
+            "discord": Subcommand(
+                actions=frozenset({"watches", "always-allowed"}),
+                confirm_actions=frozenset({"watch", "unwatch"}),
+                value_flags=frozenset({"--repo", "--mine"}),
+                allowed_flags=frozenset(),
                 strict_flags=True,
             ),
         },

@@ -879,9 +879,9 @@ def test_an_agent_with_no_grant_reads_gh_unasked_and_asks_for_everything_else():
 
 def test_the_exemption_is_dropped_when_the_skill_unloads():
     host = _Gated("gaia")
-    assert _needs_modal(host, "gaia discord schedules") is False
+    assert _needs_modal(host, "gaia automation list") is False
     host._granted_binaries.revoke_skill("github-triage")
-    assert _needs_modal(host, "gaia discord schedules") is True
+    assert _needs_modal(host, "gaia automation list") is True
 
 
 def test_only_the_policy_enforcing_tool_can_be_exempt():
@@ -1782,11 +1782,17 @@ TIERS = [
     ("isort --settings-path /tmp/evil.cfg src", REFUSE),
     ("ruff check --stdin-filename /etc/passwd", REFUSE),
     # gaia — the Discord bridge's schedules and watches, nothing else of the CLI
-    ("gaia discord schedules", ALLOW),
+    ("gaia automation list", ALLOW),
+    ("gaia automation ci-status --repo amd/gaia --branch main", ALLOW),
     ("gaia discord watches", ALLOW),
-    ('gaia discord schedule-add --every 3h --prompt "summarize my PRs"', CONFIRM),
+    (
+        'gaia automation add --name "PRs" --every 3h --prompt "summarize my PRs"',
+        CONFIRM,
+    ),
+    ('gaia automation edit "PRs" --every 6h', CONFIRM),
+    ('gaia automation pause "PRs"', CONFIRM),
     ("gaia discord watch --repo amd/gaia --mine kovtcharov", CONFIRM),
-    ("gaia discord schedule-remove --all", CONFIRM),
+    ("gaia automation remove --all", CONFIRM),
     ("gaia discord disconnect", REFUSE),
     ('gaia discord start --agent-command "python evil.py"', REFUSE),
     ("gaia config set default_model x", REFUSE),
@@ -2499,7 +2505,7 @@ def test_a_discord_trigger_or_watch_is_never_offered_always():
     from gaia.agents.base.tool_grants import grant_scope
 
     for command in (
-        'gaia discord schedule-add --every 10m --check "gh pr view 1 --repo a/b" --prompt "x"',
+        'gaia automation add --name x --every 10m --check "gh pr view 1 --repo a/b" --prompt "x"',
         "gaia discord watch --repo amd/gaia",
     ):
         assert grant_scope("run_shell_command", {"command": command}) is None

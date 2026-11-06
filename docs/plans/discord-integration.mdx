@@ -146,7 +146,7 @@ Slack:
 ## Summaries and alerts
 
 The user asks in plain words ("summarize my PRs every few hours; tell me right away when
-someone else comments"). The `discord-automation` skill turns that into `gaia discord`
+someone else comments"). The `automations` skill turns that into `gaia automation`
 commands through the agent's shell tool. Each change shows the user an Allow prompt; the
 `gaia` entry in the skill binary policy allows only the list commands without asking, and
 refuses every other `gaia` subcommand.
@@ -186,7 +186,7 @@ refuses every other `gaia` subcommand.
 - **Contract:** the transport's conversion of `discord.py` messages, the intents it
   requests, and the absence of an edit handler.
 - **Policy:** the `gaia` binary policy pinned at all three tiers, and the
-  `discord-automation` skill in the starter-pack checks.
+  `automations` skill in the starter-pack checks.
 - **TUI:** Go tests for the panel, status and offer, plus the palette and help overlay.
 - **Agent UI:** component tests for the card states (including "starting" while a start is
   in flight), and router tests for the local-only and CSRF guards.

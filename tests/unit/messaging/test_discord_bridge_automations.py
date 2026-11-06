@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Schedules and GitHub watches the Discord bridge runs on its own."""
+"""Automations the Discord bridge runs and delivers, and its GitHub watches."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ import io
 
 import pytest
 
-from gaia.messaging.discord import cli, github_watch, schedules, state
+from gaia.automations import store
+from gaia.messaging.discord import cli, github_watch, state
 
 from .test_discord_adapter import DM, make, message
 
@@ -20,85 +21,75 @@ def gaia_home(tmp_path, monkeypatch):
 
 
 # ----------------------------------------------------------------------
-# Schedules
+# Automations, run and delivered by the bridge
 # ----------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "text,seconds",
-    [("3h", 3 * 3600), ("15m", 15 * 60), ("1D", 86400), ("2 hours", 7200)],
-)
-def test_parse_interval(text, seconds):
-    assert schedules.parse_interval(text) == seconds
-
-
-@pytest.mark.parametrize("text,why", [("2m", "5 minutes"), ("soon", "not an interval")])
-def test_parse_interval_refuses_with_a_fix(text, why):
-    with pytest.raises(schedules.ScheduleError, match=why):
-        schedules.parse_interval(text)
-
-
-def test_a_missed_schedule_runs_once_not_once_per_interval():
-    item = schedules.add(3600, "digest", now=0)
-    assert [s.id for s in schedules.take_due(now=10 * 3600 + 5)] == [item.id]
-    assert schedules.load()[0].next_at == 11 * 3600
-    assert schedules.take_due(now=10 * 3600 + 6) == []
-
-
-def test_the_schedule_count_is_capped():
-    for i in range(schedules.MAX_SCHEDULES):
-        schedules.add(3600, f"p{i}", now=0)
-    with pytest.raises(schedules.ScheduleError, match="already have"):
-        schedules.add(3600, "one more", now=0)
-
-
-def test_cli_adds_lists_and_removes_schedules():
-    out = []
-    assert (
-        cli.run_schedule_add(every="3h", prompt="summarize PRs", emit=out.append) == 0
+def _summary(clock, name="Digest", prompt="summarize my PRs"):
+    return store.add(
+        store.Automation(
+            "",
+            name,
+            store.KIND_SUMMARY,
+            prompt=prompt,
+            every_seconds=600,
+            next_at=clock.now - 1,
+        )
     )
-    assert "every 3 hours" in out[-1]
-    assert cli.run_schedules(emit=out.append) == 0
-    assert '"prompt": "summarize PRs"' in out[-1]
-    assert (
-        cli.run_schedule_remove(schedule_id=None, remove_all=True, emit=out.append) == 0
-    )
-    assert schedules.load() == []
 
 
-def test_cli_refuses_a_too_short_interval():
-    out = []
-    assert cli.run_schedule_add(every="1m", prompt="spam", emit=out.append) == 2
-    assert "5 minutes" in out[-1]
-    assert schedules.load() == []
-
-
-def test_a_due_schedule_runs_on_tick_and_answers_in_the_dm():
+def test_a_due_summary_runs_on_tick_and_answers_in_the_dm():
     ad, clock = make()
     ad.on_ready()
-    schedules.add(600, "summarize my PRs", now=clock.now - 601)
+    _summary(clock)
     ad.tick()
     turns = ad._agent().turns
-    assert len(turns) == 1
-    assert turns[0].text.startswith("summarize my PRs")
-    assert (
-        "since " in turns[0].text and "UTC" in turns[0].text
-    ), "the window is explicit"
+    assert len(turns) == 1 and turns[0].text.startswith("summarize my PRs")
+    assert "since " in turns[0].text and "UTC" in turns[0].text, "an exact window"
     assert turns[0].context.channel_id == DM
-    sent = [m["text"] for m in ad.transport.sent]
-    assert sent[-1].startswith(
-        "⏰ **summarize my PRs**"
-    ), "heading and Running, one message"
+    assert ad.transport.sent[-1]["text"].startswith("🗓️ **Digest**")
     ad._on_agent_event({"type": "final", "answer": "3 merged."}, turns[0])
     answer = ad.transport.sent[-1]["text"]
-    assert answer == "⏰ **summarize my PRs**\n3 merged.", answer
-    assert "Used" not in answer
+    assert answer == "🗓️ **Digest**\n3 merged.", answer
 
 
-def test_a_bridge_that_lost_the_lease_runs_no_schedules():
+def test_an_alert_shows_nothing_until_it_has_news():
     ad, clock = make()
     ad.on_ready()
-    schedules.add(600, "digest", now=clock.now - 601)
+    store.add(
+        store.Automation(
+            "",
+            "Rainier window",
+            store.KIND_ALERT,
+            prompt="find a weekend",
+            every_seconds=6 * 3600,
+            next_at=clock.now - 1,
+        )
+    )
+    sent = len(ad.transport.sent)
+    ad.tick()
+    turn = ad._agent().turns[-1]
+    ad._on_agent_event({"type": "tool_call", "tool": "search_web"}, turn)
+    assert len(ad.transport.sent) == sent, "no placeholder or progress for an alert"
+    ad._on_agent_event({"type": "final", "answer": "NOTHING_TO_REPORT"}, turn)
+    assert len(ad.transport.sent) == sent, "nothing to report means silence"
+
+    store.update("Rainier window", next_at=clock.now - 1)
+    ad.tick()
+    turn = ad._agent().turns[-1]
+    ad._on_agent_event(
+        {"type": "final", "answer": "Sat 14 looks climbable\n[forecast](https://x)"},
+        turn,
+    )
+    assert ad.transport.sent[-1]["text"].startswith(
+        "🔔 **Rainier window**\nSat 14 looks climbable"
+    )
+
+
+def test_a_bridge_that_lost_the_lease_runs_no_automations():
+    ad, clock = make()
+    ad.on_ready()
+    _summary(clock)
     ad._set_state(state.STATE_TAKEN_OVER)
     ad.tick()
     assert ad._agent().turns == []
@@ -110,48 +101,40 @@ def _zero_fill(path):
     path.write_bytes(b"\0" * 971)
 
 
-def test_a_damaged_schedules_file_is_reported_once_and_watches_still_run(monkeypatch):
+def test_a_damaged_automations_file_is_reported_once_and_watches_still_run(
+    monkeypatch,
+):
     ad, clock = make()
     ad.on_ready()
-    _zero_fill(schedules.path())
+    _zero_fill(store.path())
     polled = []
     monkeypatch.setattr(
         ad, "_watcher", lambda: type("W", (), {"poll": lambda s: polled.append(1)})()
     )
     ad.tick()
     warnings = [m["text"] for m in ad.transport.sent if "damaged" in m["text"]]
-    assert len(warnings) == 1 and "schedules again" in warnings[0]
-    assert polled == [1], "a damaged schedules file must not stop GitHub alerts"
-    assert list(schedules.path().parent.glob("schedules.json.damaged-*"))
+    assert len(warnings) == 1 and "automations again" in warnings[0]
+    assert polled == [1], "a damaged automations file must not stop GitHub alerts"
     ad.tick()
     assert len([m for m in ad.transport.sent if "damaged" in m["text"]]) == 1
-    assert schedules.load() == []
+    assert store.load() == []
 
 
-def test_a_damaged_watches_file_is_reported_and_schedules_still_run():
+def test_a_damaged_watches_file_is_reported_and_automations_still_run():
     ad, clock = make()
     ad.on_ready()
-    schedules.add(600, "digest", now=clock.now - 601)
+    _summary(clock)
     _zero_fill(github_watch.path())
     ad.tick()
     assert len(ad._agent().turns) == 1
     assert any("watch your repos again" in m["text"] for m in ad.transport.sent)
 
 
-def test_the_cli_explains_a_damaged_file_instead_of_a_traceback(capsys):
-    import argparse
-
-    _zero_fill(schedules.path())
-    assert cli.main(argparse.Namespace(discord_action="schedules")) == 1
-    assert "shut down while saving" in capsys.readouterr().err
-    assert cli.main(argparse.Namespace(discord_action="schedules")) == 0
-
-
 def test_a_bang_message_is_just_a_question_now():
     ad, clock = make()
     ad.on_ready()
     ad.handle_message(message(clock, "!every 1h do something"))
-    assert schedules.load() == [], "schedules come from the skill, not DM syntax"
+    assert store.load() == [], "automations come from the skill, not DM syntax"
     assert len(ad._agent().turns) == 1
 
 
@@ -406,3 +389,54 @@ def test_github_text_cannot_become_a_masked_link():
     text = github_watch.format_items("amd/gaia", [item])
     assert "[safe](https://evil.example)" not in text
     assert "\\[safe\\]" in text
+
+
+def test_an_approval_from_an_automation_says_which_one_asks():
+    ad, clock = make()
+    ad.on_ready()
+    store.add(
+        store.Automation(
+            "",
+            "Rainier window",
+            store.KIND_ALERT,
+            prompt="find a weekend",
+            every_seconds=6 * 3600,
+            next_at=clock.now - 1,
+        )
+    )
+    ad.tick()
+    turn = ad._agent().turns[-1]
+    ad._on_agent_event(
+        {
+            "type": "needs_confirmation",
+            "action": "write_file",
+            "confirm_id": "c-1",
+            "summary": "notes.md",
+        },
+        turn,
+    )
+    assert (
+        "Asked by the automation 🔔 **Rainier window**" in ad.transport.sent[-1]["text"]
+    )
+
+
+def test_an_agent_failure_in_an_alert_is_shown_but_not_kept_as_news():
+    ad, clock = make()
+    ad.on_ready()
+    store.add(
+        store.Automation(
+            "",
+            "CI",
+            store.KIND_ALERT,
+            prompt="is main red?",
+            every_seconds=3600,
+            next_at=clock.now - 1,
+            last_alert="main is red",
+        )
+    )
+    ad.tick()
+    ad._on_agent_event(
+        {"type": "error", "detail": "model unloaded"}, ad._agent().turns[-1]
+    )
+    assert "model unloaded" in ad.transport.sent[-1]["text"]
+    assert store.load()[0].last_alert == "main is red"

@@ -29,7 +29,7 @@ CHECK_BINARIES = frozenset({"gh", "gaia"})
 
 _RULE = (
     "A check runs on its own every few minutes, so it must be one GitHub read "
-    "— `gaia discord ci-status --repo OWNER/REPO --branch main`, or a gh read "
+    "— `gaia automation ci-status --repo OWNER/REPO --branch main`, or a gh read "
     "naming the repo, like `gh pr view 12 --repo OWNER/REPO --json "
     "reviewDecision --jq .reviewDecision`."
 )

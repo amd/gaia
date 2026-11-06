@@ -48,12 +48,12 @@
       "justification": "binds 0.0.0.0 only on explicit caller opt-in (documented flag), never by default"
     },
     {
-      "path": "src/gaia/messaging/discord/github_watch.py",
+      "path": "src/gaia/automations/github.py",
       "rule": "S603",
       "justification": "Runs `gh auth token` with a fixed argv: the gh path comes from shutil.which and no part of the command comes from a Discord message, GitHub data or user input. shell=False, so nothing is shell-interpreted. The token it prints is used only as the GitHub API bearer and never logged."
     },
     {
-      "path": "src/gaia/messaging/discord/checks.py",
+      "path": "src/gaia/automations/checks.py",
       "rule": "B603",
       "justification": "Runs a trigger's check: one command the paired user approved when the trigger was added, re-validated before every run by check_argv, which accepts only a single read-tier call of a policed CLI (gh, gaia, git reads) or a command on the shell's read-only list, and refuses pipes, chains and redirects. The program path comes from shutil.which; shell=False, so nothing is shell-interpreted; the bot token is stripped from its environment."
     },

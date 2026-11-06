@@ -1,0 +1,54 @@
+---
+title: "Automations"
+description: "Reminders, alerts, triggers, summaries and a heartbeat: things GAIA does on its own and tells you about later."
+icon: "bell"
+---
+
+Ask GAIA in plain words to do something later, again and again, or only when
+something changes. It sets it up after you approve it, and messages you when
+there is something to say.
+
+<Note>
+Automations reach you through [Discord](/guides/discord) today. Connect it
+under Settings → Messaging in the GAIA app first; GAIA tells you if nothing
+would deliver what you set up.
+</Note>
+
+## What you can ask for
+
+| You say | GAIA sets up | It messages you |
+|---|---|---|
+| "Remind me in 10 minutes to stretch", "remind me at 5pm to call Sam" | a **reminder** | once, at that time |
+| "Summarize my inbox every morning" | a **summary** | every time |
+| "Alert me if a test breaks on main", "tell me when PR 12 is approved" | a **trigger** | only when the thing it watches changes |
+| "Let me know when there's a good weekend to climb Rainier", "tell me if anything urgent lands in my inbox" | an **alert** | only when it finds something that needs you, and never twice about the same thing |
+| "Check in on things every 30 minutes, but not at night" | a **heartbeat** | only when something on your checklist needs you |
+
+- **Triggers cost almost nothing.** A small read-only check runs on your PC every few
+  minutes without the AI; GAIA wakes only when the result changes. Checks can only
+  read from GitHub today, so they cannot change anything.
+- **Alerts and the heartbeat use judgment.** Every interval GAIA looks (the web, your
+  mail, a forecast) and decides whether it is worth telling you. Quiet runs are not
+  shown at all.
+- **Quiet hours** hold a run until they end, so a heartbeat never wakes you at 3 a.m.
+
+## Seeing and changing them
+
+Ask: "what are you watching?", "list my reminders", "pause the heartbeat", "check main
+every 30 minutes instead", "stop the Rainier alert". GAIA lists them by name and changes
+or removes the one you mean, after you approve the change.
+
+From a terminal, the same thing is [`gaia automation`](/reference/cli#automation):
+
+```bash
+gaia automation list --plain
+gaia automation pause "Heartbeat"
+gaia automation remove "Stretch"
+```
+
+## Limits
+
+- At most 25 automations, and repeating ones run at most every 5 minutes.
+- Nothing runs while the PC is off or the Discord bridge is stopped. A repeating one
+  that came due meanwhile runs once when the bridge is back, not once per missed slot.
+- A run that needs a change on your PC still asks first, in Discord, like any other.

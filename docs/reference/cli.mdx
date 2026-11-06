@@ -1322,7 +1322,7 @@ gaia slack stop
 gaia discord status --json
 gaia discord start --detach
 gaia discord watch --repo amd/gaia --mine kovtcharov,kovtcharov-amd
-gaia discord schedule-add --every 3h --prompt "Summarize my open PRs"
+gaia discord always-allowed
 ```
 
 **Subcommands & options:**
@@ -1342,11 +1342,6 @@ gaia discord schedule-add --every 3h --prompt "Summarize my open PRs"
 | `gaia discord status` | `--json` | false | Connection, pairing and bridge state, plus every link setup opens. |
 | `gaia discord decline` | `--never` | false | Record that you don't want Discord set up. |
 | `gaia discord disconnect` | – | – | Stop the bridge and forget the token and the pairing. Refused if the bridge won't stop. |
-| `gaia discord schedules` | – | – | List the prompts the bridge runs on a timer (JSON). |
-| `gaia discord schedule-add` | `--every`, `--prompt` (required) | – | Run a prompt every interval (`30m`, `3h`, `1d`; at least 5 minutes) and DM the answer. |
-| `gaia discord schedule-add` | `--check` | – | Make it a trigger: run this one read-only command every interval without the model, and run the prompt only when its output changes. Runs the check once when added, prints what it shows, and starts from that. Refused if the command can write or fails when tried. |
-| `gaia discord ci-status` | `--repo` (required), `--branch` | `main` | Print, in one line, which GitHub Actions workflows are failing on a branch. Changes only when that does, so it suits `--check`. |
-| `gaia discord schedule-remove` | `--id` or `--all` | – | Remove one schedule, or all of them. |
 | `gaia discord watches` | – | – | List the GitHub repositories being watched (JSON). |
 | `gaia discord watch` | `--repo` (required), `--mine` | – | DM each new PR, issue or comment on a repo as it happens, except from `--mine` accounts and bots. |
 | `gaia discord unwatch` | `--repo` (required) | – | Stop watching a repo. |
@@ -3401,6 +3396,45 @@ skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
 </Note>
 
 [→ Agent Skills Spec](/spec/agent-skills) · [→ Skill Format Reference](/plans/skill-format)
+
+---
+
+## Automation
+
+Reminders, alerts, triggers and summaries GAIA runs on its own and reports
+later. Stored in `~/.gaia/automations/automations.json`; the Discord bridge runs
+them today and delivers them to your Discord DM. Ask GAIA in plain words ("remind
+me at 5pm", "alert me if main breaks", "what are you watching?") and it uses
+these commands through the `automations` skill, asking before every change.
+
+```bash
+gaia automation add --name "Stretch" --at 10m --say "Time to stretch"
+gaia automation add --name "main CI" --every 10m --check "gaia automation ci-status --repo amd/gaia --branch main" --prompt "Say what broke, with links"
+gaia automation add --name "Heartbeat" --every 30m --alert --quiet 22:00-07:00 --prompt "Check my inbox and calendar; tell me only what needs me"
+gaia automation list --plain
+gaia automation edit "main CI" --every 30m
+```
+
+| Kind | Made with | GAIA speaks |
+|---|---|---|
+| reminder | `--at` and `--say` or `--prompt` | once, at that time |
+| summary | `--every` and `--prompt` | every time |
+| trigger | `--every`, `--check` and `--prompt` | only when the check's output changes |
+| alert | `--every`, `--alert` and `--prompt` | only when it finds something that needs you, and never twice about the same thing |
+
+| Command | Option | Default | Description |
+|-----------|--------|---------|-------------|
+| `gaia automation list` | `--plain` | false | Every automation: name, kind, interval, next run, paused or not. JSON unless `--plain`. |
+| `gaia automation add` | `--name` (required), `--at` or `--every`, `--prompt`, `--say` | – | Add one. `--at` takes `10m`, `in 2 hours`, `17:30`, `5pm`, `tomorrow 9am` or an ISO time; `--every` takes `30m`, `6h`, `1d` (at least 5 minutes). |
+| `gaia automation add` | `--check` | – | Make it a trigger: one GitHub read run every interval without the AI; the prompt runs only when its output changes. Runs once when added, prints what it shows, and starts from that. Refused if it could change anything. |
+| `gaia automation add` | `--alert` | false | Make it an alert: GAIA judges the prompt every interval and messages only when something needs you. |
+| `gaia automation add` / `gaia automation edit` | `--quiet` | – | Quiet hours like `22:00-07:00`: a run due inside waits until they end. Empty on `edit` removes them. |
+| `gaia automation add` / `gaia automation edit` | `--days` | every day | Only on these days: `mon-fri`, `weekends`, `mon,wed,fri`. A run due on another day is skipped. Empty on `edit` means every day. |
+| `gaia automation edit` | `--rename`, `--prompt`, `--say`, `--every`, `--at`, `--check` | – | Change one, by name or id. |
+| `gaia automation pause` / `gaia automation resume` | – | – | Stop running it without removing it, and start again. |
+| `gaia automation run` | – | – | Run it now, once, on the next upkeep tick. |
+| `gaia automation remove` | `--all` | – | Remove one by name or id, or all of them. |
+| `gaia automation ci-status` | `--repo` (required), `--branch` | `main` | One line naming the GitHub Actions workflows failing on a branch's pushes; changes only when that does, so it suits `--check`. |
 
 ---
 
