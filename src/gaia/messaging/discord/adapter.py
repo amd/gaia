@@ -126,6 +126,33 @@ BUTTON_ALWAYS = "gaia:always"
 BUTTON_DENY = "gaia:deny"
 #: On a progress placeholder: stop what is running and what waits behind it.
 BUTTON_STOP = "gaia:stop"
+#: A reply that is only one of these answers the one approval waiting.
+TYPED_DECISIONS = {
+    **dict.fromkeys(
+        (
+            "yes",
+            "y",
+            "yep",
+            "yeah",
+            "ok",
+            "okay",
+            "sure",
+            "allow",
+            "allow it",
+            "approve",
+            "approved",
+            "go ahead",
+            "do it",
+            "go",
+            "yes please",
+        ),
+        DECISION_ALLOW,
+    ),
+    **dict.fromkeys(
+        ("no", "n", "nope", "deny", "don't", "dont", "no thanks"), DECISION_DENY
+    ),
+    **dict.fromkeys(("always", "always allow", "always allow it"), DECISION_ALWAYS),
+}
 #: A message that is only one of these stops the work instead of queuing.
 STOP_WORDS = frozenset(
     {"stop", "cancel", "abort", "nevermind", "never mind", "stop it", "halt"}
@@ -645,6 +672,11 @@ class DiscordAdapter:
             self._closed = True
             pending = list(self._pending.values())
             self._pending.clear()
+            waiting, self._waiting = self._waiting, None
+        if waiting is not None and self._channel is not None:
+            # Denying the prompts below lets the agent move on; the message
+            # queued behind them must not start a turn nobody will see.
+            self._channel.withdraw(waiting[0])
         for item in pending:
             item.timer.cancel()
             self._edit(
@@ -920,6 +952,8 @@ class DiscordAdapter:
         if not question:
             self._send(msg.channel_id, "I got an empty message — send me a question.")
             return
+        if not msg.attachments and self._answer_by_text(msg):
+            return
         if not msg.attachments and _is_stop_word(msg.content):
             self._stop_work(msg.channel_id)
             return
@@ -1056,6 +1090,41 @@ class DiscordAdapter:
             pending = self._pending.pop(click.message_id, None)
         if pending is None:
             return "That prompt has expired or was already answered."
+        self._apply_decision(pending, decision)
+        return None
+
+    def _answer_by_text(self, msg: InboundMessage) -> bool:
+        """A bare "yes" / "no" / "always" answers the one approval waiting.
+
+        People reply in words; queuing the word behind the turn that waits for
+        it leaves both stuck until the prompt expires as a deny.
+        """
+        decision = TYPED_DECISIONS.get(
+            " ".join(msg.content.lower().strip(" .!").split())
+        )
+        if decision is None:
+            return False
+        with self._lock:
+            waiting = list(self._pending.values())
+            if len(waiting) == 1 and not (
+                decision == DECISION_ALWAYS and not waiting[0].scope
+            ):
+                pending = self._pending.pop(waiting[0].message_id)
+            else:
+                pending = None
+        if pending is not None:
+            self._apply_decision(pending, decision)
+            return True
+        if not waiting:
+            return False  # Nothing to answer: it is just a message.
+        if len(waiting) > 1:
+            note = f"{len(waiting)} approvals are waiting — tap the button on the one you mean."
+        else:
+            note = "That one can't be allowed always — tap Allow or Deny."
+        self._send(msg.channel_id, f"-# {note}")
+        return True
+
+    def _apply_decision(self, pending: "_Pending", decision: str) -> None:
         pending.timer.cancel()
         audit.warning(
             "Paired Discord user answered %r for confirmation %s",
@@ -1083,7 +1152,6 @@ class DiscordAdapter:
             f"-# {_DECISION_VERBS[decision]} · {_record(pending.label)}",
             clear_buttons=True,
         )
-        return None
 
     def _expire(self, message_id: str) -> None:
         with self._lock:
@@ -1168,10 +1236,17 @@ class DiscordAdapter:
     def _on_busy(self, turn: Turn, ahead: int) -> None:
         target = turn.context
         if isinstance(target, ReplyTarget):
+            with self._lock:
+                asking = bool(self._pending)
             self._update(
                 target,
-                f"-# Queued — finishing {ahead} earlier message"
-                f"{'s' if ahead != 1 else ''} first…",
+                (
+                    "-# Queued — GAIA is waiting for your answer above (tap a button, "
+                    "or reply yes or no)…"
+                    if asking
+                    else f"-# Queued — finishing {ahead} earlier message"
+                    f"{'s' if ahead != 1 else ''} first…"
+                ),
             )
 
     # ------------------------------------------------------------------
@@ -1182,6 +1257,10 @@ class DiscordAdapter:
         target = turn.context
         if not isinstance(target, ReplyTarget):
             log.warning("Dropped an agent event with no Discord reply target")
+            return
+        if self._closed:
+            # Closing already marked everything interrupted; nothing new may
+            # appear after it, nor be left behind for the next bridge.
             return
         etype = event.get("type")
         if etype == "token":

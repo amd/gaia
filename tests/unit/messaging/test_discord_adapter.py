@@ -1058,3 +1058,76 @@ def test_pipes_in_code_or_prose_are_left_alone():
     code = "```\n| a | b |\n|---|---|\n```"
     assert da.untable(code) == code
     assert da.untable("a | b") == "a | b"
+
+
+# ----------------------------------------------------------------------
+# Answering an approval in words
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "word,decision",
+    [
+        ("yes", "allow"),
+        ("Yes!", "allow"),
+        ("do it", "allow"),
+        ("ok", "allow"),
+        ("no", "deny"),
+        ("Deny.", "deny"),
+    ],
+)
+def test_a_typed_yes_or_no_answers_the_waiting_approval(word, decision):
+    ad, clock = make()
+    ad.on_ready()
+    posted = _prompt(ad, clock)
+    turns = len(ad._agent().turns)
+    clock.now += 0.001
+    ad.handle_message(message(clock, word))
+    assert (decision, "c-1") in ad._agent().decisions
+    assert len(ad._agent().turns) == turns, "the word is an answer, not a question"
+    assert any(e[1] == posted["id"] and e[3] for e in ad.transport.edits)
+
+
+def test_always_by_text_needs_a_scope():
+    ad, clock = make()
+    ad.on_ready()
+    _prompt(ad, clock)  # no always_scope
+    clock.now += 0.001
+    ad.handle_message(message(clock, "always"))
+    assert ad._agent().decisions == []
+    assert "can't be allowed always" in ad.transport.sent[-1]["text"]
+
+
+def test_two_waiting_approvals_ask_which_one():
+    ad, clock = make()
+    ad.on_ready()
+    _prompt(ad, clock)
+    clock.now += 0.001
+    _prompt(ad, clock, confirm_id="c-2")
+    clock.now += 0.001
+    ad.handle_message(message(clock, "yes"))
+    assert ad._agent().decisions == []
+    assert "2 approvals are waiting" in ad.transport.sent[-1]["text"]
+
+
+def test_yes_with_nothing_waiting_is_just_a_message():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "yes"))
+    assert len(ad._agent().turns) == 1
+
+
+def test_nothing_is_posted_after_the_bridge_closes():
+    ad, clock = make()
+    ad.on_ready()
+    _prompt(ad, clock)
+    ad._agent().ahead = 1
+    clock.now += 0.001
+    ad.handle_message(message(clock, "and then this"))
+    queued = ad._agent().turns[-1]
+    ad.close()
+    assert queued.withdrawn, "a queued message never starts after close"
+    sent = len(ad.transport.sent)
+    ad._on_agent_event({"type": "status", "message": "thinking"}, queued)
+    ad._on_agent_event({"type": "final", "answer": "late"}, queued)
+    assert len(ad.transport.sent) == sent
