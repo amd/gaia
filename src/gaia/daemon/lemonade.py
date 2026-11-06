@@ -219,7 +219,7 @@ class EmbeddedLemonadeOwner:
                     f"Start that server, or {switch_back_hint()}."
                 )
             embedded = self._factory()
-            if not embedded.is_installed() and not embedded.replaces_older_install():
+            if not embedded.is_installed() and not embedded.replaces_other_install():
                 if embedded.is_incomplete():
                     raise EmbeddedLemonadeError(
                         f"GAIA's Lemonade Server install is incomplete: "
@@ -243,16 +243,16 @@ class EmbeddedLemonadeOwner:
             if (
                 current.running
                 and not orphaned
-                and not embedded.is_older(current.version)
+                and not embedded.is_version_mismatch(current.version)
             ):
                 raise EmbeddedLemonadeError(
                     f"GAIA's Lemonade Server v{current.version} is running, "
                     f"but this GAIA needs v{embedded.version}. Run `gaia init` "
                     "to replace it."
                 )
-            # An older one that still answers is replaced by start() only once
-            # the new version is on disk, so a failed download leaves it up.
-            replaced_on_start = current.running and embedded.is_older(current.version)
+            # A different version that still answers is replaced by start() only
+            # after the pinned version is on disk, so a failed repair leaves it up.
+            replaced_on_start = current.running and embedded.is_version_mismatch(current.version)
             if orphaned and not replaced_on_start:
                 logger.warning(
                     "daemon: reaping embedded Lemonade (pid %s) left by daemon "
@@ -270,7 +270,7 @@ class EmbeddedLemonadeOwner:
                 install_if_missing=False,
                 owner_pid=self._owner_pid,
                 owner_started=self._owner_started,
-                upgrade_older=True,
+                upgrade_mismatch=True,
             )
             logger.info(
                 "daemon: started embedded Lemonade %s on port %s",

@@ -1170,7 +1170,7 @@ class TestCheckSetupStatus(unittest.TestCase):
         embedded = MagicMock()
         embedded.version = LEMONADE_VERSION
         embedded.status.return_value = status
-        embedded.older_installed_version.return_value = older
+        embedded.other_installed_version.return_value = older
         return patch(
             "gaia.llm.lemonade_embedded.EmbeddedLemonade", return_value=embedded
         )
@@ -1270,7 +1270,7 @@ class TestCheckSetupStatus(unittest.TestCase):
 
         self.assertEqual(status.stage, "setup")
 
-    def test_older_installed_version_reads_other_unpacked_versions(self):
+    def test_other_installed_version_reads_other_unpacked_versions(self):
         import platform
         import tempfile
         from pathlib import Path
@@ -1279,15 +1279,16 @@ class TestCheckSetupStatus(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as home:
             embedded = EmbeddedLemonade(home=Path(home))
-            self.assertIsNone(embedded.older_installed_version())
+            self.assertIsNone(embedded.other_installed_version())
             daemon = "lemond.exe" if platform.system() == "Windows" else "lemond"
-            for version in ("9.2.0", "10.10.1", embedded.version):
+            for version in ("9.2.0", "2026.45.3", embedded.version):
                 d = embedded.root / "dist" / version
                 d.mkdir(parents=True)
                 (d / daemon).write_bytes(b"")
             # A half-unpacked dir with no daemon does not count.
             (embedded.root / "dist" / "99.0.0").mkdir()
-            self.assertEqual(embedded.older_installed_version(), "10.10.1")
+            (embedded.root / "dist" / "not-a-version").mkdir()
+            self.assertEqual(embedded.other_installed_version(), "2026.45.3")
 
     def test_ready_when_server_up_and_required_models_present(self):
         from gaia.installer.init_command import check_setup_status

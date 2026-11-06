@@ -882,27 +882,29 @@ class EmbeddedLemonade:
         """
         return self.dist_dir.is_dir() and not self.daemon_path.is_file()
 
-    def replaces_older_install(self) -> bool:
-        """Whether an older version is unpacked, which this one upgrades.
+    def replaces_other_install(self) -> bool:
+        """Whether another parseable version is unpacked for replacement.
 
-        GAIA keeps its own server on the version it targets, so a start
-        installs over an older one instead of asking the user to.
+        GAIA keeps its private server on the pinned version. A newer build may
+        be incompatible with the current GAIA release too, so both upgrades and
+        downgrades repair it without making the user reinstall manually.
         """
         target = parse_version(self.version)
         dist = self.root / "dist"
         if target is None or not dist.is_dir():
             return False
         return any(
-            (found := parse_version(entry.name)) is not None and found < target
+            (found := parse_version(entry.name)) is not None and found != target
             for entry in dist.iterdir()
             if entry.is_dir()
         )
 
-    def older_installed_version(self) -> Optional[str]:
-        """The newest other version unpacked here, or None.
+    def other_installed_version(self) -> Optional[str]:
+        """The newest parseable version other than the pinned one, or None.
 
-        A GAIA upgrade that moves the pinned version leaves the previous one in
-        ``dist/``: that machine was set up and needs an update, not first-run setup.
+        A GAIA update can move the pinned version in either direction. Any
+        complete, different install means this machine needs repair rather than
+        first-run setup.
         """
         dist = self.root / "dist"
         if not dist.is_dir():
@@ -911,10 +913,12 @@ class EmbeddedLemonade:
         found = [
             d.name
             for d in dist.iterdir()
-            if d.name != self.version and (d / name).is_file()
+            if d.name != self.version
+            and parse_version(d.name) is not None
+            and (d / name).is_file()
         ]
         return max(
-            found, key=lambda v: [int(n) for n in re.findall(r"\d+", v)], default=None
+            found, key=lambda v: parse_version(v) or (), default=None
         )
 
     # -- install ----------------------------------------------------------
@@ -1858,7 +1862,7 @@ class EmbeddedLemonade:
         install_if_missing: bool = True,
         owner_pid: Optional[int] = None,
         owner_started: Optional[float] = None,
-        upgrade_older: bool = False,
+        upgrade_mismatch: bool = False,
     ) -> EmbeddedStatus:
         """Start the private daemon and wait for it to answer.
 
@@ -1870,9 +1874,9 @@ class EmbeddedLemonade:
             install_if_missing: Download the artifact when it is not unpacked.
             owner_pid: The GAIA daemon starting it, recorded as its owner.
             owner_started: That daemon's process start time.
-            upgrade_older: Download this version, even when
-                *install_if_missing* is false, if it replaces an older one
-                that is installed or running.
+            upgrade_mismatch: Download this version, even when
+                *install_if_missing* is false, if it replaces another
+                parseable version that is installed or running.
 
         Returns:
             Status of the running instance.
@@ -1888,21 +1892,21 @@ class EmbeddedLemonade:
                 install_if_missing,
                 owner_pid,
                 owner_started,
-                upgrade_older,
+                upgrade_mismatch,
             )
 
-    def is_older(self, version: Optional[str]) -> bool:
-        """Whether *version* predates the one this instance targets."""
+    def is_version_mismatch(self, version: Optional[str]) -> bool:
+        """Whether a parseable *version* differs from this instance's target."""
         found, target = parse_version(version), parse_version(self.version)
-        return found is not None and target is not None and found < target
+        return found is not None and target is not None and found != target
 
     def _ensure_installed(
-        self, install_if_missing: bool, upgrade_older: bool, upgrading: bool
+        self, install_if_missing: bool, upgrade_mismatch: bool, upgrading: bool
     ) -> None:
         if self.is_installed():
             return
-        replaces = upgrading or self.replaces_older_install()
-        if not install_if_missing and not (upgrade_older and replaces):
+        replaces = upgrading or self.replaces_other_install()
+        if not install_if_missing and not (upgrade_mismatch and replaces):
             raise EmbeddedLemonadeError(
                 f"Embedded Lemonade {self.version} is not installed at "
                 f"{self.dist_dir}. Run `gaia lemonade embedded start` "
@@ -1917,14 +1921,14 @@ class EmbeddedLemonade:
         install_if_missing: bool,
         owner_pid: Optional[int],
         owner_started: Optional[float],
-        upgrade_older: bool,
+        upgrade_mismatch: bool,
     ) -> EmbeddedStatus:
         existing = self._status(reap=False)
-        if existing.running and self.is_older(existing.version):
-            # Download first, so a failed download leaves the old server up.
+        if existing.running and self.is_version_mismatch(existing.version):
+            # Download first, so a failed repair leaves the running server up.
             try:
                 self._ensure_installed(
-                    install_if_missing, upgrade_older, upgrading=True
+                    install_if_missing, upgrade_mismatch, upgrading=True
                 )
             except EmbeddedLemonadeError as e:
                 raise EmbeddedLemonadeError(
@@ -1965,7 +1969,7 @@ class EmbeddedLemonade:
                 f"`gaia lemonade embedded stop`, then start again."
             )
 
-        self._ensure_installed(install_if_missing, upgrade_older, upgrading=False)
+        self._ensure_installed(install_if_missing, upgrade_mismatch, upgrading=False)
 
         self._reap_orphaned_backends()
         self.write_config()

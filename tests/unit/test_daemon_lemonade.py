@@ -47,9 +47,11 @@ def _embedded(status, installed=True, older_install=False):
     embedded = mock.Mock()
     embedded.version = VERSION
     embedded.is_installed.return_value = installed
-    embedded.replaces_older_install.return_value = older_install
+    embedded.replaces_other_install.return_value = older_install
     embedded.is_incomplete.return_value = False
-    embedded.is_older.side_effect = lambda v: parse_version(v) < parse_version(VERSION)
+    embedded.is_version_mismatch.side_effect = lambda v: (
+        parse_version(v) != parse_version(VERSION)
+    )
     embedded.status.return_value = status
     embedded.start.return_value = _running(port=60000)
     embedded.log_path = "/gaia/lemonade/lemond.log"
@@ -86,7 +88,7 @@ class TestEnsure:
             install_if_missing=False,
             owner_pid=OWNER,
             owner_started=mock.ANY,
-            upgrade_older=True,
+            upgrade_mismatch=True,
         )
 
     def test_older_version_is_upgraded_not_reported(self):
@@ -99,7 +101,7 @@ class TestEnsure:
             install_if_missing=False,
             owner_pid=OWNER,
             owner_started=mock.ANY,
-            upgrade_older=True,
+            upgrade_mismatch=True,
         )
 
     def test_older_version_owned_by_another_live_daemon_is_upgraded(self):
@@ -114,7 +116,7 @@ class TestEnsure:
             install_if_missing=False,
             owner_pid=OWNER,
             owner_started=mock.ANY,
-            upgrade_older=True,
+            upgrade_mismatch=True,
         )
 
     def test_a_crashed_daemons_older_server_waits_for_the_download(self):
@@ -140,23 +142,31 @@ class TestEnsure:
 
         embedded.stop.assert_called_once()
 
-    def test_newer_version_owned_by_another_live_daemon_is_left_alone(self):
+    def test_newer_version_owned_by_another_live_daemon_is_repaired(self):
         other = OWNER + 1
         embedded = _embedded(_running(version="9999.1.0", owner_pid=other))
-        with pytest.raises(EmbeddedLemonadeError, match="needs v"):
-            _owner(embedded, alive=(other,)).ensure()
 
+        assert _owner(embedded, alive=(other,)).ensure().started is True
         embedded.stop.assert_not_called()
-        embedded.start.assert_not_called()
+        embedded.start.assert_called_once_with(
+            install_if_missing=False,
+            owner_pid=OWNER,
+            owner_started=mock.ANY,
+            upgrade_mismatch=True,
+        )
 
-    def test_newer_version_is_reported_not_replaced(self):
-        """A newer GAIA's server is not this one's to downgrade."""
+    def test_newer_version_is_repaired_to_the_pinned_version(self):
+        """A newer incompatible server is repaired without a manual reinstall."""
         embedded = _embedded(_running(version="9999.1.0", owner_pid=OWNER))
-        with pytest.raises(EmbeddedLemonadeError, match="needs v"):
-            _owner(embedded).ensure()
 
+        assert _owner(embedded).ensure().started is True
         embedded.stop.assert_not_called()
-        embedded.start.assert_not_called()
+        embedded.start.assert_called_once_with(
+            install_if_missing=False,
+            owner_pid=OWNER,
+            owner_started=mock.ANY,
+            upgrade_mismatch=True,
+        )
 
     def test_an_older_install_is_upgraded_on_start(self):
         embedded = _embedded(
@@ -237,7 +247,7 @@ class TestEnsure:
             install_if_missing=False,
             owner_pid=OWNER,
             owner_started=mock.ANY,
-            upgrade_older=True,
+            upgrade_mismatch=True,
         )
 
     def test_old_version_a_crashed_daemon_left_is_replaced_by_the_start(self):
@@ -445,10 +455,10 @@ class TestManagerHook:
         embedded = mock.Mock()
         embedded.version = VERSION
         embedded.is_installed.return_value = installed
-        embedded.replaces_older_install.return_value = False
+        embedded.replaces_other_install.return_value = False
         embedded.is_incomplete.return_value = False
-        embedded.is_older.side_effect = lambda found: (
-            parse_version(found) < parse_version(VERSION)
+        embedded.is_version_mismatch.side_effect = lambda found: (
+            parse_version(found) != parse_version(VERSION)
         )
         embedded.status.return_value = (
             _running(version=version) if running else _status()
@@ -485,15 +495,17 @@ class TestManagerHook:
             assert LemonadeManager.start_embedded_if_stopped() is True
         ensure.assert_called_once()
 
-    def test_a_newer_running_server_is_left_alone(self):
+    def test_a_newer_running_server_is_repaired(self):
         from gaia.llm.lemonade_manager import LemonadeManager
 
         with (
-            self._patch_embedded(installed=True, running=True, version="2999.1.0"),
-            mock.patch("gaia.daemon.client.ensure_lemonade") as ensure,
+            self._patch_embedded(installed=True, running=True, version="2026.45.3"),
+            mock.patch(
+                "gaia.daemon.client.ensure_lemonade", return_value={"started": True}
+            ) as ensure,
         ):
-            assert LemonadeManager.start_embedded_if_stopped() is False
-        ensure.assert_not_called()
+            assert LemonadeManager.start_embedded_if_stopped() is True
+        ensure.assert_called_once()
 
     @pytest.mark.parametrize(
         "installed,running", [(False, False), (True, True)], ids=["absent", "running"]
