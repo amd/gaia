@@ -34,7 +34,10 @@ those platform keys rather than let a half-empty installer get built.
 ## Staging a payload
 
 All three builders take `--payload <dir>` holding `gaia-tui` and `gaia-agent`
-(with `.exe` suffixes on Windows). The Windows and macOS builders read
+(with `.exe` suffixes on Windows), and `core/`: the frozen `gaia` and its
+`_internal` folder, unpacked from a `gaia-core-<platform>` build of
+[`build_core.yml`](../../.github/workflows/build_core.yml). The terminal UI runs
+setup and starts the daemon with that `gaia`, so the PC needs no Python. The Windows and macOS builders read
 `LICENSE.md` from that directory too; the Linux one reads it from the repo root
 instead, because it already resolves the repo for its `.desktop` file and icon.
 Stage all three and every builder is satisfied. Build the first, fetch the

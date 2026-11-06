@@ -22,9 +22,14 @@ readonly PKG_IDENTIFIER="ai.amd.gaia.terminal-hub"
 readonly DOCS_IDENTIFIER="ai.amd.gaia.terminal-hub.docs"
 readonly COMPONENT_PKG="gaia-terminal-hub-component.pkg"
 readonly DOCS_COMPONENT_PKG="gaia-terminal-hub-docs-component.pkg"
+# The frozen `gaia` core (installer/core/freeze.py): an executable and its
+# _internal folder, kept together and linked into /usr/local/bin.
+readonly CORE_IDENTIFIER="ai.amd.gaia.terminal-hub.core"
+readonly CORE_COMPONENT_PKG="gaia-terminal-hub-core-component.pkg"
+readonly CORE_INSTALL_LOCATION="/usr/local/lib/gaia"
 readonly MIN_OS_VERSION="11.0"
 
-# Two components so that /usr/local* is only ever an --install-location, never a
+# Separate components so that /usr/local* is only ever an --install-location, never a
 # payload entry: `--ownership recommended` would stamp such an entry root:wheel,
 # which breaks `brew` on an Intel Mac where Homebrew owns /usr/local as the user.
 readonly BIN_INSTALL_LOCATION="/usr/local/bin"
@@ -121,6 +126,11 @@ for binary in "${PAYLOAD_BINARIES[@]}"; do
         "Check the build step that copies the Go binaries into ${PAYLOAD_DIR}."
 done
 
+[ -f "${PAYLOAD_DIR}/core/gaia" ] && [ -d "${PAYLOAD_DIR}/core/_internal" ] || die \
+    "payload is missing the frozen gaia core: ${PAYLOAD_DIR}/core/gaia and core/_internal." \
+    "Unpack the gaia-core-darwin-<arch> build (.github/workflows/build_core.yml) into ${PAYLOAD_DIR}/core." \
+    "Without it the terminal UI cannot run setup or start the daemon."
+
 [ -f "${PAYLOAD_DIR}/${LICENSE_NAME}" ] || die \
     "payload is missing '${LICENSE_NAME}': ${PAYLOAD_DIR}/${LICENSE_NAME} not found." \
     "Every package ships the licence, so this one refuses to build without it." \
@@ -202,18 +212,24 @@ trap cleanup EXIT
 
 BIN_ROOT="${WORK_DIR}/bin-root"
 DOC_ROOT="${WORK_DIR}/doc-root"
+CORE_ROOT="${WORK_DIR}/core-root"
 STAGED_SCRIPTS="${WORK_DIR}/scripts"
 
 # Each root's own mode becomes the BOM's "." entry, which is what the installer
 # creates the install location with when it is absent. Pin it rather than
 # inherit the build host's umask.
-mkdir -p "$BIN_ROOT" "$DOC_ROOT"
-chmod 0755 "$BIN_ROOT" "$DOC_ROOT"
+mkdir -p "$BIN_ROOT" "$DOC_ROOT" "$CORE_ROOT"
+chmod 0755 "$BIN_ROOT" "$DOC_ROOT" "$CORE_ROOT"
 
 for binary in "${PAYLOAD_BINARIES[@]}"; do
     cp "${PAYLOAD_DIR}/${binary}" "${BIN_ROOT}/${binary}"
     chmod 0755 "${BIN_ROOT}/${binary}"
 done
+
+cp -a "${PAYLOAD_DIR}/core/." "${CORE_ROOT}/"
+chmod 0755 "${CORE_ROOT}/gaia"
+# Relative, from /usr/local/bin to the core component's install location.
+ln -s "../lib/gaia/gaia" "${BIN_ROOT}/gaia"
 
 cp "${PAYLOAD_DIR}/${LICENSE_NAME}" "${DOC_ROOT}/${LICENSE_NAME}"
 chmod 0644 "${DOC_ROOT}/${LICENSE_NAME}"
@@ -234,10 +250,12 @@ if [ "$SIGN_PKG" -eq 1 ]; then
     # minutes into the notary round trip.
     CODESIGN_HINT="  codesign --force --options runtime --timestamp --sign \"Developer ID Application: … (${APPLE_TEAM_ID})\" <binary>"
 
-    for binary in "${PAYLOAD_BINARIES[@]}"; do
+    for binary in "${PAYLOAD_BINARIES[@]}" core/gaia; do
+        signed="${BIN_ROOT}/${binary}"
+        [ "$binary" != core/gaia ] || signed="${CORE_ROOT}/gaia"
         # Captured, not piped: `grep -q` exits on first match and would SIGPIPE
         # codesign, which `pipefail` then reports as a failure on a good binary.
-        CODESIGN_INFO="$(codesign --display --verbose=2 "${BIN_ROOT}/${binary}" 2>&1 || true)"
+        CODESIGN_INFO="$(codesign --display --verbose=2 "$signed" 2>&1 || true)"
 
         case "$CODESIGN_INFO" in
             *"Authority=Developer ID Application"*) ;;
@@ -313,7 +331,22 @@ pkgbuild \
            "Re-run with the pkgbuild output above; the usual causes are an unreadable payload staged at ${BIN_ROOT} or a malformed --scripts directory."
 
 assert_payload "${WORK_DIR}/${COMPONENT_PKG}" "$PKG_IDENTIFIER" "$BIN_INSTALL_LOCATION" \
-    "${PAYLOAD_BINARIES[@]}"
+    "${PAYLOAD_BINARIES[@]}" gaia
+
+echo "build-pkg.sh: building component package (${CORE_IDENTIFIER} ${VERSION}, ${ARCH})"
+pkgbuild \
+    --root "$CORE_ROOT" \
+    --identifier "$CORE_IDENTIFIER" \
+    --version "$VERSION" \
+    --install-location "$CORE_INSTALL_LOCATION" \
+    --ownership recommended \
+    --min-os-version "$MIN_OS_VERSION" \
+    "${WORK_DIR}/${CORE_COMPONENT_PKG}" \
+    || die "pkgbuild failed for ${CORE_IDENTIFIER}." \
+           "Re-run with the pkgbuild output above; the usual cause is an unreadable payload staged at ${CORE_ROOT}."
+
+assert_payload "${WORK_DIR}/${CORE_COMPONENT_PKG}" "$CORE_IDENTIFIER" "$CORE_INSTALL_LOCATION" \
+    gaia _internal
 
 echo "build-pkg.sh: building component package (${DOCS_IDENTIFIER} ${VERSION})"
 pkgbuild \
@@ -330,7 +363,7 @@ pkgbuild \
 assert_payload "${WORK_DIR}/${DOCS_COMPONENT_PKG}" "$DOCS_IDENTIFIER" "$DOC_INSTALL_LOCATION" \
     "$LICENSE_NAME"
 
-echo "build-pkg.sh: both payloads own only their own files (no /usr/local directory entries)"
+echo "build-pkg.sh: every payload owns only its own files (no /usr/local directory entries)"
 
 # ── Product archive ─────────────────────────────────────────────────────────
 
@@ -342,6 +375,8 @@ sed \
     -e "s|@DOCS_IDENTIFIER@|${DOCS_IDENTIFIER}|g" \
     -e "s|@COMPONENT_PKG@|${COMPONENT_PKG}|g" \
     -e "s|@DOCS_COMPONENT_PKG@|${DOCS_COMPONENT_PKG}|g" \
+    -e "s|@CORE_IDENTIFIER@|${CORE_IDENTIFIER}|g" \
+    -e "s|@CORE_COMPONENT_PKG@|${CORE_COMPONENT_PKG}|g" \
     "$DISTRIBUTION_TEMPLATE" > "$DISTRIBUTION"
 
 PRODUCTBUILD_ARGS=(

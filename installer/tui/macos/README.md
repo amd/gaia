@@ -63,8 +63,10 @@ All four arguments are required.
 
 - `--arch` is `arm64` or `x64`.
 - `--payload` is a directory that already contains two executables named
-  `gaia-tui` and `gaia-agent` (no extension) plus `LICENSE.md`. The script copies
-  them; it does not build them. A missing `LICENSE.md` is a hard error — every
+  `gaia-tui` and `gaia-agent` (no extension), `core/` (the frozen `gaia` and its
+  `_internal` folder) and `LICENSE.md`. The script copies them; it does not build
+  them. The core is its own component, installed to `/usr/local/lib/gaia` and
+  linked as `/usr/local/bin/gaia`. A missing `LICENSE.md` is a hard error — every
   package GAIA ships carries the licence.
 - `--out` is created if it does not exist. The result is
   `<out>/gaia-<version>-darwin-<arch>.pkg`.

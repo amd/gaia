@@ -123,6 +123,8 @@ on:
       - 'src/gaia/version.py'
       - 'src/gaia/frozen.py'
       - '.github/workflows/build_core.yml'
+      - 'hub/agents/gaia/python/packaging/check_bundle_licenses.py'
+      - 'hub/agents/gaia/python/packaging/check_glibc.py'
       - 'src/gaia/llm/lemonade_embedded.py'
       - 'conftest.py'
       - 'tests/conftest.py'
@@ -162,6 +164,7 @@ jobs:
   core:
     uses: ./.github/workflows/build_core.yml
     with:
+      platforms: 'win32-x64 darwin-arm64 linux-x64'
       tag: ${{ inputs.tag }}
       ref: ${{ inputs.ref }}
       artifact_prefix: ${{ inputs.artifact_prefix }}

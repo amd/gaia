@@ -32,6 +32,10 @@ readonly ICON_DIR="usr/share/icons/hicolor/256x256/apps"
 readonly SUMMARY="AMD GAIA Terminal UI - local AI assistant"
 # Not `readonly`: bash 3.2 rejects `readonly name=(...)`.
 PAYLOAD_BINARIES=(gaia-tui gaia-agent)
+# The frozen `gaia` core (installer/core/freeze.py): an executable and its
+# _internal folder, installed together and linked onto PATH.
+readonly CORE_DIR="usr/lib/gaia"
+readonly PRERM_FILE="${SCRIPT_DIR}/prerm"
 
 readonly DESKTOP_FILE="${SCRIPT_DIR}/gaia-tui.desktop"
 readonly ICON_FILE="${SCRIPT_DIR}/gaia-tui.png"
@@ -44,7 +48,8 @@ Usage: build-packages.sh --version <x.y.z|x.y.z-rc.N> --payload <dir> --out <dir
 
   --version   Release version: 1.4.0, or 1.4.0-rc.2 for a release candidate.
               The candidate's packages carry 1.4.0~rc.2, which sorts before 1.4.0.
-  --payload   Directory containing exactly the executables gaia-tui and gaia-agent.
+  --payload   Directory containing the executables gaia-tui and gaia-agent, and
+              core/, the frozen gaia (its executable and _internal folder).
   --out       Directory to write the .deb and .rpm into (created if absent).
   --print-package-version
               Print the version the packages would carry, and build nothing.
@@ -125,7 +130,12 @@ for binary in "${PAYLOAD_BINARIES[@]}"; do
         "Check the build step that copies the binaries into ${PAYLOAD_DIR}."
 done
 
-for required in "$DESKTOP_FILE" "$ICON_FILE"; do
+[ -f "${PAYLOAD_DIR}/core/gaia" ] && [ -d "${PAYLOAD_DIR}/core/_internal" ] || die \
+    "payload is missing the frozen gaia core: ${PAYLOAD_DIR}/core/gaia and core/_internal." \
+    "Unpack the gaia-core-linux-x64 build (.github/workflows/build_core.yml) into ${PAYLOAD_DIR}/core." \
+    "Without it the terminal UI cannot run setup or start the daemon."
+
+for required in "$DESKTOP_FILE" "$ICON_FILE" "$PRERM_FILE"; do
     [ -f "$required" ] || die "packaging asset not found: ${required}" \
         "It ships alongside this script; the checkout looks incomplete."
 done
@@ -169,11 +179,16 @@ trap cleanup EXIT
 chmod 0755 "$STAGE"
 
 install -d -m 0755 "${STAGE}/usr/bin" "${STAGE}/usr/share/applications" \
-                   "${STAGE}/${ICON_DIR}" "${STAGE}/${DOC_DIR}"
+                   "${STAGE}/${ICON_DIR}" "${STAGE}/${DOC_DIR}" "${STAGE}/${CORE_DIR}"
 
 for binary in "${PAYLOAD_BINARIES[@]}"; do
     install -m 0755 "${PAYLOAD_DIR}/${binary}" "${STAGE}/usr/bin/${binary}"
 done
+
+cp -a "${PAYLOAD_DIR}/core/." "${STAGE}/${CORE_DIR}/"
+chmod 0755 "${STAGE}/${CORE_DIR}/gaia"
+# Relative, so the link holds wherever the package is unpacked.
+ln -s "../lib/gaia/gaia" "${STAGE}/usr/bin/gaia"
 
 install -m 0644 "$DESKTOP_FILE"  "${STAGE}/usr/share/applications/gaia-tui.desktop"
 install -m 0644 "$ICON_FILE"     "${STAGE}/${ICON_DIR}/gaia-tui.png"
@@ -196,9 +211,9 @@ FPM_COMMON=(
     --description "$SUMMARY"
     --deb-user root  --deb-group root
     --rpm-user root  --rpm-group root
-    # No pre/post-removal scripts anywhere in this build: uninstalling must
-    # never reach into ~/.gaia, and the surest way to guarantee that is to
-    # ship no removal hook at all.
+    # The one removal hook stops a daemon running the gaia this package is
+    # about to remove or replace. It never deletes anything under ~/.gaia.
+    --before-remove "$PRERM_FILE"
     --force
 )
 

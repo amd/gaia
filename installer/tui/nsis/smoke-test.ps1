@@ -170,9 +170,13 @@ if (Test-Path $uiDefault) {
     throw "a terminal-only install wrote to $uiDefault - the desktop app's folder"
 }
 if (Test-Path $uiKey) { throw "a terminal-only install installed the desktop app" }
-foreach ($f in 'gaia-tui.exe', 'gaia-agent.exe', 'Uninstall.exe') {
+foreach ($f in 'gaia-tui.exe', 'gaia-agent.exe', 'gaia.exe', '_internal', 'Uninstall.exe') {
     if (-not (Test-Path "$tuiDir\$f")) { throw "$f did not land in $tuiDir" }
 }
+# The frozen core the terminal runs setup and the daemon with: no Python needed.
+$coreVersion = & "$tuiDir\gaia.exe" --version 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) { throw "the installed gaia.exe did not start: $coreVersion" }
+Write-Host "gaia --version -> $coreVersion"
 # The registry PATH, not $env:PATH: this process inherited its environment
 # before the install, so it cannot see the change.
 $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path

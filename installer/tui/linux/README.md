@@ -33,9 +33,11 @@ dist/gaia_1.4.0_amd64.deb
 dist/gaia-1.4.0.x86_64.rpm
 ```
 
-- `--payload` is a directory that already contains exactly two executables named
-  `gaia-tui` and `gaia-agent`, no extension. The script copies them; it does not
-  build them.
+- `--payload` is a directory that already contains two executables named
+  `gaia-tui` and `gaia-agent`, no extension, and `core/`, the frozen `gaia` with
+  its `_internal` folder. The script copies them; it does not build them. The
+  core installs to `/usr/lib/gaia`, linked as `/usr/bin/gaia`, and a pre-remove
+  script stops a daemon running it before the package is removed or upgraded.
 - `--out` is created if absent.
 - `--version` is `MAJOR.MINOR.PATCH`, or `MAJOR.MINOR.PATCH-rc.N` for a release
   candidate. Any other suffix is rejected up front rather than failing later

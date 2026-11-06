@@ -73,10 +73,21 @@ const (
 	InstallPowerShellCommand = "irm https://amd-gaia.ai/install.ps1 | iex"
 )
 
-// ResolveCLI finds the `gaia` CLI on PATH, else in ~/.gaia/bin, where the
-// installer links it. A terminal opened before the installer edited the shell's
-// startup file has no PATH entry for that folder yet.
+// selfExecutable is os.Executable, swapped out by tests.
+var selfExecutable = os.Executable
+
+// ResolveCLI finds the `gaia` CLI. First the one beside this program: the
+// terminal installers ship it there, and another `gaia` earlier on PATH may be
+// a different release. Then PATH, then ~/.gaia/bin, where the one-line
+// installer links it; a terminal opened before that installer edited the
+// shell's startup file has no PATH entry for that folder yet.
 func ResolveCLI() (string, error) {
+	if self, err := selfExecutable(); err == nil {
+		// LookPath on a full path still checks it is executable (and adds .exe on Windows).
+		if bin, err := exec.LookPath(filepath.Join(filepath.Dir(self), "gaia")); err == nil {
+			return bin, nil
+		}
+	}
 	bin, pathErr := exec.LookPath("gaia")
 	if pathErr == nil {
 		return bin, nil
