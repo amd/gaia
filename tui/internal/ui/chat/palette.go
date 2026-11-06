@@ -39,6 +39,7 @@ var paletteCommands = []paletteCommand{
 	{"/gpu", "Give the GPU more memory so bigger models fit (integrated-GPU PCs)"},
 	{"/slack", "Connect this agent to Slack, or show the connection's status"},
 	{"/discord", "Message GAIA from a Discord DM: set it up, or show its status"},
+	{"/automations", "List reminders, alerts and triggers; pause, resume or remove one"},
 	{"/model", "Switch the model this session runs on (gaia flagship agent only)"},
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},
 	{"/gateway", "Connect GAIA to the AMD LLM gateway and pick its models"},

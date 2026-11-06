@@ -392,6 +392,26 @@ export async function withDiscord(page: Page, status: Record<string, unknown>): 
     await page.route('**/api/messaging/discord', (route) => route.fulfill({ json: status }));
 }
 
+const AT = NOW.getTime() / 1000;
+const AUTOMATION = {
+    heartbeat: false, paused: false, last_run_at: 0, runs: 0,
+    prompt: '', say: '', check: '', quiet: '', days: '', failures: 0,
+};
+
+/** Settings > Automations: one of each kind, a paused one and a failing check. */
+export const AUTOMATIONS = [
+    { ...AUTOMATION, id: 'a1b2c3d4', name: 'Inbox digest', kind: 'summary', every_seconds: 86400, next_at: AT + 61200, prompt: 'Summarize what landed in my inbox overnight and flag anything that needs a reply today.', days: 'mon,tue,wed,thu,fri' },
+    { ...AUTOMATION, id: 'e5f6a7b8', name: 'Heartbeat', kind: 'alert', heartbeat: true, every_seconds: 1800, next_at: AT + 1200, prompt: 'Check my calendar, my inbox and CI on main. Only message me if something needs me.', quiet: '22:00-07:00' },
+    { ...AUTOMATION, id: 'c1c1c1c1', name: 'Call Sam', kind: 'reminder', next_at: AT + 7200, say: 'Call Sam about the venue deposit.' },
+    { ...AUTOMATION, id: 'd2d2d2d2', name: 'Main CI', kind: 'trigger', every_seconds: 900, next_at: AT + 600, prompt: 'Tell me which workflow broke and the first failing step.', check: 'gaia automation ci-status --repo amd/gaia --branch main', failures: 3 },
+    { ...AUTOMATION, id: 'f3f3f3f3', name: 'تذكير بموعد الطبيب', kind: 'reminder', paused: true, next_at: AT + 86400, say: 'موعد الطبيب الساعة الرابعة' },
+    { ...AUTOMATION, id: 'b4b4b4b4', name: 'Mount Rainier weekend weather window for a two-day climb', kind: 'alert', paused: true, every_seconds: 21600, next_at: AT + 3600, prompt: 'Tell me when a two-day window opens with low wind and no storms.' },
+];
+
+export async function withAutomations(page: Page, automations: unknown[], delivers = true): Promise<void> {
+    await page.route('**/api/automations', (route) => route.fulfill({ json: { automations, delivers } }));
+}
+
 /** The desktop app's backend as services/backend-supervisor.cjs reports it; no apiBase, so requests stay mocked. */
 export const BACKEND_RUNNING = {
     status: 'running', port: null, since: null, attempt: 0, maxRestarts: 3,
