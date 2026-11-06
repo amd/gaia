@@ -155,6 +155,12 @@ from gaia.agents.base.turn_scope import (
     REOPENED_MARKER,
     TurnScopeGuard,
 )
+from gaia.agents.base.unasked_edits import (
+    limits_edit,
+    removal_note,
+    removed_lines,
+    unasked,
+)
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
     VERIFY_AFTER_CHANGE_TAG,
@@ -7108,6 +7114,7 @@ Do NOT wrap conversational replies in JSON.
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
             if outermost:
+                self._note_edit_removals(tool_args, result)
                 result = self._flag_planted_instructions(tool_name, tool_args, result)
             return result
 
@@ -7125,6 +7132,7 @@ Do NOT wrap conversational replies in JSON.
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
+            self._note_edit_removals(tool_args, result)
             return self._flag_planted_instructions(tool_name, tool_args, result)
         finally:
             self._tool_timing_depth = 0
@@ -7148,6 +7156,26 @@ Do NOT wrap conversational replies in JSON.
                     )
                 except Exception as e:  # noqa: BLE001 - never displace a tool error
                     logger.warning("could not record tool timing: %s", e)
+
+    def _note_edit_removals(self, tool_args: Any, result: Any) -> None:
+        """Keep the lines a "change nothing else" edit removed unasked."""
+        args = tool_args if isinstance(tool_args, dict) else {}
+        old, new = args.get("old_content"), args.get("new_content")
+        if not isinstance(old, str) or not isinstance(new, str):
+            return
+        if self._is_error_result(result):
+            return
+        request = getattr(self, "_original_user_input", None) or getattr(
+            self, "_current_query", ""
+        )
+        if not limits_edit(str(request or "")):
+            return
+        name = os.path.basename(str(args.get("file_path") or "the file"))
+        removals = getattr(self, "_turn_unasked_removals", None)
+        if removals is None:
+            return
+        for line in unasked(removed_lines(old, new), str(request)):
+            removals.append((name, line))
 
     def _flag_planted_instructions(
         self, tool_name: str, tool_args: Any, result: Any
@@ -9869,6 +9897,10 @@ Do NOT wrap conversational replies in JSON.
         note = self._planted_instructions_note(body)
         if note:
             body = f"{body.rstrip()}\n\n{note}"
+        removals = getattr(self, "_turn_unasked_removals", None) or []
+        removed = removal_note(removals, body)
+        if removed:
+            body = f"{body.rstrip()}\n\n{removed}"
         if not statement:
             return body
         return f"{body.rstrip()}\n\n{statement}"
@@ -10255,6 +10287,7 @@ Do NOT wrap conversational replies in JSON.
         self._turn_seq += 1
         self._denied_effects = DeniedEffects(os.getcwd())
         self._begin_turn_provenance()
+        self._turn_unasked_removals = []
         # Cleared per turn: a trace must never report the previous turn's
         # schema for a turn that never reached the backend.
         self._last_tool_schemas = None
