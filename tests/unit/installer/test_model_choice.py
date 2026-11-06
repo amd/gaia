@@ -188,6 +188,14 @@ def test_gaias_own_server_before_it_runs_reads_this_pcs_hf_cache(tmp_path, monke
     assert store["free_gb"] is not None
 
 
+def test_a_cache_this_user_cannot_read_has_unknown_free_space(tmp_path, monkeypatch):
+    def denied(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(mc.Path, "exists", denied)
+    assert mc._free_gb_at(tmp_path / "hub") is None
+
+
 def test_a_remote_server_that_does_not_say_is_unknown():
     assert mc.model_store({}, local=False) == {
         "path": None,

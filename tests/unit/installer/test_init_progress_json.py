@@ -11,6 +11,7 @@ ran out of space mid-download.
 
 import io
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -385,6 +386,35 @@ def test_unreadable_partials_warn_instead_of_refusing(capsys, tmp_path, store):
     text = " ".join(capsys.readouterr().out.split())
     assert "The disk may be too small" in text and "GB free" in text
     client.ensure_model_downloaded.assert_called_once()
+
+
+def _deny(monkeypatch, denied):
+    """Make ``is_dir`` raise EACCES under *denied*, as for a store owned by
+    another user (chmod can't model this when tests run as root)."""
+    real_is_dir = Path.is_dir
+
+    def is_dir(self, *args, **kwargs):
+        if self == denied or denied in self.parents:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_is_dir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+
+
+def test_a_store_owned_by_another_user_reads_as_unknown(monkeypatch, tmp_path):
+    _interrupted_pull(tmp_path, done_gb=1.0, partial_gb=11.0)
+    _deny(monkeypatch, tmp_path)
+    client = _qwen_only(_client(store=tmp_path))
+    found = bytes_already_on_disk(client, ["Qwen3.6-35B-A3B-GGUF"], str(tmp_path))
+    assert found == {"Qwen3.6-35B-A3B-GGUF": None}
+
+
+def test_an_unreadable_download_reads_as_unknown(monkeypatch, tmp_path):
+    snapshot = _interrupted_pull(tmp_path, done_gb=1.0, partial_gb=11.0)
+    _deny(monkeypatch, snapshot.parent)
+    client = _qwen_only(_client(store=tmp_path))
+    found = bytes_already_on_disk(client, ["Qwen3.6-35B-A3B-GGUF"], str(tmp_path))
+    assert found == {"Qwen3.6-35B-A3B-GGUF": None}
 
 
 def test_registry_size_stands_in_when_the_catalog_has_none(capsys, tmp_path):

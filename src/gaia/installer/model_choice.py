@@ -365,11 +365,11 @@ def _hf_hub_cache() -> Path:
 def _free_gb_at(path: Path) -> Optional[float]:
     """Free GB on the drive holding *path*, which need not exist yet."""
     probe = path
-    while not probe.exists():
-        if probe.parent == probe:
-            return None
-        probe = probe.parent
     try:
+        while not probe.exists():
+            if probe.parent == probe:
+                return None
+            probe = probe.parent
         return shutil.disk_usage(probe).free / 1e9
     except OSError as e:
         log.warning("Could not read free space at %s: %s", probe, e)
