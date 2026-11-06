@@ -538,7 +538,8 @@ def resolve_default_vision_model() -> Optional[str]:
     Otherwise ``vision_model`` from setup when the user chose one; else the
     model chat reopens on, then the default chat model, whichever reads
     images first, because those are already downloaded; else
-    :data:`DEFAULT_MODEL_NAME`.
+    :data:`DEFAULT_MODEL_NAME`. When that isn't downloaded, the VLM client
+    reads with :func:`downloaded_vision_model` instead.
     """
     from gaia.config import GaiaConfig
 
@@ -575,6 +576,50 @@ def resident_vision_model(configured: str, base_url: Optional[str] = None) -> st
         if entry.get("model_name") in VISION_CHAT_MODELS:
             return entry["model_name"]
     return configured
+
+
+def downloaded_vision_model(
+    configured: str, catalog_entries: list, client: "LemonadeClient"
+) -> Optional[str]:
+    """A downloaded :data:`VISION_CHAT_MODELS` entry to read images with instead
+    of ``configured``, which the catalog lists as not downloaded; else None.
+
+    Any :data:`VISION_CHAT_MODELS` name is replaced, whoever passed it, except
+    ``vision_model`` from setup; a model outside the set never is. A loaded
+    candidate wins, then the order below.
+    """
+    from gaia.config import GaiaConfig
+
+    if configured not in VISION_CHAT_MODELS:
+        return None
+    candidates = [
+        name
+        for name in (
+            DEFAULT_MODEL_NAME,
+            LARGE_DEFAULT_MODEL_NAME,
+            FLASH_OPTION_MODEL_NAME,
+        )
+        if not _model_ids_match(name, configured)
+        and any(
+            isinstance(entry, dict)
+            and _model_ids_match(entry.get("id"), name)
+            and entry.get("downloaded") is True
+            for entry in catalog_entries
+        )
+    ]
+    if not candidates or _model_ids_match(GaiaConfig.load().vision_model, configured):
+        return None
+    if len(candidates) > 1:
+        try:
+            loaded = client.health_check().get("all_models_loaded") or []
+        except LemonadeClientError as e:
+            log.warning("Could not read the loaded models from Lemonade: %s", e)
+            loaded = []
+        for entry in loaded:
+            for name in candidates:
+                if _model_ids_match(entry.get("model_name"), name):
+                    return name
+    return candidates[0]
 
 
 # Default embedding model: EmbeddingGemma 300M (768-dim). Not a Lemonade
