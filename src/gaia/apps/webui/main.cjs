@@ -1362,6 +1362,7 @@ installQuitCleanup({ app, cleanup });
 async function cleanup() {
   shutdownStarted = true;
   const installStopped = engineInstall ? engineInstall.stop() : null;
+  const updating = app.isPackaged && autoUpdater.installsOnQuit();
 
   // Phase F: tear down auto-updater timers and IPC handlers.
   try {
@@ -1387,11 +1388,27 @@ async function cleanup() {
   // The install, the agents and the backend stop side by side: each waits out
   // its own grace period, and in series they could overrun the quit's time limit.
   await Promise.all([installStopped, stopAgentsForQuit(), stopBackendForQuit()]);
+  if (updating) await stopDaemonForUpdate();
 
   // Destroy tray icon
   if (trayManager) {
     trayManager.destroy();
     trayManager = null;
+  }
+}
+
+/**
+ * The daemon runs from the app's own files, which the update is about to
+ * replace, and macOS has no installer step that stops it first.
+ */
+async function stopDaemonForUpdate() {
+  const gaia = backendInstaller.findGaiaBin();
+  if (!gaia) return;
+  console.log("Stopping the GAIA daemon before the update replaces its files...");
+  try {
+    await backendInstaller.stopRunningDaemon({ gaiaBin: gaia, timeoutMs: 30000 });
+  } catch (err) {
+    console.error(`[main] Couldn't stop the GAIA daemon before the update: ${err.message}`);
   }
 }
 

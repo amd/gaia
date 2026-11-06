@@ -125,7 +125,19 @@ def runs_replaced_install(inst: DaemonInstance) -> Optional[str]:
     Read from the daemon's own files, so every client, whichever Python it runs
     from, gets the same answer. A daemon that predates the record is judged
     only by a client from its own Python, against that install's files.
+
+    The frozen app is the install the user just put on this PC, so a daemon
+    running any other GAIA release is out of date to it.
     """
+    if getattr(sys, "frozen", False):
+        from gaia import version
+
+        if inst.gaia_version != version.__version__:
+            return (
+                f"it runs GAIA {inst.gaia_version or 'of an unknown version'}, "
+                f"and this app ships {version.__version__}"
+            )
+        return None
     if inst.version_file:
         try:
             text = Path(inst.version_file).read_text(encoding="utf-8")

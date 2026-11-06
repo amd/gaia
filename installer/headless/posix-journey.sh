@@ -228,8 +228,14 @@ wait_for_main_log() {
   done
 }
 
-# First launch installs the Python backend from PyPI before it can serve, so
-# the bound is generous; the threshold file is what flags it getting slower.
+# The `gaia` the app runs, from the backend start it logged: the one it ships
+# (an AppImage's copy under ~/.gaia), or an older release's venv.
+backend_gaia() {
+  grep -oE 'Starting backend: .+ chat --ui' "${GAIA_HOME}/electron-main.log" 2>/dev/null | tail -n1 | sed -E 's/^Starting backend: //; s/ chat --ui$//'
+}
+
+# A release from before the app shipped its backend installs it from PyPI on
+# first launch, so the bound is generous; the threshold file flags it slowing.
 wait_agent_ui_health() {
   local port="" body="" deadline=$(( $(date +%s) + 1500 ))
   while [ "$(date +%s)" -lt "${deadline}" ]; do
@@ -246,9 +252,12 @@ wait_agent_ui_health() {
     *) tail -n 80 "${GAIA_HOME}/electron-main.log" || true; die "the backend did not answer /api/health within 25 min" ;;
   esac
   local got
-  got="$("${GAIA_HOME}/venv/bin/gaia" --version 2>&1 || true)"
-  echo "backend gaia --version -> ${got}"
-  case "${got}" in *"${PEP440}"*) ;; *) die "the backend the app installed is '${got}', expected ${PEP440}" ;; esac
+  local gaia
+  gaia="$(backend_gaia)"
+  [ -n "${gaia}" ] || die "no backend start in ${GAIA_HOME}/electron-main.log"
+  got="$("${gaia}" --version 2>&1 || true)"
+  echo "backend ${gaia} --version -> ${got}"
+  case "${got}" in *"${PEP440}"*) ;; *) die "the backend the app runs is '${got}', expected ${PEP440}" ;; esac
 }
 
 # First-run setup through the installed app's own UI, which has been talking to
@@ -327,8 +336,9 @@ stop_agent_ui() {
 # The daemon the backend started outlives the app by design, and keeps the
 # agent sidecar it supervises running, so stop it the way a user would.
 stop_daemon() {
-  local gaia="${GAIA_HOME}/venv/bin/gaia"
-  if [ ! -x "${gaia}" ]; then echo "no ${gaia}: the app installed no backend, so no daemon"; return 0; fi
+  local gaia
+  gaia="$(backend_gaia)"
+  if [ -z "${gaia}" ] || [ ! -x "${gaia}" ]; then echo "no backend gaia ('${gaia}'): the app started no backend, so no daemon"; return 0; fi
   local rc=0
   "${gaia}" daemon stop || rc=$?
   [ "${rc}" -eq 0 ] || die "\`gaia daemon stop\` exited ${rc}"
@@ -338,7 +348,7 @@ assert_gone() { for p in "$@"; do [ ! -e "${p}" ] || die "left behind: ${p}"; do
 
 no_gaia_processes() {
   local left
-  left="$(pgrep -fl 'gaia-desktop|gaia-tui|gaia-agent|\.gaia/venv/bin/|-m gaia\.daemon' || true)"
+  left="$(pgrep -fl 'gaia-desktop|gaia-tui|gaia-agent|\.gaia/venv/bin/|\.gaia/core/|resources/core/gaia|-m gaia\.daemon' || true)"
   [ -z "${left}" ] || die "still running after uninstall: ${left}"
 }
 

@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-Fail the build if the frozen Linux agent needs a newer glibc than the floor.
+Fail the build if a frozen Linux binary needs a newer glibc than the floor.
 
 A PyInstaller binary runs on the user's glibc, and every library packed inside
 it -- the Python runtime, each extension module, each wheel's vendored .so --
@@ -117,11 +117,21 @@ def _objdump(flag: str, path: Path) -> str:
 
 
 def bundled_elf_files(binary: Path, into: Path) -> list[tuple[str, Path]]:
-    """Every ELF file packed in a PyInstaller one-file *binary*, written to *into*."""
+    """Every ELF file packed in a PyInstaller *binary*, written to *into*.
+
+    A one-dir build keeps its libraries in ``_internal`` beside the binary
+    rather than in the archive, so those are read where they lie.
+    """
     from PyInstaller.archive.readers import CArchiveReader
 
     reader = CArchiveReader(str(binary))
     found: list[tuple[str, Path]] = []
+    internal = binary.parent / "_internal"
+    if internal.is_dir():
+        for path in sorted(p for p in internal.rglob("*") if p.is_file()):
+            with path.open("rb") as fh:
+                if fh.read(len(ELF_MAGIC)) == ELF_MAGIC:
+                    found.append((str(path.relative_to(internal)), path))
     for index, name in enumerate(sorted(reader.toc)):
         data = reader.extract(name)
         if not isinstance(data, bytes) or not data.startswith(ELF_MAGIC):
@@ -167,7 +177,11 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Fail if the frozen agent needs a newer glibc than the floor."
     )
-    parser.add_argument("binary", type=Path, help="The frozen one-file gaia-agent.")
+    parser.add_argument(
+        "binary",
+        type=Path,
+        help="A frozen one-file binary, or a one-dir build's executable.",
+    )
     parser.add_argument(
         "--max", required=True, help="Newest glibc the binary may need, e.g. 2.34."
     )

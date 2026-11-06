@@ -55,6 +55,26 @@ def test_a_daemon_whose_install_is_gone_is_out_of_date(tmp_path):
     assert why and "is gone" in why
 
 
+def test_the_desktop_app_replaces_a_daemon_from_its_old_venv(tmp_path, monkeypatch):
+    # The venv the previous app built stays on disk, so its version.py still
+    # matches; to the frozen app it is another release all the same.
+    path = _version_file(tmp_path, '__version__ = "0.25.3"\n')
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(version, "__version__", "0.25.4")
+    why = runs_replaced_install(_inst(gaia_version="0.25.3", version_file=str(path)))
+    assert why == "it runs GAIA 0.25.3, and this app ships 0.25.4"
+
+
+def test_the_desktop_app_keeps_its_own_daemon(tmp_path, monkeypatch):
+    gone = tmp_path / "_internal" / "gaia" / "version.py"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(version, "__version__", "0.25.4")
+    assert (
+        runs_replaced_install(_inst(gaia_version="0.25.4", version_file=str(gone)))
+        is None
+    )
+
+
 def test_the_record_round_trips_through_instance_json(tmp_path, monkeypatch):
     monkeypatch.setattr(instance.paths, "instance_path", lambda: tmp_path / "i.json")
     monkeypatch.setattr(instance.paths, "ensure_host_dir", lambda: None)

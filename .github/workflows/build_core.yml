@@ -1,0 +1,143 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Freeze the GAIA core (`gaia`) into the one-dir executable the desktop app
+# ships, smoke-test it, and upload it as a `gaia-core-<platform>` artifact.
+#
+# build-installers.yml calls this and packs each artifact into its platform's
+# installer, so a user's PC never installs a Python package. Dispatch it on
+# its own to check that main still freezes; installer PRs run it through
+# build-installers.yml.
+#
+# The Linux build runs in a Rocky Linux 9 container (glibc 2.34), like the
+# flagship agent's, so it runs on RHEL 9, Ubuntu 22.04 and Debian 12 too.
+
+name: Build GAIA core
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag; a -rcN tag stamps that version, as the installers do'
+        required: false
+        type: string
+        default: ''
+      ref:
+        description: 'Commit to build; empty checks out the tag, or the caller''s ref'
+        required: false
+        type: string
+        default: ''
+      artifact_prefix:
+        description: 'Prefix for the uploaded artifact names'
+        required: false
+        type: string
+        default: ''
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  freeze:
+    name: Freeze core (${{ matrix.key }})
+    runs-on: ${{ matrix.os }}
+    concurrency:
+      group: core-freeze-${{ matrix.key }}-${{ inputs.artifact_prefix }}${{ github.event_name == 'pull_request' && github.head_ref || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            key: win32-x64
+            exe: gaia.exe
+          - os: macos-latest
+            key: darwin-arm64
+            exe: gaia
+          - os: ubuntu-latest
+            key: linux-x64
+            exe: gaia
+            container: rockylinux/rockylinux:9
+            glibc_floor: '2.34'
+    steps:
+      - name: Prepare the glibc-floor container
+        if: matrix.container
+        shell: bash
+        run: |
+          set -euo pipefail
+          dnf install -y --setopt=install_weak_deps=False \
+            python3.12 python3.12-devel git binutils gcc gcc-c++ tar gzip findutils
+          ln -sf /usr/bin/python3.12 /usr/local/bin/python
+          echo "UV_PYTHON_PREFERENCE=only-system" >> "$GITHUB_ENV"
+          echo "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
+
+      - name: Set up Python
+        if: ${{ !matrix.container }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # The same stamp the installers get, so `gaia --version` matches the app.
+      - name: Stamp the release-candidate version
+        if: contains(inputs.tag, '-rc')
+        shell: bash
+        run: python util/release_tag.py stamp "${{ inputs.tag }}"
+
+      # The same packages `pip install amd-gaia[ui]` gives an Agent UI user today.
+      - name: Install the core + PyInstaller (frozen-build env)
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv venv .venv-freeze --python 3.12
+          uv pip install --python .venv-freeze -e ".[ui]" pyinstaller
+
+      - name: Freeze
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" installer/core/freeze.py
+
+      - name: Check the build bundles no copyleft code
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" hub/agents/gaia/python/packaging/check_bundle_licenses.py \
+            "installer/core/dist/gaia/${{ matrix.exe }}"
+
+      - name: Check the build runs on glibc ${{ matrix.glibc_floor }}
+        if: matrix.glibc_floor
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv-freeze/bin/python hub/agents/gaia/python/packaging/check_glibc.py \
+            "installer/core/dist/gaia/${{ matrix.exe }}" --max "${{ matrix.glibc_floor }}"
+
+      - name: Smoke-test the frozen core
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" installer/core/smoke_test.py "installer/core/dist/gaia/${{ matrix.exe }}"
+
+      # A tarball keeps the executable bits and the symlinks the macOS build has.
+      - name: Pack
+        shell: bash
+        run: tar -C installer/core/dist/gaia -czf gaia-core-${{ matrix.key }}.tar.gz .
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact_prefix }}gaia-core-${{ matrix.key }}
+          path: gaia-core-${{ matrix.key }}.tar.gz
+          if-no-files-found: error

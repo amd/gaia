@@ -11,6 +11,8 @@ installer/
 ├── README.md      ← you are here
 ├── scripts/       build + bootstrap scripts (PowerShell, POSIX sh, Node)
 ├── version/       version normalization and bump helpers (Node)
+├── core/          freezes the `gaia` executable the desktop app ships, so a
+│                  user's PC installs no Python package (freeze.py, smoke_test.py)
 ├── nsis/          NSIS assets: the Agent UI's electron-builder include, the
 │                  developer shareable build, and the shared icon/sidebar
 ├── debian/        Debian packaging metadata for the Agent UI (postinst, prerm, postrm)
@@ -104,6 +106,18 @@ npm run package:win      # or :mac / :linux
 ```
 
 `npm run make` is kept as an alias for `npm run package`.
+
+A packaged app runs only the `gaia` it ships, so freeze the core and stage it
+first; without it the app says it is missing its backend:
+
+```bash
+uv venv .venv-freeze --python 3.12
+uv pip install --python .venv-freeze -e ".[ui]" pyinstaller
+.venv-freeze/Scripts/python installer/core/freeze.py      # bin/python off Windows
+.venv-freeze/Scripts/python installer/core/smoke_test.py installer/core/dist/gaia/gaia.exe
+rm -rf src/gaia/apps/webui/build/core && mkdir -p src/gaia/apps/webui/build/core
+cp -r installer/core/dist/gaia/. src/gaia/apps/webui/build/core/
+```
 
 A local build ships no Lemonade archive unless you fetch one first; without it,
 first-run setup downloads the archive instead:

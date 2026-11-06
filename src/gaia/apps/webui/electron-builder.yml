@@ -62,15 +62,11 @@ extraResources:
     to: agents
     filter:
       - "**/*"
-  # Bundled `uv` binary (issue #782 T3). The CI job `fetch-uv-binary` in
-  # .github/workflows/build-electron-apps.yml downloads a pinned astral-sh/uv
-  # release, SHA256-verifies it, and extracts the single `uv` binary to
-  # build/vendor/uv/linux-x64/uv (mode 0755). Shipping this inside the
-  # AppImage removes the runtime `curl | sh` bootstrap that breaks on
-  # Ubuntu 24.04 minimal (curl not installed by default). Runtime path
-  # inside the mounted AppImage is <resources>/vendor/uv/linux-x64/uv.
-  - from: build/vendor/uv
-    to: vendor/uv
+  # The frozen `gaia` core (installer/core/freeze.py), unpacked here by the
+  # build-installers job. backend-installer.cjs runs it from <resources>/core,
+  # so the app installs no Python package on the user's PC.
+  - from: build/core
+    to: core
     filter:
       - "**/*"
   # Pinned embeddable Lemonade archive for this platform, fetched and verified
@@ -262,9 +258,6 @@ deb:
     - libdrm2
     - libgbm1
     - libxcb-dri3-0
-  recommends:
-    - python3
-    - python3-venv
   priority: optional
   fpm:
     - "--after-install=../../../../installer/debian/postinst"

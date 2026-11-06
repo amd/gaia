@@ -21,9 +21,11 @@ stop_gaia_daemons() {
         fi
         user=$(echo "$entry" | cut -d: -f1)
         home=$(echo "$entry" | cut -d: -f6)
-        gaia="$home/.gaia/venv/bin/gaia"
+        # The app ships its gaia; one from before it did lives in the venv.
+        gaia=/opt/GAIA/resources/core/gaia
+        [ -x "$gaia" ] || gaia="$home/.gaia/venv/bin/gaia"
         if [ ! -x "$gaia" ]; then
-            echo "$user's GAIA daemon was not stopped: $gaia is missing." >&2
+            echo "$user's GAIA daemon was not stopped: no gaia to stop it with." >&2
             continue
         fi
         echo "Stopping $user's GAIA daemon"

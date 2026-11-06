@@ -849,24 +849,11 @@ error. To run the chat model in the cloud instead, see
     environment variable, which current Electron releases ignore.
   </Accordion>
 
-  <Accordion title="Resetting a broken bootstrap" icon="rotate-left">
-    If the Python backend bootstrap (uv, virtualenv, `amd-gaia[ui]` install)
-    got interrupted or is in a half-installed state, clear the cached state
-    and relaunch:
-
-    ```bash
-    rm -rf ~/.gaia/venv ~/.gaia/electron-install-state.json
-    ./gaia-agent-ui-*.AppImage
-    ```
-
-    The AppImage will re-run its first-launch bootstrap from scratch.
-  </Accordion>
-
   <Accordion title="Log files" icon="file-lines">
     The Linux AppImage writes logs under `~/.gaia/`:
 
-    - `~/.gaia/electron-install.log` — Python backend bootstrap (uv, venv,
-      pip install) output.
+    - `~/.gaia/electron-install.log` — the backend check and GAIA agent
+      update the app runs on launch.
     - `~/.gaia/gaia.log` — runtime backend log from `gaia chat --ui`.
     - `~/.gaia/electron-main.log` — Electron main-process stdout/stderr,
       teed to disk so errors are visible even when the app was not launched
