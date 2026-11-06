@@ -231,8 +231,14 @@ class TurnTracker:
                 if k in event
             }
         elif etype == "done":
+            failed = bool(event.get("failed")) or self.error is not None
             self._finish_locked(
-                "cancelled" if event.get("cancelled") else "completed", None
+                "cancelled"
+                if event.get("cancelled")
+                else "error"
+                if failed
+                else "completed",
+                self.error if failed else None,
             )
             self.cancelled = bool(event.get("cancelled"))
             self.message_id = event.get("message_id")
@@ -395,15 +401,18 @@ class TurnTracker:
                 }
             )
         elif etype == "agent_error":
+            detail = _cap(event.get("content"))
             self._add_step(
                 {
                     "type": "error",
                     "label": "Error",
-                    "detail": _cap(event.get("content")),
+                    "detail": detail,
                     "active": False,
                     "success": False,
                 }
             )
+            if event.get("fatal"):
+                self.error = detail or "The agent turn failed."
         elif etype == "policy_alert":
             tool = event.get("tool") or "unknown tool"
             self._add_step(

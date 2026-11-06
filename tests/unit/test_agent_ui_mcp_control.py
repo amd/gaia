@@ -751,6 +751,28 @@ def test_a_reply_cut_off_by_a_server_restart_is_dropped():
         assert t.content() == "The ledger balances."
 
 
+def test_fatal_agent_error_and_failed_done_are_reported_as_error():
+    t = TurnTracker("s", "mcp")
+    t.apply({"type": "chunk", "content": "Partial answer"})
+    t.apply({"type": "agent_error", "content": "Policy blocked", "fatal": True})
+    t.apply({"type": "done", "content": "Partial answer", "failed": True})
+    with t.cond:
+        view = t.view()
+    assert view["outcome"] == "error"
+    assert view["error"] == "Policy blocked"
+    assert view["content"] == "Partial answer"
+    assert [s for s in view["steps"] if s["type"] == "error"][0]["success"] is False
+
+
+def test_nonfatal_agent_error_does_not_fail_the_turn():
+    t = TurnTracker("s", "mcp")
+    t.apply({"type": "agent_error", "content": "Retrying"})
+    t.apply({"type": "done", "content": "Recovered"})
+    with t.cond:
+        assert t.outcome == "completed"
+        assert t.error is None
+
+
 def test_metrics_never_invent_zeros():
     t = TurnTracker("s", "mcp")
     t.apply({"type": "answer", "content": "x"})
