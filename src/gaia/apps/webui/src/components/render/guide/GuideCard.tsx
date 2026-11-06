@@ -15,6 +15,7 @@ import { useTimers } from './useTimers';
 import { dismissGuideTip, useGuideTipDismissed } from './guideTip';
 import type { UnitSystem } from './units';
 import './guide.css';
+import { useT } from '../../../i18n/useT';
 
 const MAX_SERVINGS = 99;
 const NOTICE_MS = 2500;
@@ -49,6 +50,7 @@ export function GuideCard({ data }: { data: unknown }) {
 }
 
 function Guide({ wire }: { wire: GuideWire }) {
+    const t = useT();
     const doc = useMemo(() => parseGuideDoc(wire), [wire]);
     const [servings, setServings] = useState(doc.baseServings);
     const [system, setSystem] = useState<UnitSystem>(doc.nativeSystem);
@@ -103,7 +105,7 @@ function Guide({ wire }: { wire: GuideWire }) {
 
             <div className="render-guide__toolbar">
                 {features.scaling && servings !== null && (
-                    <div className="render-guide__servings" role="group" aria-label="Servings">
+                    <div className="render-guide__servings" role="group" aria-label={t('cards.servings')}>
                         <button
                             type="button"
                             className="render-guide__icon"
@@ -112,7 +114,7 @@ function Guide({ wire }: { wire: GuideWire }) {
                                 setServings((n) => Math.max(1, (n ?? 1) - 1));
                             }}
                             disabled={servings <= 1}
-                            aria-label="Fewer servings"
+                            aria-label={t('cards.fewerServings')}
                         >
                             <Minus size={14} />
                         </button>
@@ -127,7 +129,7 @@ function Guide({ wire }: { wire: GuideWire }) {
                                 setServings((n) => Math.min(MAX_SERVINGS, (n ?? 1) + 1));
                             }}
                             disabled={servings >= MAX_SERVINGS}
-                            aria-label="More servings"
+                            aria-label={t('cards.moreServings')}
                         >
                             <Plus size={14} />
                         </button>
@@ -142,22 +144,22 @@ function Guide({ wire }: { wire: GuideWire }) {
                                 dismissGuideTip();
                                 setSystem(other);
                             }}
-                            aria-label={`Units: ${SYSTEM_LABEL[system]}. Switch to ${SYSTEM_LABEL[other]}`}
-                            title={`Switch to ${SYSTEM_LABEL[other]} units`}
+                            aria-label={t('cards.unitsSwitch', { current: SYSTEM_LABEL[system], other: SYSTEM_LABEL[other] })}
+                            title={t('cards.unitsTitle', { other: SYSTEM_LABEL[other] })}
                         >
                             <Ruler size={15} />
                             <span>{SYSTEM_LABEL[system]}</span>
                         </button>
                     )}
                     {canShare() && (
-                        <button type="button" className="render-guide__icon" onClick={onShare} aria-label="Share" title="Share">
+                        <button type="button" className="render-guide__icon" onClick={onShare} aria-label={t('cards.share')} title={t('cards.share')}>
                             <Share2 size={15} />
                         </button>
                     )}
-                    <button type="button" className="render-guide__icon" onClick={onPrint} aria-label="Print" title="Print">
+                    <button type="button" className="render-guide__icon" onClick={onPrint} aria-label={t('cards.print')} title={t('cards.print')}>
                         <Printer size={15} />
                     </button>
-                    <button type="button" className="render-guide__icon" onClick={onCopy} aria-label="Copy" title="Copy">
+                    <button type="button" className="render-guide__icon" onClick={onCopy} aria-label={t('cards.copy')} title={t('cards.copy')}>
                         {notice === 'Copied' ? <Check size={15} /> : <Copy size={15} />}
                     </button>
                 </div>
@@ -234,7 +236,7 @@ function Guide({ wire }: { wire: GuideWire }) {
 
             {doc.notes && (
                 <aside className="render-guide__notes">
-                    <h4 className="render-guide__label">Notes</h4>
+                    <h4 className="render-guide__label">{t('cards.notes')}</h4>
                     <p>{stepText(doc, doc.notes, system)}</p>
                 </aside>
             )}
@@ -243,7 +245,7 @@ function Guide({ wire }: { wire: GuideWire }) {
                 <div className="render-guide__tip" role="note">
                     <Lightbulb size={15} aria-hidden="true" />
                     <span>{features.tip}</span>
-                    <button type="button" className="render-guide__icon" onClick={dismissGuideTip} aria-label="Dismiss tip">
+                    <button type="button" className="render-guide__icon" onClick={dismissGuideTip} aria-label={t('cards.dismissTip')}>
                         <X size={14} />
                     </button>
                 </div>

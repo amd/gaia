@@ -12,6 +12,7 @@ import type { GuideViewState } from './guideText';
 import type { GuideDoc } from './guideDoc';
 import { StepText, timerId } from './StepText';
 import type { Timers } from './useTimers';
+import { useT } from '../../../i18n/useT';
 
 /** Keeps the screen on while the guide is open; false when the platform refused or can't. */
 function useWakeLock(): boolean {
@@ -52,6 +53,7 @@ export function GuidedView({ doc, state, timers, onClose }: {
     timers: Timers;
     onClose: () => void;
 }) {
+    const t = useT();
     const [index, setIndex] = useState(0);
     const [setsDone, setSetsDone] = useState<Record<number, number>>({});
     const dialogRef = useRef<HTMLDivElement>(null);
@@ -125,22 +127,22 @@ export function GuidedView({ doc, state, timers, onClose }: {
                         </details>
                     )}
                 </div>
-                <button type="button" className="render-guided__icon" onClick={onClose} aria-label="Close guided view">
+                <button type="button" className="render-guided__icon" onClick={onClose} aria-label={t('cards.closeGuided')}>
                     <X size={22} />
                 </button>
             </div>
 
             <div className="render-guided__stage">
-                <h2 className="render-guided__step-title">{step.title ?? `Step ${index + 1}`}</h2>
+                <h2 className="render-guided__step-title">{step.title ?? t('cards.stepTitle', { n: index + 1 })}</h2>
                 <p className="render-guided__step-text">
                     <StepText text={body} stepIndex={index} timers={timers} withTimers={doc.features.timers} />
                 </p>
 
                 {sets?.sets && (
                     <div className="render-guided__sets">
-                        <span>Set {Math.min(done + 1, sets.sets)} of {sets.sets}{done >= sets.sets ? ', all done' : ''}</span>
+                        <span>{t(done >= sets.sets ? 'cards.setAllDone' : 'cards.setProgress', { n: Math.min(done + 1, sets.sets), total: sets.sets })}</span>
                         <button type="button" className="render-guided__button" onClick={finishSet} disabled={done >= sets.sets}>
-                            Set done
+                            {t('cards.setDone')}
                         </button>
                     </div>
                 )}
@@ -148,16 +150,16 @@ export function GuidedView({ doc, state, timers, onClose }: {
                 {big && bigView && (
                     <div className={`render-guided__timer is-${bigView.status}`}>
                         <span className="render-guided__clock" role="timer">
-                            {bigView.status === 'done' ? 'Done' : formatClock(bigView.remainingSeconds)}
+                            {bigView.status === 'done' ? t('cards.done') : formatClock(bigView.remainingSeconds)}
                         </span>
                         <div className="render-guided__timer-actions">
                             <button type="button" className="render-guided__button is-primary" onClick={() => timers.toggle(big.id, big.seconds)}>
                                 {bigView.status === 'running' ? <Pause size={16} /> : <Play size={16} />}
-                                {bigView.status === 'running' ? 'Pause' : bigView.status === 'paused' ? 'Resume' : 'Start'}
+                                {t(bigView.status === 'running' ? 'cards.pause' : bigView.status === 'paused' ? 'cards.resume' : 'cards.start')}
                             </button>
                             {bigView.status !== 'idle' && (
                                 <button type="button" className="render-guided__button" onClick={() => timers.reset(big.id)}>
-                                    <Square size={14} /> Stop
+                                    <Square size={14} /> {t('cards.stop')}
                                 </button>
                             )}
                         </div>
@@ -171,24 +173,24 @@ export function GuidedView({ doc, state, timers, onClose }: {
                     className="render-guided__icon"
                     onClick={() => setIndex((i) => Math.max(0, i - 1))}
                     disabled={index === 0}
-                    aria-label="Previous step"
+                    aria-label={t('cards.prevStep')}
                 >
                     <ChevronLeft size={26} />
                 </button>
                 <div className="render-guided__progress">
-                    <span aria-live="polite">Step {index + 1} of {total}</span>
-                    {!wakeLock && <span className="render-guided__note">Screen may sleep</span>}
+                    <span aria-live="polite">{t('cards.stepOf', { n: index + 1, total })}</span>
+                    {!wakeLock && <span className="render-guided__note">{t('cards.screenMaySleep')}</span>}
                 </div>
                 {last ? (
                     <button type="button" className="render-guided__button is-primary" onClick={onClose}>
-                        Finish
+                        {t('cards.finish')}
                     </button>
                 ) : (
                     <button
                         type="button"
                         className="render-guided__icon"
                         onClick={() => setIndex((i) => Math.min(total - 1, i + 1))}
-                        aria-label="Next step"
+                        aria-label={t('cards.nextStep')}
                     >
                         <ChevronRight size={26} />
                     </button>

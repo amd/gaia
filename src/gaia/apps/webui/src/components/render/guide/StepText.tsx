@@ -5,6 +5,7 @@ import { Fragment } from 'react';
 import { Check, Pause, Play } from 'lucide-react';
 import { findDurations, formatClock } from './durations';
 import type { Timers } from './useTimers';
+import { useT } from '../../../i18n/useT';
 
 export function timerId(stepIndex: number, spanIndex: number): string {
     return `${stepIndex}:${spanIndex}`;
@@ -16,19 +17,20 @@ export function TimerChip({ id, seconds, timers, label }: {
     timers: Timers;
     label: string;
 }) {
+    const t = useT();
     const view = timers.read(id, seconds);
-    const action = view.status === 'running' ? 'Pause' : view.status === 'paused' ? 'Resume' : 'Start';
+    const action = view.status === 'running' ? 'cards.timerPause' : view.status === 'paused' ? 'cards.timerResume' : 'cards.timerStart';
     const Icon = view.status === 'running' ? Pause : view.status === 'done' ? Check : Play;
     return (
         <button
             type="button"
             className={`render-guide-chip is-${view.status}`}
             onClick={() => timers.toggle(id, seconds)}
-            aria-label={`${action} ${label} timer`}
+            aria-label={t(action, { label })}
         >
             <Icon size={11} aria-hidden="true" />
             <span className="render-guide-chip__clock">
-                {view.status === 'done' ? 'Done' : formatClock(view.remainingSeconds)}
+                {view.status === 'done' ? t('cards.done') : formatClock(view.remainingSeconds)}
             </span>
         </button>
     );

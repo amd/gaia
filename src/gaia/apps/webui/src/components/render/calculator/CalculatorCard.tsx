@@ -16,6 +16,7 @@ import {
 import type { CalculatorWire, FieldSpec, Money } from './calculatorDoc';
 import '../guide/guide.css';
 import './calculator.css';
+import { useT } from '../../../i18n/useT';
 
 const NOTICE_MS = 2500;
 
@@ -25,6 +26,7 @@ export function CalculatorCard({ data }: { data: unknown }) {
 }
 
 function Calculator({ wire }: { wire: CalculatorWire }) {
+    const t = useT();
     const spec = specFor(wire.calculator);
     const money = useMemo(() => ({ locale: userLocale(), currency: wire.currency }), [wire.currency]);
     const [values, setValues] = useState<Record<string, number>>(() => ({ ...wire.inputs }));
@@ -49,7 +51,7 @@ function Calculator({ wire }: { wire: CalculatorWire }) {
         <article className="render-guide render-calc" aria-label={title}>
             <header className="render-calc__header">
                 <h3 className="render-guide__title">{title}</h3>
-                <button type="button" className="render-guide__icon" onClick={onCopy} aria-label="Copy" title="Copy">
+                <button type="button" className="render-guide__icon" onClick={onCopy} aria-label={t('cards.copy')} title={t('cards.copy')}>
                     {notice === 'Copied' ? <Check size={15} /> : <Copy size={15} />}
                 </button>
             </header>
@@ -88,6 +90,7 @@ interface NumberFieldProps {
 
 /** A typed box and a slider on one value. The box keeps what is typed until it reads as a number in range. */
 function NumberField({ field, value, money, onChange }: NumberFieldProps) {
+    const t = useT();
     const [draft, setDraft] = useState<string | null>(null);
     const sliderMax = Math.min(field.max, Math.max(field.sliderMax ?? field.max, value));
     const prefix = field.format === 'currency' ? currencySymbol(money) : '';
@@ -128,7 +131,7 @@ function NumberField({ field, value, money, onChange }: NumberFieldProps) {
                 max={sliderMax}
                 step={field.step}
                 value={value}
-                aria-label={`${field.label} slider`}
+                aria-label={t('cards.slider', { name: field.label })}
                 aria-valuetext={formatValue(value, field.format, money)}
                 onChange={(e) => {
                     setDraft(null);

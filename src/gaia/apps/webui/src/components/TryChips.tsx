@@ -4,6 +4,7 @@
 import { Calculator, ChefHat, Dumbbell, ListChecks, Map, Receipt, Wrench } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import './StartCards.css';
+import { useT } from '../i18n/useT';
 
 interface TryExample {
     icon: LucideIcon;
@@ -24,9 +25,10 @@ export const TRY_EXAMPLES: readonly TryExample[] = [
 
 /** Everyday asks that come back as interactive cards; a pick fills the box to edit or send. */
 export function TryChips({ onPick, disabled }: { onPick: (prompt: string) => void; disabled?: boolean }) {
+    const t = useT();
     return (
-        <div className="try-chips" role="group" aria-label="Try an example">
-            <span className="try-chips-label" aria-hidden="true">Try</span>
+        <div className="try-chips" role="group" aria-label={t('cards.tryGroup')}>
+            <span className="try-chips-label" aria-hidden="true">{t('cards.try')}</span>
             {TRY_EXAMPLES.map(({ icon: Icon, label, prompt }) => (
                 <button
                     key={label}
