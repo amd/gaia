@@ -1123,7 +1123,7 @@ export async function uploadFile(file: File): Promise<{
 
 /** Upload a recording, reporting progress: it can take minutes, and fetch cannot say. */
 export function uploadMedia(file: File, onProgress: (percent: number) => void, signal?: AbortSignal): ReturnType<typeof uploadFile> {
-    const url = `${API_BASE}/files/upload-media?name=${encodeURIComponent(file.name)}`;
+    const url = `${getApiBase()}/files/upload-media?name=${encodeURIComponent(file.name)}`;
     log.api.info(`POST ${url}`, { fileName: file.name, size: file.size });
 
     return new Promise((resolve, reject) => {
