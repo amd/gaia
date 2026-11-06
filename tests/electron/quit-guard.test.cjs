@@ -339,10 +339,12 @@ describe("attachWindowGuards", () => {
   function setup({ minimizeToTray = true, noticeDue = true, platform = "win32", confirmed = false, quitting = false } = {}) {
     const win = new EventEmitter();
     win.hide = jest.fn();
+    win.minimize = jest.fn();
     const app = { quit: jest.fn() };
     const guard = { confirmed, allow: jest.fn() };
     const tray = {
       minimizeToTray,
+      keepRunningWithoutTray: false,
       closeNoticeDue: noticeDue,
       showCloseNotice: jest.fn(async () => false),
     };
@@ -396,6 +398,18 @@ describe("attachWindowGuards", () => {
     const { tray, close } = setup({ noticeDue: false });
     close();
     expect(tray.showCloseNotice).not.toHaveBeenCalled();
+  });
+
+  test("without a tray host, closing minimizes to the dock and does not quit", async () => {
+    const { win, tray, close, app } = setup({ minimizeToTray: false });
+    tray.keepRunningWithoutTray = true;
+    const ev = close();
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(win.hide).not.toHaveBeenCalled();
+    expect(win.minimize).toHaveBeenCalledTimes(1);
+    expect(app.quit).not.toHaveBeenCalled();
+    await flush();
+    expect(tray.showCloseNotice).toHaveBeenCalledWith({ withoutTray: true });
   });
 
   test("with close-to-tray off, closing runs the quit guard and keeps the window", () => {

@@ -5,7 +5,7 @@
  * Whether closing the window may hide GAIA to the tray: the tray-host probe
  * (services/tray-host.cjs) with a mocked session bus, TrayManager's gating on
  * its answer, and the close handler that follows it. Stock GNOME has no tray
- * host, so there closing must quit rather than strand the app.
+ * host, so closing minimizes to the dock instead of quitting or stranding the app.
  */
 
 const { EventEmitter } = require("events");
@@ -111,6 +111,7 @@ describe("TrayManager without a tray host", () => {
     mgr.config.tray = { ...ON };
     mgr.setHost({ available: false, reason: "no-host", detail: "nothing owns it" });
     expect(mgr.minimizeToTray).toBe(false);
+    expect(mgr.keepRunningWithoutTray).toBe(true);
     expect(mgr.startMinimized).toBe(false);
     const cfg = await electronMock.ipcMain.simulateInvoke("tray:get-config");
     expect(cfg.tray).toEqual(ON);
@@ -135,6 +136,7 @@ describe("closing the window on a desktop without a tray", () => {
   function closeWith(mgr) {
     const win = new EventEmitter();
     win.hide = jest.fn();
+    win.minimize = jest.fn();
     const app = { quit: jest.fn() };
     attachWindowGuards(win, {
       app,
@@ -149,13 +151,17 @@ describe("closing the window on a desktop without a tray", () => {
     return { win, app };
   }
 
-  test("quits instead of hiding", () => {
+  test("minimizes to the dock instead of quitting", async () => {
     setPlatform("linux");
     const mgr = new TrayManager(new electronMock.BrowserWindow(), { reopenWindow: jest.fn() });
     mgr.setHost({ available: false, reason: "no-host" });
+    jest.spyOn(mgr, "showCloseNotice").mockResolvedValue(false);
     const { win, app } = closeWith(mgr);
     expect(win.hide).not.toHaveBeenCalled();
-    expect(app.quit).toHaveBeenCalledTimes(1);
+    expect(win.minimize).toHaveBeenCalledTimes(1);
+    expect(app.quit).not.toHaveBeenCalled();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(mgr.showCloseNotice).toHaveBeenCalledWith({ withoutTray: true });
   });
 
   test("hides to the tray once a host is there", () => {

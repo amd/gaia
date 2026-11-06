@@ -959,6 +959,15 @@ describe("first-close notice", () => {
     );
   });
 
+  test("names the dock rather than an unavailable tray", async () => {
+    setPlatform("linux");
+    await newTray(createMockWindow()).showCloseNotice({ withoutTray: true });
+    const notice = electronMock.dialog.showMessageBox.mock.calls[0][0];
+    expect(notice.message).toBe("GAIA is still running in the background.");
+    expect(notice.detail).toContain("dock");
+    expect(notice.detail).not.toContain("tray");
+  });
+
   test("Quit GAIA in the notice reports the user's choice", async () => {
     setPlatform("win32");
     electronMock.dialog.showMessageBox.mockResolvedValueOnce({ response: 1 });

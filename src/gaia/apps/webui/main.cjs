@@ -733,11 +733,14 @@ function createWindow() {
     platform: process.platform,
     reportNoticeError: (err) => {
       console.error("[main] First-close notice failed:", err.message);
+      const withoutTray = Boolean(trayManager && trayManager.keepRunningWithoutTray);
       const where = process.platform === "darwin" ? "menu bar" : "tray";
+      const location = withoutTray
+        ? "GAIA is still running in the background. Reopen it from the app grid or dock; use Quit from GAIA's dock or app-grid menu to stop it."
+        : `GAIA is still running in the ${where}. Quit from the ${where} menu to stop it.`;
       dialog.showErrorBox(
         "GAIA is still running",
-        `GAIA is still running in the ${where}. Quit from the ${where} menu to stop it.\n\n` +
-          `(The usual notice failed: ${err.message})`
+        `${location}\n\n(The usual notice failed: ${err.message})`
       );
     },
   });
@@ -1374,7 +1377,8 @@ app.whenReady().then(async () => {
 });
 
 // ── Window-all-closed (C4 fix) ────────────────────────────────────────────
-// Don't quit when window is hidden — tray keeps app alive
+// A tray or dock-minimized window keeps the app alive; explicit quit still
+// follows the async cleanup path below.
 app.on("window-all-closed", () => {
   // If minimize-to-tray is active, the window is just hidden, not closed.
   // Only quit on macOS if the user explicitly quit (Cmd+Q).
@@ -1384,7 +1388,7 @@ app.on("window-all-closed", () => {
     // Trigger the will-quit path which handles async cleanup properly
     app.quit();
   }
-  // Otherwise: no-op. App stays running via system tray.
+  // Otherwise: no-op. The tray or dock keeps the app reachable.
 });
 
 // ── Quit lifecycle ─────────────────────────────────────────────────────────

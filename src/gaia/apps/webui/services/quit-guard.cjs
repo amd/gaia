@@ -197,8 +197,9 @@ function installQuitGuard({ app, updater, shouldAsk, confirm, onQuitting, onErro
 }
 
 /**
- * What closing the window does: hide it to the tray (telling the user once),
- * or, when closing quits, run the quit guard first and keep the window open
+ * What closing the window does: hide it to the tray, or minimize it to the
+ * dock when Linux has no tray host (telling the user once), or, when closing
+ * quits, run the quit guard first and keep the window open
  * until it agrees. An OS sign-out (Windows' session-end) never waits on it.
  *
  * @param {Electron.BrowserWindow} win
@@ -217,6 +218,20 @@ function attachWindowGuards(win, { app, guard, getTray, isQuitting, platform, re
       if (tray.closeNoticeDue) {
         Promise.resolve()
           .then(() => tray.showCloseNotice())
+          .then((quit) => {
+            if (quit) app.quit();
+          })
+          .catch(reportNoticeError);
+      }
+      return;
+    }
+    if (tray && tray.keepRunningWithoutTray) {
+      event.preventDefault();
+      if (typeof win.minimize === "function") win.minimize();
+      console.log("[main] Window minimized to the dock (no tray host)");
+      if (tray.closeNoticeDue) {
+        Promise.resolve()
+          .then(() => tray.showCloseNotice({ withoutTray: true }))
           .then((quit) => {
             if (quit) app.quit();
           })

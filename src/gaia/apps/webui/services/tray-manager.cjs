@@ -338,6 +338,14 @@ class TrayManager {
     return this.config.tray.minimizeToTray && this.trayHost.available;
   }
 
+  /**
+   * Stock GNOME has no StatusNotifier host. Keep a closed window reachable from
+   * the dock instead of quitting or hiding it where the user cannot find it.
+   */
+  get keepRunningWithoutTray() {
+    return process.platform === "linux" && this.trayHost.reason === "no-host";
+  }
+
   /** @returns {boolean} Whether app should start minimized, which also needs a tray. */
   get startMinimized() {
     return this.config.tray.startMinimized && this.trayHost.available;
@@ -356,7 +364,7 @@ class TrayManager {
     this._host = { available: host.available, reason: host.available ? null : host.reason };
     if (!host.available) {
       console.log(
-        `[tray] No tray icon host (${host.reason}: ${host.detail || "no detail"}); closing the window quits GAIA`
+        `[tray] No tray icon host (${host.reason}: ${host.detail || "no detail"}); closing minimizes GAIA to the dock`
       );
     }
   }
@@ -379,19 +387,26 @@ class TrayManager {
   /**
    * Tell the user, once, that closing the window left GAIA running.
    * Saved as shown before it opens, so a crash mid-dialog never repeats it.
+   * @param {{withoutTray?: boolean}} [options]
    * @returns {Promise<boolean>} True when the user chose to quit from the notice.
    */
-  async showCloseNotice() {
+  async showCloseNotice({ withoutTray = false } = {}) {
     if (!this.closeNoticeDue) return false;
     const next = { ...this.config, notices: { ...this.config.notices, firstClose: true } };
     this._saveConfig(next);
     this.config = next;
     const where = process.platform === "darwin" ? "menu bar" : "tray";
+    const message = withoutTray
+      ? "GAIA is still running in the background."
+      : `GAIA is still running in the ${where}.`;
+    const detail = withoutTray
+      ? "GAIA was minimized to your dock. Reopen it from the app grid or dock. Use Quit from GAIA's dock or app-grid menu to stop it. Your model stays loaded, so the next chat starts quickly."
+      : `Quit from the ${where} menu to stop it. Closing the window keeps your model loaded, so the next chat starts quickly.`;
     const { response } = await dialog.showMessageBox({
       type: "info",
       title: "GAIA is still running",
-      message: `GAIA is still running in the ${where}.`,
-      detail: `Quit from the ${where} menu to stop it. Closing the window keeps your model loaded, so the next chat starts quickly.`,
+      message,
+      detail,
       buttons: ["OK", "Quit GAIA"],
       defaultId: 0,
       cancelId: 0,
