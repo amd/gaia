@@ -16,8 +16,9 @@ icon: sparkles
 # The real registered size for the default construction (prompt_profile="full",
 # no skill set loaded). Drift-guarded by tests/test_gaia_agent.py, which builds
 # the agent and compares — a hand-edit that disagrees with the registry fails CI.
-# 66 from ChatAgent's "full" profile (incl. transcribe_media,
-# refine_transcript, wait_for_condition, sleep, the three CLI-setup tools
+# 69 from ChatAgent's "full" profile (incl. transcribe_media,
+# refine_transcript, analyze_transcript, export_transcript,
+# wait_for_condition, sleep, the three CLI-setup tools
 # and the persistent shell session's get_shell_state / reset_shell_session)
 # + 8 skill-library tools
 # (gaia_agent.skill_tools.SKILL_LIBRARY_TOOL_NAMES) + 4 code-index tools
@@ -29,7 +30,7 @@ icon: sparkles
 # + search_tools, which GAIA_DYNAMIC_TOOLS=0 or dynamic_tools=false leaves out.
 # + 3 audio-generation tools (enabled on the flagship, disabled in fast mode).
 # This is the REGISTERED size — what the agent can do.
-tools_count: 103
+tools_count: 105
 
 language: python
 # ChatAgent (gaia_agent.chat_agent) calls RAGSDK.document_scripts (#6165)
