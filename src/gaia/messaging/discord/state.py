@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set
 
 from gaia.automations.files import (  # noqa: F401 - re-exported for the bridge
-    CorruptStateFile,
     DamagedStateFile,
     StateFileError,
 )
