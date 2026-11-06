@@ -263,8 +263,10 @@ Set up by the eval workflow, not by scenarios:
   dir prepended to PATH; `github-triage` installed at `~/.gaia/skills/`
   (copied, not `gaia skill import` — import re-stamps tier experimental).
 - `gaia_skills_lifecycle`: fixture server running; `GAIA_HUB_URL` set to the
-  fixture hub; `github-triage` pre-installed; `rss-digest` NOT pre-installed
-  (install scenarios download it).
+  fixture hub. Every `hub/skills/` skill is always installed: the flagship
+  bundles them (from the checkout's `hub/skills/`, or packaged), so install
+  and "not installed" scenarios use `unit-convert`, which exists only on the
+  fixture hub.
 - `gaia_web`, `gaia_skills_tasks` (web-based skills): fixture server running.
 - `gaia_data`, `gaia_code`: fixture CSV / mini repo staged at `~/gaia-eval/`
   (see Path staging above).
@@ -302,6 +304,9 @@ Set up by the eval workflow, not by scenarios:
 | `tui` | ladder-equivalent subset (L1–L7 + follow-up canaries) for the local TUI mode |
 | `requires_asr` | needs the Lemonade ASR model (`DEFAULT_ASR_MODEL`) downloaded and ffmpeg on PATH; skipped as `SKIPPED_NO_MODEL` otherwise |
 | `requires_vlm` | needs the VLM model (`DEFAULT_VLM_MODEL`) downloaded; skipped as `SKIPPED_NO_MODEL` otherwise |
+| `requires_sd` | needs `SDXL-Turbo` downloaded; skipped as `SKIPPED_NO_MODEL` otherwise |
+| `requires_music` | needs `ACE-Step-Music` downloaded; skipped as `SKIPPED_NO_MODEL` otherwise |
+| `requires_full_tier` / `requires_compact_tier` | runs only when the agent model (the pinned `--agent-model`, else the default) has that feature tier (`model_features.py`); skipped as `SKIPPED_NO_MODEL` otherwise. Pairs a skill's use scenario on `full` with its honest-refusal scenario on `compact` |
 | `local_blocked_no_embedder` | cannot run without Lemonade embeddings (memory store, RAG, code index, dynamic tool selection) — excluded mechanically from the local Haiku run |
 
 ## Capability-tier expansion fixtures

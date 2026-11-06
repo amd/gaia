@@ -8,7 +8,8 @@
 # version bump, so a re-run is safe.
 #
 # Dispatch by hand to publish between releases; dry_run (the default) runs every
-# gate and uploads nothing.
+# gate and uploads nothing. After a real publish, the verify job installs every
+# skill back from the hub (util/verify_published_skills.py).
 
 name: Publish Hub Skills
 
@@ -99,6 +100,32 @@ jobs:
           else
             python util/publish_skills.py --hub-url "${GAIA_HUB_PUBLISH_URL}"
           fi
+
+  # Reads the live hub back: every repo skill listed at its version, and each
+  # one installs through the user installer with a valid AMD signature.
+  verify:
+    name: Verify published skills
+    needs: publish
+    if: |
+      !cancelled()
+      && needs.publish.result == 'success'
+      && needs.publish.outputs.dry_run == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install GAIA
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          uv pip install --system -e .
+
+      - name: Install every skill from the hub
+        run: python util/verify_published_skills.py
 
   # The website's /hub page reads the catalog at build time.
   redeploy-website:

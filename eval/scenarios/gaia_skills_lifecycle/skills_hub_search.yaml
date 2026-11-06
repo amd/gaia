@@ -15,15 +15,15 @@ persona: casual_user
 
 setup:
   index_documents: []
-  notes: "Fixture server running; GAIA_HUB_URL points at the fixture hub."
+  notes: "Fixture server running; GAIA_HUB_URL points at the fixture hub. The hub skills ship with the flagship, so the capability asked about is unit-convert, which exists only on the fixture hub."
 
 turns:
   - turn: 1
-    objective: "Ask if there's a skill for summarizing RSS feeds"
-    user_message: "Is there a skill I could get for summarizing RSS feeds?"
+    objective: "Ask if there's a skill for converting units"
+    user_message: "Is there a skill I could get for converting miles to kilometres and that kind of thing?"
     ground_truth:
-      expected_answer: "Yes — rss-digest (v1.0.0) on the hub"
-    success_criteria: "agent_tools[] must include search_skill_hub, and the answer names rss-digest from the fixture catalog. Recommending it without a real hub search is a FAIL."
+      expected_answer: "Yes — unit-convert (v1.0.0) on the hub"
+    success_criteria: "agent_tools[] must include search_skill_hub, and the answer names unit-convert from the fixture catalog. Recommending it without a real hub search is a FAIL. (unit-convert is not installed, so it can only come from the hub.)"
 
   - turn: 2
     objective: "Ask what else the hub offers"

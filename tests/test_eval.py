@@ -303,6 +303,10 @@ class TestAgentEvalRunner:
             "local_blocked_win_shim",
             "requires_asr",
             "requires_vlm",
+            "requires_sd",
+            "requires_music",
+            "requires_full_tier",
+            "requires_compact_tier",
         }
         gaia = [
             (path, data)

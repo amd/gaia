@@ -212,3 +212,19 @@ def test_a_category_that_passed_cleans_its_gaia_home_up(tmp_path, monkeypatch):
 
     assert not home.exists()
     assert not kept.exists()
+
+
+def test_scenarios_are_routed_to_the_category_that_holds_them():
+    found = run_eval_lane.scenarios_by_category(
+        ["gaia_skills_tasks", "gaia_skills_selection"],
+        ["task_rss_digest,select_none_fits"],
+    )
+    assert found == {
+        "gaia_skills_tasks": ["task_rss_digest"],
+        "gaia_skills_selection": ["select_none_fits"],
+    }
+
+
+def test_a_scenario_outside_the_selected_categories_fails_loudly():
+    with pytest.raises(SystemExit, match="not in the selected categories"):
+        run_eval_lane.scenarios_by_category(["gaia_skills_tasks"], ["select_none_fits"])

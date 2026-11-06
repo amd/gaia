@@ -1,0 +1,36 @@
+id: task_musicgen_menu_loop
+name: "Skill Task — music-gen Makes a Menu Loop"
+category: gaia_skills_tasks
+severity: high
+tags: [t1_basic, requires_music]
+description: |
+  The music-gen skill turns a brief for game menu music into a real
+  generate_music call and reports the WAV file it produced.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "music-gen installed at ~/.gaia/skills/; ACE-Step-Music downloaded on the Lemonade server."
+
+turns:
+  - turn: 1
+    objective: "Load the music-gen skill"
+    user_message: "Load the music-gen skill."
+    ground_truth:
+      expected_behavior: "Skill loads"
+    success_criteria: "Agent loads it (load_skill in agent_tools[])."
+
+  - turn: 2
+    objective: "Ask for a short, calm piano loop for a game's main menu"
+    user_message: "I need about 15 seconds of calm piano music for my game's main menu, something that loops"
+    ground_truth:
+      expected_behavior: "generate_music called with a calm piano prompt; the WAV path the tool returned is reported"
+    success_criteria: |
+      agent_tools[] shows generate_music with a prompt describing calm piano
+      menu music, and the agent reports the WAV path the tool returned. FAIL if
+      it claims a track without a successful generate_music call or reports a
+      path the tool did not return.
+
+expected_outcome: |
+  A real generated WAV, described accurately.

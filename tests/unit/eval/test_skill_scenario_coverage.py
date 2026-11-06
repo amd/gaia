@@ -13,14 +13,15 @@ The skill list is read from the tree (the same lane
 ``tests/unit/test_starter_skills.py`` iterates), never hardcoded, so a new skill
 cannot slip past by not being on a list.
 
-Coverage is claimed by filename convention: a scenario for skill ``file-ops``
-lives at ``eval/scenarios/<category>/skill_file_ops_*.yaml``. The scenario schema
-has no field for "this exercises skill X" and inventing one would change the
-judge prompt, so the filename carries it.
+Which scenarios cover a skill is decided by ``util/skill_eval_scenarios.py``
+(a ``skill_<name>_*.yaml`` filename, or a ``gaia_skills_tasks`` scenario whose
+first turn is "Load the <name> skill."), the same helper ``skill_audit.yml`` uses
+to tell a PR which scenarios to dispatch.
 """
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -32,34 +33,16 @@ from gaia.eval.runner import SCENARIOS_DIR, validate_scenario
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SKILLS_ROOT = REPO_ROOT / "hub" / "skills"
+if str(REPO_ROOT / "util") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "util"))
+
+import skill_eval_scenarios as ses  # noqa: E402  (path set above)
 
 #: Minimum scenarios per covered skill: one golden path, one failure/edge path.
 MIN_SCENARIOS_PER_SKILL = 2
 
 #: Skills with no scenarios yet, each with the reason it can wait.
-#:
-#: Phase 1 covers the four skills carrying parity risk from the retiring
-#: chat/doc/file profiles. The rest are deferred on cost: the agent eval averages
-#: ~4.2 min/scenario, so covering all sixteen at two scenarios each would add
-#: over two hours to a suite already being split for length.
-DEFERRED: dict[str, str] = {
-    "check-in": "Scheduled-trigger skill; needs a clock fixture the runner lacks.",
-    "coding": "Overlaps the code_index scenarios; needs its own corpus first.",
-    "daily-brief": "Composes other skills; cover its parts before the composite.",
-    "github-triage": "Requires a live GitHub connector; not available in the lane.",
-    "image-gen": "Needs Stable Diffusion loaded; out of scope for the text lanes.",
-    "inbox-triage": "Requires a mailbox connector; covered by the email eval lane.",
-    "music-gen": (
-        "Needs downloaded ACE-Step/ThinkSound models and an audio-quality rubric; "
-        "the separate live Lemonade integration test covers the API path."
-    ),
-    "price-watch": "Requires live web fetch; non-deterministic ground truth.",
-    "recommendations": "Subjective output; no stable rubric yet.",
-    "research-report": "Requires live web search; non-deterministic ground truth.",
-    "rss-digest": "Requires live feeds; non-deterministic ground truth.",
-    "source-watch": "Requires live web fetch and stored state across runs.",
-    "transcribe-meeting": "Requires audio input; belongs with the audio tests.",
-}
+DEFERRED: dict[str, str] = {}
 
 
 def _skill_names() -> list[str]:
@@ -67,13 +50,14 @@ def _skill_names() -> list[str]:
     return sorted(d.name for d in SKILLS_ROOT.iterdir() if (d / "SKILL.md").is_file())
 
 
-def _scenario_prefix(skill: str) -> str:
-    return f"skill_{skill.replace('-', '_')}_"
+_scenario_prefix = ses.filename_prefix
+
+
+TASK_SKILLS = ses.task_skills(SCENARIOS_DIR / "gaia_skills_tasks")
 
 
 def _scenarios_for(skill: str) -> list[Path]:
-    prefix = _scenario_prefix(skill)
-    return sorted(SCENARIOS_DIR.rglob(f"{prefix}*.yaml"))
+    return ses.scenarios_for(skill, SCENARIOS_DIR, TASK_SKILLS)
 
 
 SKILL_NAMES = _skill_names()
@@ -200,3 +184,24 @@ def test_scenario_filename_prefixes_are_unambiguous():
         if a != b and _scenario_prefix(b).startswith(_scenario_prefix(a))
     ]
     assert not collisions, f"Ambiguous skill-name prefixes: {collisions}"
+
+
+def test_task_scenarios_load_only_shipped_skills():
+    """A "Load the X skill." turn naming a renamed skill would credit nothing."""
+    unknown = sorted(
+        f"{p.name}: {s}" for p, s in TASK_SKILLS.items() if s and s not in SKILL_NAMES
+    )
+    assert not unknown, f"Task scenarios load skills not under hub/skills/: {unknown}"
+
+
+def test_audit_hint_names_a_changed_skills_scenarios_and_the_dispatch_input():
+    summary = ses.markdown(["price-watch"])
+
+    assert "`task_pricewatch_new_low`" in summary
+    assert "eval_flagship.yml" in summary
+    assert "task_pricewatch_new_low" in summary.split("```")[1]
+
+
+def test_audit_hint_ignores_directories_outside_the_hub_lane(capsys):
+    assert ses.main(["tests/fixtures/skills/evil", "src/gaia/skills"]) == 0
+    assert capsys.readouterr().out == ""

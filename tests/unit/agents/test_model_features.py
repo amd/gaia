@@ -66,3 +66,23 @@ def test_every_feature_names_its_tools():
 def test_full_withholds_nothing_and_compact_withholds_every_feature_tool():
     assert withheld_tools(FULL) == frozenset()
     assert withheld_tools(COMPACT) == frozenset().union(*FEATURE_TOOLS.values())
+
+
+def test_the_email_feature_names_every_email_tool():
+    """A tool missed here stays on a compact model that was meant to have no email."""
+    import ast
+    import inspect
+    import textwrap
+
+    from gaia.agents.tools import email_tools
+
+    source = inspect.getsource(email_tools.EmailToolsMixin.register_email_tools)
+    tree = ast.parse(textwrap.dedent(source))
+    registered = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and any("tool" in ast.unparse(d) for d in node.decorator_list)
+    }
+    assert registered, "found no @tool functions in register_email_tools"
+    assert registered == FEATURE_TOOLS["email"]

@@ -740,6 +740,15 @@ def _documents_exist(scenario_data: dict) -> bool:
 # would read as the agent's fault.
 REQUIRES_ASR_TAG = "requires_asr"
 REQUIRES_VLM_TAG = "requires_vlm"
+REQUIRES_SD_TAG = "requires_sd"
+REQUIRES_MUSIC_TAG = "requires_music"
+SD_MODEL = "SDXL-Turbo"
+MUSIC_MODEL = "ACE-Step-Music"
+
+# Tags pinning a scenario to the agent model's feature tier
+# (gaia/agents/base/model_features.py): a skill one tier withholds is scored
+# for use on the other and for an honest refusal on this one.
+REQUIRES_TIER_TAGS = {"requires_full_tier": "full", "requires_compact_tier": "compact"}
 
 
 def _required_models(scenario_data: dict) -> list:
@@ -747,9 +756,37 @@ def _required_models(scenario_data: dict) -> list:
     from gaia.audio.lemonade_asr import DEFAULT_ASR_MODEL
     from gaia.vlm.mixin import DEFAULT_VLM_MODEL
 
-    by_tag = {REQUIRES_ASR_TAG: DEFAULT_ASR_MODEL, REQUIRES_VLM_TAG: DEFAULT_VLM_MODEL}
+    by_tag = {
+        REQUIRES_ASR_TAG: DEFAULT_ASR_MODEL,
+        REQUIRES_VLM_TAG: DEFAULT_VLM_MODEL,
+        REQUIRES_SD_TAG: SD_MODEL,
+        REQUIRES_MUSIC_TAG: MUSIC_MODEL,
+    }
     tags = set(scenario_data.get("tags") or [])
     return [(tag, model) for tag, model in by_tag.items() if tag in tags]
+
+
+def _agent_tier(agent_model) -> str:
+    """The feature tier of the model the agent runs (the pinned one, else the default)."""
+    from gaia.agents.base.model_features import TIERS, features_for_model
+    from gaia.llm.lemonade_client import resolve_default_chat_model
+
+    features = features_for_model(agent_model or resolve_default_chat_model())
+    return next(name for name, tier in TIERS.items() if tier == features)
+
+
+def _tier_mismatch(scenario_data: dict, agent_model) -> list:
+    """Why the agent model's feature tier rules the scenario out; empty means it doesn't."""
+    tags = set(scenario_data.get("tags") or [])
+    wanted = [(t, tier) for t, tier in REQUIRES_TIER_TAGS.items() if t in tags]
+    if not wanted:
+        return []
+    actual = _agent_tier(agent_model)
+    return [
+        f"the agent model has the {actual!r} feature tier (tag {tag})"
+        for tag, tier in wanted
+        if tier != actual
+    ]
 
 
 def _missing_requirements(scenario_data: dict, downloaded_models: set) -> list:
@@ -776,7 +813,7 @@ def _downloaded_lemonade_models() -> set:
         catalog = client.list_models()
     except Exception as e:
         raise RuntimeError(
-            f"Scenarios tagged {REQUIRES_ASR_TAG}/{REQUIRES_VLM_TAG} need Lemonade's "
+            "Scenarios with a model requires_* tag need Lemonade's "
             f"model list to decide whether they can run, but GET "
             f"{client.base_url}/models failed: {e}. Start Lemonade "
             "(`gaia daemon start`) or set LEMONADE_BASE_URL to a running server."
@@ -3550,7 +3587,9 @@ class AgentEvalRunner:
                 )
                 continue
 
-            missing = _missing_requirements(scenario_data, downloaded_models)
+            missing = _missing_requirements(
+                scenario_data, downloaded_models
+            ) + _tier_mismatch(scenario_data, self.agent_model)
             if missing:
                 self._record_skip(
                     scenario_data,
