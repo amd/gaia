@@ -641,15 +641,37 @@ def _message_kind(message: dict[str, Any]) -> str:
 #: Opens the per-turn memory block ``MemoryMixin`` prepends to a user message.
 MEMORY_CONTEXT_HEADER = "[GAIA Memory Context]"
 
+#: Closes that block, so a short user message never reads as its last line.
+MEMORY_CONTEXT_FOOTER = (
+    "[End GAIA Memory Context — the rest of this message is from the user]"
+)
+
+_FOOTER_BREAK = MEMORY_CONTEXT_FOOTER + "\n\n"
+
+
+def frame_user_message(context: str, user_input: str) -> str:
+    """*user_input* behind the per-turn context block, fenced off from it."""
+    if not context:
+        return user_input
+    # A stored note quoting the footer must not end the block early.
+    context = context.replace(MEMORY_CONTEXT_FOOTER, "").rstrip()
+    if not context.startswith(MEMORY_CONTEXT_HEADER):
+        context = f"{MEMORY_CONTEXT_HEADER}\n{context}"
+    return f"{context}\n{_FOOTER_BREAK}{user_input}"
+
+
+def user_text_of(content: str) -> str:
+    """The user's own words in a message ``frame_user_message`` built."""
+    if content.startswith(MEMORY_CONTEXT_HEADER) and _FOOTER_BREAK in content:
+        return content.partition(_FOOTER_BREAK)[2]
+    return content
+
 
 def _turn_preview(turn: list[dict[str, Any]], limit: int = 60) -> str:
     for message in turn:
         content = message.get("content")
         if message.get("role") == "user" and isinstance(content, str) and content:
-            if content.startswith(MEMORY_CONTEXT_HEADER):
-                # The user's text follows the block's last blank line.
-                content = content.rpartition("\n\n")[2]
-            text = " ".join(content.split())
+            text = " ".join(user_text_of(content).split())
             if not text:
                 continue
             return text if len(text) <= limit else text[: limit - 1] + "…"
