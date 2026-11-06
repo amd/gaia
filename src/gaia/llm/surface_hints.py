@@ -120,9 +120,20 @@ AGENT_UI_VISION_DOWNLOAD_HINT = (
     "To ask about images later, tick it under Settings > Model (a ~6 GB download)."
 )
 
+#: How to download a vision model the image tools found missing.
+VISION_DOWNLOAD_HINT = (
+    "Download it under Settings > Model in the Agent UI, or with /setup in the "
+    "TUI, then ask again."
+)
+AGENT_UI_VISION_DOWNLOAD_STEP = (
+    "Download it under Settings > Model > Manage downloads and disk space, then "
+    "ask again."
+)
+
 _SWAPS = {
     "agent_ui": (
         (CLI_VISION_DOWNLOAD_HINT, AGENT_UI_VISION_DOWNLOAD_HINT),
+        (VISION_DOWNLOAD_HINT, AGENT_UI_VISION_DOWNLOAD_STEP),
         (TUI_SERVER_RESTART_HINT, AGENT_UI_SERVER_RESTART_HINT),
         (TUI_MODEL_SWITCH_HINT, AGENT_UI_MODEL_SWITCH_HINT),
         (TUI_PROVIDER_AUTH_HINT, AGENT_UI_PROVIDER_AUTH_HINT),
