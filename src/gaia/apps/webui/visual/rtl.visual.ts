@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, PHONE_ALERTS, PHONE_STATUS, SYSTEM_STATUS, TOOL_STATUS, VOICE_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, PHONE_ALERTS, PHONE_SETTINGS, PHONE_STATUS, SYSTEM_STATUS, TOOL_STATUS, VOICE_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -2598,7 +2598,7 @@ for (const locale of ['en', 'ar']) {
                 verification_id: 'a'.repeat(32), number: '+49 •••• 7788', needs_confirm_code: true, confirm_sent_to: '+1 •••• 4567', expires_in: 600,
             } }));
             await p.route('**/api/phone/contacts/confirm', (route) => route.fulfill({
-                status: 422, json: { detail: { code: 'verification_failed', message: 'That code is wrong. 2 tries left.' } },
+                status: 422, json: { detail: { code: 'verification_failed', message: 'That code is wrong. 2 tries left.', tries_left: 2 } },
             }));
         });
         await openPhonePane(page);
@@ -2649,6 +2649,34 @@ for (const locale of ['en', 'ar']) {
                 await banner.locator('.link-btn').first().click();
                 await expect(page.locator('.phone-settings')).toBeVisible();
                 await expect(page.locator('#phone-alerts .settings-disclosure')).toHaveAttribute('open', '');
+            });
+        }
+    }
+}
+
+for (const locale of ['en', 'ar']) {
+    for (const theme of ['light', 'dark'] as const) {
+        for (const [size, viewport] of PHONE_SIZES) {
+            test(`settings phone pane, talk on calls (${locale}, ${theme}, ${size})`, async ({ page }) => {
+                await page.setViewportSize(viewport);
+                await open(page, '', locale, async (p) => {
+                    await p.route('**/api/phone/settings', (route) => route.fulfill({ json: { ...PHONE_SETTINGS, pin_set: true, talk_available: true, voice: 'bm_george' } }));
+                }, theme);
+                await openPhonePane(page);
+                const group = page.locator('.phone-talk');
+                await page.locator('.settings-disclosure', { has: group }).locator('summary').click();
+                await expect(page.locator('.phone-talk-status.is-ready')).toBeVisible();
+                await expect(page.locator('#phone-voice')).toHaveValue('bm_george');
+                await page.locator('.phone-talk').scrollIntoViewIfNeeded();
+                if (size === 'phone') await page.addStyleTag({ content: '.sb:not(.is-open) { display: none; }' });
+                await checkPhone(page, locale, `phone-talk-${locale}-${theme}-${size}-ready`);
+                await group.locator('.phone-actions button').first().click();
+                await expect(page.locator('#phone-pin')).toBeVisible();
+                await page.locator('#phone-pin').fill('12');
+                await page.locator('.phone-pin button[type="submit"]').click();
+                await expect(page.locator('.phone-pin .settings-error')).toBeVisible();
+                await page.locator('.phone-pin').scrollIntoViewIfNeeded();
+                await checkPhone(page, locale, `phone-talk-${locale}-${theme}-${size}-pin`);
             });
         }
     }

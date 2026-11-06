@@ -62,6 +62,14 @@ export interface PhoneSettings {
     simulated_outcome: SimulatedOutcome;
     keep_awake: boolean;
     rules: Record<PhoneRuleKey, PhoneRule>;
+    /** Whether a call PIN is set; the PIN itself never leaves the daemon. */
+    pin_set: boolean;
+    /** Mobile access is on and the PC published where calls connect. */
+    talk_available: boolean;
+    /** After the alert sentence, connect the call so you can talk with GAIA. */
+    talk_on_calls: boolean;
+    /** Kokoro voice GAIA speaks in on calls. */
+    voice: string;
 }
 
 /** Only the keys that change; nested objects carry only their changed fields. */
@@ -74,6 +82,8 @@ export interface PhoneSettingsPatch {
     simulated_outcome?: SimulatedOutcome;
     keep_awake?: boolean;
     rules?: Partial<Record<PhoneRuleKey, Partial<PhoneRule>>>;
+    talk_on_calls?: boolean;
+    voice?: string;
 }
 
 export interface PhoneDelivery {
@@ -132,6 +142,9 @@ export const setTwilioKeys = (account_sid: string, auth_token: string, from_numb
     apiFetch<PhoneStatus>('POST', '/phone/keys', { account_sid, auth_token, from_number });
 export const forgetTwilioKeys = () => apiFetch<PhoneStatus>('DELETE', '/phone/keys');
 export const useSimulatedPhone = () => apiFetch<PhoneStatus>('POST', '/phone/simulated');
+/** 4 to 8 digits. Returns the public settings; nothing is kept in the page. */
+export const setPhonePin = (pin: string) => apiFetch<PhoneSettings>('POST', '/phone/pin', { pin });
+export const clearPhonePin = () => apiFetch<PhoneSettings>('DELETE', '/phone/pin');
 export const getSimulatedLog = () => apiFetch<SimulatedLog>('GET', '/phone/simulated/log');
 export const addPhoneNumber = (number: string, label: string, via: 'call' | 'text') =>
     apiFetch<CodeStarted>('POST', '/phone/contacts', { number, label, via });

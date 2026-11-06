@@ -161,6 +161,7 @@ export const PHONE_SETTINGS = {
         gaia_down: { on: true, steps: 'notify_text_call', urgent: true },
         agent: { on: false, steps: 'notify_text_call', urgent: false },
     },
+    pin_set: false, talk_available: false, talk_on_calls: true, voice: 'af_nicole',
 };
 const phoneTime = Math.floor(NOW.getTime() / 1000);
 export const PHONE_ALERTS = [

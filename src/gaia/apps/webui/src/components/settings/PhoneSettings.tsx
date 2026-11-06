@@ -21,6 +21,7 @@ import {
 } from '../../services/phoneApi';
 import { setVisibleInterval } from '../../utils/visibleInterval';
 import { SettingsDisclosure } from './SettingsDisclosure';
+import { PhoneTalkSettings, talkStatus } from './PhoneTalkSettings';
 import { alertTitle, awakeText, heldText, outcomeText, phoneErrorText, providerDetail } from './phoneText';
 import './PhoneSettings.css';
 
@@ -31,7 +32,7 @@ const SIM_OUTCOME_KEY: Record<string, MessageKey> = {
     'no-answer': 'phone.simulated.noAnswer', busy: 'phone.simulated.busy',
 };
 
-type Area = 'power' | 'provider' | 'book' | 'rules' | 'when' | 'alerts';
+type Area = 'power' | 'provider' | 'book' | 'talk' | 'rules' | 'when' | 'alerts';
 
 /** A section to open when Settings › Phone shows next (the alert banner's Open). */
 let pendingFocus: 'alerts' | null = null;
@@ -503,6 +504,21 @@ export function PhoneSettings() {
                 )}
                 <Failure failure={errors.book} />
                 {notices.book && <p className="settings-ok" role="status">{notices.book}</p>}
+            </SettingsDisclosure>
+
+            <SettingsDisclosure
+                title={t('phone.talk.title')}
+                hint={t(talkStatus(settings).state === 'ready' ? 'phone.talk.ready' : talkStatus(settings).state === 'off' ? 'phone.talk.off' : talkStatus(settings).needsPin ? 'phone.talk.needsPin' : 'phone.talk.needsAccess')}
+            >
+                <PhoneTalkSettings
+                    settings={settings}
+                    disabled={working}
+                    busy={busy}
+                    act={(label, fn, done) => act('talk', label, fn, done)}
+                    save={(patch) => save('talk', patch)}
+                />
+                <Failure failure={errors.talk} />
+                {notices.talk && <p className="settings-ok" role="status">{notices.talk}</p>}
             </SettingsDisclosure>
 
             <SettingsDisclosure title={t('phone.rules.title')} hint={t('phone.rules.hint')}>

@@ -27,6 +27,7 @@ const DEFAULT_SETTINGS: PhoneSettings = {
         gaia_down: { on: true, steps: 'notify_text_call', urgent: false },
         agent: { on: false, steps: 'notify_text_call', urgent: false },
     },
+    pin_set: false, talk_available: true, talk_on_calls: true, voice: 'af_nicole',
 };
 
 export const phoneError = (status: number, code: string, message: string, extra: Record<string, unknown> = {}): Reply => ({ status, json: { detail: { code, message, ...extra } } });
@@ -131,6 +132,21 @@ export class FakePhone {
             const a = this.alerts.find((x) => x.id === Number(handled[1]))!;
             a.state = 'handled';
             return { json: a };
+        }
+        if (key === 'POST /phone/pin') {
+            if (!/^\d{4,8}$/.test(String(body.pin))) return phoneError(422, 'bad_request', 'A PIN is 4 to 8 digits.');
+            this.settings.pin_set = true;
+            return { json: this.settings };
+        }
+        if (key === 'DELETE /phone/pin') {
+            this.settings.pin_set = false;
+            return { json: this.settings };
+        }
+        if (key === 'GET /speech/settings') {
+            return { json: { voice: 'af_bella', speed: 100, auto: false, min_speed: 50, max_speed: 200, voices: [
+                { id: 'af_nicole', name: 'Nicole', accent: 'american', gender: 'female', quality: 'B-' },
+                { id: 'bm_george', name: 'George', accent: 'british', gender: 'male', quality: 'C' },
+            ] } };
         }
         if (key === 'POST /phone/keys') return phoneError(422, 'bad_credentials', 'Twilio rejected the Account SID or Auth Token.');
         return { status: 404, json: { detail: `no fake for ${key}` } };

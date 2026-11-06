@@ -418,3 +418,47 @@
         font-size: 16px;
     }
 }
+
+/* Talk on calls. */
+.phone-talk {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.phone-talk > p {
+    margin: 0;
+}
+
+.phone-talk-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    background: var(--bg-recessed);
+    color: var(--text-secondary);
+    font-size: var(--fs-ui);
+}
+
+.phone-talk-status.is-ready {
+    background: var(--accent-green-dim);
+    color: var(--accent-green);
+}
+
+.phone-talk-status.is-missing {
+    background: var(--accent-yellow-dim);
+    color: var(--text-primary);
+}
+
+.phone-talk-status ul {
+    margin: 0;
+    padding-inline-start: 18px;
+}
+
+.phone-pin {
+    padding: 12px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    background: var(--bg-card);
+}
