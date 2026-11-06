@@ -20,6 +20,7 @@ from ..lemonade_client import (
     DEFAULT_MODEL_NAME,
     KV_CACHE_SHARED_PHRASES,
     CloudModelUnavailableError,
+    CloudProviderDisconnectedError,
     GaiaLemonadeStartError,
     LemonadeAuthError,
     LemonadeClient,
@@ -38,6 +39,7 @@ from ..surface_hints import (
     APP_WEDGED_SERVER_HINT,
     TUI_MODEL_SWITCH_HINT,
     TUI_PROVIDER_AUTH_HINT,
+    TUI_PROVIDER_SETTINGS,
     TUI_SETUP_HINT,
 )
 
@@ -449,6 +451,18 @@ class LemonadeCloudModelUnavailableError(LemonadeError):
             ),
             payload=payload,
         )
+
+
+class LemonadeCloudDisconnectedError(LemonadeError):
+    """GAIA's model server restarted, lost the cloud provider, and GAIA could
+    not reconnect it. The message names the fix; a resend fails the same way."""
+
+    retryable = False
+    user_message = (
+        "GAIA's AI engine restarted and lost its cloud provider connection. "
+        f"Reconnect the provider {TUI_PROVIDER_SETTINGS}, then send your message "
+        "again."
+    )
 
 
 class LemonadeAuthRejectedError(LemonadeError):
@@ -869,6 +883,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
             return LemonadeServerUnreachableError(str(cur), cur.endpoint)
         if isinstance(cur, LemonadeAuthError):
             return LemonadeAuthRejectedError(user_message=str(cur))
+        if isinstance(cur, CloudProviderDisconnectedError):
+            return LemonadeCloudDisconnectedError(user_message=str(cur))
         if isinstance(cur, CloudModelUnavailableError):
             return LemonadeCloudModelUnavailableError(cur.model_id, cur.provider)
         if isinstance(cur, CloudDisabledError):
