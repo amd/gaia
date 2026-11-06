@@ -367,14 +367,17 @@ describe('Chat App Integration', () => {
     });
 
     it('should define StreamEvent interface', () => {
-      expect(typesContent).toContain('interface StreamEvent');
-      expect(typesContent).toContain("'chunk'");
-      expect(typesContent).toContain("'done'");
-      expect(typesContent).toContain("'error'");
-      expect(typesContent).toContain("'policy_alert'");
-      expect(typesContent).toContain('rule_ids?: string[]');
-      expect(typesContent).toContain('policy_version?: string');
-      expect(typesContent).toContain('receipt_id?: string');
+      // Stream types live in their own module, re-exported from index.ts.
+      expect(typesContent).toContain("export * from './stream';");
+      const streamContent = fs.readFileSync(path.join(CHAT_APP_PATH, 'src/types/stream.ts'), 'utf8');
+      expect(streamContent).toContain('interface StreamEvent');
+      expect(streamContent).toContain("'chunk'");
+      expect(streamContent).toContain("'done'");
+      expect(streamContent).toContain("'error'");
+      expect(streamContent).toContain("'policy_alert'");
+      expect(streamContent).toContain('rule_ids?: string[]');
+      expect(streamContent).toContain('policy_version?: string');
+      expect(streamContent).toContain('receipt_id?: string');
     });
   });
 

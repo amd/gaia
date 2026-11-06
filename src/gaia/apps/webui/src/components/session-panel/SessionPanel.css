@@ -285,6 +285,15 @@
 
 .sp-tool code.sp-item-name { font-family: var(--font-mono); }
 
+.sp-skill-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.sp-skill-name svg { flex-shrink: 0; color: var(--accent); }
+
 .sp-output.is-inactive .sp-item-name {
     color: var(--text-muted);
     text-decoration: line-through;

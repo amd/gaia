@@ -12,6 +12,7 @@ import { useChatStore } from '../stores/chatStore';
 import { useReadAloudStore } from '../stores/readAloudStore';
 import { readsAloudWhenDone } from '../utils/autoReadAloud';
 import { useReadAloudSettings } from '../hooks/useReadAloudSettings';
+import { RecordingProgress } from './RecordingProgress';
 import { ensureModel, modelKnownReady } from '../stores/modelNeededStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -20,6 +21,7 @@ import { isStarting } from '../services/statusPoll';
 import { refreshActiveRuns } from '../services/activeRuns';
 import { claimView, dispatchNext, idleByPoll, isBusyError, markActivity, requeueRefused, type QueuedSend, type SendOutcome } from '../services/queueDispatch';
 import { log } from '../utils/logger';
+import { isMediaFile } from '../utils/mediaFiles';
 import { bugReportUrl } from './UnsupportedFeature';
 import { classifyChatError, isStreamInterrupted, mayStillFinish, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
 import { isAuthRequiredMessage } from './email/EmailConnectCta';
@@ -986,6 +988,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
+                // A load_skill call is already its own row; other pickups get one.
+                if (event.type === 'skill_use') {
+                    useChatStore.getState().addSkillStep(
+                        event.how === 'model' ? null : agentEventToStep(event, stepIdRef),
+                    );
+                    return;
+                }
+
                 // The text streamed so far narrated the call that follows: it leaves the answer for the timeline.
                 if (event.type === 'commentary') {
                     fullContent = '';
@@ -1554,9 +1564,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setIsDragOver(false);
         if (e.dataTransfer.files.length === 0) return;
 
+        const dropped = Array.from(e.dataTransfer.files);
+        // A recording is transcribed by the agent, not indexed as a document.
+        const recordings = dropped.filter((file) => isMediaFile(file.name));
+        if (recordings.length > 0) attach.addFiles(recordings);
+        const documents = dropped.filter((file) => !isMediaFile(file.name));
+        if (documents.length === 0) return;
+
         if (!(await ensureModel('embedding'))) return;
-        await addDroppedFiles(sessionId, Array.from(e.dataTransfer.files));
-    }, [sessionId]);
+        await addDroppedFiles(sessionId, documents);
+    }, [sessionId, attach]);
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
@@ -1769,6 +1786,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     })}
 
                     {(isStreaming || streamEnding) && liveHistoryNotice && <HistoryNotice text={liveHistoryNotice} />}
+                    {isStreaming && <RecordingProgress />}
                     {(isStreaming || streamEnding) && (
                         <div className={`streaming-bubble ${streamEnding ? 'stream-ending' : 'stream-active'}`}>
                             <MessageBubble

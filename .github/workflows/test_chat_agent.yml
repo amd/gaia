@@ -58,6 +58,7 @@ on:
       - 'tests/unit/agents/test_console_tool_confirmation.py'
       - 'tests/unit/agents/tools/test_email_tools.py'
       - 'tests/unit/test_inference_location.py'
+      - 'tests/unit/test_skill_loads_with.py'
       - 'tests/unit/test_skill_tools_same_turn.py'
       - 'tests/unit/test_tool_admission_order.py'
       - 'tests/unit/chat/test_session_prompt_context.py'
@@ -142,6 +143,7 @@ on:
       - 'tests/unit/agents/test_console_tool_confirmation.py'
       - 'tests/unit/agents/tools/test_email_tools.py'
       - 'tests/unit/test_inference_location.py'
+      - 'tests/unit/test_skill_loads_with.py'
       - 'tests/unit/test_skill_tools_same_turn.py'
       - 'tests/unit/test_tool_admission_order.py'
       - 'tests/unit/chat/test_session_prompt_context.py'
@@ -278,6 +280,7 @@ jobs:
             tests/unit/agents/test_console_tool_confirmation.py \
             tests/unit/agents/tools/test_email_tools.py \
             tests/unit/test_inference_location.py \
+            tests/unit/test_skill_loads_with.py \
             tests/unit/test_skill_tools_same_turn.py \
             tests/unit/test_tool_admission_order.py \
             tests/unit/chat/test_session_prompt_context.py \
