@@ -1133,8 +1133,10 @@ def update_memory(knowledge_id: str, content: str = "",
 
 @tool
 def forget(knowledge_id: str) -> dict:
-    """Remove one memory by ID (from recall). To erase all memory, use
-    forget_everything."""
+    """Remove one memory: its ID from recall, or the user's words for it
+    (e.g. 'allergic to shellfish'). Words erase only the one memory they
+    clearly match; otherwise nothing is erased and the matching IDs come
+    back. To erase all memory, use forget_everything."""
 
 @tool
 def forget_everything() -> dict:

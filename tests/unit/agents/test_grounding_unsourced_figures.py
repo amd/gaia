@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import COMPUTATION_NOT_RUN, Agent
+from gaia.agents.base.agent import COMPUTATION_FAILED, COMPUTATION_NOT_RUN, Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.grounding import CONTENT, content_findings, presented_values
 from gaia.agents.base.tools import tool
@@ -275,6 +275,11 @@ class _OrdersAgent(Agent):
             stdout = "".join(f"{r} {TRUE[r]:.2f}\n" for r in REGIONS)
             return {"status": "success", "stdout": stdout, "return_code": 0}
 
+        @tool
+        def run_python(code: str) -> dict:
+            """Run a Python snippet."""
+            return dict(PANDAS_MISSING)
+
     def _create_console(self):
         return self.console_override
 
@@ -409,9 +414,120 @@ def test_a_denied_computation_says_so_in_its_result(tool_name, result):
                 "has_errors": True,
             },
         ),
-        ("execute_python_file", {"status": "success", "return_code": 1}),
-        ("query_data", {"status": "error", "error": "no such table: orders"}),
     ],
 )
 def test_other_results_are_left_alone(tool_name, result):
     assert Agent._with_computation_note(tool_name, dict(result)) == result
+
+
+PANDAS_MISSING = {
+    "status": "error",
+    "error": "Python exited with code 1: ModuleNotFoundError: No module named 'pandas'",
+    "stdout": "",
+    "stderr": "ModuleNotFoundError: No module named 'pandas'",
+    "return_code": 1,
+    "has_errors": True,
+}
+
+
+@pytest.mark.parametrize(
+    "tool_name,result",
+    [
+        ("run_python", PANDAS_MISSING),
+        ("execute_python_file", {"status": "success", "return_code": 1}),
+        ("query_data", {"status": "error", "error": "no such table: orders"}),
+    ],
+)
+def test_a_computation_that_failed_before_any_output_says_so(tool_name, result):
+    out = Agent._with_computation_note(tool_name, dict(result))
+
+    assert out["computation"] == COMPUTATION_FAILED
+
+
+def test_a_scratchpad_query_error_string_says_so():
+    out = Agent._with_computation_note("query_data", "Error executing query: boom")
+
+    assert out.endswith(COMPUTATION_FAILED)
+    assert Agent._with_computation_note("query_data", "Query returned no results.") == (
+        "Query returned no results."
+    )
+
+
+# ---------------------------------------------------------------------------
+# A failed run, then a table of amounts (Gemma 4 E4B on the NPU)
+# ---------------------------------------------------------------------------
+
+INVENTED_TABLE = (
+    "| Region | Net revenue |\n|---|---|\n"
+    "| North | $10,342.50 |\n| West | $10,678.98 |\n"
+    "| East | $10,374.55 |\n| South | $10,946.25 |\n"
+)
+GROUPED = {
+    "status": "success",
+    "row_count": 500,
+    "group_by": "region",
+    "group_by_results": [
+        {"region": r, "rows": 125, "units": 870.0, "unit_price": 5988.13}
+        for r in REGIONS
+    ],
+}
+
+
+def _failed_run_records():
+    return [
+        _rec(
+            "analyze_data_file",
+            {"file_path": "orders.csv", "group_by": "region"},
+            GROUPED,
+        ),
+        _rec("run_python", {"code": "import pandas as pd"}, PANDAS_MISSING),
+        _rec("analyze_data_file", {"file_path": "orders.csv"}, SUMMARY),
+        _rec(
+            "read_file",
+            {"file_path": "orders.csv"},
+            {"status": "success", "content": ORDERS},
+        ),
+    ]
+
+
+def test_dollar_cells_in_a_table_are_presented_data():
+    shown = {v.text for v in presented_values(INVENTED_TABLE)}
+
+    assert {"10,342.50", "10,678.98", "10,374.55", "10,946.25"} <= shown
+
+
+def test_an_invented_table_after_a_failed_run_is_flagged():
+    findings = content_findings(INVENTED_TABLE, _failed_run_records(), QUERY)
+
+    assert [f.gate for f in findings] == [CONTENT]
+    assert "10,342.50" in findings[0].note
+
+
+def test_a_dollar_table_the_script_printed_is_not_flagged():
+    stdout = "".join(f"{r} {TRUE[r]:.2f}\n" for r in REGIONS)
+    ran = {"status": "success", "stdout": stdout, "stderr": "", "return_code": 0}
+    table = "| Region | Net revenue |\n|---|---|\n" + "".join(
+        f"| {r} | ${TRUE[r]:,.2f} |\n" for r in REGIONS
+    )
+
+    assert content_findings(table, _turn_records(ran), QUERY) == []
+
+
+def test_npu_invented_table_after_a_failed_run_ships_with_the_note(make_agent):
+    agent = make_agent()
+    calls = (
+        _call("analyze_data_file", file_path="orders.csv"),
+        _call("run_python", code="import pandas as pd"),
+        _call("analyze_data_file", file_path="orders.csv"),
+        _call("read_file", file_path="orders.csv"),
+    )
+    answer = _answer(INVENTED_TABLE)
+    sent = _stub_chat(agent, *calls, answer, answer)
+
+    result = agent.process_query(QUERY, max_steps=12)
+
+    assert COMPUTATION_FAILED in _messages_text(sent[:5])
+    assert sent[5][-1]["content"].startswith("[check:grounding]")
+    text = result["result"]
+    assert VERIFICATION_NOTE_OPENER in text
+    assert "10,342.50" in text.split(VERIFICATION_NOTE_OPENER, 1)[1]
