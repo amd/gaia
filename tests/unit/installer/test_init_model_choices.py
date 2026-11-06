@@ -418,6 +418,32 @@ def test_check_does_not_count_a_skipped_model_as_missing(lemonade, home, monkeyp
     assert not check_setup_status("gaia").ready
 
 
+def test_check_accepts_the_local_model_picked_after_a_cloud_setup(
+    lemonade, home, monkeypatch
+):
+    """Cloud setup sets no default_model; the local model picked later counts."""
+    from gaia.installer.init_command import check_setup_status
+
+    lemonade(downloaded=[EMBEDDER, FLM])
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+    home.write_text(json.dumps({"last_provider": "local", "last_model": FLM}))
+    assert check_setup_status("gaia").ready
+
+
+def test_check_ignores_a_last_model_that_is_not_downloaded_or_not_local(
+    lemonade, home, monkeypatch
+):
+    from gaia.installer.init_command import check_setup_status
+
+    lemonade(downloaded=[EMBEDDER])
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+    home.write_text(json.dumps({"last_provider": "local", "last_model": FLM}))
+    assert not check_setup_status("gaia").ready
+    lemonade(downloaded=[EMBEDDER, FLM])
+    home.write_text(json.dumps({"last_provider": "fireworks", "last_model": FLM}))
+    assert not check_setup_status("gaia").ready
+
+
 def test_check_says_there_is_no_chat_model_when_the_chat_model_is_skipped(
     lemonade, home, monkeypatch
 ):

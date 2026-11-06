@@ -637,6 +637,22 @@ def configured_server_too_old(health: object, url: str) -> Optional[str]:
     return None
 
 
+def _local_model_in_use(client) -> Optional[str]:
+    """The downloaded local model last chatted on, when ``default_model`` is unset.
+
+    A user who set up on a cloud model and then picked a local one has no
+    ``default_model``; setup must not then demand the hardware's defaults.
+    """
+    from gaia.config import GaiaConfig
+
+    config = GaiaConfig.load()
+    if config.default_model or config.last_provider != "local" or not config.last_model:
+        return None
+    return (
+        config.last_model if client.check_model_available(config.last_model) else None
+    )
+
+
 def check_setup_status(
     profile: str = DEFAULT_INIT_PROFILE,
     skip_chat_model: bool = False,
@@ -775,10 +791,13 @@ def check_setup_status(
     chat_choice = None
     if not skip_chat_model:
         resolved = []
+        in_use = _local_model_in_use(client)
 
         def resolve_chat():
             resolved.append(
-                resolve_init_chat_model(
+                ChatModelChoice(model_id=in_use, user_set=True, skipped=[])
+                if in_use
+                else resolve_init_chat_model(
                     client, reset_corrupt=False, enforce_fit=False, profile=profile
                 )
             )
