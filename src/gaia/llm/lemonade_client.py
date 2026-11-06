@@ -926,12 +926,25 @@ def _wait_for_drains(model: str) -> None:
     from gaia.daemon import broker_client
 
     started = time.monotonic()
+    limit, source = broker_client.current_wait_limit()
     next_update = started
     while True:
+        now = time.monotonic()
+        waited = now - started
+        if limit is not None and waited >= limit:
+            raise broker_client.BrokerUnavailableError(
+                f"no turn on '{model}' within the {limit:g}s wait limit: a "
+                "stopped reply in this process is still finishing. The model is "
+                "busy, not broken." + broker_client.wait_limit_hint(source),
+                status_code=504,
+            )
         with _DRAINING_CHANGED:
             if not _DRAINING.get(key):
                 break
-            _DRAINING_CHANGED.wait(broker_client.LOCAL_WAIT_POLL_S)
+            wait = broker_client.LOCAL_WAIT_POLL_S
+            if limit is not None:
+                wait = min(wait, limit - waited)
+            _DRAINING_CHANGED.wait(wait)
         now = time.monotonic()
         if now >= next_update:
             broker_client.notify_wait(
@@ -6642,6 +6655,21 @@ class LemonadeClient:
                 finally:
                     http_client.close()
 
+            def _on_drain() -> Callable[[], None]:
+                """Keep both local and cross-process ownership through a drain."""
+                local_end = _begin_drain(model)
+                from gaia.daemon.broker_client import defer_lease_release
+
+                lease_end = defer_lease_release()
+
+                def end() -> None:
+                    try:
+                        local_end()
+                    finally:
+                        lease_end()
+
+                return end
+
             return watch_stream(
                 produce,
                 limits=limits,
@@ -6649,7 +6677,7 @@ class LemonadeClient:
                 is_output=_chunk_carries_output,
                 # FastFlowLM's engine restarts when a reply is cut off mid-stream.
                 drain_on_abandon=runs_on_npu(model),
-                on_drain=lambda: _begin_drain(model),
+                on_drain=_on_drain,
             )
 
         def _convert(stream) -> Generator[Dict[str, Any], None, None]:
