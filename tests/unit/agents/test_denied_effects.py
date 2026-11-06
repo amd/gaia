@@ -919,6 +919,37 @@ def test_a_users_no_is_still_put_to_them_once(tmp_path, victim):
     assert agent.ran == [("execute_python_file", str(cleanup))]
 
 
+def test_a_shape_refusal_that_points_at_another_tool_can_still_be_allowed(tmp_path):
+    """`echo … > f` is refused toward write_file; that route must stay askable."""
+    console = _AskingConsole(Agent.ALLOW_DENIED_EFFECT)
+    agent = _agent(console, tmp_path)
+    notes = tmp_path / "notes.txt"
+
+    def _refuse_redirect(name, args):
+        if ">" in str((args or {}).get("command", "")):
+            return {
+                "status": "error",
+                "shell_operators": True,
+                "error": "Shell operators (&, >, >>, <) are not allowed.",
+                "hint": "To write a file, use write_file or edit_file.",
+            }
+        return None
+
+    agent.policy_refusal_for_call = _refuse_redirect
+    writer = tmp_path / "write_notes.py"
+    writer.write_text(f"open({str(notes)!r}, 'w').write('hi')\n")
+
+    refused = agent._execute_tool(
+        "run_shell_command", {"command": f"echo hi > {notes}"}
+    )
+    allowed = agent._execute_tool("execute_python_file", {"file_path": str(writer)})
+
+    assert refused["executed"] is False
+    assert len(console.questions) == 1
+    assert allowed["status"] == "success"
+    assert agent.ran == [("execute_python_file", str(writer))]
+
+
 def test_the_unattended_refusal_gets_the_no_reroute_recovery_prompt():
     assert Agent._is_denial_error(BLANKET_REFUSAL.format(cmd="rm -rf victim_rm"))
 

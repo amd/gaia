@@ -7384,7 +7384,10 @@ Do NOT wrap conversational replies in JSON.
                     tool_args,
                     str(refusal.get("error") if isinstance(refusal, dict) else refusal),
                     kinds={NETWORK, PATH},
-                    refused=True,
+                    # Only a refuse-tier no is final; a shape refusal ("use
+                    # write_file") points at a route the user may still allow.
+                    refused=isinstance(refusal, dict)
+                    and refusal.get("tier") == "refuse",
                 )
             return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
 
