@@ -363,8 +363,9 @@ def resolve_init_chat_model(
     client, *, reset_corrupt: bool, enforce_fit: bool, profile: str = "gaia"
 ) -> ChatModelChoice:
     """The chat model `gaia init` sets up: the user's ``default_model`` when it
-    is a local Lemonade model, else the largest default that fits this machine
-    (Qwen3.6 35B A3B wherever a GPU holds it, Gemma 4 E4B everywhere else).
+    is a local Lemonade model, else the downloaded local model they last
+    chatted on, else the largest default that fits this machine (Qwen3.6 35B
+    A3B wherever a GPU holds it, Gemma 4 E4B everywhere else).
 
     ``--check`` and ``run()`` both go through here so they can never disagree
     about what "set up" means on this machine. ``reset_corrupt`` is run()'s
@@ -382,12 +383,13 @@ def resolve_init_chat_model(
 
     on_npu = profile == "npu"
     try:
-        configured = GaiaConfig.load().default_model
+        config = GaiaConfig.load()
     except GaiaConfigError as e:
         if not reset_corrupt:
             raise
         log.warning("Ignoring corrupt config; gaia init rewrites it: %s", e)
-        configured = None
+        config = None
+    configured = config.default_model if config else None
     # A Claude or cloud default has nothing to download; the local chat model
     # then follows the hardware, and the user's setting is left as it is.
     # `--profile npu` asks for the NPU, so a GPU default does not hold there;
@@ -402,6 +404,9 @@ def resolve_init_chat_model(
         if enforce_fit:
             _refuse_if_it_does_not_fit(client, configured)
         return ChatModelChoice(model_id=configured, user_set=True, skipped=[])
+    in_use = _local_model_in_use(client, config, on_npu)
+    if in_use:
+        return ChatModelChoice(model_id=in_use, user_set=True, skipped=[])
     recommend = recommend_npu_chat_model if on_npu else recommend_default_chat_model
     model_id, skipped, capacity = recommend(client)
     capacity_pick = (
@@ -416,6 +421,22 @@ def resolve_init_chat_model(
         capacity=capacity,
         capacity_pick=capacity_pick,
     )
+
+
+def _local_model_in_use(client, config, on_npu: bool) -> Optional[str]:
+    """The downloaded local model last chatted on, or None.
+
+    Someone who set up on a cloud model and then picked a local one has no
+    local ``default_model``; setup must not then demand the hardware defaults.
+    """
+    from gaia.llm.lemonade_client import cloud_model_provider, runs_on_npu
+
+    model = config.last_model if config else None
+    if not model or config.last_provider != "local" or cloud_model_provider(model):
+        return None
+    if on_npu and not runs_on_npu(model):
+        return None
+    return model if client.check_model_available(model) else None
 
 
 def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
@@ -637,22 +658,6 @@ def configured_server_too_old(health: object, url: str) -> Optional[str]:
     return None
 
 
-def _local_model_in_use(client) -> Optional[str]:
-    """The downloaded local model last chatted on, when ``default_model`` is unset.
-
-    A user who set up on a cloud model and then picked a local one has no
-    ``default_model``; setup must not then demand the hardware's defaults.
-    """
-    from gaia.config import GaiaConfig
-
-    config = GaiaConfig.load()
-    if config.default_model or config.last_provider != "local" or not config.last_model:
-        return None
-    return (
-        config.last_model if client.check_model_available(config.last_model) else None
-    )
-
-
 def check_setup_status(
     profile: str = DEFAULT_INIT_PROFILE,
     skip_chat_model: bool = False,
@@ -791,13 +796,10 @@ def check_setup_status(
     chat_choice = None
     if not skip_chat_model:
         resolved = []
-        in_use = _local_model_in_use(client)
 
         def resolve_chat():
             resolved.append(
-                ChatModelChoice(model_id=in_use, user_set=True, skipped=[])
-                if in_use
-                else resolve_init_chat_model(
+                resolve_init_chat_model(
                     client, reset_corrupt=False, enforce_fit=False, profile=profile
                 )
             )

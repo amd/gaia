@@ -430,6 +430,19 @@ def test_check_accepts_the_local_model_picked_after_a_cloud_setup(
     assert check_setup_status("gaia").ready
 
 
+def test_init_keeps_the_local_model_picked_after_a_cloud_setup(lemonade, home):
+    """`gaia init` must agree with the check and not pull the hardware default."""
+    from gaia.installer.init_command import resolve_init_chat_model
+
+    fake = lemonade(downloaded=[EMBEDDER, FLM])
+    home.write_text(json.dumps({"last_provider": "local", "last_model": FLM}))
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=True)
+    assert (choice.model_id, choice.user_set) == (FLM, True)
+    assert _download(InitCommand(profile="gaia", yes=True))
+    assert DEFAULT_MODEL_NAME not in _pulled(fake)
+    assert LARGE_DEFAULT_MODEL_NAME not in _pulled(fake)
+
+
 def test_check_ignores_a_last_model_that_is_not_downloaded_or_not_local(
     lemonade, home, monkeypatch
 ):
