@@ -6078,9 +6078,9 @@ class LemonadeClient:
                 reason = "GAIA could not give it a working key"
             else:
                 reason = "GAIA does not set the gateway up again on its own"
-        except CloudDisabledError:
-            raise
         except (CloudKeyError, GatewayError, requests.RequestException) as e:
+            if isinstance(e, CloudDisabledError):
+                raise
             reason = f"reconnecting failed: {str(e).rstrip('.')}"
         if reason is not None:
             raise CloudProviderDisconnectedError(provider, model, reason) from error
