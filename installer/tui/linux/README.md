@@ -38,6 +38,8 @@ dist/gaia-1.4.0.x86_64.rpm
   its `_internal` folder. The script copies them; it does not build them. The
   core installs to `/usr/lib/gaia`, linked as `/usr/bin/gaia`, and a pre-remove
   script stops a daemon running it before the package is removed or upgraded.
+  `--without-core` leaves the core out, as packages before it shipped one did;
+  CI uses it only to rebuild such a release's package.
 - `--out` is created if absent.
 - `--version` is `MAJOR.MINOR.PATCH`, or `MAJOR.MINOR.PATCH-rc.N` for a release
   candidate. Any other suffix is rejected up front rather than failing later

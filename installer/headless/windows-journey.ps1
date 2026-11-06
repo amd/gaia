@@ -405,12 +405,13 @@ switch ($Step) {
                 $env:HOME = $userHome
                 & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -Raw '$script' | Invoke-Expression"
                 if ($LASTEXITCODE -ne 0) { Fail "install.ps1 failed (exit $LASTEXITCODE)" }
-                foreach ($f in "$gaiaHome\venv\Scripts\gaia.exe", "$gaiaHome\bin\gaia.exe", "$gaiaHome\bin\gaia-cli.exe", "$gaiaHome\bin\gaia-mcp.exe", "$gaiaHome\bin\gaia-tui.exe", "$gaiaHome\bin\gaia-agent.exe") {
+                foreach ($f in "$gaiaHome\bin\_internal", "$gaiaHome\bin\gaia.exe", "$gaiaHome\bin\gaia-cli.exe", "$gaiaHome\bin\gaia-mcp.exe", "$gaiaHome\bin\gaia-tui.exe", "$gaiaHome\bin\gaia-agent.exe") {
                     if (-not (Test-Path $f)) { Fail "install.ps1 finished but $f is not there" }
                 }
                 # The venv's python.exe must not reach the user's PATH.
                 $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path
                 $entries = @($regPath -split ';' | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') })
+                if (Test-Path "$gaiaHome\venv") { Fail "install.ps1 built $gaiaHome\venv; it installs the frozen gaia" }
                 if ($entries -contains "$gaiaHome\venv\Scripts") { Fail "install.ps1 put $gaiaHome\venv\Scripts on the user PATH" }
                 if ($entries -notcontains "$gaiaHome\bin") { Fail "install.ps1 did not put $gaiaHome\bin on the user PATH" }
             }
@@ -454,7 +455,7 @@ switch ($Step) {
                 if ($LASTEXITCODE -ne 0) { Fail "$gaiaHome\bin\gaia.exe --version exited $LASTEXITCODE" }
                 if (Select-String -Path "$repo\installer\scripts\install.ps1" -Pattern 'GAIA_RELEASE_TAG' -Quiet) {
                     Check-TuiVersion @($tuiVersion, $version)
-                    $got = & "$gaiaHome\venv\Scripts\gaia.exe" --version 2>&1 | Out-String
+                    $got = & "$gaiaHome\bin\gaia.exe" --version 2>&1 | Out-String
                     if ($got -notmatch [regex]::Escape($pep440)) { Fail "install.ps1 was asked for $($rel.tag) but installed $got" }
                 }
             }

@@ -153,7 +153,7 @@ jobs:
 
   # A candidate older than v0.25.1-rc4 carries no terminal packages, so build
   # them here from its own binaries. Unsigned, like the release build (see
-  # tui_installers.yml).
+  # tui_installers.yml), and with no gaia core, which it predates.
   rebuild-packages:
     name: Rebuild terminal packages (${{ matrix.label }})
     needs: resolve
@@ -206,11 +206,11 @@ jobs:
             stage darwin-x64 tui-bin-darwin-x64 sidecar-darwin-x64 stage/darwin-x64
             for arch in arm64 x64; do
               installer/tui/macos/build-pkg.sh --version "${CORE}" --arch "${arch}" \
-                --payload "stage/darwin-${arch}" --out dist --allow-unsigned
+                --payload "stage/darwin-${arch}" --out dist --allow-unsigned --without-core
             done
           else
             stage linux-x64 tui-bin-linux-x64 sidecar-linux-x64 stage/linux-x64
-            installer/tui/linux/build-packages.sh --version "${CORE}" --payload stage/linux-x64 --out dist
+            installer/tui/linux/build-packages.sh --version "${CORE}" --payload stage/linux-x64 --out dist --without-core
           fi
           ls -l dist
       - uses: actions/upload-artifact@v7
@@ -238,8 +238,9 @@ jobs:
           name: release-json
       # The previous release's own .deb when it published one. If it
       # published none, it is rebuilt from its own gaia-tui with a
-      # stand-in sidecar: the upgrade row checks the package upgrade and the
-      # user's data, and runs only the NEW version's agent.
+      # stand-in sidecar and, as that release did, no gaia core: the upgrade row
+      # checks the package upgrade and the user's data, and runs only the NEW
+      # version's agent.
       - name: Previous release's .deb
         run: |
           set -euo pipefail
@@ -264,7 +265,7 @@ jobs:
               subprocess.check_call(["chmod", "+x", "prev-stage/gaia-tui", "prev-stage/gaia-agent"])
               core = d["prev_version"].split("-")[0]
               subprocess.check_call(["installer/tui/linux/build-packages.sh", "--version", core,
-                                     "--payload", "prev-stage", "--out", "prev-out"])
+                                     "--payload", "prev-stage", "--out", "prev-out", "--without-core"])
               subprocess.check_call("cp prev-out/*_amd64.deb prev/", shell=True)
           PY
           ls -l prev
@@ -350,7 +351,18 @@ jobs:
           fi
           python "$J" init --results "$R" --row "${ROW}" --title "${TITLE}" --os-label "Windows x64" \
             --installer "${KIND}" --release "$(python -c "import json;print(json.load(open(r'${RELEASE_JSON}'))['tag'])")" --source release
-          python "$J" run --results "$R" --phases "${PHASES}" --logs "${WORK}/logs/phases" \
+          skip=()
+          # install.sh / install.ps1 fetch the frozen gaia from the release, and a
+          # release from before it shipped has none: those rows wait for one.
+          case "${KIND}" in install-sh|install-ps1)
+            tag="$(python -c "import json;print(json.load(open(r'${RELEASE_JSON}'))['tag'])")"
+            if ! curl -fsIL -o /dev/null "https://github.com/amd/gaia/releases/download/${tag}/gaia-core-SHA256SUMS.txt"; then
+              python "$J" note --results "$R" --text "${tag} carries no gaia-core files, which this ref's install script fetches; the first release that ships them runs this row."
+              for p in ${PHASES}; do skip+=(--skip "${p}=${tag} carries no gaia-core files"); done
+            fi
+            ;;
+          esac
+          python "$J" run --results "$R" --phases "${PHASES}" --logs "${WORK}/logs/phases" ${skip[@]+"${skip[@]}"} \
             --known installer/headless/known_failures.json --thresholds installer/install_time_thresholds.json \
             -- pwsh -NoProfile -File installer/headless/windows-journey.ps1 -Step '{phase}'
       - uses: actions/upload-artifact@v7
@@ -488,6 +500,16 @@ jobs:
           if [ "${source}" != release ]; then
             skip=(--skip "download=rebuilt in this run; the release publishes no such package")
           fi
+          # install.sh / install.ps1 fetch the frozen gaia from the release, and a
+          # release from before it shipped has none: those rows wait for one.
+          case "${KIND}" in install-sh|install-ps1)
+            tag="$(python -c "import json;print(json.load(open(r'${RELEASE_JSON}'))['tag'])")"
+            if ! curl -fsIL -o /dev/null "https://github.com/amd/gaia/releases/download/${tag}/gaia-core-SHA256SUMS.txt"; then
+              python "$J" note --results "$R" --text "${tag} carries no gaia-core files, which this ref's install script fetches; the first release that ships them runs this row."
+              for p in ${PHASES}; do skip+=(--skip "${p}=${tag} carries no gaia-core files"); done
+            fi
+            ;;
+          esac
           python "$J" run --results "$R" --phases "${PHASES}" --logs "${WORK}/logs/phases" ${skip[@]+"${skip[@]}"} \
             --known installer/headless/known_failures.json --thresholds installer/install_time_thresholds.json \
             -- bash installer/headless/posix-journey.sh '{phase}'

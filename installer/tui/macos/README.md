@@ -67,7 +67,9 @@ All four arguments are required.
   `_internal` folder) and `LICENSE.md`. The script copies them; it does not build
   them. The core is its own component, installed to `/usr/local/lib/gaia` and
   linked as `/usr/local/bin/gaia`. A missing `LICENSE.md` is a hard error — every
-  package GAIA ships carries the licence.
+  package GAIA ships carries the licence. `--without-core` leaves the core out, as
+  packages before it shipped one did; CI uses it only to rebuild such a release's
+  package.
 - `--out` is created if it does not exist. The result is
   `<out>/gaia-<version>-darwin-<arch>.pkg`.
 

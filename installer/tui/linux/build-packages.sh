@@ -43,7 +43,7 @@ readonly LICENSE_FILE="${REPO_ROOT}/LICENSE.md"
 
 usage() {
     cat >&2 <<'EOF'
-Usage: build-packages.sh --version <x.y.z|x.y.z-rc.N> --payload <dir> --out <dir>
+Usage: build-packages.sh --version <x.y.z|x.y.z-rc.N> --payload <dir> --out <dir> [--without-core]
        build-packages.sh --version <x.y.z|x.y.z-rc.N> --print-package-version
 
   --version   Release version: 1.4.0, or 1.4.0-rc.2 for a release candidate.
@@ -51,6 +51,9 @@ Usage: build-packages.sh --version <x.y.z|x.y.z-rc.N> --payload <dir> --out <dir
   --payload   Directory containing the executables gaia-tui and gaia-agent, and
               core/, the frozen gaia (its executable and _internal folder).
   --out       Directory to write the .deb and .rpm into (created if absent).
+  --without-core
+              Build a package with no gaia core, as releases before it shipped
+              one were. Only for rebuilding such a release's package in CI.
   --print-package-version
               Print the version the packages would carry, and build nothing.
 
@@ -75,6 +78,7 @@ VERSION=""
 PAYLOAD_DIR=""
 OUT_DIR=""
 PRINT_PACKAGE_VERSION=0
+WITHOUT_CORE=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -82,6 +86,7 @@ while [ $# -gt 0 ]; do
         --payload) [ $# -ge 2 ] || die "--payload requires a value." "Example: --payload ./stage/linux-x64"; PAYLOAD_DIR="$2"; shift 2 ;;
         --out)     [ $# -ge 2 ] || die "--out requires a value." "Example: --out ./dist"; OUT_DIR="$2"; shift 2 ;;
         --print-package-version) PRINT_PACKAGE_VERSION=1; shift ;;
+        --without-core) WITHOUT_CORE=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *)         usage; die "unknown argument: $1" ;;
     esac
@@ -130,7 +135,7 @@ for binary in "${PAYLOAD_BINARIES[@]}"; do
         "Check the build step that copies the binaries into ${PAYLOAD_DIR}."
 done
 
-[ -f "${PAYLOAD_DIR}/core/gaia" ] && [ -d "${PAYLOAD_DIR}/core/_internal" ] || die \
+[ "$WITHOUT_CORE" -eq 1 ] || { [ -f "${PAYLOAD_DIR}/core/gaia" ] && [ -d "${PAYLOAD_DIR}/core/_internal" ]; } || die \
     "payload is missing the frozen gaia core: ${PAYLOAD_DIR}/core/gaia and core/_internal." \
     "Unpack the gaia-core-linux-x64 build (.github/workflows/build_core.yml) into ${PAYLOAD_DIR}/core." \
     "Without it the terminal UI cannot run setup or start the daemon."
@@ -179,16 +184,19 @@ trap cleanup EXIT
 chmod 0755 "$STAGE"
 
 install -d -m 0755 "${STAGE}/usr/bin" "${STAGE}/usr/share/applications" \
-                   "${STAGE}/${ICON_DIR}" "${STAGE}/${DOC_DIR}" "${STAGE}/${CORE_DIR}"
+                   "${STAGE}/${ICON_DIR}" "${STAGE}/${DOC_DIR}"
 
 for binary in "${PAYLOAD_BINARIES[@]}"; do
     install -m 0755 "${PAYLOAD_DIR}/${binary}" "${STAGE}/usr/bin/${binary}"
 done
 
-cp -a "${PAYLOAD_DIR}/core/." "${STAGE}/${CORE_DIR}/"
-chmod 0755 "${STAGE}/${CORE_DIR}/gaia"
-# Relative, so the link holds wherever the package is unpacked.
-ln -s "../lib/gaia/gaia" "${STAGE}/usr/bin/gaia"
+if [ "$WITHOUT_CORE" -eq 0 ]; then
+    install -d -m 0755 "${STAGE}/${CORE_DIR}"
+    cp -a "${PAYLOAD_DIR}/core/." "${STAGE}/${CORE_DIR}/"
+    chmod 0755 "${STAGE}/${CORE_DIR}/gaia"
+    # Relative, so the link holds wherever the package is unpacked.
+    ln -s "../lib/gaia/gaia" "${STAGE}/usr/bin/gaia"
+fi
 
 install -m 0644 "$DESKTOP_FILE"  "${STAGE}/usr/share/applications/gaia-tui.desktop"
 install -m 0644 "$ICON_FILE"     "${STAGE}/${ICON_DIR}/gaia-tui.png"
@@ -222,7 +230,8 @@ FPM_COMMON=(
 # ever share a build ID collide on those paths at install time.
 # rpm owns only the files it is told about, so without --directories removing
 # the package left the core's folder tree behind; dpkg tracks directories itself.
-RPM_ONLY=(--rpm-rpmbuild-define '_build_id_links none' --directories "/${CORE_DIR}")
+RPM_ONLY=(--rpm-rpmbuild-define '_build_id_links none')
+[ "$WITHOUT_CORE" -eq 1 ] || RPM_ONLY+=(--directories "/${CORE_DIR}")
 
 build_one() {
     target="$1"; arch="$2"; output="$3"

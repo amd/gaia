@@ -449,13 +449,11 @@ install)
       fi
       # Exactly the documented `curl ... | sh`, with the script from this checkout.
       sh <"${REPO}/installer/scripts/install.sh"
-      for f in "${GAIA_HOME}/venv/bin/gaia" "${GAIA_HOME}/bin/gaia" "${GAIA_HOME}/bin/gaia-mcp" "${GAIA_HOME}/bin/gaia-tui" "${GAIA_HOME}/bin/gaia-agent"; do
+      for f in "${GAIA_HOME}/core/gaia" "${GAIA_HOME}/bin/gaia" "${GAIA_HOME}/bin/gaia-mcp" "${GAIA_HOME}/bin/gaia-tui" "${GAIA_HOME}/bin/gaia-agent"; do
         [ -x "${f}" ] || die "install.sh finished but ${f} is not there"
       done
-      # #6603: the venv's python3 must not reach the user's PATH.
-      if grep -Fs "${GAIA_HOME}/venv/bin" "${HOME}/.bashrc" "${HOME}/.bash_profile" "${HOME}/.profile" "${HOME}/.zshrc"; then
-        die "install.sh put ${GAIA_HOME}/venv/bin on PATH in a shell startup file"
-      fi
+      # It installs the frozen gaia: no venv, so no Python of GAIA's on any PATH.
+      [ ! -e "${GAIA_HOME}/venv" ] || die "install.sh built ${GAIA_HOME}/venv; it installs the frozen gaia"
       ;;
     *) die "no install for ${KIND}" ;;
   esac
@@ -475,11 +473,11 @@ launch)
     agent-ui-dmg|agent-ui-deb|appimage) launch_agent_ui ;;
     install-sh)
       check_tui_version ""
-      "${GAIA_HOME}/venv/bin/gaia" --version
+      "${GAIA_HOME}/bin/gaia" --version
       if script_pins_release; then
         check_tui_version "${TUI_VERSION}" "${VERSION}"
-        "${GAIA_HOME}/venv/bin/gaia" --version 2>&1 | grep -q "${PEP440}" \
-          || die "install.sh was asked for $(rel "d['tag']") but installed $("${GAIA_HOME}/venv/bin/gaia" --version 2>&1)"
+        "${GAIA_HOME}/bin/gaia" --version 2>&1 | grep -q "${PEP440}" \
+          || die "install.sh was asked for $(rel "d['tag']") but installed $("${GAIA_HOME}/bin/gaia" --version 2>&1)"
       fi
       ;;
     *) check_tui_version "${TUI_VERSION}" "${VERSION}" ;;

@@ -48,7 +48,7 @@ readonly SCRIPTS_DIR="${SCRIPT_DIR}/scripts"
 usage() {
     cat >&2 <<'EOF'
 Usage: build-pkg.sh --version <x.y.z> --arch <arm64|x64> --payload <dir> --out <dir>
-                    [--allow-unsigned]
+                    [--allow-unsigned] [--without-core]
 
   --version         Release version, e.g. 1.4.0. Embedded in the package and filename.
   --arch            Architecture of the staged binaries: arm64 or x64.
@@ -57,6 +57,9 @@ Usage: build-pkg.sh --version <x.y.z> --arch <arm64|x64> --payload <dir> --out <
   --allow-unsigned  Proceed without Apple credentials. Required to build an
                     unsigned package, so that shipping one is always a decision
                     someone made rather than a secret that happened to be absent.
+  --without-core    Build a package with no gaia core, as releases before it
+                    shipped one were. Only for rebuilding such a release's
+                    package in CI.
 
 The first four arguments are required. See installer/tui/macos/README.md for the
 signing and notarization environment variables.
@@ -79,10 +82,12 @@ ARCH=""
 PAYLOAD_DIR=""
 OUT_DIR=""
 ALLOW_UNSIGNED=0
+WITHOUT_CORE=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --allow-unsigned) ALLOW_UNSIGNED=1; shift ;;
+        --without-core) WITHOUT_CORE=1; shift ;;
         --version) [ $# -ge 2 ] || die "--version requires a value." "Example: --version 1.4.0"; VERSION="$2"; shift 2 ;;
         --arch)    [ $# -ge 2 ] || die "--arch requires a value." "Expected: --arch arm64  or  --arch x64"; ARCH="$2"; shift 2 ;;
         --payload) [ $# -ge 2 ] || die "--payload requires a value." "Example: --payload ./stage/darwin-arm64"; PAYLOAD_DIR="$2"; shift 2 ;;
@@ -126,7 +131,7 @@ for binary in "${PAYLOAD_BINARIES[@]}"; do
         "Check the build step that copies the Go binaries into ${PAYLOAD_DIR}."
 done
 
-[ -f "${PAYLOAD_DIR}/core/gaia" ] && [ -d "${PAYLOAD_DIR}/core/_internal" ] || die \
+[ "$WITHOUT_CORE" -eq 1 ] || { [ -f "${PAYLOAD_DIR}/core/gaia" ] && [ -d "${PAYLOAD_DIR}/core/_internal" ]; } || die \
     "payload is missing the frozen gaia core: ${PAYLOAD_DIR}/core/gaia and core/_internal." \
     "Unpack the gaia-core-darwin-<arch> build (.github/workflows/build_core.yml) into ${PAYLOAD_DIR}/core." \
     "Without it the terminal UI cannot run setup or start the daemon."
@@ -226,10 +231,16 @@ for binary in "${PAYLOAD_BINARIES[@]}"; do
     chmod 0755 "${BIN_ROOT}/${binary}"
 done
 
-cp -a "${PAYLOAD_DIR}/core/." "${CORE_ROOT}/"
-chmod 0755 "${CORE_ROOT}/gaia"
-# Relative, from /usr/local/bin to the core component's install location.
-ln -s "../lib/gaia/gaia" "${BIN_ROOT}/gaia"
+BIN_FILES=("${PAYLOAD_BINARIES[@]}")
+SIGNED_BINARIES=("${PAYLOAD_BINARIES[@]}")
+if [ "$WITHOUT_CORE" -eq 0 ]; then
+    cp -a "${PAYLOAD_DIR}/core/." "${CORE_ROOT}/"
+    chmod 0755 "${CORE_ROOT}/gaia"
+    # Relative, from /usr/local/bin to the core component's install location.
+    ln -s "../lib/gaia/gaia" "${BIN_ROOT}/gaia"
+    BIN_FILES+=(gaia)
+    SIGNED_BINARIES+=(core/gaia)
+fi
 
 cp "${PAYLOAD_DIR}/${LICENSE_NAME}" "${DOC_ROOT}/${LICENSE_NAME}"
 chmod 0644 "${DOC_ROOT}/${LICENSE_NAME}"
@@ -250,7 +261,7 @@ if [ "$SIGN_PKG" -eq 1 ]; then
     # minutes into the notary round trip.
     CODESIGN_HINT="  codesign --force --options runtime --timestamp --sign \"Developer ID Application: … (${APPLE_TEAM_ID})\" <binary>"
 
-    for binary in "${PAYLOAD_BINARIES[@]}" core/gaia; do
+    for binary in "${SIGNED_BINARIES[@]}"; do
         signed="${BIN_ROOT}/${binary}"
         [ "$binary" != core/gaia ] || signed="${CORE_ROOT}/gaia"
         # Captured, not piped: `grep -q` exits on first match and would SIGPIPE
@@ -331,22 +342,24 @@ pkgbuild \
            "Re-run with the pkgbuild output above; the usual causes are an unreadable payload staged at ${BIN_ROOT} or a malformed --scripts directory."
 
 assert_payload "${WORK_DIR}/${COMPONENT_PKG}" "$PKG_IDENTIFIER" "$BIN_INSTALL_LOCATION" \
-    "${PAYLOAD_BINARIES[@]}" gaia
+    "${BIN_FILES[@]}"
 
-echo "build-pkg.sh: building component package (${CORE_IDENTIFIER} ${VERSION}, ${ARCH})"
-pkgbuild \
-    --root "$CORE_ROOT" \
-    --identifier "$CORE_IDENTIFIER" \
-    --version "$VERSION" \
-    --install-location "$CORE_INSTALL_LOCATION" \
-    --ownership recommended \
-    --min-os-version "$MIN_OS_VERSION" \
-    "${WORK_DIR}/${CORE_COMPONENT_PKG}" \
-    || die "pkgbuild failed for ${CORE_IDENTIFIER}." \
-           "Re-run with the pkgbuild output above; the usual cause is an unreadable payload staged at ${CORE_ROOT}."
+if [ "$WITHOUT_CORE" -eq 0 ]; then
+    echo "build-pkg.sh: building component package (${CORE_IDENTIFIER} ${VERSION}, ${ARCH})"
+    pkgbuild \
+        --root "$CORE_ROOT" \
+        --identifier "$CORE_IDENTIFIER" \
+        --version "$VERSION" \
+        --install-location "$CORE_INSTALL_LOCATION" \
+        --ownership recommended \
+        --min-os-version "$MIN_OS_VERSION" \
+        "${WORK_DIR}/${CORE_COMPONENT_PKG}" \
+        || die "pkgbuild failed for ${CORE_IDENTIFIER}." \
+               "Re-run with the pkgbuild output above; the usual cause is an unreadable payload staged at ${CORE_ROOT}."
 
-assert_payload "${WORK_DIR}/${CORE_COMPONENT_PKG}" "$CORE_IDENTIFIER" "$CORE_INSTALL_LOCATION" \
-    gaia _internal
+    assert_payload "${WORK_DIR}/${CORE_COMPONENT_PKG}" "$CORE_IDENTIFIER" "$CORE_INSTALL_LOCATION" \
+        gaia _internal
+fi
 
 echo "build-pkg.sh: building component package (${DOCS_IDENTIFIER} ${VERSION})"
 pkgbuild \
@@ -368,7 +381,15 @@ echo "build-pkg.sh: every payload owns only its own files (no /usr/local directo
 # ── Product archive ─────────────────────────────────────────────────────────
 
 DISTRIBUTION="${WORK_DIR}/distribution.xml"
-sed \
+DROP_CORE=()
+if [ "$WITHOUT_CORE" -eq 1 ]; then
+    DROP_CORE=(
+        -e '/<line choice="@CORE_IDENTIFIER@"\/>/d'
+        -e '/<choice id="@CORE_IDENTIFIER@"/,/<\/choice>/d'
+        -e '/<pkg-ref id="@CORE_IDENTIFIER@"$/,/<\/pkg-ref>/d'
+    )
+fi
+sed "${DROP_CORE[@]+"${DROP_CORE[@]}"}" \
     -e "s|@VERSION@|${VERSION}|g" \
     -e "s|@HOST_ARCHITECTURES@|${HOST_ARCHITECTURES}|g" \
     -e "s|@PKG_IDENTIFIER@|${PKG_IDENTIFIER}|g" \
