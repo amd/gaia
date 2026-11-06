@@ -443,6 +443,90 @@ def test_a_script_computing_from_a_file_the_turn_read_sources_its_result(code):
     assert _check(_md(table), records, name="r.md") == []
 
 
+GM15_TABLE = (
+    "| Order ID | Region | Product | Revenue |\n|---|---|---|---|\n"
+    "| 492 | South | Doohickey | 1410.00 |\n| 251 | East | Doohickey | 1374.75 |\n"
+    "| 389 | West | Widget | 1374.75 |\n"
+)
+GM15_CODE = (
+    "import csv\n"
+    'csv_path = r"C:\\gtest\\fx\\orders.csv"\n'
+    'report_path = r"C:\\gtest\\fx\\work\\report_gm15.md"\n'
+    "with open(csv_path, newline='') as f:\n"
+    "    rows = list(csv.DictReader(f))\n"
+    "for r in rows:\n"
+    "    r['revenue'] = int(r['units']) * float(r['unit_price'])\n"
+    "top = sorted(rows, key=lambda r: r['revenue'], reverse=True)[:3]\n"
+    "with open(report_path, 'w') as out:\n"
+    "    out.write('| Order ID | Region | Product | Revenue |\\n|---|---|---|---|\\n')\n"
+    "    for r in top:\n"
+    "        out.write(f\"| {r['order_id']} | {r['region']} | {r['product']} "
+    "| {r['revenue']:.2f} |\\n\")\n"
+)
+
+
+def _gm15_turn(code=GM15_CODE, table=GM15_TABLE):
+    report = r"C:\gtest\fx\work\report_gm15.md"
+    failed = _run_python("import pandas as pd", "")
+    failed["failed"] = True
+    return report, [
+        _rec(
+            "analyze_data_file",
+            {"file_path": r"C:\gtest\fx\orders.csv"},
+            {"status": "success", "summary": "500 rows; columns order_id, units"},
+        ),
+        failed,
+        _run_python(code, ""),
+        _read(report, table),
+    ]
+
+
+def test_figures_a_script_computed_into_the_report_itself_are_sourced():
+    report, records = _gm15_turn()
+
+    findings = file_findings({report: _md(GM15_TABLE)}, records, query=TOP_ORDERS_QUERY)
+
+    assert findings == []
+
+
+def test_prices_typed_into_a_script_that_writes_the_report_are_still_flagged():
+    code = GM15_CODE.replace(
+        "    rows = list(csv.DictReader(f))\n",
+        "    rows = list(csv.DictReader(f))\n"
+        "rows = [{'order_id': '492', 'region': 'South', 'product': 'Doohickey',"
+        " 'units': '1', 'unit_price': '1410.00'}]\n",
+    )
+    report, records = _gm15_turn(code)
+
+    findings = file_findings({report: _md(GM15_TABLE)}, records, query=TOP_ORDERS_QUERY)
+
+    assert [f.gate for f in findings] == [FILE]
+    assert "1410.00 (Revenue)" in findings[0].note
+
+
+@pytest.mark.parametrize("tool", ["write_file", "run_python"])
+def test_a_report_rewritten_after_the_computing_script_is_checked_again(tool):
+    report, records = _gm15_turn()
+    args = (
+        {"file_path": report, "content": GM15_TABLE}
+        if tool == "write_file"
+        else {"code": f"open(r'{report}', 'w').write('| 492 | 1410.00 |')"}
+    )
+    records.insert(3, _rec(tool, args, {"status": "success"}))
+
+    assert file_findings({report: _md(GM15_TABLE)}, records, query=TOP_ORDERS_QUERY)
+
+
+def test_a_script_writing_the_report_from_unread_data_sources_nothing():
+    code = GM15_CODE.replace(
+        'csv_path = r"C:\\gtest\\fx\\orders.csv"',
+        'csv_path = r"C:\\gtest\\fx\\other.csv"',
+    )
+    report, records = _gm15_turn(code)
+
+    assert file_findings({report: _md(GM15_TABLE)}, records, query=TOP_ORDERS_QUERY)
+
+
 def test_a_file_only_the_script_opened_counts_once_the_check_has_read_it():
     code = "import pandas as pd\nprint(pd.read_csv('orders.csv').units.mul(2).sum())"
     table = "| Region | Revenue |\n|---|---|\n| South | 1410.00 |\n"

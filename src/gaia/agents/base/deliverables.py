@@ -689,53 +689,121 @@ _SMALL_INT = 10
 _NUMERIC_STRING = re.compile(r"\s*[-+]?\d[\d,]*(?:\.\d+)?\s*")
 
 
-def _computed(record: Dict[str, Any], read_names: Set[str]) -> bool:
+def _string_names(tree: ast.AST) -> Dict[str, str]:
+    """Names bound once, to a string literal: ``csv_path = r"...orders.csv"``."""
+    stores: Dict[str, int] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            stores[node.id] = stores.get(node.id, 0) + 1
+    return {
+        node.targets[0].id: node.value.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and stores.get(node.targets[0].id) == 1
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    }
+
+
+def _computed(
+    record: Dict[str, Any], read_names: Set[str], written: Set[str] = frozenset()
+) -> bool:
     """*record* is a script whose output can only come from files read this turn.
 
-    Every file it opens is named and was read this turn, it reaches no other
-    data, and it types no figure beyond a small count — ``v*40`` or
-    ``1500 - 90`` invents its result rather than computing it.
+    Every file it opens other than one the turn wrote was read this turn.
+    """
+    opened = _script_opens(record)
+    read = [name for name in opened or () if name not in written]
+    return bool(read) and all(name in read_names for name in read)
+
+
+def _script_opens(record: Dict[str, Any]) -> Optional[List[str]]:
+    """The files a ``run_python`` script opens, or ``None`` when its figures
+    may not come from them.
+
+    Each file it opens is named, as a literal or a name bound once to one; it
+    reaches no other data; and it types no figure beyond a small count —
+    ``v*40`` or ``1500 - 90`` invents its result rather than computing it.
     """
     if _name(record) != "run_python":
-        return False
+        return None
     code = (record.get("args") or {}).get("code")
     if not isinstance(code, str):
-        return False
+        return None
     try:
         tree = ast.parse(code)
     except SyntaxError:
-        return False
+        return None
     opened = []
+    named = _string_names(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant):
             value = node.value
             if isinstance(value, str) and value.lower().startswith(("http:", "https:")):
-                return False
+                return None
             # Decimal('95.00') types a price as surely as 95 does.
             if isinstance(value, str) and _NUMERIC_STRING.fullmatch(value):
                 if abs(_number(value)) > _SMALL_INT:
-                    return False
+                    return None
             if isinstance(value, (int, float, complex)) and not isinstance(value, bool):
                 if not isinstance(value, int) or abs(value) > _SMALL_INT:
-                    return False
+                    return None
         elif isinstance(node, (ast.Name, ast.Attribute)):
             if (node.id if isinstance(node, ast.Name) else node.attr) in _PY_UNSEEN:
-                return False
+                return None
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             modules = [a.name for a in node.names] + [
                 getattr(node, "module", None) or ""
             ]
             if any(m.split(".")[0] in _PY_UNSEEN for m in modules):
-                return False
+                return None
         if isinstance(node, ast.Call):
             func = node.func
             if getattr(func, "id", getattr(func, "attr", None)) not in _PY_READERS:
                 continue
             target = (node.args or [k.value for k in node.keywords] or [None])[0]
-            if not (isinstance(target, ast.Constant) and isinstance(target.value, str)):
-                return False
-            opened.append(_basename(target.value))
-    return bool(opened) and all(name in read_names for name in opened)
+            if isinstance(target, ast.Name) and target.id in named:
+                path = named[target.id]
+            elif isinstance(target, ast.Constant) and isinstance(target.value, str):
+                path = target.value
+            else:
+                return None
+            opened.append(_basename(path))
+    return opened
+
+
+def _script_written(
+    files: Mapping[str, Sequence[Block]],
+    records: Sequence[Dict[str, Any]],
+    read_names: Set[str],
+    written: Set[str],
+) -> List[str]:
+    """What a computing script wrote straight into a file in *files*, minus
+    its own literals — the file was its output, as stdout would have been.
+
+    Only when the script opened that file and nothing wrote it after.
+    """
+    texts = []
+    for path, blocks in files.items():
+        name = _basename(path)
+        last = None
+        for record in records:
+            if not _ran(record) or record.get("failed"):
+                continue
+            if _computed(record, read_names, written) and name in (
+                _script_opens(record) or ()
+            ):
+                last = record
+            elif _has(_name(record), _WRITE_WORDS + _EXEC_WORDS) and (
+                name in _args_text(record)
+            ):
+                last = None
+        if last is not None:
+            output = {**last, "observed": blocks_text(blocks)}
+            texts.append(_spelled_out(evidence_text(output, code_literals=True)))
+    return texts
 
 
 def _read_names(records: Sequence[Dict[str, Any]], written: Set[str]) -> Set[str]:
@@ -790,7 +858,10 @@ def _evidence_texts(
         ):
             continue
         texts.append(
-            (evidence_text(record, code_literals=True), _computed(record, read_names))
+            (
+                evidence_text(record, code_literals=True),
+                _computed(record, read_names, written),
+            )
         )
     return texts
 
@@ -1061,8 +1132,8 @@ def file_findings(
             lambda m: " " if _number(m.group(0)) in seen else m.group(0),
             _UNIT.sub(" ", t),
         )
-        for t, c in found
-        if c
+        for t in [t for t, c in found if c]
+        + _script_written(files, records, read_names, written)
     ]
     money = _Corpus(
         "\n".join([query] + [_money_evidence(t) for t in [context] + texts] + computed)
