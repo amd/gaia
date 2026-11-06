@@ -72,7 +72,7 @@ def test_reap_after_stop_kills_a_real_recorded_sidecar():
         argv, start_new_session=True, stdout=subprocess.PIPE, text=True
     )
     try:
-        # Read its cmdline only once it runs: mid-exec it may not match yet.
+        # Reap once it runs: macOS framework Python has re-exec'd as Python.app by then.
         assert proc.stdout.readline().strip() == "ready"
         if os.name != "nt":
             assert os.getpgid(proc.pid) != os.getpgid(0)
@@ -126,6 +126,46 @@ def test_a_skipped_live_pid_says_why(monkeypatch, caplog, cmdline, reason):
 
     assert reason in caplog.text
     assert "serve" not in caplog.text
+
+
+_FRAMEWORK = "/Library/Frameworks/Python.framework/Versions"
+_APP = "Resources/Python.app/Contents/MacOS/Python"
+
+
+@pytest.mark.parametrize(
+    "live_exe, live_port, reaped",
+    [
+        # python.org's macOS build runs bin/python as Python.app's binary.
+        (f"{_FRAMEWORK}/3.12/{_APP}", 45999, True),
+        (f"{_FRAMEWORK}/3.11/{_APP}", 45999, False),
+        (f"{_FRAMEWORK}/3.12/{_APP}", 46000, False),
+    ],
+)
+def test_a_framework_python_sidecar_is_recognised_by_its_real_executable(
+    monkeypatch, live_exe, live_port, reaped
+):
+    from gaia.daemon.sidecars.spec import builtin_specs
+
+    recorded = f"{_FRAMEWORK}/3.12/bin/python"
+    monkeypatch.setattr(ledger, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(ledger, "_probe_health", lambda port: None)
+    monkeypatch.setattr(
+        ledger, "_pid_cmdline", lambda pid: f"{live_exe} -m app --port {live_port}"
+    )
+    monkeypatch.setattr(ledger, "_pid_exe", lambda pid: live_exe, raising=False)
+    killed = []
+    monkeypatch.setattr(ledger, "_tree_kill", killed.append)
+    ledger.record_spawn(
+        agent_id="gaia",
+        pid=4242,
+        port=45999,
+        mode="user",
+        argv=[recorded, "-m", "app", "--port", "45999"],
+        started_at=time.time(),
+    )
+
+    assert ledger.reap_stale(builtin_specs()) == ([4242] if reaped else [])
+    assert killed == ([4242] if reaped else [])
 
 
 def test_a_cmdline_psutil_cannot_read_skips_the_pid_instead_of_crashing(

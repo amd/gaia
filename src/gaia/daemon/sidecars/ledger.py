@@ -24,6 +24,7 @@ import json
 import os
 import subprocess
 import threading
+from pathlib import Path
 from typing import Optional
 
 from gaia.daemon import paths
@@ -187,10 +188,48 @@ def _group_kill(pid: int) -> None:
         pass
 
 
-def _cmdline_matches(cmdline: Optional[str], argv: list, port) -> bool:
-    return bool(
-        cmdline and argv and str(argv[0]) in cmdline and f"--port {port}" in cmdline
+def _pid_exe(pid: int) -> Optional[str]:
+    """The live process's executable, or None when it cannot be read."""
+    import psutil
+
+    try:
+        return psutil.Process(pid).exe()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, SystemError):
+        return None
+
+
+def _framework_version_dir(path: Path) -> Optional[Path]:
+    """``…/Python.framework/Versions/<v>`` when *path* is inside one."""
+    parts = path.parts
+    for i in range(len(parts) - 2):
+        if parts[i] == "Python.framework" and parts[i + 1] == "Versions":
+            return Path(*parts[: i + 3])
+    return None
+
+
+def _same_program(recorded: str, live_exe: Optional[str]) -> bool:
+    """Whether *live_exe* is the interpreter or binary *recorded* launched."""
+    if not live_exe:
+        return False
+    recorded_real = Path(os.path.realpath(recorded))
+    live_real = Path(os.path.realpath(live_exe))
+    if os.path.normcase(str(recorded_real)) == os.path.normcase(str(live_real)):
+        return True
+    # python.org's macOS build runs Versions/<v>/bin/python as that version's
+    # Python.app binary, so the live argv[0] is not the recorded path.
+    version_dir = _framework_version_dir(recorded_real)
+    return (
+        version_dir is not None
+        and recorded_real.parent == version_dir / "bin"
+        and live_real
+        == version_dir / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
     )
+
+
+def _cmdline_matches(pid: int, cmdline: Optional[str], argv: list, port) -> bool:
+    if not (cmdline and argv and f"--port {port}" in cmdline):
+        return False
+    return str(argv[0]) in cmdline or _same_program(str(argv[0]), _pid_exe(pid))
 
 
 def _mismatch(cmdline: Optional[str], argv: list, port) -> str:
@@ -211,8 +250,10 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
     Kill gates, per entry (D-4a as amended — pid identity and port identity
     are separate pieces of evidence and never conflated):
 
-    - pid ALIVE → kill (tree-kill) iff the CMDLINE gate passes: the recorded
-      ``argv[0]`` AND ``--port <port>`` both appear in the live cmdline. A live
+    - pid ALIVE → kill (tree-kill) iff the CMDLINE gate passes: ``--port
+      <port>`` appears in the live cmdline AND the recorded ``argv[0]`` either
+      appears there too or is the process's own executable (the same file, or
+      a macOS framework Python's ``bin/`` interpreter and its Python.app). A live
       pid is NEVER killed on port evidence alone — the pid may have been reused
       by an innocent process while our orphaned child still serves the port.
       If the cmdline gate fails but the port probe confirms our service, log a
@@ -245,7 +286,9 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
                 logger.warning("sidecar ledger: skipping unreapable entry %r", entry)
                 continue
             if spec is None:
-                if _pid_alive(pid) and _cmdline_matches(_pid_cmdline(pid), argv, port):
+                if _pid_alive(pid) and _cmdline_matches(
+                    pid, _pid_cmdline(pid), argv, port
+                ):
                     logger.info(
                         "sidecar ledger: reaping stale sidecar of unregistered "
                         "agent %s pid=%s port=%s",
@@ -267,7 +310,7 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
                 continue
             if _pid_alive(pid):
                 cmdline = _pid_cmdline(pid)
-                if _cmdline_matches(cmdline, argv, port):
+                if _cmdline_matches(pid, cmdline, argv, port):
                     logger.info(
                         "sidecar ledger: reaping stale %s sidecar pid=%s port=%s",
                         agent_id,
