@@ -540,3 +540,156 @@ def test_platform_only_keeps_tests_that_touch_the_os(graph):
     sel = st.select(graph, ["src/gaia/tools/sinks.py"], FULL_MAP, platform_only=True)
     assert "tests/unit/test_proc.py" in sel.tests
     assert "tests/unit/test_patch.py" not in sel.tests
+
+
+# The merge queue has no paths filter, so the selection applies the workflow's.
+REPO = Path(__file__).resolve().parents[2]
+UNIT_WORKFLOW = REPO / ".github/workflows/test_unit.yml"
+
+
+@pytest.mark.parametrize(
+    "path, matches",
+    [
+        ("src/gaia/cli.py", True),
+        ("src/gaia/deep/nested/mod.py", True),
+        ("hub/agents/mail/python/pkg/agent.py", True),
+        # `*` is one path segment.
+        ("hub/agents/mail/extra/python/pkg/agent.py", False),
+        ("hub/components/x/gaia-agent.yaml", True),
+        ("hub/components/x/y/gaia-agent.yaml", False),
+        # An exact pattern is the whole path, not a prefix.
+        ("docs/docs.json", True),
+        ("docs/docs.json.bak", False),
+        ("README.md", False),
+    ],
+)
+def test_path_filter_reads_globs_as_github_does(path, matches):
+    rx = st.path_filter(
+        [
+            "src/**",
+            "hub/agents/*/python/**",
+            "hub/components/*/gaia-agent.yaml",
+            "docs/docs.json",
+        ]
+    )
+    assert bool(rx.match(path)) is matches
+
+
+@pytest.mark.parametrize("pattern", ["!src/**", "src/?.py", "src/[ab].py", "a+"])
+def test_path_filter_refuses_syntax_it_cannot_read(pattern):
+    with pytest.raises(SystemExit, match="filter syntax"):
+        st.path_filter([pattern])
+
+
+def test_a_workflow_without_a_paths_filter_is_refused(tmp_path):
+    wf = tmp_path / "wf.yml"
+    wf.write_text("on:\n  pull_request:\n  merge_group:\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="no on.pull_request.paths"):
+        st.workflow_trigger_paths(wf)
+
+
+def test_the_unit_workflow_filter_is_read_from_the_real_file():
+    paths = st.workflow_trigger_paths(UNIT_WORKFLOW)
+    assert "src/**" in paths and "conftest.py" in paths
+    # Every full-run file the workflow could see is inside its own filter, so
+    # the filter alone never hides one; forces_full_run() covers the rest.
+    rx = st.path_filter(paths)
+    for path in ("util/select_tests.py", ".github/workflows/test_unit.yml"):
+        assert rx.match(path)
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        ["README.md"],
+        [
+            "docs/guides/not-a-unit-test-input.mdx",
+            "website/src/pages/not-a-unit-test-input.astro",
+        ],
+    ],
+)
+def test_a_merge_group_outside_the_filter_runs_nothing(graph, changed):
+    sel = st.select(
+        graph, changed, FULL_MAP, trigger_paths=st.workflow_trigger_paths(UNIT_WORKFLOW)
+    )
+    assert not sel.triggered and not sel.full and sel.tests == []
+    platform = st.select(
+        graph,
+        changed,
+        FULL_MAP,
+        platform_only=True,
+        trigger_paths=st.workflow_trigger_paths(UNIT_WORKFLOW),
+    )
+    assert not platform.triggered and platform.tests == []
+
+
+def test_a_batched_group_selects_what_its_prs_would_have(graph):
+    # A docs PR batched with a code PR: the docs PR alone never runs the
+    # workflow, so the group runs what the code PR alone would.
+    triggers = st.workflow_trigger_paths(UNIT_WORKFLOW)
+    alone = st.select(graph, ["src/gaia/core/base.py"], FULL_MAP)
+    batched = st.select(
+        graph,
+        ["README.md", "src/gaia/core/base.py"],
+        FULL_MAP,
+        trigger_paths=triggers,
+    )
+    assert batched.triggered and not batched.full
+    assert batched.tests == alone.tests
+    # Without the filter the README alone would have forced everything.
+    assert st.select(graph, ["README.md", "src/gaia/core/base.py"], FULL_MAP).full
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        # The selector and the workflow that runs it.
+        "util/select_tests.py",
+        ".github/workflows/test_unit.yml",
+        # Any other workflow file.
+        ".github/workflows/lint.yml",
+        # conftest and shared fixtures.
+        "conftest.py",
+        "tests/conftest.py",
+        "tests/fixtures/data/cases.json",
+        "tests/fixtures/gaia/email/build_mailbox.py",
+    ],
+)
+def test_a_merge_group_still_runs_everything_for_unreadable_changes(graph, changed):
+    # Batched with a docs change and a mapped source file, as a group would be.
+    sel = st.select(
+        graph,
+        ["docs/guides/not-a-unit-test-input.mdx", "src/gaia/core/base.py", changed],
+        FULL_MAP,
+        trigger_paths=st.workflow_trigger_paths(UNIT_WORKFLOW),
+    )
+    assert sel.triggered and sel.full and len(sel.tests) == sel.total, sel.reason
+
+
+@pytest.mark.parametrize("changed", ["pytest.ini", "tox.ini", "setup.cfg"])
+def test_the_filter_never_drops_a_file_that_forces_a_full_run(graph, changed):
+    # Not in the workflow's filter, but they configure every test.
+    sel = st.select(
+        graph,
+        ["README.md", changed],
+        FULL_MAP,
+        trigger_paths=["src/**", "tests/**"],
+    )
+    assert sel.triggered and sel.full, sel.reason
+
+
+def test_select_writes_whether_the_change_triggered_the_workflow(
+    graph, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(st, "build_graph", lambda: graph)
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    wf = tmp_path / "wf.yml"
+    wf.write_text("on:\n  pull_request:\n    paths: ['src/**']\n", encoding="utf-8")
+    base = ["select", "--trigger-paths-from", str(wf), "--github-output", "linux"]
+    st.main(base + ["--changed", "README.md"])
+    st.main(base + ["--changed", "src/gaia/core/base.py"])
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert lines[:3] == ["linux_full=false", "linux_count=0", "linux_triggered=false"]
+    assert lines[5] == "linux_triggered=true"

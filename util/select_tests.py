@@ -41,13 +41,22 @@ everything for nearly any change.
 - A test the map never ran (added since the nightly build) follows imports
   inside functions too.
 
-This is a speed-up for pull requests, not the coverage of record: test_unit.yml
-runs the full suite on every push to main and nightly on all three operating
+**The workflow's own paths filter** (``--trigger-paths-from``) drops changed
+files that would not trigger the workflow on a pull request. A merge-queue group
+has no paths filter, so without this a docs-only change would run everything,
+and a group batching a docs PR with a code PR would too. Files that force the
+full suite are never dropped.
+
+This is a speed-up for pull requests and the merge queue, not the coverage of
+record: test_unit.yml runs the full suite on Linux on every push to main, on
+every dispatch (the release gate's run) and nightly on all three operating
 systems, and the nightly run rebuilds the map.
 
 Usage::
 
     python util/select_tests.py select --base origin/main --map test_map.json --out sel.txt
+    python util/select_tests.py select --base origin/main --explain \
+        --trigger-paths-from .github/workflows/test_unit.yml
     python util/select_tests.py select --changed src/gaia/security.py --explain
     python util/select_tests.py build-map --coverage .coverage --out test_map.json
 """
@@ -94,6 +103,8 @@ FULL_RUN_FILES = {
     ".github/workflows/test_unit.yml",
 }
 FULL_RUN_BASENAMES = {"conftest.py"}
+# Filter syntax beyond `*` and `**`, refused rather than misread.
+_UNSUPPORTED_GLOB_RE = re.compile(r"[!?+\[\]]")
 
 # Windows and macOS run only the selected tests that touch the operating system.
 PLATFORM_RE = re.compile(
@@ -154,6 +165,8 @@ class Selection:
     reason: str
     tests: List[str]
     total: int
+    # False: no changed file is in the workflow's paths filter, so nothing runs.
+    triggered: bool = True
 
 
 def _reverse(edges: Dict[str, Set[str]]) -> Dict[str, Set[str]]:
@@ -726,7 +739,7 @@ def full_run_reason(
     if stale:
         return "the coverage map is stale"
     for path in sorted(changed):
-        if path in FULL_RUN_FILES or PurePosixPath(path).name in FULL_RUN_BASENAMES:
+        if forces_full_run(path):
             return f"{path} changed"
         # A test may still name the old path or module; nothing on disk does.
         if not (repo / path).exists():
@@ -740,6 +753,60 @@ def full_run_reason(
         if path not in coverage:
             return f"{path} has no entry in the coverage map"
     return None
+
+
+def forces_full_run(path: str) -> bool:
+    return path in FULL_RUN_FILES or PurePosixPath(path).name in FULL_RUN_BASENAMES
+
+
+def workflow_trigger_paths(workflow: Path) -> List[str]:
+    """The ``on.pull_request.paths`` filter of a workflow file."""
+    import yaml
+
+    data = yaml.safe_load(workflow.read_text(encoding="utf-8")) or {}
+    # YAML 1.1 reads a bare `on:` key as True.
+    on = data.get("on", data.get(True))
+    pull_request = on.get("pull_request") if isinstance(on, dict) else None
+    paths = pull_request.get("paths") if isinstance(pull_request, dict) else None
+    if not paths:
+        raise SystemExit(
+            f"select_tests: {workflow} has no on.pull_request.paths filter to "
+            "match changes against. Drop --trigger-paths-from, or add the filter."
+        )
+    return [str(p) for p in paths]
+
+
+def path_filter(patterns: Iterable[str]) -> "re.Pattern[str]":
+    """One regex for a list of GitHub Actions ``paths`` patterns."""
+    parts = []
+    for pattern in patterns:
+        if _UNSUPPORTED_GLOB_RE.search(pattern):
+            raise SystemExit(
+                f"select_tests: paths pattern {pattern!r} uses filter syntax this "
+                "script does not read (only `*` and `**`). Extend path_filter() "
+                "before relying on it."
+            )
+        out, i = [], 0
+        while i < len(pattern):
+            if pattern.startswith("**", i):
+                out.append(".*")
+                i += 2
+            elif pattern[i] == "*":
+                out.append("[^/]*")
+                i += 1
+            else:
+                out.append(re.escape(pattern[i]))
+                i += 1
+        parts.append("".join(out))
+    if not parts:
+        raise SystemExit("select_tests: an empty paths filter matches nothing.")
+    return re.compile(r"(?:%s)\Z" % "|".join(parts))
+
+
+def triggering_changes(changed: Iterable[str], patterns: Iterable[str]) -> List[str]:
+    """The changed files the paths filter matches, plus any that force a full run."""
+    rx = path_filter(patterns)
+    return [p for p in changed if rx.match(p) or forces_full_run(p)]
 
 
 def is_platform_sensitive(graph: Graph, test: str) -> bool:
@@ -759,9 +826,20 @@ def select(
     test_root: str = DEFAULT_TEST_ROOT,
     platform_only: bool = False,
     stale: bool = False,
+    trigger_paths: Optional[List[str]] = None,
 ) -> Selection:
     changed = sorted(set(changed))
     all_tests = sorted(p for p in graph.files if is_test_file(p, test_root))
+    if trigger_paths is not None:
+        changed = triggering_changes(changed, trigger_paths)
+        if not changed:
+            return Selection(
+                full=False,
+                reason="no changed file is in the workflow's paths filter",
+                tests=[],
+                total=len(all_tests),
+                triggered=False,
+            )
     reason = full_run_reason(changed, graph, graph.repo, coverage, stale, test_root)
     tests = all_tests
     if reason is None:
@@ -811,8 +889,19 @@ def _cmd_select(args: argparse.Namespace) -> int:
                 "running the full suite.",
                 file=sys.stderr,
             )
+    trigger_paths = None
+    if args.trigger_paths_from:
+        trigger_paths = workflow_trigger_paths(Path(args.trigger_paths_from))
     graph = build_graph()
-    sel = select(graph, changed, coverage, args.test_root, args.platform_only, stale)
+    sel = select(
+        graph,
+        changed,
+        coverage,
+        args.test_root,
+        args.platform_only,
+        stale,
+        trigger_paths,
+    )
     kind = "full suite" if sel.full else "selected"
     summary = f"{kind}: {len(sel.tests)} of {sel.total} test files ({sel.reason})"
     print(f"select_tests: {summary}", file=sys.stderr)
@@ -828,6 +917,7 @@ def _cmd_select(args: argparse.Namespace) -> int:
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
             fh.write(f"{args.github_output}_full={str(sel.full).lower()}\n")
             fh.write(f"{args.github_output}_count={len(sel.tests)}\n")
+            fh.write(f"{args.github_output}_triggered={str(sel.triggered).lower()}\n")
     return 0
 
 
@@ -862,12 +952,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="keep only tests that touch the operating system",
     )
+    sel.add_argument(
+        "--trigger-paths-from",
+        metavar="WORKFLOW",
+        help="drop changed files outside this workflow's pull_request paths filter",
+    )
     sel.add_argument("--out", help="write one test path per line here")
     sel.add_argument("--explain", action="store_true", help="print the selection")
     sel.add_argument(
         "--github-output",
         metavar="PREFIX",
-        help="write PREFIX_full and PREFIX_count to $GITHUB_OUTPUT",
+        help="write PREFIX_full, PREFIX_count and PREFIX_triggered to $GITHUB_OUTPUT",
     )
     sel.set_defaults(func=_cmd_select)
 

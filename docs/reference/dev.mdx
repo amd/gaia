@@ -298,9 +298,12 @@ installs the package. That lane must name the file and run the check too.
 </Note>
 
 <Note>
-A pull request can run part of the unit suite, but only when every file it
-changes is a unit test or modified Python code under `src/gaia` or a hub agent
-package that the nightly coverage map records. `util/select_tests.py` then picks
+A pull request, and its group in the merge queue, can run part of the unit
+suite, but only when every file it changes is a unit test or modified Python
+code under `src/gaia` or a hub agent package that the nightly coverage map
+records. Files outside the workflow's `paths` filter are ignored, so a queue
+group that changes only docs runs no unit tests, and a group that batches several
+PRs runs what their own PR runs would. `util/select_tests.py` then picks
 the test files that change can reach, from that map plus imports and
 patch-target strings. Any other change runs the full suite: data files, `util/`
 scripts, test helpers and fixtures, `eval/`, configs, workflows, any
@@ -310,8 +313,12 @@ load those by path, and neither imports nor coverage can follow what such a
 script reads. Of the last 600 merges to main, about one in five (21%) would have
 had a narrowed run; the rest run everything. Linux runs the selection; Windows
 and macOS run the part of it that touches the OS (processes, paths, locks,
-permissions). Every push to main runs the full suite on Linux, and the nightly
-run covers all three operating systems. The coverage map has one known blind
+permissions). Every push to main runs the full suite on Linux. The nightly run
+is the full suite on all three operating systems at the head of main, and a red
+one files an issue that the next green one closes. A final release needs a
+dispatched or nightly run on its commit, never a selected one. The check to
+require is **Unit Tests Result**, which passes only when every lane passed or was
+meant to be skipped. The coverage map has one known blind
 spot: code behind a cache or a shared fixture is credited only to the first test
 that ran it, so a test that only reaches it second can be left out until the
 nightly run.
