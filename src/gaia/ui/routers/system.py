@@ -1141,6 +1141,8 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
         dynamic_tools_locked,
     )
     model_status = await _check_model_status(custom_model) if custom_model else None
+    from gaia.llm.local_only import effective_policy
+
     return SettingsResponse(
         custom_model=custom_model or None,
         model_status=model_status,
@@ -1148,6 +1150,7 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
         agent_mode=agent_mode,
         dynamic_tools=dynamic_tools,
         dynamic_tools_locked=dynamic_tools_locked,
+        network_policy=effective_policy().value,
     )
 
 
@@ -1227,12 +1230,38 @@ async def update_settings(
         db.set_setting("dynamic_tools", "true" if request.dynamic_tools else "false")
         logger.info("Dynamic tools setting persisted: %s", request.dynamic_tools)
 
+    policy_warnings: List[str] = []
+    if (
+        "network_policy" in request.model_fields_set
+        and request.network_policy is not None
+    ):
+        from gaia.llm import local_only
+
+        try:
+            result = local_only.apply_policy(request.network_policy)
+        except (ValueError, OSError) as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        policy_warnings = result["warnings"]
+        if result["policy"] is local_only.NetworkPolicy.LOCAL_AI_ONLY:
+            # Preserve a local custom model; only a cloud selection would keep
+            # the UI pointing at a model the shared cleanup has removed.
+            from gaia.llm.lemonade_client import cloud_model_provider
+
+            custom = (db.get_setting("custom_model") or "").strip()
+            if custom and (
+                cloud_model_provider(custom) or custom.lower().startswith("claude")
+            ):
+                db.set_setting("custom_model", None)
+        logger.info("Network policy set: %s", result["policy"].value)
+
     custom_model = db.get_setting("custom_model")
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
     dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting(db)
     model_status = await _check_model_status(custom_model) if custom_model else None
+    from gaia.llm.local_only import effective_policy
+
     return SettingsResponse(
         custom_model=custom_model or None,
         model_status=model_status,
@@ -1240,6 +1269,8 @@ async def update_settings(
         agent_mode=agent_mode,
         dynamic_tools=dynamic_tools,
         dynamic_tools_locked=dynamic_tools_locked,
+        network_policy=effective_policy().value,
+        policy_warnings=policy_warnings,
     )
 
 

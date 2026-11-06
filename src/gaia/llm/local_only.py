@@ -233,6 +233,45 @@ def set_policy(value: str) -> NetworkPolicy:
     return policy
 
 
+def apply_policy(value: str) -> Dict[str, Any]:
+    """Write the network policy and apply its Local only cleanup everywhere.
+
+    The CLI and Agent UI both use this path so enabling Local only cannot leave
+    a saved cloud model or a cloud key that an inference path may reuse. Cleanup
+    warnings are returned for the caller to display; they never undo the policy
+    write or get silently swallowed.
+    """
+    from gaia.config import GaiaConfigError
+
+    stored = set_policy(value)
+    result: Dict[str, Any] = {
+        "policy": stored,
+        "cleared": [],
+        "dropped": [],
+        "users_url": None,
+        "warnings": [],
+    }
+    if stored is not NetworkPolicy.LOCAL_AI_ONLY:
+        return result
+
+    try:
+        result["cleared"] = clear_saved_cloud_models()
+    except GaiaConfigError as e:
+        result["warnings"].append(f"Saved models were not checked: {e}")
+
+    from gaia.llm.cloud_keys import CloudKeyError, drop_runtime_keys, users_lemonade_url
+
+    try:
+        result["users_url"] = users_lemonade_url()
+        if not result["users_url"]:
+            result["dropped"] = drop_runtime_keys()
+    except CloudKeyError as e:
+        result["warnings"].append(
+            f"Lemonade still holds any cloud key GAIA gave it ({e}); restart Lemonade to drop it."
+        )
+    return result
+
+
 #: config.json keys that can hold a model id GAIA runs or restores.
 SAVED_MODEL_KEYS = ("default_model", "last_model")
 

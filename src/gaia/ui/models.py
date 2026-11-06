@@ -281,6 +281,10 @@ class SettingsResponse(BaseModel):
     # True when GAIA_DYNAMIC_TOOLS is set ⇒ the env wins ⇒ the UI toggle
     # reflects the effective value and disables (no silent no-op).
     dynamic_tools_locked: bool = False
+    # The shared policy file, not the Agent UI database. Local only clears
+    # saved cloud selections and removes runtime cloud keys when it is enabled.
+    network_policy: Literal["cloud_allowed", "local_ai_only"] = "cloud_allowed"
+    policy_warnings: List[str] = Field(default_factory=list)
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -319,6 +323,14 @@ class SettingsUpdateRequest(BaseModel):
             "each turn's tool prompt to a matched subset to cut first-turn TTFT. "
             "Default off. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. "
             "Omit the field to leave the persisted value unchanged."
+        ),
+    )
+    network_policy: Optional[Literal["cloud_allowed", "local_ai_only"]] = Field(
+        None,
+        description=(
+            "Whether GAIA may use cloud AI models. Setting local_ai_only blocks cloud "
+            "models, clears saved cloud model choices, and removes cloud keys from "
+            "GAIA's running Lemonade server. Omit to leave the policy unchanged."
         ),
     )
 

@@ -18,8 +18,40 @@ export function PrivacySettings() {
     const dataDir = useChatStore((s) => s.systemStatus?.data_dir);
     const [confirm, setConfirm] = useState(false);
     const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+    const [localOnly, setLocalOnly] = useState<boolean | null>(null);
+    const [savingPolicy, setSavingPolicy] = useState(false);
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
     useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+    useEffect(() => {
+        let active = true;
+        void api.getSettings()
+            .then((settings) => { if (active) setLocalOnly(settings.network_policy === 'local_ai_only'); })
+            .catch((err) => { if (active) setResult({ ok: false, text: err instanceof Error ? err.message : String(err) }); });
+        return () => { active = false; };
+    }, []);
+
+    const toggleLocalOnly = useCallback(async () => {
+        if (localOnly === null || savingPolicy) return;
+        const previous = localOnly;
+        const next = !previous;
+        setLocalOnly(next);
+        setSavingPolicy(true);
+        setResult(null);
+        try {
+            const settings = await api.updateSettings({ network_policy: next ? 'local_ai_only' : 'cloud_allowed' });
+            setLocalOnly(settings.network_policy === 'local_ai_only');
+            const warnings = settings.policy_warnings ?? [];
+            setResult({
+                ok: warnings.length === 0,
+                text: warnings.length ? warnings.join(' ') : t(next ? 'settings.privacy.localOnlyOn' : 'settings.privacy.localOnlyOff'),
+            });
+        } catch (err) {
+            setLocalOnly(previous);
+            setResult({ ok: false, text: err instanceof Error ? err.message : String(err) });
+        } finally {
+            setSavingPolicy(false);
+        }
+    }, [localOnly, savingPolicy, t]);
 
     const clearAll = useCallback(async () => {
         if (!confirm) {
@@ -45,6 +77,25 @@ export function PrivacySettings() {
     return (
         <div className="settings-pane">
             <h2 className="settings-pane-title">{t('settings.section.privacy')}</h2>
+            <section className="settings-card" aria-label={t('settings.privacy.localOnlyTitle')}>
+                <div className="settings-row settings-row-between">
+                    <div>
+                        <strong>{t('settings.privacy.localOnlyTitle')}</strong>
+                        <p className="settings-hint">{t('settings.privacy.localOnlyHint')}</p>
+                    </div>
+                    <button
+                        type="button"
+                        role="switch"
+                        aria-checked={localOnly === true}
+                        aria-label={t('settings.privacy.localOnlyTitle')}
+                        className={localOnly ? 'is-active' : ''}
+                        onClick={() => void toggleLocalOnly()}
+                        disabled={localOnly === null || savingPolicy}
+                    >
+                        {localOnly ? t('settings.privacy.localOnlyOnLabel') : t('settings.privacy.localOnlyOffLabel')}
+                    </button>
+                </div>
+            </section>
             <section className="settings-card" aria-label={t('settings.privacy.whereTitle')}>
                 <p className="settings-note">{t('settings.privacy.stays')}</p>
                 <p className={place?.remote ? 'settings-note' : 'settings-hint'}>

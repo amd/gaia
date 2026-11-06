@@ -3980,6 +3980,22 @@
             "type": "null"
           }
         ]
+      },
+      "network_policy": {
+        "default": "cloud_allowed",
+        "enum": [
+          "cloud_allowed",
+          "local_ai_only"
+        ],
+        "title": "Network Policy",
+        "type": "string"
+      },
+      "policy_warnings": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Policy Warnings",
+        "type": "array"
       }
     },
     "title": "SettingsResponse",
@@ -4036,6 +4052,22 @@
         ],
         "description": "Beta: enable the semantic dynamic tool loader (#1798), which trims each turn's tool prompt to a matched subset to cut first-turn TTFT. Default off. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.",
         "title": "Dynamic Tools"
+      },
+      "network_policy": {
+        "anyOf": [
+          {
+            "enum": [
+              "cloud_allowed",
+              "local_ai_only"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Whether GAIA may use cloud AI models. Setting local_ai_only blocks cloud models, clears saved cloud model choices, and removes cloud keys from GAIA's running Lemonade server. Omit to leave the policy unchanged.",
+        "title": "Network Policy"
       }
     },
     "title": "SettingsUpdateRequest",

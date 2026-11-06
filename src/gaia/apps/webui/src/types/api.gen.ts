@@ -1142,6 +1142,8 @@ export interface SettingsResponse {
   dynamic_tools?: boolean;
   dynamic_tools_locked?: boolean;
   model_status?: ModelStatus | null;
+  network_policy?: "cloud_allowed" | "local_ai_only";
+  policy_warnings?: string[];
 }
 /**
  * Request to update user settings.
@@ -1163,6 +1165,10 @@ export interface SettingsUpdateRequest {
    * Beta: enable the semantic dynamic tool loader (#1798), which trims each turn's tool prompt to a matched subset to cut first-turn TTFT. Default off. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.
    */
   dynamic_tools?: boolean | null;
+  /**
+   * Whether GAIA may use cloud AI models. Setting local_ai_only blocks cloud models, clears saved cloud model choices, and removes cloud keys from GAIA's running Lemonade server. Omit to leave the policy unchanged.
+   */
+  network_policy?: ("cloud_allowed" | "local_ai_only") | null;
 }
 /**
  * ``skip_chat_model`` when the chat runs on a cloud provider;

@@ -1124,6 +1124,36 @@ class TestDynamicToolsSetting:
         assert unlocked["dynamic_tools_locked"] is False
 
 
+class TestNetworkPolicySetting:
+    """The Agent UI writes the same Local only policy and cleanup as the CLI."""
+
+    def test_get_reports_the_default_policy(self, client, monkeypatch, tmp_path):
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        assert client.get("/api/settings").json()["network_policy"] == "cloud_allowed"
+
+    def test_local_only_clears_a_cloud_ui_choice_but_keeps_a_local_one(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        db.set_setting("custom_model", "fireworks.glm-5p3-flash")
+
+        turned_on = client.put(
+            "/api/settings", json={"network_policy": "local_ai_only"}
+        )
+
+        assert turned_on.status_code == 200
+        assert turned_on.json()["network_policy"] == "local_ai_only"
+        assert db.get_setting("custom_model") is None
+        db.set_setting("custom_model", "Qwen3.6-35B-A3B-GGUF")
+        assert (
+            client.put(
+                "/api/settings", json={"network_policy": "local_ai_only"}
+            ).status_code
+            == 200
+        )
+        assert db.get_setting("custom_model") == "Qwen3.6-35B-A3B-GGUF"
+
+
 class TestAgentModeSetting:
     """/api/settings agent_mode honesty (#2005): 'autonomous' is unshipped —
     reject it on write, default to 'goal_driven', normalize legacy values."""

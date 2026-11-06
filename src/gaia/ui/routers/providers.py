@@ -368,6 +368,12 @@ def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, 
     view.update(
         {
             "registered": entry is not None,
+            "blocked": cloud_blocked(),
+            "blocked_reason": (
+                "Local only is on; turn it off in Settings to use cloud models."
+                if cloud_blocked()
+                else None
+            ),
             "key_source": key_source,
             "key_hint": _key_hint(provider, key_source, lemond_env),
             "key_state": key_state,
@@ -853,6 +859,10 @@ def _needs_key(
     provider: str, entry: Optional[Dict[str, Any]], key_source: Optional[str]
 ) -> bool:
     """Whether GAIA should hand Lemonade a key it has, registering Fireworks first."""
+    # Listing providers must remain read-only under Local only: in particular,
+    # it must not replay a saved key merely because Lemonade lost its entry.
+    if cloud_blocked():
+        return False
     if key_source not in ("stored", "environment"):
         return False
     if entry is None:
@@ -1168,10 +1178,17 @@ def provider_models(
     Local models also carry their state, device, fit, size and measured speed.
     """
     _known(provider)
+    if provider != LOCAL and cloud_blocked():
+        return {
+            "provider": provider,
+            "models": [],
+            "blocked": True,
+            "blocked_reason": "Local only is on; turn it off in Settings to use cloud models.",
+        }
     try:
         models = _list_models(provider)
         if provider != LOCAL:
-            return {"provider": provider, "models": models}
+            return {"provider": provider, "models": models, "blocked": False}
         return {"provider": provider, **_local_report(models, db)}
     except ProviderError as e:
         _raise(e)
