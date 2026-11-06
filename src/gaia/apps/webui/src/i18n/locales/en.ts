@@ -2176,6 +2176,7 @@ export const enMessages = {
     'mem.cat.fact': 'Fact',
     'mem.cat.preference': 'Preference',
     'mem.cat.error': 'Error',
+    'mem.cat.errorLearned': 'Learned by GAIA',
     'mem.cat.skill': 'Skill',
     'mem.cat.note': 'Note',
     'mem.cat.reminder': 'Reminder',
