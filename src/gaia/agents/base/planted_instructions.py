@@ -256,8 +256,10 @@ _ZERO_WIDTH = re.compile(
     r"[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]"
 )
 _PLAIN_DESTRUCTIVE = re.compile(
-    r"\b(?:delete|remove|erase|wipe|destroy|overwrite|send|share|upload|publish)\b"
-    r"[^.\n]{0,80}?\b(?:backup(?:s)?|folder|directory|file|key|token|password|secret|credential)s?\b",
+    r"\b(?:delete|remove|erase|wipe|destroy|overwrite)\b"
+    r"[^.\n]{0,80}?\b(?:backup(?:s)?|folder|directory|file|key|token|password|secret|credential)s?\b"
+    r"|\b(?:send|share|upload|publish)\b"
+    r"[^.\n]{0,80}?\b(?:key|token|password|secret|credential)s?\b",
     re.IGNORECASE,
 )
 
@@ -297,7 +299,7 @@ def find_planted_instructions(text: str) -> List[Dict[str, str]]:
     seen: set = set()
 
     def _add(reason: str, start: int, end: int) -> None:
-        excerpt = _line_excerpt(text, start, end)
+        excerpt = _line_excerpt(scan_text, start, end)
         if excerpt in seen or len(findings) >= _MAX_FINDINGS:
             return
         seen.add(excerpt)
@@ -306,7 +308,7 @@ def find_planted_instructions(text: str) -> List[Dict[str, str]]:
     for pattern, reason in _CHANNELS:
         for match in pattern.finditer(scan_text):
             # A quoted phrase is an example being discussed, not an order.
-            if text[max(0, match.start() - 1) : match.start()] in _QUOTES:
+            if scan_text[max(0, match.start() - 1) : match.start()] in _QUOTES:
                 continue
             lead = scan_text[
                 max(0, match.start() - _DESCRIBED_LEAD_CHARS) : match.start()
@@ -336,7 +338,7 @@ def find_planted_instructions(text: str) -> List[Dict[str, str]]:
         # A harmless call inside a code fence is a documentation example.
         elif (
             _MARKUP_ACTION.search(window)
-            and text.count("```", 0, match.start()) % 2 == 0
+            and scan_text.count("```", 0, match.start()) % 2 == 0
         ):
             _add(
                 "the text contains tool-call markup that runs a command",
