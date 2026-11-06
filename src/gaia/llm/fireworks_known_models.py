@@ -8,10 +8,12 @@ When that list fails, chat still works but every Fireworks model is unknown. So
 GAIA registers the models it already prices in the embedded server's
 ``user_models.json`` and restarts it.
 
-The key goes in through ``LEMONADE_FIREWORKS_API_KEY`` at start, because a key
-posted to ``cloud/auth`` makes Lemonade re-read the list and drop these entries.
-The entries are the only state: each start asks Fireworks again and removes them
-once the list answers.
+At start, GAIA first replays a key saved through Settings; a GAIA process
+environment key is only the fallback for a fresh setup. The selected key goes
+through ``LEMONADE_FIREWORKS_API_KEY`` because a key posted to ``cloud/auth``
+makes Lemonade re-read the list and drop these entries. The entries are the
+only state: each start asks Fireworks again and removes them once the list
+answers.
 """
 
 from __future__ import annotations
@@ -119,14 +121,17 @@ def start_env(config_dir: Path) -> Dict[str, str]:
 
     if cloud_blocked():
         return {}
-    key = next(
+    # A key explicitly saved through Settings must survive a Lemonade restart
+    # even when GAIA also has a process environment key.  The environment is
+    # only the fallback for a fresh setup with no saved key.
+    key = recall_key("fireworks") or next(
         (
             value.strip()
             for name in API_KEY_ENV_VARS
             if (value := os.environ.get(name)) and value.strip()
         ),
         None,
-    ) or recall_key("fireworks")
+    )
     check = check_model_list(key) if key else None
     if check is None or check.state is not ModelListState.FAILING:
         log.info("Fireworks' model list no longer needs the known models.")

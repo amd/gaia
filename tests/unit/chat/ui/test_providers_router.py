@@ -452,15 +452,15 @@ def test_stored_key_with_no_provider_registered_is_connected_at_startup(
     assert KEY not in resp.text
 
 
-def test_a_process_environment_key_wins_over_a_stored_key(
+def test_a_saved_key_wins_over_a_process_environment_key(
     client, lemonade, keys, replay, monkeypatch
 ):
     monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
     keys["stored"]["fireworks"] = KEY
     fw = client.get("/api/providers").json()["providers"][1]
-    assert replay == [ENV_KEY]
-    assert fw["key_source"] == "environment"
-    assert fw["key_from_gaia_env"] is True
+    assert replay == [KEY]
+    assert fw["key_source"] == "lemonade"
+    assert fw["key_from_gaia_env"] is False
 
 
 def test_a_stored_key_is_used_when_no_process_environment_key_exists(
@@ -976,7 +976,7 @@ def test_a_stored_key_is_checked_when_no_models_come_back(
     assert model_list["restarts"] == [1]
 
 
-def test_reconnect_outage_replays_an_environment_key_without_saving_it(
+def test_reconnect_outage_replays_a_saved_key_and_keeps_it(
     client, lemonade, keys, model_list, monkeypatch
 ):
     from gaia.llm import fireworks_known_models as known
@@ -995,9 +995,9 @@ def test_reconnect_outage_replays_an_environment_key_without_saving_it(
     resp = client.post("/api/providers/fireworks/connect", json={})
 
     assert resp.status_code == 200, resp.text
-    assert model_list["keys_checked"] == [ENV_KEY]
+    assert model_list["keys_checked"] == [KEY]
     assert model_list["restarts"] == [1]
-    assert keys["remembered"] == []
+    assert keys["remembered"] == [("fireworks", KEY)]
     assert keys["stored"]["fireworks"] == KEY
     assert ENV_KEY not in resp.text
 

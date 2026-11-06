@@ -124,11 +124,21 @@ def test_a_start_during_the_outage_carries_the_key(active, monkeypatch):
     assert known.is_active(active)
 
 
-def test_a_process_environment_key_wins_over_a_saved_key(active, monkeypatch):
+def test_a_saved_key_wins_over_a_process_environment_key(active, monkeypatch):
     _list_answers(monkeypatch, ModelListState.FAILING)
     env_key = "fw_environment_key_123456"
     monkeypatch.setenv("FIREWORKS_API_KEY", env_key)
     monkeypatch.setattr(cloud_keys, "recall_key", lambda provider: KEY)
+    assert known.start_env(active) == {"LEMONADE_FIREWORKS_API_KEY": KEY}
+
+
+def test_a_process_environment_key_is_the_fallback_without_a_saved_key(
+    active, monkeypatch
+):
+    _list_answers(monkeypatch, ModelListState.FAILING)
+    env_key = "fw_environment_key_123456"
+    monkeypatch.setenv("FIREWORKS_API_KEY", env_key)
+    monkeypatch.setattr(cloud_keys, "recall_key", lambda provider: None)
     assert known.start_env(active) == {"LEMONADE_FIREWORKS_API_KEY": env_key}
 
 

@@ -273,12 +273,19 @@ _HANDED_ENV_KEYS: Dict[str, str] = {}
 
 
 def _usable_key(provider: str) -> Optional[str]:
-    """The key to hand Lemonade: this process's environment wins over a saved key."""
+    """Return a saved key first, otherwise use GAIA's environment key.
+
+    A key entered in Settings must continue to win after Lemonade restarts;
+    the environment key is only the fallback when no saved key exists.
+    """
+    saved = _bounded_recall(provider)
+    if saved:
+        return saved
     env = _env_key(provider)
     if env:
         _HANDED_ENV_KEYS[provider] = env[1]
         return env[1]
-    return _bounded_recall(provider)
+    return None
 
 
 def _known_models_active(provider: str) -> bool:
@@ -301,11 +308,13 @@ def _known_models_active(provider: str) -> bool:
 def _key_source(
     entry: Optional[Dict[str, Any]], provider: str, known_models: bool = False
 ) -> Optional[str]:
-    # The start environment carries the current process key when present;
-    # otherwise known-model mode replays the saved key.
+    # Known-model mode uses the same precedence as normal reconnect: a saved
+    # key wins after a restart, and GAIA's environment key is only a fallback.
     env = _env_key(provider)
     if known_models:
-        return "environment" if env else "stored"
+        return (
+            "stored" if _bounded_recall(provider) else ("environment" if env else None)
+        )
     if entry and entry.get("env_var_set"):
         return "environment"
     if entry and entry.get("runtime_key_set"):
@@ -1025,11 +1034,12 @@ def connect_provider(
                 except CredentialStoreWaiting as e:
                     raise ProviderError(str(e), 409) from e
                 if stored:
-                    _use_known_models(
-                        provider,
-                        stored,
-                        persist_key=_env_key(provider) is None,
-                    )
+                    env = _env_key(provider)
+                    # Do not copy a GAIA environment key into the credential
+                    # store, but keep a user-saved key durable when it is the
+                    # one being replayed.
+                    persist_key = not (env and stored == env[1])
+                    _use_known_models(provider, stored, persist_key=persist_key)
                 del stored
         del key
         entry = _cloud_entry(provider)
@@ -1072,10 +1082,17 @@ def _use_known_models(provider: str, key: str, *, persist_key: bool = True) -> N
             remember_key(provider, key)
         except CloudKeyError as e:
             raise ProviderError(f"{outage} GAIA could not keep it: {e}", 503) from e
-    if not gaia_runs_lemonade(_base_url()):
-        raise ProviderError(
-            f"{outage} GAIA kept it. Connect again when {name} recovers.", 503
+    kept = (
+        "GAIA kept it."
+        if persist_key
+        else (
+            f"It remains available from {_env_key(provider)[0]}."
+            if _env_key(provider)
+            else "It was not copied into GAIA's credential store."
         )
+    )
+    if not gaia_runs_lemonade(_base_url()):
+        raise ProviderError(f"{outage} {kept} Connect again when {name} recovers.", 503)
     try:
         use_known_models(EmbeddedLemonade())
         ensure_authenticated(provider, recall=lambda: key)
@@ -1086,8 +1103,8 @@ def _use_known_models(provider: str, key: str, *, persist_key: bool = True) -> N
         requests.RequestException,
     ) as e:
         raise ProviderError(
-            f"{outage} GAIA kept it, but could not switch to the models it "
-            f"already knows: {e}",
+            f"{outage} {kept[:-1] if kept.endswith('.') else kept}, but could not "
+            f"switch to the models it already knows: {e}",
             503,
         ) from e
 
