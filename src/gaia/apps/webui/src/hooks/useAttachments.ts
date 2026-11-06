@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useT } from '../i18n/useT';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { isMediaFile } from '../utils/mediaFiles';
 import type { Attachment } from '../types';
 
 /** Files attached to the message being composed, uploaded as soon as they are added. */
@@ -27,27 +29,39 @@ function screenshotName(): string {
 }
 
 export function useAttachments(): UseAttachments {
+    const t = useT();
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const mounted = useRef(true);
+    const uploads = useRef(new Map<string, AbortController>());
     useEffect(() => {
         mounted.current = true;
         return () => { mounted.current = false; };
     }, []);
 
     const upload = useCallback(async (attachment: Attachment) => {
+        const controller = new AbortController();
+        uploads.current.set(attachment.id, controller);
         try {
-            const result = await api.uploadFile(attachment.file);
+            const result = attachment.isMedia
+                ? await api.uploadMedia(attachment.file, (progress) => {
+                    if (!mounted.current) return;
+                    setAttachments((prev) => prev.map((a) => (a.id === attachment.id ? { ...a, progress } : a)));
+                }, controller.signal)
+                : await api.uploadFile(attachment.file);
             if (!mounted.current) return;
             setAttachments((prev) => prev.map((a) =>
                 a.id === attachment.id ? { ...a, uploading: false, uploaded: true, serverUrl: result.url } : a,
             ));
         } catch (err) {
+            if (controller.signal.aborted) return;
             log.chat.error(`Upload failed: ${attachment.name}`, err);
             if (!mounted.current) return;
             const message = err instanceof Error ? err.message : 'Upload failed';
             setAttachments((prev) => prev.map((a) =>
                 a.id === attachment.id ? { ...a, uploading: false, error: message } : a,
             ));
+        } finally {
+            uploads.current.delete(attachment.id);
         }
     }, []);
 
@@ -62,6 +76,7 @@ export function useAttachments(): UseAttachments {
                 uploading: true,
                 uploaded: false,
                 isImage,
+                isMedia: isMediaFile(file.name),
             };
             setAttachments((prev) => [...prev, attachment]);
             void upload(attachment);
@@ -81,6 +96,7 @@ export function useAttachments(): UseAttachments {
     }, [addFiles]);
 
     const remove = useCallback((id: string) => {
+        uploads.current.get(id)?.abort();
         setAttachments((prev) => {
             const gone = prev.find((a) => a.id === id);
             if (gone?.url) URL.revokeObjectURL(gone.url);
@@ -98,11 +114,17 @@ export function useAttachments(): UseAttachments {
     const compose = useCallback((text: string) => {
         const links = attachments
             .filter((a) => a.uploaded && a.serverUrl)
-            .map((a) => (a.isImage ? `![${a.name}](${a.serverUrl})` : `[${a.name}](${a.serverUrl})`))
+            .map((a) => {
+                // A bracket in a file name ends the link early, and the agent never sees the file.
+                const label = a.name.replace(/[[\]]/g, ' ').trim();
+                return a.isImage ? `![${label}](${a.serverUrl})` : `[${label}](${a.serverUrl})`;
+            })
             .join('\n');
         if (!links) return text;
-        return text ? `${text}\n\n${links}` : links;
-    }, [attachments]);
+        // A recording sent with no words still has an obvious request.
+        const ask = text || (attachments.some((a) => a.uploaded && a.isMedia) ? t('composer.mediaPrompt') : '');
+        return ask ? `${ask}\n\n${links}` : links;
+    }, [attachments, t]);
 
     return {
         attachments,
