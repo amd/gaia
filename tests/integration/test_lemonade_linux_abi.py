@@ -141,12 +141,18 @@ def _download(name: str, version: str, sha256: str) -> bytes:
 
 
 def _binaries(archive: bytes) -> Dict[str, bytes]:
+    """Every ELF file in the tarball, keyed by its path inside the archive.
+
+    Bundled shared libraries are loaded too, so they are held to the same limits.
+    """
     found = {}
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
         for member in tar.getmembers():
-            name = member.name.rsplit("/", 1)[-1]
-            if member.isfile() and name in BINARIES:
-                found[name] = tar.extractfile(member).read()
+            if not member.isfile():
+                continue
+            data = tar.extractfile(member).read()
+            if data[:4] == b"\x7fELF":
+                found[member.name.split("/", 1)[-1]] = data
     return found
 
 
@@ -159,7 +165,7 @@ def test_pinned_linux_lemonade_runs_on_ubuntu_24_04(template):
     name = template.format(version=LEMONADE_VERSION)
     archive = _download(name, LEMONADE_VERSION, EMBEDDABLE_SHA256[name])
     binaries = _binaries(archive)
-    assert set(binaries) == set(BINARIES), f"{name} holds {sorted(binaries)}"
+    assert set(BINARIES) <= set(binaries), f"{name} holds {sorted(binaries)}"
 
     bad = {
         binary: sorted(too_new(symbol_version_needs(elf)))
@@ -181,3 +187,24 @@ def test_check_catches_the_build_that_broke_linux():
     bad = too_new(symbol_version_needs(elf))
     assert "libm.so.6: GLIBC_2.43" in bad, bad
     assert "libssl.so.3: OPENSSL_3.2.0" in bad, bad
+
+
+def test_check_reads_bundled_libraries_and_skips_non_elf_files():
+    """A too-new shared library in the tarball fails even if both binaries pass."""
+    broken = _binaries(_download(BROKEN_ASSET, BROKEN_RELEASE, BROKEN_SHA256))
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        for path, data in (
+            ("pkg/lib/libbundled.so.1", broken["lemond"]),
+            ("pkg/README.md", b"not an ELF"),
+            ("pkg/fake.so", b"\x7fELX not an ELF either"),
+        ):
+            info = tarfile.TarInfo(path)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+
+    found = _binaries(buffer.getvalue())
+    assert set(found) == {"lib/libbundled.so.1"}, sorted(found)
+    assert "libm.so.6: GLIBC_2.43" in too_new(
+        symbol_version_needs(found["lib/libbundled.so.1"])
+    )
