@@ -116,7 +116,8 @@ describe('context meter', () => {
         });
         render(<ChatView sessionId={SESSION.id} />);
         await act(async () => {});
-        const warning = screen.getByRole('status');
+        // The resource strip has a status of its own; pick the context warning.
+        const warning = screen.getAllByRole('status').find((el) => el.classList.contains('context-warning'))!;
         expect(warning.textContent).toContain('oldest 2 turns');
         expect(warning.textContent).toContain('what is in the Q3 plan?');
         expect(warning.textContent).toContain('list the owners');
