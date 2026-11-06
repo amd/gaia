@@ -22,6 +22,7 @@ from gaia.daemon import broker_client
 from gaia.daemon.errors import LemonadeStartFailedError
 from gaia.llm import lemonade_choice
 from gaia.llm import lemonade_client as lc
+from gaia.llm import lemonade_launcher
 from gaia.llm.lemonade_client import RECONNECTING_MESSAGE, GaiaLemonadeStartError
 from gaia.llm.lemonade_embedded import EmbeddedLemonade
 from gaia.llm.lemonade_manager import LemonadeManager
@@ -107,7 +108,8 @@ def engine(tmp_path, monkeypatch):
     ):
         monkeypatch.delenv(var, raising=False)
     e = Engine(EmbeddedLemonade(), monkeypatch)
-    monkeypatch.setattr(lc, "gaia_runs_lemonade", lambda *_a, **_k: True)
+    for module in (lc, lemonade_launcher):
+        monkeypatch.setattr(module, "gaia_runs_lemonade", lambda *_a, **_k: True)
     monkeypatch.setattr(
         "gaia.llm.lemonade_service.lease_gaia_lemonade", lambda *_a, **_k: None
     )
@@ -160,7 +162,8 @@ def test_a_cloud_turn_after_the_engine_died_starts_it_and_hands_back_the_key(
 
     assert engine.daemon_calls == 1
     assert engine.keys_replayed == [(CLOUD, NEW_PORT)]
-    assert all(f":{NEW_PORT}/" in url for url in engine.health_urls)
+    assert [f":{OLD_PORT}/" in url for url in engine.health_urls] == [True, False]
+    assert f":{NEW_PORT}/" in engine.health_urls[-1]
     assert {"type": "status", "status": "info", "message": RECONNECTING_MESSAGE} in (
         sse.events
     )

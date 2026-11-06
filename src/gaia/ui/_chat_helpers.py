@@ -3450,11 +3450,14 @@ async def _add_indexed_documents_to_library(
 _PREFLIGHT_LOAD_TIMEOUT_S = 120
 
 
-def _restart_stopped_gaia_lemonade(model_id: str, sse_handler) -> None:
+def _restart_stopped_gaia_lemonade(model_id: str, sse_handler) -> bool:
     """Have the daemon start GAIA's own model server when it has stopped.
 
     A server the user runs is never started from here. On success a cloud
     model's provider key is handed to the new server too.
+
+    Returns:
+        True once it is back; False when it is not GAIA's own or not stopped.
 
     Raises:
         GaiaLemonadeStartError: the daemon tried to start it and could not.
@@ -3462,10 +3465,13 @@ def _restart_stopped_gaia_lemonade(model_id: str, sse_handler) -> None:
             not back within the client's reconnect wait.
     """
     from gaia.llm.lemonade_client import LemonadeClient
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
 
+    if not gaia_runs_lemonade():
+        return False
     client = LemonadeClient(verbose=False)
     if not client.gaia_lemonade_stopped():
-        return
+        return False
     logger.warning(
         "Pre-flight for %s: GAIA's Lemonade Server at %s has stopped; asking "
         "the daemon to start it",
@@ -3479,6 +3485,7 @@ def _restart_stopped_gaia_lemonade(model_id: str, sse_handler) -> None:
 
     client.wait_for_gaia_lemonade(model_id, on_status=on_status)
     logger.info("Pre-flight for %s: GAIA's Lemonade Server is back", model_id)
+    return True
 
 
 def _preflight_load(
@@ -3541,11 +3548,12 @@ def _preflight_load(
             _EVAL_PROVIDER_ENV,
         )
         return
-    from gaia.llm.lemonade_client import InsufficientMemoryError
+    from gaia.llm.lemonade_client import (
+        GaiaLemonadeStartError,
+        InsufficientMemoryError,
+        LemonadeServerDownError,
+    )
 
-    # Outside the catch-all below: its error is already worded, and "send the
-    # message again" would only repeat a failed start.
-    _restart_stopped_gaia_lemonade(model_id, sse_handler)
     try:
         import httpx
 
@@ -3563,7 +3571,14 @@ def _preflight_load(
 
         base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
         _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
-        resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
+        try:
+            resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
+        except httpx.ConnectError:
+            if not _restart_stopped_gaia_lemonade(model_id, sse_handler):
+                raise
+            base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
+            _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+            resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
         if resp.status_code != 200:
             raise RuntimeError(f"its /health check returned HTTP {resp.status_code}")
         data = resp.json()
@@ -3723,6 +3738,10 @@ def _preflight_load(
         raise
     except (ModelInUseError, LemonadeModelUnavailableError) as exc:
         logger.error("Pre-flight model load refused: %s", exc)
+        raise
+    except (GaiaLemonadeStartError, LemonadeServerDownError) as exc:
+        # Already worded; "send the message again" would repeat a failed start.
+        logger.error("Pre-flight could not bring GAIA's Lemonade back: %s", exc)
         raise
     except LeaseWaitCancelled:
         logger.info("Pre-flight model load stopped with the turn")
