@@ -2511,51 +2511,9 @@ def test_a_discord_trigger_or_watch_is_never_offered_always():
         assert grant_scope("run_shell_command", {"command": command}) is None
 
 
-# ---------------------------------------------------------------------------
-# git reads skip the prompt without git counting as granted
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "git status",
-        "git log -3 --oneline",
-        "git rev-parse --abbrev-ref HEAD",
-        "git diff HEAD",
-    ],
-)
-def test_a_plain_git_read_needs_no_prompt(command):
-    assert _needs_modal(_Gated(), command) is False
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "git commit -m x",
-        "git push",
-        "git checkout main",
-        "git branch -D x",
-        "git reset --hard",
-        "git config user.email x",
-        "git -c core.pager=x log",
-        "git log --output=x.txt",
-        "git status && git add .",
-        "git log | head",
-    ],
-)
-def test_git_writes_and_compound_lines_still_ask(command):
-    assert _needs_modal(_Gated(), command) is True
-
-
-def test_a_git_read_with_cmd_metacharacters_still_asks_on_windows(monkeypatch):
-    monkeypatch.setattr("gaia.agents.tools.shell_tools._pipe_dialect", lambda: "cmd")
-    assert _needs_modal(_Gated(), "git log -1 --format=%FIREWORKS_API_KEY%") is True
-    assert _needs_modal(_Gated(), "git log -1 --oneline") is False
-
-
-def test_git_is_still_not_a_granted_binary():
-    """The exemption skips a prompt; it does not change how git is run."""
-    from gaia.agents.tools.shell_tools import shell_granted_binaries
-
-    assert "git" not in shell_granted_binaries(_Gated())
+def test_a_git_read_still_asks_without_a_skill():
+    """git loads the folder's own repository settings even for a read, and
+    those can name programs for it to run, so no git call skips the prompt
+    on the strength of looking read-only."""
+    assert _needs_modal(_Gated(), "git status") is True
+    assert _needs_modal(_Gated(), "git log -3 --oneline") is True

@@ -388,9 +388,8 @@ def test_a_confirm_id_from_an_earlier_prompt_cannot_approve_a_new_one(repo):
         earlier.append(event["confirm_id"])
         handler.resolve_tool_confirmation(approved=True, confirm_id=event["confirm_id"])
 
-    # Any call that asks; a plain git read no longer does.
     first, _ = _drive(
-        agent, handler, _shell(f"{python} --version", repo), on_prompt=approve_and_keep
+        agent, handler, _shell("git status", repo), on_prompt=approve_and_keep
     )
     assert first["status"] == "success", first
     delivered = []

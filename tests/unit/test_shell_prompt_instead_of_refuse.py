@@ -430,8 +430,7 @@ def test_a_full_access_chat_runs_a_safe_command_unasked(repo):
     handler = _full_access_chat()
     agent = _agent(handler)
 
-    # A call that reaches the prompt step; a plain git read never does.
-    result, events = _drive(agent, handler, _shell("ls", repo))
+    result, events = _drive(agent, handler, _shell("git status", repo))
 
     assert _prompts(events) == []
     assert result["status"] == "success", result
