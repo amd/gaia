@@ -410,7 +410,7 @@ Facts change. "User's project uses React 18" becomes "User's project uses React 
 
 **Level 1: Automatic dedup (storage layer)**
 
-When `store()` finds >80% word overlap in the same category, it **replaces the content with the newer version** (not the longer one). The newer fact is assumed to be more current. `updated_at` is set; `created_at` is preserved.
+When `store()` finds >80% word overlap in the same category, it **replaces the content with the newer version** (not the longer one). The same words filed as a `fact` and as a `preference` are one memory as well, since the extractor uses the two interchangeably. The newer fact is assumed to be more current. `updated_at` is set; `created_at` is preserved.
 
 ```
 store(category="fact", content="Project uses React 18")  -> creates entry

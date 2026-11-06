@@ -419,6 +419,27 @@ def _forget_text(item: Dict) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", str(item.get("content", "")).lower()))
 
 
+#: "forget X": what the user asked to drop, to the end of its clause. "Don't
+#: forget X" asks the opposite, so it is not one.
+_FORGET_REQUEST = re.compile(
+    r"(?<!don't )(?<!dont )(?<!do not )(?<!never )"
+    r"\b(?:forget|erase|delete|remove)\b"
+    r"(?P<what>[^.;,!?\n]*?)(?=\s+(?:and|but|then)\b|[.;,!?\n]|$)",
+    re.IGNORECASE,
+)
+
+
+def _restates_forget(content: str, user_input: str) -> bool:
+    """Whether *content* only says what *user_input* asked to forget."""
+    stems = content_stems(content)
+    if not stems:
+        return False
+    text = user_input.replace("\u2019", "'")
+    return any(
+        stems <= content_stems(m.group("what")) for m in _FORGET_REQUEST.finditer(text)
+    )
+
+
 def _is_lesson(item: Dict) -> bool:
     """Whether *item* is a lesson this agent wrote, not one the model labelled.
 
@@ -2488,6 +2509,15 @@ class MemoryMixin(ProceduralMemoryMixin):
                         ),
                         "",
                     )
+                if op_type in ("add", "update") and _restates_forget(
+                    str(op.get("content", "")), user_input
+                ):
+                    logger.info(
+                        "[MemoryMixin] not stored: proposed memory is what the "
+                        "user asked to forget this turn: %s",
+                        str(op.get("content", ""))[:80],
+                    )
+                    continue
                 if op_type in ("add", "update") and _copied_from_material(
                     str(op.get("content", "")), user_input, material, prior
                 ):
