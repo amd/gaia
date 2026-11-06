@@ -28,10 +28,12 @@ const DEFAULTS = Object.freeze({
  * @param {object} deps
  * @param {() => Promise<{port: number}>} deps.start spawns the backend and resolves once it answers
  * @param {(state: object) => void} deps.onState called with every new state
+ * @param {(state: object) => void} [deps.onStopped] called once each time restarts run out
  */
 function createBackendSupervisor({
   start,
   onState,
+  onStopped = () => {},
   maxRestarts = DEFAULTS.maxRestarts,
   windowMs = DEFAULTS.windowMs,
   backoffMs = DEFAULTS.backoffMs,
@@ -87,7 +89,9 @@ function createBackendSupervisor({
     history = history.filter((at) => t - at < windowMs);
     const outage = state.status === "running" ? { since: t, attempt: 0 } : {};
     if (history.length >= maxRestarts) {
+      const wasStopped = state.status === "stopped";
       emit({ status: "stopped", nextAttemptAt: null, ...outage, ...extra });
+      if (!wasStopped) onStopped({ ...state });
       return "stopped";
     }
     const delay = backoffMs[Math.min(history.length, backoffMs.length - 1)];
@@ -107,8 +111,12 @@ function createBackendSupervisor({
     /** The backend exited on its own. Returns what happens next. */
     crashed({ code = null, signal = null } = {}) {
       if (stopped) return "stopped";
-      // An exit during a start is that start's failure, reported by start() itself.
-      if (starting) return state.status;
+      // An exit during a start is that start's failure, reported by start() itself;
+      // keep its exit so the crash dialog names the latest one.
+      if (starting) {
+        state = { ...state, lastExit: { code, signal } };
+        return state.status;
+      }
       if (timer) return state.status;
       return schedule({ lastExit: { code, signal } });
     },

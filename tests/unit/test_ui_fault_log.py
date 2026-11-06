@@ -7,6 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from gaia import cli
+
 SRC = Path(__file__).resolve().parents[2] / "src"
 
 
@@ -56,3 +60,49 @@ def test_each_start_appends_a_header_and_an_oversized_log_rotates(tmp_path):
     _run(code, tmp_path)
     text = (logs / "backend-faults.log").read_text(encoding="utf-8")
     assert text.count("--- Agent UI backend pid=") == 2
+
+
+def _fake_homes(tmp_path, monkeypatch):
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
+    return fake_home
+
+
+def test_an_unsafe_gaia_home_is_refused_before_the_fault_log_is_opened(
+    tmp_path, monkeypatch
+):
+    fake_home = _fake_homes(tmp_path, monkeypatch)
+    monkeypatch.setenv("GAIA_HOME", str(fake_home))
+    monkeypatch.setattr(cli, "_ensure_webui_built", lambda log=None: None)
+    monkeypatch.setattr(
+        "gaia.ui.fault_log.enable_fault_log",
+        lambda *a, **k: pytest.fail("opened the fault log under an unsafe GAIA_HOME"),
+    )
+    monkeypatch.setattr(
+        "uvicorn.run", lambda *a, **k: pytest.fail("started under an unsafe GAIA_HOME")
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli._launch_agent_ui(port=4200, base_url="http://127.0.0.1:59999")
+
+    assert exc_info.value.code == 64
+    assert not (fake_home / "logs").exists()
+
+
+def test_a_safe_gaia_home_opens_the_fault_log_before_serving(tmp_path, monkeypatch):
+    _fake_homes(tmp_path, monkeypatch)
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
+    monkeypatch.setattr(cli, "_ensure_webui_built", lambda log=None: None)
+    calls = []
+    monkeypatch.setattr(
+        "gaia.ui.fault_log.enable_fault_log",
+        lambda *a, **k: calls.append("fault_log") or tmp_path / "faults.log",
+    )
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: calls.append("serve"))
+
+    cli._launch_agent_ui(port=4200, base_url="http://127.0.0.1:59999")
+
+    assert calls == ["fault_log", "serve"]

@@ -247,6 +247,8 @@ let backendProcess = null;
 let backendStarting = null;
 // Set as cleanup() begins; startup stops at its next step once it is.
 let shutdownStarted = false;
+// Set once an update install starts quitting the app.
+let updateQuitStarted = false;
 let backendPort = DEFAULT_BACKEND_PORT;
 let healthCheckUrl = `http://localhost:${backendPort}/api/health`;
 let backendStderrTail = [];
@@ -283,6 +285,11 @@ const portManager = new PortManager({
  * Prevents minimize-to-tray from intercepting the close event.
  */
 let isQuitting = false;
+
+/** Any quit is under way, an update install's included: start no backend. */
+function quitStarted() {
+  return shutdownStarted || isQuitting || updateQuitStarted;
+}
 
 // ── Backend Process ────────────────────────────────────────────────────────
 
@@ -447,10 +454,8 @@ async function startBackend() {
     if (backendProcess === child) backendProcess = null;
     if (trayManager && !isQuitting) trayManager.setBackendAlive(false);
 
-    if (crashed && backendSupervisor.crashed({ code, signal }) === "stopped") {
-      // Fire-and-forget — don't block the event loop.
-      void handleBackendCrash(code, signal);
-    }
+    // Once restarts run out, the supervisor's onStopped shows the crash dialog.
+    if (crashed) backendSupervisor.crashed({ code, signal });
 
     // Remove pidfile on exit to avoid leaving stale PID behind.
     try {
@@ -482,9 +487,15 @@ async function startBackend() {
  * Rejects when it exits first or never answers, so the supervisor retries.
  */
 async function restartBackend() {
-  const child = await startBackend();
+  backendStarting = startBackend();
+  const child = await backendStarting;
   if (!child) {
     throw new Error("GAIA's backend program is missing, so it can't restart. Reinstall GAIA.");
+  }
+  if (quitStarted()) {
+    isIntentionalKill = true;
+    await portManager.killBackend(child);
+    throw new Error("GAIA is quitting, so the restarted backend was stopped.");
   }
   backendProcess = child;
   const alive = () => child.exitCode === null && child.signalCode === null;
@@ -512,6 +523,10 @@ function backendStateForRenderer(state) {
 
 const backendSupervisor = createBackendSupervisor({
   start: restartBackend,
+  onStopped: (state) => {
+    const { code = null, signal = null } = state.lastExit || {};
+    void handleBackendCrash(code, signal);
+  },
   onState: (state) => {
     console.log(
       `[main] Backend ${state.status}` +
@@ -532,7 +547,7 @@ ipcMain.handle("backend:restart", () => {
 
 /**
  * Tell the user the backend stopped and offer Restart / Save diagnostics /
- * Quit. Invoked from child.on("exit") when the kill was NOT initiated by us.
+ * Quit. Invoked by the supervisor's onStopped once automatic restarts run out.
  */
 async function handleBackendCrash(code, signal) {
   autoUpdater.reportStartFailure();
@@ -1421,6 +1436,12 @@ const quitGuard = installQuitGuard({
         "Quit again within a minute to quit anyway; any answer still being written will be lost."
     );
   },
+});
+
+// The installer is already running: a restart now would hold its files open.
+electronAutoUpdater.on("before-quit-for-update", () => {
+  updateQuitStarted = true;
+  backendSupervisor.stop();
 });
 
 quitOnTermSignal({ proc: process, app, guard: quitGuard });

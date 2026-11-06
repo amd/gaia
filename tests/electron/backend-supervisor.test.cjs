@@ -179,3 +179,46 @@ test("rejects options that would restart forever", () => {
   expect(() => createBackendSupervisor({ start: () => {}, onState: () => {}, maxRestarts: 0 })).toThrow(/maxRestarts/);
   expect(() => createBackendSupervisor({ start: () => {}, onState: () => {}, backoffMs: [] })).toThrow(/backoffMs/);
 });
+
+test("restarts that keep failing call onStopped once, with the last exit", async () => {
+  const onStopped = jest.fn();
+  const h = harness({ maxRestarts: 3, backoffMs: [10], onStopped });
+  h.sup.running(5000);
+  h.sup.crashed({ code: 3221225477 });
+  for (let i = 0; i < 3; i++) {
+    h.advance(10);
+    // The restarted child dies before answering, then its start rejects.
+    h.sup.crashed({ code: 1 });
+    h.starts[i].reject(new Error(`try ${i + 1} exited before it answered`));
+    await h.settle();
+  }
+  expect(h.starts).toHaveLength(3);
+  expect(h.last()).toMatchObject({ status: "stopped", lastExit: { code: 1 }, lastError: "try 3 exited before it answered" });
+  expect(onStopped).toHaveBeenCalledTimes(1);
+  expect(onStopped.mock.calls[0][0]).toMatchObject({ status: "stopped", lastExit: { code: 1 } });
+
+  // A stray late exit while stopped doesn't show the dialog again.
+  expect(h.sup.crashed({ code: 1 })).toBe("stopped");
+  expect(onStopped).toHaveBeenCalledTimes(1);
+});
+
+test("a crash that hits the cap calls onStopped too, and Restart GAIA re-arms it", async () => {
+  const onStopped = jest.fn();
+  const h = harness({ maxRestarts: 1, backoffMs: [10], onStopped });
+  h.sup.running(5000);
+  h.sup.crashed({ code: 1 });
+  h.advance(10);
+  h.starts[0].resolve({ port: 6000 });
+  await h.settle();
+  expect(h.sup.crashed({ code: 2 })).toBe("stopped");
+  expect(onStopped).toHaveBeenCalledTimes(1);
+
+  h.sup.restartNow();
+  h.starts[1].reject(new Error("no"));
+  await h.settle();
+  h.advance(10);
+  h.starts[2].reject(new Error("still no"));
+  await h.settle();
+  expect(h.last().status).toBe("stopped");
+  expect(onStopped).toHaveBeenCalledTimes(2);
+});
