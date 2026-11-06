@@ -256,6 +256,19 @@ REAL_ANSWERS = [
         "CI is green.",
         id="plan-now-that",
     ),
+    # A present-tense verb used as a subject or with an adverb is not a step.
+    pytest.param(
+        "That covers setup. Creating the schema comes next.",
+        id="progressive-subject-comes-next",
+    ),
+    pytest.param(
+        "Applying the patch is the step that comes next.",
+        id="progressive-subject-is",
+    ),
+    pytest.param(
+        "Deploy: done. Tests: green. Running smoothly now.",
+        id="progressive-adverb-status",
+    ),
 ]
 
 

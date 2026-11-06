@@ -1505,6 +1505,9 @@ _PROGRESSIVE_STEP_PATTERN = re.compile(
     r"^(?:(?:ok(?:ay)?|so|alright|now)[,.]?\s+)?"
     r"(?:executing|running|performing|writing|applying|calling|fetching"
     r"|searching|saving|updating|creating|making|proceeding)\b"
+    r"(?!\s+\w+ly\b)"
+    r"(?![^.!?:]*\b(?:comes?|is|are|was|were|works?|returns?|succeeds?|takes?"
+    r"|gives?|happens?|follows?)\b)"
     r"[^.!?:]{0,80}\b(?:now|next)\s*[.!]?\s*$",
     re.IGNORECASE,
 )
