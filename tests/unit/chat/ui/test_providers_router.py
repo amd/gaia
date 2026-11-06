@@ -221,17 +221,30 @@ def test_list_when_lemonade_is_unreachable(client, lemonade, keys):
     assert body["active"]["is_default"] is True
 
 
-def test_unreachable_lemonade_gives_this_machines_start_hint(
+def test_unreachable_lemonade_names_the_app_fix_not_a_command(
+    client, lemonade, keys, monkeypatch
+):
+    from gaia.llm import lemonade_launcher
+    from gaia.llm.surface_hints import APP_RESTART_HINT
+
+    monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: True)
+    lemonade.down = True
+    error = client.get("/api/providers").json()["lemonade_error"]
+    assert error.endswith(APP_RESTART_HINT)
+    assert "gaia " not in error
+
+
+def test_unreachable_user_run_lemonade_gives_this_machines_start_hint(
     client, lemonade, keys, monkeypatch
 ):
     from gaia.llm import lemonade_launcher
 
-    hint = lemonade_launcher.StartHint(instruction="Run `gaia init` to install it.")
+    hint = lemonade_launcher.StartHint(instruction="Start Lemonade from its tray icon.")
+    monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
     monkeypatch.setattr(lemonade_launcher, "describe_start_hint", lambda: hint)
     lemonade.down = True
     error = client.get("/api/providers").json()["lemonade_error"]
     assert error.endswith(hint.instruction)
-    assert "gaia daemon start" not in error
 
 
 def test_list_does_not_repeat_a_provider_when_a_later_lookup_fails(
@@ -299,6 +312,207 @@ def test_stored_key_replay_failure_is_reported_on_the_provider(client, lemonade,
     fw = client.get("/api/providers").json()["providers"][1]
     assert fw["key_source"] == "stored"
     assert "500" in fw["error"]
+
+
+# ── A key GAIA has, on a Lemonade with no Fireworks registered ─────────────
+
+ENV_KEY = "fw_test_000_env_key_not_real"
+
+
+@pytest.fixture(autouse=True)
+def _no_fireworks_env(monkeypatch):
+    """The developer's own FIREWORKS_API_KEY must not leak into these tests."""
+    for name in ("FIREWORKS_API_KEY", "LEMONADE_FIREWORKS_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(providers, "_HANDED_ENV_KEYS", {})
+
+
+@pytest.fixture
+def replay(monkeypatch, lemonade, keys):
+    """ensure_authenticated that hands over whatever key *recall* gives, as the real one does."""
+    handed = []
+
+    def ensure(provider, client=None, recall=None):
+        keys["ensure"].append(provider)
+        key = recall() if recall else None
+        if key:
+            handed.append(key)
+            lemonade.cloud[provider].update(
+                runtime_key_set=True, models_discovered=True
+            )
+        return bool(key)
+
+    monkeypatch.setattr(cloud_keys, "ensure_authenticated", ensure)
+    return handed
+
+
+def test_env_key_with_no_provider_registered_is_connected_at_startup(
+    client, lemonade, keys, replay, monkeypatch
+):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    resp = client.get("/api/providers")
+    fw = resp.json()["providers"][1]
+    install = lemonade.call("POST", "install")["json"]
+    assert install["provider"] == "fireworks"
+    assert install["base_url"] == "https://api.fireworks.ai/inference/v1"
+    assert replay == [ENV_KEY]
+    assert fw["models_discovered"] is True
+    assert fw["key_source"] == "environment"
+    assert fw["key_from_gaia_env"] is True
+    assert fw["env_var"] == "FIREWORKS_API_KEY"
+    assert fw["key_hint"] == ENV_KEY[-4:]
+    assert ENV_KEY not in resp.text
+
+
+def test_a_typed_key_gaia_could_not_keep_is_not_labelled_the_environments(
+    client, lemonade, keys, replay, monkeypatch
+):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    assert client.get("/api/providers").json()["providers"][1]["key_source"] == (
+        "environment"
+    )
+    keys["remember_error"] = "The OS credential store did not keep the key"
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 200, resp.text
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert fw["key_source"] == "lemonade"
+    assert fw["key_from_gaia_env"] is False
+
+
+def test_an_env_key_that_finds_no_models_can_be_replaced_by_a_typed_one(
+    client, lemonade, keys, monkeypatch
+):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    monkeypatch.setitem(providers._HANDED_ENV_KEYS, "fireworks", ENV_KEY)
+    lemonade.cloud["fireworks"] = {
+        "name": "fireworks",
+        "runtime_key_set": True,
+        "models_discovered": False,
+    }
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert fw["key_source"] == "environment"
+    assert fw["key_from_gaia_env"] is True
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 200, resp.text
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert fw["models_discovered"] is True
+    assert fw["key_source"] == "lemonade"
+    assert keys["stored"]["fireworks"] == KEY
+
+
+def test_a_runtime_key_gaia_never_handed_is_not_labelled_the_environments(
+    client, lemonade, keys, monkeypatch
+):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    lemonade.cloud["fireworks"] = {
+        "name": "fireworks",
+        "runtime_key_set": True,
+        "models_discovered": True,
+    }
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert fw["key_source"] == "lemonade"
+
+
+def test_lemonades_own_env_key_is_not_gaias_to_replace(client, lemonade, keys):
+    lemonade.cloud["fireworks"] = {
+        "name": "fireworks",
+        "env_var_set": True,
+        "models_discovered": True,
+    }
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert fw["key_source"] == "environment"
+    assert fw["key_from_gaia_env"] is False
+
+
+def test_env_key_hint_shows_before_lemonade_is_up(client, lemonade, keys, monkeypatch):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    lemonade.down = True
+    resp = client.get("/api/providers")
+    fw = next(p for p in resp.json()["providers"] if p["id"] == "fireworks")
+    assert fw["key_source"] == "environment"
+    assert fw["key_hint"] == ENV_KEY[-4:]
+    assert ENV_KEY not in resp.text
+
+
+def test_no_env_hint_for_a_key_only_lemonade_holds(client, lemonade, keys, monkeypatch):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "env_var_set": True}
+    assert _fireworks_view(client)["key_hint"] is None
+
+
+def test_stored_key_with_no_provider_registered_is_connected_at_startup(
+    client, lemonade, keys, replay
+):
+    keys["stored"]["fireworks"] = KEY
+    resp = client.get("/api/providers")
+    fw = resp.json()["providers"][1]
+    assert lemonade.call("POST", "install")["json"]["provider"] == "fireworks"
+    assert replay == [KEY]
+    assert fw["models_discovered"] is True
+    assert KEY not in resp.text
+
+
+def test_a_stored_key_wins_over_the_environment(
+    client, lemonade, keys, replay, monkeypatch
+):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    keys["stored"]["fireworks"] = KEY
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert replay == [KEY]
+    assert fw["key_source"] == "lemonade"
+
+
+def test_no_key_anywhere_registers_nothing(client, lemonade, keys, replay):
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert "install" not in lemonade.paths("POST")
+    assert keys["ensure"] == []
+    assert fw["key_source"] is None
+
+
+def test_an_env_key_is_not_registered_on_a_remote_lemonade(
+    client, lemonade, keys, replay, monkeypatch
+):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    monkeypatch.setattr(providers, "_base_url", lambda: "http://10.0.0.5:13305/api/v1")
+    monkeypatch.setattr(providers, "_cloud_entry", lambda p: lemonade.cloud.get(p))
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert lemonade.calls == []
+    assert replay == []
+    assert "not on this PC" in fw["error"]
+
+
+def test_an_env_key_is_not_registered_on_the_users_own_server(
+    client, lemonade, keys, replay, monkeypatch
+):
+    from gaia.llm import lemonade_choice
+
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    monkeypatch.setattr(lemonade_choice, "is_users_server", lambda url: True)
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert "install" not in lemonade.paths("POST")
+    assert replay == []
+    assert "does not change your server's setup" in fw["error"]
+
+
+def test_a_key_that_finds_no_models_says_so(client, lemonade, keys, monkeypatch):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    keys["ensure_result"] = False
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert fw["models_discovered"] is False
+    assert "FIREWORKS_API_KEY" in fw["error"]
+    assert "no models" in fw["error"]
+    assert ENV_KEY not in fw["error"]
+
+
+def test_connect_blank_key_uses_the_env_key(
+    client, lemonade, keys, replay, monkeypatch
+):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    lemonade.cloud["fireworks"] = {"name": "fireworks"}
+    resp = client.post("/api/providers/fireworks/connect", json={})
+    assert resp.status_code == 200, resp.text
+    assert replay == [ENV_KEY]
+    assert resp.json()["key_source"] == "environment"
 
 
 # ── A keychain read the OS holds for permission (#5570) ────────────────────
@@ -490,6 +704,48 @@ def test_active_restore_fails_without_a_working_key(client, lemonade, keys, db):
     assert body["restore"]["status"] == "failed"
     assert "Fireworks AI has no working key" in body["restore"]["message"]
     assert db.get_setting("custom_model") is None
+
+
+def test_restore_connects_fireworks_from_an_env_key_on_a_fresh_lemonade(
+    client, lemonade, keys, replay, db, monkeypatch
+):
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    _write_config({"last_model": model})
+    lemonade.models = _cloud_models()
+    resp = client.get("/api/providers/active")
+    body = resp.json()
+    assert body["restore"]["status"] == "restored", body["restore"]
+    assert lemonade.call("POST", "install")["json"]["provider"] == "fireworks"
+    assert replay == [ENV_KEY]
+    assert db.get_setting("custom_model") == model
+    assert ENV_KEY not in resp.text
+
+
+def test_a_failed_cloud_restore_is_checked_again_and_clears(client, lemonade, keys, db):
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    _write_config({"last_model": model})
+    lemonade.models = _cloud_models()
+    keys["ensure_result"] = False
+    failed = client.get("/api/providers/active").json()["restore"]
+    assert failed["status"] == "failed"
+    assert failed["retry"] is True
+
+    keys["ensure_result"] = True
+    again = client.get("/api/providers/active").json()
+    assert again["restore"]["status"] == "restored", again["restore"]
+    assert again["model"] == model
+
+
+def test_a_failed_local_restore_is_not_checked_again(client, lemonade, keys, db):
+    _write_config({"last_model": "Llama-3-8B-GGUF"})
+    lemonade.models = _CATALOG
+    failed = client.get("/api/providers/active").json()["restore"]
+    assert failed["status"] == "failed"
+    assert not failed.get("retry")
+    calls = len(lemonade.calls)
+    client.get("/api/providers/active")
+    assert not [c for c in lemonade.calls[calls:] if c["path"] == "health"]
 
 
 def test_active_restore_fails_for_a_local_model_not_downloaded(
@@ -1194,6 +1450,40 @@ def test_select_local_model(client, lemonade, keys, db):
     assert resp.status_code == 200
     assert _config()["last_provider"] == "local"
     assert keys["ensure"] == []
+
+
+def test_picking_a_local_model_starts_loading_it(
+    client, lemonade, keys, db, monkeypatch
+):
+    from gaia.ui import warmup
+
+    asked = []
+    monkeypatch.setattr(
+        warmup, "request_warm_up", lambda reason, fresh=False: asked.append(fresh)
+    )
+    lemonade.models = _CATALOG
+    assert (
+        client.post(
+            "/api/providers/select", json={"model": "Qwen3-4B-GGUF"}
+        ).status_code
+        == 200
+    )
+    assert asked == [True]
+
+
+def test_picking_a_cloud_model_loads_nothing_here(
+    client, lemonade, keys, db, monkeypatch
+):
+    from gaia.ui import warmup
+
+    asked = []
+    monkeypatch.setattr(
+        warmup, "request_warm_up", lambda reason, fresh=False: asked.append(fresh)
+    )
+    lemonade.models = _CATALOG
+    resp = client.post("/api/providers/select", json={"model": "fireworks.aa-model"})
+    assert resp.status_code == 200, resp.text
+    assert asked == []
 
 
 def test_a_picked_npu_model_is_the_model_after_a_restart(client, lemonade, keys, db):

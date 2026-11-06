@@ -550,6 +550,11 @@ as you flip it:
   from the next launch. On Windows a launch at sign-in always starts in the
   tray.
 
+On a Linux desktop that shows no tray icons (stock GNOME, before the
+AppIndicator extension is turned on), the two tray switches are off and say
+why: closing the window quits GAIA, and every launch opens the window. Turn on
+the extension and restart GAIA to get them back.
+
 ## Models and where they run
 
 Open **Settings → Model** (or the model chip in the message box):
@@ -861,7 +866,13 @@ pick from 32K up to the window it was trained for. GAIA can't check those fit
 first, so a size too large fails to load and says so.
 
 The model chip in the composer opens the same list. While GAIA is answering,
-a model you pick there applies to your next message. The model pill
+a model you pick there applies to your next message. On most PCs, a local
+model you pick starts loading right away, and a banner counts the seconds; you
+can type meanwhile, and a message waits for the load. On a PC with under 24 GB
+of RAM, or when the GAIA agent runs as a Hub install, it loads with your first
+message instead. If the model can't load, for
+example because other apps hold the memory it needs, the banner says why and
+offers **Try again**. The model pill
 at the bottom of the sidebar shows whether the model is loaded, warming up or
 stopped, where it runs, memory in use and free, and its context window, with a
 **Restart** button. On a Lemonade you run yourself, GAIA asks before Restart
@@ -1012,7 +1023,7 @@ Chats, documents and schedules are saved on disk as you go. What happens to work
 | What happened | A reply being written | A document being indexed |
 |---------------|-----------------------|--------------------------|
 | You switch chats, open Memory or Scheduled tasks, or close the browser tab | Keeps going; reopen the chat to watch it finish | Keeps going |
-| You close the desktop window | Keeps going: the window hides to the tray (unless you turned that off) and GAIA keeps running | Keeps going |
+| You close the desktop window | Keeps going: the window hides to the tray and GAIA keeps running. With that turned off, or on a desktop with no tray, closing quits (next row) | Keeps going |
 | You quit GAIA, it crashes, or the PC shuts down | Stops. On the next start the reply shows what it had written so far, which tools it had started, then "This answer was interrupted when GAIA closed. Send again to retry." A scheduled run cut short shows the same in its chat. | Stops. On the next start it shows as **Failed** with **Retry**, and "Indexing was interrupted when GAIA closed" under the document |
 
 GAIA never re-runs an interrupted reply by itself: it may already have run tools, and running them twice is not safe. Send the message again to retry.

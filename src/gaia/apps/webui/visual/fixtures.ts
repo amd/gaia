@@ -292,7 +292,7 @@ export const FAILED_LINK_CHECK = {
 };
 
 /** Settings > Model with `models` on the Local tab; every other answer stays as in ROUTES. */
-export async function withModelPage(page: Page, models: unknown[], plan: unknown, status: unknown = { state: 'idle' }): Promise<void> {
+export async function withModelPage(page: Page, models: unknown[], plan: unknown, status: unknown = { state: 'idle' }, fireworks: Record<string, unknown> = {}): Promise<void> {
     const answers: Record<string, unknown> = {
         'GET /providers/local/models': { provider: 'local', models, memory_gb: 96, memory_source: 'AMD iGPU', capacity_error: null },
         'GET /providers/local/context': MODEL_CONTEXT,
@@ -303,7 +303,7 @@ export async function withModelPage(page: Page, models: unknown[], plan: unknown
         'GET /providers': {
             providers: [
                 { id: 'local', name: 'Local', remote: false, privacy_notice: 'Runs on this PC. Nothing leaves your machine.' },
-                { id: 'fireworks', name: 'Fireworks AI', remote: true, models_discovered: true, key_source: 'stored', key_hint: 'a1b2', env_var: 'FIREWORKS_API_KEY', privacy_notice: 'Chat history is sent to Fireworks AI.' },
+                { id: 'fireworks', name: 'Fireworks AI', remote: true, models_discovered: true, key_source: 'stored', key_hint: 'a1b2', env_var: 'FIREWORKS_API_KEY', privacy_notice: 'Chat history is sent to Fireworks AI.', ...fireworks },
             ],
         },
         'GET /providers/fireworks/models': { provider: 'fireworks', models: FIREWORKS_MODELS },
@@ -390,9 +390,19 @@ export async function withConnectors(page: Page, connectors: unknown[] = CONNECT
     });
 }
 
-/** The Electron bridges the browser lacks, so desktop-only settings render. */
-export async function withDesktopBridges(page: Page, update: Record<string, unknown> = {}): Promise<void> {
-    await page.addInitScript((state) => {
+/** The desktop app's backend as services/backend-supervisor.cjs reports it; no apiBase, so requests stay mocked. */
+export const BACKEND_RUNNING = {
+    status: 'running', port: null, since: null, attempt: 0, maxRestarts: 3,
+    nextAttemptAt: null, lastExit: null, lastError: null, apiBase: null,
+};
+
+/** The Electron bridges the browser lacks, so desktop-only settings render. `host` is the tray-host check's answer. */
+export async function withDesktopBridges(
+    page: Page,
+    update: Record<string, unknown> = {},
+    host: { available: boolean; reason: string | null } = { available: true, reason: null },
+): Promise<void> {
+    await page.addInitScript(({ state, host, running }) => {
         const tray = { minimizeToTray: true, startOnLogin: false, startMinimized: false };
         const status = {
             status: 'idle', version: null, progress: 0, releaseNotes: null, error: null, currentVersion: '0.25.4',
@@ -403,13 +413,27 @@ export async function withDesktopBridges(page: Page, update: Record<string, unkn
         const stub: unknown = new Proxy(function stub() {}, { get: (_, key) => (key === 'then' ? undefined : stub), apply: () => stub });
         const withStubs = (real: object) => new Proxy(real, { get: (t, key) => (key in t ? t[key as keyof typeof t] : stub) });
         Object.assign(window, {
-            gaiaAPI: withStubs({ tray: withStubs({ getConfig: async () => ({ tray }), setConfig: async () => ({ tray }) }) }),
+            gaiaAPI: withStubs({
+                tray: withStubs({ getConfig: async () => ({ tray, host }), setConfig: async () => ({ tray, host }) }),
+                backend: { getState: async () => running, restart: async () => running, onState: () => () => {} },
+            }),
             gaiaUpdater: {
                 getStatus: same, check: same, onStatusChange: () => () => {}, listReleases: async () => [], installVersion: same,
                 resumeUpdates: same, setAutoUpdate: same, setIncludePrereleases: same, downloadUpdate: same, restart: same,
             },
         });
-    }, update);
+    }, { state: update, host, running: BACKEND_RUNNING });
+}
+
+/** A desktop app whose backend crashed: `restarting` or, once restarts ran out, `stopped`. */
+export async function withCrashedBackend(page: Page, status: 'restarting' | 'stopped', since: number): Promise<void> {
+    await page.addInitScript(({ state }) => {
+        const stub: unknown = new Proxy(function stub() {}, { get: (_, key) => (key === 'then' ? undefined : stub), apply: () => stub });
+        const withStubs = (real: object) => new Proxy(real, { get: (t, key) => (key in t ? t[key as keyof typeof t] : stub) });
+        Object.assign(window, {
+            gaiaAPI: withStubs({ backend: { getState: async () => state, restart: async () => state, onState: () => () => {} } }),
+        });
+    }, { state: { ...BACKEND_RUNNING, status, since, attempt: status === 'restarting' ? 2 : 0, lastExit: { code: 1, signal: null } } });
 }
 
 /** Pick the theme before the app's first paint, the way a returning user would. */

@@ -5647,6 +5647,11 @@
         "title": "Force",
         "type": "boolean"
       },
+      "load_after": {
+        "default": false,
+        "title": "Load After",
+        "type": "boolean"
+      },
       "model_name": {
         "title": "Model Name",
         "type": "string"

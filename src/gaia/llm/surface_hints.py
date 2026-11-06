@@ -97,6 +97,12 @@ CLI_RESTART_HINT = (
     "If it keeps happening, run `gaia daemon status` and check the daemon log."
 )
 
+#: What an app user does when GAIA's model server was down for a chat: the
+#: next message has the daemon start it.
+APP_SERVER_DOWN_HINT = (
+    f"Send your message again and GAIA will start its model server. {APP_RESTART_HINT}"
+)
+
 #: When GAIA's background service is not running at all, so the CLI must start
 #: it: `gaia daemon status` (the restart hint) would only report it is down.
 APP_SERVICE_DOWN_HINT = "Close GAIA and open it again so its background service starts."
@@ -120,9 +126,20 @@ AGENT_UI_VISION_DOWNLOAD_HINT = (
     "To ask about images later, tick it under Settings > Model (a ~6 GB download)."
 )
 
+#: How to download a vision model the image tools found missing.
+VISION_DOWNLOAD_HINT = (
+    "Download it under Settings > Model in the Agent UI, or with /setup in the "
+    "TUI, then ask again."
+)
+AGENT_UI_VISION_DOWNLOAD_STEP = (
+    "Download it under Settings > Model > Manage downloads and disk space, then "
+    "ask again."
+)
+
 _SWAPS = {
     "agent_ui": (
         (CLI_VISION_DOWNLOAD_HINT, AGENT_UI_VISION_DOWNLOAD_HINT),
+        (VISION_DOWNLOAD_HINT, AGENT_UI_VISION_DOWNLOAD_STEP),
         (TUI_SERVER_RESTART_HINT, AGENT_UI_SERVER_RESTART_HINT),
         (TUI_MODEL_SWITCH_HINT, AGENT_UI_MODEL_SWITCH_HINT),
         (TUI_PROVIDER_AUTH_HINT, AGENT_UI_PROVIDER_AUTH_HINT),

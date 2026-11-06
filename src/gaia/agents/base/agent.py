@@ -720,6 +720,16 @@ DECLINED_HINT = (
     "to do and why, then stop."
 )
 
+#: Tools whose output is a computed result: when one was denied, nothing was computed.
+COMPUTATION_TOOLS = frozenset(
+    {"run_python", "execute_python_file", "run_shell_command", "query_data"}
+)
+COMPUTATION_NOT_RUN = (
+    "The computation did not run, so it produced no figures. Do not report "
+    "computed figures (totals, sums, counts, averages) as if it had. Tell the "
+    "user what is needed to compute them."
+)
+
 # Tools whose result is nothing but a receipt for what the agent itself just
 # did. EVERY other tool is treated as bringing in content the user did not type
 # — including the skill-library reads, whose text comes from third-party
@@ -2623,6 +2633,10 @@ Do NOT wrap conversational replies in JSON.
             if cloud_model_provider(model_id):
                 # The local manager preloads a chat model even on an idle server.
                 probe_client = LemonadeClient(base_url=base_url, verbose=False)
+                # Ask the daemon for GAIA's engine, never probe the default port.
+                probe_client.current_base_url()
+                if resolve_after_start:
+                    base_url = probe_client.base_url
                 try:
                     probe_client.health_check()
                 except LemonadeUnresponsiveError:
@@ -3487,7 +3501,9 @@ Do NOT wrap conversational replies in JSON.
 
     def _register_extraction_tool(self):
         def extract_document_items(
-            file_path: str, fields: Optional[List[str]] = None
+            file_path: str,
+            fields: Optional[List[str]] = None,
+            terms: Optional[List[str]] = None,
         ) -> dict:
             """Extract EVERY requested item from a text document, page by page.
 
@@ -3499,6 +3515,10 @@ Do NOT wrap conversational replies in JSON.
             Args:
                 file_path: Source text file permitted in this session.
                 fields: Requested field names; each entry must include every field.
+                terms: Words every wanted item must contain, with their variants
+                    (["code", "error"] for "sections that mention a code").
+                    Only pages containing one are read, which is far faster.
+                    Omit when an item could be worded without any of them.
             """
             from gaia.agents.base.tools import raise_if_cancelled
 
@@ -3592,6 +3612,7 @@ Do NOT wrap conversational replies in JSON.
                     check,
                     fields,
                     progress,
+                    terms,
                 )
             finally:
                 ledger.lock.release()
@@ -3649,11 +3670,12 @@ Do NOT wrap conversational replies in JSON.
                 "requires_confirmation": gated,
             }
             if name == "extract_document_items":
-                entry["parameters"]["fields"] = {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "required": False,
-                }
+                for parameter in ("fields", "terms"):
+                    entry["parameters"][parameter] = {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "required": False,
+                    }
             self._tool_overrides[name] = entry
             if self._instance_tools is not None:
                 self._instance_tools[name] = entry
@@ -6895,6 +6917,7 @@ Do NOT wrap conversational replies in JSON.
         if (recorder is None and step_timer is None) or not outermost:
             result = self._execute_tool(tool_name, tool_args)
             self._note_verification_signal(tool_name, tool_args, result, before=before)
+            result = self._with_computation_note(tool_name, result)
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
@@ -6910,6 +6933,7 @@ Do NOT wrap conversational replies in JSON.
             result = self._execute_tool(tool_name, tool_args)
             ok = not self._is_error_result(result)
             self._note_verification_signal(tool_name, tool_args, result, before=before)
+            result = self._with_computation_note(tool_name, result)
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
@@ -6936,6 +6960,21 @@ Do NOT wrap conversational replies in JSON.
                     )
                 except Exception as e:  # noqa: BLE001 - never displace a tool error
                     logger.warning("could not record tool timing: %s", e)
+
+    @staticmethod
+    def _with_computation_note(tool_name: str, result: Any) -> Any:
+        """A denied computation says plainly that nothing was computed.
+
+        Only a denial: a failed test run or a script that crashed after
+        printing results is for the model to fix and re-run, not to report.
+        """
+        if (
+            tool_name not in COMPUTATION_TOOLS
+            or not isinstance(result, dict)
+            or str(result.get("status", "")).lower() != "denied"
+        ):
+            return result
+        return {**result, "computation": COMPUTATION_NOT_RUN}
 
     def _with_task_lessons(self, tool_name: str, tool_args: Any, result: Any) -> Any:
         """A failed result carries what this task has already learned."""
@@ -8185,13 +8224,19 @@ Do NOT wrap conversational replies in JSON.
         """
         from gaia.llm.providers.lemonade import (
             LemonadeCloudAccountError,
+            LemonadeCloudDisconnectedError,
             LemonadeCloudModelUnavailableError,
             classify_lemonade_exception,
         )
 
         classified = classify_lemonade_exception(exc)
         if isinstance(
-            classified, (LemonadeCloudAccountError, LemonadeCloudModelUnavailableError)
+            classified,
+            (
+                LemonadeCloudAccountError,
+                LemonadeCloudDisconnectedError,
+                LemonadeCloudModelUnavailableError,
+            ),
         ):
             return classified.user_message
         return None

@@ -41,7 +41,7 @@ from gaia.agents.base.claims import (
     admits_unverified,
     read_claims,
 )
-from gaia.agents.base.completion import mentioned_paths
+from gaia.agents.base.completion import WRITE_TOOLS, mentioned_paths
 from gaia.agents.base.verification import is_check_execution, observed_text
 
 LOOK = "look"
@@ -437,7 +437,8 @@ _VERSION_LEAD = re.compile(
     r"|(?i:\b(?:version|python|node|py)[ -]?)$"
 )
 _ESTIMATE_LEAD = re.compile(
-    r"(?:~|\b(?:about|approximately|approx\.?|around|roughly|nearly|almost))\s*$",
+    r"(?:~|\b(?:about|approximately|approx\.?|around|roughly|nearly|almost))\s*"
+    r"(?:(?:US|C|A)?[$€£¥]\s*)?$",
     re.I,
 )
 
@@ -571,7 +572,14 @@ def _prose_values(text: str) -> List[_Value]:
         values.append(value)
     for match, _ in reversed(scaled):
         text = text[: match.start()] + " " + text[match.end() :]
-    for match in list(_GROUPED.finditer(text)) + list(_PLAIN.finditer(text)):
+    grouped = list(_GROUPED.finditer(text))
+    # "37,160.80" is one figure, not 37 and 160.80.
+    plain = [
+        m
+        for m in _PLAIN.finditer(text)
+        if not any(g.start() <= m.start() < g.end() for g in grouped)
+    ]
+    for match in grouped + plain:
         raw = match.group(0)
         after = text[match.end() : match.end() + 1]
         if after == "+" or not ("." in raw or "," in raw or after == "%"):
@@ -584,14 +592,25 @@ def _prose_values(text: str) -> List[_Value]:
     return values
 
 
-def presented_values(answer: str) -> List[_Value]:
-    """Values *answer* presents as data, in order, without duplicates.
+#: "$2,708.95", "€1,379.87", "USD 1,375.25": an amount to the cent or the thousand.
+_PROSE_MONEY = re.compile(
+    r"(?:(?:US|C|A)?\$|€|£|¥|\b(?:USD|EUR|GBP|CAD|AUD|JPY|CHF|CNY|INR)\s?)\s?"
+    r"(?P<n>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+)(?!\d|,\d)"
+)
 
-    Table cells that are one value, fields of an untagged/CSV/JSON code block,
-    and — only when the answer has one of those — decimals, dates and
-    percentages in its prose. Code blocks in a language, inline code, small
-    whole numbers, estimates and version numbers are left alone.
-    """
+
+def _stated_money(text: str) -> Set[str]:
+    """The exact amounts of money *text* states, as written, estimates aside."""
+    amounts = set()
+    for match in _PROSE_MONEY.finditer(text):
+        lead = text[max(0, match.start() - 24) : match.start()]
+        if not _ESTIMATE_LEAD.search(lead) and float(match["n"].replace(",", "")):
+            amounts.add(match.group("n"))
+    return amounts
+
+
+def _tables_and_prose(answer: str) -> "tuple[List[_Value], str]":
+    """Values in *answer*'s tables and data blocks, and the prose around them."""
     values: List[_Value] = []
 
     def data_block(match: "re.Match[str]") -> str:
@@ -609,10 +628,30 @@ def presented_values(answer: str) -> List[_Value]:
     text = re.sub(r"`[^`\n]*`", " ", text)
     lines = text.splitlines()
     values.extend(_table_values(lines))
-    if not values:
-        return []  # no table or data block: prose numbers are not presented data
     prose = "\n".join(line for line in lines if not line.strip().startswith("|"))
-    values.extend(_prose_values(prose))
+    return values, prose
+
+
+def presented_values(answer: str) -> List[_Value]:
+    """Values *answer* presents as data, in order, without duplicates.
+
+    Table cells that are one value, fields of an untagged/CSV/JSON code block,
+    and — only when the answer has one of those — decimals, dates and
+    percentages in its prose. Without a table or block, only the exact amounts
+    of money its prose states are data. Code blocks in a language, inline
+    code, small whole numbers, estimates and version numbers are left alone.
+    """
+    values, prose = _tables_and_prose(answer)
+    if values:
+        values.extend(_prose_values(prose))
+    else:
+        # A date or percentage beside a price in a chat reply is not data.
+        money = _stated_money(prose)
+        values = [
+            v
+            for v in _prose_values(prose)
+            if v.text in money or (v.mantissa is not None and v.mantissa.text in money)
+        ]
     seen: Set["tuple[str, Optional[str]]"] = set()
     unique = []
     for value in values:
@@ -727,6 +766,16 @@ def _derived(value: _Value, operands: Sequence[Set[float]]) -> bool:
     return False
 
 
+def _total_of(value: _Value, grounded: Sequence[_Value]) -> bool:
+    """*value* is the sum of every grounded value the answer shows to its precision."""
+    parts = [
+        v.number
+        for v in grounded
+        if v.number is not None and v.decimals == value.decimals and v.unit is None
+    ]
+    return len(parts) > 2 and _rounds_to(sum(parts), value)
+
+
 def content_findings(
     answer: str, records: Sequence[Dict[str, Any]], context: str = ""
 ) -> List[Finding]:
@@ -757,10 +806,24 @@ def content_findings(
         if v.number is not None and len(by_value) < 20:
             by_value.setdefault(v.number, {v.number}).update(corpus.sources(v))
     operands = list(by_value.values())
+    # Prose summing up a file the turn wrote is the deliverable check's to note.
+    written = _Corpus(
+        ""
+        if _tables_and_prose(answer)[0]
+        else "\n".join(
+            observed_text(r.get("args") or {})
+            for r in records
+            if _name(r) in WRITE_TOOLS
+        )
+    )
     missing = [
         v.text
         for v in values
-        if v not in grounded and not (v.number is not None and _derived(v, operands))
+        if v not in grounded
+        and not written.holds(v)
+        and not (
+            v.number is not None and (_derived(v, operands) or _total_of(v, grounded))
+        )
     ]
     if not missing:
         return []

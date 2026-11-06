@@ -126,6 +126,18 @@ def test_cold_pc_with_a_cloud_default_still_names_a_local_model(no_server, confi
     assert plan["chat_model"]["user_set"] is False
 
 
+def test_cold_pc_after_picking_a_local_model_still_builds_a_plan(
+    no_server, config_file
+):
+    """With no server, nobody can say the last local model is downloaded."""
+    config_file.write_text(
+        json.dumps({"last_provider": "local", "last_model": "gemma4-it-e4b-FLM"})
+    )
+    plan = sp.build_plan()
+    assert plan["chat_model"]["id"] == DEFAULT_MODEL_NAME
+    assert plan["decided_after_server"] is True
+
+
 def test_cold_pc_with_a_local_default_names_it_and_skips_the_hardware_pick(
     no_server, config_file
 ):

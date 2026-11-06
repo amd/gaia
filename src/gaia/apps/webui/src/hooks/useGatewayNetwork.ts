@@ -3,19 +3,23 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import * as api from '../services/api';
-import type { ProviderNetwork } from '../types';
+import type { ProviderInfo, ProviderNetwork } from '../types';
 
-/** Whether the AMD gateway's host answers; null until the backend has said. */
-export function useGatewayNetwork(): { network: ProviderNetwork | null; recheck: () => void } {
+/** Whether the AMD gateway's host answers; null until the backend has said. Also every provider read. */
+export function useGatewayNetwork(): { network: ProviderNetwork | null; providers: ProviderInfo[]; recheck: () => void } {
     const [network, setNetwork] = useState<ProviderNetwork | null>(null);
+    const [providers, setProviders] = useState<ProviderInfo[]>([]);
     const recheck = useCallback(() => {
         Promise.resolve(api.listProviders())
-            .then((r) => setNetwork(r?.providers?.find((p) => p.id === 'amd')?.network ?? null))
+            .then((r) => {
+                setNetwork(r?.providers?.find((p) => p.id === 'amd')?.network ?? null);
+                setProviders(r?.providers ?? []);
+            })
             .catch((err) => {
                 console.warn('[useGatewayNetwork] could not check the AMD gateway', err);
                 setNetwork(null);
             });
     }, []);
     useEffect(recheck, [recheck]);
-    return { network, recheck };
+    return { network, providers, recheck };
 }

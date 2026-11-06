@@ -84,6 +84,8 @@ beforeEach(() => {
     mockedApi.getStartScreen.mockResolvedValue(START);
     mockedApi.listProviders.mockResolvedValue({ providers: [], active: null, lemonade_error: null } as unknown as Awaited<ReturnType<typeof api.listProviders>>);
     mockedApi.getActiveModel.mockResolvedValue({ provider: 'local', model: QWEN.id, label: 'Qwen', remote: false, is_default: true });
+    mockedApi.selectModel.mockResolvedValue({ provider: 'local', model: QWEN.id, label: 'Qwen', remote: false, is_default: true });
+    mockedApi.getWarmUp.mockResolvedValue({ state: 'ready', elapsed_seconds: 1 });
 });
 
 /** Render, and return the callback the screen reports ready through. */
@@ -867,6 +869,28 @@ describe('SetupScreen: downloading', () => {
         expect(list.getByText("AI engine").closest('li')).toHaveTextContent('Ready');
     });
 
+    it('says why a component failed on its row and reruns setup from a Retry there', async () => {
+        const error = '`gaia init --profile gaia` failed (exit 1): GAIA 0.25.4rc11 is release candidate v0.25.4-rc11, which installs the GAIA agent built from its own commit. '
+            + "Could not read https://github.com/amd/gaia/releases/download/v0.25.4-rc11/gaia-agent-release.json: HTTPSConnectionPool(host='github.com', port=443): Read timed out. (read timeout=10)";
+        const stopped = runStatus([
+            progress({ id: EMBED.id, roles: ['embedding'], state: 'ready', bytes_done: 0.3e9, bytes_total: 0.3e9 }),
+            progress({ id: QWEN.id, state: 'ready', bytes_done: 23.3e9, bytes_total: 23.3e9 }),
+        ], { state: 'failed', error, components: { server: 'done', backend: 'done', agent: 'failed' }, component_kinds: { agent: 'transient' } });
+        mockedApi.getSetupPlan.mockResolvedValue({ ...COLD_BIG(), components: COMPONENTS });
+        mockedApi.startSetup.mockResolvedValue(stopped);
+        await startLocal();
+        const list = within(await screen.findByRole('region', { name: 'Everything being set up' }));
+        const agent = list.getByText('GAIA assistant').closest('li') as HTMLElement;
+        expect(agent).toHaveTextContent('GAIA assistant: the download timed out or the connection dropped. Check your internet, then retry.');
+        expect(within(agent).getByText(/Read timed out/).closest('details')).not.toHaveAttribute('open');
+        // One clearly named way on, not an unlabelled "Finish setup".
+        expect(screen.queryByRole('button', { name: /Finish setup/ })).not.toBeInTheDocument();
+        expect(screen.queryByText(/Setup stopped before it could check/)).not.toBeInTheDocument();
+        const calls = mockedApi.startSetup.mock.calls.length;
+        fireEvent.click(within(agent).getByRole('button', { name: 'Retry GAIA assistant' }));
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(calls + 1));
+    });
+
     it('retries a failed model from where it stopped, and can skip it', async () => {
         const failed = runStatus([
             progress({ id: EMBED.id, roles: ['embedding'], state: 'ready', bytes_done: 0.3e9, bytes_total: 0.3e9 }),
@@ -1211,6 +1235,30 @@ describe('SetupScreen: cloud', () => {
         expect(screen.getByRole('link', { name: /Open Fireworks API keys/ })).toHaveAttribute('href', 'https://app.fireworks.ai/settings/users/api-keys');
         expect(screen.getByText('Create a new API key and copy it.')).toBeInTheDocument();
         expect(screen.getByLabelText('API key')).toHaveAttribute('type', 'password');
+    });
+
+    it('says a key was found in the environment, by its last characters only', async () => {
+        mockedApi.listProviders.mockResolvedValue({
+            providers: [{
+                id: 'fireworks', name: 'Fireworks AI', remote: true, privacy_notice: '',
+                key_source: 'environment', key_hint: '0000', env_var: 'FIREWORKS_API_KEY',
+            }],
+            active: null,
+            lemonade_error: null,
+        } as unknown as Awaited<ReturnType<typeof api.listProviders>>);
+        await open();
+        await toKey();
+        expect(await screen.findByText(
+            'Found a Fireworks AI key in your environment (ends …0000). Test and connect to use it.',
+        )).toBeInTheDocument();
+        fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'fw_test_000' } });
+        expect(screen.queryByText(/Found a Fireworks AI key/)).not.toBeInTheDocument();
+    });
+
+    it('says nothing about the environment when no key is there', async () => {
+        await open();
+        await toKey();
+        expect(screen.queryByText(/in your environment/)).not.toBeInTheDocument();
     });
 
     it('swaps the steps for a guide link on the AMD gateway', async () => {
