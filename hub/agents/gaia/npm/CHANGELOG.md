@@ -16,6 +16,9 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   summary of at most 40 words, so dictation and voice mode in the Agent UI and
   the TUI can speak the outcome and show the detail. Typed turns are
   unchanged, including their cached prompt.
+- **`alert_owner`.** With phone alerts on and "Agents may alert me" allowed,
+  the agent can ask GAIA to reach the user by text or call. The user hears a
+  fixed sentence, never the agent's words; the reason shows in GAIA's apps.
 
 ### Changed
 

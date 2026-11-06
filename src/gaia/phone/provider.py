@@ -220,7 +220,7 @@ def _twilio_error(status: int, body: Dict) -> PhoneError:
 
 
 @dataclass
-class SimulatedProvider:
+class SimulatedProvider:  # pylint: disable=unused-argument
     """Records calls and texts instead of sending them, so every screen, rule
     and limit can be tried before signing up anywhere."""
 

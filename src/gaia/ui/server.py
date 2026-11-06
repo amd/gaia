@@ -75,6 +75,7 @@ from .routers import lemonade as lemonade_router_mod
 from .routers import mcp as mcp_router_mod
 from .routers import memory as memory_router_mod
 from .routers import onboarding as onboarding_router_mod
+from .routers import phone as phone_router_mod
 from .routers import providers as providers_router_mod
 from .routers import schedules as schedules_router_mod
 from .routers import sessions as sessions_router_mod
@@ -85,7 +86,6 @@ from .routers import spending as spending_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
 from .routers import voice as voice_router_mod
-from .routers import phone as phone_router_mod
 from .security import UIRequestGuardMiddleware
 from .tunnel import TunnelManager
 from .utils import ALLOWED_EXTENSIONS as _ALLOWED_EXTENSIONS  # noqa: F401
