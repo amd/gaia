@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, SYSTEM_STATUS, TOOL_STATUS, VOICE_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, PHONE_ALERTS, PHONE_STATUS, SYSTEM_STATUS, TOOL_STATUS, VOICE_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -975,7 +975,7 @@ for (const locale of ['ar', 'en']) {
     }
 }
 
-for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'voice', 'privacy', 'advanced']) {
+for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'voice', 'phone', 'privacy', 'advanced']) {
     test(`settings ${section} pane has no leftover English`, async ({ page }) => {
         await open(page, '', 'ar', withSettingsPanes);
         await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -2518,4 +2518,138 @@ for (const locale of ['en', 'ar']) {
         await expect(page.locator('.vs-row.is-note').last()).toBeVisible();
         await checkVoice(page, locale, `voice-${locale}-permission`);
     });
+}
+
+// ── Phone alerts ─────────────────────────────────────────────────────────────
+
+const PHONE_SIZES = [['desktop', { width: 1400, height: 900 }], ['phone', { width: 375, height: 812 }]] as const;
+/** Contact labels, what the simulated phone said and alert reasons are user or service text, not interface text. */
+const PHONE_USER_TEXT = 'bdi, select, time';
+const PHONE_STATUS_FIRST = { ...PHONE_STATUS, configured: false, from_number: '', contacts: [], open_alerts: 0, calls_today: 0, texts_today: 0, awake: null };
+
+async function openPhonePane(page: Page): Promise<void> {
+    const sidebar = page.getByRole('button', { name: /Open sidebar/ });
+    if (await sidebar.isVisible()) await sidebar.click();
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    await page.getByRole('dialog').locator('[data-section="phone"]').click();
+    await expect(page.locator('.phone-settings')).toBeVisible();
+    await expect(page.locator('.phone-settings .spin')).toHaveCount(0);
+}
+
+const openAllSections = (page: Page) =>
+    page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+
+async function checkPhone(page: Page, locale: string, name: string): Promise<void> {
+    await shot(page, name);
+    expect(await audit(page), name).toEqual([]);
+    if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', PHONE_USER_TEXT), name).toEqual([]);
+}
+
+for (const locale of ['en', 'ar']) {
+    for (const theme of ['light', 'dark'] as const) {
+        for (const [size, viewport] of PHONE_SIZES) {
+            test(`settings phone pane, set up (${locale}, ${theme}, ${size})`, async ({ page }) => {
+                await page.setViewportSize(viewport);
+                await open(page, '', locale, undefined, theme);
+                await openPhonePane(page);
+                await openAllSections(page);
+                await expect(page.locator('.phone-alert').first()).toBeVisible();
+                await expect(page.locator('.phone-sim li')).toHaveCount(3);
+                const tag = `phone-${locale}-${theme}-${size}`;
+                await checkPhone(page, locale, `${tag}-1-top`);
+                for (const [i, part] of [['2', '.phone-rules'], ['3', '.phone-limits'], ['4', '.phone-alerts'], ['5', '.phone-sim']] as const) {
+                    await page.locator(part).first().scrollIntoViewIfNeeded();
+                    await checkPhone(page, locale, `${tag}-${i}-${part.slice(7)}`);
+                }
+            });
+        }
+    }
+
+    test(`settings phone pane, first time and the Twilio keys (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/phone/status', (route) => route.fulfill({ json: { ...PHONE_STATUS_FIRST } }));
+            await p.route('**/api/phone/alerts**', (route) => route.fulfill({ json: { alerts: [] } }));
+            await p.route('**/api/phone/keys', (route) => route.fulfill({
+                status: 422, json: { detail: { code: 'bad_credentials', message: 'Twilio rejected the Account SID or Auth Token.' } },
+            }));
+        });
+        await openPhonePane(page);
+        await expect(page.locator('.phone-intro')).toBeVisible();
+        await expect(page.getByRole('button', { name: locale === 'ar' ? /استخدام الهاتف التجريبي/ : 'Use the Simulated phone' })).toBeVisible();
+        await checkPhone(page, locale, `phone-${locale}-first-time`);
+        await page.locator('.phone-provider input[value="twilio"]').check();
+        await page.locator('#phone-sid').fill('AC' + '0'.repeat(32));
+        await page.locator('#phone-token').fill('not-a-real-token');
+        await page.locator('#phone-from').fill('+15557654321');
+        await page.locator('.phone-twilio button[type="submit"]').click();
+        await expect(page.locator('.phone-error')).toBeVisible();
+        await expect(page.locator('#phone-token')).toHaveValue('');
+        await page.locator('.phone-twilio').scrollIntoViewIfNeeded();
+        await checkPhone(page, locale, `phone-${locale}-twilio-rejected`);
+        await page.setViewportSize({ width: 375, height: 812 });
+        await page.addStyleTag({ content: '.sb:not(.is-open) { display: none; }' });
+        await page.locator('.phone-twilio').scrollIntoViewIfNeeded();
+        await checkPhone(page, locale, `phone-${locale}-twilio-rejected-phone`);
+    });
+
+    test(`settings phone pane, adding a second number takes two codes (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/phone/contacts', (route) => route.fulfill({ json: {
+                verification_id: 'a'.repeat(32), number: '+49 •••• 7788', needs_confirm_code: true, confirm_sent_to: '+1 •••• 4567', expires_in: 600,
+            } }));
+            await p.route('**/api/phone/contacts/confirm', (route) => route.fulfill({
+                status: 422, json: { detail: { code: 'verification_failed', message: 'That code is wrong. 2 tries left.' } },
+            }));
+        });
+        await openPhonePane(page);
+        await openAllSections(page);
+        await page.locator('#phone-add-number').fill('+4915112347788');
+        await page.locator('#phone-add-label').fill(locale === 'ar' ? 'هاتف السفر' : 'Travel phone');
+        await page.locator('.phone-add button[type="submit"]').click();
+        await expect(page.locator('#phone-confirm-code')).toBeVisible();
+        await page.locator('#phone-code').fill('123456');
+        await page.locator('#phone-confirm-code').fill('654321');
+        await page.locator('.phone-code button[type="submit"]').click();
+        await expect(page.locator('.phone-error')).toContainText(locale === 'ar' ? 'المحاولات المتبقية' : '2 tries left');
+        await page.locator('.phone-code').scrollIntoViewIfNeeded();
+        await checkPhone(page, locale, `phone-${locale}-two-codes`);
+    });
+
+    test(`settings phone pane over mobile access: a change says where to make it (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/phone/settings', (route) => (route.request().method() === 'PUT'
+                ? route.fulfill({ status: 403, json: { detail: 'Change this on the PC running GAIA.' } })
+                : route.fallback()));
+        });
+        await openPhonePane(page);
+        await page.locator('.phone-settings .settings-card').first().locator('.setting-row').click();
+        await expect(page.locator('.phone-error')).toContainText(locale === 'ar' ? 'غيّر هذا على الجهاز' : 'Change this on the PC running GAIA.');
+        await checkPhone(page, locale, `phone-${locale}-mobile-refused`);
+    });
+
+    for (const [size, viewport] of PHONE_SIZES) {
+        for (const theme of ['light', 'dark'] as const) {
+            test(`open phone alert banner (${locale}, ${theme}, ${size})`, async ({ page }) => {
+                await page.setViewportSize(viewport);
+                await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+                    await p.route('**/api/phone/status', (route) => route.fulfill({ json: { ...PHONE_STATUS, enabled: true, open_alerts: 2 } }));
+                    await p.route('**/api/phone/alerts?open=true', (route) => route.fulfill({ json: { alerts: [
+                        PHONE_ALERTS[0], { ...PHONE_ALERTS[0], id: 13, kind: 'approval_waiting' },
+                    ] } }));
+                }, theme);
+                const banner = page.locator('.phone-banner');
+                await expect(banner).toBeVisible();
+                await expect(banner).toContainText(locale === 'ar' ? 'فشلت مهمة مجدولة' : 'Scheduled job failed');
+                if (size === 'phone') await page.addStyleTag({ content: '.sb:not(.is-open) { display: none; }' });
+                await shot(page, `phone-banner-${locale}-${theme}-${size}`);
+                // At phone width the Arabic chat row below is crowded already; check what the banner adds.
+                const problems = await audit(page);
+                expect(size === 'desktop' ? problems : problems.filter((p) => /phone-banner|link-btn/.test(p))).toEqual([]);
+                if (locale === 'ar') expect(await untranslated(page, '.phone-banner')).toEqual([]);
+                await banner.locator('.link-btn').first().click();
+                await expect(page.locator('.phone-settings')).toBeVisible();
+                await expect(page.locator('#phone-alerts .settings-disclosure')).toHaveAttribute('open', '');
+            });
+        }
+    }
 }

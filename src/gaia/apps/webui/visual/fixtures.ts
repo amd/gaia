@@ -142,6 +142,51 @@ export const VOICE_STATUS = {
     ],
 };
 
+/** Phone set up on the Simulated phone with two numbers and a recent alert, but switched off. */
+export const PHONE_STATUS = {
+    enabled: false, provider: 'simulated', configured: true, from_number: '+15550100000', texts_enabled: false,
+    contacts: [
+        { id: 1, label: 'My phone', number: '+1 •••• 4567', primary: true },
+        { id: 2, label: 'هاتف العمل', number: '+44 •••• 0192', primary: false },
+    ],
+    open_alerts: 1, calls_today: 2, texts_today: 1, last_error: null, awake: { held: false, reason: 'battery' },
+};
+export const PHONE_SETTINGS = {
+    enabled: false, provider: 'simulated', from_number: '+15550100000', texts_enabled: false, quiet_hours: { start: '22:00', end: '07:00' },
+    limits: { calls_per_day: 6, texts_per_day: 20, agent_calls_per_day: 2 },
+    delays: { text_after_minutes: 5, call_after_minutes: 5 }, cooldown_minutes: 30, simulated_outcome: 'machine_start', keep_awake: true,
+    rules: {
+        schedule_failed: { on: true, steps: 'notify_text_call', urgent: false },
+        approval_waiting: { on: true, steps: 'notify_text', urgent: false, after_minutes: 10 },
+        gaia_down: { on: true, steps: 'notify_text_call', urgent: true },
+        agent: { on: false, steps: 'notify_text_call', urgent: false },
+    },
+};
+const phoneTime = Math.floor(NOW.getTime() / 1000);
+export const PHONE_ALERTS = [
+    {
+        id: 12, source: 'schedule', kind: 'schedule_failed', title: 'Scheduled job failed', reason: 'Nightly backup to D:\\Backups exited with code 2',
+        count: 3, state: 'open', urgent: false, created_at: phoneTime - 900, reached: false, held: 'call_limit',
+        deliveries: [
+            { channel: 'call', number: '+1 •••• 4567', state: 'done', outcome: 'no-answer', reached: false, error: null, at: phoneTime - 120 },
+            { channel: 'call', number: '+1 •••• 4567', state: 'done', outcome: 'machine_start', reached: false, error: null, at: phoneTime - 240 },
+            { channel: 'text', number: '+1 •••• 4567', state: 'done', outcome: 'delivered', reached: false, error: null, at: phoneTime - 600 },
+        ],
+    },
+    {
+        id: 11, source: 'test', kind: 'test', title: 'Test alert', reason: '', count: 1, state: 'handled', urgent: true,
+        created_at: phoneTime - 86_400, reached: true, held: '',
+        deliveries: [{ channel: 'call', number: '+1 •••• 4567', state: 'done', outcome: 'human', reached: true, error: null, at: phoneTime - 86_300 }],
+    },
+];
+export const PHONE_SIM_LOG = {
+    calls: [
+        { sid: 'SIM-C1', to: '+15551234567', from: '+15550100000', script: '<Response><Say>This is GAIA. Your verification code is 4, 8, 1, 5, 9, 2. Again, 4, 8, 1, 5, 9, 2.</Say><Hangup/></Response>' },
+        { sid: 'SIM-C2', to: '+15551234567', from: '+15550100000', script: '<Response><Say>This is GAIA on your PC. A scheduled job failed. Open GAIA to see it.</Say><Pause length="1"/><Say>This is GAIA on your PC. A scheduled job failed. Open GAIA to see it.</Say><Hangup/></Response>' },
+    ],
+    texts: [{ sid: 'SIM-T1', to: '+15551234567', from: '+15550100000', body: 'GAIA: A scheduled job failed. Open GAIA to see it.' }],
+};
+
 const ROUTES: Record<string, unknown> = {
     'GET /sessions': { sessions: SESSIONS, total: SESSIONS.length },
     [`GET /sessions/${ANSWER_SESSION}/messages`]: MESSAGES,
@@ -202,6 +247,10 @@ const ROUTES: Record<string, unknown> = {
     'GET /lemonade/target': { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: 'http://127.0.0.1:13305', saved_base_url: null, api_key_stored: false, env_override: null },
     'GET /voice/settings': VOICE_SETTINGS,
     'GET /voice/status': VOICE_STATUS,
+    'GET /phone/status': PHONE_STATUS,
+    'GET /phone/settings': PHONE_SETTINGS,
+    'GET /phone/alerts': { alerts: PHONE_ALERTS },
+    'GET /phone/simulated/log': PHONE_SIM_LOG,
 };
 
 /**

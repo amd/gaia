@@ -1,0 +1,420 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.phone-intro p {
+    margin: 0;
+}
+
+.phone-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.phone-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+}
+
+.phone-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.phone-error {
+    display: grid;
+    gap: 2px;
+}
+
+.phone-error-detail {
+    color: var(--text-secondary);
+    font-size: var(--fs-label);
+}
+
+.phone-toggle .settings-hint {
+    margin-top: -4px;
+}
+
+.phone-providers {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.phone-provider {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    background: var(--bg-card);
+    cursor: pointer;
+}
+
+.phone-provider.is-chosen {
+    border-color: var(--accent-solid);
+    background: var(--accent-dim);
+}
+
+.phone-provider input {
+    margin-top: 3px;
+    accent-color: var(--accent-solid);
+}
+
+.phone-provider-text {
+    display: grid;
+    gap: 2px;
+}
+
+/* Names isolated in <bdi> keep to the reading edge of their row. */
+.phone-provider-name,
+.phone-book-label {
+    justify-self: start;
+    max-width: 100%;
+}
+
+.phone-provider-name {
+    font-size: var(--fs-body);
+    font-weight: 600;
+}
+
+.phone-twilio,
+.phone-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.phone-form > button {
+    align-self: flex-start;
+}
+
+.phone-warning {
+    margin: 0;
+}
+
+.phone-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent);
+}
+
+.phone-ok-icon {
+    display: inline;
+    color: var(--accent-green);
+    vertical-align: -2px;
+}
+
+.phone-book {
+    display: grid;
+    gap: 6px;
+    margin: 0 0 12px;
+    padding: 0;
+    list-style: none;
+}
+
+.phone-book li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    background: var(--bg-recessed);
+}
+
+.phone-book-who {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+}
+
+.phone-book-label {
+    overflow: hidden;
+    font-size: var(--fs-ui);
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.phone-book-number {
+    justify-self: start;
+    color: var(--text-muted);
+    font-size: var(--fs-label);
+    font-variant-numeric: tabular-nums;
+}
+
+.phone-badge {
+    padding: 1px 8px;
+    border-radius: var(--radius-full);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: var(--fs-caption);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.phone-badge.is-open {
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
+}
+
+.phone-badge.is-urgent {
+    background: var(--accent-yellow-dim);
+    color: var(--accent-yellow);
+}
+
+.phone-code,
+.phone-add {
+    padding: 12px;
+    border-radius: var(--radius-lg);
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+}
+
+.phone-code h4,
+.phone-add h4 {
+    margin: 0;
+}
+
+.phone-code p {
+    margin: 0;
+}
+
+.phone-code-input {
+    max-width: 16ch;
+    font-family: var(--font-mono);
+    font-size: var(--fs-body);
+    letter-spacing: 0.2em;
+}
+
+.phone-add-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+    gap: 10px;
+}
+
+.phone-via {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.phone-via legend {
+    float: inline-start;
+    margin-inline-end: 6px;
+    padding: 0;
+}
+
+.phone-via-option,
+.phone-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-ui);
+    cursor: pointer;
+}
+
+.phone-via-option input,
+.phone-check input {
+    accent-color: var(--accent-solid);
+}
+
+.phone-rules {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.phone-rule {
+    display: grid;
+    gap: 6px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-light);
+}
+
+.phone-rule:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+}
+
+.phone-rule-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+}
+
+.phone-rule.is-off .phone-rule-controls {
+    opacity: 0.6;
+}
+
+.phone-number-field {
+    display: grid;
+    gap: 4px;
+}
+
+.phone-number-input {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.phone-number-input input {
+    width: 8ch;
+}
+
+.phone-rule .phone-number-field {
+    grid-template-columns: auto auto;
+    align-items: center;
+    column-gap: 8px;
+}
+
+.phone-rule .phone-number-field > .settings-hint:last-child {
+    display: none;
+}
+
+.phone-quiet,
+.phone-limits {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.phone-alerts-anchor {
+    scroll-margin-top: 12px;
+}
+
+.phone-alerts {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.phone-alert {
+    display: grid;
+    gap: 6px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    background: var(--bg-card);
+}
+
+.phone-alert.is-open {
+    border-color: var(--accent-solid);
+}
+
+.phone-alert > p {
+    margin: 0;
+}
+
+.phone-alert > button {
+    justify-self: start;
+}
+
+.phone-alert-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+}
+
+.phone-alert-title {
+    font-size: var(--fs-body);
+    font-weight: 600;
+}
+
+.phone-alert-time {
+    margin-inline-start: auto;
+    color: var(--text-muted);
+    font-size: var(--fs-label);
+}
+
+.phone-alert-reason {
+    color: var(--text-secondary);
+    font-size: var(--fs-ui);
+    overflow-wrap: anywhere;
+}
+
+.phone-deliveries,
+.phone-sim {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--fs-label);
+}
+
+.phone-deliveries li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+}
+
+.phone-outcome {
+    font-weight: 600;
+}
+
+.phone-outcome.is-reached {
+    color: var(--accent-green);
+}
+
+.phone-outcome.is-failed {
+    color: var(--danger);
+}
+
+.phone-sim li {
+    display: grid;
+    gap: 2px;
+    padding: 6px 10px;
+    border-radius: var(--radius-md);
+    background: var(--bg-recessed);
+}
+
+.phone-sim-to {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.phone-sim-said {
+    justify-self: start;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+
+/* The open-alert banner at the top of the main area. */
+.phone-banner-title {
+    font-weight: 600;
+}
+
+.phone-banner-more {
+    color: var(--text-secondary);
+}
+
+@media (max-width: 640px) {
+    .phone-settings input.settings-input {
+        /* iOS zooms into anything under 16px when it is focused. */
+        font-size: 16px;
+    }
+}

@@ -816,7 +816,7 @@ much they use now.
 One window with General (language; appearance: Light, Dark, Match system; colors; the
 [desktop app's tray switches](#the-tray-icon); shortcuts),
 Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, the `.claude/skills` folder of the project GAIA is working in, or your other Claude Code skill folders, with **Use** to try one),
-Connectors, Memory, Notifications, Voice, Privacy and Advanced (model server and
+Connectors, Memory, Notifications, Voice, Phone, Privacy and Advanced (model server and
 llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
 back).
 
@@ -864,6 +864,14 @@ skipped, so you hear the words. **Settings → Voice → Speaking** picks the vo
 speak English, so a reply in another language is read with an English accent.
 The first reading after a restart takes longer while Lemonade loads the voice.
 The [terminal app](/guides/tui) uses the same voice and speed, and so does GAIA when you ask it to save speech to a file.
+
+**Settings → Phone** sets up [phone alerts](/guides/phone-alerts): GAIA texts or calls your
+phone when a scheduled job fails, a task waits on your approval, or GAIA can't run. It starts on
+the **Simulated phone**, which records calls and texts here instead of sending them, so you can add
+a number (the code shows in the Simulated phone log), turn phone on and send a test alert before
+signing up with Twilio. Changes to phone settings work only on the PC running GAIA, not over mobile
+access. While an alert is open, a bar at the top of the window names it; **Open** shows it in
+Settings and **Dismiss** marks it handled, which stops its texts and calls, from your phone too.
 
 **One chat at a time on the model.** A second chat sent while another is
 working waits its turn and says so ("Waiting for the GPU — 1st in line", also

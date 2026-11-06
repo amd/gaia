@@ -27,15 +27,25 @@ ERROR_CODES = frozenset(
 
 
 class PhoneError(RuntimeError):
-    def __init__(self, code: str, message: str, *, detail: str = ""):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        detail: str = "",
+        tries_left: "int | None" = None,
+    ):
         if code not in ERROR_CODES:
             raise ValueError(f"unknown phone error code {code!r}")
         super().__init__(message)
         self.code = code
         self.detail = detail
+        self.tries_left = tries_left
 
     def to_dict(self) -> dict:
         out = {"code": self.code, "message": str(self)}
         if self.detail:
             out["detail"] = self.detail
+        if self.tries_left is not None:
+            out["tries_left"] = self.tries_left
         return out

@@ -23,6 +23,7 @@ export type SettingsSection =
     | 'privacy'
     | 'notifications'
     | 'voice'
+    | 'phone'
     | 'advanced';
 
 /**
