@@ -1924,16 +1924,19 @@ class TestStreamingGeneratorEdgeCases:
                 )
             ]
 
-        assert any('"type": "policy_alert"' in chunk for chunk in chunks)
-        # The error rides on the closing ``done``, not a separate ``error`` event.
-        assert not any('"type": "error"' in chunk for chunk in chunks)
-        (done,) = [
-            json.loads(chunk[len("data: ") :])
+        events = [
+            json.loads(line[6:])
             for chunk in chunks
-            if '"type": "done"' in chunk
+            for line in chunk.splitlines()
+            if line.startswith("data: ")
         ]
+        assert any(e.get("type") == "policy_alert" for e in events)
+        errors = [e for e in events if e.get("type") == "agent_error"]
+        assert len(errors) == 1 and errors[0].get("fatal") is True, events
+        assert "stream exploded" in errors[0]["content"]
+        assert not [e for e in events if e.get("type") == "error"], events
+        (done,) = [e for e in events if e.get("type") == "done"]
         assert done.get("failed") is True
-        assert "[Error: stream exploded]" in done["content"]
 
         assistant_messages = [
             message
@@ -1949,6 +1952,11 @@ class TestStreamingGeneratorEdgeCases:
         assert assistant_messages[0]["agent_steps"][0]["receiptId"] == (
             "rcpt_stream_error_1234"
         )
+        assert [
+            s["detail"]
+            for s in assistant_messages[0]["agent_steps"]
+            if s["type"] == "error"
+        ] == [errors[0]["content"]]
 
     def test_policy_alert_block_with_agent_explanation_does_not_duplicate_message(
         self, client, session_id
