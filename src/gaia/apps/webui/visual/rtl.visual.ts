@@ -1215,6 +1215,36 @@ async function expectVisibleTryAgain(page: Page, locale: string): Promise<void> 
     expect(opacity).toBeGreaterThan(0.99);
 }
 
+const FAILED_WITH_REPORT =
+    "The model call failed at step 1, so this request is unfinished. Couldn't reach the local LLM.\n\n"
+    + 'Nothing had run yet.\n\n'
+    + 'A problem report for this was saved on this PC as GF-20261104-192233-3f2a; nothing was sent anywhere.';
+
+/** A chat whose last turn failed and named the problem report GAIA saved for it. */
+async function withFailureReport(page: Page): Promise<void> {
+    await page.route(new RegExp(`/api/sessions/${ANSWER_SESSION}/messages(\\?|$)`), (route) => route.fulfill({
+        json: {
+            messages: [
+                { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Summarize the minutes', created_at: '2026-11-04T19:22:00Z', rag_sources: null },
+                { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: FAILED_WITH_REPORT, created_at: '2026-11-04T19:22:33Z', rag_sources: null },
+            ],
+            total: 2,
+        },
+    }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a failed answer offers its troubleshooting report (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFailureReport);
+        const report = page.locator('.msg-report');
+        await expect(report.getByRole('button')).toHaveText(locale === 'ar' ? /حفظ تقرير لاستكشاف الأخطاء/ : /Save a troubleshooting report/);
+        await expect(report.locator('.msg-report-hint')).toContainText(locale === 'ar' ? 'لا يُرسَل شيء' : 'nothing is sent');
+        await report.scrollIntoViewIfNeeded();
+        await shot(page, `failed-answer-report-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const PARTIAL_ANSWER = 'Coral reefs cover less than one percent of the ocean floor.';
 const INTERRUPTED_NOTICE = 'This answer was interrupted when GAIA closed. Send again to retry.';
 

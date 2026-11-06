@@ -211,7 +211,15 @@ def test_postrm_purge_removes_only_our_memlock_dropins(tmp_path):
         target.write_text(text)
     script = tmp_path / "postrm"
     script.write_text(POSTRM.read_text().replace("/etc/", str(root / "etc") + "/"))
+    # The runner's real cache refreshes scan /usr/share and can outlast the timeout.
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for name in ("update-desktop-database", "gtk-update-icon-cache"):
+        command = fake_bin / name
+        command.write_text("#!/bin/sh\nexit 0\n")
+        command.chmod(0o755)
+    env = {**os.environ, "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"]}
     for action, ours_kept in (("remove", True), ("purge", False)):
-        subprocess.run(["/bin/sh", str(script), action], check=True, timeout=5)
+        subprocess.run(["/bin/sh", str(script), action], env=env, check=True, timeout=5)
         assert (root / ours.lstrip("/")).exists() == ours_kept
     assert (root / theirs.lstrip("/")).read_text() == "admin's own setting"

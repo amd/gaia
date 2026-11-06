@@ -928,6 +928,42 @@ error. To run the chat model in the cloud instead, see
 
     Attach the resulting `.tgz` to your GitHub issue.
   </Accordion>
+
+  <Accordion title="A model call failed: the problem report it names" icon="file-medical">
+    When a call to a local model fails (GAIA couldn't reach the model
+    server, a model wouldn't load, the server stopped mid-answer or timed
+    out, setup failed, or an agent didn't start), GAIA saves what it saw at
+    that moment and the failed answer names it, for example
+    `GF-20261104-192233-3f2a`. Nothing is sent anywhere.
+
+    Each report is a JSON file in `~/.gaia/failures/` holding:
+    - GAIA, Python and Lemonade versions, the OS and kernel
+    - the CPU, GPU and NPU and each backend's state and version (llama.cpp,
+      FastFlowLM), as Lemonade reports them
+    - the model, the address the agent called and the one Lemonade listens
+      on (GAIA's own, one you installed, or a remote one), and whether an
+      API key was sent; never the key
+    - what GAIA last asked for: each load request (model, recipe options,
+      context window) and how the window was chosen, the free-memory check,
+      and each chat request's size (estimated prompt tokens, number of tools
+      and their schema size, `max_tokens`, streaming), with start and end
+      times, the HTTP status and body or the connection error. Never the
+      words of your messages
+    - the models Lemonade had loaded, whether `lemond`, `llama-server` and
+      `flm` were running and for how long, how GAIA's own `lemond` exited if
+      it stopped, and whether Lemonade restarted since the last report
+    - the error and the last 200 lines of GAIA's Lemonade log, where
+      llama.cpp and FastFlowLM print their own errors and exit codes
+
+    Keys, tokens and your home folder are taken out before the file is
+    written. GAIA keeps the last 10 reports, each at most 256 KB. It reads
+    only a Lemonade on this PC; a remote server is named but not contacted.
+
+    To share one, select **Save a troubleshooting report** under the failed
+    answer, or in **Settings → Privacy**. The bundle holds these reports,
+    GAIA's logs and this PC's details. Look it over, then attach it to your
+    GitHub issue along with the report name from the answer.
+  </Accordion>
 </AccordionGroup>
 
 ---
