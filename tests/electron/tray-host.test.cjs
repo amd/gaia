@@ -147,6 +147,15 @@ describe("TrayManager without a tray host", () => {
     expect(`${message} ${detail}`).not.toMatch(/tray|AppIndicator/i);
   });
 
+  test("the first-close notice waits for the tray check, so it names the right place", () => {
+    setPlatform("linux");
+    const mgr = newTray();
+    mgr.config.notices = { firstClose: false };
+    expect(mgr.closeNoticeDue).toBe(false);
+    mgr.setHost({ available: true, reason: null });
+    expect(mgr.closeNoticeDue).toBe(true);
+  });
+
   test("a malformed host result is refused loudly", () => {
     setPlatform("linux");
     expect(() => newTray().setHost({ reason: "no-host" })).toThrow(/setHost expects/);
@@ -159,7 +168,7 @@ describe("closing the window on a desktop without a tray", () => {
     win.hide = jest.fn();
     win.minimize = jest.fn();
     win.isMinimized = jest.fn(() => false);
-    win.isFocused = jest.fn(() => false);
+    win.isFocused = jest.fn(() => true);
     const app = { quit: jest.fn() };
     attachWindowGuards(win, {
       app,

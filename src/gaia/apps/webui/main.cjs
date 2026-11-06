@@ -1404,7 +1404,7 @@ function askAboutRunningWork(action) {
       if (!mainWindow || mainWindow.isDestroyed()) return dialog.showMessageBox(opts);
       if (mainWindow.isMinimized()) mainWindow.restore();
       if (!mainWindow.isVisible()) mainWindow.show();
-      // Wayland can't un-minimize a window, and a modal stays minimized with it.
+      // Linux may not un-minimize or focus it in time, and a modal stays hidden with its parent.
       if (process.platform === "linux" && !mainWindow.isFocused()) return dialog.showMessageBox(opts);
       return dialog.showMessageBox(mainWindow, opts);
     },

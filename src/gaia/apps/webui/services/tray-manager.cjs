@@ -383,7 +383,8 @@ class TrayManager {
 
   /** @returns {boolean} Whether the one-time "still running in the tray" notice is still due. */
   get closeNoticeDue() {
-    return !this.config.notices.firstClose;
+    // Held while the tray check runs, so a dock notice never uses up the tray one.
+    return !this.config.notices.firstClose && this.trayHost.reason !== "checking";
   }
 
   /**

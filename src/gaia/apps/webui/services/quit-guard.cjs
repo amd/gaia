@@ -220,11 +220,10 @@ function attachWindowGuards(win, { app, guard, getTray, isQuitting, platform, re
     if (isQuitting()) return;
     const tray = getTray();
     const action = tray ? tray.closeAction : "quit";
-    // A focused window was closed from its own title bar, whatever isMinimized() says
-    // (Wayland can leave it stale after a dock restore). Unfocused and minimized: the dock's Quit.
-    const minimized =
+    // Focus wins over isMinimized(), which Wayland can leave stale after a dock restore.
+    const dockQuit =
       action === "minimize" && !win.isFocused() && (minimizedByClose || win.isMinimized());
-    if (action === "hide" || (action === "minimize" && !minimized)) {
+    if (action === "hide" || (action === "minimize" && !dockQuit)) {
       event.preventDefault();
       if (action === "hide") {
         win.hide();

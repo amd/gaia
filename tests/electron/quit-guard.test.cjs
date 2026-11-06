@@ -339,9 +339,11 @@ describe("attachWindowGuards", () => {
   function setup({ closeAction = "hide", noticeDue = true, platform = "win32", confirmed = false, quitting = false } = {}) {
     const win = new EventEmitter();
     win.hide = jest.fn();
-    win.minimize = jest.fn();
+    // A title-bar close comes from the focused window; minimizing takes focus away.
     win.isMinimized = jest.fn(() => false);
-    win.isFocused = jest.fn(() => false);
+    win.isFocused = jest.fn(() => true);
+    win.minimize = jest.fn(() => win.isFocused.mockReturnValue(false));
+    win.on("focus", () => win.isFocused.mockReturnValue(true));
     const app = { quit: jest.fn() };
     const guard = { confirmed, allow: jest.fn() };
     const tray = {
@@ -395,7 +397,7 @@ describe("attachWindowGuards", () => {
     expect(reportNoticeError).toHaveBeenCalledWith(expect.objectContaining({ message: "EACCES" }));
   });
 
-  test("with no tray, close minimizes the window, keeps GAIA running and shows the notice", async () => {
+  test("with no tray, a title-bar close minimizes, keeps GAIA running and shows the notice", async () => {
     const { win, tray, close, app } = setup({ closeAction: "minimize" });
     const ev = close();
     expect(ev.preventDefault).toHaveBeenCalled();
@@ -406,7 +408,7 @@ describe("attachWindowGuards", () => {
     expect(app.quit).not.toHaveBeenCalled();
   });
 
-  test("a close while minimized is the dock's Quit, so it runs the quit guard", () => {
+  test("the dock's Quit on the window GAIA minimized runs the quit guard", () => {
     const { win, close, app } = setup({ closeAction: "minimize", noticeDue: false });
     close();
     const ev = close();
@@ -415,12 +417,12 @@ describe("attachWindowGuards", () => {
     expect(app.quit).toHaveBeenCalledTimes(1);
   });
 
-  test("a close while the user minimized it (title bar) is a dock Quit too", () => {
+  test("the dock's Quit on a window the user minimized quits too", () => {
     const { win, close, app } = setup({ closeAction: "minimize", noticeDue: false });
+    win.isFocused.mockReturnValue(false);
     win.isMinimized.mockReturnValue(true);
-    const ev = close();
+    close();
     expect(win.minimize).not.toHaveBeenCalled();
-    expect(ev.preventDefault).toHaveBeenCalled();
     expect(app.quit).toHaveBeenCalledTimes(1);
   });
 
@@ -429,9 +431,16 @@ describe("attachWindowGuards", () => {
     close();
     win.isMinimized.mockReturnValue(true);
     win.isFocused.mockReturnValue(true);
-    const ev = close();
-    expect(ev.preventDefault).toHaveBeenCalled();
+    close();
     expect(win.minimize).toHaveBeenCalledTimes(2);
+    expect(app.quit).not.toHaveBeenCalled();
+  });
+
+  test("a close on a visible window that isn't focused minimizes rather than quit", () => {
+    const { win, close, app } = setup({ closeAction: "minimize", noticeDue: false });
+    win.isFocused.mockReturnValue(false);
+    close();
+    expect(win.minimize).toHaveBeenCalledTimes(1);
     expect(app.quit).not.toHaveBeenCalled();
   });
 
