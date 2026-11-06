@@ -832,6 +832,19 @@
     font-weight: 600;
 }
 
+/* Read aloud: the voice picker with its Preview button beside it. */
+.read-aloud-voice-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.read-aloud-voice-row .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
 .settings-setup-status {
     display: flex;
     flex-wrap: wrap;

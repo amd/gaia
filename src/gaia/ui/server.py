@@ -75,14 +75,17 @@ from .routers import lemonade as lemonade_router_mod
 from .routers import mcp as mcp_router_mod
 from .routers import memory as memory_router_mod
 from .routers import onboarding as onboarding_router_mod
+from .routers import phone as phone_router_mod
 from .routers import providers as providers_router_mod
 from .routers import schedules as schedules_router_mod
 from .routers import sessions as sessions_router_mod
 from .routers import setup as setup_router_mod
 from .routers import skills as skills_router_mod
+from .routers import speech as speech_router_mod
 from .routers import spending as spending_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
+from .routers import voice as voice_router_mod
 from .security import UIRequestGuardMiddleware
 from .tunnel import TunnelManager
 from .utils import ALLOWED_EXTENSIONS as _ALLOWED_EXTENSIONS  # noqa: F401
@@ -102,7 +105,9 @@ DEFAULT_PORT = 4200
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 # API paths that bypass tunnel authentication (monitoring / preflight)
-_AUTH_EXEMPT_PATHS = {"/api/health"}
+# The phone webhook can't carry the tunnel token; Twilio's signature, checked by
+# the daemon, authenticates it instead.
+_AUTH_EXEMPT_PATHS = {"/api/health", "/api/phone/incoming"}
 
 # HttpOnly cookie name used to bootstrap tunnel auth from the QR-code URL.
 # When a mobile browser opens ``https://<tunnel>/?token=<uuid>`` the SPA
@@ -776,6 +781,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         scheduler = Scheduler(db=db, executor=_schedule_executor)
         app.state.scheduler = scheduler
         await scheduler.start()
+        # Lets phone calls reach this PC while mobile access is on.
+        phone_publisher = asyncio.create_task(
+            phone_router_mod.publish_talk_endpoint(app)
+        )
         logger.info("Task scheduler started (timeout=%ss)", _sched_timeout)
 
         # Start document file monitor for auto re-indexing
@@ -841,6 +850,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         # Shutdown
         remove_local_work(active_turns_in_flight)
+        phone_publisher.cancel()
         await scheduler.shutdown()
         logger.info("Task scheduler stopped")
         await agent_loop.stop()
@@ -959,6 +969,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(gpu_memory_router_mod.router)
     app.include_router(lemonade_router_mod.router)
     app.include_router(providers_router_mod.router)
+    app.include_router(speech_router_mod.router)
+    app.include_router(voice_router_mod.router)
+    app.include_router(phone_router_mod.router)
     app.include_router(spending_router_mod.router)
     app.include_router(skills_router_mod.router)
     app.include_router(hub_router_mod.router)

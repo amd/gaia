@@ -123,6 +123,10 @@ export interface GaiaElectronAPI {
   power: {
     setKeepAwake: (on: boolean) => Promise<boolean>;
   };
+  system?: {
+    /** The OS microphone privacy pane; resolves false on an OS with none to open. */
+    openMicSettings?: () => Promise<boolean>;
+  };
   dialog: {
     /** The OS folder picker. Resolves the chosen absolute path, or null when cancelled. */
     pickFolder: (defaultPath?: string) => Promise<string | null>;

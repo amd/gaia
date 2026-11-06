@@ -154,6 +154,7 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 		"KeyCtrlJ":  "Ctrl+J",
 		"KeyEnter":  "Enter",
 		"KeyCtrlT":  "Ctrl+T",
+		"KeyCtrlR":  "Ctrl+R",
 		"KeyCtrlO":  "Ctrl+O",
 		"KeyCtrlY":  "Ctrl+Y",
 		"KeyCtrlB":  "Ctrl+B",
@@ -193,6 +194,9 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 		"/gateway":     "/gateway",
 		"/copy":        "/copy",
 		"/copy all":    "/copy all",
+		"/dictate":     "/dictate",
+		"/talk":        "/talk",
+		"/phone":       "/phone",
 	}
 	for _, cmd := range chatModelCommands(t) {
 		if strings.HasPrefix(cmd, "/bypass") {
@@ -231,6 +235,12 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 	// literal there and has to be asserted directly.
 	if !strings.Contains(chatHelpText, "/model") {
 		t.Error("chat help never mentions /model")
+	}
+	// Dispatched before the switch for the same reason (free-form arguments).
+	for _, want := range []string{"/read-aloud", "/voice"} {
+		if !strings.Contains(chatHelpText, want) {
+			t.Errorf("chat help never mentions %s", want)
+		}
 	}
 
 	// None of these are switch cases either: type-ahead queueing, the

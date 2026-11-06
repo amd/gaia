@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
 from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT
+from gaia.voice.spoken import without_tags
 
 from .. import answer_retry, followups
 from .. import permissions as session_permissions
@@ -626,7 +627,8 @@ async def export_session(
             answer_model = _answer_model(msg)
             if answer_model:
                 role_label = f"{role_label} ({answer_model})"
-            lines.append(f"**{role_label}:**\n\n{msg['content']}\n\n---\n")
+            text = without_tags(msg["content"] or "")
+            lines.append(f"**{role_label}:**\n\n{text}\n\n---\n")
 
         content = "\n".join(lines)
         return {"content": content, "format": "markdown"}

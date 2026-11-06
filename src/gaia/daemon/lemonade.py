@@ -155,6 +155,9 @@ class EmbeddedLemonadeOwner:
         self._owner_pid = owner_pid if owner_pid is not None else os.getpid()
         self._owner_started = _process_started(self._owner_pid)
         self._owner_alive = owner_alive or _owner_alive
+        #: Told ``(ok, reason)`` after every start attempt; the phone service
+        #: uses it to alert when GAIA's model server keeps failing.
+        self.on_health: Optional[Callable[[bool, str], None]] = None
 
     @property
     def owner_pid(self) -> int:
@@ -178,6 +181,23 @@ class EmbeddedLemonadeOwner:
         )
 
     def ensure(self) -> EnsuredLemonade:
+        """Return the running embedded server, starting it if it is stopped.
+
+        See :meth:`_ensure`; this also reports the outcome to :attr:`on_health`.
+        """
+        from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+
+        try:
+            ensured = self._ensure()
+        except EmbeddedLemonadeError as e:
+            if self.on_health is not None:
+                self.on_health(False, str(e))
+            raise
+        if self.on_health is not None:
+            self.on_health(True, "")
+        return ensured
+
+    def _ensure(self) -> EnsuredLemonade:
         """Return the running embedded server, starting it if it is stopped.
 
         A healthy server someone else started is claimed, so this daemon stops

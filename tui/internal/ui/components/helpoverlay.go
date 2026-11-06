@@ -289,16 +289,16 @@ const chatHelpText = `  GAIA Chat
 
   Commands    /help /clear /full-access /slack /setup
               /memory /model /provider /gateway /agents
-              /models /gpu
+              /models /gpu /read-aloud /voice /phone
   /cost       Session spend · /cost help for rates
+  Ctrl+R      Dictate (/dictate) · /talk: voice mode
   /update     New GAIA release? · /update now
   /           Browse commands on an empty line: ↑/↓ or
               click to pick, Enter to run, Esc to close
 
-  Scroll        ↑ / ↓ line · PgUp/PgDn page
+  Scroll        ↑/↓ line · PgUp/PgDn page · Mouse wheel
   Home / End    Top / bottom, if the composer is
                 empty — otherwise cursor keys
-  Mouse wheel   Scrolls
   Click         Picks a palette row or question
                 option · Ctrl+T to click links too
   Ctrl+O        Each step in full, or folded

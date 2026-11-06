@@ -600,6 +600,7 @@ names the update command.
 | `Ctrl+Y` | Copy the whole answer |
 | `Ctrl+B` | Copy the last code block in the answer |
 | `Ctrl+O` | Show every step in full — the agent's narration, wrapped commands, timings — or fold it back to one row per step |
+| `Ctrl+R` | Dictate: speak, and what you said lands in the composer at the cursor. `Ctrl+R`, `Esc` or `Enter` stops — see [Talking to GAIA](#talking-to-gaia) |
 
 ### Reading a turn
 
@@ -696,11 +697,16 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/full-access off` | Turn full access off for this session |
 | `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |
 | `/full-access never` | Stop it coming back on future launches |
+| `/read-aloud` | Read the last reply aloud through Lemonade's voice model, played by the PC's own player. Run it again, or `/read-aloud stop`, to stop. Works while the agent is still answering |
+| `/voice` | Show the read-aloud voice, speed and auto-read, and list the voices (American or British English, female or male). `/voice bm_george` picks one, `/voice speed 125` sets the speed in percent (50–200), `/voice auto on` reads each finished reply. Saved to `~/.gaia/config.json`, shared with the [Agent UI](/guides/agent-ui#settings) |
 | `/cost` | What this session has spent — time, steps, tool calls, tokens, dollars |
 | `/cost help` | Where the rates come from, and how to set your own |
 | `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
 | `/copy all` | Copy the whole conversation as markdown |
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
+| `/dictate` | Same as `Ctrl+R`: speak into the composer |
+| `/talk` | Voice mode: talk with GAIA and hear a short spoken answer — see [Talking to GAIA](#talking-to-gaia) |
+| `/phone` | Phone alerts: the provider, your phone book, the rules and the alerts so far — see [Phone alerts](#phone-alerts) |
 | `/update` | Check for a newer GAIA. `/update now` installs the newest, `/update v0.25.0` installs and pins that exact one, `/update back` returns to the version before the last update, `/update auto on` installs new releases when you quit (off by default), `/update rc on` offers release candidates too. See [Updating GAIA](/guides/install#updating-gaia) |
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
@@ -744,6 +750,59 @@ options are the same: `↑`/`↓` (or `Tab`) to move between them, a number key 
 one directly, `Enter` to answer, and the mouse works identically to the palette above.
 `Esc` cancels the turn rather than the question, since abandoning it is the only way
 out once it is up.
+
+### Talking to GAIA
+
+GAIA can listen and speak. The GAIA background service records this PC's
+microphone and plays speech through its speakers, and speech recognition and
+the voice run on your local Lemonade Server, so audio never leaves the machine.
+Over SSH the microphone is the remote machine's, not yours.
+
+**Dictation** (`Ctrl+R` or `/dictate`) types for you. While it records, the line
+above the composer reads `● Listening — Ctrl+R or Esc to stop`, with the words
+it has heard so far. Pauses don't end it. Stopping puts the text at the cursor;
+nothing is sent until you press `Enter`.
+
+**Voice mode** (`/talk`) is a full screen on the same conversation. Say
+something, pause, and GAIA answers: it says one or two sentences out loud while
+the full answer, and every step it took, is on screen. Before each step it
+says what it is about to do. Each spoken turn is an ordinary turn in the chat,
+so `Esc` returns to the conversation with your voice turns in it, the spoken
+summary shown in bold above each answer.
+
+| Key, in voice mode | What it does |
+|---|---|
+| Any key while GAIA speaks | Stops it, and it listens again |
+| `p` | Pause listening, and `p` again to resume |
+| `c` | Show or hide captions: what you said and what GAIA said |
+| `Space` | Talk, then `Space` again to send, when Settings › Voice › Turn-taking is push-to-talk |
+| `Esc` | Back to the chat. A turn still running carries on there |
+
+The microphone pauses while GAIA speaks, since the service has no echo
+cancellation; that is why a key, not your voice, interrupts it. Spoken replies
+are English-only for now: with another voice language GAIA answers on screen.
+The first time, voice mode asks to download the speech models it needs
+(`d` downloads them). Voice mode needs a GAIA agent new enough to give spoken
+replies, and says so if yours is older. The voice and speed are `/voice`'s;
+the other settings are the `voice_*` keys in [Configuration](/reference/cli#configuration),
+shared with the Agent UI.
+
+### Phone alerts
+
+`/phone` sets up [phone alerts](/guides/phone-alerts), the texts and calls GAIA
+makes when something urgent needs you. It has five sections; `Tab` (or `1`–`5`,
+or a click) moves between them and `Esc` returns to the chat.
+
+| Section | What you do there |
+|---|---|
+| Setup | Turn phone alerts on or off, use the Simulated phone or enter your Twilio keys (the Auth Token never shows on screen), and send a test alert. With the Simulated phone, the calls and texts it would have made are listed here |
+| Phone book | `a` adds a number: GAIA sends it a 6-digit code, and a second code to your first number when there is one. `x` removes a number, after a code sent to it |
+| Rules | Each alert's on/off (`Enter`), steps (`s`: notify, text, call), urgent (`u`), and how long an approval may wait (`+`/`-`). Also quiet hours, texts, keeping the PC awake and the daily limits |
+| Alerts | Every alert with what it sent and why one is held. `Enter` marks it handled, which stops the texts and calls left |
+| Talk on calls | Set, change or remove the PIN (it never shows on screen), turn talking on calls on or off, and pick the voice GAIA uses on calls. A line says whether calls can talk, or what is missing: a PIN, or mobile access so calls can reach this PC. After the alert sentence the call connects to this PC; you enter your PIN on the keypad, then talk with GAIA, and answer approvals with yes or no (or 1 or 2). You can also call GAIA's number from a number in your phone book |
+
+While an alert is open, a line under the chat's header says so, such as
+`⚠ Scheduled job failed · /phone`. It goes away once the alert is handled.
 
 ### When the agent asks first
 

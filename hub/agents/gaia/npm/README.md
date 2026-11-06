@@ -224,6 +224,14 @@ turn. Post it only once `/query` has answered: before then the turn's own
 `internet_off` replaces it, so re-read the switch at that point and post it if
 it changed. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**Speaking the reply? Send `reply_style: "voice"`** (contract ≥ 2.28) on that
+turn. The agent then writes a short status line before each tool call and opens
+its answer with a `<spoken>…</spoken>` summary of at most 40 words, then the
+usual detail. Speak the summary, strip the tags before showing the answer, and
+treat a missing block as "nothing to say aloud". Send it every turn: a retained
+session goes back to `"text"` when the field is omitted. Binaries older than
+2.28 reject it with `422`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
 **Showing what a turn changed, with undo? Send `changes_turn_id`** (contract ≥
 2.19) along with `session_id`: the agent copies each file before it writes it,
 into the snapshot store under its GAIA home, keyed by the session and that turn

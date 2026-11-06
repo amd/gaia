@@ -28,6 +28,7 @@ files:
   tests/integration/test_chat_rag_pdf_chat_e2e.py: Chats over an indexed PDF end to end; needs a live Lemonade Server with the chat and embedding models.
   tests/integration/test_chat_rag_pdf_e2e.py: Indexes and queries a PDF end to end; needs a live Lemonade Server with the chat and embedding models.
   tests/integration/test_pptx_rag_e2e.py: Answers questions over an indexed PPTX; needs a live Lemonade Server with the chat and embedding models.
+  tests/integration/test_voice_realtime_lemonade.py: Speaks with Kokoro and hears it back through the realtime recognizer; needs a live local Lemonade with speech models, named by GAIA_VOICE_TEST_LEMONADE.
   tests/integration/test_code_index_live.py: Embeds and searches real code; needs a live Lemonade Server serving the embedding model.
   tests/integration/test_check_suspicious_mail_tool_selection_2900.py: Measures which tool a real model picks for mail phrasings; needs a live Lemonade Server with the email model.
   tests/integration/test_email_agent_triage.py: Holds triage accuracy to a baseline; needs a live Lemonade Server with the email model.

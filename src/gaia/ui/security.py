@@ -70,7 +70,9 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 #: browser to it -- is a ``GET`` served by its own aiohttp server in
 #: ``gaia.connectors.flow``, not by this app. An entry here is a hole, so
 #: ``tests/unit/chat/ui/test_ui_request_guard.py`` asserts it stays empty.
-CSRF_EXEMPT_PATHS: frozenset = frozenset()
+#: Twilio's incoming-call webhook can't send the UI header; the daemon checks
+#: Twilio's signature on it instead.
+CSRF_EXEMPT_PATHS: frozenset = frozenset({"/api/phone/incoming"})
 
 #: Hostnames that always denote this machine.
 _LOOPBACK_NAMES = frozenset({"localhost", "::1"})

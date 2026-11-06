@@ -150,7 +150,9 @@ def _model_pin() -> Dict[str, Any]:
     return {"model": DEFAULT_MODEL_NAME}
 
 
-def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]:
+def _stream_chat(
+    base_url: str, session_id: str, message: str, reply_style: str = "text"
+) -> Dict[str, Any]:
     """Send a message via SSE stream and collect the full response."""
     url = f"{base_url}/api/chat/send"
     payload = {
@@ -159,6 +161,8 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
         "stream": True,
         **_model_pin(),
     }
+    if reply_style != "text":
+        payload["reply_style"] = reply_style
 
     try:
         r = requests.post(
@@ -438,15 +442,21 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
         return {"messages": messages, "total": total}
 
     @mcp.tool()
-    def send_message(session_id: str, message: str) -> Dict[str, Any]:
+    def send_message(
+        session_id: str, message: str, reply_style: str = "text"
+    ) -> Dict[str, Any]:
         """Send a message to the GAIA agent in a session and wait for the response.
         The conversation is stored and will be visible when the session is viewed.
         Returns the agent's response, tool outputs, and an event log.
 
         Use list_sessions() first to get a session ID, or create_session() to make one.
         To make the session visible in the browser, call open_session_in_browser() first.
+        Pass reply_style="voice" to send it as a voice-mode turn, whose answer opens
+        with a <spoken>...</spoken> summary.
         """
-        return _stream_chat(backend_url, session_id, message)
+        if reply_style not in ("text", "voice"):
+            return {"error": "reply_style must be 'text' or 'voice'."}
+        return _stream_chat(backend_url, session_id, message, reply_style)
 
     # ── Turn control (drive a turn without blocking) ───────────────
 

@@ -77,6 +77,7 @@ from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
+    AlertToolsMixin,
     AudioGenerationToolsMixin,
     AudioToolsMixin,
     BrowserToolsMixin,
@@ -121,6 +122,7 @@ from gaia.utils.file_lock import held_by_another_program
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.utils.user_folders import documents_dir
 from gaia.vlm.mixin import VLMToolsMixin
+from gaia.voice.prompt import VOICE_TURN_NOTE
 
 # Sentinel for not-yet-built lazy attributes (``rag``, ``session_manager``).
 # Distinct from ``None``. A missing RAG extra caches ``None``; any other RAG
@@ -454,6 +456,7 @@ class ChatAgent(
     AudioToolsMixin,
     AudioGenerationToolsMixin,
     WaitToolsMixin,
+    AlertToolsMixin,
     ReasoningEffortToolsMixin,
     MCPClientMixin,
 ):
@@ -845,8 +848,12 @@ class ChatAgent(
         return f"{Path(file_path).name} ({file_path}){written_in}"
 
     def get_memory_dynamic_context(self) -> str:
-        """Per-turn context, plus which documents are indexed right now."""
-        parts = (super().get_memory_dynamic_context(), self._indexed_documents_line())
+        """Per-turn context, which documents are indexed, and the voice note."""
+        parts = (
+            super().get_memory_dynamic_context(),
+            self._indexed_documents_line(),
+            VOICE_TURN_NOTE if getattr(self, "reply_style", "text") == "voice" else "",
+        )
         return "\n".join(part for part in parts if part)
 
     # ── lazy subsystems (#2323 Increment 3) ────────────────────────────────
@@ -2911,8 +2918,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         def text_to_speech(
             text: str,
             output_path: str = "",
-            voice: str = "af_bella",
-            speed: float = 1.0,
+            voice: str = "",
+            speed: Optional[float] = None,
         ) -> dict:
             """Turn text into one WAV audio file with an installed local TTS model.
 
@@ -2926,8 +2933,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 text: Text to speak.
                 output_path: Optional WAV destination. Empty uses GAIA's audio folder.
                 voice: Kokoro voice, such as af_bella, am_michael, bf_emma, or
-                    bm_george.
-                speed: Speech rate from 0.5 to 2.0; 1.0 is normal.
+                    bm_george. Omit to use the voice the user chose for
+                    reading aloud.
+                speed: Speech rate from 0.5 to 2.0; 1.0 is normal. Omit to use
+                    the user's chosen speed.
 
             Returns:
                 status, output_path, audio_path, duration_seconds, voice, model,
@@ -2938,11 +2947,26 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             import gaia.config as gaia_config
             from gaia.audio.lemonade_tts import (
                 DEFAULT_TTS_MODEL,
+                DEFAULT_VOICE,
                 KOKORO_VOICES,
                 LemonadeTTSClient,
                 LemonadeTTSError,
             )
+            from gaia.config import (
+                READ_ALOUD_MAX_SPEED,
+                READ_ALOUD_MIN_SPEED,
+                GaiaConfig,
+                GaiaConfigError,
+            )
 
+            # The same voice and speed the Agent UI and TUI read replies in.
+            try:
+                saved = GaiaConfig.load()
+            except GaiaConfigError as exc:
+                return {"status": "error", "error": str(exc)}
+            voice = voice or saved.read_aloud_voice or DEFAULT_VOICE
+            if speed is None:
+                speed = saved.read_aloud_speed / 100
             if voice not in KOKORO_VOICES:
                 return {
                     "status": "error",
@@ -2951,10 +2975,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         f"{', '.join(KOKORO_VOICES)}."
                     ),
                 }
-            if not 0.5 <= speed <= 2.0:
+            low, high = READ_ALOUD_MIN_SPEED / 100, READ_ALOUD_MAX_SPEED / 100
+            if not low <= speed <= high:
                 return {
                     "status": "error",
-                    "error": "speed must be between 0.5 and 2.0.",
+                    "error": f"speed must be between {low} and {high}.",
                 }
             if not text or not text.strip():
                 return {"status": "error", "error": "text to speak must not be empty."}
@@ -3196,6 +3221,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     # - FileSearchToolsMixin (shared): File and directory search across drives
     # - FileIOToolsMixin (file_io_tools.py): read_file, write_file, edit_file (3 generic tools only)
     # - WaitToolsMixin (wait_tools.py): sleep, to wait out a rate limit
+    # - AlertToolsMixin (alert_tools.py): alert_owner, when phone alerts allow it
     # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from <gaia_home>/mcp_servers.json)
 
     def _register_external_tools_conditional(self) -> None:
@@ -3204,6 +3230,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         Per §10.3 of the agent capabilities plan: only register tools if their
         backend is reachable. Prevents LLM from repeatedly calling tools that always fail.
         """
+        # Only under the daemon with "Agents may alert me" on; see alert_tools.
+        self.register_alert_tools()
+
         import shutil
 
         from gaia.agents.base.tools import tool
