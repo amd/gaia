@@ -31,7 +31,7 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.lemonade_manager import gpu_display_info
 
-from .. import warmup
+from .. import security, warmup
 from ..agent_loop import resolve_agent_mode
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_dispatch_queue
@@ -53,7 +53,6 @@ from ..models import (
     WorkInProgress,
 )
 from ..run_manager import run_manager
-from .. import security
 
 # "autonomous" is intentionally absent: its observation cycle is unimplemented
 # (#2005) and accepting it would silently behave as "goal_driven".
@@ -1251,8 +1250,6 @@ async def update_settings(
         if result["policy"] is local_only.NetworkPolicy.LOCAL_AI_ONLY:
             # Preserve a local custom model; only a cloud selection would keep
             # the UI pointing at a model the shared cleanup has removed.
-            from gaia.llm.lemonade_client import cloud_model_provider
-
             custom = (db.get_setting("custom_model") or "").strip()
             if custom and (
                 cloud_model_provider(custom) or custom.lower().startswith("claude")

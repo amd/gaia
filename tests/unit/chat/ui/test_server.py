@@ -1147,7 +1147,9 @@ class TestNetworkPolicySetting:
         monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
         monkeypatch.setattr("gaia.llm.cloud_keys.users_lemonade_url", lambda: None)
         monkeypatch.setattr("gaia.llm.cloud_keys.drop_runtime_keys", lambda: [])
-        monkeypatch.setattr("gaia.ui.routers.system.security.require_local_pc", lambda _request: None)
+        monkeypatch.setattr(
+            "gaia.ui.routers.system.security.require_local_pc", lambda _request: None
+        )
         db.set_setting("custom_model", "fireworks.glm-5p3-flash")
 
         turned_on = client.put(
@@ -1172,7 +1174,9 @@ class TestNetworkPolicySetting:
         from gaia.llm.cloud_keys import CloudKeyError
 
         monkeypatch.setattr("gaia.llm.cloud_keys.users_lemonade_url", lambda: None)
-        monkeypatch.setattr("gaia.ui.routers.system.security.require_local_pc", lambda _request: None)
+        monkeypatch.setattr(
+            "gaia.ui.routers.system.security.require_local_pc", lambda _request: None
+        )
         monkeypatch.setattr(
             "gaia.llm.cloud_keys.drop_runtime_keys",
             lambda: (_ for _ in ()).throw(CloudKeyError("server refused")),
@@ -1189,10 +1193,16 @@ class TestNetworkPolicySetting:
             }
         ]
 
-    def test_user_server_notice_is_structured_for_translation(self, client, monkeypatch, tmp_path):
+    def test_user_server_notice_is_structured_for_translation(
+        self, client, monkeypatch, tmp_path
+    ):
         monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
-        monkeypatch.setattr("gaia.llm.cloud_keys.users_lemonade_url", lambda: "http://127.0.0.1:1234")
-        monkeypatch.setattr("gaia.ui.routers.system.security.require_local_pc", lambda _request: None)
+        monkeypatch.setattr(
+            "gaia.llm.cloud_keys.users_lemonade_url", lambda: "http://127.0.0.1:1234"
+        )
+        monkeypatch.setattr(
+            "gaia.ui.routers.system.security.require_local_pc", lambda _request: None
+        )
         response = client.put("/api/settings", json={"network_policy": "local_ai_only"})
         assert response.status_code == 200
         assert response.json()["policy_warnings"] == []
