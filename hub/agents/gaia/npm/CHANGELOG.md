@@ -6,9 +6,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- **A Python snippet that fails on a missing library teaches the next chat
-  what worked instead**, and the Python tools list only the libraries this
-  install can import.
+- **A Python snippet that fails on a missing library says how to retry with
+  the standard library, and teaches the next chat what worked instead.** The
+  Python tools list only the libraries this install can import.
 
 ## [0.3.4]
 

@@ -546,3 +546,68 @@ def test_a_failed_check_is_logged_and_the_library_left_out(installed, monkeypatc
 
     checked = [call.args[1] for call in warning.call_args_list]
     assert checked == list(BUNDLED_LIBRARIES.values())
+
+
+def _missing(module):
+    from gaia_agent.chat_agent import _python_run_result
+
+    stderr = (
+        'Traceback (most recent call last):\n  File "snippet.py", line 1\n'
+        f"ModuleNotFoundError: No module named '{module}'\n"
+    )
+    return _python_run_result(_completed([], 1, "", stderr), "", stderr, 0.1)
+
+
+@pytest.mark.parametrize(
+    "module, route",
+    [("pandas", "using csv to read the file and statistics"), ("numpy", "math")],
+)
+def test_a_missing_bundled_library_names_the_standard_library_route(module, route):
+    error = _missing(module)["error"]
+
+    assert f"No module named '{module}'" in error
+    assert f"{module} is not installed in this Python" in error
+    assert "Retry now without it" in error
+    assert route in error
+
+
+def test_an_unbundled_missing_module_gets_no_route():
+    assert _missing("requests")["error"] == (
+        "Python exited with code 1: ModuleNotFoundError: No module named 'requests'"
+    )
+
+
+def test_the_hinted_failure_still_teaches_the_fix_once_a_retry_works(tmp_path):
+    from gaia.agents.base.memory import MemoryMixin
+    from gaia.agents.base.memory_store import MemoryStore
+    from gaia.security import PathValidator
+
+    class _Base:
+        def process_query(self, user_input, **kwargs):
+            return {"result": ""}
+
+        def _execute_tool(self, tool_name, tool_args):
+            return self.next_result
+
+    class Session(MemoryMixin, _Base):
+        def __init__(self):
+            self._memory_store = MemoryStore(db_path=tmp_path / "m.db")
+            self._memory_context = "global"
+            self._memory_session_id = "s"
+            self.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
+
+        def _embed_text(self, text):
+            raise RuntimeError("no embedder in unit tests")
+
+    s = Session()
+    try:
+        s.process_query("average unit_price per region")
+        s.next_result = _missing("pandas")
+        s._execute_tool("run_python", {"code": "import pandas as pd"})
+        s.next_result = {"status": "success", "return_code": 0}
+        s._execute_tool("run_python", {"code": "import csv, statistics"})
+        [lesson] = s._memory_store.get_by_category("note", domain="lesson")
+    finally:
+        s._memory_store.close()
+
+    assert "used `csv`, `statistics` instead" in lesson["content"]

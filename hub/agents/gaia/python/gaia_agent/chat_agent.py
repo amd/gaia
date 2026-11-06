@@ -233,6 +233,32 @@ def _script_source(path: Path) -> str:
         return ""
 
 
+#: Standard-library route for a bundled library this interpreter lacks.
+_STDLIB_ROUTES: Dict[str, str] = {
+    "pandas": "csv to read the file and statistics for the math",
+    "numpy": "statistics and math",
+    "openpyxl": "csv, saving a .csv file instead of a workbook",
+    "xlsxwriter": "csv, saving a .csv file instead of a workbook",
+}
+
+_MISSING_MODULE_LINE = re.compile(r"No module named '([A-Za-z_][\w.]*)'")
+
+
+def _missing_library_hint(stderr_line: str) -> Optional[str]:
+    """How to retry when a script imports a bundled library this Python lacks."""
+    match = _MISSING_MODULE_LINE.search(stderr_line or "")
+    module = match.group(1).split(".")[0] if match else None
+    if module not in BUNDLED_LIBRARIES.values():
+        return None
+    route = _STDLIB_ROUTES.get(module, "the standard library only")
+    if module in _STDLIB_ROUTES:
+        route = f"{route} from the standard library"
+    return (
+        f"{module} is not installed in this Python and pip is not available. "
+        f"Retry now without it, using {route}."
+    )
+
+
 def _python_run_result(
     run: Any,
     stdout: str,
@@ -264,6 +290,9 @@ def _python_run_result(
         result["error"] = f"Python exited with code {code}" + (
             f": {last[:300]}" if last else ""
         )
+        hint = _missing_library_hint(last)
+        if hint:
+            result["error"] += f". {hint}"
     return result
 
 
