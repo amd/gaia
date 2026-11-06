@@ -32,6 +32,8 @@ export interface ApiSchemas {
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
   CustomModelRequest: CustomModelRequest;
+  DiscordConnectRequest: DiscordConnectRequest;
+  DiscordStartRequest: DiscordStartRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
   DocumentListResponse: DocumentListResponse;
@@ -422,6 +424,14 @@ export interface CreateSessionRequest {
 export interface CustomModelRequest {
   quant?: string | null;
   url: string;
+}
+export interface DiscordConnectRequest {
+  model?: string | null;
+  token: string;
+}
+export interface DiscordStartRequest {
+  model?: string | null;
+  take_over?: boolean;
 }
 export interface DiscoveryCommit {
   items: DiscoveryCommitItem[];

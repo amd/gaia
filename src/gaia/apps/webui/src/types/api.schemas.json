@@ -1090,6 +1090,52 @@
     "title": "CustomModelRequest",
     "type": "object"
   },
+  "DiscordConnectRequest": {
+    "properties": {
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "token": {
+        "title": "Token",
+        "type": "string"
+      }
+    },
+    "required": [
+      "token"
+    ],
+    "title": "DiscordConnectRequest",
+    "type": "object"
+  },
+  "DiscordStartRequest": {
+    "properties": {
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "take_over": {
+        "default": false,
+        "title": "Take Over",
+        "type": "boolean"
+      }
+    },
+    "title": "DiscordStartRequest",
+    "type": "object"
+  },
   "DiscoveryCommit": {
     "properties": {
       "items": {

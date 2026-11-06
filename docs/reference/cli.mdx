@@ -1325,27 +1325,27 @@ gaia discord schedule-add --every 3h --prompt "Summarize my open PRs"
 
 **Subcommands & options:**
 
-| Subcommand | Option | Default | Description |
+| Command | Option | Default | Description |
 |-----------|--------|---------|-------------|
-| `setup` | `--no-browser`, `--model` | – | Interactive setup in a terminal: paste the bot token, then add the bot and DM it the pairing code. |
-| `connect` | – | – | Check and store a bot token read from stdin; prints JSON. Never in argv, where `ps` would show it. |
-| `start` | `--detach` | false | Run as its own process that outlives the caller, and print JSON status once it reports in. Without it, runs in the foreground. |
-| `start` / `restart` | `--model` | the agent's default | Chat model the agent answers with. Remembered. |
-| `start` / `restart` | `--take-over` | false | Answer from this PC even when another PC holds this bot's lease. |
-| `start` | `--agent-command` | the installed `gaia-agent` | Command that starts the agent child. Remembered. |
-| `start` | `--deny-gated-tools`, `--upload-root` | –, home | Refuse every gated tool; directories a file may be sent back from. |
-| `stop` | – | – | Ask the bridge to stop, then end it and its agent if it doesn't. |
-| `pair` | – | – | Forget the paired account and show a new code. |
-| `autostart` | – | – | Start the bridge if it is connected and set to autostart. The apps run this at launch. |
-| `status` | `--json` | false | Connection, pairing and bridge state, plus every link setup opens. |
-| `decline` | `--never` | false | Record that you don't want Discord set up. |
-| `disconnect` | – | – | Stop the bridge and forget the token and the pairing. |
-| `schedules` | – | – | List the prompts the bridge runs on a timer (JSON). |
-| `schedule-add` | `--every`, `--prompt` (required) | – | Run a prompt every interval (`30m`, `3h`, `1d`; at least 5 minutes) and DM the answer. |
-| `schedule-remove` | `--id` or `--all` | – | Remove one schedule, or all of them. |
-| `watches` | – | – | List the GitHub repositories being watched (JSON). |
-| `watch` | `--repo` (required), `--mine` | – | DM each new PR, issue or comment on a repo as it happens, except from `--mine` accounts and bots. |
-| `unwatch` | `--repo` (required) | – | Stop watching a repo. |
+| `gaia discord setup` | `--no-browser`, `--model` | – | Interactive setup in a terminal: paste the bot token, then add the bot and DM it the pairing code. |
+| `gaia discord connect` | – | – | Check and store a bot token read from stdin; prints JSON. Never in argv, where `ps` would show it. |
+| `gaia discord start` | `--detach` | false | Run as its own process that outlives the caller, and print JSON status once it reports in. Without it, runs in the foreground. |
+| `gaia discord start` / `gaia discord restart` | `--model` | the agent's default | Chat model the agent answers with. Remembered. |
+| `gaia discord start` / `gaia discord restart` | `--take-over` | false | Answer from this PC even when another PC holds this bot's lease. |
+| `gaia discord start` | `--agent-command` | the installed `gaia-agent` | Command that starts the agent child. Remembered. |
+| `gaia discord start` | `--deny-gated-tools`, `--upload-root` | –, home | Foreground only: refuse every gated tool; directories a file may be sent back from. |
+| `gaia discord stop` | – | – | Ask the bridge to stop, then end it and its agent if it doesn't. |
+| `gaia discord pair` | – | – | Forget the paired account and show a new code. Refused if the bridge won't stop. |
+| `gaia discord autostart` | – | – | Start the bridge if it is connected and set to autostart. The apps run this at launch. |
+| `gaia discord status` | `--json` | false | Connection, pairing and bridge state, plus every link setup opens. |
+| `gaia discord decline` | `--never` | false | Record that you don't want Discord set up. |
+| `gaia discord disconnect` | – | – | Stop the bridge and forget the token and the pairing. Refused if the bridge won't stop. |
+| `gaia discord schedules` | – | – | List the prompts the bridge runs on a timer (JSON). |
+| `gaia discord schedule-add` | `--every`, `--prompt` (required) | – | Run a prompt every interval (`30m`, `3h`, `1d`; at least 5 minutes) and DM the answer. |
+| `gaia discord schedule-remove` | `--id` or `--all` | – | Remove one schedule, or all of them. |
+| `gaia discord watches` | – | – | List the GitHub repositories being watched (JSON). |
+| `gaia discord watch` | `--repo` (required), `--mine` | – | DM each new PR, issue or comment on a repo as it happens, except from `--mine` accounts and bots. |
+| `gaia discord unwatch` | `--repo` (required) | – | Stop watching a repo. |
 
 [→ Discord Guide](/guides/discord)
 

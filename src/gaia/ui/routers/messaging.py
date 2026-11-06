@@ -32,12 +32,12 @@ router = APIRouter(
 )
 
 
-class ConnectRequest(BaseModel):
+class DiscordConnectRequest(BaseModel):
     token: str
     model: Optional[str] = None
 
 
-class StartRequest(BaseModel):
+class DiscordStartRequest(BaseModel):
     model: Optional[str] = None
     take_over: bool = False
 
@@ -59,7 +59,7 @@ def discord_status() -> Dict[str, Any]:
 
 
 @router.post("/discord/connect", dependencies=[Depends(require_ui_header)])
-def discord_connect(body: ConnectRequest) -> Dict[str, Any]:
+def discord_connect(body: DiscordConnectRequest) -> Dict[str, Any]:
     """Check and store a bot token, then start the bridge in pairing mode."""
     from gaia.messaging.discord.transport import DiscordTokenError
 
@@ -75,7 +75,7 @@ def discord_connect(body: ConnectRequest) -> Dict[str, Any]:
 
 
 @router.post("/discord/start", dependencies=[Depends(require_ui_header)])
-def discord_start(body: StartRequest) -> Dict[str, Any]:
+def discord_start(body: DiscordStartRequest) -> Dict[str, Any]:
     """Start the bridge (or take the lease from another PC)."""
     cli = _cli()
     if body.take_over and not cli.stop():
