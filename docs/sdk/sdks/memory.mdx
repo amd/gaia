@@ -542,7 +542,7 @@ This design allows LLM inference engines (like Lemonade Server) to cache the att
 def process_query(self, user_input, **kwargs):
     self._original_user_input = user_input           # Save clean version
     dynamic = self.get_memory_dynamic_context()       # Time + upcoming
-    augmented = f"{dynamic}\n\n{user_input}" if dynamic else user_input
+    augmented = frame_user_message(dynamic, user_input)  # fenced memory block
     return super().process_query(augmented, **kwargs)  # System prompt stays frozen
 ```
 
