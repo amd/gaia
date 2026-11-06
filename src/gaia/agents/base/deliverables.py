@@ -652,6 +652,11 @@ _PY_ARITHMETIC = re.compile(
     re.I,
 )
 _STRING_LITERAL = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"")
+_PY_STRING = re.compile(r"(?<!\w)([rRbBuUfF]{0,2})('[^'\n]*'|\"[^\"\n]*\")")
+_FSTRING_FIELD = re.compile(r"\{([^{}]*)\}")
+_PY_COMMENT = re.compile(r"#[^\n]*")
+#: "i+1", "len(s)-1": a counter or an index, not a computed figure.
+_PY_COUNTER = re.compile(r"\blen\s*\([^()]*\)\s*[-+]\s*\d+|\b\w+\s*[-+]\s*1\b(?!\.)")
 _SQL_STAR = re.compile(r"\bselect\s+(?:\w+\.)?\*|\(\s*\*\s*\)", re.I)
 _SQL_ARITHMETIC = re.compile(
     r"\b(?:sum|avg|total|round)\s*\(|[\w)]\s*(?:\*|/|\+|-)\s*[\w(]", re.I
@@ -665,10 +670,18 @@ def _computed(record: Dict[str, Any]) -> bool:
     code = (record.get("args") or {}).get(arg) if arg else None
     if not isinstance(code, str):
         return False
-    code = _STRING_LITERAL.sub("''", code)
     if arg == "query":
+        code = _STRING_LITERAL.sub("''", code)
         return bool(_SQL_ARITHMETIC.search(_SQL_STAR.sub(" ", code)))
-    return bool(_PY_ARITHMETIC.search(code))
+    code = _PY_COMMENT.sub(" ", _PY_STRING.sub(_code_in_literal, code))
+    return bool(_PY_ARITHMETIC.search(_PY_COUNTER.sub(" ", code)))
+
+
+def _code_in_literal(match: "re.Match[str]") -> str:
+    """The code inside a string literal: an f-string's fields, else none."""
+    if "f" not in match.group(1).lower():
+        return "''"
+    return " ".join(_FSTRING_FIELD.findall(match.group(2))) or "''"
 
 
 def _evidence_texts(

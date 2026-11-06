@@ -353,6 +353,35 @@ def test_a_file_a_tool_echoed_is_not_a_price(record):
     assert _check(_md(ECHOED_TABLE), [record])
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        "for i, l in enumerate(open('cm5.txt')): print(i+1, l)",
+        "s = open('cm5.txt').read(); print(s); print(len(s)-1)",
+        "print(open('cm5.txt').read())  # re-print sheet",
+        "p = 'cm5-sheet.txt'\nprint(f'{open(p).read()}')",
+    ],
+    ids=["line-counter", "len-minus-one", "hyphen-in-comment", "hyphen-in-name"],
+)
+def test_a_script_that_opens_and_echoes_a_file_is_not_a_price(code):
+    assert _check(_md(ECHOED_TABLE), [_run_python(code, ECHOED_SHEET)])
+
+
+@pytest.mark.parametrize(
+    "code,stdout",
+    [
+        ("for r, u, p in rows:\n    print(f'{r} {u*p:,.2f}')", "North 1,410.00\n"),
+        ("net = 1500.25 - 90.25  # minus refunds\nprint(net)", "1410.0\n"),
+        ("for i, (u, p) in enumerate(rows):\n    print(i+1, u*p)", "1 1410.00\n"),
+    ],
+    ids=["math-in-fstring", "math-beside-comment", "math-beside-counter"],
+)
+def test_arithmetic_a_script_really_did_still_sources_its_output(code, stdout):
+    table = "| Region | Revenue |\n|---|---|\n| North | 1410.00 |\n"
+
+    assert _check(_md(table), [_run_python(code, stdout)], name="r.md") == []
+
+
 def test_a_computing_script_that_also_echoes_a_read_file_does_not_source_it():
     code = "print(open('cm5.txt').read())\nprint(40 * price)"
     records = [_read("cm5.txt", ECHOED_SHEET), _run_python(code, ECHOED_SHEET)]
