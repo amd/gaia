@@ -340,3 +340,23 @@ def test_a_lost_gateway_is_not_blamed_on_its_key(lemond, monkeypatch):
     message = classify_lemonade_exception(caught.value).user_message
     assert "restarted" in message and "working key" not in message
     assert "install" not in lemond.routes()
+
+
+@pytest.mark.allow_network  # TestClient talks ASGI over a local socket
+def test_the_tuis_reconnect_registers_fireworks_after_a_restart(lemond):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from gaia.daemon.provider_key_routes import build_provider_key_router
+
+    lemond.restart()
+    app = FastAPI()
+    app.include_router(build_provider_key_router("daemon-token"))
+
+    resp = TestClient(app).post(
+        "/daemon/v1/providers/fireworks/authenticate",
+        headers={"Authorization": "Bearer daemon-token"},
+    )
+
+    assert resp.json() == {"authenticated": True}
+    assert lemond.routes() == ["system-info", "install", "system-info", "cloud/auth"]

@@ -459,7 +459,8 @@ class LemonadeCloudDisconnectedError(LemonadeError):
 
     retryable = False
     user_message = (
-        "GAIA's AI engine restarted and lost its cloud provider connection. "
+        "GAIA's AI engine lost its cloud provider connection (it may have "
+        "restarted). "
         f"Reconnect the provider {TUI_PROVIDER_SETTINGS}, then send your message "
         "again."
     )

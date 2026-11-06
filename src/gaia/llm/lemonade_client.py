@@ -3510,9 +3510,9 @@ class CloudProviderDisconnectedError(LemonadeClientError):
 
         where = provider_phrase(provider)
         super().__init__(
-            f"GAIA's AI engine restarted and lost its connection to {where}, and "
-            f"{reason}. Reconnect {where} {TUI_PROVIDER_SETTINGS}, then send your "
-            "message again."
+            f"GAIA's AI engine lost its connection to {where} (it may have "
+            f"restarted), and {reason}. Reconnect {where} {TUI_PROVIDER_SETTINGS}, "
+            "then send your message again."
         )
         self.provider = provider
         self.model_id = model_id

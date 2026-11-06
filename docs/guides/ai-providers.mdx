@@ -290,8 +290,7 @@ with `gaia config set network_policy cloud_allowed`. Details and limits:
   too, so GAIA registers it again first, using your saved key or
   `FIREWORKS_API_KEY`. If a cloud reply still finds the provider gone, GAIA
   reconnects it and sends the message once more; if that fails, the error says
-  GAIA's AI engine restarted and lost the connection, not that the model is
-  missing. A key Fireworks AI or the gateway rejects is not kept.
+  GAIA's AI engine lost the connection, not that the model is missing. A key Fireworks AI or the gateway rejects is not kept.
   GAIA never writes a key to config files, transcripts, control logs,
   traces, or command-line arguments.
 - If Fireworks AI's model list fails but your key was not rejected, the Agent UI
