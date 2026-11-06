@@ -190,6 +190,37 @@ test("writeDiagnosticsBundle produces a tar.gz containing seeded log files", asy
   }
 });
 
+test("writeDiagnosticsBundle includes the backend's fault log and its rotated copy", async () => {
+  const fakeGaia = fs.mkdtempSync(path.join(os.tmpdir(), "gaia-home-"));
+  fs.mkdirSync(path.join(fakeGaia, "logs"));
+  fs.writeFileSync(path.join(fakeGaia, "logs", "backend-faults.log"), "Fatal Python error: current\n");
+  fs.writeFileSync(path.join(fakeGaia, "logs", "backend-faults.log.1"), "Fatal Python error: older\n");
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gaia-diag-"));
+  const dest = path.join(tmpDir, "bundle.tgz");
+  const prevOverride = process.env.GAIA_HOME_OVERRIDE;
+  process.env.GAIA_HOME_OVERRIDE = fakeGaia;
+
+  try {
+    const written = await writeDiagnosticsBundle(dest);
+    const contents = written.endsWith(".tgz")
+      ? execFileSync("tar", ["-tzf", written], { encoding: "utf8" })
+      : fs.readFileSync(written, "utf8");
+    // A tar listing names one entry per line; the plain-text fallback heads each with "==== name ====".
+    const entries = contents.split(/\r?\n/).map((line) => line.replace(/^==== (.*) ====$/, "$1"));
+    assert.ok(entries.includes("logs/backend-faults.log"), `missing the fault log in:\n${contents}`);
+    assert.ok(entries.includes("logs/backend-faults.log.1"), `missing the rotated fault log in:\n${contents}`);
+  } finally {
+    if (prevOverride === undefined) {
+      delete process.env.GAIA_HOME_OVERRIDE;
+    } else {
+      process.env.GAIA_HOME_OVERRIDE = prevOverride;
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(fakeGaia, { recursive: true, force: true });
+  }
+});
+
 // ─── PortManager class wrapper ───────────────────────────────────────
 
 test("PortManager class wraps the module-level helpers", async () => {
