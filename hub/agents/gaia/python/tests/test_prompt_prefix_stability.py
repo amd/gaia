@@ -63,11 +63,18 @@ def _isolated_registry():
         _TOOL_REGISTRY.update(saved)
 
 
+def _dump_json(value) -> str:
+    return json.dumps(value, sort_keys=True, ensure_ascii=False)
+
+
 def _render(request) -> str:
     """The request as the chat template lays it out: system, tools, then turns."""
     messages, tools = request
-    dump = lambda value: json.dumps(value, sort_keys=True, ensure_ascii=False)
-    return dump(messages[:1]) + dump(tools) + "".join(dump(m) for m in messages[1:])
+    return (
+        _dump_json(messages[:1])
+        + _dump_json(tools)
+        + "".join(_dump_json(m) for m in messages[1:])
+    )
 
 
 def _first_difference(before: str, after: str) -> int:
@@ -75,151 +82,6 @@ def _first_difference(before: str, after: str) -> int:
         if a != b:
             return index
     return min(len(before), len(after))
-
-
-class _ScriptedModel:
-    """Stands in for the provider's ``chat``: records requests, replays a script.
-
-    Only requests that carry tools are the agent's own turn steps; memory
-    extraction runs on a side thread without tools and gets an empty reply.
-    """
-
-    def __init__(self):
-        self.requests = []
-        self.slots = []
-        self.script = []
-
-    def chat(self, messages, model=None, stream=False, **kwargs):
-        tools = kwargs.get("tools")
-        if not tools:
-            reply = "[]"
-        else:
-            self.requests.append(
-                (json.loads(json.dumps(messages)), json.loads(json.dumps(tools)))
-            )
-            self.slots.append(kwargs.get("id_slot"))
-            step = self.script.pop(0)
-            if isinstance(step, dict):
-                call = {
-                    "id": step["id"],
-                    "type": "function",
-                    "function": {
-                        "name": step["name"],
-                        "arguments": json.dumps(step["args"]),
-                    },
-                }
-                reply = json.dumps(
-                    {
-                        "__tool_calls__": [call],
-                        "finish_reason": "tool_calls",
-                        "content": None,
-                    }
-                )
-            else:
-                reply = step
-        return iter([reply]) if stream else reply
-
-
-@pytest.fixture
-def flagship(monkeypatch, tmp_path):
-    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("GAIA_DAEMON_HOME", str(tmp_path / "daemon"))
-    # Outranks GAIA_HOME, and conftest points it at one DB for the session.
-    monkeypatch.setenv("GAIA_MEMORY_DB", str(tmp_path / "home" / "memory.db"))
-    monkeypatch.setenv("GAIA_PROJECT_MAP_AUTO_INDEX", "0")
-    # Unroutable: nothing here may reach a developer's running server.
-    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9/api/v1")
-    monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
-    monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
-    monkeypatch.setattr(MemoryMixin, "_embed_text", lambda self, t: _fake_embedding(t))
-    monkeypatch.setattr(
-        ChatAgent,
-        "_embed_texts_batch",
-        lambda self, texts: np.stack([_fake_embedding(t) for t in texts]),
-    )
-    work = tmp_path / "work"
-    work.mkdir()
-    monkeypatch.chdir(work)
-    doc = work / "handbook.md"
-    doc.write_text("# Safety handbook\n\nWear goggles in the lab.\n", encoding="utf-8")
-
-    with _isolated_registry():
-        # The default config, so a default that brings back per-turn tool
-        # selection (a new tool list every turn) fails here.
-        agent = GaiaAgent(
-            config=GaiaAgentConfig(
-                silent_mode=True,
-                streaming=True,
-                # GaiaAgentConfig defaults allowed_paths to the user's home
-                # directory, not cwd (unlike ChatAgent) -- on a CI runner the
-                # pytest tmp dir lives under /tmp, outside $HOME, so without
-                # this the handbook fixture is refused as "not in allowed
-                # paths" the moment a turn tries to index or read it.
-                allowed_paths=[str(work)],
-            )
-        )
-        assert agent._memory_store is not None, "memory must be on for this test"
-        agent.conversation_history = SessionHistory(str(tmp_path / "history.sqlite3"))
-
-        # A stand-in RAG — this test pins request-prefix stability, not real
-        # indexing, and the CI lane that runs it installs no RAG extras.
-        # Shaped like an empty-but-valid RAGSDK (no chunks) so the agent's
-        # post-index query guard (query_specific_file, forced when an answer
-        # skips retrieval) gets its normal "no relevant information found"
-        # reply instead of an AttributeError on a real SDK's internals.
-        class _FakeRag:
-            def __init__(self):
-                self.indexed_files = set()
-                self.chunks = []
-                self.file_metadata = {}
-                self.file_to_chunk_indices = {}
-
-            def index_document(self, path, progress_callback=None, wait_callback=None):
-                self.indexed_files.add(path)
-                return {"success": True, "file_name": "handbook.md", "num_chunks": 1}
-
-            def _retrieve_chunks_from_file(self, query, file_path):
-                return [], []
-
-            def document_scripts(self, _file_path):
-                return ["Latin"]
-
-        agent.rag = _FakeRag()
-
-        procedure = DistilledProcedure(
-            name="read-the-handbook",
-            when_to_use="questions about the safety handbook",
-            body="1. index_document the handbook. 2. query_specific_file it.",
-            tools_required=["index_document"],
-        )
-        monkeypatch.setattr(
-            agent,
-            "_recall_skills_for_turn",
-            lambda goal: (
-                [procedure] if "handbook" in goal.lower() else [],
-                load_synthesis_config({}),
-            ),
-        )
-
-        model = _ScriptedModel()
-        monkeypatch.setattr(agent.chat.llm_client, "chat", model.chat)
-        for name, value in (
-            ("get_last_usage", None),
-            ("get_last_ttft_seconds", None),
-            ("get_last_finish_reason", "stop"),
-            ("get_last_reasoning", None),
-        ):
-            monkeypatch.setattr(
-                agent.chat.llm_client, name, lambda *a, _v=value, **k: _v
-            )
-        monkeypatch.setattr(agent.chat, "get_stats", lambda: {})
-        monkeypatch.setattr(
-            agent.chat.llm_client._backend, "slot_count", lambda _model: 3
-        )
-        try:
-            yield agent, model, doc
-        finally:
-            agent.close()
 
 
 @pytest.fixture
@@ -307,8 +169,7 @@ def test_each_request_extends_the_previous_one(flagship):
 def _prefix(request) -> str:
     """System message and tool schemas: what a warm-up leaves in the cache."""
     messages, tools = request
-    dump = lambda value: json.dumps(value, sort_keys=True, ensure_ascii=False)
-    return dump(messages[:1]) + dump(tools)
+    return _dump_json(messages[:1]) + _dump_json(tools)
 
 
 def _assert_same_prefix(warm, first):
@@ -541,7 +402,7 @@ def test_an_embedder_that_dies_offers_every_tool(flagship, monkeypatch):
 
 def test_a_hosted_model_gets_every_tool_in_full(flagship, monkeypatch):
     agent, _model, _doc = flagship
-    monkeypatch.setattr(agent, "_hosted_native_tool_caller", lambda: True)
+    monkeypatch.setattr(agent, "_hosted_model", lambda: True)
 
     agent._refresh_active_tool_filter("hello")
 

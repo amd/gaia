@@ -2846,6 +2846,7 @@ These positions indicate where to split the text."""
                 f"({vlm.server_url}).\n"
                 "  2. Index the image again."
             )
+        model = vlm.vlm_model
 
         if self.config.show_stats:
             print(f"  🖼️  Reading image text with {model} ({len(pages)} page(s))...")

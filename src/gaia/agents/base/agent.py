@@ -3339,17 +3339,22 @@ Do NOT wrap conversational replies in JSON.
             or uses_native_tool_calls(model_id)
         )
 
-    def _hosted_native_tool_caller(self) -> bool:
-        """True for Claude, or a cloud-routed model that takes ``tools=``."""
+    def _hosted_model(self) -> bool:
+        """True for Claude or any cloud-routed model, whatever its tool format."""
         if getattr(self, "_use_claude", False):
             return True
         from gaia.llm.lemonade_client import cloud_model_info, cloud_model_provider
 
         model_id = getattr(self, "model_id", None)
-        hosted = bool(cloud_model_provider(model_id)) or (
+        return bool(cloud_model_provider(model_id)) or (
             cloud_model_info(model_id) is not None
         )
-        return hosted and self._uses_native_tool_calls()
+
+    def _hosted_native_tool_caller(self) -> bool:
+        """True for Claude, or a cloud-routed model that takes ``tools=``."""
+        if getattr(self, "_use_claude", False):
+            return True
+        return self._hosted_model() and self._uses_native_tool_calls()
 
     @property
     def system_prompt(self) -> str:

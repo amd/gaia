@@ -14,11 +14,7 @@ import threading
 from pathlib import Path
 
 import pytest
-from test_prompt_prefix_stability import (  # noqa: F401  # pylint: disable=unused-import
-    _assert_each_extends_the_last,
-    _turn,
-    flagship,
-)
+from test_prompt_prefix_stability import _assert_each_extends_the_last, _turn
 
 from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION
 from gaia.agents.base.model_features import TIER_ENV, features_for_model, withheld_tools
@@ -101,6 +97,7 @@ def test_a_gated_tool_off_the_list_still_asks(flagship, monkeypatch, approve):
 def test_a_planted_search_flood_is_capped_and_jumps_at_most_once(flagship, tmp_path):
     """A document telling the model to search forever costs a bounded turn."""
     agent, model, _doc = flagship
+    # Its own store, so a learned refusal can't reach another test's prompt.
     assert tmp_path in Path(agent._memory_store._db_path).parents
     _turn(agent, model, "hello", ["Hi."])
     flood = [
@@ -116,14 +113,14 @@ def test_a_planted_search_flood_is_capped_and_jumps_at_most_once(flagship, tmp_p
     agent.process_query(query)
     # The loop refuses the repeated failing call and ends the turn early.
     assert len(model.requests) - 1 < len(flood) + 1
+    # A budget the model ran out of is not a problem to warn the next chat about.
+    learned = agent._memory_store.get_by_category("error")
+    assert not [k for k in learned if "search_tools" in k["content"]]
     results = _tool_results(model)
     assert any("Searched" in r and "times this turn" in r for r in results)
     lists = {json.dumps(tools) for _messages, tools in model.requests}
     assert len(lists) <= 2
     assert "delete_everything" not in agent._tools_registry
-    # The cap is ours, not a fact to replay into every later chat.
-    stored = agent._memory_store.get_by_category("error", limit=100)
-    assert not [r for r in stored if "times this turn" in r["content"]], stored
 
 
 @pytest.mark.parametrize(

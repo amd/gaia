@@ -21,6 +21,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before", so every later chat started with it in its prompt. It, and the new
   `search_tools` cap, are now marked as not run, like a permission refusal, and
   memory skips them.
+- **A Python snippet that fails on a missing library says how to retry with
+  the standard library, and teaches the next chat what worked instead.** The
+  Python tools list only the libraries this install can import.
 
 ## [0.3.5]
 
