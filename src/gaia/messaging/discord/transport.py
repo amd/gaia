@@ -26,7 +26,7 @@ import io
 import logging
 import threading
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Sequence
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 from gaia.logger import get_logger
 from gaia.messaging.discord.adapter import (
@@ -214,6 +214,27 @@ class GatewayTransport:
                 if str(message.author.id) == author_id:
                     count += 1
             return count
+
+        return self._call(go)
+
+    def open_controls(
+        self, channel_id: str, author_id: str, limit: int = 100
+    ) -> List[Tuple[str, List[str]]]:
+        """*author_id*'s recent messages that still carry buttons, with their ids."""
+
+        async def go() -> List[Tuple[str, List[str]]]:
+            found: List[Tuple[str, List[str]]] = []
+            async for message in self._channel(channel_id).history(limit=limit):
+                if str(message.author.id) != author_id or not message.components:
+                    continue
+                ids = [
+                    str(getattr(child, "custom_id", "") or "")
+                    for row in message.components
+                    for child in getattr(row, "children", [])
+                ]
+                if any(ids):
+                    found.append((str(message.id), ids))
+            return found
 
         return self._call(go)
 

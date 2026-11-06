@@ -270,6 +270,10 @@ class Transport(Protocol):
 
     def pins(self, channel_id: str) -> List[PinnedMessage]: ...
 
+    def open_controls(
+        self, channel_id: str, author_id: str, limit: int = 100
+    ) -> List[Tuple[str, List[str]]]: ...
+
     def pin(self, channel_id: str, message_id: str) -> None: ...
 
     def unpin(self, channel_id: str, message_id: str) -> None: ...
@@ -582,6 +586,8 @@ class DiscordAdapter:
         self._in_flight: List[ReplyTarget] = []
         #: The last automations failure the user was told about.
         self._automation_error = ""
+        #: The DM was searched for buttons a dead bridge left; done once.
+        self._scanned = False
 
     # ------------------------------------------------------------------
     # Status
@@ -700,6 +706,15 @@ class DiscordAdapter:
     # Open messages: placeholders and prompts that must not outlive the bridge
     # ------------------------------------------------------------------
 
+    def _buttoned_messages(self) -> List[Tuple[str, List[str]]]:
+        try:
+            return self.transport.open_controls(
+                self.config.dm_channel_id, self.config.bot_id
+            )
+        except Exception as e:  # noqa: BLE001 - a failed scan leaves them as they are
+            log.warning("Could not scan the DM for leftover buttons: %s", e)
+            return []
+
     def _track(self, channel_id: str, message_id: str, kind: str) -> None:
         if not message_id:
             return
@@ -714,10 +729,25 @@ class DiscordAdapter:
             self._refresh_status()
 
     def _close_orphans(self) -> None:
-        """Close what a bridge that crashed left open, once."""
+        """Close what a bridge that crashed left open, once.
+
+        The status file names what the last bridge knew it left; the DM's own
+        recent history catches the rest (a crash before the file was written,
+        a file that was lost): any message of this bot that still has buttons.
+        """
         orphans, self._orphans = self._orphans, []
         if orphans:
             self._refresh_status()
+        if not self._scanned and self.config.dm_channel_id:
+            self._scanned = True
+            known = {mid for _, mid, _ in orphans}
+            with self._lock:
+                known |= set(self._open)
+            for message_id, ids in self._buttoned_messages():
+                if message_id in known:
+                    continue
+                kind = OPEN_PLACEHOLDER if BUTTON_STOP in ids else OPEN_PROMPT
+                orphans.append([self.config.dm_channel_id, message_id, kind])
         for channel_id, message_id, kind in orphans:
             if kind == OPEN_PROMPT:
                 self._edit(

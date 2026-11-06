@@ -56,6 +56,12 @@ class FakeTransport:
     def count_from_after(self, channel_id, author_id, after_id):
         return self.missed
 
+    #: (message id, button custom ids) the DM history returns.
+    buttoned = ()
+
+    def open_controls(self, channel_id, author_id, limit=50):
+        return list(self.buttoned)
+
     def pins(self, channel_id):
         return list(self.pin_list)
 
@@ -1131,3 +1137,28 @@ def test_nothing_is_posted_after_the_bridge_closes():
     ad._on_agent_event({"type": "status", "message": "thinking"}, queued)
     ad._on_agent_event({"type": "final", "answer": "late"}, queued)
     assert len(ad.transport.sent) == sent
+
+
+def test_a_fresh_bridge_closes_buttons_nothing_recorded():
+    ad, clock = make()
+    ad.transport.buttoned = [
+        ("7001", [da.BUTTON_STOP]),
+        ("7002", [da.BUTTON_ALLOW, da.BUTTON_DENY]),
+    ]
+    ad.on_ready()
+    edits = {e[1]: e for e in ad.transport.edits}
+    assert edits["7001"][2] == da.INTERRUPTED_TEXT and edits["7001"][3]
+    assert edits["7002"][2] == da.EXPIRED_PROMPT_TEXT and edits["7002"][3]
+    ad.on_ready()  # a later reconnect does not scan again
+    assert len([e for e in ad.transport.edits if e[1] in ("7001", "7002")]) == 2
+
+
+def test_a_failed_history_scan_does_not_stop_the_bridge():
+    ad, clock = make()
+
+    def broken(*_a, **_k):
+        raise RuntimeError("history unavailable")
+
+    ad.transport.open_controls = broken
+    ad.on_ready()
+    assert ad.current_state == state.STATE_CONNECTED
