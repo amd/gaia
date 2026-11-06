@@ -52,6 +52,7 @@ from gaia.messaging.bridge import (
     resolve_agent_argv,
 )
 from gaia.messaging.discord import github_watch, state
+from gaia.security import is_scratch_path
 
 log = get_logger(__name__)
 
@@ -69,7 +70,7 @@ DISCORD_REPLY_NOTE = (
     "write each PR, issue, commit or page as a Markdown link to its full URL, "
     "like [#6779](https://github.com/amd/gaia/pull/6779), never a bare number "
     "or name. Discord shows no tables: use a short bullet list instead. A "
-    "file you write is sent to the user here as an attachment. The "
+    "file you write is posted here on its own, just above your reply. The "
     "user is likely on their phone: never tell them to run a command; name the "
     "GAIA app screen that does it, like Settings → Connectors.)"
 )
@@ -368,6 +369,45 @@ def render_confirmation(action: str, summary: str) -> tuple:
     if "ˋ" in body or "⟨U+" in body:
         body += "\n-# Backticks are shown as ˋ and hidden characters as ⟨U+…⟩."
     return body, full
+
+
+_TEXT_SUFFIXES = {
+    ".py", ".js", ".ts", ".tsx", ".go", ".rs", ".java", ".c", ".cpp", ".h",
+    ".cs", ".sh", ".ps1", ".bat", ".md", ".txt", ".json", ".yml", ".yaml",
+    ".toml", ".ini", ".cfg", ".csv", ".html", ".css", ".sql", ".xml",
+}  # fmt: skip
+
+
+def render_file_write(action: str, event: Dict[str, Any]) -> Optional[tuple]:
+    """``(text, (filename, content))`` for a long file write, else ``None``.
+
+    A write is a path and a body, not a command: the prompt names the path and
+    size, and the body goes along under the file's own name, which Discord
+    previews as code. Hidden characters in the body are called out, since the
+    preview shows them raw.
+    """
+    args = event.get("args")
+    if not isinstance(args, dict):
+        return None
+    path, content = args.get("file_path"), args.get("content")
+    if not isinstance(path, str) or not isinstance(content, str):
+        return None
+    if len(neutralize(content)) + len(path) <= _SHOWN_COMMAND_CHARS:
+        return None
+    base = path.replace("\\", "/").rsplit("/", 1)[-1]
+    name = _UNSAFE_NAME.sub("_", base).strip(". ") or "file"
+    if Path(name).suffix.lower() not in _TEXT_SUFFIXES:
+        name += ".txt"
+    size = f"{len(content.splitlines()):,} lines · {len(content):,} characters"
+    text = (
+        f"🔐 **Approve:** {neutralize(tool_words(action))}\n"
+        f"```\n{neutralize(path)}\n```\n-# {size} — the whole file is attached"
+    )
+    hidden = sorted({c for c in content if _visible(c) != c})
+    if hidden:
+        codes = ", ".join(f"U+{ord(c):04X}" for c in hidden[:5])
+        text += f"\n-# ⚠️ The file contains hidden characters ({codes})."
+    return text, (name, content)
 
 
 def confirmation_detail(event: Dict[str, Any]) -> str:
@@ -1362,7 +1402,14 @@ class DiscordAdapter:
                 f"-# ✅ Allowed — you chose Always allow · {_record(record)}",
             )
             return
-        text, full = render_confirmation(action, confirmation_detail(event) or summary)
+        written = render_file_write(action, event)
+        if written:
+            text, attachment = written
+        else:
+            text, full = render_confirmation(
+                action, confirmation_detail(event) or summary
+            )
+            attachment = ("command.txt", full) if full else None
         if target.heading:
             # No message of the user's led here: say which automation asks.
             text = f"-# Asked by the automation {target.heading}\n{text}"
@@ -1377,7 +1424,7 @@ class DiscordAdapter:
             target.channel_id,
             text,
             buttons=buttons,
-            file_text=("command.txt", full) if full else None,
+            file_text=attachment,
         )
         if not message_id:
             audit.warning("Denied %r: the approval prompt could not be shown", action)
@@ -1440,6 +1487,9 @@ class DiscordAdapter:
             return
         key = str(path)
         if key in target.uploaded or not path.is_file():
+            return
+        if is_scratch_path(path):
+            # The agent's own working files (a smoke-test log), not a deliverable.
             return
         if not any(path == root or root in path.parents for root in self.upload_roots):
             audit.warning(
@@ -1604,6 +1654,17 @@ def _agent_env() -> Dict[str, str]:
     return env
 
 
+def _gaia_launcher() -> Optional[Path]:
+    """The ``gaia.exe`` console-script launcher beside this interpreter."""
+    import sys
+
+    here = Path(sys.executable).parent
+    return next(
+        (p for p in (here / "gaia.exe", here / "Scripts" / "gaia.exe") if p.is_file()),
+        None,
+    )
+
+
 def _gaia_shim_dir() -> Path:
     """A folder holding one ``gaia`` launcher for this interpreter.
 
@@ -1626,11 +1687,7 @@ def _gaia_shim_dir() -> Path:
     # The shell tool starts programs directly, and Windows starts only .exe
     # that way, so a .cmd shim is never found. The console-script launcher
     # names its interpreter by absolute path, so a copy runs from anywhere.
-    here = Path(sys.executable).parent
-    launcher = next(
-        (p for p in (here / "gaia.exe", here / "Scripts" / "gaia.exe") if p.is_file()),
-        None,
-    )
+    launcher = _gaia_launcher()
     if launcher is None:
         raise RuntimeError(
             f"No gaia.exe next to {sys.executable}, so GAIA in Discord could not "

@@ -190,7 +190,10 @@ class GatewayTransport:
                 "allowed_mentions": discord.AllowedMentions.none(),
             }
             if clear_buttons:
+                # A closed prompt is a one-line record; its attached command
+                # or file would otherwise show twice once the turn replies.
                 kwargs["view"] = None
+                kwargs["attachments"] = []
             await message.edit(**kwargs)
 
         self._call(go)

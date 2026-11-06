@@ -77,3 +77,29 @@ def test_dms_are_handled_one_at_a_time_in_arrival_order():
     """Parallel handling let a quick follow-up overtake the message it follows."""
     gateway = transport.GatewayTransport()
     assert gateway._messages._max_workers == 1
+
+
+def test_closing_a_prompt_drops_its_buttons_and_attachment():
+    edited = {}
+
+    class _Partial:
+        async def edit(self, **kwargs):
+            edited.update(kwargs)
+
+    gateway = transport.GatewayTransport.__new__(transport.GatewayTransport)
+    gateway._discord = discord
+    gateway._channel = lambda _cid: SimpleNamespace(
+        get_partial_message=lambda _mid: _Partial()
+    )
+
+    def run(make):
+        import asyncio
+
+        return asyncio.run(make())
+
+    gateway._call = run
+    gateway.edit("1", "2", "✅ Allowed", clear_buttons=True)
+    assert edited["view"] is None and edited["attachments"] == []
+    edited.clear()
+    gateway.edit("1", "2", "Thinking…")
+    assert "attachments" not in edited, "a plain edit keeps what is attached"

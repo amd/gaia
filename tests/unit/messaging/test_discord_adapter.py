@@ -576,6 +576,30 @@ def test_a_written_file_is_uploaded_only_from_an_upload_root(tmp_path):
     assert uploads == [inside.resolve()]
 
 
+def test_the_agents_scratch_files_are_not_sent(tmp_path, monkeypatch):
+    """A smoke-test log the agent wrote for itself is not a deliverable."""
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    scratch = tmp_path / "gaia-scratch-abc123" / "test.log"
+    scratch.parent.mkdir()
+    scratch.write_text("2026-11-06 ERROR")
+    ad, clock = make(upload_roots=[str(tmp_path)])
+    ad.on_ready()
+    ad.handle_message(message(clock, "test it"))
+    turn = ad._agent().turns[-1]
+    ad._on_agent_event(
+        {
+            "type": "tool_call",
+            "tool": "write_file",
+            "args": {"file_path": str(scratch)},
+        },
+        turn,
+    )
+    ad._on_agent_event({"type": "tool_result", "data": {"success": True}}, turn)
+    assert not [m for m in ad.transport.sent if m["file_path"]]
+
+
 def test_a_mid_run_question_ends_the_turn():
     ad, clock = make()
     ad.on_ready()
@@ -1171,3 +1195,45 @@ def test_missed_messages_are_counted_against_the_bots_own_replies():
     ad._last_message_id = snowflake(clock.now - 60)
     ad.on_ready()
     assert ad.transport.counted_with == BOT
+
+
+def test_a_long_file_write_is_attached_under_its_own_name():
+    content = '"""Tail a log."""\n' + "\n".join(f"line_{i} = {i}" for i in range(400))
+    text, (name, body) = da.render_file_write(
+        "write_file",
+        {"args": {"file_path": r"C:\Users\me\logtail.py", "content": content}},
+    )
+    assert name == "logtail.py" and body == content
+    assert r"C:\Users\me\logtail.py" in text
+    assert "401 lines" in text and "line_" not in text, "the attachment shows it"
+    assert "hidden characters" not in text
+
+
+def test_a_file_write_with_hidden_characters_says_so():
+    event = {"args": {"file_path": "a.py", "content": "x = 1  # ‮\n" * 200}}
+    text, _ = da.render_file_write("write_file", event)
+    assert "hidden characters (U+202E)" in text
+
+
+def test_a_short_file_write_stays_inline():
+    event = {"args": {"file_path": "a.txt", "content": "hello"}}
+    assert da.render_file_write("write_file", event) is None
+
+
+def test_a_file_write_name_cannot_pose_as_another_type():
+    event = {"args": {"file_path": "/tmp/run me.exe", "content": "x\n" * 2000}}
+    _, (name, _) = da.render_file_write("write_file", event)
+    assert name == "run_me.exe.txt"
+
+
+def test_a_file_write_path_cannot_break_the_code_block():
+    event = {"args": {"file_path": "a```\n**ok**", "content": "x\n" * 2000}}
+    text, _ = da.render_file_write("write_file", event)
+    assert text.count("```") == 2
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Linux and macOS use a script shim")
+def test_no_gaia_launcher_says_how_to_restore_it(monkeypatch):
+    monkeypatch.setattr(da, "_gaia_launcher", lambda: None)
+    with pytest.raises(RuntimeError, match="Reinstall GAIA"):
+        da._agent_env()
