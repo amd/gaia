@@ -525,6 +525,18 @@ def test_tool_plan_in_place_of_the_work_is_narration():
     assert body.startswith("The previous tool call returned a result")
 
 
+def test_tool_plan_step_is_quoted_with_curly_apostrophes():
+    answer = (
+        "Here’s the plan:\n"
+        "1. I’ll use the `run_python` tool to load the CSV.\n"
+        "2. I’ll print the regional totals.\n\n"
+        "This should give you the breakdown."
+    )
+    assert _unfinished_answer_kind(answer) == "narration"
+    _, step = _split_announced_step(answer)
+    assert step == "I’ll use the `run_python` tool to load the CSV."
+
+
 @pytest.mark.parametrize(
     "answer",
     [
@@ -553,6 +565,32 @@ def test_tool_plan_in_place_of_the_work_is_narration():
             "> 1. I will use the `run_python` tool to load the data.\n"
             "> 2. I will print the totals.",
             id="quoted-plan",
+        ),
+        pytest.param(
+            "Here's the plan:\n"
+            "1. I'll use the `list_files` tool to find files older than 30 days.\n"
+            "2. I'll move them to an Archive folder.\n\n"
+            "Want me to go ahead?",
+            id="plan-awaiting-confirmation",
+        ),
+        pytest.param(
+            "Here's what I propose:\n"
+            "1. I'll use the `list_files` tool to find the old files.\n"
+            "2. I'll move them to Archive.\n\n"
+            "Let me know and I'll start.",
+            id="plan-asks-permission",
+        ),
+        pytest.param(
+            "1. I will rename `load_config` to `read_settings`.\n"
+            "2. I will add a unit test.\n\n"
+            "Let me know if that works for you.",
+            id="code-plan-with-identifiers",
+        ),
+        pytest.param(
+            "Proposed change:\n"
+            "1. I will move `parse_args` into `cli_utils`.\n"
+            "2. I will update the imports.",
+            id="code-plan-no-closing-line",
         ),
     ],
 )

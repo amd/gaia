@@ -1616,27 +1616,38 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     return None
 
 
-# A plan step the agent could have run itself: it names a tool ("use the
-# `run_python` tool", "call `query_data`").
+# A plan step the agent could have run itself: it uses, calls or runs a tool
+# ("use the `run_python` tool", "call `query_data`"), not just a code name.
 _TOOL_NAMING_PATTERN = re.compile(
-    r"\btools?\b|`[a-z][a-z0-9]*_[a-z0-9_]+`", re.IGNORECASE
+    r"\b(?:use|using|call|calling|run|running|invoke|invoking)\s+(?:the\s+)?"
+    r"(?:`[\w-]+`\s+tool\b|[\w-]+\s+tool\b|`[a-z][a-z0-9]*_[a-z0-9_]+`)",
+    re.IGNORECASE,
 )
 _PLAN_ITEM_PATTERN = re.compile(r"^\s*(?:[-*+•]|\**\d+[.)]\**)\s+(?P<item>.+)$")
+# A plan that waits for the user's go-ahead is the answer they asked for.
+_ASKS_GO_AHEAD_PATTERN = re.compile(
+    r"\?\s*$|\b(?:let me know|tell me|say the word|want me to|would you like"
+    r"|shall i|should i|do you want|your (?:go-ahead|approval|ok(?:ay)?))\b",
+    re.IGNORECASE,
+)
 _CLOSING_LINE_MAX_CHARS = 300
 
 
 def _tool_plan_step(paragraphs: List[str]) -> Optional[Tuple[str, str]]:
     """The plan paragraph and its first tool step, when a tool plan ends the answer.
 
-    The plan lists two or more first-person future steps, one naming a tool, and
-    at most one short closing line follows it with no figures, so no result.
+    The plan lists two or more first-person future steps, one using a tool, and
+    at most one short closing line follows it: no figures, so no result, and no
+    question or request for the go-ahead.
     """
     for plan_at in (-1, -2):
         if len(paragraphs) < -plan_at:
             return None
         closing = paragraphs[plan_at + 1 :] if plan_at == -2 else []
         if closing and (
-            len(closing[0]) > _CLOSING_LINE_MAX_CHARS or re.search(r"\d", closing[0])
+            len(closing[0]) > _CLOSING_LINE_MAX_CHARS
+            or re.search(r"\d", closing[0])
+            or _ASKS_GO_AHEAD_PATTERN.search(closing[0].replace("\u2019", "'"))
         ):
             return None
         items = [
@@ -1647,7 +1658,9 @@ def _tool_plan_step(paragraphs: List[str]) -> Optional[Tuple[str, str]]:
         future = [
             item
             for item in items
-            if _FUTURE_ACTION_PATTERN.match(re.sub(r"[*_`]", "", item))
+            if _FUTURE_ACTION_PATTERN.match(
+                re.sub(r"[*_`]", "", item).replace("\u2019", "'")
+            )
         ]
         tool_steps = [item for item in future if _TOOL_NAMING_PATTERN.search(item)]
         if len(future) >= 2 and tool_steps:
