@@ -500,3 +500,16 @@ def test_push_to_talk_messages_are_handled_by_the_daemon(client, catalog, monkey
         assert final["text"] in ("committed", "turn off the lights")
         ws.send_text(json.dumps({"type": "stop"}))
         _until(ws, "closed")
+
+
+def test_a_listed_mic_with_no_default_is_not_available():
+    # Seen on a real Windows PC: only a kernel-streaming input is listed, no
+    # API offers a default, and opening it fails. Status must not say "ready".
+    from gaia.daemon import voice_routes
+    from gaia.voice.errors import VoiceError
+
+    sd = fake_sounddevice(inputs=1)
+    sd.default = types.SimpleNamespace(device=(-1, 1))
+    with pytest.raises(VoiceError) as e:
+        voice_routes.require_microphone(sd)
+    assert e.value.code == "mic_missing" and "default microphone" in str(e.value)

@@ -131,6 +131,14 @@ def _open_error(e: Exception, what: str) -> VoiceError:
     )
 
 
+def _input_settings() -> str:
+    if sys.platform == "win32":
+        return "Settings › System › Sound › Input"
+    if sys.platform == "darwin":
+        return "System Settings › Sound › Input"
+    return "your desktop's sound settings"
+
+
 def _list_devices(sd) -> Dict[str, List[Dict[str, Any]]]:
     try:
         devices = list(sd.query_devices())
@@ -168,7 +176,16 @@ def require_microphone(sd) -> Dict[str, Any]:
             "mic_missing",
             "No microphone found on this PC. Plug one in, then try again.",
         )
-    return next((d for d in inputs if d["default"]), inputs[0])
+    default = next((d for d in inputs if d["default"]), None)
+    if default is None:
+        # Capture opens the default input; a device the system lists but
+        # doesn't offer as one (Windows kernel-streaming only) can't be opened.
+        raise VoiceError(
+            "mic_missing",
+            "This PC has no default microphone for apps. Turn one on in "
+            f"{_input_settings()}, then try again.",
+        )
+    return default
 
 
 class Speaker:
