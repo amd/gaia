@@ -2421,7 +2421,7 @@ def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
     """
     import requests
 
-    from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, ensure_authenticated
+    from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, reconnect_provider
     from gaia.llm.gateway import GatewayError
 
     provider, dot, _ = str(model_id or "").partition(".")
@@ -2429,7 +2429,7 @@ def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
     if not dot or provider not in PROVIDERS:
         return
     try:
-        ensure_authenticated(provider)
+        reconnect_provider(provider)
     except (CloudKeyError, GatewayError, requests.RequestException) as exc:
         logger.warning("chat: could not reconnect the %s provider: %s", provider, exc)
         sse_handler._emit(
@@ -5008,28 +5008,26 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     full_response += f"\n\n[Error: {result_holder['error']}]"
                 else:
                     full_response = error_msg
-                    # Same shape as a relayed sidecar's terminal error.
-                    step_id += 1
-                    for s in captured_steps:
-                        s["active"] = False
-                    captured_steps.append(
-                        {
-                            "id": step_id,
-                            "type": "error",
-                            "label": "Error",
-                            "detail": error_msg,
-                            "active": False,
-                            "success": False,
-                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
-                        }
-                    )
-                    yield _sse(
-                        {"type": "agent_error", "content": error_msg, "fatal": True}
-                    )
             else:
                 # Partial response exists -- append error notice so user knows
                 # the response may be incomplete
                 full_response += f"\n\n[Error: {result_holder['error']}]"
+            # Every failed turn sends this, even after a policy block or partial text.
+            step_id += 1
+            for s in captured_steps:
+                s["active"] = False
+            captured_steps.append(
+                {
+                    "id": step_id,
+                    "type": "error",
+                    "label": "Error",
+                    "detail": error_msg,
+                    "active": False,
+                    "success": False,
+                    "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                }
+            )
+            yield _sse({"type": "agent_error", "content": error_msg, "fatal": True})
 
         # A model failure ended the turn. The streamed text is only its opening
         # sentence, so the message must say what happened.

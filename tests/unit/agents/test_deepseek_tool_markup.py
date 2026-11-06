@@ -249,7 +249,7 @@ def _register_run_python(agent):
 
     def run_python(code: str, timeout: int = 60):
         calls.append({"code": code, "timeout": timeout})
-        return {"status": "success", "stdout": "ok"}
+        return {"status": "success", "stdout": "to recover: 412.50"}
 
     agent._instance_tools = {
         "run_python": {
