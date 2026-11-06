@@ -453,7 +453,7 @@ Skipping a model is allowed, and setup says what stops working:
 
 | Model | Without it |
 |-------|------------|
-| `Gemma-4-E4B-it-GGUF` | GAIA can't read images or screenshots: vision loads this model by name, whatever the chat model is. On PCs where it is also the chat model, there is no local chat model either |
+| `Gemma-4-E4B-it-GGUF` | GAIA can't read images or screenshots, unless another tested image-reading model such as `Qwen3.6-35B-A3B-GGUF` is downloaded, which then reads them. On PCs where it is also the chat model, there is no local chat model either |
 | `user.embeddinggemma-300m-GGUF` | GAIA can't search your documents or remember things |
 | The chat model | GAIA has no local chat model; pick another with `--use-model`, or a cloud provider |
 
@@ -1881,7 +1881,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `context_sizes` | _(empty)_ | Context window per local model, set in the Agent UI under **Settings → Model** (`gaia config set` refuses it). A model not listed gets GAIA's automatic size; `GAIA_CTX_SIZE` overrides it |
 | `custom_models` | _(empty)_ | Local models you added from a Hugging Face link, managed with [`gaia model`](#model-command), the Agent UI or the TUI (`gaia config set` refuses it) |
 | `profile` | `chat` | Last `gaia init` profile |
-| `vision_model` | _(unset)_ | Model that reads scans and images, when you chose one in setup. Unset uses the chat model if it reads images, otherwise Gemma 4 E4B |
+| `vision_model` | _(unset)_ | Model that reads scans and images, when you chose one in setup. Unset uses the chat model if it reads images, otherwise Gemma 4 E4B; when that one isn't downloaded, a tested image-reading model that is |
 | `skipped_models` | _(empty)_ | Models you chose not to download; `gaia init` and first-run setup leave them out. Comma-separated with `gaia config set`; also set by `gaia init --skip-model` and the setup screens. See [Choosing models](#choosing-models) |
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
 | `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, the one GAIA has tested, or `auto` to let Lemonade choose. A value saved before this (`rocm`, `metal`, `cpu`) still loads but can't be set again. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
@@ -3518,13 +3518,13 @@ gaia schedule daemon
 
 ### Sinks
 
-A sink decides where each scheduled run's output goes. Set it with `--sink` on `add` (default `stdout`). `add` rejects a sink that could never deliver (an unknown name, `telegram` without `--to`, bare `file` without a path, or `notification` on Windows) and stores nothing. The Telegram bot token is only checked when a run delivers, because the daemon reads it from its own environment.
+A sink decides where each scheduled run's output goes. Set it with `--sink` on `add` (default `stdout`). `add` rejects a sink that could never deliver (an unknown name, `telegram` without `--to`, or bare `file` without a path) and stores nothing. The Telegram bot token is only checked when a run delivers, because the daemon reads it from its own environment.
 
 | Sink | Description |
 |------|-------------|
 | `stdout` | Print output to the terminal (default) |
 | `file:<path>` | Append output to the given file (created if missing) |
-| `notification` | Desktop notification (macOS `osascript` / Linux `notify-send`) |
+| `notification` | Desktop notification (macOS `osascript` / Linux `notify-send` / Windows `plyer` or PowerShell) |
 | `telegram` | Send via a Telegram bot — needs a bot token (`GAIA_TELEGRAM_TOKEN` env var or `sink_args.token` in `schedules.toml`) and a recipient via `--to` |
 
 **Telegram example:**
@@ -4301,6 +4301,7 @@ gaia diagnostics --output /tmp/my-bundle.tgz
 The bundle includes:
 - System info snapshot: OS version (`uname -a` and distro on Linux, `sw_vers` on macOS, `ver` on Windows), relevant env vars with secrets redacted, the pid and port of the GAIA daemon, GAIA's Lemonade and the Agent UI backend with what listens on them, and all TCP listeners (`ss -tlnp` on Linux, `lsof -iTCP -sTCP:LISTEN` on macOS, `netstat -ano` on Windows)
 - `~/.gaia/electron-install-state.json` (no chat content)
+- The last 10 model-failure reports (`~/.gaia/failures/GF-*.json`), each saved with secrets redacted when a model call failed, omitted with `--no-logs` since each holds a Lemonade log tail
 - Log files, omitted with `--no-logs`: `~/.gaia/gaia.log`, the Electron logs (`electron-install.log`, `electron-main.log`, `electron-updater.log`), `~/.gaia/logs/*.log`, the daemon log (`~/.gaia/host/daemon.log`), GAIA's Lemonade log (`~/.gaia/lemonade/lemond.log`) and agent sidecar logs (`~/.gaia/agents/*/logs/*.log`), each with its rotated copies (`gaia.log.1`, ...). A log over 50 MB is bundled as its last 50 MB, named `<file>.tail`.
 
 API keys and tokens in GAIA's state files (`lemonade/state.json`, `host/instance.json`) are never bundled.

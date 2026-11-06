@@ -49,6 +49,7 @@ import requests
 from openai import OpenAI
 
 from gaia.env import child_env, load_env
+from gaia.llm import call_ledger
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
@@ -537,7 +538,8 @@ def resolve_default_vision_model() -> Optional[str]:
     Otherwise ``vision_model`` from setup when the user chose one; else the
     model chat reopens on, then the default chat model, whichever reads
     images first, because those are already downloaded; else
-    :data:`DEFAULT_MODEL_NAME`.
+    :data:`DEFAULT_MODEL_NAME`. When that isn't downloaded, the VLM client
+    reads with :func:`downloaded_vision_model` instead.
     """
     from gaia.config import GaiaConfig
 
@@ -574,6 +576,50 @@ def resident_vision_model(configured: str, base_url: Optional[str] = None) -> st
         if entry.get("model_name") in VISION_CHAT_MODELS:
             return entry["model_name"]
     return configured
+
+
+def downloaded_vision_model(
+    configured: str, catalog_entries: list, client: "LemonadeClient"
+) -> Optional[str]:
+    """A downloaded :data:`VISION_CHAT_MODELS` entry to read images with instead
+    of ``configured``, which the catalog lists as not downloaded; else None.
+
+    Any :data:`VISION_CHAT_MODELS` name is replaced, whoever passed it, except
+    ``vision_model`` from setup; a model outside the set never is. A loaded
+    candidate wins, then the order below.
+    """
+    from gaia.config import GaiaConfig
+
+    if configured not in VISION_CHAT_MODELS:
+        return None
+    candidates = [
+        name
+        for name in (
+            DEFAULT_MODEL_NAME,
+            LARGE_DEFAULT_MODEL_NAME,
+            FLASH_OPTION_MODEL_NAME,
+        )
+        if not _model_ids_match(name, configured)
+        and any(
+            isinstance(entry, dict)
+            and _model_ids_match(entry.get("id"), name)
+            and entry.get("downloaded") is True
+            for entry in catalog_entries
+        )
+    ]
+    if not candidates or _model_ids_match(GaiaConfig.load().vision_model, configured):
+        return None
+    if len(candidates) > 1:
+        try:
+            loaded = client.health_check().get("all_models_loaded") or []
+        except LemonadeClientError as e:
+            log.warning("Could not read the loaded models from Lemonade: %s", e)
+            loaded = []
+        for entry in loaded:
+            for name in candidates:
+                if _model_ids_match(entry.get("model_name"), name):
+                    return name
+    return candidates[0]
 
 
 # Default embedding model: EmbeddingGemma 300M (768-dim). Not a Lemonade
@@ -1484,6 +1530,19 @@ def _chosen_ctx_size(model: str, base_url: Optional[str]) -> Optional[int]:
     return tokens
 
 
+def _noted_stream(stream: Generator, noted: Dict[str, Any]) -> Generator:
+    """*stream*, closing its call-ledger entry when it ends, fails or is dropped."""
+    try:
+        yield from stream
+    except GeneratorExit:
+        call_ledger.end(noted, outcome="closed by caller")
+        raise
+    except Exception as e:
+        call_ledger.end(noted, error=e)
+        raise
+    call_ledger.end(noted)
+
+
 def resolve_ctx_size(
     model: Optional[str] = None,
     device: Optional[str] = None,
@@ -1508,21 +1567,31 @@ def resolve_ctx_size(
         # GAIA_CTX_SIZE (applied below) wins, so it can rescue a size that no longer fits.
         pinned = bool(os.environ.get("GAIA_CTX_SIZE", "").strip())
         chosen = None if pinned else _chosen_ctx_size(model, base_url)
+        inputs: Dict[str, Any] = {}
         if chosen is not None:
             # The user's pick is not shrunk to free memory; the load refuses instead.
-            ctx = chosen
+            ctx, how = chosen, "chosen in Settings"
         elif requirement is not None:
-            ctx = fit_ctx_to_free_memory(
-                model, _model_ctx_size(requirement, base_url), base_url
-            )
+            sized = _model_ctx_size(requirement, base_url)
+            ctx = fit_ctx_to_free_memory(model, sized, base_url)
+            how = "sized to this PC's memory, then to memory free now"
+            inputs = {
+                "for_capacity": sized,
+                "after_free_memory": ctx,
+                "min_ctx_size": requirement.min_ctx_size,
+                "scales_with_memory": requirement.scales_with_memory,
+            }
         else:
-            ctx = NPU_CTX_SIZE if runs_on_npu(model) else GPU_CTX_SIZE
+            on_npu = runs_on_npu(model)
+            ctx = NPU_CTX_SIZE if on_npu else GPU_CTX_SIZE
+            how = "NPU default" if on_npu else "GPU default"
     else:
         if device is None:
             from gaia.config import GaiaConfig
 
             device = GaiaConfig.load().default_device
         ctx = profile_ctx_size(device)
+        how = f"{device} profile"
 
     override = os.environ.get("GAIA_CTX_SIZE", "").strip()
     if override:
@@ -1543,6 +1612,10 @@ def resolve_ctx_size(
             "may be truncated. Increase or unset GAIA_CTX_SIZE if replies are empty.",
             ctx,
             DEFAULT_CONTEXT_SIZE,
+        )
+    if model:
+        call_ledger.note_ctx_choice(
+            model, ctx, "GAIA_CTX_SIZE" if override else how, **inputs
         )
     return ctx
 
@@ -6071,19 +6144,36 @@ class LemonadeClient:
                 **kwargs,
             )
 
-        try:
-            first = self._survive_gaia_lemonade_stop(_call, model)
-        except CloudModelUnavailableError as e:
-            if not self._reconnected_cloud_provider(e, model):
-                raise
-            first = self._survive_gaia_lemonade_stop(_call, model)
-        if not stream or not self.follows_gaia_lemonade:
-            return first
-        return self._stream_surviving_cloud_disconnect(
-            self._stream_surviving_gaia_lemonade_stop(first, _call, model),
-            lambda: self._stream_surviving_gaia_lemonade_stop(_call(), _call, model),
-            model,
+        noted = call_ledger.begin(
+            "chat",
+            url=f"{getattr(self, 'base_url', None)}/chat/completions",
+            model=model,
+            **call_ledger.chat_shape(
+                messages, tools, max_completion_tokens or max_tokens, stream
+            ),
         )
+        try:
+            try:
+                first = self._survive_gaia_lemonade_stop(_call, model)
+            except CloudModelUnavailableError as e:
+                if not self._reconnected_cloud_provider(e, model):
+                    raise
+                first = self._survive_gaia_lemonade_stop(_call, model)
+        except Exception as e:
+            call_ledger.end(noted, error=e)
+            raise
+        if not stream:
+            call_ledger.end(noted)
+            return first
+        if self.follows_gaia_lemonade:
+            first = self._stream_surviving_cloud_disconnect(
+                self._stream_surviving_gaia_lemonade_stop(first, _call, model),
+                lambda: self._stream_surviving_gaia_lemonade_stop(
+                    _call(), _call, model
+                ),
+                model,
+            )
+        return _noted_stream(first, noted)
 
     def _stream_surviving_cloud_disconnect(
         self,
@@ -9033,6 +9123,13 @@ class LemonadeClient:
                 f"loading {model_name}: {e} Try again in a moment. "
                 f"{APP_RESTART_HINT}"
             ) from e
+        call_ledger.note_memory_check(
+            model_name,
+            window=window,
+            size_gb=requirement.size_gb,
+            fits=None if verdict is None else verdict.fits,
+            reason=None if verdict is None else verdict.reason,
+        )
         if verdict is None:
             self.log.debug(
                 f"Free GPU memory is not reported here; loading {model_name} "
@@ -9268,6 +9365,9 @@ class LemonadeClient:
                 f"{wait}s, or at once if the model's load options change."
             )
 
+        noted = call_ledger.begin(
+            "load", url=url, request=dict(request_data), timeout_s=timeout
+        )
         try:
             if managed_embedder and request_data.get("llamacpp_backend") != "cpu":
                 response = self._post_embedder_load(
@@ -9277,10 +9377,12 @@ class LemonadeClient:
                 response = self._post_load_with_transient_retry(
                     url, request_data, timeout, model_name, load_retries
                 )
+            call_ledger.end(noted)
             self.log.debug(f"Loaded {model_name} successfully: response={response}")
             self.model = model_name
             return response
         except Exception as e:
+            call_ledger.end(noted, error=e)
             original_error = str(e)
 
             # Check if this is a corrupt/incomplete download error
