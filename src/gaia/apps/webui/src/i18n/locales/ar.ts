@@ -1703,6 +1703,15 @@ const messages: Messages = {
     'banner.restartingShort': 'جارٍ إعادة التشغيل…',
     'banner.restartButton': 'إعادة تشغيل GAIA',
     'banner.restartFailed': 'تعذّر على GAIA إعادة تشغيل مساعده: {error}',
+    'banner.pickLoad.loading': 'جارٍ تحميل {model}…',
+    'banner.pickLoad.seconds': '{s} ث',
+    'banner.pickLoad.canType': 'يمكنك الكتابة الآن؛ ستُرسل رسالتك عندما يصبح جاهزًا.',
+    'banner.pickLoad.failed': 'تعذّر تحميل {model}.',
+    'banner.pickLoad.retry': 'أعد المحاولة',
+    'banner.pickLoad.noReason': 'توقّف التحميل دون ذكر السبب.',
+    'banner.pickLoad.lostTrack': 'تعذّر على GAIA متابعة التحميل: {reason}',
+    'banner.pickLoad.startFailed': 'تعذّر على GAIA بدء التحميل: {reason}',
+    'banner.dismiss': 'إغلاق',
 
     // The update chip
 

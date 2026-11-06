@@ -216,8 +216,9 @@ export async function getSystemStatus(signal?: AbortSignal): Promise<SystemStatu
 }
 
 /** Ask the backend to prime a new chat's prompt. Debounced and single-flight there. */
-export async function requestWarmUp(): Promise<WarmUpStatus> {
-    return apiFetch<WarmUpStatus>('POST', '/system/warm-up');
+/** `fresh` retries a picked model's load, queued behind a warm-up already running. */
+export async function requestWarmUp(fresh = false): Promise<WarmUpStatus> {
+    return apiFetch<WarmUpStatus>('POST', fresh ? '/system/warm-up?fresh=true' : '/system/warm-up');
 }
 
 export async function getWarmUp(): Promise<WarmUpStatus> {
