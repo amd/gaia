@@ -729,6 +729,15 @@ COMPUTATION_NOT_RUN = (
     "computed figures (totals, sums, counts, averages) as if it had. Tell the "
     "user what is needed to compute them."
 )
+#: Shell commands stay out: a failing test or git run is for fixing, not reporting.
+SCRIPT_COMPUTATION_TOOLS = frozenset(
+    {"run_python", "execute_python_file", "query_data"}
+)
+COMPUTATION_FAILED = (
+    "The computation failed before it printed anything, so nothing was "
+    "computed. Do not report computed figures (totals, sums, counts, averages). "
+    "Fix the error and run it again, or tell the user what is needed."
+)
 
 # Tools whose result is nothing but a receipt for what the agent itself just
 # did. EVERY other tool is treated as bringing in content the user did not type
@@ -6963,18 +6972,34 @@ Do NOT wrap conversational replies in JSON.
 
     @staticmethod
     def _with_computation_note(tool_name: str, result: Any) -> Any:
-        """A denied computation says plainly that nothing was computed.
+        """A denied computation, or a script that failed before printing
+        anything, says plainly that nothing was computed.
 
-        Only a denial: a failed test run or a script that crashed after
-        printing results is for the model to fix and re-run, not to report.
+        A failed shell command or a script that crashed after printing
+        results is for the model to fix and re-run, so it gets no note.
         """
-        if (
-            tool_name not in COMPUTATION_TOOLS
-            or not isinstance(result, dict)
-            or str(result.get("status", "")).lower() != "denied"
-        ):
+        if tool_name not in COMPUTATION_TOOLS:
             return result
-        return {**result, "computation": COMPUTATION_NOT_RUN}
+        if isinstance(result, str):
+            # query_data reports its errors as "Error: ..." text.
+            failed = tool_name in SCRIPT_COMPUTATION_TOOLS and tool_result_failed(
+                result
+            )
+            return f"{result}\n\n{COMPUTATION_FAILED}" if failed else result
+        if not isinstance(result, dict):
+            return result
+        if str(result.get("status", "")).lower() == "denied":
+            return {**result, "computation": COMPUTATION_NOT_RUN}
+        printed = any(
+            str(result.get(key) or "").strip() for key in ("stdout", "result", "rows")
+        )
+        if (
+            tool_name in SCRIPT_COMPUTATION_TOOLS
+            and tool_result_failed(result)
+            and not printed
+        ):
+            return {**result, "computation": COMPUTATION_FAILED}
+        return result
 
     def _with_task_lessons(self, tool_name: str, tool_args: Any, result: Any) -> Any:
         """A failed result carries what this task has already learned."""
