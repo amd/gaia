@@ -203,16 +203,26 @@ class GatewayTransport:
 
         self._call(go)
 
-    def count_from_after(self, channel_id: str, author_id: str, after_id: str) -> int:
+    def count_from_after(
+        self, channel_id: str, author_id: str, after_id: str, bot_id: str = ""
+    ) -> int:
+        """*author_id*'s messages after *after_id* that no reply of *bot_id* follows.
+
+        Another PC answering the same bot replies in this DM too, so a message
+        it answered was not missed.
+        """
         discord = self._discord
 
         async def go() -> int:
             count = 0
             async for message in self._channel(channel_id).history(
-                limit=100, after=discord.Object(id=int(after_id))
+                limit=100, after=discord.Object(id=int(after_id)), oldest_first=True
             ):
-                if str(message.author.id) == author_id:
+                author = str(message.author.id)
+                if author == author_id:
                     count += 1
+                elif bot_id and author == bot_id:
+                    count = 0
             return count
 
         return self._call(go)

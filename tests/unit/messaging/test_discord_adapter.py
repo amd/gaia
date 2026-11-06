@@ -53,7 +53,8 @@ class FakeTransport:
     def delete(self, channel_id, message_id):
         self.deleted.append(message_id)
 
-    def count_from_after(self, channel_id, author_id, after_id):
+    def count_from_after(self, channel_id, author_id, after_id, bot_id=""):
+        self.counted_with = bot_id
         return self.missed
 
     #: (message id, button custom ids) the DM history returns.
@@ -1162,3 +1163,11 @@ def test_a_failed_history_scan_does_not_stop_the_bridge():
     ad.transport.open_controls = broken
     ad.on_ready()
     assert ad.current_state == state.STATE_CONNECTED
+
+
+def test_missed_messages_are_counted_against_the_bots_own_replies():
+    """Another PC on the same bot answers in this DM; those were not missed."""
+    ad, clock = make()
+    ad._last_message_id = snowflake(clock.now - 60)
+    ad.on_ready()
+    assert ad.transport.counted_with == BOT

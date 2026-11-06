@@ -68,7 +68,8 @@ DISCORD_REPLY_NOTE = (
     "(Sent from Discord. Link everything you mention that you found online: "
     "write each PR, issue, commit or page as a Markdown link to its full URL, "
     "like [#6779](https://github.com/amd/gaia/pull/6779), never a bare number "
-    "or name. Discord shows no tables: use a short bullet list instead. The "
+    "or name. Discord shows no tables: use a short bullet list instead. A "
+    "file you write is sent to the user here as an attachment. The "
     "user is likely on their phone: never tell them to run a command; name the "
     "GAIA app screen that does it, like Settings → Connectors.)"
 )
@@ -265,7 +266,7 @@ class Transport(Protocol):
     def delete(self, channel_id: str, message_id: str) -> None: ...
 
     def count_from_after(
-        self, channel_id: str, author_id: str, after_id: str
+        self, channel_id: str, author_id: str, after_id: str, bot_id: str = ""
     ) -> int: ...
 
     def pins(self, channel_id: str) -> List[PinnedMessage]: ...
@@ -659,7 +660,10 @@ class DiscordAdapter:
         missed = 0
         if not resumed and self._last_message_id and self.config.dm_channel_id:
             missed = self.transport.count_from_after(
-                self.config.dm_channel_id, self.config.owner_id, self._last_message_id
+                self.config.dm_channel_id,
+                self.config.owner_id,
+                self._last_message_id,
+                self.config.bot_id,
             )
         self._set_state(state.STATE_CONNECTED)
         if missed:
