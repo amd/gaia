@@ -8,7 +8,7 @@
  * StatusNotifierItem, which shows only when a host owns the
  * `org.kde.StatusNotifierWatcher` name on the session bus. Stock GNOME has
  * none (its AppIndicator extension adds one), so hiding the window there
- * leaves GAIA running with no way back to it.
+ * would leave GAIA running with no way back to it; GAIA minimizes instead.
  */
 
 const { execFile } = require("child_process");
