@@ -799,9 +799,10 @@ A few stay refused with no prompt: a PowerShell `-EncodedCommand` or a line
 with invisible or line-break characters (the prompt couldn't show what runs), a
 line whose quoting GAIA can't split the way the shell would, a line its checks
 don't cover that also deletes or discards work (`git push --force`, `git reset
---hard`, `git clean`, `rm` outside the project), and folders no approval can
-open (credential folders, the system temp folder, a whole drive or your home
-folder). The agent
+--hard`, `git clean`, `rm` outside the project), a granted CLI's actions that
+end someone else's work (`gh issue close`, `gh pr merge`), and folders no
+approval can open (credential folders, the system temp folder, a whole drive or
+your home folder). The agent
 says what it would have run, so you can run it yourself.
 
 | Key | What it does |
