@@ -2719,6 +2719,7 @@ Do NOT wrap conversational replies in JSON.
         # the entries from _turn_error_start on.
         self.error_history = []
         self._turn_error_start = 0
+        self._turn_unasked_removals = []
         # Safe default so _execute_tool -> _fold_tool_usage never AttributeErrors
         # if called outside the normal process_query loop (e.g. directly in a
         # test); _process_query_impl resets this per-turn.
