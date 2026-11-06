@@ -158,8 +158,14 @@ def test_expected_gate_with_no_report_is_flagged_not_silently_omitted(tmp_path):
     gates, _ = eval_summary.collect(tmp_path)
     markdown, warnings = eval_summary.render(gates, [])
 
-    assert markdown.count("no verdict produced") == 3
-    assert len(warnings) == 3
+    # Derived, not literal: the product under test is "every EXPECTED gate that
+    # produced no report is flagged", and the expected set grows as suites gain
+    # CI wiring (#2040 added followups). A hardcoded 3 here re-broke on every
+    # addition while asserting nothing about which gates were missing.
+    missing = len(eval_summary.GATE_LABELS) - len(gates)
+    assert missing > 0, "fixture must omit at least one expected gate"
+    assert markdown.count("no verdict produced") == missing
+    assert len(warnings) == missing
     assert all("missing evidence" in w for w in warnings)
 
 
