@@ -1274,10 +1274,17 @@ function ConnectorAgentGrants({
               )
             : [];
 
+    // "No agents require access" above a switch that grants access reads as a
+    // contradiction, so the grants block appears only when it has a row or
+    // nothing else does.
+    const showGrants = relevantAgents.length > 0 || activatableAgents.length === 0;
+
     return (
         <div className="connection-grants">
-            <div className="grants-header">{t('settings.connectors.grants')}</div>
-            {relevantAgents.length === 0 ? (
+            {showGrants && (
+                <div className="grants-header">{t('settings.connectors.grants')}</div>
+            )}
+            {!showGrants ? null : relevantAgents.length === 0 ? (
                 <div className="grants-empty">{t('settings.connectors.noGrants')}</div>
             ) : (
                 relevantAgents.map((agent) => (

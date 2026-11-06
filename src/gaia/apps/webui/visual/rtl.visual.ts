@@ -806,8 +806,8 @@ for (const locale of ['ar', 'en']) {
 
 for (const locale of ['ar', 'en']) {
     test.describe(`settings connectors (${locale})`, () => {
-        const openConnectors = async (page: Page, rows?: unknown[]) => {
-            await open(page, '', locale, (p) => withConnectors(p, rows));
+        const openConnectors = async (page: Page, rows?: unknown[], extra?: Record<string, unknown>) => {
+            await open(page, '', locale, (p) => withConnectors(p, rows, extra));
             await page.getByRole('button', { name: /Settings/ }).first().click();
             await page.getByRole('dialog').locator('[data-section="connectors"]').click();
             await expect(page.locator('.settings-pane-title')).toBeVisible();
@@ -855,6 +855,26 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('.mcp-key-help')).toHaveAttribute('dir', 'auto');
             await page.locator('.mcp-key-help').scrollIntoViewIfNeeded();
             await shot(page, `connectors-${locale}-mcp-setup`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('a connected server shows one switch for GAIA, its help no larger than its heading', async ({ page }) => {
+            await openConnectors(page, [{
+                id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', description: 'Read channels, threads, and DMs in your Slack workspace.',
+                configured: true, configurable: true, enabled: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [],
+            }], {
+                'GET /agents': { agents: [{ id: 'gaia', name: 'GAIA', namespaced_agent_id: 'installed:gaia', consumes_mcp_servers: true }] },
+                'GET /connectors/mcp-slack/activations': { activations: { 'installed:gaia': true } },
+            });
+            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
+            const card = page.locator('.grant-agent-card');
+            await expect(card).toBeVisible();
+            await expect(page.locator('.grants-empty')).toHaveCount(0);
+            const size = (sel: string) => page.locator(sel).first().evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+            expect(await size('.grants-help')).toBeLessThanOrEqual(await size('.grants-header'));
+            await card.scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-mcp-switch`);
             expect(await audit(page)).toEqual([]);
         });
 

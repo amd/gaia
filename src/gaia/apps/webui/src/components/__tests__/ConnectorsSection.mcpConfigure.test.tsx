@@ -22,6 +22,7 @@ vi.mock('../../hooks/useConnectorsSSE', () => ({
 }));
 
 import * as api from '../../services/api';
+import { useChatStore } from '../../stores/chatStore';
 import { ConnectorsSection } from '../ConnectorsSection';
 
 function mcpRow(overrides: Partial<ConnectorRow>): ConnectorRow {
@@ -164,5 +165,23 @@ describe('MCP connector configure panel', () => {
         expect(screen.getByLabelText('Slack bot token')).toBeInTheDocument();
         expect(screen.queryByRole('link', { name: /Create Slack app/ })).toBeNull();
         expect(screen.queryByText(/Click/)).toBeNull();
+    });
+
+    it('shows one plain switch for GAIA instead of an empty grants list', async () => {
+        useChatStore.setState({
+            agents: [
+                { id: 'gaia', name: 'GAIA', namespaced_agent_id: 'installed:gaia', consumes_mcp_servers: true },
+            ] as never,
+        });
+        mocked.listConnectorActivations.mockResolvedValue({
+            activations: { 'installed:gaia': true },
+        } as never);
+        await openTile(mcpRow({ id: 'mcp-slack', display_name: 'Slack', configured: true }));
+
+        expect(await screen.findByText('Who can use it')).toBeInTheDocument();
+        expect(screen.getByRole('checkbox', { name: 'Can use these tools' })).toBeChecked();
+        expect(screen.queryByText('No agents require access to this connector.')).toBeNull();
+        expect(screen.queryByText(/Activations gate/)).toBeNull();
+        useChatStore.setState({ agents: [] as never });
     });
 });

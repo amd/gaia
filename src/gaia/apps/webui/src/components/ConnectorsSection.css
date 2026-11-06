@@ -366,6 +366,14 @@
     margin-bottom: 8px;
 }
 
+.grants-help {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    line-height: 1.45;
+    margin-bottom: 8px;
+}
+
 .grants-empty {
     font-size: 12px;
     color: var(--text-muted);
