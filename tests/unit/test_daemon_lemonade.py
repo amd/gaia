@@ -142,11 +142,22 @@ class TestEnsure:
 
         embedded.stop.assert_called_once()
 
-    def test_newer_version_owned_by_another_live_daemon_is_repaired(self):
+    def test_newer_version_owned_by_another_live_daemon_is_left_running(self):
+        """Do not evict a newer server another live GAIA daemon owns."""
         other = OWNER + 1
         embedded = _embedded(_running(version="9999.1.0", owner_pid=other))
 
-        assert _owner(embedded, alive=(other,)).ensure().started is True
+        with pytest.raises(EmbeddedLemonadeError, match="another running GAIA"):
+            _owner(embedded, alive=(other,)).ensure()
+
+        embedded.stop.assert_not_called()
+        embedded.start.assert_not_called()
+
+    def test_newer_version_a_crashed_daemon_left_is_repaired(self):
+        """A downgrade remains safe after the old daemon exits during an update."""
+        embedded = _embedded(_running(version="9999.1.0", owner_pid=CRASHED))
+
+        assert _owner(embedded).ensure().started is True
         embedded.stop.assert_not_called()
         embedded.start.assert_called_once_with(
             install_if_missing=False,

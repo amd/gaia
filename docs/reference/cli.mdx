@@ -2137,9 +2137,9 @@ and no admin rights. `gaia init` installs and starts it; a Lemonade you installe
 yourself is left alone unless you choose to use it (see
 [Use a Lemonade you already run](#use-a-lemonade-you-already-run)).
 
-GAIA keeps its own server current. When an update to GAIA targets a newer
-Lemonade, the next start replaces the older one, downloading it if needed; you
-run nothing.
+GAIA keeps its own server on the version it targets. When an update to GAIA
+targets a different Lemonade version, the next start replaces the installed one,
+downloading the pinned version if needed; you run nothing.
 
 ```bash
 gaia lemonade embedded start      # download if needed, then run

@@ -5,7 +5,7 @@
 The daemon starts the server when it comes up and whenever a client asks, and
 stops it when the daemon shuts down, so nobody has to run ``gaia init`` again
 after a reboot. Installing it stays ``gaia init``'s job: the daemon only starts
-what is already installed, except that an older install is upgraded in place
+what is already installed, except that a mismatched install is repaired in place
 to the version this GAIA targets. A ``LEMONADE_BASE_URL``, or the saved
 ``lemonade_mode: external`` choice, means the user runs their own server, so
 the daemon leaves Lemonade alone -- and :meth:`EmbeddedLemonadeOwner.reconfigure`
@@ -30,6 +30,7 @@ from dataclasses import asdict, dataclass
 from typing import Callable, Optional, Tuple
 
 from gaia.logger import get_logger
+from gaia.version import parse_version
 
 logger = get_logger(__name__)
 
@@ -182,8 +183,8 @@ class EmbeddedLemonadeOwner:
 
         A healthy server someone else started is claimed, so this daemon stops
         it later. One a crashed daemon left that is not answering, or runs
-        another version, is reaped and replaced. One on an older version, or an
-        older install, is upgraded to the version this GAIA targets.
+        another version, is reaped and replaced. One on a mismatched version, or
+        an install of another version, is repaired to the version this GAIA targets.
 
         Raises:
             LemonadeNotManaged: ``LEMONADE_BASE_URL`` or the saved setting names
@@ -250,9 +251,23 @@ class EmbeddedLemonadeOwner:
                     f"but this GAIA needs v{embedded.version}. Run `gaia init` "
                     "to replace it."
                 )
+            if (
+                current.running
+                and not orphaned
+                and current.owner_pid not in (None, self._owner_pid)
+                and (parse_version(current.version) > parse_version(embedded.version))
+            ):
+                raise EmbeddedLemonadeError(
+                    f"GAIA's Lemonade Server v{current.version} is owned by "
+                    f"another running GAIA (pid {current.owner_pid}), but this "
+                    f"GAIA needs v{embedded.version}. Stop the other GAIA before "
+                    "replacing its server."
+                )
             # A different version that still answers is replaced by start() only
             # after the pinned version is on disk, so a failed repair leaves it up.
-            replaced_on_start = current.running and embedded.is_version_mismatch(current.version)
+            replaced_on_start = current.running and embedded.is_version_mismatch(
+                current.version
+            )
             if orphaned and not replaced_on_start:
                 logger.warning(
                     "daemon: reaping embedded Lemonade (pid %s) left by daemon "
