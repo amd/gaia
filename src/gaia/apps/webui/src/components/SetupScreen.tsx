@@ -1169,8 +1169,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             {gateway?.reachable === false && (
                                 <button type="button" className="link-btn setup-start" onClick={recheckGateway}>{t('setup.key.checkAgain')}</button>
                             )}
+
                             {cloudProviderBlocked(choice) && (
-                                <p className="setup-error" role="alert">{t('settings.privacy.localOnlyBlocked')}</p>
+                                <p className="setup-a11y-alert" role="alert">{t('settings.privacy.localOnlyBlocked')}</p>
                             )}
                             {choice === 'fireworks' && !usersServer && !cloudProviderBlocked(choice) && (
                                 <section className="setup-card">
