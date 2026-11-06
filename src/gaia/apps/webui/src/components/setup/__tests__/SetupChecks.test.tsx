@@ -31,7 +31,7 @@ describe('Checking this PC', () => {
     it('starts with the hardware being read and the server waiting its turn', () => {
         show();
         expect(row('Processor, GPU and NPU')).toHaveClass('is-active');
-        expect(row('Memory')).toHaveClass('is-active');
+        expect(row('Memory for models')).toHaveClass('is-active');
         expect(row('AI engine')).toHaveClass('is-waiting');
         expect(screen.getByText('Checks done: 0 of 5')).toBeInTheDocument();
     });
@@ -39,8 +39,7 @@ describe('Checking this PC', () => {
     it('fills in what it found and counts the finished checks', () => {
         show({ hardware: HARDWARE, plan: DOWN });
         expect(row('Processor, GPU and NPU')).toHaveTextContent('AMD Radeon 8060S · Ryzen AI NPU');
-        // The OS's figure until the model server reports what is installed.
-        expect(row('Memory')).toHaveTextContent('96.0 GB');
+        expect(row('Memory for models')).toHaveTextContent('96.0 GB');
         expect(row('Disk space')).toHaveTextContent('400 GB free');
         expect(row('AI engine')).toHaveClass('is-active');
         expect(screen.getByText('Checks done: 3 of 5')).toBeInTheDocument();
@@ -74,17 +73,18 @@ describe('Checking this PC', () => {
         expect(row('AI engine')).toHaveTextContent('Lemonade 2026.44.1 · Yours');
     });
 
-    it('shows installed memory, not what the OS has left after the GPU takes its share', () => {
-        // 128 GB installed with 64 GB set aside for the GPU: Windows reports 63.6 GB.
-        const plan = { ...DOWN, system: { physical_memory: '128.00 GB' } } as unknown as SetupPlan;
+    it('shows the same model capacity as the next setup screen, not the OS-visible RAM', () => {
+        // 128 GB installed with 64 GB set aside for the GPU: Windows reports 63.6 GB,
+        // while setup chooses models from its 103.1 GB model-memory capacity.
+        const plan = { ...DOWN, capacity_gb: 103.1 } as SetupPlan;
         show({ hardware: { ...HARDWARE, ram_gb: 63.6 }, plan });
-        expect(row('Memory')).toHaveTextContent('137.4 GB');
+        expect(row('Memory for models')).toHaveTextContent('103.1 GB');
     });
 
     it('marks the hardware rows failed when they could not be read, inventing no value', () => {
         show({ hardwareError: 'timed out', plan: DOWN });
-        expect(row('Memory')).toHaveClass('is-failed');
-        expect(row('Memory')).not.toHaveTextContent('GB');
+        expect(row('Memory for models')).toHaveClass('is-failed');
+        expect(row('Memory for models')).not.toHaveTextContent('GB');
     });
 
     it('marks the server failed when the server run did', () => {
