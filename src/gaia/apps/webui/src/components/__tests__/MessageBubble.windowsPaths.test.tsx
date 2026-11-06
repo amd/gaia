@@ -6,10 +6,11 @@
  * the next character is punctuation that markdown would treat as escaped.
  */
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
 import { MessageBubble } from '../MessageBubble';
 import type { Message } from '../../types';
+import { useChatStore } from '../../stores/chatStore';
 
 const baseMessage: Message = {
     id: 1,
@@ -177,5 +178,62 @@ describe('Windows paths in prose keep their backslashes', () => {
         expect(container.querySelector('.md-content')?.textContent).toBe(
             'Logs: C:\\Users\\me\\.gaia\\logs and C:\\x\\.y and \\\\nas\\s\\.c done',
         );
+    });
+});
+
+describe('a Windows path is one chip with its exact text', () => {
+    const PATH = 'C:\\gtest\\run-rc11\\fx\\Team Docs  -  AMD Shared\\budget.txt';
+
+    function chips(content: string): string[] {
+        const { container } = render(<MessageBubble message={{ ...baseMessage, role: 'user', content }} />);
+        return [...container.querySelectorAll('.file-path-link, .citation-link')].map((el) => el.textContent ?? '');
+    }
+
+    afterEach(() => useChatStore.setState({ documents: [] }));
+
+    it('keeps a quoted path with " - " and double spaces whole', () => {
+        const content = `Please index "${PATH}" into my document library`;
+        expect(chips(content)).toEqual([PATH]);
+        expect(textOf(content, 'user')).toBe(content);
+    });
+
+    it('keeps the path whole once its file is in the library', () => {
+        useChatStore.setState({ documents: [{
+            id: 'b', filename: 'budget.txt', filepath: PATH, file_size: 1, chunk_count: 1,
+            indexed_at: '2026-01-01T00:00:00Z', last_accessed_at: null, sessions_using: 0, indexing_status: 'complete',
+        }] });
+        expect(chips(`Please index "${PATH}" into my document library`)).toEqual([PATH]);
+        expect(chips(`Please index ${PATH} now`)).toEqual([PATH]);
+    });
+
+    it.each([
+        ['unquoted', `Please index ${PATH} into my document library`, [PATH]],
+        ['in curly quotes', `Please index \u201c${PATH}\u201d now`, [PATH]],
+        ['quoted, ending in words with no backslash', 'Open "C:\\My Docs\\notes and more" now', ['C:\\My Docs\\notes and more']],
+        ['quoted, with an escapable folder', 'Open "C:\\Team  Docs\\_drafts\\a.md" now', ['C:\\Team  Docs\\_drafts\\a.md']],
+        ['quoted, ending in a dot', 'Open "C:\\a\\b." now', ['C:\\a\\b.']],
+        ['unquoted, double-spaced last name', 'Open C:\\Team  Docs\\Q3  report.txt now', ['C:\\Team  Docs\\Q3  report.txt']],
+        ['unquoted, prose after it', 'See C:\\out\\docs and look at a.pdf', ['C:\\out\\docs']],
+        ['quoted, two paths', 'Copy "C:\\a  b\\x.txt" to "D:\\c  d\\y.txt"', ['C:\\a  b\\x.txt', 'D:\\c  d\\y.txt']],
+        ['in a quoted sentence', 'He said "see C:\\out\\docs and look" twice', ['C:\\out\\docs']],
+    ])('%s', (_label, content, expected) => {
+        expect(chips(content)).toEqual(expected);
+        expect(textOf(content, 'user')).toBe(content);
+    });
+
+    it('shows the label with its spaces kept', () => {
+        const { container } = render(<MessageBubble message={{ ...baseMessage, role: 'user', content: `"${PATH}"` }} />);
+        expect(getComputedStyle(container.querySelector('.file-path-link')!).whiteSpace).toBe('pre-wrap');
+    });
+
+    it.each([
+        ['quoted folders with double spaces', `"C:\\${'a  b  -  c\\'.repeat(2000)}_x"`],
+        ['unclosed quotes', `${'"C:\\a  b '.repeat(2000)}\\_x`],
+        ['double-spaced words with no backslash', `C:\\${'OneDrive  -  AMD  '.repeat(2000)}\\_x`],
+        ['double-spaced folders', `C:\\${'a  b  -  c\\'.repeat(2000)}_x`],
+    ])('handles 2,000 %s quickly', (_label, content) => {
+        const started = performance.now();
+        textOf(content, 'user');
+        expect(performance.now() - started).toBeLessThan(2000);
     });
 });

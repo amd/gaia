@@ -16,7 +16,8 @@ What happens depends on the tag. This file is the one place that says so:
   script exits 0. Candidates exist to be tested; publish.yml still builds and
   smoke-tests the candidate's own artifacts (RC_IN_RUN_CRITICAL);
 - a final (vX.Y.Z) needs FINAL_REQUIRED: every job of every workflow, plus the
-  dry run.
+  dry run. FINAL_ADVISORY is read once after that, never dispatched or waited
+  for, and each check not green is a warning that does not hold the release.
 
 A check names a workflow and, optionally, the jobs in it that count. Most
 commits on main have no run of their own: the next merge cancels it, and path
@@ -72,8 +73,9 @@ _DRY_RUN_WHY = (
     "and the manifest"
 )
 
-# Named, so a push run that started only the Windows row cannot pass for both.
-_NPU_JOBS = ("NPU agent chat (Windows, cold)", "NPU agent chat (Linux, cold)")
+# Named, so a push run that skipped the Linux row cannot pass as the Linux row.
+_NPU_WINDOWS = "NPU agent chat (Windows, cold)"
+_NPU_LINUX = "NPU agent chat (Linux, cold)"
 _NPU_WHY = (
     "one Agent UI turn on the NPU default model, through GAIA's own Lemonade "
     "and the gaia-agent sidecar, on Windows and Linux Strix Halo (#6632)"
@@ -102,7 +104,8 @@ RC_REPORTED = (
     ),
     Check("test_gaia_cli_linux.yml"),
     Check("release_train_dryrun.yml", remedy_args="-f rc_tag={tag}", why=_DRY_RUN_WHY),
-    Check("test_npu_agent_chat.yml", jobs=_NPU_JOBS, why=_NPU_WHY),
+    Check("test_npu_agent_chat.yml", jobs=(_NPU_WINDOWS,), why=_NPU_WHY),
+    Check("test_npu_agent_chat.yml", jobs=(_NPU_LINUX,), why=_NPU_WHY),
 )
 
 # The dry run takes an RC name, so the gate never starts one for a final: run
@@ -117,8 +120,12 @@ FINAL_REQUIRED = (
         remedy_args="-f rc_tag=<the candidate tagged on this commit>",
         why=_DRY_RUN_WHY,
     ),
-    Check("test_npu_agent_chat.yml", jobs=_NPU_JOBS, why=_NPU_WHY),
+    Check("test_npu_agent_chat.yml", jobs=(_NPU_WINDOWS,), why=_NPU_WHY),
 )
+
+# The Linux NPU row goes back into FINAL_REQUIRED once the Linux Strix Halo
+# runners lock enough memory for the NPU model (#6764).
+FINAL_ADVISORY = (Check("test_npu_agent_chat.yml", jobs=(_NPU_LINUX,), why=_NPU_WHY),)
 
 # Jobs in publish.yml itself that approve-publish requires on a candidate: they
 # build the candidate and smoke-test those artifacts. Listed here so the whole
@@ -369,23 +376,44 @@ def report_rc(verdicts: list[Verdict], sha: str, tag: str) -> tuple[str, list[st
         lines += [
             "",
             f"{tag} publishes anyway: tests never hold a release candidate. The "
-            "final requires every one of these, so before tagging it:",
+            "final requires these unless marked advisory, so before tagging it:",
             "",
         ]
         for v in not_green:
             state = RC_STATE_WORDS[v.state]
+            advisory = v.check in FINAL_ADVISORY
             lines.append(
-                f"- `{v.check.label}` {state}." + (f" `{v.remedy}`" if v.remedy else "")
+                f"- `{v.check.label}` {state}."
+                + (" Advisory on the final." if advisory else "")
+                + (f" `{v.remedy}`" if v.remedy else "")
+            )
+            final = (
+                "the final reports it as advisory"
+                if advisory
+                else "the final requires it"
             )
             warnings.append(
                 f"{v.check.label} {state} on {sha[:12]} ({v.detail}). "
-                f"{tag} publishes anyway; the final requires it."
+                f"{tag} publishes anyway; {final}."
             )
     return "\n".join(lines), warnings
 
 
-def report(verdicts: list[Verdict], sha: str) -> tuple[bool, str]:
-    """A final's gate: every required check must have passed."""
+def advisory_warnings(advisory: list[Verdict], sha: str) -> list[str]:
+    """One warning per advisory check on a final that is not green."""
+    return [
+        f"{v.check.label} {RC_STATE_WORDS[v.state]} on {sha[:12]} ({v.detail}). "
+        "Advisory on a final: it does not hold the release."
+        for v in advisory
+        if v.state != "success"
+    ]
+
+
+def report(
+    verdicts: list[Verdict], sha: str, advisory: list[Verdict] | None = None
+) -> tuple[bool, str]:
+    """A final's gate: every required check must have passed; advisory never holds."""
+    advisory = advisory or []
     ok = all(v.state == "success" for v in verdicts)
     lines = [
         f"### CI on {sha[:12]} (final release gate)",
@@ -396,6 +424,13 @@ def report(verdicts: list[Verdict], sha: str) -> tuple[bool, str]:
     lines += [
         f"| `{v.check.label}` | required | {v.state} | {v.detail} |" for v in verdicts
     ]
+    lines += [
+        f"| `{v.check.label}` | advisory | {v.state} | {v.detail} |" for v in advisory
+    ]
+    not_green = [v for v in advisory if v.state != "success"]
+    if not_green:
+        lines += ["", "Advisory, so these do not hold the release:", ""]
+        lines += [f"- `{v.check.label}` {RC_STATE_WORDS[v.state]}." for v in not_green]
     blocked = [v for v in verdicts if v.state != "success"]
     if blocked:
         lines += ["", "Nothing was published. To unblock this release:", ""]
@@ -470,9 +505,12 @@ def main(argv: list[str] | None = None) -> int:
         args.wait_minutes,
         get_jobs=get_jobs,
     )
-    ok, text = report(verdicts, args.sha)
+    advisory = snapshot(args.repo, args.tag, FINAL_ADVISORY, get_runs, get_jobs)
+    ok, text = report(verdicts, args.sha, advisory)
     print(text)
     _write_summary(text)
+    for w in advisory_warnings(advisory, args.sha):
+        print(f"::warning::{w}")
     if not ok:
         print(
             f"::error::{args.tag} ({args.sha[:12]}) is not green on its required "

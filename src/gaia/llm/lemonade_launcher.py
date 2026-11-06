@@ -330,11 +330,28 @@ def gaia_runs_lemonade(base_url: Optional[str] = None) -> bool:
     if configured_lemonade_url():
         return False
     embedded = EmbeddedLemonade()
-    if not (embedded.is_installed() or embedded.replaces_older_install()):
+    if not (
+        embedded.is_installed()
+        or embedded.replaces_older_install()
+        or embedded.is_incomplete()
+    ):
         return False
     if base_url is None:
         return True
     return resolve_lemonade_base_url(base_url) == resolve_lemonade_base_url()
+
+
+def server_down_advice(base_url: Optional[str] = None) -> str:
+    """What an app user does about a model server that isn't answering.
+
+    GAIA's own server is started by the daemon on the next message; one the
+    user runs needs this machine's start instruction.
+    """
+    from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT
+
+    if gaia_runs_lemonade(base_url):
+        return APP_SERVER_DOWN_HINT
+    return describe_start_hint().instruction
 
 
 def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:

@@ -39,6 +39,7 @@ from gaia.llm.providers.lemonade import (
     MODEL_SERVER_DOWN,
     LemonadeModelUnavailableError,
     classify_lemonade_exception,
+    wording_for_model,
 )
 from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT, APP_RESTART_HINT
 from gaia.security import (
@@ -2413,7 +2414,7 @@ def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
     """
     import requests
 
-    from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, ensure_authenticated
+    from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, reconnect_provider
     from gaia.llm.gateway import GatewayError
 
     provider, dot, _ = str(model_id or "").partition(".")
@@ -2421,7 +2422,7 @@ def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
     if not dot or provider not in PROVIDERS:
         return
     try:
-        ensure_authenticated(provider)
+        reconnect_provider(provider)
     except (CloudKeyError, GatewayError, requests.RequestException) as exc:
         logger.warning("chat: could not reconnect the %s provider: %s", provider, exc)
         sse_handler._emit(
@@ -3117,7 +3118,7 @@ async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str
         resolve_lemonade_api_key,
         resolve_lemonade_base_url,
     )
-    from gaia.llm.lemonade_launcher import describe_start_hint
+    from gaia.llm.lemonade_launcher import server_down_advice
     from gaia.llm.lemonade_manager import LemonadeManager
 
     base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
@@ -3130,7 +3131,7 @@ async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str
         logger.warning("Empty-answer health check of %s failed: %s", base_url, e)
         return (
             f"No answer came back because Lemonade Server at {base_url} isn't "
-            f"responding. {describe_start_hint().instruction}"
+            f"responding. {server_down_advice(base_url)}"
         )
     if resp.status_code in (401, 403):
         # Running, so the start hint would be wrong; the key is what to fix.
@@ -3143,7 +3144,7 @@ async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str
         return (
             f"No answer came back because Lemonade Server at {base_url} failed "
             f"its health check (HTTP {resp.status_code}). "
-            f"{describe_start_hint().instruction}"
+            f"{server_down_advice(base_url)}"
         )
     if not model_id or cloud_model_provider(model_id):
         return None
@@ -3384,6 +3385,7 @@ def _done_event(
     turn_summary: Optional[dict] = None,
     failed: bool = False,
     failure: Optional[str] = None,
+    documents_added: Optional[list] = None,
 ) -> dict:
     """Build the closing ``done`` SSE payload for a persisted turn.
 
@@ -3392,6 +3394,7 @@ def _done_event(
     Stop that lands after the agent already answered stays an ordinary turn.
     ``failed`` marks a turn a model failure ended; its content explains why,
     and ``failure`` names a cause the UI offers a fix for.
+    ``documents_added`` are the library documents the turn attached to the chat.
     """
     event: dict = {"type": "done", "message_id": msg_id, "content": content}
     if turn_cancelled:
@@ -3404,7 +3407,30 @@ def _done_event(
         event["stats"] = stats
     if turn_summary:
         event["turn_summary"] = turn_summary
+    if documents_added:
+        event["documents_added"] = documents_added
     return event
+
+
+async def _add_indexed_documents_to_library(
+    db: ChatDatabase, session_id: str, sse_handler
+) -> Tuple[list, list]:
+    """Library rows for the files the agent indexed this turn, and notices.
+
+    Each file is recorded in the Document library and attached to the chat, as
+    if the user had added it there.
+    """
+    indexed = sse_handler.turn_ledger.indexed_documents()
+    if not indexed:
+        return [], []
+    from .agent_documents import add_indexed_documents
+    from .utils import doc_to_response
+
+    added = await asyncio.to_thread(add_indexed_documents, db, session_id, indexed)
+    return (
+        [doc_to_response(doc).model_dump(mode="json") for doc in added.documents],
+        added.notices,
+    )
 
 
 # Tight timeout for pre-flight load_model. The default Lemonade
@@ -3414,6 +3440,44 @@ def _done_event(
 # in that window something is genuinely wrong and we'd rather surface
 # the failure than hang.
 _PREFLIGHT_LOAD_TIMEOUT_S = 120
+
+
+def _restart_stopped_gaia_lemonade(model_id: str, sse_handler) -> bool:
+    """Have the daemon start GAIA's own model server when it has stopped.
+
+    A server the user runs is never started from here. On success a cloud
+    model's provider key is handed to the new server too.
+
+    Returns:
+        True once it is back; False when it is not GAIA's own or not stopped.
+
+    Raises:
+        GaiaLemonadeStartError: the daemon tried to start it and could not.
+        LemonadeClientError: the daemon could not be asked, or the server was
+            not back within the client's reconnect wait.
+    """
+    from gaia.llm.lemonade_client import LemonadeClient
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+
+    if not gaia_runs_lemonade():
+        return False
+    client = LemonadeClient(verbose=False)
+    if not client.gaia_lemonade_stopped():
+        return False
+    logger.warning(
+        "Pre-flight for %s: GAIA's Lemonade Server at %s has stopped; asking "
+        "the daemon to start it",
+        model_id,
+        client.base_url,
+    )
+
+    def on_status(message: str) -> None:
+        if sse_handler is not None:
+            sse_handler._emit({"type": "status", "status": "info", "message": message})
+
+    client.wait_for_gaia_lemonade(model_id, on_status=on_status)
+    logger.info("Pre-flight for %s: GAIA's Lemonade Server is back", model_id)
+    return True
 
 
 def _preflight_load(
@@ -3476,7 +3540,11 @@ def _preflight_load(
             _EVAL_PROVIDER_ENV,
         )
         return
-    from gaia.llm.lemonade_client import InsufficientMemoryError
+    from gaia.llm.lemonade_client import (
+        GaiaLemonadeStartError,
+        InsufficientMemoryError,
+        LemonadeServerDownError,
+    )
 
     try:
         import httpx
@@ -3495,7 +3563,14 @@ def _preflight_load(
 
         base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
         _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
-        resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
+        try:
+            resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
+        except httpx.ConnectError:
+            if not _restart_stopped_gaia_lemonade(model_id, sse_handler):
+                raise
+            base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
+            _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+            resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
         if resp.status_code != 200:
             raise RuntimeError(f"its /health check returned HTTP {resp.status_code}")
         data = resp.json()
@@ -3656,6 +3731,10 @@ def _preflight_load(
     except (ModelInUseError, LemonadeModelUnavailableError) as exc:
         logger.error("Pre-flight model load refused: %s", exc)
         raise
+    except (GaiaLemonadeStartError, LemonadeServerDownError) as exc:
+        # Already worded; "send the message again" would repeat a failed start.
+        logger.error("Pre-flight could not bring GAIA's Lemonade back: %s", exc)
+        raise
     except LeaseWaitCancelled:
         logger.info("Pre-flight model load stopped with the turn")
     except BrokerUnavailableError as exc:
@@ -3813,7 +3892,9 @@ async def _get_chat_response(
             if hasattr(agent, "config"):
                 agent.config.working_directory = working_directory
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
-                new_paths = [p for p in rag_file_paths if p not in agent.indexed_files]
+                from .agent_documents import not_yet_indexed
+
+                new_paths = not_yet_indexed(rag_file_paths, agent.indexed_files)
                 for fpath in new_paths:
                     doc_name = Path(fpath).name
                     try:
@@ -4046,7 +4127,10 @@ async def _get_chat_response(
         # classify the exception.
         classified = _classify_chat_exception(e)
         if classified is not None:
-            return _agent_ui_wording(classified.user_message)
+            chat_model = db.get_setting("custom_model") or session.get("model")
+            return _agent_ui_wording(
+                wording_for_model(classified.user_message, chat_model)
+            )
         # Same as the streamed path: the real reason, not a guess at one.
         return _agent_ui_wording(f"Agent error: {e}")
 
@@ -4289,9 +4373,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                     _extend_cached_scope(agent, allowed)
                     # Index any session docs newly attached since last turn.
-                    new_rag_paths = [
-                        p for p in rag_file_paths if p not in agent.indexed_files
-                    ]
+                    from .agent_documents import not_yet_indexed
+
+                    new_rag_paths = not_yet_indexed(rag_file_paths, agent.indexed_files)
                     if new_rag_paths and hasattr(agent, "rag") and agent.rag:
                         _index_rag_with_progress(
                             agent,
@@ -4549,7 +4633,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # AgentSDK that wrap the original LemonadeError.
                 classified = _classify_chat_exception(e)
                 if classified is not None:
-                    result_holder["error"] = _agent_ui_wording(classified.user_message)
+                    result_holder["error"] = _agent_ui_wording(
+                        wording_for_model(classified.user_message, model_id)
+                    )
+                    result_holder["error_explained"] = True
                 else:
                     result_holder["error"] = _agent_ui_wording(str(e))
             finally:
@@ -4945,9 +5032,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         for s in captured_steps:
             s["active"] = False
 
-        # Check for errors from the agent thread
+        # The agent thread's error rides on the closing `done`; an `error` event too showed it twice.
         if result_holder["error"]:
-            error_msg = f"Agent error: {result_holder['error']}"
+            error_msg = (
+                result_holder["error"]
+                if result_holder.get("error_explained")
+                else f"Agent error: {result_holder['error']}"
+            )
             if not full_response:
                 blocked_alert_steps = _blocked_policy_steps()
                 if blocked_alert_steps:
@@ -4962,14 +5053,29 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # Partial response exists -- append error notice so user knows
                 # the response may be incomplete
                 full_response += f"\n\n[Error: {result_holder['error']}]"
-            error_data = json.dumps({"type": "error", "content": error_msg})
-            yield f"data: {error_data}\n\n"
+            # Every failed turn sends this, even after a policy block or partial text.
+            step_id += 1
+            for s in captured_steps:
+                s["active"] = False
+            captured_steps.append(
+                {
+                    "id": step_id,
+                    "type": "error",
+                    "label": "Error",
+                    "detail": error_msg,
+                    "active": False,
+                    "success": False,
+                    "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                }
+            )
+            yield _sse({"type": "agent_error", "content": error_msg, "fatal": True})
 
         # A model failure ended the turn. The streamed text is only its opening
         # sentence, so the message must say what happened.
         turn_failed, failure_text = _turn_failure(
             answer_event, fatal_error, result_holder.get("result")
         )
+        turn_failed = turn_failed or bool(result_holder["error"])
         if turn_failed and answer_event is None:
             explained = _agent_ui_wording(failure_text or result_holder["answer"] or "")
             if explained and explained not in full_response:
@@ -5004,6 +5110,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 full_response[:40],
             )
             full_response = result_holder.get("answer", "") or ""
+
+        documents_added, library_notices = await _add_indexed_documents_to_library(
+            db, request.session_id, sse_handler
+        )
+        if library_notices:
+            # One step: consecutive status steps overwrite each other in the chat.
+            notice = " ".join(library_notices)
+            yield _sse({"type": "status", "status": "warning", "message": notice})
 
         blocked_alert_steps = _blocked_policy_steps()
         if not full_response and blocked_alert_steps:
@@ -5169,6 +5283,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     if turn_failed
                     else None
                 ),
+                documents_added=documents_added,
             )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
@@ -5245,6 +5360,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     turn_cancelled,
                     turn_summary=turn_summary,
                     failed=failed,
+                    documents_added=documents_added,
                 )
                 link_warning = (
                     turn_box["recording"].link_message(msg_id)

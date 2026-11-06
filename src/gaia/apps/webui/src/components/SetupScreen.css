@@ -312,6 +312,20 @@ button.setup-rail-step:hover {
     color: var(--danger);
 }
 
+.setup-content-failure {
+    grid-column: 2 / -1;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    color: var(--danger);
+}
+
+.setup-content-failure pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
 .setup-content-main,
 .setup-content-side {
     display: flex;

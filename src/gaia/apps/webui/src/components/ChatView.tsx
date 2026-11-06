@@ -13,6 +13,7 @@ import { ensureModel, modelKnownReady } from '../stores/modelNeededStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
+import { isStarting } from '../services/statusPoll';
 import { refreshActiveRuns } from '../services/activeRuns';
 import { claimView, dispatchNext, idleByPoll, isBusyError, markActivity, requeueRefused, type QueuedSend, type SendOutcome } from '../services/queueDispatch';
 import { log } from '../utils/logger';
@@ -49,6 +50,7 @@ import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { usePolicyToast } from '../hooks/usePolicyToast';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { isPlaceholderTitle } from '../utils/sessionTitle';
+import { addDroppedFiles, showAddedDocuments } from '../utils/chatDocuments';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
@@ -314,7 +316,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const mountedRef = useRef(true);
     // Left pendingPrompt, not yet sent.
     const openingRef = useRef(false);
-    const initializing = systemStatus?.init_state === 'initializing';
+    const initializing = isStarting(systemStatus);
     useEffect(() => {
         mountedRef.current = true;
         return () => { mountedRef.current = false; };
@@ -491,7 +493,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // new message and streaming response are visible.
         isNearBottomRef.current = true;
 
-        const isInitializing = systemStatus?.init_state === 'initializing';
+        const isInitializing = isStarting(systemStatus);
         const notTaken = (outcome: SendOutcome) => { if (fromQueue) options?.onQueuedOutcome?.(outcome); };
         if (!reattach && retiredAgent) {
             log.chat.warn(`Send blocked: chat ${sessionId} belongs to the retired "${retiredAgent}" agent`);
@@ -1057,6 +1059,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
                 streamBufferRef.current = '';
 
+                // Even for a backgrounded chat: these are library and chat-list state.
+                showAddedDocuments(sessionId, event.documents_added ?? []);
+
                 // A completion for a backgrounded session is persisted
                 // server-side, so don't touch the shared store (#1580).
                 if (isStale()) return;
@@ -1423,11 +1428,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
             return;
         }
         // The opening message goes first.
-        if (queue.length === 0 || queueHold || isLoadingMessages || pendingPrompt || openingRef.current || retiredAgent || systemStatus?.init_state === 'initializing') return;
+        if (queue.length === 0 || queueHold || isLoadingMessages || pendingPrompt || openingRef.current || retiredAgent || initializing) return;
         // Only once this chat's turn is over: seen ending here, or reported idle by a poll since.
         if (isStale() || (!observedEndRef.current && !idleHere)) return;
         void dispatchNext(sessionId, sendQueued, () => mountedRef.current && !isStale() && !useChatStore.getState().isStreaming && !comparingRef.current);
-    }, [busy, queue, queueHold, idleHere, isLoadingMessages, pendingPrompt, retiredAgent, systemStatus?.init_state, sessionId, sendQueued, isStale]);
+    }, [busy, queue, queueHold, idleHere, isLoadingMessages, pendingPrompt, retiredAgent, initializing, sessionId, sendQueued, isStale]);
 
     // The meter shows what the next message will carry, so re-measure after each reply.
     const wasBusyRef = useRef(false);
@@ -1522,12 +1527,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     }, [documents, sessionId, updateSessionInList]);
 
-    // Drag & drop — uploads the file blob directly rather than relying on
-    // File.path (which is browser-undefined and was removed in Electron 32+).
-    // Dropped files index quietly and auto-attach to the current session;
-    // the Document Library panel is NOT forced open so the drop doesn't
-    // interrupt the chat view. Users can still open the library manually
-    // to see progress for large files. See issue #728.
+    // Drag & drop: see addDroppedFiles.
     const handleDrop = useCallback(async (e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
@@ -1535,35 +1535,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         if (e.dataTransfer.files.length === 0) return;
 
         if (!(await ensureModel('embedding'))) return;
-        for (const file of Array.from(e.dataTransfer.files)) {
-            log.doc.info(`Dropped on chat view: ${file.name}`);
-            try {
-                const doc = await api.uploadDocumentBlob(file);
-                if (sessionId && doc?.id) {
-                    try {
-                        await api.attachDocument(sessionId, doc.id);
-                        const freshSession = useChatStore.getState().sessions.find(s => s.id === sessionId);
-                        const existing = freshSession?.document_ids ?? [];
-                        if (!existing.includes(doc.id)) {
-                            updateSessionInList(sessionId, { document_ids: [...existing, doc.id] });
-                        }
-                        log.doc.info(`Auto-attached "${file.name}" to session ${sessionId}`);
-                    } catch (attachErr) {
-                        log.doc.warn(`Could not attach dropped document to session: ${attachErr}`);
-                    }
-                }
-            } catch (err) {
-                log.doc.error(`Upload failed: ${file.name}`, err);
-            }
-        }
-        // The document bar lists only documents the store knows about.
-        try {
-            const data = await api.listDocuments();
-            setDocuments(data.documents || []);
-        } catch (err) {
-            log.doc.error('Could not refresh the document list after a drop', err);
-        }
-    }, [sessionId, updateSessionInList, setDocuments]);
+        await addDroppedFiles(sessionId, Array.from(e.dataTransfer.files));
+    }, [sessionId]);
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
@@ -1595,7 +1568,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const composerBlocked = retiredAgent
         ? `This chat used the retired "${retiredAgent}" agent and is read-only. Start a new chat.`
-        : systemStatus?.init_state === 'initializing'
+        : isStarting(systemStatus)
             ? STARTING_REASON
             : null;
 
@@ -1666,7 +1639,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             {visibleDocs.map((d) => (
                                 <span key={d.id} className="doc-pill" title={d.filepath || d.filename}>
                                     <FileText size={9} className="doc-pill-icon" aria-hidden="true" />
-                                    <span className="doc-pill-name">{d.filename}</span>
+                                    <span className="doc-pill-name" dir="auto">{d.filename}</span>
                                     <button
                                         className="doc-pill-remove"
                                         onClick={(e) => handleRemoveDocument(e, d.id)}

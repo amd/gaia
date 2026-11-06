@@ -111,6 +111,12 @@ from gaia.agents.base.model_features import (
     features_for_model,
     withheld_tools,
 )
+from gaia.agents.base.planted_instructions import (
+    acted_after,
+    flag_tool_result,
+    planted_instructions_note,
+    source_label,
+)
 from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.task_lessons import TaskLessons
@@ -718,6 +724,25 @@ DECLINED_HINT = (
     "The user declined this. Do not try to get the same result another way "
     "(a different command, tool, or script). Tell the user what you were going "
     "to do and why, then stop."
+)
+
+#: Tools whose output is a computed result: when one was denied, nothing was computed.
+COMPUTATION_TOOLS = frozenset(
+    {"run_python", "execute_python_file", "run_shell_command", "query_data"}
+)
+COMPUTATION_NOT_RUN = (
+    "The computation did not run, so it produced no figures. Do not report "
+    "computed figures (totals, sums, counts, averages) as if it had. Tell the "
+    "user what is needed to compute them."
+)
+#: Shell commands stay out: a failing test or git run is for fixing, not reporting.
+SCRIPT_COMPUTATION_TOOLS = frozenset(
+    {"run_python", "execute_python_file", "query_data"}
+)
+COMPUTATION_FAILED = (
+    "The computation failed before it printed anything, so nothing was "
+    "computed. Do not report computed figures (totals, sums, counts, averages). "
+    "Fix the error and run it again, or tell the user what is needed."
 )
 
 # Tools whose result is nothing but a receipt for what the agent itself just
@@ -1394,7 +1419,7 @@ _TOOL_MARKUP_FAILURE_ANSWER = (
 )
 _EMOJI_SHORTCODE_END_PATTERN = re.compile(r":[a-z0-9_+-]+:$", re.IGNORECASE)
 _NEXT_STEP_INTENT_PATTERN = re.compile(
-    r"^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+)?"
+    r"^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+|(?:next|then|finally)[,.]?\s+(?!we\b))?"
     r"(?:executing step|first step|(?:my|our) next step"
     r"|now,? i need to|now,? i'll|now,? i will|i'll now|i will now"
     r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b)"
@@ -1405,6 +1430,110 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
 _PLAN_HEADING_PATTERN = re.compile(
     r"^(?:corrected|new|updated|revised) plan\b", re.IGNORECASE
 )
+# "Before finalizing, I will perform one final search…": a step never taken.
+_ANNOUNCED_ACTION_PATTERN = re.compile(
+    r"^(?P<lead>[^,;:]{1,60},\s+|(?:next|then|now)\s+)?"
+    r"(?:i'll|i will|i'm going to|i am going to"
+    r"|(?P<we>we'll|we will|let's|let us))\s+"
+    r"(?:(?:now|next|then|also|first|quickly|immediately|go ahead and"
+    r"|proceed to|need to|try to|attempt to)\s+)*"
+    r"(?:perform|run|re-?run|search|check|re-?check|fetch|look(?!\s+forward)"
+    r"|read|open|call|query|compute|calculate|analy[sz]e|execute|start|begin"
+    r"|proceed|continue|try"
+    r"|verify|gather|pull|download|compare|create|write|generate|list|scan"
+    r"|review|examine|investigate|test|find|retrieve|browse|visit|load|index"
+    r"|process|plot|chart|build|extract|count|sum|total|confirm|dig)\b",
+    re.IGNORECASE,
+)
+# What makes an announcement mean "this turn": "now", "one final search",
+# "Before finalizing, …", "… next", "… to confirm".
+_IMMEDIACY_PATTERN = re.compile(
+    r"\b(?:now|right away|immediately|straight away)\b"
+    r"|\b(?:one|a)\s+(?:more|final|last|quick|further)\b"
+    r"|\bnext\s*[.!]?\s*$|\bto (?:confirm|verify|double-check|make sure|be sure)\b"
+    r"|^(?:next|then|first|finally|now|before\s+\w+ing\b[^,]*|to (?:confirm|verify"
+    r"|be sure|make sure|double-check)[^,]*),"
+    r"|^(?:i'll|i will|i'm going to|i am going to)\s+"
+    r"(?:next|then|first|now)\b",
+    re.IGNORECASE,
+)
+# An offer, a condition, or a promise about later is an answer, not a step.
+_DEFERRED_ACTION_PATTERN = re.compile(
+    r"\b(?:if|when|whenever|once|after|unless|should)\s+(?:you|you'd|you're"
+    r"|you've|needed|necessary|asked|required|wanted|desired)\b"
+    r"|^(?:if|when|whenever|once|after|unless|in case|as soon as)\b"
+    r"|\bas soon as\b|\b(?:approv|allow|grant|permi|go-ahead)\w*"
+    r"|\b(?:let me know|tell me|say the word)\b"
+    r"|\bnext time\b|\bin the future\b|\bfrom now on\b|\bgoing forward\b"
+    r"|\blater\b|\btomorrow\b|\?\s*$"
+    r"|\bby (?:(?:mon|tues|wednes|thurs|fri|satur|sun)day|eod|cob|tonight|noon"
+    r"|the end of|end of|next)\b"
+    r"|\b(?:on|this|next) (?:mon|tues|wednes|thurs|fri|satur|sun)day\b"
+    r"|\bthis (?:week|weekend|morning|afternoon|evening|month|quarter)\b"
+    r"|\bnext (?:week|month|sprint|quarter|meeting|release|rc|year|run)\b"
+    r"|\b(?:continue to|keep you|keep an eye)\b",
+    re.IGNORECASE,
+)
+# A drafted email, message or post speaks in the user's voice; its closing
+# commitment ("I will review it by Friday") is content, not a pending step.
+_DRAFT_PATTERN = re.compile(
+    r"\A\s*(?:hi|hello|hey|dear|good (?:morning|afternoon|evening)|greetings)\b"
+    r"[^\n]{0,40}$"
+    r"|^\s*subject\s*:"
+    r"|\bhere(?:'s| is)\s+(?:a|an|the|your)\s+(?:[\w-]+\s+){0,3}(?:draft|reply"
+    r"|email|message|response|post|note|letter|update|announcement|notes)\b"
+    r"|\A[^\n]*\bdraft\b[^\n]*:\s*$"
+    r"|^\s*(?:best|thanks|thank you|regards|kind regards|best regards|cheers"
+    r"|sincerely|warmly|all the best)\s*[,!.]?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+# A list item or a quoted line is content the user asked for or quoted.
+_LIST_ITEM_PATTERN = re.compile(r"^\s*(?:(?:[-*+•]|\d+[.)])\s|>)")
+# Each future action a paragraph announces. Two or more is a plan or a
+# tutorial the user asked for ("First, I'll… Next, I'll… Finally, I'll…").
+_FUTURE_ACTION_PATTERN = re.compile(
+    r"\b(?:i'll|i will|i'm going to|i am going to|we'll|we will)\s+\w",
+    re.IGNORECASE,
+)
+# A last sentence tied to this turn is a step even after a plan-like lead-in
+# ("I'll keep this short. I'll check the releases page now.").
+_THIS_TURN_PATTERN = re.compile(
+    r"\bnow\b(?!\s+that)|\bbefore\s+\w+ing\b", re.IGNORECASE
+)
+# "Executing the final write now.": a step in the present tense, due this turn.
+_PROGRESSIVE_STEP_PATTERN = re.compile(
+    r"^(?:(?:ok(?:ay)?|so|alright|now)[,.]?\s+)?"
+    r"(?:executing|running|performing|writing|applying|calling|fetching"
+    r"|searching|saving|updating|creating|making|proceeding)\b"
+    r"(?!\s+\w+ly\b)"
+    r"(?![^.!?:]*\b(?:comes?|is|are|was|were|works?|returns?|succeeds?|takes?"
+    r"|gives?|happens?|follows?)\b)"
+    r"[^.!?:]{0,80}\b(?:now|next)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+_UNFINISHED_STEP_QUOTE_MAX_CHARS = 200
+
+
+def _announces_action(sentence: str, short: bool = True) -> bool:
+    """*sentence* announces an action for this turn rather than for later.
+
+    Past the short-paragraph limit it needs an immediacy cue; within it, a bare
+    "I'll check X." counts, but a lead clause ("As the owner, …") must be one.
+    """
+    if _DEFERRED_ACTION_PATTERN.search(sentence):
+        return False
+    if _PROGRESSIVE_STEP_PATTERN.match(sentence):
+        return True
+    match = _ANNOUNCED_ACTION_PATTERN.match(sentence)
+    if not match:
+        return False
+    if match.group("we") and not re.search(r"\bnow\b", sentence, re.IGNORECASE):
+        return False  # "Next, we'll run the migration." is a tutorial step.
+    if re.search(r":\s*\S", sentence[match.end() :]):
+        return False  # "I'll start with the summary: sales are up 8%."
+    if _IMMEDIACY_PATTERN.search(sentence):
+        return True
+    return short and not match.group("lead")
 
 
 def _is_json(text: str) -> bool:
@@ -1458,9 +1587,23 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     if last_line.endswith(":") and not _EMOJI_SHORTCODE_END_PATTERN.search(last_line):
         return "narration"
 
+    sentences = re.split(r"(?<=[.!?])\s+", last_line)
+    plain_paragraph = re.sub(r"[*_`#>]", "", paragraphs[-1])
+    is_plan = len(
+        _FUTURE_ACTION_PATTERN.findall(plain_paragraph)
+    ) >= 2 and not _THIS_TURN_PATTERN.search(sentences[-1])
+    if (
+        not is_plan
+        and not _DRAFT_PATTERN.search(text)
+        and not _LIST_ITEM_PATTERN.match(paragraphs[-1].splitlines()[-1])
+        and _announces_action(
+            sentences[-1],
+            short=len(paragraphs[-1]) <= _UNFINISHED_PARAGRAPH_MAX_CHARS,
+        )
+    ):
+        return "narration"
     if len(paragraphs[-1]) > _UNFINISHED_PARAGRAPH_MAX_CHARS:
         return None
-    sentences = re.split(r"(?<=[.!?])\s+", last_line)
     if _NEXT_STEP_INTENT_PATTERN.match(sentences[-1]):
         return "narration"
     heading_lines = [paragraphs[-1].splitlines()[0]]
@@ -1472,6 +1615,60 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     ):
         return "narration"
     return None
+
+
+def _split_announced_step(answer: str) -> Tuple[str, Optional[str]]:
+    """Split a narrated answer into (what came before, the announced step).
+
+    The step is the last sentence when it announces an action or ends in a
+    colon; otherwise (a plan) it is ``None`` and the whole text is kept.
+    """
+    text = (answer or "").strip()
+    last_line = text.splitlines()[-1] if text else ""
+    sentence = re.split(r"(?<=[.!?])\s+", last_line.strip())[-1]
+    plain = re.sub(r"[*_`#>]", "", sentence).replace("’", "'").strip()
+    if not plain or not (
+        plain.endswith(":")
+        or _announces_action(plain)
+        or _NEXT_STEP_INTENT_PATTERN.match(plain)
+    ):
+        return text, None
+    return text[: text.rfind(sentence)].rstrip(), sentence.strip()
+
+
+def _quoted_step(step: str) -> str:
+    if len(step) > _UNFINISHED_STEP_QUOTE_MAX_CHARS:
+        step = step[:_UNFINISHED_STEP_QUOTE_MAX_CHARS].rstrip() + "…"
+    return f'"{step}"'
+
+
+def _narration_reprompt(answer: str) -> str:
+    _, step = _split_announced_step(answer)
+    said = f" (you said {_quoted_step(step)})" if step else ""
+    return (
+        f"You described your next step instead of doing it{said}. "
+        "Do it now with a tool call, or give the final answer if the task is "
+        "complete."
+    )
+
+
+def _unfinished_step_answer(answer: str) -> str:
+    """The honest ending for a turn that stopped on a step it never took."""
+    body, step = _split_announced_step(answer)
+    if step:
+        opening = (
+            f"I didn't finish: I stopped at a step I announced but never "
+            f"carried out ({_quoted_step(step)})."
+        )
+    else:
+        opening = (
+            "I didn't finish: I wrote out the next steps but never carried them out."
+        )
+    parts = [opening]
+    if body:
+        parts.append(f"What I had so far:\n\n{body}")
+    parts.append('Send "continue" to pick up from there.')
+    return "\n\n".join(parts)
 
 
 # First-person intent that announces the call it rides with ("I'll read it").
@@ -2524,6 +2721,8 @@ Do NOT wrap conversational replies in JSON.
         self._tool_reported_usage: List[Dict[str, Any]] = []
         # Same rationale for the verification-scope log.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # (source, tool-log index) per result that carried planted instructions.
+        self._turn_planted_sources: List[Tuple[str, int]] = []
         # Whether a project root has tests, walked once per root per turn.
         self._has_tests_cache: Dict[Optional[str], bool] = {}
         # Same rationale for the per-turn record of edited files.
@@ -2622,6 +2821,10 @@ Do NOT wrap conversational replies in JSON.
             if cloud_model_provider(model_id):
                 # The local manager preloads a chat model even on an idle server.
                 probe_client = LemonadeClient(base_url=base_url, verbose=False)
+                # Ask the daemon for GAIA's engine, never probe the default port.
+                probe_client.current_base_url()
+                if resolve_after_start:
+                    base_url = probe_client.base_url
                 try:
                     probe_client.health_check()
                 except LemonadeUnresponsiveError:
@@ -3486,7 +3689,9 @@ Do NOT wrap conversational replies in JSON.
 
     def _register_extraction_tool(self):
         def extract_document_items(
-            file_path: str, fields: Optional[List[str]] = None
+            file_path: str,
+            fields: Optional[List[str]] = None,
+            terms: Optional[List[str]] = None,
         ) -> dict:
             """Extract EVERY requested item from a text document, page by page.
 
@@ -3498,6 +3703,10 @@ Do NOT wrap conversational replies in JSON.
             Args:
                 file_path: Source text file permitted in this session.
                 fields: Requested field names; each entry must include every field.
+                terms: Words every wanted item must contain, with their variants
+                    (["code", "error"] for "sections that mention a code").
+                    Only pages containing one are read, which is far faster.
+                    Omit when an item could be worded without any of them.
             """
             from gaia.agents.base.tools import raise_if_cancelled
 
@@ -3597,6 +3806,7 @@ Do NOT wrap conversational replies in JSON.
                     check,
                     fields,
                     progress,
+                    terms,
                 )
             finally:
                 ledger.lock.release()
@@ -3654,11 +3864,12 @@ Do NOT wrap conversational replies in JSON.
                 "requires_confirmation": gated,
             }
             if name == "extract_document_items":
-                entry["parameters"]["fields"] = {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "required": False,
-                }
+                for parameter in ("fields", "terms"):
+                    entry["parameters"][parameter] = {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "required": False,
+                    }
             self._tool_overrides[name] = entry
             if self._instance_tools is not None:
                 self._instance_tools[name] = entry
@@ -6972,9 +7183,12 @@ Do NOT wrap conversational replies in JSON.
         if (recorder is None and step_timer is None) or not outermost:
             result = self._execute_tool(tool_name, tool_args)
             self._note_verification_signal(tool_name, tool_args, result, before=before)
+            result = self._with_computation_note(tool_name, result)
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
+            if outermost:
+                result = self._flag_planted_instructions(tool_name, tool_args, result)
             return result
 
         started = time.perf_counter()
@@ -6987,10 +7201,11 @@ Do NOT wrap conversational replies in JSON.
             result = self._execute_tool(tool_name, tool_args)
             ok = not self._is_error_result(result)
             self._note_verification_signal(tool_name, tool_args, result, before=before)
+            result = self._with_computation_note(tool_name, result)
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
-            return result
+            return self._flag_planted_instructions(tool_name, tool_args, result)
         finally:
             self._tool_timing_depth = 0
             elapsed = time.perf_counter() - started
@@ -7013,6 +7228,69 @@ Do NOT wrap conversational replies in JSON.
                     )
                 except Exception as e:  # noqa: BLE001 - never displace a tool error
                     logger.warning("could not record tool timing: %s", e)
+
+    def _flag_planted_instructions(
+        self, tool_name: str, tool_args: Any, result: Any
+    ) -> Any:
+        """Lead a result with a flag when its content instructs an AI."""
+        flagged, findings = flag_tool_result(tool_name, result)
+        sources = getattr(self, "_turn_planted_sources", None)
+        if findings and sources is not None:
+            logger.warning(
+                "Planted instructions in %s result: %s",
+                tool_name,
+                [f["excerpt"] for f in findings],
+            )
+            executions = getattr(self, "_turn_tool_executions", None) or []
+            sources.append((source_label(tool_name, tool_args), len(executions)))
+        return flagged
+
+    def _planted_instructions_note(self, answer: str) -> str:
+        """The heads-up line for this turn's flagged content, or ``""``."""
+        sources = getattr(self, "_turn_planted_sources", None)
+        if not sources:
+            return ""
+        executions = getattr(self, "_turn_tool_executions", None) or []
+        first = min(index for _, index in sources)
+        acted = acted_after(
+            (record.get("tool", ""), record.get("args"))
+            for record in executions[first:]
+            if record.get("ran")
+        )
+        return planted_instructions_note(
+            answer, [source for source, _ in sources], acted=acted
+        )
+
+    @staticmethod
+    def _with_computation_note(tool_name: str, result: Any) -> Any:
+        """A denied computation, or a script that failed before printing
+        anything, says plainly that nothing was computed.
+
+        A failed shell command or a script that crashed after printing
+        results is for the model to fix and re-run, so it gets no note.
+        """
+        if tool_name not in COMPUTATION_TOOLS:
+            return result
+        if isinstance(result, str):
+            # query_data reports its errors as "Error: ..." text.
+            failed = tool_name in SCRIPT_COMPUTATION_TOOLS and tool_result_failed(
+                result
+            )
+            return f"{result}\n\n{COMPUTATION_FAILED}" if failed else result
+        if not isinstance(result, dict):
+            return result
+        if str(result.get("status", "")).lower() == "denied":
+            return {**result, "computation": COMPUTATION_NOT_RUN}
+        printed = any(
+            str(result.get(key) or "").strip() for key in ("stdout", "result", "rows")
+        )
+        if (
+            tool_name in SCRIPT_COMPUTATION_TOOLS
+            and tool_result_failed(result)
+            and not printed
+        ):
+            return {**result, "computation": COMPUTATION_FAILED}
+        return result
 
     def _with_task_lessons(self, tool_name: str, tool_args: Any, result: Any) -> Any:
         """A failed result carries what this task has already learned."""
@@ -8218,7 +8496,10 @@ Do NOT wrap conversational replies in JSON.
         from gaia.llm.providers.lemonade import (
             LemonadeError,
             classify_lemonade_exception,
+            wording_for_model,
         )
+
+        model = getattr(self, "model_id", None)
 
         # 1. Direct match anywhere in the cause chain.
         cur: Optional[BaseException] = exc
@@ -8232,7 +8513,7 @@ Do NOT wrap conversational replies in JSON.
             if isinstance(cur, LemonadeError):
                 msg = getattr(cur, "user_message", None)
                 if msg:
-                    return str(msg)
+                    return wording_for_model(str(msg), model)
             prev = cur
             cur = cur.__cause__ or cur.__context__
 
@@ -8244,7 +8525,7 @@ Do NOT wrap conversational replies in JSON.
         if classified is not None:
             msg = getattr(classified, "user_message", None)
             if msg:
-                return str(msg)
+                return wording_for_model(str(msg), model)
         return None
 
     def _cloud_account_refusal(self, exc: BaseException) -> Optional[str]:
@@ -8256,13 +8537,19 @@ Do NOT wrap conversational replies in JSON.
         """
         from gaia.llm.providers.lemonade import (
             LemonadeCloudAccountError,
+            LemonadeCloudDisconnectedError,
             LemonadeCloudModelUnavailableError,
             classify_lemonade_exception,
         )
 
         classified = classify_lemonade_exception(exc)
         if isinstance(
-            classified, (LemonadeCloudAccountError, LemonadeCloudModelUnavailableError)
+            classified,
+            (
+                LemonadeCloudAccountError,
+                LemonadeCloudDisconnectedError,
+                LemonadeCloudModelUnavailableError,
+            ),
         ):
             return classified.user_message
         return None
@@ -8382,10 +8669,22 @@ Do NOT wrap conversational replies in JSON.
         if self._console_cancelled():
             # Stop pressed during the client's backoff: it gave up on purpose.
             return "cancelled", None
+        tally = self._turn_model_retries
+        # A stop seen mid-turn keeps its restart path; this is a failed first start.
+        if not tally["server_stopped"]:
+            engine = self._engine_start_failure(exc)
+            if engine is not None:
+                logger.error("GAIA's model server could not be started: %s", exc)
+                self.error_history.append(
+                    {"step": steps_taken, "error": str(exc), "type": "llm_engine_start"}
+                )
+                tally["failed"] = True
+                return "unreachable", self._engine_start_failed_answer(
+                    conversation, steps_taken, engine
+                )
         state = self._transient_model_failure(exc)
         if state is None:
             return None, None
-        tally = self._turn_model_retries
         tally["request_retries"] += state.retries
         stopped = self._gaia_server_stopped()
         if stopped:
@@ -8471,6 +8770,36 @@ Do NOT wrap conversational replies in JSON.
                 "The model server stopped while answering, and GAIA could not "
                 "restart it"
             ),
+        )
+
+    @staticmethod
+    def _engine_start_failure(exc: BaseException):
+        """The typed error when *exc* is GAIA's server failing to start, else None."""
+        from gaia.llm.providers.lemonade import (
+            LemonadeEngineStartError,
+            classify_lemonade_exception,
+        )
+
+        typed = classify_lemonade_exception(exc)
+        return typed if isinstance(typed, LemonadeEngineStartError) else None
+
+    def _engine_start_failed_answer(
+        self, conversation: List[Dict[str, Any]], steps_taken: int, engine
+    ) -> str:
+        """The final answer when GAIA's own model server could not be started.
+
+        *engine* is the :class:`LemonadeEngineStartError`. Not marked
+        server-down: the front-end's start button would only repeat the start
+        that just failed.
+        """
+        return self._model_failure_answer(
+            conversation,
+            steps_taken,
+            stopped_responding=False,
+            cause=engine.reason or "",
+            advice=engine.advice,
+            name_service=False,
+            headline=engine.headline,
         )
 
     def _model_unreachable_answer(
@@ -9563,6 +9892,9 @@ Do NOT wrap conversational replies in JSON.
         if not body.strip():
             # Never surface the stale echo as this turn's answer.
             return statement or self.ECHO_ONLY_ANSWER
+        note = self._planted_instructions_note(body)
+        if note:
+            body = f"{body.rstrip()}\n\n{note}"
         if not statement:
             return body
         return f"{body.rstrip()}\n\n{statement}"
@@ -10061,6 +10393,7 @@ Do NOT wrap conversational replies in JSON.
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
         unfinished_answer_reprompts = 0
+        stopped_on_announced_step = False
         look_first_reprompted = False
         verify_after_change_reprompted = False
         test_claim_corrections = 0
@@ -10101,6 +10434,8 @@ Do NOT wrap conversational replies in JSON.
         # Executed tool calls this turn, classified for the verification-scope
         # statement. Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # (source, tool-log index) per result that carried planted instructions.
+        self._turn_planted_sources: List[Tuple[str, int]] = []
         self._has_tests_cache = {}
         self._turn_ungrounded = []
         self._deliverable_cache = {}
@@ -12226,6 +12561,12 @@ Do NOT wrap conversational replies in JSON.
                         steps_limit,
                         answer_candidate[-120:],
                     )
+                stopped_on_announced_step = (
+                    unfinished_kind == "narration" and not can_reprompt_unfinished
+                )
+                if stopped_on_announced_step:
+                    # Never hand over the announcement as if it were the answer.
+                    answer_candidate = _unfinished_step_answer(answer_candidate)
                 if unfinished_kind == "tool_markup" and can_reprompt_unfinished:
                     unfinished_answer_reprompts += 1
                     logger.debug(
@@ -12282,10 +12623,19 @@ Do NOT wrap conversational replies in JSON.
                 #   1. post-index planning (index_document → "Let me now search...")
                 #   2. no-tool planning on follow-up turns ("I'll check the remote work policy")
                 #   3. post-tool planning after getting results ("I need more info... Let me query")
-                is_planning_text = len(answer_candidate) < 500 and any(
-                    phrase in answer_candidate.lower() for phrase in _PLANNING_PHRASES
+                # The honest ending quotes the announcement; it is final, not planning.
+                is_planning_text = (
+                    not stopped_on_announced_step
+                    and len(answer_candidate) < 500
+                    and any(
+                        phrase in answer_candidate.lower()
+                        for phrase in _PLANNING_PHRASES
+                    )
                 )
                 if is_planning_text and steps_taken < steps_limit - 1:
+                    if unfinished_kind == "narration":
+                        # Same budget as the narration re-prompt, so the turn can end.
+                        unfinished_answer_reprompts += 1
                     # Inject a correction message and continue the loop to force the answer
                     logger.debug(
                         "[WORKFLOW] Blocking planning-only response as final answer: %s",
@@ -12321,11 +12671,7 @@ Do NOT wrap conversational replies in JSON.
                     messages.append(
                         {
                             "role": "user",
-                            "content": (
-                                "You described your next step instead of doing it. "
-                                "Do it now with a tool call, or give the final "
-                                "answer if the task is complete."
-                            ),
+                            "content": _narration_reprompt(answer_candidate),
                         }
                     )
                     continue
@@ -12720,6 +13066,8 @@ Do NOT wrap conversational replies in JSON.
                 _pre_input_tokens, pre_output_tokens = _sum_conversation_tokens(
                     conversation, self._tool_reported_usage
                 )
+                if stopped_on_announced_step:
+                    self._announce_turn_failed()
                 # Sealed before the answer prints: total_s must mean "until it
                 # was on screen", and the console folds the record into that
                 # same event.

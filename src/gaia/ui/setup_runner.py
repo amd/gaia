@@ -832,6 +832,8 @@ class SetupRun:
     chat_model_for: Optional[Callable[["SetupRun"], str]] = None
     #: Each piece besides the models, by id: ``active``, ``done``, ``failed``.
     components: Dict[str, str] = field(default_factory=dict)
+    #: Why a failed piece failed, when init said: ``transient`` or ``other``.
+    component_kinds: Dict[str, str] = field(default_factory=dict)
     #: The Test step's rows, in the order they ran, by (job, subject).
     tests: Dict[Any, Dict[str, Any]] = field(default_factory=dict)
     #: Everything this run printed or reported, by screen stage.
@@ -896,6 +898,7 @@ class SetupRun:
             "upgrade_embedded": self.upgrade_embedded,
             "model_failed": self.model_failed,
             "components": dict(self.components),
+            "component_kinds": dict(self.component_kinds),
             "tests": list(self.tests.values()),
             "chat_model": None if self.skip_chat_model else self.chat_model,
         }
@@ -1349,6 +1352,11 @@ class SetupRunner:
                 component, state = event.get("component"), event.get("state")
                 if self._run is not None and component and state:
                     self._run.components[component] = state
+                    failure = event.get("kind") if state == "failed" else None
+                    if failure:
+                        self._run.component_kinds[component] = failure
+                    else:
+                        self._run.component_kinds.pop(component, None)
                     self._run.note(f"{component}: {state}")
                 return
             if kind == "test":

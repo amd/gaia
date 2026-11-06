@@ -183,7 +183,8 @@ Edit a Python file by replacing content with validation.
 - `file_path` (str, required): Path to the file
 - `old_content` (str, required): Content to find and replace. Must match
   exactly one location — see [Edit semantics](#edit-semantics).
-- `new_content` (str, required): New content to insert
+- `new_content` (str, required): Text that replaces `old_content` only, not
+  the whole file
 - `backup` (bool, optional): Create backup (default: True). The copy goes to
   `~/.gaia/cache/backups/<original absolute path>/<name>.<timestamp>.bak`, never
   beside the file, with or without a `PathValidator`. The backups directory is
@@ -283,7 +284,8 @@ Edit any file by replacing content without validation.
 - `file_path` (str, required): Path to file
 - `old_content` (str, required): Exact content to find and replace. Must match
   exactly one location — see [Edit semantics](#edit-semantics).
-- `new_content` (str, required): New content to replace with
+- `new_content` (str, required): Text that replaces `old_content` only, not
+  the whole file. To rewrite the whole file, use `write_file`.
 - `project_dir` (str, optional): Project root for resolving paths
 
 **Returns:**
@@ -294,6 +296,9 @@ Edit any file by replacing content without validation.
     "old_size": int,
     "new_size": int,
     "file_type": str,
+    "after": str,           # the edited lines as they now read, 2 lines of context
+    "after_start_line": int,
+    "after_end_line": int,
     "diff": str
 }
 ```
@@ -341,12 +346,22 @@ there.
 
 `edit_file` and `edit_python_file` share one match-and-replace implementation,
 [`gaia.agents.tools.file_edit`](https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/file_edit.py),
-so the two cannot drift apart. Two rules:
+so the two cannot drift apart. Three rules:
 
 **`old_content` must match exactly one location.** Matching several is an
 error, not a first-match replacement — picking one edits a region the caller
 never named while reporting success, and the resulting diff looks plausible.
 Extend `old_content` with surrounding lines until it is unique.
+
+**`new_content` must not repeat the lines around `old_content`.** When it
+contains two or more of the lines just outside the matched text — a run above,
+a run below, or the line above as its first line and the line below as its
+last — the caller has put the whole intended file into one span, and splicing
+it in would leave those lines twice.
+The edit is refused and the repeats are listed in `repeated_lines`. Pass only
+the replacement text; if those lines belong in `new_content`, include them in
+`old_content` too; to rewrite the whole file, use `write_file`. A single echoed
+line and lines of punctuation such as closing braces may repeat freely.
 
 **A rejection carries the file's current content**, so the retry does not need
 a separate read.
@@ -359,6 +374,7 @@ a separate read.
     "match_count": int,     # 0 = not found, >1 = ambiguous
     "match_lines": [int],   # ambiguous only
     "matches": [dict],      # ambiguous only: line + surrounding context
+    "repeated_lines": [str], # repeated-context only
     "current_content": str, # excerpt around the target region
     "current_content_start_line": int,
     "current_content_end_line": int,
@@ -366,7 +382,7 @@ a separate read.
 }
 ```
 
-The C++ `file_edit` tool (`cpp/src/file_tools.cpp`) follows both rules and
+The C++ `file_edit` tool (`cpp/src/file_tools.cpp`) follows the first and last rules and
 rejects a stale write, but still lets an agent edit a file it never read.
 
 ### 8. replace_function

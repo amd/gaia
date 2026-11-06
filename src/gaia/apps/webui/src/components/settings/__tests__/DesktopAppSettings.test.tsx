@@ -5,15 +5,18 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DesktopAppSettings } from '../DesktopAppSettings';
-import type { TrayConfig, TraySettings } from '../../../types/agent';
+import type { TrayConfig, TrayHost, TraySettings } from '../../../types/agent';
 
 const DEFAULTS: TraySettings = { minimizeToTray: true, startMinimized: false, startOnLogin: false };
 
+const HAS_TRAY: TrayHost = { available: true, reason: null };
+
 let saved: TraySettings;
-const getConfig = vi.fn(async (): Promise<TrayConfig> => ({ tray: { ...saved } }));
+let host: TrayHost;
+const getConfig = vi.fn(async (): Promise<TrayConfig> => ({ tray: { ...saved }, host }));
 const setConfig = vi.fn(async ({ tray }: { tray: Partial<TraySettings> }): Promise<TrayConfig> => {
     saved = { ...saved, ...tray };
-    return { tray: { ...saved } };
+    return { tray: { ...saved }, host };
 });
 
 function withDesktopApp() {
@@ -25,6 +28,7 @@ function withDesktopApp() {
 
 beforeEach(() => {
     saved = { ...DEFAULTS };
+    host = HAS_TRAY;
     getConfig.mockClear();
     setConfig.mockClear();
     withDesktopApp();
@@ -67,7 +71,7 @@ describe('DesktopAppSettings', () => {
         expect(toggle(/start in the tray/i)).toBeDisabled();
         await userEvent.keyboard(' ');
         expect(setConfig).toHaveBeenCalledTimes(1);
-        finish({ tray: { ...DEFAULTS, startOnLogin: true } });
+        finish({ tray: { ...DEFAULTS, startOnLogin: true }, host: HAS_TRAY });
         await waitFor(() => expect(toggle(/sign in/i)).toBeChecked());
         expect(toggle(/start in the tray/i)).toBeEnabled();
     });
@@ -92,6 +96,29 @@ describe('DesktopAppSettings', () => {
         render(<DesktopAppSettings />);
         await waitFor(() => expect(toggle(/start in the tray/i)).toBeEnabled());
         expect(toggle(/start in the tray/i)).toHaveAccessibleDescription(/opens without its window/i);
+    });
+
+    it.each([
+        ['no-host', /doesn't show tray icons, so closing the window quits GAIA.*AppIndicator/i],
+        ['check-failed', /couldn't check whether your desktop shows tray icons/i],
+    ] as const)('with no tray (%s), the tray toggles are off and say why', async (reason, why) => {
+        host = { available: false, reason };
+        saved = { ...DEFAULTS, startMinimized: true };
+        render(<DesktopAppSettings />);
+        await waitFor(() => expect(toggle(/sign in/i)).toBeEnabled());
+        for (const name of [/keep running when the window closes/i, /start in the tray/i]) {
+            expect(toggle(name)).toBeDisabled();
+            expect(toggle(name)).not.toBeChecked();
+            expect(toggle(name)).toHaveAccessibleDescription(why);
+        }
+        expect(toggle(/sign in/i)).toHaveAccessibleDescription(/first chat of the day/i);
+    });
+
+    it('while the tray check is still running, the toggles work as usual', async () => {
+        host = { available: false, reason: 'checking' };
+        render(<DesktopAppSettings />);
+        await waitFor(() => expect(toggle(/keep running when the window closes/i)).toBeEnabled());
+        expect(toggle(/keep running when the window closes/i)).toBeChecked();
     });
 
     it('is absent in a browser, where there is no tray', () => {

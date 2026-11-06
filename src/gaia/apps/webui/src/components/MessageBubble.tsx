@@ -801,7 +801,8 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 // A space stays inside a folder name a `\` follows (`Program Files (x86)\`) and
 // inside a last name of at most three words ending in an extension (`Q3 report.txt`);
 // otherwise it ends the path, so "C:\out\docs and look at a.pdf" stops at `docs`.
-const WIN_PATH_RE = /\b[A-Z]:[\\/](?=[^\s*?"<>|,;)}\]\\/])(?:[^\s*?"<>|,;)}\]\\/]+(?:(?: (?:[^\s*?"<>|,;:)}\]\\/]+|\([^\s*?"<>|,;:)}\]\\/]+\)))+\\|[\\/]))*(?:(?:[^\s*?"<>|,;:.)}\]\\/]+ ){1,2}[^\s*?"<>|,;)}\]\\/]+\.[A-Za-z0-9]{1,5}\b|[^\s*?"<>|,;)}\]\\/]+)?/gi;
+// A path in double quotes runs to the closing quote, spaces and all.
+const WIN_PATH_RE = /(?<=["\u201c])[A-Z]:[\\/][^*?"<>|\r\n\u201c\u201d]+(?=["\u201d])|\b[A-Z]:[\\/](?=[^\s*?"<>|,;)}\]\\/])(?:[^\s*?"<>|,;)}\]\\/]+(?:(?: +(?:[^\s*?"<>|,;:)}\]\\/]+|\([^\s*?"<>|,;:)}\]\\/]+\)))+\\|[\\/]))*(?:(?:[^\s*?"<>|,;:.)}\]\\/]+ +){1,2}[^\s*?"<>|,;)}\]\\/]+\.[A-Za-z0-9]{1,5}\b|[^\s*?"<>|,;)}\]\\/]+)?/gi;
 /** Sentence punctuation the path regex swallows: "see C:\a\b." ends at `b`. */
 const PATH_TRAILING_PUNCT_RE = /[.:!']+$/;
 /** An inline-code span that is one absolute path and nothing else, e.g. "Saved to `C:\out\answer.md`". */
@@ -836,22 +837,26 @@ function FilePathLink({ path }: { path: string }) {
     );
 }
 
+/** Each Windows path in `text`; a quoted one is kept exactly, a trailing dot and all. */
+function findFilePaths(text: string): Array<{ start: number; path: string }> {
+    return [...text.matchAll(new RegExp(WIN_PATH_RE.source, 'gi'))].map((m) => {
+        const end = m.index + m[0].length;
+        const quoted = '"“'.includes(text[m.index - 1] ?? '\n') && '"”'.includes(text[end] ?? '\n');
+        return { start: m.index, path: quoted ? m[0] : m[0].replace(PATH_TRAILING_PUNCT_RE, '') };
+    });
+}
+
 /** Split text into segments, replacing file paths with clickable links. */
 function linkifyFilePaths(text: string): React.ReactNode {
-    // Combine both regexes: match files first, then directories
-    const combined = new RegExp(WIN_PATH_RE.source, 'gi');
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
-    let match: RegExpExecArray | null;
 
-    while ((match = combined.exec(text)) !== null) {
-        // Add text before the match
-        if (match.index > lastIndex) {
-            parts.push(text.slice(lastIndex, match.index));
+    for (const { start, path } of findFilePaths(text)) {
+        if (start > lastIndex) {
+            parts.push(text.slice(lastIndex, start));
         }
-        const path = match[0].replace(PATH_TRAILING_PUNCT_RE, '');
-        parts.push(<FilePathLink key={match.index} path={path} />);
-        lastIndex = match.index + path.length;
+        parts.push(<FilePathLink key={start} path={path} />);
+        lastIndex = start + path.length;
     }
 
     // No paths found — return original text
@@ -914,7 +919,11 @@ function leadingPages(index: CitationIndex, text: string): FoundPage[] {
  * (in inline code), whose pages may open the run.
  */
 function citeText(text: string, index: CitationIndex, t: Translate, carried: LibraryDoc | null): React.ReactNode {
-    const citations = findCitations(index, text);
+    // A filename that ends a longer path stays inside that path's chip.
+    const paths = findFilePaths(text);
+    const citations = findCitations(index, text).filter(
+        (c) => !paths.some((p) => p.start < c.start && c.start < p.start + p.path.length),
+    );
     const parts: Array<{ start: number; end: number; node: React.ReactNode }> = [];
     const addPages = (doc: LibraryDoc, pages: FoundPage[], offset: number) => {
         for (const pg of pages) {

@@ -144,6 +144,13 @@ icon: "bug"
     other windows) and click **Always Allow**. The model list updates once you
     answer. If you click **Deny**, GAIA can't use the saved key; paste it again under
     **Settings → Model**.
+
+    You only need to answer this once for each saved key. On a Mac, the GAIA daemon
+    reads the keychain for the agent, so updating the agent doesn't ask again. The
+    dialog then names the daemon's Python, and **Always Allow** lets any script that
+    Python runs read your saved keys without asking. A
+    terminal install without the `gaia` command has no daemon, so its agent reads the
+    keychain itself and asks again after each update.
   </Accordion>
 
   <Accordion title="Use GAIA's own says GAIA's server is not installed" icon="box-open">
@@ -744,6 +751,22 @@ error. To run the chat model in the cloud instead, see
     The count also resets the first time a GAIA window gets focus. Only errors
     GAIA catches are counted: a crash of the app process itself does not
     reach safe mode.
+  </Accordion>
+
+  <Accordion title="GAIA's assistant stopped and is restarting" icon="rotate">
+    The desktop app restarts its assistant when it stops on its own. The banner
+    shows how long it has been restarting, and your chats are saved. GAIA tries
+    up to three times in ten minutes, waiting longer before each try. If they all
+    fail, a dialog offers to restart GAIA, save diagnostics, or quit, and the
+    banner offers **Restart GAIA**, which starts the assistant again without
+    closing the app.
+
+    To report it, choose **Save diagnostics** and attach the bundle. It holds
+    these files from `~/.gaia/`:
+
+    - `electron-main.log`: the exit code and the assistant's last output.
+    - `logs/backend-faults.log`: the stack of every thread, when the assistant
+      died in a hard crash that skipped normal logging.
   </Accordion>
 
   <Accordion title="Cannot find module 'electron'" icon="window-restore">

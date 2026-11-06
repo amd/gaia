@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Iterator, List, Optional, Tuple, Union
 
 from gaia.llm.local_only import CloudDisabledError
@@ -20,11 +21,14 @@ from ..lemonade_client import (
     FULL_TOOLS_SLOT,
     KV_CACHE_SHARED_PHRASES,
     CloudModelUnavailableError,
+    CloudProviderDisconnectedError,
+    GaiaLemonadeStartError,
     LemonadeAuthError,
     LemonadeClient,
     LemonadeClientError,
     LemonadeServerDownError,
     active_profile_ctx_size,
+    cloud_model_provider,
     is_tool_calling_model,
     lemonade_log_hint,
     local_sampling_defaults,
@@ -37,6 +41,7 @@ from ..surface_hints import (
     APP_WEDGED_SERVER_HINT,
     TUI_MODEL_SWITCH_HINT,
     TUI_PROVIDER_AUTH_HINT,
+    TUI_PROVIDER_SETTINGS,
     TUI_SETUP_HINT,
 )
 
@@ -277,8 +282,64 @@ class LemonadeServerUnreachableError(LemonadeNetworkError):
         super().__init__(user_message=user_message)
 
 
+class LemonadeEngineStartError(LemonadeError):
+    """GAIA's own model server is down and the daemon could not start it.
+
+    Not :class:`LemonadeNetworkError`: the daemon's reason often quotes
+    refused connections, but resending repeats the same failed start.
+    """
+
+    retryable = False
+    headline = "GAIA's AI engine couldn't start"
+
+    def __init__(
+        self,
+        reason: Optional[str] = None,
+        log_file: Optional[Path] = None,
+        payload: Optional[dict] = None,
+    ):
+        if log_file is None:
+            from gaia.daemon.paths import log_path
+
+            log_file = log_path()
+        self.reason = (reason or "").strip().rstrip(".") or None
+        self.log_file = log_file
+        #: What to do; :data:`TUI_SETUP_HINT` stays verbatim for ``surface_wording``.
+        self.advice = (
+            "Sending the message again won't help until it is repaired. "
+            f"{TUI_SETUP_HINT} Details are in the daemon log at {log_file}"
+        )
+        detail = f": {self.reason}" if self.reason else ""
+        super().__init__(
+            user_message=f"{self.headline}{detail}. {self.advice}", payload=payload
+        )
+
+
+#: :class:`~gaia.llm.lemonade_client.GaiaLemonadeStartError`'s wording, once a
+#: wrapper flattened it. Other daemon failures share only its first clause.
+_ENGINE_START_RE = re.compile(
+    r"could not start gaia's lemonade server: "
+    r"the daemon could not start lemonade server: (?P<reason>.+)",
+    re.IGNORECASE | re.DOTALL,
+)
+
 #: How a failed turn names this cause to a front-end, which offers the fix.
 MODEL_SERVER_DOWN = "model_server_down"
+
+#: How these messages name the local server.
+_LOCAL_SERVER_RE = re.compile(r"\bthe local (?:LLM|model)(?: server)?\b", re.IGNORECASE)
+
+
+def wording_for_model(message: str, model_id: Optional[str]) -> str:
+    """*message* as a chat on *model_id* should read it.
+
+    A cloud chat still goes through GAIA's Lemonade, so a failure there is
+    real, but "the local LLM" would tell the user their model runs here.
+    """
+    if not message or cloud_model_provider(model_id) is None:
+        return message
+    return _LOCAL_SERVER_RE.sub("GAIA's AI engine", message)
+
 
 #: The wording of :class:`LemonadeServerDownError`, once a wrapper flattened it.
 _SERVER_DOWN_RE = re.compile(
@@ -407,6 +468,19 @@ class LemonadeCloudModelUnavailableError(LemonadeError):
             ),
             payload=payload,
         )
+
+
+class LemonadeCloudDisconnectedError(LemonadeError):
+    """GAIA's model server restarted, lost the cloud provider, and GAIA could
+    not reconnect it. The message names the fix; a resend fails the same way."""
+
+    retryable = False
+    user_message = (
+        "GAIA's AI engine lost its cloud provider connection (it may have "
+        "restarted). "
+        f"Reconnect the provider {TUI_PROVIDER_SETTINGS}, then send your message "
+        "again."
+    )
 
 
 class LemonadeAuthRejectedError(LemonadeError):
@@ -821,10 +895,14 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         seen.add(id(cur))
         if isinstance(cur, LemonadeError):
             return cur
+        if isinstance(cur, GaiaLemonadeStartError):
+            return LemonadeEngineStartError(cur.reason, cur.log_file)
         if isinstance(cur, LemonadeServerDownError):
             return LemonadeServerUnreachableError(str(cur), cur.endpoint)
         if isinstance(cur, LemonadeAuthError):
             return LemonadeAuthRejectedError(user_message=str(cur))
+        if isinstance(cur, CloudProviderDisconnectedError):
+            return LemonadeCloudDisconnectedError(user_message=str(cur))
         if isinstance(cur, CloudModelUnavailableError):
             return LemonadeCloudModelUnavailableError(cur.model_id, cur.provider)
         if isinstance(cur, CloudDisabledError):
@@ -867,6 +945,9 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         load_error = _model_load_error(envelope[1], context=raw)
         if load_error is not None:
             return load_error
+    engine_start = _ENGINE_START_RE.search(raw)
+    if engine_start:
+        return LemonadeEngineStartError(engine_start.group("reason"))
     down = _SERVER_DOWN_RE.search(raw)
     if down:
         return LemonadeServerUnreachableError(down.group(0).strip(), down.group(1))
@@ -1468,7 +1549,7 @@ class LemonadeProvider(LLMClient):
                 "%s kept writing after its tool call; stopped the stream there",
                 self._last_model,
             )
-            # Closing the stream stops the server generating the rest.
+            # The client reads out the rest: cutting FastFlowLM off restarts it.
             close = getattr(response, "close", None)
             if close is not None:
                 close()
