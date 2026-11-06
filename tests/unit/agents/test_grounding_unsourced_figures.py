@@ -147,6 +147,20 @@ def test_currency_codes_and_words_do_not_hide_unsourced_prose_amounts(answer):
     assert "2,708.95" in findings[0].note
 
 
+@pytest.mark.parametrize(
+    "answer, expected",
+    [
+        ("Python 3.12 and 4.50 USD.", {"1.25", "4.50"}),
+        ("Paid $4.50 for Python 3.12.", {"1.25", "4.50"}),
+        ("Release 2.5 costs 9.99 USD.", {"1.25", "9.99"}),
+    ],
+)
+def test_a_nearby_price_does_not_make_a_version_a_money_figure(answer, expected):
+    table = "| a | b |\n|---|---|\n| x | 1.25 |\n\n"
+
+    assert {v.text for v in presented_values(table + answer)} == expected
+
+
 def test_invented_totals_after_a_denied_run_are_flagged():
     findings = content_findings(INVENTED, _turn_records(DENIED), QUERY)
 

@@ -621,13 +621,11 @@ def _stated_money(text: str) -> Set[str]:
 
 
 def _is_money_number(text: str, start: int, end: int) -> bool:
-    """Whether the number at *start:end* has an explicit currency marker."""
-    prefix = text[max(0, start - 24) : end]
-    suffix = text[start : min(len(text), end + 24)]
-    return any(
-        pattern.search(prefix if pattern is _PROSE_MONEY_PREFIX else suffix)
-        for pattern in (_PROSE_MONEY_PREFIX, _PROSE_MONEY_SUFFIX)
-    )
+    """Whether the number at *start:end* has its own currency marker."""
+    lead = text[max(0, start - 24) : end]
+    if any(m.end("n") == len(lead) for m in _PROSE_MONEY_PREFIX.finditer(lead)):
+        return True
+    return _PROSE_MONEY_SUFFIX.match(text[start : end + 24]) is not None
 
 
 def _tables_and_prose(answer: str) -> "tuple[List[_Value], str]":
