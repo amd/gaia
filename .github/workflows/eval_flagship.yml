@@ -223,11 +223,12 @@ on:
         default: smoke
       # Qwen is what a 64 GB+ Strix Halo runs. Gemma compares against the
       # Gemma-on-Halo baseline: use it to re-run part of a Gemma tag run.
+      # K2-Horizon and Flint are candidates being measured, not offered to users.
       model:
         description: 'Local model under test. Each compares only against its own baseline (eval/ci_tiers.json).'
         required: false
         type: choice
-        options: [Qwen3.6-35B-A3B-GGUF, Gemma-4-E4B-it-GGUF]
+        options: [Qwen3.6-35B-A3B-GGUF, Gemma-4-E4B-it-GGUF, K2-Horizon-MoVA-36B-A4B-GGUF, K2-Horizon-7B-GGUF, K2-Horizon-3.7B-GGUF, Flint-GGUF]
         default: Qwen3.6-35B-A3B-GGUF
       # Targeted runs. Blank both to run the `tier`. Validated by
       # util/eval_lane_matrix.py before any lane takes a lab machine.
