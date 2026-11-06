@@ -382,6 +382,9 @@ class ChatAgentConfig:
 
     # Optional capability flags (disabled by default to keep document Q&A focused)
     enable_sd_tools: bool = False  # Lemonade image generation
+    # Editing/upscaling changes the tool roster, so only explicit SDK profiles
+    # opt in until the flagship capability and eval update are approved.
+    enable_sd_edit_tools: bool = False
     enable_3d_tools: bool = False  # Opt-in Lemonade TRELLIS image-to-3D
     enable_audio_generation_tools: bool = False  # Lemonade music and sound effects
 
@@ -2419,10 +2422,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 self.init_sd(
                     output_dir=str(sd_output_dir),
                     enable_3d_tools=getattr(self.config, "enable_3d_tools", False),
+                    enable_edit_tools=getattr(
+                        self.config, "enable_sd_edit_tools", False
+                    ),
                 )
                 logger.debug(
                     "SD tools registered (generate_image, list_sd_models, "
-                    "get_generation_history), output=%s",
+                    "get_generation_history%s), output=%s",
+                    (
+                        ", edit_image, upscale_image"
+                        if getattr(self.config, "enable_sd_edit_tools", False)
+                        else ""
+                    ),
                     sd_output_dir,
                 )
             except OSError as _sd_err:
