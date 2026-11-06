@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.chat.prompts import Prompts
+from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
@@ -506,8 +507,8 @@ class AgentSDK:
             messages: List of message dicts with 'role' and 'content' keys
             system_prompt: Optional system prompt to use (overrides config)
             cancel: When given, the reply is streamed and the call is abandoned
-                as soon as the event is set — the connection is closed so the
-                server stops generating, and ``LLMCallCancelled`` is raised.
+                as soon as the event is set, also while it waits for the model
+                slot, and ``LLMCallCancelled`` is raised.
             **kwargs: Additional arguments for LLM generation
 
         Returns:
@@ -614,16 +615,20 @@ class AgentSDK:
             messages, system_prompt=system_prompt, tools=tools, **kwargs
         )
         try:
-            for chunk in stream:
-                if cancel.is_set():
-                    raise LLMCallCancelled("model call cancelled mid-reply")
-                if chunk.is_complete:
-                    final = chunk
-                else:
-                    parts.append(chunk.text)
+            # A call cancelled while queued for the model must never be sent:
+            # on the NPU, hanging up on it once it streams restarts the engine.
+            with lease_cancel_scope(cancel):
+                for chunk in stream:
+                    if cancel.is_set():
+                        raise LLMCallCancelled("model call cancelled mid-reply")
+                    if chunk.is_complete:
+                        final = chunk
+                    else:
+                        parts.append(chunk.text)
+        except LeaseWaitCancelled as e:
+            raise LLMCallCancelled(str(e)) from e
         finally:
-            # Closing the generator closes the HTTP stream, which is what
-            # makes the server stop generating and free the model.
+            # Ends the HTTP stream: cut off on a GPU, read to its end on the NPU.
             stream.close()
         if final is None:
             raise RuntimeError("model stream ended without a final chunk")
@@ -731,6 +736,8 @@ class AgentSDK:
                 reasoning=self.llm_client.get_last_reasoning(),
             )
 
+        except LeaseWaitCancelled:
+            raise  # the caller stopped waiting: not an error
         except ConnectionError as e:
             # Re-raise connection errors with additional context
             self.log.error(f"LLM connection error in send_messages_stream: {e}")

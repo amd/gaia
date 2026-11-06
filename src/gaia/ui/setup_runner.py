@@ -419,6 +419,8 @@ NO_CLOUD_MODEL = (
 SETUP_REPORT = "setup-report.json"
 REPORT_NAME_RE = re.compile(r"diagnostics-\d{8}-\d{6}\.tgz")
 _REPORT_TIMEOUT_S = 120
+#: How long a report waits for a failed run's problem report to finish saving.
+_RECORD_WAIT_S = 30
 
 
 def write_report(record: Dict[str, Any]) -> Path:
@@ -462,6 +464,24 @@ def write_report(record: Dict[str, Any]) -> Path:
             f"{_last_line(proc.stdout + chr(10) + proc.stderr)}"
         )
     return out
+
+
+def _record_setup_failure(
+    run: "SetupRun", cause: Optional[BaseException]
+) -> Optional[str]:
+    """Save a local fault record for a failed run; its id."""
+    from gaia.llm.failure_record import record_local_failure
+
+    error = SetupError(run.error or "Setup failed")
+    if cause is not None:
+        error.__cause__ = cause
+    return record_local_failure(
+        error,
+        where="setup",
+        kind="setup",
+        model=run.chat_model,
+        extra={"problem": run.problem} if run.problem else None,
+    )
 
 
 def users_lemonade_url() -> Optional[str]:
@@ -832,6 +852,8 @@ class SetupRun:
     chat_model_for: Optional[Callable[["SetupRun"], str]] = None
     #: Each piece besides the models, by id: ``active``, ``done``, ``failed``.
     components: Dict[str, str] = field(default_factory=dict)
+    #: Why a failed piece failed, when init said: ``transient`` or ``other``.
+    component_kinds: Dict[str, str] = field(default_factory=dict)
     #: The Test step's rows, in the order they ran, by (job, subject).
     tests: Dict[Any, Dict[str, Any]] = field(default_factory=dict)
     #: Everything this run printed or reported, by screen stage.
@@ -896,6 +918,7 @@ class SetupRun:
             "upgrade_embedded": self.upgrade_embedded,
             "model_failed": self.model_failed,
             "components": dict(self.components),
+            "component_kinds": dict(self.component_kinds),
             "tests": list(self.tests.values()),
             "chat_model": None if self.skip_chat_model else self.chat_model,
         }
@@ -929,6 +952,8 @@ class SetupRunner:
         self._run: Optional[SetupRun] = None
         self._proc: Optional[subprocess.Popen] = None
         self._thread: Optional[threading.Thread] = None
+        #: Saving a failed run's problem report, which the next report waits for.
+        self._recording: Optional[threading.Thread] = None
         self._check_proc: Optional[subprocess.Popen] = None
         # Clear while a load check runs: only it can write to the model rows.
         self._check_idle = threading.Event()
@@ -953,6 +978,10 @@ class SetupRunner:
     def report(self) -> Dict[str, Any]:
         """Everything setup knows about its last run, with every log line kept."""
         with self._lock:
+            recording = self._recording
+        if recording is not None:
+            recording.join(timeout=_RECORD_WAIT_S)
+        with self._lock:
             view = self._run.view() if self._run else {"state": "idle"}
             chat = self._run.chat_model if self._run else None
             view["models"] = [
@@ -961,6 +990,11 @@ class SetupRunner:
             view["log_tail"] = list(self._run.log) if self._run else []
             view["logs"] = self._logs(None)
             view["check_result"] = self._run.status if self._run else None
+            if recording is not None and recording.is_alive():
+                view["problem_report"] = (
+                    f"still being saved after {_RECORD_WAIT_S} s; it is in "
+                    "the failures folder once done"
+                )
             return view
 
     def status(self) -> Optional[Dict[str, Any]]:
@@ -1349,6 +1383,11 @@ class SetupRunner:
                 component, state = event.get("component"), event.get("state")
                 if self._run is not None and component and state:
                     self._run.components[component] = state
+                    failure = event.get("kind") if state == "failed" else None
+                    if failure:
+                        self._run.component_kinds[component] = failure
+                    else:
+                        self._run.component_kinds.pop(component, None)
                     self._run.note(f"{component}: {state}")
                 return
             if kind == "test":
@@ -1493,9 +1532,11 @@ class SetupRunner:
 
     def _watch(self, run: SetupRun, proc: subprocess.Popen) -> None:
         """Run the setup thread; an unexpected error fails the run, never strands it."""
+        cause: Optional[BaseException] = None
         try:
             self._pump(run, proc)
         except Exception as e:  # pylint: disable=broad-exception-caught
+            cause = e
             logger.exception("Setup thread failed")
             with self._lock:
                 if run.state in ("running", "verifying"):
@@ -1518,6 +1559,23 @@ class SetupRunner:
                     logger.error(
                         "gaia init (pid %s) did not stop when killed", proc.pid
                     )
+        with self._lock:
+            failed = run.state == "failed"
+        if failed:
+            # Its own thread: the record probes Lemonade for a second or two,
+            # and the runner is free for a retry the moment the run ends.
+            recording = threading.Thread(
+                target=self._record_failure, args=(run, cause), daemon=True
+            )
+            with self._lock:
+                self._recording = recording
+            recording.start()
+
+    def _record_failure(self, run: SetupRun, cause: Optional[BaseException]) -> None:
+        record_id = _record_setup_failure(run, cause)
+        if record_id:
+            with self._lock:
+                run.note(f"Problem report saved as {record_id}")
 
     def _pump(self, run: SetupRun, proc: subprocess.Popen) -> None:
         buf = b""

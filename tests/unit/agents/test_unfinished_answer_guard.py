@@ -52,9 +52,9 @@ FAILED_RUN_ENDINGS = [
         id="row5-just-need-to",
     ),
     pytest.param(
-        "I'll load the GitHub tools first.\n\n"
-        '<invoke name="load_tools">\n'
-        '<parameter name="names">["github"]</parameter>\n'
+        "I'll find the GitHub tools first.\n\n"
+        '<invoke name="search_tools">\n'
+        '<parameter name="query">github</parameter>\n'
         "</invoke>",
         "tool_markup",
         id="row7-invoke-markup",
@@ -250,10 +250,10 @@ def test_narration_is_reprompted_then_answer_accepted(agent):
 
 
 def test_tool_markup_is_reprompted_as_malformed_call(agent):
-    markup = '<invoke name="load_tools"><parameter name="names">x</parameter>'
+    markup = '<invoke name="search_tools"><parameter name="query">x</parameter>'
     sent = _stub_chat(agent, markup, "Loaded.")
 
-    result = agent.process_query("Load the tools", max_steps=10)
+    result = agent.process_query("Find the tools", max_steps=10)
 
     assert len(sent) == 2
     assert "tool call written out as text" in sent[1][-1]["content"]
@@ -267,7 +267,9 @@ def test_reprompts_are_bounded_per_turn(agent):
     result = agent.process_query("Do the task", max_steps=20)
 
     assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
-    assert _final_text(result) == f"Executing step {_MAX_UNFINISHED_ANSWER_REPROMPTS}:"
+    final = _final_text(result)
+    assert final.startswith("I didn't finish:")
+    assert f'"Executing step {_MAX_UNFINISHED_ANSWER_REPROMPTS}:"' in final
 
 
 def test_no_reprompt_on_last_step(agent):
@@ -276,7 +278,8 @@ def test_no_reprompt_on_last_step(agent):
     result = agent.process_query("Document the env var", max_steps=1)
 
     assert len(sent) == 1
-    assert _final_text(result) == NARRATION
+    assert _final_text(result).startswith("I didn't finish:")
+    assert NARRATION in _final_text(result)
 
 
 def test_completed_answer_is_not_reprompted(agent):

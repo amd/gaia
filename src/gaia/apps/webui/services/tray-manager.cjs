@@ -200,6 +200,9 @@ class TrayManager {
 
     this._iconSpec = ICON_SPECS[process.platform] || ICON_SPECS.linux;
 
+    /** Whether the desktop shows tray icons; on Linux unknown (null) until setHost(). */
+    this._host = process.platform === "linux" ? null : { available: true, reason: null };
+
     /** @type {Map<string, Electron.NativeImage>} One image per tray state, built on first use. */
     this._icons = new Map();
 
@@ -330,14 +333,47 @@ class TrayManager {
     return this._notificationCount || 0;
   }
 
-  /** @returns {boolean} Whether minimize-to-tray is enabled. */
+  /** @returns {boolean} Whether closing hides the window: switched on, and a tray to find it in. */
   get minimizeToTray() {
-    return this.config.tray.minimizeToTray;
+    return this.config.tray.minimizeToTray && this.trayHost.available;
   }
 
-  /** @returns {boolean} Whether app should start minimized. */
+  /**
+   * What closing the window does. With no tray to find a hidden window in,
+   * GAIA minimizes instead, so the dock still shows it and offers Quit.
+   * @returns {"hide" | "minimize" | "quit"}
+   */
+  get closeAction() {
+    if (!this.config.tray.minimizeToTray) return "quit";
+    return this.trayHost.available ? "hide" : "minimize";
+  }
+
+  /** @returns {boolean} Whether app should start minimized, which also needs a tray. */
   get startMinimized() {
-    return this.config.tray.startMinimized;
+    return this.config.tray.startMinimized && this.trayHost.available;
+  }
+
+  /** @returns {{available: boolean, reason: null | "checking" | "no-host" | "check-failed"}} */
+  get trayHost() {
+    return this._host || { available: false, reason: "checking" };
+  }
+
+  /** Record what tray-host.cjs found; until then a Linux window is never hidden. */
+  setHost(host) {
+    if (!isPlainObject(host) || typeof host.available !== "boolean") {
+      throw new TypeError("TrayManager.setHost expects {available: boolean, reason}");
+    }
+    this._host = { available: host.available, reason: host.available ? null : host.reason };
+    if (!host.available) {
+      console.log(
+        `[tray] No tray icon host (${host.reason}: ${host.detail || "no detail"}); closing the window minimizes GAIA`
+      );
+    }
+  }
+
+  /** The saved config plus the tray host, which Settings needs and nothing saves. */
+  _configReply() {
+    return { ...this.config, host: this.trayHost };
   }
 
   /** @returns {boolean} Whether app should start on login. */
@@ -347,7 +383,8 @@ class TrayManager {
 
   /** @returns {boolean} Whether the one-time "still running in the tray" notice is still due. */
   get closeNoticeDue() {
-    return !this.config.notices.firstClose;
+    // Held while the tray check runs, so a dock notice never uses up the tray one.
+    return !this.config.notices.firstClose && this.trayHost.reason !== "checking";
   }
 
   /**
@@ -360,18 +397,34 @@ class TrayManager {
     const next = { ...this.config, notices: { ...this.config.notices, firstClose: true } };
     this._saveConfig(next);
     this.config = next;
-    const where = process.platform === "darwin" ? "menu bar" : "tray";
+    const { message, detail } = this.closeNoticeText();
     const { response } = await dialog.showMessageBox({
       type: "info",
       title: "GAIA is still running",
-      message: `GAIA is still running in the ${where}.`,
-      detail: `Quit from the ${where} menu to stop it. Closing the window keeps your model loaded, so the next chat starts quickly.`,
+      message,
+      detail,
       buttons: ["OK", "Quit GAIA"],
       defaultId: 0,
       cancelId: 0,
       noLink: true,
     });
     return response === 1;
+  }
+
+  /** @returns {{message: string, detail: string}} Where the closed window went and how to quit. */
+  closeNoticeText() {
+    const loaded = "Closing the window keeps your model loaded, so the next chat starts quickly.";
+    if (this.closeAction === "minimize") {
+      return {
+        message: "GAIA is still running in the dock.",
+        detail: `${loaded} Click GAIA in the dock to bring it back. To stop it, right-click GAIA there and choose Quit.`,
+      };
+    }
+    const where = process.platform === "darwin" ? "menu bar" : "tray";
+    return {
+      message: `GAIA is still running in the ${where}.`,
+      detail: `Quit from the ${where} menu to stop it. ${loaded}`,
+    };
   }
 
   // ── Private: Rendering ───────────────────────────────────────────────
@@ -722,7 +775,7 @@ class TrayManager {
     });
 
     ipcMain.handle("tray:get-config", () => {
-      return this.config;
+      return this._configReply();
     });
 
     ipcMain.handle("tray:set-config", (_event, cfg) => {
@@ -750,7 +803,7 @@ class TrayManager {
       }
 
       if (tray === null && agents === null) {
-        return this.config;
+        return this._configReply();
       }
       const loginChanged =
         tray !== null && tray.startOnLogin !== this.config.tray.startOnLogin;
@@ -774,7 +827,7 @@ class TrayManager {
       }
       this.config = next;
 
-      return this.config;
+      return this._configReply();
     });
   }
 

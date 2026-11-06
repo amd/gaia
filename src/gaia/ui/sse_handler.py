@@ -2789,7 +2789,10 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
     # Status-based results
     if "status" in data:
         status = data["status"]
-        msg = data.get("message", data.get("error", data.get("display_message", "")))
+        # Written for the user; message may be written for the model.
+        if data.get("display_message"):
+            return str(data["display_message"])[:200]
+        msg = data.get("message", data.get("error", ""))
         if msg:
             return f"{status}: {str(msg)[:200]}"
         # A bare "success" tells the user nothing. Report what came back

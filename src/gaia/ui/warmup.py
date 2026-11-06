@@ -85,6 +85,8 @@ class PrefixWarmer:
         self._target: Dict[str, Optional[str]] = {}
         self._busy: Callable[[], bool] = lambda: False
         self._turn_models: List[str] = []
+        #: A fresh request that came while one ran; it runs once that ends.
+        self._again: Optional[str] = None
         #: Set when a turn starts on another model; the job stops at it.
         self.cancel = threading.Event()
 
@@ -92,13 +94,20 @@ class PrefixWarmer:
         """Install the "is a chat turn running?" probe."""
         self._busy = busy
 
-    def request(self, reason: str) -> bool:
-        """Start a warm-up in the background. Returns whether one was started."""
+    def request(self, reason: str, fresh: bool = False) -> bool:
+        """Start a warm-up in the background. Returns whether one was started.
+
+        A *fresh* request (the model changed) skips the debounce, and one made
+        while a warm-up runs starts as soon as that one ends.
+        """
         with self._lock:
             if self._state == WARMING:
+                if fresh:
+                    self._again = reason
                 return False
             recent = (
-                self._state == READY
+                not fresh
+                and self._state == READY
                 and self._finished is not None
                 and time.monotonic() - self._finished < DEBOUNCE_SECONDS
             )
@@ -123,6 +132,13 @@ class PrefixWarmer:
         return True
 
     def _run(self, reason: str) -> None:
+        self._run_job(reason)
+        with self._lock:
+            again, self._again = self._again, None
+        if again is not None:
+            self.request(again, fresh=True)
+
+    def _run_job(self, reason: str) -> None:
         try:
             result = self._job()
         except Exception as exc:  # noqa: BLE001 - surfaced in status and the log
@@ -347,7 +363,6 @@ def _warm_new_chat_prefix(
                 library_paths=[],
                 allowed=chat._compute_allowed_paths([]),
                 session_id="warm-up",
-                dynamic_tools=db.get_setting("dynamic_tools", "false") == "true",
                 memory_incognito=chat._memory_off(session, db),
             ),
         )
@@ -402,9 +417,10 @@ def configure(db) -> PrefixWarmer:
     return _warmer
 
 
-def request_warm_up(reason: str) -> bool:
+def request_warm_up(reason: str, fresh: bool = False) -> bool:
     """Ask for a warm-up; a no-op before :func:`configure`, while one runs, or
     before first-run setup has finished (it would load a model setup didn't pick).
+    See :meth:`PrefixWarmer.request` for *fresh*.
     """
     from gaia.ui.setup_runner import is_initialized
 
@@ -415,7 +431,7 @@ def request_warm_up(reason: str) -> bool:
             "Warm-up (%s) not started: first-run setup has not finished", reason
         )
         return False
-    return _warmer.request(reason)
+    return _warmer.request(reason, fresh=fresh)
 
 
 def _set_phase(phase: str) -> None:

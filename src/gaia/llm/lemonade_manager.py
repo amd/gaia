@@ -31,6 +31,7 @@ from gaia.llm.lemonade_client import (
     is_llm_model_entry,
     lemonade_log_hint,
     loaded_ctx_size,
+    remember_engine_start_failure,
     resolve_ctx_size,
     resolve_default_chat_model,
     resolve_effective_ctx_size,
@@ -1001,6 +1002,7 @@ class LemonadeManager:
                     from gaia.daemon.errors import (
                         DaemonError,
                         LemonadeNotAnsweringError,
+                        LemonadeStartFailedError,
                     )
 
                     try:
@@ -1009,6 +1011,8 @@ class LemonadeManager:
                         if not cls._wait_for_gaia_lemonade(quiet):
                             return False
                     except DaemonError as e:
+                        if isinstance(e, LemonadeStartFailedError):
+                            remember_engine_start_failure(e.reason)
                         cls._log.error("Could not start GAIA's Lemonade Server: %s", e)
                         if not quiet:
                             print(
@@ -1734,6 +1738,7 @@ class LemonadeManager:
 
     @classmethod
     def _remember_server(cls, client: LemonadeClient) -> None:
+        remember_engine_start_failure(None)
         cls._base_url = client.base_url
         cls._follows_gaia_lemonade = client.follows_gaia_lemonade is True
 

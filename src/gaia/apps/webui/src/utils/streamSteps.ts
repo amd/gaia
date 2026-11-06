@@ -1,12 +1,18 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { getT } from '../i18n/useT';
 import type { StreamEvent, AgentStep } from '../types';
 
 /** The backend's periodic "Model is processing... (Ns)" tick; the live line beside GAIA's name already times that wait. */
 export function isProgressTick(event: StreamEvent): boolean {
     return event.type === 'status' && event.status === 'working' && !event.phase
         && (event.message ?? '').startsWith('Model is processing');
+}
+
+/** A status event's line for the user; the tool-list re-read is said in their language. */
+export function statusText(event: StreamEvent): string {
+    return event.phase === 'loading_tools' ? getT()('chat.loadingTools') : (event.message || '').trim();
 }
 
 /** Map an SSE agent event to an AgentStep for the UI. */

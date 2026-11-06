@@ -29,10 +29,12 @@ from gaia.agents.tools.document_text import (
 )
 from gaia.agents.tools.edit_impact import edit_impact
 from gaia.agents.tools.file_edit import (
+    after_excerpt,
     apply_unique_replacement,
     file_read_record,
     read_first_preflight,
     stamp_of,
+    turn_of,
 )
 from gaia.agents.tools.path_access import missing_file_error, readable_entry
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
@@ -744,12 +746,13 @@ class FileIOToolsMixin:
 
             old_content must match exactly one location. Zero or several matches
             are errors that carry the file's current content, so a retry does not
-            need a separate read.
+            need a separate read. Repeating an edit already applied this turn
+            is refused.
 
             Args:
                 file_path: Path to the file to edit
                 old_content: Content to find and replace; must be unique in the file
-                new_content: New content to insert
+                new_content: Text that replaces old_content only, not the whole file
                 backup: Whether to create a backup
                 dry_run: Whether to only simulate the edit
 
@@ -806,7 +809,9 @@ class FileIOToolsMixin:
                     return _directory_path_error(file_path)
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path)
+                refusal = reads.refusal(file_path) or reads.repeat_refusal(
+                    file_path, old_content, new_content, turn_of(self)
+                )
                 if refusal is not None:
                     return refusal
 
@@ -864,6 +869,7 @@ class FileIOToolsMixin:
                 with open(file_path, "w", encoding="utf-8", newline="") as f:
                     f.write(modified_content)
                 reads.note(file_path)
+                reads.note_edit(file_path, old_content, new_content, turn_of(self))
 
                 # Audit successful edit
                 detail = (
@@ -1301,12 +1307,14 @@ class FileIOToolsMixin:
             Requires a prior read_file. edit_python_file refuses a
             syntax-breaking edit. old_content must match exactly one
             location; zero or several matches return the current content,
-            so a retry needs no re-read.
+            so a retry needs no re-read. Repeating an edit already applied
+            this turn is refused.
 
             Args:
                 file_path: Path to the file to edit.
                 old_content: Exact text to replace; must be unique in the file.
-                new_content: Text to put in its place.
+                new_content: Only the text that replaces old_content, never
+                    the whole file; for that, use write_file.
                 project_dir: Project root for resolving a relative file_path.
             """
             try:
@@ -1356,7 +1364,9 @@ class FileIOToolsMixin:
                     return missing_file_error(file_path)
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(path)
+                refusal = reads.refusal(path) or reads.repeat_refusal(
+                    path, old_content, new_content, turn_of(self)
+                )
                 if refusal is not None:
                     return refusal
 
@@ -1393,6 +1403,7 @@ class FileIOToolsMixin:
                 # Write updated content
                 _write_exact(path, updated_content)
                 reads.note(path)
+                reads.note_edit(path, old_content, new_content, turn_of(self))
 
                 console = getattr(self, "console", None)
                 if diff.strip():
@@ -1436,6 +1447,7 @@ class FileIOToolsMixin:
                         if (syntax_error := _python_syntax_error(path, updated_content))
                         else {}
                     ),
+                    **after_excerpt(current_content, updated_content),
                     "diff": diff,
                 }
                 if backup_path:

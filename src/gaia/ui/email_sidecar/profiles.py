@@ -489,7 +489,7 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "check_cli_setup": "Checking a CLI's setup",
     "install_cli": "Installing a CLI",
     "sign_in_cli": "Signing in to a CLI",
-    "load_tools": "Loading tools",
+    "search_tools": "Searching for a tool",
     "request_user_input": "Asking you a question",
     # Media / desktop
     "transcribe_media": "Transcribing recording",

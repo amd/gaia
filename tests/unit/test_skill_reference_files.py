@@ -96,6 +96,7 @@ class _StubAgent(FileIOToolsMixin):
     _pin_skill_body = Agent._pin_skill_body
     load_skill = Agent.load_skill
     unload_skill = Agent.unload_skill
+    _drop_skill_tools = Agent._drop_skill_tools
     get_skills_system_prompt = Agent.get_skills_system_prompt
 
     def __init__(self, scope: Path):

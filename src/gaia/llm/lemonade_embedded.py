@@ -874,6 +874,14 @@ class EmbeddedLemonade:
         """
         return self.daemon_path.is_file()
 
+    def is_incomplete(self) -> bool:
+        """Whether this version was unpacked but its ``lemond`` is gone.
+
+        Still GAIA's server to start: setup repairs it, and a system install
+        on the default port is not the one this machine was set up with.
+        """
+        return self.dist_dir.is_dir() and not self.daemon_path.is_file()
+
     def replaces_older_install(self) -> bool:
         """Whether an older version is unpacked, which this one upgrades.
 

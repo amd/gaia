@@ -542,6 +542,39 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | `preferred_backend` | The saved choice, which may be an untested one saved before GAIA stopped offering it; `null` means none was saved and Lemonade picks |
   </Accordion>
 
+  <Accordion title="GET /api/system/resources">
+    This PC's CPU, memory, GPU, NPU and network use for the chat's resource strip, with about a minute of history (oldest first, one sample per `interval_ms`). Needs the `X-Gaia-UI: 1` header. Sampling starts on the first request and stops on its own about 15 seconds after the last one. `ready` is `false` until the first sample is in. `503` when CPU or memory can't be read, with the reason in `detail`; a GPU or network failure alone is reported in `devices_error` or `networks_error` instead.
+
+    On Windows the figures come from the counters Task Manager reads: CPU is `% Processor Utility`, a GPU or NPU (a compute-only adapter) is its busiest engine, and `networks` lists the connected hardware adapters (no Hyper-V, WSL or VPN interfaces). On Linux, AMD GPUs are read from sysfs and networks are interfaces with a `device` link; macOS reports CPU, memory and its `en` interfaces.
+
+    **Response:**
+    ```json
+    {
+      "interval_ms": 1000,
+      "ready": true,
+      "cpu": { "percent": 20.4, "ghz": 4.7, "history": [18.2, 20.4] },
+      "memory": { "used_bytes": 48318382080, "total_bytes": 68289282048, "percent": 70.8, "history": [70.5, 70.8] },
+      "devices": [
+        { "id": "0x00000000_0x0000d938", "name": "AMD Radeon(TM) 8060S Graphics", "kind": "gpu", "percent": 14.0, "memory_used_bytes": 32212254720, "history": [12.0, 14.0] },
+        { "id": "0x00000000_0x0000f994", "name": "NPU Compute Accelerator Device", "kind": "npu", "percent": 0.0, "memory_used_bytes": 12261240832, "history": [0.0, 0.0] }
+      ],
+      "networks": [
+        { "id": "net_0006008007000000", "name": "Ethernet 3", "description": "Realtek Gaming 2.5GbE Family Controller", "kind": "ethernet", "send_bps": 52008, "recv_bps": 47055, "send_history": [68447, 52008], "recv_history": [60059, 47055] }
+      ]
+    }
+    ```
+
+    | Field | Description |
+    |-------|-------------|
+    | `cpu.ghz` | Current clock speed, or `null` when the OS doesn't report it |
+    | `memory.used_bytes` | Total less available, as Task Manager's "In use" |
+    | `devices[].kind` | `gpu` or `npu` |
+    | `devices[].memory_used_bytes` | Dedicated plus shared memory the device holds, or `null` when not reported |
+    | `networks[].kind` | `ethernet`, `wifi`, or `network` when the OS doesn't say which |
+    | `networks[].send_bps`, `recv_bps` | Bits per second over the last interval; the histories are the same per sample |
+    | `devices_error`, `networks_error` | Why GPUs and NPUs, or network adapters, can't be read while CPU and memory still can (for example, no GPU counters in a VM); `null` otherwise. That list is then empty |
+  </Accordion>
+
   <Accordion title="PUT /api/system/model-server/backend">
     Save the llama.cpp backend for chat models as `llamacpp_backend` in `~/.gaia/config.json`. It applies the next time a chat model loads; the embedding model keeps its own backend.
 
@@ -585,13 +618,14 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="POST /api/system/download-model">
-    Trigger downloading a model via the Lemonade server. Returns `202` immediately; the download proceeds in the background. Poll `GET /api/system/status` to detect when the model becomes available. Set `force` to `true` to re-download even if the file already exists (repairs corrupted or incomplete downloads).
+    Trigger downloading a model via the Lemonade server. Returns `202` immediately; the download proceeds in the background. Poll `GET /api/system/status` to detect when the model becomes available. Downloads leave the active model unchanged by default. Set `force` to `true` to re-download even if the file already exists (repairs corrupted or incomplete downloads).
 
     **Request:**
     ```json
     {
       "model_name": "Qwen3.5-35B-A3B-GGUF",
-      "force": false
+      "force": false,
+      "load_after": false
     }
     ```
 
@@ -599,6 +633,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     |-------|------|----------|-------------|
     | `model_name` | string | Yes | Name of the model to download. |
     | `force` | boolean | No | Re-download even if the model already exists. Defaults to `false`. |
+    | `load_after` | boolean | No | Load the model after the download completes. Skipped while a chat is answering. Defaults to `false`. |
 
     **Response (202):**
     ```json
@@ -642,7 +677,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="POST /api/system/warm-up">
-    Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. It is also skipped when the GAIA agent runs in its daemon sidecar (a Hub install), which warms its own prompt, on a PC with under 24 GB of RAM, where the model loads with the first message instead, and before first-run setup has finished, when it would load a model setup didn't pick. A chat turn on the model being warmed waits for the warm-up and reuses what it cached; a turn on any other model, local or cloud, stops it, so the warm-up never loads over the turn's model. A local turn that arrives while the warm-up is loading its model waits for that load to finish first, since it can't be interrupted and holds the memory the turn's own load needs. An NPU (FastFlowLM) model is only loaded, not primed: FastFlowLM reuses a prompt only when the next request continues it, so the first message reads the prompt either way. Returns the warm-up state, with the `model` it loads and its `device` (`npu`, `gpu` or `cpu`) once known. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
+    Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens, and with `?fresh=true` when the user presses **Try again** on a picked model that failed to load. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. It is also skipped when the GAIA agent runs in its daemon sidecar (a Hub install), which warms its own prompt, on a PC with under 24 GB of RAM, where the model loads with the first message instead, and before first-run setup has finished, when it would load a model setup didn't pick. A chat turn on the model being warmed waits for the warm-up and reuses what it cached; a turn on any other model, local or cloud, stops it, so the warm-up never loads over the turn's model. A local turn that arrives while the warm-up is loading its model waits for that load to finish first, since it can't be interrupted and holds the memory the turn's own load needs. An NPU (FastFlowLM) model is only loaded, not primed: FastFlowLM reuses a prompt only when the next request continues it, so the first message reads the prompt either way. A fresh request (a model pick, or `?fresh=true`) skips the 30 s debounce, and one made while a warm-up runs starts as soon as that one ends. Returns the warm-up state, with the `model` it loads and its `device` (`npu`, `gpu` or `cpu`) once known. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
 
     **Response:**
     ```json
@@ -2613,7 +2648,9 @@ plan and make one set of choices.
 
   <Accordion title="GET /api/setup/status">
     `components` maps each piece besides the models to `active`, `done` or
-    `failed`. `tests` holds the Test step's rows: `job`, `subject`, `state`,
+    `failed`. `component_kinds` says why a failed piece failed, when setup
+    knows: `transient` (a timeout, dropped connection or server error, so
+    running setup again may fix it) or `other`. `tests` holds the Test step's rows: `job`, `subject`, `state`,
     `error`, `kind` (`memory`, `stuck`, `broken`) and `seconds`.
 
     The running (or last) setup: `state` (`running`, `verifying`, `ready`,
@@ -2927,7 +2964,9 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     `last_provider` in `~/.gaia/config.json` (other keys are kept). Body:
     `{"model": "fireworks.glm-5p3-flash"}`. **409** when the model cannot run
     now; **503** while the local model server is still starting. A successful
-    pick clears this run's restore notice.
+    pick clears this run's restore notice. Picking a local model also starts a
+    fresh warm-up (see `POST /api/system/warm-up`), so the model loads before
+    the next message; follow it with `GET /api/system/warm-up`.
   </Accordion>
 </AccordionGroup>
 
@@ -2957,6 +2996,20 @@ model with no known price reads as unknown, never $0. Cloud models from
     entry carries its own `unpriced_turns` and `unreported_turns`), `limit_usd`, and `state`
     (`no_limit`, `ok`, `near` at 80% of the limit, `reached`, or
     `allowed_over`). **500** when the saved limit is unreadable.
+  </Accordion>
+
+  <Accordion title="GET /api/spending/chat/{session_id}">
+    Takes `since` and `model` as query parameters.
+    What one chat's cloud answers cost, and every chat's answers since `since`
+    (an ISO instant: the start of the viewer's local day). Sums the cost each
+    answer's turn summary saved, cache discounts included; answers on this PC
+    are left out. `paid` is true when `model` has a known cloud price, the only
+    time the composer shows it. `chat` carries `usd`, `answers`,
+    `unpriced_answers` (stopped or unpriced answers, counted apart, never as
+    $0) and `items` (`message_id`, `created_at`, `model`, `kind`, `usd` per
+    answer); `today` carries `usd`, `answers`, `unpriced_answers` and `chats`.
+    **404** for an unknown chat, **422** when `since` isn't an ISO timestamp,
+    **500** when a saved answer's summary is unreadable.
   </Accordion>
 
   <Accordion title="PUT /api/spending/limit">

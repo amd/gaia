@@ -262,6 +262,8 @@ export interface SetupRunStatus {
     model_failed?: boolean;
     /** Each piece besides the models, by id. */
     components?: Record<string, 'active' | 'done' | 'failed'>;
+    /** Why a failed piece failed, when setup knows: `transient` may pass on Retry. */
+    component_kinds?: Record<string, 'transient' | 'other'>;
     tests?: SetupTest[];
     /** The run only starts the model server; models are chosen and pulled after. */
     server_only?: boolean;

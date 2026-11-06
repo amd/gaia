@@ -36,7 +36,7 @@ const session = (id: string, title: string, minutesAgo: number, messages: number
     inference_description: 'Using Gemma-4-E4B-it-GGUF on this machine.',
 });
 
-const SESSIONS = [
+export const SESSIONS = [
     session(ANSWER_SESSION, 'Rainier weather and Aug 28 action items', 2, 2),
     session('a1b2c3d4-0000-4000-8000-000000000002', 'Draft volunteer email to the Kestrel trail crew', 20, 4),
     session('a1b2c3d4-0000-4000-8000-000000000003', 'kestrel: fix flaky upload test in CI', 95, 6),
@@ -110,6 +110,30 @@ const DOCUMENTS = {
     total_chunks: 108,
 };
 
+/** A Strix Halo mid-answer: the GPU busy with the model, the NPU idle. */
+const GIB = 1024 ** 3;
+/** A minute of jagged, seeded readings around `base`, like a real counter. */
+const noisy = (base: number, jitter: number, seed: number) => {
+    let x = seed;
+    return Array.from({ length: 60 }, () => {
+        x = (x * 1103515245 + 12345) % 2 ** 31;
+        return Math.max(0, Math.round((base + ((x / 2 ** 31) * 2 - 1) * jitter) * 10) / 10);
+    });
+};
+export const RESOURCES = {
+    interval_ms: 1000,
+    ready: true,
+    cpu: { percent: 20.4, ghz: 4.7, history: noisy(16, 9, 7) },
+    memory: { used_bytes: 45 * GIB, total_bytes: 63.6 * GIB, percent: 70.8, history: noisy(70.6, 0.4, 3) },
+    devices: [
+        { id: '0x00000000_0x0000d938', name: 'AMD Radeon(TM) 8060S Graphics', kind: 'gpu', percent: 14, memory_used_bytes: 30 * GIB, history: noisy(12, 8, 11) },
+        { id: '0x00000000_0x0000f994', name: 'NPU Compute Accelerator Device', kind: 'npu', percent: 0, memory_used_bytes: null, history: noisy(0, 0, 1) },
+    ],
+    networks: [
+        { id: 'net_0006008007000000', name: 'Ethernet 3', description: 'Realtek Gaming 2.5GbE Family Controller', kind: 'ethernet', send_bps: 0, recv_bps: 8000, send_history: noisy(20e3, 20e3, 5), recv_history: noisy(60e3, 55e3, 9) },
+    ],
+};
+
 export const SYSTEM_STATUS = {
     lemonade_running: true, lemonade_error: null, model_loaded: 'Gemma-4-E4B-it-GGUF', embedding_model_loaded: true,
     disk_space_gb: 1293.2, memory_available_gb: 38.5, initialized: true, version: '0.25.0',
@@ -160,6 +184,12 @@ const ROUTES: Record<string, unknown> = {
         error: null, base_url: 'http://127.0.0.1:13305', owner: 'gaia', busy: false, restarting: false, restart_error: null,
     },
     [`GET /chat/context/${ANSWER_SESSION}`]: { session_id: ANSWER_SESSION, context: null },
+    // A model on this PC: the composer shows no spending.
+    [`GET /spending/chat/${ANSWER_SESSION}`]: {
+        paid: false, model: 'Gemma-4-E4B-it-GGUF', price_source: 'list price',
+        chat: { usd: 0, answers: 0, unpriced_answers: 0, items: [] },
+        today: { usd: 0, answers: 0, unpriced_answers: 0, chats: 0, since: NOW.toISOString() },
+    },
     [`GET /sessions/${ANSWER_SESSION}/changes`]: { turns: [] },
     [`GET /sessions/${ANSWER_SESSION}/changes/total`]: {
         files: [], totals: { files: 0, additions: 0, deletions: 0, uncounted: 0 }, turns: 0, pending: false, untracked: [], incomplete: false,
@@ -175,6 +205,7 @@ const ROUTES: Record<string, unknown> = {
     'GET /connectors': { connectors: [] },
     'GET /memory/settings': { memory_enabled: true },
     'GET /skills': { skills: [] },
+    'GET /system/resources': RESOURCES,
     'GET /system/model-server': { reachable: true, error: null, base_url: 'http://127.0.0.1:13305', port: 13305, owner: 'gaia' },
     'GET /lemonade/target': { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: 'http://127.0.0.1:13305', saved_base_url: null, api_key_stored: false, env_override: null },
 };
@@ -267,7 +298,7 @@ export const FAILED_LINK_CHECK = {
 };
 
 /** Settings > Model with `models` on the Local tab; every other answer stays as in ROUTES. */
-export async function withModelPage(page: Page, models: unknown[], plan: unknown, status: unknown = { state: 'idle' }): Promise<void> {
+export async function withModelPage(page: Page, models: unknown[], plan: unknown, status: unknown = { state: 'idle' }, fireworks: Record<string, unknown> = {}): Promise<void> {
     const answers: Record<string, unknown> = {
         'GET /providers/local/models': { provider: 'local', models, memory_gb: 96, memory_source: 'AMD iGPU', capacity_error: null },
         'GET /providers/local/context': MODEL_CONTEXT,
@@ -278,7 +309,7 @@ export async function withModelPage(page: Page, models: unknown[], plan: unknown
         'GET /providers': {
             providers: [
                 { id: 'local', name: 'Local', remote: false, privacy_notice: 'Runs on this PC. Nothing leaves your machine.' },
-                { id: 'fireworks', name: 'Fireworks AI', remote: true, models_discovered: true, key_source: 'stored', key_hint: 'a1b2', env_var: 'FIREWORKS_API_KEY', privacy_notice: 'Chat history is sent to Fireworks AI.' },
+                { id: 'fireworks', name: 'Fireworks AI', remote: true, models_discovered: true, key_source: 'stored', key_hint: 'a1b2', env_var: 'FIREWORKS_API_KEY', privacy_notice: 'Chat history is sent to Fireworks AI.', ...fireworks },
             ],
         },
         'GET /providers/fireworks/models': { provider: 'fireworks', models: FIREWORKS_MODELS },
@@ -365,9 +396,19 @@ export async function withConnectors(page: Page, connectors: unknown[] = CONNECT
     });
 }
 
-/** The Electron bridges the browser lacks, so desktop-only settings render. */
-export async function withDesktopBridges(page: Page, update: Record<string, unknown> = {}): Promise<void> {
-    await page.addInitScript((state) => {
+/** The desktop app's backend as services/backend-supervisor.cjs reports it; no apiBase, so requests stay mocked. */
+export const BACKEND_RUNNING = {
+    status: 'running', port: null, since: null, attempt: 0, maxRestarts: 3,
+    nextAttemptAt: null, lastExit: null, lastError: null, apiBase: null,
+};
+
+/** The Electron bridges the browser lacks, so desktop-only settings render. `host` is the tray-host check's answer. */
+export async function withDesktopBridges(
+    page: Page,
+    update: Record<string, unknown> = {},
+    host: { available: boolean; reason: string | null } = { available: true, reason: null },
+): Promise<void> {
+    await page.addInitScript(({ state, host, running }) => {
         const tray = { minimizeToTray: true, startOnLogin: false, startMinimized: false };
         const status = {
             status: 'idle', version: null, progress: 0, releaseNotes: null, error: null, currentVersion: '0.25.4',
@@ -378,13 +419,27 @@ export async function withDesktopBridges(page: Page, update: Record<string, unkn
         const stub: unknown = new Proxy(function stub() {}, { get: (_, key) => (key === 'then' ? undefined : stub), apply: () => stub });
         const withStubs = (real: object) => new Proxy(real, { get: (t, key) => (key in t ? t[key as keyof typeof t] : stub) });
         Object.assign(window, {
-            gaiaAPI: withStubs({ tray: withStubs({ getConfig: async () => ({ tray }), setConfig: async () => ({ tray }) }) }),
+            gaiaAPI: withStubs({
+                tray: withStubs({ getConfig: async () => ({ tray, host }), setConfig: async () => ({ tray, host }) }),
+                backend: { getState: async () => running, restart: async () => running, onState: () => () => {} },
+            }),
             gaiaUpdater: {
                 getStatus: same, check: same, onStatusChange: () => () => {}, listReleases: async () => [], installVersion: same,
                 resumeUpdates: same, setAutoUpdate: same, setIncludePrereleases: same, downloadUpdate: same, restart: same,
             },
         });
-    }, update);
+    }, { state: update, host, running: BACKEND_RUNNING });
+}
+
+/** A desktop app whose backend crashed: `restarting` or, once restarts ran out, `stopped`. */
+export async function withCrashedBackend(page: Page, status: 'restarting' | 'stopped', since: number): Promise<void> {
+    await page.addInitScript(({ state }) => {
+        const stub: unknown = new Proxy(function stub() {}, { get: (_, key) => (key === 'then' ? undefined : stub), apply: () => stub });
+        const withStubs = (real: object) => new Proxy(real, { get: (t, key) => (key in t ? t[key as keyof typeof t] : stub) });
+        Object.assign(window, {
+            gaiaAPI: withStubs({ backend: { getState: async () => state, restart: async () => state, onState: () => () => {} } }),
+        });
+    }, { state: { ...BACKEND_RUNNING, status, since, attempt: status === 'restarting' ? 2 : 0, lastExit: { code: 1, signal: null } } });
 }
 
 /** Pick the theme before the app's first paint, the way a returning user would. */
@@ -443,6 +498,8 @@ const MEMORY_ITEMS = [
     memoryItem('k3', 'reminder', 'Dentist appointment', { due_at: '2026-10-23', context: 'personal' }),
     memoryItem('k4', 'fact', 'Bank PIN hint', { sensitive: true }),
     memoryItem('k5', 'note', 'يفضّل الاجتماعات الصباحية', { source: 'consolidation' }),
+    memoryItem('k6', 'error', "load_skill: No skill named 'note-taker'.", { source: 'error_auto' }),
+    memoryItem('k7', 'error', 'The VPN drops on hotel wifi', { source: 'user' }),
 ];
 
 const GOAL = {

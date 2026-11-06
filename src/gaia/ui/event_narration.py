@@ -355,7 +355,7 @@ def _format_bytes(size: int) -> str:
 
 
 def _error_text(payload: Mapping[str, Any]) -> str:
-    for key in ("error", "message", "detail", "display_message", "summary"):
+    for key in ("display_message", "error", "message", "detail", "summary"):
         value = payload.get(key)
         if _is_scalar(value) and _collapse(value):
             return _collapse(value)

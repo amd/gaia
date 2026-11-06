@@ -34,6 +34,13 @@ export type StatusOutcome =
  */
 export type ModelServerHealth = 'up' | 'unresponsive' | 'down';
 
+/** Boot tasks are still pending or running. A stale "initializing" with none left never holds the composer. */
+export function isStarting(status: SystemStatus | null | undefined): boolean {
+    if (status?.init_state !== 'initializing') return false;
+    if (!status.init_tasks) return true;
+    return status.init_tasks.some((t) => t.status === 'pending' || t.status === 'running');
+}
+
 export function modelServerHealth(status: SystemStatus): ModelServerHealth {
     if (status.lemonade_running) return 'up';
     return status.lemonade_error ? 'unresponsive' : 'down';
