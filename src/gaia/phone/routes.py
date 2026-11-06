@@ -15,6 +15,7 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from gaia.phone.errors import PhoneError
+from gaia.phone.numbers import masked
 from gaia.phone.service import PhoneService
 
 API_PREFIX = "/daemon/v1/phone"
@@ -128,7 +129,14 @@ def build_phone_router(
     @router.get(f"{API_PREFIX}/simulated/log", dependencies=auth)
     def simulated_log() -> dict:
         sim = service.simulated
-        return {"calls": sim.calls[-50:], "texts": sim.texts[-50:]}
+
+        def shown(entry: dict) -> dict:
+            return {**entry, "to": masked(entry["to"])}
+
+        return {
+            "calls": [shown(c) for c in sim.calls[-50:]],
+            "texts": [shown(t) for t in sim.texts[-50:]],
+        }
 
     @router.post(f"{API_PREFIX}/contacts", dependencies=auth)
     async def add_number(body: AddNumber) -> dict:

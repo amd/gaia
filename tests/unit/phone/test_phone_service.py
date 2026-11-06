@@ -554,3 +554,87 @@ def test_awake_hold_releases_on_battery(monkeypatch):
     hold = awake_mod.AwakeHold()
     hold.want(True)
     assert hold.state == {"held": False, "reason": "battery"}
+
+
+# ---------------------------------------------------------------- review regressions
+
+
+async def test_simulated_numbers_are_dropped_when_twilio_is_set_up(env, monkeypatch):
+    service, _ = env
+    await _ready(service)
+    monkeypatch.setattr(TwilioProvider, "check", lambda self, number: None)
+    service.set_credentials("AC" + "0" * 32, "tok", "+15550001111")
+    assert service.store.contacts() == []
+    assert service.settings()["enabled"] is False
+
+
+async def test_a_text_that_never_confirms_doesnt_call_on_a_text_only_rule(env):
+    service, clock = env
+    await _ready(service, texts_enabled=True)
+    service.update_settings({"rules": {"schedule_failed": {"steps": "notify_text"}}})
+    service.simulated.text_status = lambda sid: __import__(
+        "gaia.phone.provider", fromlist=["TextStatus"]
+    ).TextStatus("sent")
+    before = len(service.simulated.calls)
+    service.raise_alert("schedule")
+    await _run(service, clock, 40 * 60, step=30)
+    assert len(service.simulated.calls) == before
+
+
+async def test_an_unexpected_error_doesnt_stop_alerting(env):
+    service, clock = env
+    await _ready(service)
+    calls = {"n": 0}
+    real_tick = service.tick
+
+    async def flaky():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("keyring locked")
+        await real_tick()
+
+    service.tick = flaky
+    await service._guarded(service.tick)
+    assert "keyring locked" in service.last_error["message"]
+    await service._guarded(service.tick)
+    assert calls["n"] == 2
+
+
+async def test_health_ok_after_a_restart_clears_the_open_alert(env):
+    service, _ = env
+    await _ready(service)
+    service.raise_alert("health", reason="down before restart")
+    service.note_health(True)  # a fresh process: never saw the outage
+    assert service.alerts(open_only=True) == []
+
+
+async def test_call_limit_retries_after_midnight(env):
+    service, clock = env
+    await _ready(service, limits={"calls_per_day": 1})
+    service.raise_alert("test")
+    await _run(service, clock, 20, step=3)
+    service.raise_alert("test")
+    await _run(service, clock, 20, step=3)
+    held = [a for a in service.alerts(open_only=True) if a["held"] == "call_limit"]
+    assert held
+    before = len(service.simulated.calls)
+    await _run(service, clock, 13 * 3600, step=600)
+    assert len(service.simulated.calls) > before
+
+
+def test_concurrent_raises_open_one_alert(env):
+    import threading
+
+    service, _ = env
+    out = []
+    threads = [
+        threading.Thread(
+            target=lambda: out.append(service.raise_alert("schedule")["id"])
+        )
+        for _ in range(8)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(set(out)) == 1

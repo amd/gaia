@@ -9,16 +9,16 @@ access: they can only be changed at the PC.
 
 from __future__ import annotations
 
-import logging
 from typing import Any, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from gaia.logger import get_logger
 from gaia.ui.security import require_local_pc
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter(tags=["phone"])
 
@@ -103,8 +103,10 @@ def _make(method: str, browser_path: str, daemon_path: str):
 
 
 for _method, _path, _daemon_path in _ROUTES:
-    # Reads are fine over mobile access; every change happens at the PC.
-    deps = [] if _method == "GET" else [Depends(require_local_pc)]
+    # Reads are fine over mobile access; every change happens at the PC. The
+    # Simulated phone's log holds live codes, so it stays on the PC too.
+    local_only = _method != "GET" or _path == "simulated/log"
+    deps = [Depends(require_local_pc)] if local_only else []
     router.add_api_route(
         f"/api/phone/{_path}",
         _make(_method, _path, _daemon_path),

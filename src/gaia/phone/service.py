@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import threading
 import hashlib
 import hmac
 import secrets as _secrets
@@ -125,6 +126,8 @@ class PhoneService:
         self._health_reason = ""
         self._health_alerted = False
         self._awake = awake
+        self._raise_lock = threading.Lock()
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._awake_checked = -1e18
 
     # ---------------------------------------------------------------- settings
@@ -144,7 +147,7 @@ class PhoneService:
         self._provider = None
         # Apply keep-awake on the next tick rather than up to a minute later.
         self._awake_checked = -1e18
-        self._wake.set()
+        self._wake_up()
         return updated
 
     def set_credentials(
@@ -156,8 +159,12 @@ class PhoneService:
         provider.check(number)
         self.secrets.set(_SECRET_SID, account_sid.strip())
         self.secrets.set(_SECRET_TOKEN, auth_token.strip())
+        # A simulated code reached no phone, so those numbers were never proven.
+        dropped = self.store.remove_contacts_verified_by("simulated")
         settings = self.settings()
         settings.update(provider="twilio", from_number=number)
+        if dropped:
+            settings["enabled"] = False
         self.store.put_settings(settings)
         self._provider = None
         return self.status()
@@ -294,7 +301,9 @@ class PhoneService:
             )
         self.store.update_verification(vid, state="done")
         existing = self.store.contacts()
-        contact_id = self.store.add_contact(row["number"], label)
+        contact_id = self.store.add_contact(
+            row["number"], label, verified_by=self.settings()["provider"]
+        )
         for other in existing:
             await self._notice(other["id"], templates.ADDED_LINE)
         return {"id": contact_id, "label": label, "number": masked(row["number"])}
@@ -388,6 +397,13 @@ class PhoneService:
     ) -> Optional[Dict[str, Any]]:
         """Open an alert, or join the open one for the same rule. Returns None
         when the rule for *source* is off."""
+        # Check-then-insert under one lock, so two raises can't both open one.
+        with self._raise_lock:
+            return self._raise_alert(source, reason=reason, rule_key=rule_key)
+
+    def _raise_alert(
+        self, source: str, *, reason: str, rule_key: Optional[str]
+    ) -> Optional[Dict[str, Any]]:
         if source not in SOURCES:
             raise PhoneError(
                 "bad_request", f"source must be one of {', '.join(SOURCES)}"
@@ -436,7 +452,7 @@ class PhoneService:
                 "call_due_at": call_at,
             }
         )
-        self._wake.set()
+        self._wake_up()
         return self.store.alert(alert_id)
 
     def handle_alert(self, alert_id: int) -> Dict[str, Any]:
@@ -459,10 +475,10 @@ class PhoneService:
         """GAIA's model server started (``ok``) or failed to. Called from any
         thread; the alert itself is raised by :meth:`tick`."""
         if ok:
-            if self._unhealthy_since is not None:
-                self._unhealthy_since = None
-                self._health_alerted = False
-                self.clear_rule("gaia_down")
+            self._unhealthy_since = None
+            self._health_alerted = False
+            # Always: an alert left open by a run before a restart must stop too.
+            self.clear_rule("gaia_down")
             return
         if self._unhealthy_since is None:
             self._unhealthy_since = self.clock()
@@ -505,10 +521,11 @@ class PhoneService:
         """Advance every open alert and poll every live delivery once."""
         settings = self.settings()
         now = self.clock()
+        unhealthy_since = self._unhealthy_since  # set from another thread
         if (
-            self._unhealthy_since is not None
+            unhealthy_since is not None
             and not self._health_alerted
-            and now - self._unhealthy_since >= HEALTH_ALERT_SECONDS
+            and now - unhealthy_since >= HEALTH_ALERT_SECONDS
         ):
             self._health_alerted = True
             self.raise_alert("health", reason=self._health_reason)
@@ -569,8 +586,13 @@ class PhoneService:
                 return
             limit = self._call_limit_reason(alert, settings)
             if limit:
-                self.store.update_alert(alert["id"], held=limit, call_due_at=None)
+                # Try again once the daily limit resets at local midnight.
+                self.store.update_alert(
+                    alert["id"], held=limit, call_due_at=self._day_start() + 86400
+                )
                 return
+            if alert["held"] in ("call_limit", "agent_call_limit"):
+                self.store.update_alert(alert["id"], held="")
             made = alert["calls_made"]
             target = (
                 contacts[0] if made < 2 else contacts[min(made - 1, len(contacts) - 1)]
@@ -634,6 +656,7 @@ class PhoneService:
                 if not status.answered_by
                 else f"{status.status}:{status.answered_by}"
             )
+            self._polled_at.pop(delivery["id"], None)
             self.store.update_delivery(
                 delivery["id"],
                 state="done",
@@ -644,6 +667,7 @@ class PhoneService:
             await self._after_call(delivery, reached=status.reached)
         else:
             assert isinstance(status, TextStatus)
+            self._polled_at.pop(delivery["id"], None)
             self.store.update_delivery(
                 delivery["id"],
                 state="done" if status.status == "delivered" else "failed",
@@ -653,6 +677,9 @@ class PhoneService:
             )
 
     async def _after_call(self, delivery: Dict[str, Any], *, reached: bool) -> None:
+        # A text that ended never schedules a call: the rule may be text-only.
+        if delivery.get("channel", "call") != "call":
+            return
         if delivery["purpose"] != "alert" or delivery["alert_id"] is None:
             return
         alert = self.store.alert(delivery["alert_id"])
@@ -852,16 +879,37 @@ class PhoneService:
                 await self._after_call(delivery, reached=False)
 
     async def run(self) -> None:
-        await self.resume()
+        self._loop = asyncio.get_running_loop()
+        await self._guarded(self.resume)
         while True:
-            try:
-                await self.tick()
-            except PhoneError as e:
-                self._note_error(e)
+            await self._guarded(self.tick)
             self._wake.clear()
             # Woken early by a new alert, else once a second.
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._wake.wait(), TICK_SECONDS)
+
+    async def _guarded(self, step) -> None:
+        """Run one step; a failure is reported and the loop goes on, so one bad
+        poll never stops alerting for good."""
+        try:
+            await step()
+        except PhoneError as e:
+            self._note_error(e)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            log.exception("phone: alert loop step failed")
+            self.last_error = {
+                "code": "provider_error",
+                "message": f"Phone alerts hit an error: {type(e).__name__}: {e}"[:300],
+                "at": self.clock(),
+            }
+
+    def _wake_up(self) -> None:
+        """Wake the loop from any thread."""
+        loop = getattr(self, "_loop", None)
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(self._wake.set)
 
     def start(self) -> None:
         if self._task is None:

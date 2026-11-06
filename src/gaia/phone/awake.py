@@ -43,6 +43,8 @@ class AwakeHold:
         self._release = threading.Event()
 
     def want(self, on: bool) -> None:
+        if self.held and self._proc is not None and self._proc.poll() is not None:
+            self._proc, self.held, self.reason = None, False, "unsupported"
         if on and not on_ac_power():
             on = False
             self.reason = "battery"
@@ -79,8 +81,11 @@ class AwakeHold:
                     "--who=GAIA",
                     "--why=Phone alerts are on",
                     "--mode=block",
-                    "sleep",
-                    "infinity",
+                    # Ends with the daemon, even one that is killed.
+                    "tail",
+                    f"--pid={os.getpid()}",
+                    "-f",
+                    "/dev/null",
                 ]
                 if tool
                 else None
@@ -99,7 +104,15 @@ class AwakeHold:
             self.reason = "unsupported"
             log.warning("phone: could not keep the PC awake: %s", e)
             return
-        self.held, self.reason = True, "held"
+        try:
+            code = self._proc.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            self.held, self.reason = True, "held"
+            return
+        # It exited at once: no logind, or not allowed to inhibit sleep.
+        self._proc = None
+        self.reason = "unsupported"
+        log.warning("phone: the sleep inhibitor exited with %s", code)
 
     def _windows_hold(self) -> None:
         import ctypes

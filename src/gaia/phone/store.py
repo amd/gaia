@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS contacts (
     number TEXT NOT NULL UNIQUE,
     label TEXT NOT NULL DEFAULT '',
     position INTEGER NOT NULL,
-    verified_at REAL NOT NULL
+    verified_at REAL NOT NULL,
+    verified_by TEXT NOT NULL DEFAULT 'twilio'  -- provider whose code proved it
 );
 CREATE TABLE IF NOT EXISTS verifications (
     id TEXT PRIMARY KEY,
@@ -91,6 +92,14 @@ class PhoneStore:
         self._db.row_factory = sqlite3.Row
         with self._lock:
             self._db.executescript(SCHEMA)
+            columns = {
+                r["name"] for r in self._db.execute("PRAGMA table_info(contacts)")
+            }
+            if "verified_by" not in columns:
+                self._db.execute(
+                    "ALTER TABLE contacts ADD COLUMN verified_by TEXT NOT NULL "
+                    "DEFAULT 'twilio'"
+                )
             self._db.commit()
 
     @contextmanager
@@ -145,16 +154,21 @@ class PhoneStore:
             ).fetchone()
         return dict(row) if row else None
 
-    def add_contact(self, number: str, label: str) -> int:
+    def add_contact(self, number: str, label: str, *, verified_by: str) -> int:
         with self.tx() as db:
             pos = db.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM contacts")
             position = pos.fetchone()[0]
             cur = db.execute(
-                "INSERT INTO contacts (number, label, position, verified_at) "
-                "VALUES (?, ?, ?, ?)",
-                (number, label, position, time.time()),
+                "INSERT INTO contacts (number, label, position, verified_at, "
+                "verified_by) VALUES (?, ?, ?, ?, ?)",
+                (number, label, position, time.time(), verified_by),
             )
             return int(cur.lastrowid)
+
+    def remove_contacts_verified_by(self, provider: str) -> int:
+        with self.tx() as db:
+            cur = db.execute("DELETE FROM contacts WHERE verified_by = ?", (provider,))
+            return cur.rowcount
 
     def remove_contact(self, contact_id: int) -> None:
         with self.tx() as db:

@@ -20,6 +20,8 @@ logger = get_logger(__name__)
 _URL_ENV = "GAIA_HOST_CUSTODY_URL"
 _SECRET_ENV = "GAIA_HOST_CUSTODY_SECRET"
 _TIMEOUT = 10.0
+#: Asked while the agent is built, so a hung daemon must not hold that up.
+_CHECK_TIMEOUT = 3.0
 
 
 def _custody() -> Optional[tuple]:
@@ -39,12 +41,13 @@ def agent_alerts_allowed() -> bool:
         response = httpx.get(
             f"{url}/host/v1/alerts",
             headers={"Authorization": f"Bearer {secret}"},
-            timeout=_TIMEOUT,
+            timeout=_CHECK_TIMEOUT,
         )
-    except httpx.HTTPError as e:
+        body = response.json() if response.status_code == 200 else {}
+    except (httpx.HTTPError, ValueError) as e:
         logger.info("phone alerts unavailable: %s", e)
         return False
-    return response.status_code == 200 and response.json().get("allowed") is True
+    return isinstance(body, dict) and body.get("allowed") is True
 
 
 class AlertToolsMixin:
