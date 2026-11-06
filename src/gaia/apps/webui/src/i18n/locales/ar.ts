@@ -894,7 +894,6 @@ const messages: Messages = {
     'setup.checks.count': 'الفحوصات المكتملة: {done} من {total}',
     'setup.checks.device': 'المعالج وGPU وNPU',
     'setup.checks.npu': 'Ryzen AI NPU',
-    'setup.checks.memory': 'الذاكرة',
     'setup.checks.disk': 'مساحة القرص',
     'setup.checks.diskValue': '{size} متاحة',
     'setup.checks.server': 'محرك الذكاء الاصطناعي',
