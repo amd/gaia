@@ -71,6 +71,7 @@ on:
       - 'docs/releases/**'
       # Doc pages unit tests check against the code (drift and runnable-command tests).
       - 'docs/connectors/google.mdx'
+      - 'docs/connectors/slack.mdx'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/chat.mdx'
       - 'docs/guides/gaia.mdx'
@@ -142,6 +143,7 @@ on:
       - 'docs/releases/**'
       # Doc pages unit tests check against the code (drift and runnable-command tests).
       - 'docs/connectors/google.mdx'
+      - 'docs/connectors/slack.mdx'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/chat.mdx'
       - 'docs/guides/gaia.mdx'
