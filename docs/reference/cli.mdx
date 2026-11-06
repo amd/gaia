@@ -532,7 +532,9 @@ memory holds, up to 262,144 tokens: 256K on a Strix Halo, about 88K on a 32 GB G
 (see [Context length follows memory](/guides/ai-providers#context-length-follows-memory)). Gemma is
 still downloaded, since vision and document-image extraction load it by name. Every
 smaller PC gets Gemma alone. A `default_model` you set yourself always wins and is
-downloaded instead of Gemma; if Lemonade explicitly reports the configured
+downloaded instead of Gemma. With no local `default_model`, a downloaded local
+model you last chatted on (for example one picked after setting up on a cloud
+model) counts as set up too, so nothing else is downloaded for chat. If Lemonade explicitly reports the configured
 vision model as missing, image questions ask you to download it first (for the
 built-in VLM, use `gaia download --agent vlm`) instead of silently starting the
 download during image analysis. Gemma is about 6 GB, and `gaia init` also warns

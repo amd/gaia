@@ -102,6 +102,7 @@ const KeepAwake = require("./services/keep-awake.cjs");
 const PortManager = require("./services/port-manager.cjs");
 const { isGaiaBackendProcess } = require("./services/backend-orphan.cjs");
 const { showBackendCrashDialog } = require("./services/backend-crash-dialog.cjs");
+const { createBackendSupervisor } = require("./services/backend-supervisor.cjs");
 const { buildIndexQuery, INSTALL_SCREEN_QUERY } = require("./services/index-query.cjs");
 const backendInstaller = require("./services/backend-installer.cjs");
 const { createEngineInstall } = require("./services/engine-install.cjs");
@@ -214,6 +215,8 @@ const APP_NAME = "GAIA";
 // from prior aborted sessions (issue #782 / T5).
 const DEFAULT_BACKEND_PORT = 4200;
 const STARTUP_TIMEOUT = 30000;
+// A restart must answer within this, or it counts as a failed try.
+const RESTART_TIMEOUT = 90000;
 
 // Parse CLI args (T11: --minimized flag for auto-start)
 const startMinimized = process.argv.includes("--minimized");
@@ -244,6 +247,8 @@ let backendProcess = null;
 let backendStarting = null;
 // Set as cleanup() begins; startup stops at its next step once it is.
 let shutdownStarted = false;
+// Set once an update install starts quitting the app.
+let updateQuitStarted = false;
 let backendPort = DEFAULT_BACKEND_PORT;
 let healthCheckUrl = `http://localhost:${backendPort}/api/health`;
 let backendStderrTail = [];
@@ -280,6 +285,11 @@ const portManager = new PortManager({
  * Prevents minimize-to-tray from intercepting the close event.
  */
 let isQuitting = false;
+
+/** Any quit is under way, an update install's included: start no backend. */
+function quitStarted() {
+  return shutdownStarted || isQuitting || updateQuitStarted;
+}
 
 // ── Backend Process ────────────────────────────────────────────────────────
 
@@ -389,6 +399,8 @@ async function startBackend() {
       env: {
         ...process.env,
         GAIA_APP_PID: String(process.pid),
+        // Piped stdout is block-buffered: a dying backend's last lines would never arrive.
+        PYTHONUNBUFFERED: "1",
         ...(app.isPackaged && {
           GAIA_BUNDLED_LEMONADE_DIR: path.join(process.resourcesPath, "vendor", "lemonade"),
         }),
@@ -434,17 +446,16 @@ async function startBackend() {
   }
 
   child.on("exit", (code, signal) => {
-    if (code !== 0 && code !== null) {
-      console.error(`Backend exited with code ${code} (signal=${signal})`);
+    // Any exit we didn't ask for leaves the window without a backend, even code 0.
+    const crashed = !isIntentionalKill && !isQuitting;
+    if (crashed) {
+      console.error(`Backend exited with code ${code} (signal=${signal}, pid=${child.pid})`);
     }
-    const crashed = !isIntentionalKill && code !== 0 && code !== null;
-    backendProcess = null;
+    if (backendProcess === child) backendProcess = null;
     if (trayManager && !isQuitting) trayManager.setBackendAlive(false);
 
-    if (crashed && !isQuitting) {
-      // Fire-and-forget — don't block the event loop.
-      void handleBackendCrash(code, signal);
-    }
+    // Once restarts run out, the supervisor's onStopped shows the crash dialog.
+    if (crashed) backendSupervisor.crashed({ code, signal });
 
     // Remove pidfile on exit to avoid leaving stale PID behind.
     try {
@@ -461,12 +472,82 @@ async function startBackend() {
     }
   });
 
+  // "close" waits for stdio to drain, so the tail holds the backend's last words.
+  child.once("close", (code, signal) => {
+    if (isIntentionalKill || isQuitting) return;
+    const tail = backendStderrTail.length ? backendStderrTail.join("\n") : "(nothing on stderr)";
+    console.error(`[main] Backend pid ${child.pid} closed (code=${code}, signal=${signal}). Last stderr lines:\n${tail}`);
+  });
+
   return child;
 }
 
 /**
+ * Start a new backend for the supervisor and resolve once it answers.
+ * Rejects when it exits first or never answers, so the supervisor retries.
+ */
+async function restartBackend() {
+  backendStarting = startBackend();
+  const child = await backendStarting;
+  if (!child) {
+    throw new Error("GAIA's backend program is missing, so it can't restart. Reinstall GAIA.");
+  }
+  if (quitStarted()) {
+    isIntentionalKill = true;
+    await portManager.killBackend(child);
+    throw new Error("GAIA is quitting, so the restarted backend was stopped.");
+  }
+  backendProcess = child;
+  const alive = () => child.exitCode === null && child.signalCode === null;
+  const ready = await waitForBackend(RESTART_TIMEOUT, alive);
+  if (!ready) {
+    if (!alive()) {
+      throw new Error(`The backend exited (code ${child.exitCode}, signal ${child.signalCode}) before it answered.`);
+    }
+    isIntentionalKill = true;
+    await portManager.killBackend(child);
+    throw new Error(`The backend did not answer within ${RESTART_TIMEOUT / 1000} s.`);
+  }
+  console.log(`[main] Backend restarted on port ${backendPort} (pid=${child.pid})`);
+  if (trayManager) {
+    trayManager.setBackendPort(backendPort);
+    trayManager.setBackendAlive(true);
+  }
+  return { port: backendPort };
+}
+
+/** What the renderer needs: the supervisor's state plus the API base to use. */
+function backendStateForRenderer(state) {
+  return { ...state, apiBase: state.port ? buildIndexQuery(state.port).api : null };
+}
+
+const backendSupervisor = createBackendSupervisor({
+  start: restartBackend,
+  onStopped: (state) => {
+    const { code = null, signal = null } = state.lastExit || {};
+    void handleBackendCrash(code, signal);
+  },
+  onState: (state) => {
+    console.log(
+      `[main] Backend ${state.status}` +
+        (state.status === "restarting" ? ` (try ${state.attempt} of ${state.maxRestarts})` : "") +
+        (state.lastError ? `: ${state.lastError}` : "")
+    );
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("backend:state", backendStateForRenderer(state));
+    }
+  },
+});
+
+ipcMain.handle("backend:get-state", () => backendStateForRenderer(backendSupervisor.getState()));
+ipcMain.handle("backend:restart", () => {
+  backendSupervisor.restartNow();
+  return backendStateForRenderer(backendSupervisor.getState());
+});
+
+/**
  * Tell the user the backend stopped and offer Restart / Save diagnostics /
- * Quit. Invoked from child.on("exit") when the kill was NOT initiated by us.
+ * Quit. Invoked by the supervisor's onStopped once automatic restarts run out.
  */
 async function handleBackendCrash(code, signal) {
   autoUpdater.reportStartFailure();
@@ -488,11 +569,11 @@ async function handleBackendCrash(code, signal) {
   }
 }
 
-async function waitForBackend(timeoutMs) {
+async function waitForBackend(timeoutMs, isAlive = () => true) {
   const start = Date.now();
   const http = require("http");
 
-  while (Date.now() - start < timeoutMs) {
+  while (Date.now() - start < timeoutMs && isAlive()) {
     try {
       await new Promise((resolve, reject) => {
         const req = http.get(healthCheckUrl, (res) => {
@@ -1213,6 +1294,7 @@ app.whenReady().then(async () => {
   if (shutdownStarted) return;
   backendStarting = startBackend();
   backendProcess = await backendStarting;
+  if (backendProcess) backendSupervisor.running(backendPort);
   if (shutdownStarted) {
     console.log("[main] Quit during startup — not opening the window");
     return;
@@ -1344,6 +1426,7 @@ const quitGuard = installQuitGuard({
     // Mark any subsequent backend exit as intentional so we don't pop the
     // crash dialog during normal shutdown.
     isIntentionalKill = true;
+    backendSupervisor.stop();
   },
   onError: (err) => {
     console.error("[main] Quit check failed:", err);
@@ -1355,12 +1438,19 @@ const quitGuard = installQuitGuard({
   },
 });
 
+// The installer is already running: a restart now would hold its files open.
+electronAutoUpdater.on("before-quit-for-update", () => {
+  updateQuitStarted = true;
+  backendSupervisor.stop();
+});
+
 quitOnTermSignal({ proc: process, app, guard: quitGuard });
 
 installQuitCleanup({ app, cleanup });
 
 async function cleanup() {
   shutdownStarted = true;
+  backendSupervisor.stop();
   const installStopped = engineInstall ? engineInstall.stop() : null;
 
   // Phase F: tear down auto-updater timers and IPC handlers.

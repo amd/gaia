@@ -111,6 +111,9 @@ async function writeDiagnosticsBundle(destPath, logger) {
     "gaia.log",
     "electron-main.log",
     "electron-install-state.json",
+    // Fatal-crash stacks from the backend (src/gaia/ui/fault_log.py), and its rotated copy.
+    "logs/backend-faults.log",
+    "logs/backend-faults.log.1",
   ];
 
   const present = candidates.filter((rel) =>

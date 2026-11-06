@@ -106,6 +106,21 @@ export type TrayCommand =
   | { type: 'open-settings'; section: 'general' }
   | { type: 'refresh-status' };
 
+/** services/backend-supervisor.cjs state, plus the API base for its port. */
+export interface BackendLifecycle {
+  status: 'running' | 'restarting' | 'stopped';
+  port: number | null;
+  /** When this outage began (ms epoch), or null while running. */
+  since: number | null;
+  attempt: number;
+  maxRestarts: number;
+  /** When the next try starts, or null while one is starting. */
+  nextAttemptAt: number | null;
+  lastExit: { code: number | null; signal: string | null } | null;
+  lastError: string | null;
+  apiBase: string | null;
+}
+
 /** The part of window.gaiaAPI (preload.cjs) the UI calls. Present only in Electron. */
 export interface GaiaElectronAPI {
   notification: {
@@ -126,6 +141,14 @@ export interface GaiaElectronAPI {
   dialog: {
     /** The OS folder picker. Resolves the chosen absolute path, or null when cancelled. */
     pickFolder: (defaultPath?: string) => Promise<string | null>;
+  };
+  /** GAIA's backend process, as services/backend-supervisor.cjs sees it. */
+  backend: {
+    getState: () => Promise<BackendLifecycle>;
+    /** Restart GAIA: start the backend now, with a fresh restart budget. */
+    restart: () => Promise<BackendLifecycle>;
+    /** Returns an unsubscribe function. */
+    onState: (cb: (state: BackendLifecycle) => void) => () => void;
   };
   tray: {
     getConfig: () => Promise<TrayConfig>;
