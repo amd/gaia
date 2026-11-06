@@ -3440,13 +3440,13 @@ gaia schedule daemon
 
 ### Sinks
 
-A sink decides where each scheduled run's output goes. Set it with `--sink` on `add` (default `stdout`). `add` rejects a sink that could never deliver (an unknown name, `telegram` without `--to`, bare `file` without a path, or `notification` on Windows) and stores nothing. The Telegram bot token is only checked when a run delivers, because the daemon reads it from its own environment.
+A sink decides where each scheduled run's output goes. Set it with `--sink` on `add` (default `stdout`). `add` rejects a sink that could never deliver (an unknown name, `telegram` without `--to`, or bare `file` without a path) and stores nothing. The Telegram bot token is only checked when a run delivers, because the daemon reads it from its own environment.
 
 | Sink | Description |
 |------|-------------|
 | `stdout` | Print output to the terminal (default) |
 | `file:<path>` | Append output to the given file (created if missing) |
-| `notification` | Desktop notification (macOS `osascript` / Linux `notify-send`) |
+| `notification` | Desktop notification (macOS `osascript` / Linux `notify-send` / Windows `plyer` or PowerShell) |
 | `telegram` | Send via a Telegram bot — needs a bot token (`GAIA_TELEGRAM_TOKEN` env var or `sink_args.token` in `schedules.toml`) and a recipient via `--to` |
 
 **Telegram example:**
