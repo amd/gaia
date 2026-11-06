@@ -1230,6 +1230,16 @@ def build_parser():
         help="With -p: cap on agent steps (default: the agent's own limit)",
     )
     parser.add_argument(
+        "--time-limit",
+        dest="print_time_limit",
+        type=_positive_int,
+        default=None,
+        metavar="SECONDS",
+        help="With -p: wall-clock seconds the turn may take. The agent is told "
+        "when time is running short, wraps up before the limit, and is stopped "
+        "at it, so the answer is still printed (default: no limit)",
+    )
+    parser.add_argument(
         "--attempts",
         dest="print_attempts",
         type=_positive_int,
@@ -4954,6 +4964,7 @@ def main():
         "--output-format": args.print_output_format is not None,
         "--verbose": args.print_verbose,
         "--max-steps": args.print_max_steps is not None,
+        "--time-limit": args.print_time_limit is not None,
         "--attempts": args.print_attempts is not None,
         "--dangerously-skip-permissions": args.print_skip_permissions,
         "--full-access": args.print_full_access,
@@ -4999,6 +5010,7 @@ def main():
                 skip_permissions=args.print_skip_permissions,
                 full_access=args.print_full_access,
                 base_url=args.base_url,
+                time_limit=args.print_time_limit,
             )
         )
 
