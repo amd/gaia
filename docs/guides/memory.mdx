@@ -286,7 +286,7 @@ Recurring reminders advance their date automatically each time they fire (e.g. *
 
 ## Knowledge Categories
 
-Every memory entry belongs to one of six categories:
+Every memory entry belongs to one of nine categories. These six can be created in chat:
 
 | Category | What it stores | Example |
 |----------|---------------|---------|
@@ -296,6 +296,14 @@ Every memory entry belongs to one of six categories:
 | **skill** | Learned workflows and multi-step patterns | "To deploy: run tests, build, push to staging, verify, promote" |
 | **note** | Free-form observations, journal entries, or meeting notes | "Standup 2026-04-01: API migration complete" |
 | **reminder** | Time-sensitive items to follow up on | "Check if the PR was merged by Friday" (use with `due_at`) |
+
+The other three can't be created from a chat turn. They come from onboarding, system context collection, the `gaia memory` commands, and reviewed changes in the memory dashboard:
+
+| Category | What it stores | Example |
+|----------|---------------|---------|
+| **profile** | Background about you from onboarding and discovery | "User's primary tools and languages: Python, TypeScript" |
+| **system** | Facts about your machine and GAIA install, if you turn system context on | GAIA and Lemonade versions, OS, CPU/GPU/RAM, installed apps |
+| **permission** | Approvals for goals the agent infers in autonomous mode | "Always accept maintenance tasks" |
 
 The agent automatically categorizes knowledge when you ask it to remember something. You can also specify the category explicitly:
 
