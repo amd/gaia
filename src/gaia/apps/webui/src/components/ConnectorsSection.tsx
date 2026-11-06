@@ -317,6 +317,7 @@ function ConnectorTile({
                     {connector.configured && (
                         <ConnectorAgentGrants
                             connectorId={connector.id}
+                            connectorName={connector.display_name}
                             connectorType={connector.type}
                         />
                     )}
@@ -1204,9 +1205,11 @@ function AgentMcpTile({
 
 function ConnectorAgentGrants({
     connectorId,
+    connectorName,
     connectorType,
 }: {
     connectorId: string;
+    connectorName: string;
     connectorType: string;
 }) {
     const t = useT();
@@ -1307,12 +1310,12 @@ function ConnectorAgentGrants({
                     <div className="grants-header grants-header--activations">
                         {t('settings.connectors.activeFor')}
                     </div>
-                    <div className="grants-help">{t('settings.connectors.activationHelp')}</div>
                     {activatableAgents.map((agent) => (
                         <AgentActivationCard
                             key={`activation-${agent.namespaced_agent_id}`}
                             agent={agent}
                             connectorId={connectorId}
+                            connectorName={connectorName}
                             active={Boolean(activations[agent.namespaced_agent_id!])}
                             grantedScopes={grants[agent.namespaced_agent_id!] ?? []}
                             onChanged={() => void load()}
@@ -1343,6 +1346,7 @@ function ConnectorAgentGrants({
 function AgentActivationCard({
     agent,
     connectorId,
+    connectorName,
     active,
     grantedScopes,
     onChanged,
@@ -1353,6 +1357,7 @@ function AgentActivationCard({
         required_connections?: Array<{ connector_id: string; scopes: string[]; reason: string }>;
     };
     connectorId: string;
+    connectorName: string;
     active: boolean;
     grantedScopes: string[];
     onChanged: () => void;
@@ -1409,7 +1414,7 @@ function AgentActivationCard({
             <div className="grant-scope-list">
                 <label className="grant-scope-item">
                     <span className="grant-scope-label">
-                        {localActive ? t('settings.connectors.toolsVisible') : t('settings.connectors.toolsHidden')}
+                        {t(localActive ? 'settings.connectors.toolsVisible' : 'settings.connectors.toolsHidden', { name: connectorName })}
                     </span>
                     <span className="toggle-switch">
                         <input

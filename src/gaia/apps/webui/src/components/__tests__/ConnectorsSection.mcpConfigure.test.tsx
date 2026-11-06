@@ -179,9 +179,9 @@ describe('MCP connector configure panel', () => {
         await openTile(mcpRow({ id: 'mcp-slack', display_name: 'Slack', configured: true }));
 
         expect(await screen.findByText('Who can use it')).toBeInTheDocument();
-        expect(screen.getByRole('checkbox', { name: 'Can use these tools' })).toBeChecked();
+        expect(screen.getByRole('checkbox', { name: 'Can use Slack in chat' })).toBeChecked();
         expect(screen.queryByText('No agents require access to this connector.')).toBeNull();
-        expect(screen.queryByText(/Activations gate/)).toBeNull();
+        expect(screen.queryByText(/agent/i)).toBeNull();
         useChatStore.setState({ agents: [] as never });
     });
 });

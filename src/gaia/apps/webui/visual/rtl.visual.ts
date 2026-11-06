@@ -858,7 +858,7 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
-        test('a connected server shows one switch for GAIA, its help no larger than its heading', async ({ page }) => {
+        test('a connected server shows one switch for GAIA that names the service', async ({ page }) => {
             await openConnectors(page, [{
                 id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', description: 'Read channels, threads, and DMs in your Slack workspace.',
                 configured: true, configurable: true, enabled: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [],
@@ -871,8 +871,8 @@ for (const locale of ['ar', 'en']) {
             const card = page.locator('.grant-agent-card');
             await expect(card).toBeVisible();
             await expect(page.locator('.grants-empty')).toHaveCount(0);
-            const size = (sel: string) => page.locator(sel).first().evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
-            expect(await size('.grants-help')).toBeLessThanOrEqual(await size('.grants-header'));
+            await expect(card.locator('.grant-scope-label')).toContainText('Slack');
+            await expect(page.locator('.connection-grants')).not.toContainText(/agent|وكيل/i);
             await card.scrollIntoViewIfNeeded();
             await shot(page, `connectors-${locale}-mcp-switch`);
             expect(await audit(page)).toEqual([]);
