@@ -296,6 +296,7 @@ Output format: Clean markdown with the ACTUAL text from the image."""
             LemonadeClientError,
             _model_ids_match,
             cloud_model_provider,
+            downloaded_vision_model,
         )
         from gaia.llm.surface_hints import VISION_DOWNLOAD_HINT
 
@@ -320,6 +321,15 @@ Output format: Clean markdown with the ACTUAL text from the image."""
             or entry.get("downloaded") is not False
             or cloud_model_provider(self.vlm_model, entry)
         ):
+            self._vlm_catalog_checked = True
+            return
+
+        substitute = downloaded_vision_model(self.vlm_model, entries, self.client)
+        if substitute:
+            logger.info(
+                f"Reading images with {substitute}: {self.vlm_model} is not downloaded"
+            )
+            self.vlm_model = substitute
             self._vlm_catalog_checked = True
             return
 
