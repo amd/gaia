@@ -574,6 +574,20 @@ def test_tool_plan_step_is_quoted_with_curly_apostrophes():
             id="plan-awaiting-confirmation",
         ),
         pytest.param(
+            "Here's the plan:\n"
+            "1. I'll use the `list_files` tool to find old files.\n"
+            "2. I'll move them to Archive.\n"
+            "Want me to go ahead?",
+            id="plan-question-right-under-the-list",
+        ),
+        pytest.param(
+            "Done. Here's what happened:\n"
+            "1. I'll use the `list_files` tool again if you add files.\n"
+            "2. I'll keep the Archive folder as is.\n"
+            "Moved 12 files.",
+            id="results-line-right-under-the-list",
+        ),
+        pytest.param(
             "Here's what I propose:\n"
             "1. I'll use the `list_files` tool to find the old files.\n"
             "2. I'll move them to Archive.\n\n"

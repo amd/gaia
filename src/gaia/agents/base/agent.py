@@ -1643,11 +1643,23 @@ def _tool_plan_step(paragraphs: List[str]) -> Optional[Tuple[str, str]]:
     for plan_at in (-1, -2):
         if len(paragraphs) < -plan_at:
             return None
-        closing = paragraphs[plan_at + 1 :] if plan_at == -2 else []
-        if closing and (
-            len(closing[0]) > _CLOSING_LINE_MAX_CHARS
-            or re.search(r"\d", closing[0])
-            or _ASKS_GO_AHEAD_PATTERN.search(closing[0].replace("\u2019", "'"))
+        lines = paragraphs[plan_at].splitlines()
+        last_item = max(
+            (i for i, line in enumerate(lines) if _PLAN_ITEM_PATTERN.match(line)),
+            default=-1,
+        )
+        if last_item < 0:
+            continue
+        # A closing line can sit right under the list, with no blank line.
+        tail = "\n".join(
+            line for line in lines[last_item + 1 :] if not line[:1].isspace()
+        ).strip()
+        closing = [c for c in [tail, *paragraphs[plan_at + 1 :]] if c]
+        if any(
+            len(c) > _CLOSING_LINE_MAX_CHARS
+            or re.search(r"\d", c)
+            or _ASKS_GO_AHEAD_PATTERN.search(c.replace("\u2019", "'"))
+            for c in closing
         ):
             return None
         items = [
