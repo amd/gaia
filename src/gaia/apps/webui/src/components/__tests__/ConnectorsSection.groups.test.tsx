@@ -5,7 +5,8 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
 import type { ConnectorRow } from '../../types';
-import { ConnectorsSection } from '../ConnectorsSection';
+import { useChatStore } from '../../stores/chatStore';
+import { ConnectorsSection, HOME_ASSISTANT_CONNECTOR } from '../ConnectorsSection';
 
 vi.mock('../../services/api');
 vi.mock('../../hooks/useConnectorsSSE', () => ({ useConnectorsSSE: () => {} }));
@@ -68,5 +69,17 @@ describe('ConnectorsSection groups', () => {
         expect(screen.queryByText('Notion')).not.toBeInTheDocument();
         fireEvent.change(screen.getByRole('searchbox', { name: 'Search connectors' }), { target: { value: 'nothing here' } });
         expect(screen.getByText('No connectors match.')).toBeInTheDocument();
+    });
+
+    it('lists no generic Home Assistant tile and points to Smart home instead', async () => {
+        list([row('Notion', 'mcp_server'), row(HOME_ASSISTANT_CONNECTOR, 'mcp_server', { display_name: 'Home Assistant' })]);
+        const openSettings = vi.fn();
+        useChatStore.setState({ openSettings });
+        render(<ConnectorsSection />);
+        await screen.findByText('Notion');
+        expect(screen.queryByText('Home Assistant')).not.toBeInTheDocument();
+        expect(group('MCP servers').querySelectorAll('.connector-tile')).toHaveLength(1);
+        fireEvent.click(screen.getByRole('button', { name: 'Open Smart home' }));
+        expect(openSettings).toHaveBeenCalledWith('smartHome');
     });
 });

@@ -145,20 +145,24 @@ class MCPClientMixin:
                 "Use format: {'command': 'npx', 'args': ['-y', 'server']}"
             )
 
-        # Check transport type - only stdio is supported
         transport_type = config.get("type", "stdio")
-        if transport_type != "stdio":
+        if transport_type not in ("stdio", "http"):
             raise ValueError(
-                f"GAIA MCP client only supports stdio transport at this time. "
+                f"GAIA's MCP client supports the stdio and http transports. "
                 f"Server uses '{transport_type}' transport which is not supported."
             )
 
-        if "command" not in config:
+        if transport_type == "http":
+            if "url" not in config:
+                raise ValueError("An http config must include a 'url' field")
+        elif "command" not in config:
             raise ValueError("Config must include 'command' field")
 
         logger.debug(f"Connecting to MCP server '{name}'...")
 
-        logger.debug(f"Config: {config}")
+        logger.debug(
+            "Config for %s: type=%s", name, config.get("type", "stdio")
+        )  # never the values: headers and env can hold secrets
 
         try:
             client = self._mcp_manager.add_server(name, config)
@@ -344,6 +348,14 @@ class MCPClientMixin:
             # see. ``client.name`` (raw) is passed alongside so the
             # ``_mcp_server`` metadata still round-trips to the config.
             gaia_tool = tool.to_gaia_format(client.prefix, client.name)
+            if (
+                getattr(client, "writes_need_person", False)
+                and gaia_tool["requires_confirmation"]
+            ):
+                gaia_tool["needs_person"] = True
+            note = getattr(client, "tool_note", "")
+            if note and gaia_tool["requires_confirmation"]:
+                gaia_tool["description"] = f"{gaia_tool['description']} {note}"
 
             # Create base wrapper function
             base_wrapper = client.create_tool_wrapper(tool)

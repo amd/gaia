@@ -826,13 +826,20 @@ class SSEOutputHandler(OutputHandler):
         # to the legacy description map in this module when none is provided.
         detail_label = get_tool_display_label(tool_name) or _tool_description(tool_name)
         self._last_tool_label = detail_label
+        identity = _mcp_identity(tool_name)
+        title = identity.get("mcp_tool_title")
         event = {
             "type": "tool_start",
             "tool": tool_name,
             "detail": detail_label,
-            "narration": derive_narration(tool_name),
+            # A titled MCP tool reads as its server names it, not as its id.
+            "narration": (
+                f"{title} ({identity['mcp_server_label']})"
+                if title
+                else derive_narration(tool_name)
+            ),
         }
-        event.update(_mcp_identity(tool_name))
+        event.update(identity)
         self._emit(event)
 
     def print_tool_complete(self):
@@ -2033,13 +2040,15 @@ class SSEOutputHandler(OutputHandler):
             self._confirm_args = tool_args if isinstance(tool_args, dict) else {}
         self._last_denial = None
 
+        identity = _mcp_identity(tool_name)
         request: Dict[str, Any] = {
             "type": "permission_request",
             "tool": tool_name,
             # The tool in plain words, for the question; ``tool`` stays the id.
-            "tool_label": tool_phrase(tool_name),
+            "tool_label": _permission_tool_label(tool_name, identity),
             "args": tool_args,
             "confirm_id": confirm_id,
+            **identity,
         }
         if call_args is not None and call_args != tool_args:
             request["call_args"] = call_args
@@ -2633,7 +2642,21 @@ def _mcp_identity(tool_name: Optional[str]) -> Dict[str, str]:
     identity = {"mcp_server": server, "mcp_server_label": label}
     if meta.get("_mcp_tool"):
         identity["mcp_tool"] = meta["_mcp_tool"]
+    if meta.get("_mcp_title"):
+        identity["mcp_tool_title"] = meta["_mcp_title"]
     return identity
+
+
+def _permission_tool_label(tool_name: str, identity: Dict[str, str]) -> str:
+    """The tool in plain words for a permission question.
+
+    An MCP tool the server titled reads as "turn on in Home Assistant" rather
+    than a phrase made from its prefixed id.
+    """
+    title = identity.get("mcp_tool_title")
+    if title:
+        return f"{title[:1].lower()}{title[1:]} in {identity['mcp_server_label']}"
+    return tool_phrase(tool_name)
 
 
 def _mcp_output_text(data: Any) -> Optional[str]:

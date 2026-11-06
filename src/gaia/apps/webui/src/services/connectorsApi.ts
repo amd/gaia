@@ -3,7 +3,14 @@
 
 /** Connector calls, re-exported by api.ts; callers keep importing from there. */
 
-import type { AgentMcpServer, ConnectorRow } from '../types';
+import type {
+    AgentMcpServer,
+    ConnectorRow,
+    HomeAssistantConnectResult,
+    HomeAssistantDisconnectResult,
+    HomeAssistantStatus,
+    HomeAssistantTestResult,
+} from '../types';
 import { apiFetch, UI_HEADER } from './api';
 
 // -- Connections (issue #915) ---------------------------------------------------
@@ -200,4 +207,23 @@ export async function deactivateConnectorAgent(
         undefined,
         UI_HEADER,
     );
+}
+
+// -- Home Assistant -----------------------------------------------------------
+
+export async function getHomeAssistant(): Promise<HomeAssistantStatus> {
+    return apiFetch('GET', '/home-assistant');
+}
+
+/** Checks the address and token against Home Assistant; a 400's message says what to fix. */
+export async function connectHomeAssistant(url: string, token: string): Promise<HomeAssistantConnectResult> {
+    return apiFetch('POST', '/home-assistant', { url, token }, UI_HEADER);
+}
+
+export async function testHomeAssistant(): Promise<HomeAssistantTestResult> {
+    return apiFetch('POST', '/home-assistant/test', undefined, UI_HEADER);
+}
+
+export async function disconnectHomeAssistant(): Promise<HomeAssistantDisconnectResult> {
+    return apiFetch('DELETE', '/home-assistant', undefined, UI_HEADER);
 }

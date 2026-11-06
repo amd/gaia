@@ -62,6 +62,7 @@ JUDGE_CREDENTIALS = (
 )
 FIXTURE_PORT = 8765
 MCP_STUB = "tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py"
+FAKE_HA = "tests/fixtures/home_assistant/stage_fake_ha.py"
 #: Modules whose origin proves which checkout the backend and eval run.
 ANCHOR_MODULES = ("gaia", "gaia_agent")
 _ORIGINS_SCRIPT = """
@@ -334,6 +335,10 @@ def _run_category(category: str, env: dict, p: dict, args) -> int:
         subprocess.run(
             [sys.executable, MCP_STUB, "install"], cwd=REPO_ROOT, env=env, check=True
         )
+    if category == "gaia_home":
+        subprocess.run(
+            [sys.executable, FAKE_HA, "install"], cwd=REPO_ROOT, env=env, check=True
+        )
     log_path = args.out / f"backend-{category}.log"
     backend = subprocess.Popen(
         [
@@ -404,6 +409,10 @@ def _run_category(category: str, env: dict, p: dict, args) -> int:
         if category == "gaia_mcp":
             subprocess.run(
                 [sys.executable, MCP_STUB, "remove"], cwd=REPO_ROOT, env=env, check=True
+            )
+        if category == "gaia_home":
+            subprocess.run(
+                [sys.executable, FAKE_HA, "remove"], cwd=REPO_ROOT, env=env, check=True
             )
         # The daemon the backend spawned lives in this home; stop it there.
         subprocess.run(

@@ -189,6 +189,7 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 		"/full-access": "/full-access",
 		"/cost":        "/cost",
 		"/slack":       "/slack",
+		"/home":        "/home",
 		"/agents":      "/agents",
 		"/gateway":     "/gateway",
 		"/copy":        "/copy",

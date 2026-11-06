@@ -11406,9 +11406,11 @@ def handle_mcp_list(args):
     print("=" * 60)
 
     for name, server_config in servers.items():
-        command = server_config.get("command", "Unknown")
         print(f"\n🔹 {name}")
-        print(f"   Command: {command}")
+        if server_config.get("type") == "http":
+            print(f"   URL: {server_config.get('url', 'Unknown')}")
+        else:
+            print(f"   Command: {server_config.get('command', 'Unknown')}")
 
 
 def handle_mcp_tools(args):

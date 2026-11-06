@@ -9,15 +9,17 @@ python hub/agents/gaia/python/packaging/capability_matrix.py
 
 ## Definitions
 
-- **tools_count**: the number of registered agent-loop tools for the default construction (prompt_profile='full', memory available): FULL_CORE_TOOLS unioned with every FULL_BUNDLES member in gaia_agent.tool_bundles (which the flagship's registry must equal exactly, including the 8 skill-library tools and the 4 code-index tools), less the load_tools escape hatch, which registers only when GAIA_DYNAMIC_TOOLS=1 turns per-turn tool selection on, and set_reasoning_effort, which registers only on a model that grades its reasoning (gpt-oss). This is the REGISTERED size — what the agent can do. It is distinct from the REST surface's 12 functional verbs, a purpose-built streaming facade for external callers.
+- **tools_count**: the number of registered agent-loop tools for the default construction (prompt_profile='full', memory available): FULL_CORE_TOOLS unioned with every FULL_BUNDLES member in gaia_agent.tool_bundles (which the flagship's registry must equal exactly, including the 8 skill-library tools and the 4 code-index tools), less the load_tools escape hatch, which registers only when GAIA_DYNAMIC_TOOLS=1 turns per-turn tool selection on, and set_reasoning_effort, which registers only on a model that grades its reasoning (gpt-oss). This is the REGISTERED size — what the agent can do. It is distinct from the REST surface's 16 functional verbs, a purpose-built streaming facade for external callers.
 - **no quality eval sentinel**: `no quality eval (contract-tested only)` -- the op is contract/shape-tested only; no judged quality bar exists for it.
 
 ## Capability matrix
 
-12 exposed ops (12 REST functional, no MCP surface) and their eval coverage:
+16 exposed ops (16 REST functional, no MCP surface) and their eval coverage:
 
 | Op | Surface | Eval coverage |
 |---|---|---|
+| `home-assistant` | REST | no quality eval (contract-tested only) |
+| `home-assistant/test` | REST | no quality eval (contract-tested only) |
 | `memory` | REST | no quality eval (contract-tested only) |
 | `query` | REST | no quality eval (contract-tested only) |
 | `query/{run_id}/cancel` | REST | no quality eval (contract-tested only) |
@@ -71,7 +73,11 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
   - `search_skill_hub`
   - `skill_status`
   - `unload_skill`
-- REST functional verbs: **12** (16 total operations in the sidecar contract, including the health/version/init probes)
+- REST functional verbs: **16** (20 total operations in the sidecar contract, including the health/version/init probes)
+  - `home-assistant`
+  - `home-assistant`
+  - `home-assistant`
+  - `home-assistant/test`
   - `memory`
   - `query`
   - `query/{run_id}/cancel`
@@ -88,13 +94,14 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
 - Eval suites: **2**
   - `perf`: enforce=False, acceptance_enforce=None
   - `quality`: enforce=True, acceptance_enforce=None
-- Judged scenario categories (`eval/scenarios/gaia_*`): **19**
+- Judged scenario categories (`eval/scenarios/gaia_*`): **20**
   - `gaia_code`
   - `gaia_core`
   - `gaia_data`
   - `gaia_email`
   - `gaia_files`
   - `gaia_git`
+  - `gaia_home`
   - `gaia_honesty`
   - `gaia_mcp`
   - `gaia_media`

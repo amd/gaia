@@ -33,7 +33,7 @@
     },
     {
       "lane": "gaia-tasks",
-      "categories": ["gaia_skills_tasks", "gaia_tool_selection", "gaia_mcp"]
+      "categories": ["gaia_skills_tasks", "gaia_tool_selection", "gaia_mcp", "gaia_home"]
     },
     {
       "lane": "gaia-signal",

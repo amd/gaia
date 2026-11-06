@@ -38,7 +38,17 @@
     "tool_call": { "fields": ["tool", "args", "narration"] },
     "tool_result": { "fields": ["tool", "render", "data", "preview"], "not_sent_over_stdio": ["render"] },
     "needs_confirmation": {
-      "fields": ["run_id", "action", "summary", "confirm_id", "always_scope", "risk", "confirm_url"],
+      "fields": [
+        "run_id",
+        "action",
+        "summary",
+        "confirm_id",
+        "always_scope",
+        "risk",
+        "confirm_url",
+        "mcp_server_label",
+        "mcp_tool_title"
+      ],
       "not_sent_over_stdio": ["confirm_url"]
     },
     "needs_input": {

@@ -29,6 +29,9 @@ import { ConnectorTileMenu } from './ConnectorTileMenu';
 import { SettingsDisclosure } from './settings/SettingsDisclosure';
 import './ConnectorsSection.css';
 
+/** Set up in Settings > Smart home; its generic form would save it without turning it on. */
+export const HOME_ASSISTANT_CONNECTOR = 'mcp-home-assistant';
+
 // Human-readable labels for well-known OAuth scope URIs.
 // Unrecognised scopes fall back to the last path segment of the URI.
 const SCOPE_LABELS: Record<string, MessageKey> = {
@@ -158,14 +161,17 @@ export function ConnectorsSection() {
         ),
     );
 
+    const openSettings = useChatStore((s) => s.openSettings);
+    const hasHomeAssistant = connectors.some((c) => c.id === HOME_ASSISTANT_CONNECTOR);
+    const listed = connectors.filter((c) => c.id !== HOME_ASSISTANT_CONNECTOR);
     const q = query.trim().toLowerCase();
-    const shown = connectors.filter(
+    const shown = listed.filter(
         (c) => !q || c.display_name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q),
     );
     const connected = shown.filter((c) => c.configured);
     const accounts = shown.filter((c) => !c.configured && c.type === 'oauth_pkce');
     const servers = shown.filter((c) => !c.configured && c.type !== 'oauth_pkce');
-    const nothingConnected = !connectors.some((c) => c.configured);
+    const nothingConnected = !listed.some((c) => c.configured);
 
     const tiles = (rows: ConnectorRow[]) => (
         <div className="connectors-list">
@@ -209,7 +215,7 @@ export function ConnectorsSection() {
                 </div>
             ) : (
                 <>
-                    {connectors.length > SEARCH_ABOVE && (
+                    {listed.length > SEARCH_ABOVE && (
                         <input
                             className="settings-input"
                             type="search"
@@ -219,7 +225,7 @@ export function ConnectorsSection() {
                             aria-label={t('settings.connectors.search')}
                         />
                     )}
-                    {connectors.length === 0 && !error && <p className="settings-hint">{t('settings.connectors.none')}</p>}
+                    {listed.length === 0 && !hasHomeAssistant && !error && <p className="settings-hint">{t('settings.connectors.none')}</p>}
                     {q && shown.length === 0 && <p className="settings-hint">{t('settings.connectors.noMatch')}</p>}
                     {connected.length > 0 && (
                         <SettingsDisclosure title={t('settings.connectors.connected')} count={connected.length} defaultOpen forceOpen={!!q}>
@@ -235,6 +241,14 @@ export function ConnectorsSection() {
                         <SettingsDisclosure title={t('settings.connectors.servers')} hint={t('settings.connectors.serversHint')} count={servers.length} forceOpen={!!q}>
                             {tiles(servers)}
                         </SettingsDisclosure>
+                    )}
+                    {hasHomeAssistant && (
+                        <p className="settings-hint">
+                            {t('settings.connectors.homeAssistantHint')}{' '}
+                            <button type="button" className="link-btn" onClick={() => openSettings('smartHome')}>
+                                {t('settings.connectors.openSmartHome')}
+                            </button>
+                        </p>
                     )}
                     {agentMcps.length > 0 && !q && (
                         <SettingsDisclosure title={t('settings.connectors.agentServers')} count={agentMcps.length}>

@@ -233,7 +233,8 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.awaitApproval(e.Action)
 
 		cm := components.NewConfirmationModel(e.RunID, e.Action, e.Summary, e.ConfirmURL).
-			WithRisk(e.Risk)
+			WithRisk(e.Risk).
+			WithToolTitle(e.MCPServerLabel, e.MCPToolTitle)
 		if m.canRespondToPermission() {
 			cm = cm.WithLiveChannel(e.ConfirmID, e.AlwaysScope)
 		}

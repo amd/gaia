@@ -93,7 +93,7 @@ async def list_mcp_servers():
         result.append(
             MCPServerInfo(
                 name=name,
-                command=cfg.get("command", ""),
+                command=cfg.get("command") or cfg.get("url", ""),
                 args=cfg.get("args", []),
                 env=_mask_env(cfg.get("env", {})),
                 enabled=not cfg.get("disabled", False),

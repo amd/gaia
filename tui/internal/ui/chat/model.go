@@ -503,6 +503,8 @@ type ChatModel struct {
 	// panel is on and what it has collected. Non-nil only between /slack setup
 	// and the flow finishing or being cancelled.
 	slackSetup *slackSetupState
+	// home is the open /home panel, if any. It never holds the token.
+	home *homeState
 	// slackOffered records that the one-time Slack offer has already been shown
 	// this session, so a second launch-time probe cannot repeat it. The durable
 	// answer lives in `gaia slack decline`; this only stops a duplicate inside
@@ -1039,6 +1041,18 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case slackConnectedMsg:
 		return m.handleSlackConnected(msg)
 
+	case homeStatusMsg:
+		return m.handleHomeStatus(msg)
+
+	case homeConnectedMsg:
+		return m.handleHomeConnected(msg)
+
+	case homeTestedMsg:
+		return m.handleHomeTested(msg)
+
+	case homeDisconnectedMsg:
+		return m.handleHomeDisconnected(msg)
+
 	case setupStreamMsg:
 		if m.supersededSetup(msg.ch) {
 			return m, nil
@@ -1192,6 +1206,12 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.question = nil
 			m.updateViewport()
 			return m.handleSlackSetupAnswer(msg.RequestID, msg.Value)
+		}
+		if isHomeQuestion(msg.RequestID) {
+			// Local, like Slack's: the token must never reach the transcript.
+			m.question = nil
+			m.updateViewport()
+			return m.handleHomeAnswer(msg.RequestID, msg.Value)
 		}
 		m.messages = append(m.messages, Message{
 			Role:    RoleUser,
@@ -1406,6 +1426,11 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// A pending question owns the keyboard: the run is blocked on it, so a
 	// keystroke that fell through to the composer would go nowhere. Ctrl+C and
 	// Esc still cancel the turn — abandoning a question must stay possible.
+	// No turn is parked on /home's questions, so Esc closes the panel.
+	if m.question != nil && msg.Type == tea.KeyEsc && isHomeQuestion(m.question.RequestID()) {
+		return m.closeHome()
+	}
+
 	if m.question != nil && msg.Type != tea.KeyCtrlC && msg.Type != tea.KeyEsc {
 		q, cmd := m.question.Update(msg)
 		m.question = &q
@@ -2006,6 +2031,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 
 	case "/slack never":
 		return m, declineSlackCmd(true)
+
+	case "/home":
+		return m.startHome()
 	}
 
 	return m.sendQuery(query)

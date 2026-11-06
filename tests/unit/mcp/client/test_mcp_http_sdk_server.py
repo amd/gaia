@@ -169,9 +169,8 @@ def _fake_urlopen(monkeypatch, *replies):
             raise reply
         return reply
 
-    monkeypatch.setattr(
-        "gaia.mcp.client.transports.http.urllib.request.urlopen", urlopen
-    )
+    # The transport opens through its own no-redirect opener, not urlopen.
+    monkeypatch.setattr("gaia.mcp.client.transports.http._OPENER.open", urlopen)
     return sent
 
 

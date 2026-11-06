@@ -128,7 +128,27 @@ class ConnectorSpec:
     # mcp_server only
     mcp_command: str | None = None
     mcp_args: tuple[str, ...] = field(default_factory=tuple)
+    # Secret config keys, stored in the keyring. A stdio server gets them as
+    # env vars; an http server gets them through ``mcp_headers``.
     mcp_env_keys: tuple[str, ...] = field(default_factory=tuple)
+    # mcp_server, remote ("http") only. The user enters a base URL in the
+    # ``mcp_url_field`` config field; GAIA appends ``mcp_url_path`` itself, so
+    # the endpoint (and what it can reach) is pinned by the catalog.
+    mcp_transport: Literal["stdio", "http"] = "stdio"
+    mcp_url_field: str | None = None
+    mcp_url_path: str = ""
+    # (header, secret config key, template) — e.g.
+    # ("Authorization", "HA_TOKEN", "Bearer {}").
+    mcp_headers: tuple[tuple[str, str, str], ...] = field(default_factory=tuple)
+    # Messages for a failed live test, keyed "unauthorized", "not_found",
+    # "unreachable"; ``{url}`` is replaced with the base URL.
+    mcp_http_hints: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    # The server's state-changing tools may only be approved by a person:
+    # never by full access, auto-approve, a schedule or a messaging chat.
+    mcp_writes_need_person: bool = False
+    # Appended to the description of each of the server's state-changing
+    # tools: how to call them well, for servers whose own wording falls short.
+    mcp_tool_note: str = ""
 
     def scope_ceiling(self) -> tuple[str, ...]:
         """Every scope a grant for this connector is allowed to carry.
@@ -164,3 +184,26 @@ class ConnectorSpec:
         object.__setattr__(self, "oauth_setup_fields", tuple(self.oauth_setup_fields))
         object.__setattr__(self, "mcp_args", tuple(self.mcp_args))
         object.__setattr__(self, "mcp_env_keys", tuple(self.mcp_env_keys))
+        object.__setattr__(
+            self, "mcp_headers", tuple(tuple(h) for h in self.mcp_headers)
+        )
+        object.__setattr__(
+            self, "mcp_http_hints", tuple(tuple(h) for h in self.mcp_http_hints)
+        )
+        if self.mcp_transport == "http":
+            if not self.mcp_url_field or not self.mcp_url_path.startswith("/"):
+                raise ValueError(
+                    f"ConnectorSpec {self.id!r}: an http MCP server needs "
+                    f"mcp_url_field and an mcp_url_path starting with '/'"
+                )
+            if self.mcp_command:
+                raise ValueError(
+                    f"ConnectorSpec {self.id!r}: an http MCP server has no "
+                    f"mcp_command"
+                )
+            unknown = [k for _, k, _ in self.mcp_headers if k not in self.mcp_env_keys]
+            if unknown:
+                raise ValueError(
+                    f"ConnectorSpec {self.id!r}: mcp_headers name {unknown!r}, "
+                    f"which are not in mcp_env_keys"
+                )

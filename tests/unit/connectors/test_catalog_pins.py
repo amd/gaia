@@ -84,6 +84,8 @@ def test_catalog_is_not_empty():
 def test_catalog_mcp_server_is_pinned(spec):
     if spec.type != "mcp_server":
         pytest.skip("not an MCP server")
+    if spec.mcp_transport == "http":
+        pytest.skip("a remote server: GAIA launches no package to pin")
     problem = package_spec_problem(spec.mcp_command, spec.mcp_args)
     assert problem is None, (
         f"{spec.id}: {problem}. Pin it and follow the refresh steps in "

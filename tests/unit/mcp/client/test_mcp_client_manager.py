@@ -201,8 +201,10 @@ class TestMCPClientManager:
 
     @patch("gaia.mcp.client.mcp_client_manager.MCPClient")
     @patch("gaia.mcp.client.mcp_client_manager.logger")
-    def test_load_from_config_skips_http_type(self, mock_logger, mock_client_class):
-        """Test that HTTP/sse type connections are skipped with a warning."""
+    def test_load_from_config_skips_sse_but_loads_http(
+        self, mock_logger, mock_client_class
+    ):
+        """sse servers are skipped with a warning; http ones with a url load."""
         manager = MCPClientManager()
 
         # Manually set up config with an HTTP server
@@ -219,24 +221,23 @@ class TestMCPClientManager:
 
         manager.load_from_config()
 
-        # No servers should be loaded
-        assert len(manager.list_servers()) == 0
-
-        # Should have logged warnings about unsupported type
-        warning_calls = [call for call in mock_logger.warning.call_args_list]
-        assert len(warning_calls) >= 2  # At least 2 warnings for the 2 servers
+        built = [c.args[0] for c in mock_client_class.from_config.call_args_list]
+        assert built == ["http_server"]
+        assert any(
+            "sse_server" in str(call) for call in mock_logger.warning.call_args_list
+        )
 
     @patch("gaia.mcp.client.mcp_client_manager.MCPClient")
     @patch("gaia.mcp.client.mcp_client_manager.logger")
     def test_add_server_rejects_http_type(self, mock_logger, mock_client_class):
-        """Test that add_server raises error for non-stdio transport types."""
+        """Test that add_server raises error for transports other than stdio/http."""
         manager = MCPClientManager()
         config = {
             "type": "sse",
             "url": "http://localhost:8080/sse",
         }
 
-        with pytest.raises(ValueError, match="only supports stdio"):
+        with pytest.raises(ValueError, match="supports the stdio and http"):
             manager.add_server("http_server", config)
 
 

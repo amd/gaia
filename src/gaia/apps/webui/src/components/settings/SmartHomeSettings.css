@@ -1,0 +1,48 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.smart-home-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding-inline-start: 20px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.smart-home-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.smart-home-state > svg {
+    flex-shrink: 0;
+}
+
+.smart-home .settings-label.smart-home-state {
+    color: var(--accent-green);
+}
+
+.smart-home-start {
+    align-self: flex-start;
+}
+
+.smart-home-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.smart-home-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    white-space: nowrap;
+}
+

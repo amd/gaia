@@ -70,6 +70,7 @@ from .routers import environment as environment_router_mod
 from .routers import files as files_router_mod
 from .routers import goals as goals_router_mod
 from .routers import gpu_memory as gpu_memory_router_mod
+from .routers import home_assistant as home_assistant_router_mod
 from .routers import hub as hub_router_mod
 from .routers import lemonade as lemonade_router_mod
 from .routers import mcp as mcp_router_mod
@@ -978,6 +979,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(connectors_router_mod.router)
     # Issue #1292 — forwarded pre-authenticated connections (/v1/connections).
     app.include_router(connectors_router_mod.forwarded_router)
+    app.include_router(home_assistant_router_mod.router)
     # Email REST surface (/v1/email/*) — out-of-process sidecar ONLY (#1767
     # cutover / design decision 4). The core backend never imports the email
     # wheel: it stays lightweight, crash-isolated, and dogfoods the exact binary

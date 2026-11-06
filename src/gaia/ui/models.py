@@ -585,6 +585,7 @@ class AgentStepResponse(BaseModel):
     mcpServer: Optional[str] = None
     mcpServerLabel: Optional[str] = None
     mcpTool: Optional[str] = None
+    mcpToolTitle: Optional[str] = None
     mcpOutput: Optional[McpOutputResponse] = None
     latencyMs: Optional[float] = None
     # Render-map card persistence (#2109): populated ONLY when the source

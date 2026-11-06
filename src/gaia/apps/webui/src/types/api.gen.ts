@@ -27,7 +27,6 @@ export interface ApiSchemas {
   CommandOutputResponse: CommandOutputResponse;
   CommitRequest: CommitRequest;
   ConfigureRequest: ConfigureRequest;
-  ConnectRequest: ConnectRequest;
   ContextRequest: ContextRequest;
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
@@ -135,6 +134,8 @@ export interface ApiSchemas {
   VisionModelRequest: VisionModelRequest;
   WarmUpStatus: WarmUpStatus;
   WorkInProgress: WorkInProgress;
+  gaia__ui__routers__home_assistant__ConnectRequest: Gaia_Ui_Routers_HomeAssistant__ConnectRequest;
+  gaia__ui__routers__providers__ConnectRequest: Gaia_Ui_Routers_Providers__ConnectRequest;
   gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
   gaia__ui__routers__system__DownloadModelRequest: Gaia_Ui_Routers_System__DownloadModelRequest;
 }
@@ -233,6 +234,7 @@ export interface AgentStepResponse {
   mcpServer?: string | null;
   mcpServerLabel?: string | null;
   mcpTool?: string | null;
+  mcpToolTitle?: string | null;
   narration?: string | null;
   planNarrations?: string[] | null;
   planSteps?: string[] | null;
@@ -364,15 +366,6 @@ export interface ConfigureRequest {
   config?: {
     [k: string]: unknown | undefined;
   };
-}
-/**
- * Register a cloud provider in Lemonade; ``api_key`` blank keeps the current key.
- */
-export interface ConnectRequest {
-  api_key?: string | null;
-  auth_header_name?: string | null;
-  auth_header_prefix?: string | null;
-  base_url?: string | null;
 }
 /**
  * ``ctx_size`` None returns the model to GAIA's automatic size.
@@ -1353,6 +1346,25 @@ export interface WorkInProgress {
   answers: RunningAnswer[];
   indexing: RunningIndexJob[];
   setup?: boolean;
+}
+export interface Gaia_Ui_Routers_HomeAssistant__ConnectRequest {
+  /**
+   * Long-lived access token
+   */
+  token: string;
+  /**
+   * Home Assistant base address, no path
+   */
+  url: string;
+}
+/**
+ * Register a cloud provider in Lemonade; ``api_key`` blank keeps the current key.
+ */
+export interface Gaia_Ui_Routers_Providers__ConnectRequest {
+  api_key?: string | null;
+  auth_header_name?: string | null;
+  auth_header_prefix?: string | null;
+  base_url?: string | null;
 }
 export interface Gaia_Ui_Routers_Setup__DownloadModelRequest {
   acknowledge_low_disk?: boolean;

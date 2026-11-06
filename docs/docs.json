@@ -144,6 +144,7 @@
                   "connectors/memory",
                   "connectors/slack",
                   "connectors/discord",
+                  "connectors/home-assistant",
                   "security/connections",
                   "security/connectors"
                 ]
@@ -416,6 +417,7 @@
               "plans/security-model",
               "plans/email-triage-skill",
               "plans/messaging-integrations-plan",
+              "plans/home-assistant",
               "plans/daemon-convergence",
               "plans/autonomy-engine"
             ]

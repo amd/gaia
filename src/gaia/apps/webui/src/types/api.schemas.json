@@ -395,6 +395,17 @@
         ],
         "title": "Mcptool"
       },
+      "mcpToolTitle": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mcptooltitle"
+      },
       "narration": {
         "anyOf": [
           {
@@ -852,57 +863,6 @@
       }
     },
     "title": "ConfigureRequest",
-    "type": "object"
-  },
-  "ConnectRequest": {
-    "description": "Register a cloud provider in Lemonade; ``api_key`` blank keeps the current key.",
-    "properties": {
-      "api_key": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "title": "Api Key"
-      },
-      "auth_header_name": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "title": "Auth Header Name"
-      },
-      "auth_header_prefix": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "title": "Auth Header Prefix"
-      },
-      "base_url": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "title": "Base Url"
-      }
-    },
-    "title": "ConnectRequest",
     "type": "object"
   },
   "ContextRequest": {
@@ -5351,6 +5311,77 @@
       "indexing"
     ],
     "title": "WorkInProgress",
+    "type": "object"
+  },
+  "gaia__ui__routers__home_assistant__ConnectRequest": {
+    "properties": {
+      "token": {
+        "description": "Long-lived access token",
+        "title": "Token",
+        "type": "string"
+      },
+      "url": {
+        "description": "Home Assistant base address, no path",
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url",
+      "token"
+    ],
+    "title": "ConnectRequest",
+    "type": "object"
+  },
+  "gaia__ui__routers__providers__ConnectRequest": {
+    "description": "Register a cloud provider in Lemonade; ``api_key`` blank keeps the current key.",
+    "properties": {
+      "api_key": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Api Key"
+      },
+      "auth_header_name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Auth Header Name"
+      },
+      "auth_header_prefix": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Auth Header Prefix"
+      },
+      "base_url": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Base Url"
+      }
+    },
+    "title": "ConnectRequest",
     "type": "object"
   },
   "gaia__ui__routers__setup__DownloadModelRequest": {
