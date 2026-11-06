@@ -131,6 +131,10 @@ def _download(name: str, version: str, sha256: str) -> bytes:
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             data = response.read()
+    except urllib.error.HTTPError as e:
+        # A missing or renamed release is a broken pin, not a transient network
+        # outage. Keep the bump gate honest even when the API is optional.
+        pytest.fail(f"Could not download {url}: HTTP {e.code} {e.reason}")
     except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
         if os.environ.get("GAIA_REQUIRE_RELEASE_API"):
             pytest.fail(f"Could not download {url}: {e}. Re-run the job.")
@@ -138,6 +142,20 @@ def _download(name: str, version: str, sha256: str) -> bytes:
     digest = hashlib.sha256(data).hexdigest()
     assert digest == sha256, f"{url} has SHA-256 {digest}, expected {sha256}"
     return data
+
+
+def test_a_missing_release_asset_fails_even_when_network_is_optional(monkeypatch):
+    """A 404 says the pin is wrong; it must never turn this ABI gate green."""
+
+    def missing(*_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            "https://example.invalid/asset", 404, "Not Found", {}, None
+        )
+
+    monkeypatch.delenv("GAIA_REQUIRE_RELEASE_API", raising=False)
+    monkeypatch.setattr(urllib.request, "urlopen", missing)
+    with pytest.raises(pytest.fail.Exception, match="HTTP 404 Not Found"):
+        _download("missing.tar.gz", "0.0.0", "0" * 64)
 
 
 def _binaries(archive: bytes) -> Dict[str, bytes]:
