@@ -86,6 +86,7 @@ class VLMToolsMixin:
         from gaia.llm.vlm_client import VLMClient
 
         self.vlm_model = model
+        self.vlm_base_url = base_url
         self.vlm_client = (
             None if model is None else VLMClient(vlm_model=model, base_url=base_url)
         )
@@ -132,9 +133,13 @@ class VLMToolsMixin:
         # init_vlm(model=None) turned reading off; a host that never ran it isn't off.
         if "vlm_model" not in vars(self) or self.vlm_model is not None:
             return None
-        from gaia.llm.lemonade_client import VISION_OFF_ON_NPU
+        from gaia.llm.lemonade_client import vision_off_reason
 
-        return {"status": "error", "error": VISION_OFF_ON_NPU, "image_path": image_path}
+        return {
+            "status": "error",
+            "error": vision_off_reason(getattr(self, "vlm_base_url", None)),
+            "image_path": image_path,
+        }
 
     def _analyze_image(self, image_path: str, focus: str = "all") -> Dict[str, Any]:
         """
@@ -185,7 +190,7 @@ class VLMToolsMixin:
                 "image_path": str(path),
                 "focus": focus,
                 "description": description,
-                "model": self.vlm_model,
+                "model": self.vlm_client.vlm_model,
             }
 
         except Exception as e:
@@ -232,7 +237,7 @@ class VLMToolsMixin:
                 "image_path": str(path),
                 "question": question,
                 "answer": answer,
-                "model": self.vlm_model,
+                "model": self.vlm_client.vlm_model,
             }
 
         except Exception as e:

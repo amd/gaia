@@ -16,6 +16,7 @@
  *   system:*         — System metrics for the observability dashboard (#2007)
  *   power:*          — Keep the PC awake while a chat turn runs (#5226)
  *   dialog:*         — The OS folder picker
+ *   backend:*        — Backend restarts after a crash (services/backend-supervisor.cjs)
  */
 
 const { contextBridge, ipcRenderer } = require("electron");
@@ -89,6 +90,13 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
   // ── OS folder picker; resolves the chosen path, or null on cancel ─────
   dialog: {
     pickFolder: (defaultPath) => ipcRenderer.invoke("dialog:pick-folder", defaultPath),
+  },
+
+  // ── GAIA's backend process: restarts after a crash, and its new port ──
+  backend: {
+    getState: () => ipcRenderer.invoke("backend:get-state"),
+    restart: () => ipcRenderer.invoke("backend:restart"),
+    onState: (cb) => onEvent("backend:state", cb),
   },
 });
 

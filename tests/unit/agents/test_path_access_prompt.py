@@ -215,13 +215,16 @@ def test_path_prompt_offers_no_always():
 
 
 def _answer_next_prompt(handler, **decision):
+    # The pending flag is set before the request is queued, so wait for the request.
     deadline = time.monotonic() + 5
-    while handler._confirm_event is None and time.monotonic() < deadline:
-        time.sleep(0.01)
-    events = []
-    while not handler.event_queue.empty():
-        events.append(handler.event_queue.get_nowait())
-    requests = [e for e in events if e.get("type") == "permission_request"]
+    requests = []
+    while not requests and time.monotonic() < deadline:
+        while not handler.event_queue.empty():
+            event = handler.event_queue.get_nowait()
+            if event.get("type") == "permission_request":
+                requests.append(event)
+        if not requests:
+            time.sleep(0.01)
     handler.resolve_tool_confirmation(**decision)
     return requests
 

@@ -29,9 +29,11 @@ export interface ApiSchemas {
   ConfigureRequest: ConfigureRequest;
   ConnectRequest: ConnectRequest;
   ContextRequest: ContextRequest;
+  CpuUsage: CpuUsage;
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
   CustomModelRequest: CustomModelRequest;
+  DeviceUsage: DeviceUsage;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
   DocumentListResponse: DocumentListResponse;
@@ -76,11 +78,13 @@ export interface ApiSchemas {
   LoadedModelInfo: LoadedModelInfo;
   McpOutputResponse: McpOutputResponse;
   MemorySettingsBody: MemorySettingsBody;
+  MemoryUsage: MemoryUsage;
   MessageListResponse: MessageListResponse;
   MessageResponse: MessageResponse;
   ModelServerBackendRequest: ModelServerBackendRequest;
   ModelServerInfo: ModelServerInfo;
   ModelStatus: ModelStatus;
+  NetworkUsage: NetworkUsage;
   OpenFileRequest: OpenFileRequest;
   ParseScheduleRequest: ParseScheduleRequest;
   ParseScheduleResponse: ParseScheduleResponse;
@@ -89,6 +93,7 @@ export interface ApiSchemas {
   PullRequestRequest: PullRequestRequest;
   QuickLink: QuickLink;
   RemoveModelRequest: RemoveModelRequest;
+  ResourceUsage: ResourceUsage;
   RestartRequest: RestartRequest;
   RetryChoiceRequest: RetryChoiceRequest;
   RetryWithRequest: RetryWithRequest;
@@ -384,6 +389,17 @@ export interface ContextRequest {
   ctx_size?: number | null;
   model: string;
 }
+export interface CpuUsage {
+  /**
+   * Current clock speed, when the OS reports it.
+   */
+  ghz: number | null;
+  /**
+   * Percent per sample, oldest first, one per interval_ms.
+   */
+  history: number[];
+  percent: number;
+}
 /**
  * Request to create a new scheduled task.
  */
@@ -425,6 +441,23 @@ export interface CreateSessionRequest {
 export interface CustomModelRequest {
   quant?: string | null;
   url: string;
+}
+export interface DeviceUsage {
+  /**
+   * Percent per sample, oldest first, one per interval_ms.
+   */
+  history: number[];
+  id: string;
+  kind: "gpu" | "npu";
+  /**
+   * Dedicated plus shared memory in use, when the OS reports it.
+   */
+  memory_used_bytes: number | null;
+  name: string;
+  /**
+   * Load of the device's busiest engine.
+   */
+  percent: number;
 }
 export interface DiscoveryCommit {
   items: DiscoveryCommitItem[];
@@ -787,6 +820,15 @@ export interface MemorySettingsBody {
   memory_enabled?: boolean | null;
   system_discovery_consent?: boolean | null;
 }
+export interface MemoryUsage {
+  /**
+   * Percent per sample, oldest first, one per interval_ms.
+   */
+  history: number[];
+  percent: number;
+  total_bytes: number;
+  used_bytes: number;
+}
 /**
  * List of messages for a session.
  */
@@ -926,6 +968,34 @@ export interface ModelStatus {
   found?: boolean;
   loaded?: boolean;
 }
+export interface NetworkUsage {
+  /**
+   * The adapter's hardware name.
+   */
+  description: string;
+  id: string;
+  kind: "ethernet" | "wifi" | "network";
+  /**
+   * The connection's name, such as "Ethernet 3".
+   */
+  name: string;
+  /**
+   * Bits per second received.
+   */
+  recv_bps: number;
+  /**
+   * Bits per second, oldest first.
+   */
+  recv_history: number[];
+  /**
+   * Bits per second sent.
+   */
+  send_bps: number;
+  /**
+   * Bits per second, oldest first.
+   */
+  send_history: number[];
+}
 /**
  * Request to open a file or folder in the system file explorer.
  */
@@ -1022,6 +1092,25 @@ export interface PullRequestRequest {
 }
 export interface RemoveModelRequest {
   model_id: string;
+}
+export interface ResourceUsage {
+  cpu?: CpuUsage | null;
+  devices?: DeviceUsage[];
+  /**
+   * Why GPUs and NPUs can't be read, when CPU and memory still can.
+   */
+  devices_error?: string | null;
+  interval_ms: number;
+  memory?: MemoryUsage | null;
+  networks?: NetworkUsage[];
+  /**
+   * Why network adapters can't be read, when CPU and memory still can.
+   */
+  networks_error?: string | null;
+  /**
+   * False until the first sample is in.
+   */
+  ready: boolean;
 }
 /**
  * ``confirm`` is required to reload a model on a server GAIA does not run.
@@ -1392,5 +1481,6 @@ export interface Gaia_Ui_Routers_Setup__DownloadModelRequest {
 }
 export interface Gaia_Ui_Routers_System__DownloadModelRequest {
   force?: boolean;
+  load_after?: boolean;
   model_name: string;
 }
