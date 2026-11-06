@@ -20,7 +20,11 @@ import pytest
 
 import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
 from gaia.connectors.activations import activate_agent, list_agent_activations
-from gaia.connectors.catalog.mcp_servers import _SLACK, SLACK_BOT_SCOPES
+from gaia.connectors.catalog.mcp_servers import (
+    _SLACK,
+    SLACK_BOT_SCOPES,
+    SLACK_READ_TOOLS,
+)
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.grants import grant_agent, list_agent_grants
 from gaia.connectors.mcp_server import McpServerHandler, _read_mcp_servers_json
@@ -83,6 +87,15 @@ def test_launch_is_pinned_and_speaks_stdio():
     args = list(_SLACK.mcp_args)
     # The server picks its transport from argv; without it, it won't speak stdio.
     assert args[args.index("--transport") + 1] == "stdio"
+
+
+def test_only_read_tools_are_offered():
+    """Join, leave and mark-read need scopes the app doesn't have; offered,
+    the model asks to join channels instead of telling the user to invite it."""
+    args = list(_SLACK.mcp_args)
+    assert args[args.index("--enabled-tools") + 1].split(",") == list(SLACK_READ_TOOLS)
+    for tool in SLACK_READ_TOOLS:
+        assert not re.search(r"join|leave|mark|create|update|add|reaction", tool)
 
 
 def test_deprecated_reference_package_is_not_used():

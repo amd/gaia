@@ -36,12 +36,13 @@ already filled in, so you don't pick any permissions yourself.
    workspace, Slack shows **Create and Install** instead. The list only shows
    workspaces your browser is signed in to. If yours is missing, sign in to it
    at [slack.com](https://slack.com/signin) and click **Create Slack app** again.
-2. Install the app to your workspace and click **Allow**. You need permission to
-   install apps in the workspace: guest accounts can't, and some company
-   workspaces need an admin to approve new apps first.
-3. Slack opens the app's **Basic Information** page. Open **OAuth &
-   Permissions** in the left menu and copy the **Bot User OAuth Token**. It
-   starts with `xoxb-`.
+2. If Slack asks, install the app to your workspace and click **Allow**. You
+   need permission to install apps in the workspace: guest accounts can't, and
+   some company workspaces need an admin to approve new apps first.
+3. Slack may show a **GAIA is ready!** box with commands to install the Slack
+   CLI and run a project. GAIA doesn't need them: click **Go to App Settings**.
+   Open **OAuth & Permissions** in the left menu and copy the **Bot User OAuth
+   Token**. It starts with `xoxb-`.
 4. In Slack, invite the bot to each channel it should read
    (`/invite @GAIA`). A bot sees only the channels it's in.
 
@@ -73,24 +74,24 @@ in plaintext.
 
 ## Step 3 — Use it
 
-Grant **and** activate the connector for each agent that should use it. The
-grant lets the agent use the credential; activation makes the tools visible
-to it, and is off by default:
+Saving the token doesn't yet let GAIA use Slack. Turn on the **GAIA** switch
+under **Who can use it** on the Slack tile. From the CLI, grant **and**
+activate the connector; activation is off by default:
 
 ```bash
-gaia connectors grants grant mcp-slack builtin:chat --scopes "*"
-gaia connectors activations activate mcp-slack builtin:chat
+gaia connectors grants grant mcp-slack installed:gaia --scopes "*"
+gaia connectors activations activate mcp-slack installed:gaia
 ```
 
-(In the UI, the tile's **Per-agent** toggle does both.) Then ask the agent
-something like *"Summarise today's messages in #general."*
+Then start a new chat and ask something like *"Summarise today's messages in
+#general."*
 
-With a bot token the useful tools are `channels_list`,
-`conversations_history`, `conversations_replies`, `users_search`, and
-`usergroups_list`. The server also lists tools that change things: join,
-leave, and mark-as-read for channels, and user-group create and edit. The bot
-scopes in Step 1 don't cover them, so Slack refuses each one with
-`missing_scope`, and GAIA asks you before an agent calls any of them.
+GAIA starts the server with only its read tools: `channels_list`,
+`channels_me`, `conversations_history`, `conversations_replies`,
+`users_search`, `usergroups_list`, and `usergroups_me`. The server's other
+tools (join, leave, and mark-as-read for channels, and user-group edits)
+need scopes the Step 1 app doesn't have, so GAIA doesn't offer them. GAIA
+can only read channels you invite it to.
 
 ## Common issues
 

@@ -133,6 +133,18 @@ _SLACK_APP_MANIFEST = {
     },
 }
 
+# The server also offers join, leave, mark-read and user-group edits. The bot
+# scopes can't use them, so the model only sees the tools that can work.
+SLACK_READ_TOOLS = (
+    "channels_list",
+    "channels_me",
+    "conversations_history",
+    "conversations_replies",
+    "users_search",
+    "usergroups_list",
+    "usergroups_me",
+)
+
 SLACK_CREATE_APP_URL = "https://api.slack.com/apps?new_app=1&manifest_json=" + quote(
     json.dumps(_SLACK_APP_MANIFEST, separators=(",", ":"))
 )
@@ -149,7 +161,14 @@ _SLACK = ConnectorSpec(
     docs_url="https://amd-gaia.ai/docs/connectors/slack",
     setup_url=SLACK_CREATE_APP_URL,
     mcp_command="npx",
-    mcp_args=("-y", "slack-mcp-server@1.3.0", "--transport", "stdio"),
+    mcp_args=(
+        "-y",
+        "slack-mcp-server@1.3.0",
+        "--transport",
+        "stdio",
+        "--enabled-tools",
+        ",".join(SLACK_READ_TOOLS),
+    ),
     mcp_env_keys=("SLACK_MCP_XOXB_TOKEN",),
     config_schema=(
         ConfigField(
@@ -163,7 +182,9 @@ _SLACK = ConnectorSpec(
                 "and some workspaces need an admin to approve it. "
                 "Click **Create Slack app**, pick your workspace, and click **Next**, "
                 "then **Create**. If your workspace isn't in the list, sign in to it "
-                "at [slack.com](https://slack.com/signin) and click the button again. Install the app to your workspace and click **Allow**. "
+                "at [slack.com](https://slack.com/signin) and click the button again. "
+                "If Slack asks, install the app and click **Allow**. If Slack shows "
+                "commands to run, skip them and click **Go to App Settings**. "
                 "Open **OAuth & Permissions** in Slack's left menu, copy the "
                 "**Bot User OAuth Token**, and paste it here. "
                 "Then type `/invite @GAIA` in each channel GAIA should read."
