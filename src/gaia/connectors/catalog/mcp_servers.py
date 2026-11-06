@@ -17,6 +17,9 @@ their own ``mcp_servers.json`` — discoverable via the Settings "Custom agent
 servers" section (#1020, #1021).
 """
 
+import json
+from urllib.parse import quote
+
 import gaia.connectors.mcp_server  # noqa: F401  # pylint: disable=unused-import
 from gaia.connectors.registry import REGISTRY
 from gaia.connectors.spec import ConfigField, ConnectorSpec
@@ -102,6 +105,38 @@ _GIT = ConnectorSpec(
     mcp_args=("mcp-server-git==2026.8.18",),
 )
 
+SLACK_BOT_SCOPES = (
+    "channels:history",
+    "channels:read",
+    "groups:history",
+    "groups:read",
+    "im:history",
+    "im:read",
+    "mpim:history",
+    "mpim:read",
+    "users:read",
+    "usergroups:read",
+)
+
+# Slack opens "Create app" with this manifest filled in, so the user never picks scopes.
+_SLACK_APP_MANIFEST = {
+    "display_information": {
+        "name": "GAIA",
+        "description": "Lets your local GAIA assistant read this workspace.",
+    },
+    "features": {"bot_user": {"display_name": "GAIA", "always_online": False}},
+    "oauth_config": {"scopes": {"bot": list(SLACK_BOT_SCOPES)}},
+    "settings": {
+        "org_deploy_enabled": False,
+        "socket_mode_enabled": False,
+        "token_rotation_enabled": False,
+    },
+}
+
+SLACK_CREATE_APP_URL = "https://api.slack.com/apps?new_app=1&manifest_json=" + quote(
+    json.dumps(_SLACK_APP_MANIFEST, separators=(",", ":"))
+)
+
 # @modelcontextprotocol/server-slack is deprecated on npm; this is the maintained successor.
 _SLACK = ConnectorSpec(
     id="mcp-slack",
@@ -112,16 +147,25 @@ _SLACK = ConnectorSpec(
     type="mcp_server",
     description="Read channels, threads, and DMs in your Slack workspace.",
     docs_url="https://amd-gaia.ai/docs/connectors/slack",
+    setup_url=SLACK_CREATE_APP_URL,
     mcp_command="npx",
     mcp_args=("-y", "slack-mcp-server@1.3.0", "--transport", "stdio"),
     mcp_env_keys=("SLACK_MCP_XOXB_TOKEN",),
     config_schema=(
         ConfigField(
             key="SLACK_MCP_XOXB_TOKEN",
-            label="Slack Bot User OAuth Token",
+            label="Slack bot token",
             kind="secret",
             placeholder="xoxb-…",
-            help_md="Create a [Slack app](https://api.slack.com/apps), add the bot scopes listed in the [setup guide](https://amd-gaia.ai/docs/connectors/slack), install it to your workspace, and copy the **Bot User OAuth Token**.",
+            help_md=(
+                "GAIA reads Slack through a small app you add to your workspace. "
+                "You need permission to install apps there; guest accounts can't, "
+                "and some workspaces need an admin to approve it. "
+                "Click **Create Slack app**, pick your workspace, and click **Next**, "
+                "then **Create**. Click **Install to Workspace**, then **Allow**. "
+                "Copy the **Bot User OAuth Token** that Slack shows and paste it here. "
+                "Then type `/invite @GAIA` in each channel GAIA should read."
+            ),
             secret=True,
         ),
     ),

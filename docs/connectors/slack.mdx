@@ -28,16 +28,24 @@ keyring, and the server gets it through a `$keyring` reference when it starts.
 
 ## Step 1 — Create a Slack app and copy its bot token
 
-1. Go to <a href="https://api.slack.com/apps" target="_blank">api.slack.com/apps</a>
-   → **Create New App** → **From scratch**, and pick your workspace.
-2. Under **OAuth & Permissions** → **Bot Token Scopes**, add:
-   `channels:history`, `channels:read`, `groups:history`, `groups:read`,
-   `im:history`, `im:read`, `mpim:history`, `mpim:read`, `users:read`, and
-   `usergroups:read`.
-3. Click **Install to Workspace** and approve.
-4. Copy the **Bot User OAuth Token**. It starts with `xoxb-`.
-5. In Slack, invite the bot to each channel it should read
-   (`/invite @your-app-name`). A bot sees only the channels it's in.
+**From the Agent UI (easiest):** open **Settings** → **Connectors** → **Slack**
+and click **Create Slack app**. Slack opens with a read-only app named GAIA
+already filled in, so you don't pick any permissions yourself.
+
+1. Pick your workspace and click **Next**, then **Create**.
+2. Click **Install to Workspace**, then **Allow**. You need permission to
+   install apps in the workspace: guest accounts can't, and some company
+   workspaces need an admin to approve new apps first.
+3. Copy the **Bot User OAuth Token**. It starts with `xoxb-`.
+4. In Slack, invite the bot to each channel it should read
+   (`/invite @GAIA`). A bot sees only the channels it's in.
+
+**By hand:** go to <a href="https://api.slack.com/apps" target="_blank">api.slack.com/apps</a>
+→ **Create New App** → **From scratch**, pick your workspace, and under
+**OAuth & Permissions** → **Bot Token Scopes** add:
+`channels:history`, `channels:read`, `groups:history`, `groups:read`,
+`im:history`, `im:read`, `mpim:history`, `mpim:read`, `users:read`, and
+`usergroups:read`. Then follow steps 2–4 above.
 
 ## Step 2 — Configure GAIA
 
@@ -51,7 +59,7 @@ gaia connectors configure mcp-slack --set SLACK_MCP_XOXB_TOKEN=xoxb-...
 
 1. Launch the Agent UI: `gaia chat --ui`.
 2. **Settings** (gear) → **Connectors** → click the **Slack** tile.
-3. Paste the token into the **Slack Bot User OAuth Token** field and click **Save**.
+3. Paste the token into the **Slack bot token** field and click **Save**.
 
 Either path saves the token in your OS keyring and writes only a `$keyring`
 reference into `~/.gaia/mcp_servers.json`. The token is never written to disk

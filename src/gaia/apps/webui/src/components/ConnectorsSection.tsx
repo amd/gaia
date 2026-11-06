@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useState, useCallback } from 'react';
+import ReactMarkdown from 'react-markdown';
 import {
     CheckCircle2,
     AlertCircle,
@@ -20,6 +21,7 @@ import {
 } from 'lucide-react';
 
 import * as api from '../services/api';
+import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import { useChatStore } from '../stores/chatStore';
 import { useConnectorsSSE } from '../hooks/useConnectorsSSE';
 import type { MessageKey } from '../i18n/registry';
@@ -936,22 +938,61 @@ function MCPServerConfigureBody({
             {connector.configured && connector.enabled === false && (
                 <p className="connector-toggle-help">{t('settings.connectors.disabledHelp')}</p>
             )}
-            {connector.mcp_env_keys.map((key) => (
-                <div key={key} className="mcp-key-row">
-                    <label className="mcp-key-label">{key}</label>
-                    <input
-                        type="password"
-                        className="mcp-key-input"
-                        placeholder={connector.configured ? '••••••••' : t.bare('settings.connectors.enterValue')}
-                        value={values[key] ?? ''}
-                        onChange={(e) =>
-                            setValues((prev) => ({ ...prev, [key]: e.target.value }))
-                        }
-                        spellCheck={false}
-                        autoComplete="off"
-                    />
-                </div>
-            ))}
+            {connector.setup_url && !connector.configured && (
+                <a
+                    href={safeUrlTransform(connector.setup_url) || undefined}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn-secondary connector-setup-link"
+                >
+                    {t('settings.connectors.createApp', { name: connector.display_name })}
+                    <ExternalLink size={12} />
+                </a>
+            )}
+            {connector.mcp_env_keys.map((key) => {
+                const field = connector.config_fields?.find((f) => f.key === key);
+                return (
+                    <div key={key} className="mcp-key-row">
+                        <label className="mcp-key-label" htmlFor={`mcp-key-${connector.id}-${key}`}>
+                            <bdi>{field?.label || key}</bdi>
+                        </label>
+                        <input
+                            id={`mcp-key-${connector.id}-${key}`}
+                            type="password"
+                            dir="ltr"
+                            className="mcp-key-input"
+                            placeholder={
+                                connector.configured
+                                    ? '••••••••'
+                                    : field?.placeholder || t.bare('settings.connectors.enterValue')
+                            }
+                            value={values[key] ?? ''}
+                            onChange={(e) =>
+                                setValues((prev) => ({ ...prev, [key]: e.target.value }))
+                            }
+                            spellCheck={false}
+                            autoComplete="off"
+                        />
+                        {field?.help_md && !connector.configured && (
+                            <div className="mcp-key-help" dir="auto">
+                                <ReactMarkdown
+                                    disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}
+                                    urlTransform={safeUrlTransform}
+                                    components={{
+                                        a: ({ href, children }) => (
+                                            <a href={href} target="_blank" rel="noopener noreferrer">
+                                                {children}
+                                            </a>
+                                        ),
+                                    }}
+                                >
+                                    {field.help_md}
+                                </ReactMarkdown>
+                            </div>
+                        )}
+                    </div>
+                );
+            })}
             <div className="configure-actions">
                 {!(keyless && connector.configured) && (
                     <button

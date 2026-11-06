@@ -85,6 +85,7 @@ from gaia.connectors.mcp_server import (
     is_mcp_server_configured,
 )
 from gaia.connectors.registry import REGISTRY
+from gaia.connectors.spec import ConfigField
 from gaia.connectors.store import peek_connection, peek_provider_credentials
 
 from ..security import require_ui_header as _require_ui_header
@@ -519,6 +520,7 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "description": spec.description,
         "product_url": spec.product_url,
         "docs_url": spec.docs_url,
+        "setup_url": spec.setup_url,
         "configured": configured,
         "configurable": configurable,
         "config_error": config_error,
@@ -535,17 +537,20 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "supports_device_code": spec.supports_device_code,
         # OAuth setup form (e.g. Google client_id/client_secret) — empty
         # tuple for connectors that don't need first-time provider creds.
-        "oauth_setup_fields": [
-            {
-                "key": f.key,
-                "label": f.label,
-                "kind": f.kind,
-                "required": f.required,
-                "placeholder": f.placeholder,
-                "help_md": f.help_md,
-            }
-            for f in spec.oauth_setup_fields
-        ],
+        "oauth_setup_fields": [_field_summary(f) for f in spec.oauth_setup_fields],
+        # Label, example and help for each ``mcp_env_keys`` entry.
+        "config_fields": [_field_summary(f) for f in spec.config_schema],
+    }
+
+
+def _field_summary(f: ConfigField) -> Dict[str, Any]:
+    return {
+        "key": f.key,
+        "label": f.label,
+        "kind": f.kind,
+        "required": f.required,
+        "placeholder": f.placeholder,
+        "help_md": f.help_md,
     }
 
 

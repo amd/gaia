@@ -220,6 +220,10 @@ export interface ConnectorRow {
      * provider credentials.
      */
     oauth_setup_fields: ConnectorConfigField[];
+    /** Label, example and help for each ``mcp_env_keys`` entry. */
+    config_fields?: ConnectorConfigField[];
+    /** The service's page that creates what the user pastes back (a pre-filled Slack app). */
+    setup_url?: string | null;
     /**
      * Which OAuth *client* (app credentials) the provider resolves (#2104).
      * ``source`` is ``'keyring'`` for credentials saved via Settings /

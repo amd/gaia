@@ -1676,6 +1676,7 @@ export const enMessages = {
     'settings.connectors.disableServer': 'Disable this MCP server',
     'settings.connectors.enableServer': 'Enable this MCP server',
     'settings.connectors.disabledHelp': "Credentials and per-agent grants are preserved. Re-enable to make this server's tools available again.",
+    'settings.connectors.createApp': 'Create {name} app',
     'settings.connectors.enterValue': 'Enter value',
     'settings.connectors.docs': 'Docs',
     'settings.connectors.via': 'via {name}',

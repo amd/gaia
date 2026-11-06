@@ -11,13 +11,16 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import keyring
 import pytest
 
 import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
 from gaia.connectors.activations import activate_agent, list_agent_activations
-from gaia.connectors.catalog.mcp_servers import _SLACK
+from gaia.connectors.catalog.mcp_servers import _SLACK, SLACK_BOT_SCOPES
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.grants import grant_agent, list_agent_grants
 from gaia.connectors.mcp_server import McpServerHandler, _read_mcp_servers_json
@@ -216,3 +219,38 @@ def test_api_lifecycle_never_echoes_token(ui_api_client, monkeypatch, caplog):
     assert TOKEN not in json.dumps(events)
     assert TOKEN not in caplog.text
     assert keyring.get_password(SERVICE_NAME, SLOT) is None
+
+
+def _manifest_from_setup_url():
+    url = urlparse(_SLACK.setup_url)
+    assert (url.scheme, url.netloc, url.path) == ("https", "api.slack.com", "/apps")
+    query = parse_qs(url.query)
+    assert query["new_app"] == ["1"]
+    return json.loads(query["manifest_json"][0])
+
+
+def test_setup_link_creates_a_read_only_app_with_the_bot_scopes():
+    manifest = _manifest_from_setup_url()
+    assert manifest["oauth_config"]["scopes"]["bot"] == list(SLACK_BOT_SCOPES)
+    assert manifest["features"]["bot_user"]["display_name"] == "GAIA"
+    assert not any(":write" in s or s.startswith("chat:") for s in SLACK_BOT_SCOPES)
+
+
+def test_setup_guide_lists_the_same_scopes_as_the_setup_link():
+    guide = (Path(__file__).parents[3] / "docs" / "connectors" / "slack.mdx").read_text(
+        encoding="utf-8"
+    )
+    listed = set(re.findall(r"`([a-z]+:(?:history|read))`", guide))
+    assert listed == set(SLACK_BOT_SCOPES)
+
+
+def test_tile_gets_the_setup_link_and_a_plain_field_label(ui_api_client):
+    listing = ui_api_client.get("/api/connectors")
+    tile = next(c for c in listing.json()["connectors"] if c["id"] == "mcp-slack")
+    assert tile["setup_url"] == _SLACK.setup_url
+    (field,) = tile["config_fields"]
+    assert field["key"] == TOKEN_VAR
+    assert field["label"] == "Slack bot token"
+    assert field["placeholder"].startswith("xoxb-")
+    assert "Create Slack app" in field["help_md"]
+    assert "/invite @GAIA" in field["help_md"]

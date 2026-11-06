@@ -108,4 +108,61 @@ describe('MCP connector configure panel', () => {
             }),
         );
     });
+
+    it('shows the field label, help and setup link from the catalog', async () => {
+        const row = mcpRow({
+            id: 'mcp-slack',
+            display_name: 'Slack',
+            mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'],
+            setup_url: 'https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D',
+            config_fields: [
+                {
+                    key: 'SLACK_MCP_XOXB_TOKEN',
+                    label: 'Slack bot token',
+                    kind: 'secret',
+                    required: true,
+                    placeholder: 'xoxb-…',
+                    help_md: 'Click **Create Slack app**. See the [guide](https://amd-gaia.ai/docs/connectors/slack).',
+                },
+            ],
+        });
+        await openTile(row);
+
+        expect(screen.getByLabelText('Slack bot token')).toHaveAttribute('placeholder', 'xoxb-…');
+        expect(screen.queryByText('SLACK_MCP_XOXB_TOKEN')).toBeNull();
+        expect(screen.getByRole('link', { name: /Create Slack app/ })).toHaveAttribute(
+            'href',
+            'https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D',
+        );
+        expect(screen.getByRole('link', { name: 'guide' })).toHaveAttribute(
+            'href',
+            'https://amd-gaia.ai/docs/connectors/slack',
+        );
+        expect(screen.queryByText(/\*\*/)).toBeNull();
+    });
+
+    it('drops the setup link and help once the connector is configured', async () => {
+        const row = mcpRow({
+            id: 'mcp-slack',
+            display_name: 'Slack',
+            configured: true,
+            mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'],
+            setup_url: 'https://api.slack.com/apps?new_app=1',
+            config_fields: [
+                {
+                    key: 'SLACK_MCP_XOXB_TOKEN',
+                    label: 'Slack bot token',
+                    kind: 'secret',
+                    required: true,
+                    placeholder: 'xoxb-…',
+                    help_md: 'Click **Create Slack app**.',
+                },
+            ],
+        });
+        await openTile(row);
+
+        expect(screen.getByLabelText('Slack bot token')).toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: /Create Slack app/ })).toBeNull();
+        expect(screen.queryByText(/Click/)).toBeNull();
+    });
 });

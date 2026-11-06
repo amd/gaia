@@ -1676,6 +1676,7 @@ const messages: Messages = {
     'settings.connectors.disableServer': 'تعطيل خادم MCP هذا',
     'settings.connectors.enableServer': 'تفعيل خادم MCP هذا',
     'settings.connectors.disabledHelp': 'تبقى بيانات الاعتماد وأذونات الوكلاء محفوظة. أعد التفعيل لإتاحة أدوات هذا الخادم مجددًا.',
+    'settings.connectors.createApp': 'إنشاء تطبيق {name}',
     'settings.connectors.enterValue': 'أدخل القيمة',
     'settings.connectors.docs': 'التوثيق',
     'settings.connectors.via': 'عبر {name}',

@@ -837,6 +837,27 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
+        test('a keyed server shows its label, help and setup link', async ({ page }) => {
+            await openConnectors(page, [{
+                id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', description: 'Read channels, threads, and DMs in your Slack workspace.',
+                configured: false, configurable: true, enabled: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [],
+                setup_url: 'https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D',
+                config_fields: [{
+                    key: 'SLACK_MCP_XOXB_TOKEN', label: 'Slack bot token', kind: 'secret', required: true, placeholder: 'xoxb-…',
+                    help_md: 'Click **Create Slack app**, pick your workspace, then **Install to Workspace**. Then type `/invite @GAIA` in each channel GAIA should read.',
+                }],
+            }]);
+            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
+            await expect(page.locator('.connector-setup-link')).toBeVisible();
+            await expect(page.locator('.mcp-key-help code')).toBeVisible();
+            await expect(page.locator('.mcp-key-input')).toHaveAttribute('dir', 'ltr');
+            await expect(page.locator('.mcp-key-help')).toHaveAttribute('dir', 'auto');
+            await page.locator('.mcp-key-help').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-mcp-setup`);
+            expect(await audit(page)).toEqual([]);
+        });
+
         test('nothing connected: accounts start open', async ({ page }) => {
             await openConnectors(page, [{ id: 'microsoft', display_name: 'Microsoft', type: 'oauth_pkce', description: 'Mail', configured: false, configurable: true, mcp_env_keys: [], oauth_setup_fields: [] }]);
             await expect(page.locator('.connector-tile')).toBeVisible();
