@@ -10,11 +10,17 @@ import { useChatStore } from './chatStore';
 import { log } from '../utils/logger';
 import type { ActiveModel, Session, WarmUpStatus } from '../types';
 
+/** Why a pick's load failed: the backend's own reason, or a translated one when GAIA lost track. */
+export interface PickLoadError {
+    key?: 'banner.pickLoad.noReason' | 'banner.pickLoad.lostTrack' | 'banner.pickLoad.startFailed';
+    reason: string;
+}
+
 /** A local model picked from the list, loading in the background; `error` once that load failed. */
 export interface PickLoad {
     model: string;
     seconds: number;
-    error: string | null;
+    error: PickLoadError | null;
 }
 
 interface ModelState {
@@ -85,7 +91,8 @@ function watchPickLoad(model: string, set: (s: Partial<ModelState>) => void): vo
             set({ pickLoad: { model, seconds: isPickWarmUp(w, model) ? seconds : 0, error: null } });
             setTimeout(() => { void poll().catch(fail); }, PICK_LOAD_POLL_MS);
         } else if (w.state === 'failed' && isPickWarmUp(w, model)) {
-            set({ pickLoad: { model, seconds, error: w.error || 'The load stopped without saying why.' } });
+            const error: PickLoadError = w.error ? { reason: w.error } : { key: 'banner.pickLoad.noReason', reason: '' };
+            set({ pickLoad: { model, seconds, error } });
         } else {
             set({ pickLoad: null });
         }
@@ -95,7 +102,7 @@ function watchPickLoad(model: string, set: (s: Partial<ModelState>) => void): vo
         if (watch !== pickLoadWatch) return;
         log.system.warn(`Lost track of loading ${model}`, err);
         const reason = err instanceof Error ? err.message : String(err);
-        set({ pickLoad: { model, seconds: 0, error: `GAIA couldn't check on the load: ${reason}` } });
+        set({ pickLoad: { model, seconds: 0, error: { key: 'banner.pickLoad.lostTrack', reason } } });
     };
     void poll().catch(fail);
 }
@@ -202,10 +209,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
         const model = get().pickLoad?.model;
         if (!model) return;
         try {
-            await api.requestWarmUp();
+            await api.requestWarmUp(true);
         } catch (err) {
             const reason = err instanceof Error ? err.message : String(err);
-            set({ pickLoad: { model, seconds: 0, error: `GAIA couldn't start the load: ${reason}` } });
+            set({ pickLoad: { model, seconds: 0, error: { key: 'banner.pickLoad.startFailed', reason } } });
             return;
         }
         watchPickLoad(model, set);

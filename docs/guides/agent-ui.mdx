@@ -844,9 +844,11 @@ pick from 32K up to the window it was trained for. GAIA can't check those fit
 first, so a size too large fails to load and says so.
 
 The model chip in the composer opens the same list. While GAIA is answering,
-a model you pick there applies to your next message. A local model you pick
-starts loading right away, and a banner counts the seconds; you can type
-meanwhile, and a message waits for the load. If the model can't load, for
+a model you pick there applies to your next message. On most PCs, a local
+model you pick starts loading right away, and a banner counts the seconds; you
+can type meanwhile, and a message waits for the load. On a PC with under 24 GB
+of RAM, or when the GAIA agent runs as a Hub install, it loads with your first
+message instead. If the model can't load, for
 example because other apps hold the memory it needs, the banner says why and
 offers **Try again**. The model pill
 at the bottom of the sidebar shows whether the model is loaded, warming up or

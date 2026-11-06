@@ -210,7 +210,9 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     </div>
                     <div className="connection-banner__text" dir="auto">
                         {t('banner.pickLoad.failed', { model: name })}{' '}
-                        <span className="connection-banner__hint" dir="auto">{pickLoad.error}</span>
+                        <span className="connection-banner__hint" dir="auto">
+                            {pickLoad.error.key ? t(pickLoad.error.key, { reason: pickLoad.error.reason }) : pickLoad.error.reason}
+                        </span>
                     </div>
                     <RetryButton onRetry={retryPickLoad} label={t('banner.pickLoad.retry')} />
                     <button

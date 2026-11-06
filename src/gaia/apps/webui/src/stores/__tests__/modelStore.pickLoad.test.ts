@@ -49,14 +49,30 @@ describe('picking a local model', () => {
         mocked.getWarmUp.mockResolvedValue({ state: 'failed', elapsed_seconds: 3, model: QWEN, error: reason } as never);
         await useModelStore.getState().select(QWEN);
         await vi.advanceTimersByTimeAsync(0);
-        expect(useModelStore.getState().pickLoad).toEqual({ model: QWEN, seconds: 3, error: reason });
+        expect(useModelStore.getState().pickLoad).toEqual({ model: QWEN, seconds: 3, error: { reason } });
 
         mocked.requestWarmUp.mockResolvedValue({ state: 'warming' } as never);
         mocked.getWarmUp.mockResolvedValue({ state: 'warming', elapsed_seconds: 0.5, model: QWEN } as never);
         await useModelStore.getState().retryPickLoad();
         await vi.advanceTimersByTimeAsync(0);
-        expect(mocked.requestWarmUp).toHaveBeenCalledTimes(1);
+        expect(mocked.requestWarmUp).toHaveBeenCalledWith(true);
         expect(useModelStore.getState().pickLoad).toEqual({ model: QWEN, seconds: 0, error: null });
+    });
+
+    it('names a failure the backend gave no reason for, in the chosen language', async () => {
+        mocked.selectModel.mockResolvedValue(local);
+        mocked.getWarmUp.mockResolvedValue({ state: 'failed', elapsed_seconds: 2, model: QWEN, error: null } as never);
+        await useModelStore.getState().select(QWEN);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(useModelStore.getState().pickLoad?.error).toEqual({ key: 'banner.pickLoad.noReason', reason: '' });
+    });
+
+    it('says so when it loses track of the load', async () => {
+        mocked.selectModel.mockResolvedValue(local);
+        mocked.getWarmUp.mockRejectedValue(new Error('offline'));
+        await useModelStore.getState().select(QWEN);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(useModelStore.getState().pickLoad?.error).toEqual({ key: 'banner.pickLoad.lostTrack', reason: 'offline' });
     });
 
     it('ignores an older failure of another model', async () => {

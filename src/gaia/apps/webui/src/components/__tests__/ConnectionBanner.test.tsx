@@ -40,7 +40,7 @@ describe('a model picked from the list', () => {
     it('says why the load failed and offers to try again', () => {
         const retry = vi.fn().mockResolvedValue(undefined);
         const reason = `Not enough free memory to load ${QWEN}: it needs about 33.0 GB and only 3.7 GB is free. Close apps that use a lot of memory, then try again.`;
-        useModelStore.setState({ pickLoad: { model: QWEN, seconds: 4, error: reason }, retryPickLoad: retry });
+        useModelStore.setState({ pickLoad: { model: QWEN, seconds: 4, error: { reason } }, retryPickLoad: retry });
         render(<ConnectionBanner />);
         const alert = screen.getByRole('alert');
         expect(alert).toHaveTextContent(`Couldn't load ${QWEN}.`);
@@ -49,6 +49,17 @@ describe('a model picked from the list', () => {
         expect(retry).toHaveBeenCalledTimes(1);
         fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
         expect(useModelStore.getState().pickLoad).toBeNull();
+    });
+
+    it('translates a failure GAIA itself reports', () => {
+        useChatStore.setState({ locale: 'ar' });
+        try {
+            useModelStore.setState({ pickLoad: { model: QWEN, seconds: 0, error: { key: 'banner.pickLoad.lostTrack', reason: 'offline' } } });
+            render(<ConnectionBanner />);
+            expect(screen.getByRole('alert')).toHaveTextContent('تعذّر على GAIA متابعة التحميل');
+        } finally {
+            useChatStore.setState({ locale: 'en' });
+        }
     });
 });
 

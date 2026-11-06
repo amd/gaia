@@ -915,6 +915,25 @@ class TestSystemStatus:
         assert data["model_downloaded"] is True
         assert data["default_model_size_gb"] == 23.3
 
+    @pytest.mark.parametrize(
+        "query, expected",
+        [("", ("new chat", False)), ("?fresh=true", ("model pick retry", True))],
+    )
+    def test_warm_up_retry_of_a_pick_is_fresh(
+        self, client, monkeypatch, query, expected
+    ):
+        """Try again on a failed pick queues behind a running warm-up."""
+        from gaia.ui import warmup
+
+        asked = []
+        monkeypatch.setattr(
+            warmup,
+            "request_warm_up",
+            lambda reason, fresh=False: asked.append((reason, fresh)),
+        )
+        assert client.post(f"/api/system/warm-up{query}").status_code == 200
+        assert asked == [expected]
+
     @patch("httpx.AsyncClient")
     def test_system_status_custom_model_respected(self, mock_httpx_cls, client):
         """expected_model_loaded is True when the loaded model matches the

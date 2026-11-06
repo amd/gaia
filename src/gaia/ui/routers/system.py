@@ -1006,13 +1006,18 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
 
 
 @router.post("/api/system/warm-up", response_model=WarmUpStatus)
-async def request_warm_up():
+async def request_warm_up(fresh: bool = False):
     """Prime the prompt a new chat's first turn sends; returns the warm-up state.
 
     Called when the user opens a new chat. Debounced and single-flight, so a
     repeat call while one runs, or just after one finished, changes nothing.
+    ``?fresh=true`` retries a picked model's load: it skips the debounce and
+    runs after a warm-up already under way.
     """
-    warmup.request_warm_up("new chat")
+    if fresh:
+        warmup.request_warm_up("model pick retry", fresh=True)
+    else:
+        warmup.request_warm_up("new chat")
     return WarmUpStatus(**warmup.warm_up_status())
 
 

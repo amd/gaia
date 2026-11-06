@@ -1699,6 +1699,9 @@ export const enMessages = {
     'banner.pickLoad.canType': 'You can type now; your message sends once it is ready.',
     'banner.pickLoad.failed': "Couldn't load {model}.",
     'banner.pickLoad.retry': 'Try again',
+    'banner.pickLoad.noReason': 'The load stopped without saying why.',
+    'banner.pickLoad.lostTrack': "GAIA couldn't check on the load: {reason}",
+    'banner.pickLoad.startFailed': "GAIA couldn't start the load: {reason}",
     'banner.dismiss': 'Dismiss',
 
     // The update chip
