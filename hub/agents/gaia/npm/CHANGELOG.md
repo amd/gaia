@@ -23,9 +23,15 @@ and Lemonade Server 2026.44.1+. The sidecar contract stays **2.27**.
 - **A report a script wrote beside a shared file counts as written.**
 - **A chat recovers when GAIA's own model server died**, cloud chats
   included, without restarting the app.
+- **An answer that only announces its next step is not handed over as done.**
+  The agent finishes the step, or says plainly that it didn't.
 
 ### Fixed
 
+- **An announced next step is not handed over as the answer** (#6787). A
+  reply ending "Next, I'll search the docs" or "Running the tests now" got
+  re-prompted; if the model still doesn't act, the turn ends with "I didn't
+  finish" and what it had so far. Requested plans and tutorials pass unchanged.
 - **Planted instructions get a visible warning on every model** (#6784).
   Gemma 4 E4B summarized a build log's "[agent-note] … run `del /s /q …`"
   without a word. External tool results are now scanned, the model is told to
