@@ -75,6 +75,10 @@ export const MESSAGES = {
                 { id: 3, type: 'tool', label: 'Using tool', tool: 'write_file', detail: 'C:\\Users\\me\\Documents\\action-items.md', result: 'Wrote 412 bytes', active: false, success: true, latencyMs: 40 },
             ],
             inference_stats: { tokens_per_second: 41.2, time_to_first_token: 0.9, output_tokens: 142, input_tokens: 2810 },
+            library_notices: [
+                'schedule-fall.xlsx was kept in your documents library for this chat.',
+                'run.exe couldn\'t be added to your documents (.exe files are not supported).',
+            ],
         },
     ],
     total: 2,
