@@ -586,28 +586,47 @@ def _prose_values(text: str) -> List[_Value]:
         if after == "+" or not ("." in raw or "," in raw or after == "%"):
             continue  # "3.11+" is a version floor
         lead = text[max(0, match.start() - 24) : match.start()]
-        if _VERSION_LEAD.search(lead) or _ESTIMATE_LEAD.search(lead):
+        if (
+            _VERSION_LEAD.search(lead)
+            and not _is_money_number(text, match.start(), match.end())
+            or _ESTIMATE_LEAD.search(lead)
+        ):
             continue
         unit = _PROSE_UNIT.match(text, match.end())
         values.append(_value(raw, _unit(unit.group(1)) if unit else None))
     return values
 
 
+#: Currency codes and words accepted after a prose amount as well as before it.
+_MONEY_SUFFIX = r"(?:USD|EUR|GBP|CAD|AUD|JPY|CHF|CNY|INR|dollars?|euros?|pounds?)"
 #: "$2,708.95", "€1,379.87", "USD 1,375.25": an amount to the cent or the thousand.
-_PROSE_MONEY = re.compile(
+_PROSE_MONEY_PREFIX = re.compile(
     r"(?:(?:US|C|A)?\$|€|£|¥|\b(?:USD|EUR|GBP|CAD|AUD|JPY|CHF|CNY|INR)\s?)\s?"
     r"(?P<n>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+)(?!\d|,\d)"
+)
+#: "2,708.95 USD" and "2,708.95 dollars" are money too.
+_PROSE_MONEY_SUFFIX = re.compile(
+    r"(?<![\w.,])(?P<n>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+)\s+" rf"{_MONEY_SUFFIX}\b"
 )
 
 
 def _stated_money(text: str) -> Set[str]:
     """The exact amounts of money *text* states, as written, estimates aside."""
     amounts = set()
-    for match in _PROSE_MONEY.finditer(text):
-        lead = text[max(0, match.start() - 24) : match.start()]
-        if not _ESTIMATE_LEAD.search(lead) and float(match["n"].replace(",", "")):
-            amounts.add(match.group("n"))
+    for pattern in (_PROSE_MONEY_PREFIX, _PROSE_MONEY_SUFFIX):
+        for match in pattern.finditer(text):
+            lead = text[max(0, match.start() - 24) : match.start()]
+            if not _ESTIMATE_LEAD.search(lead) and float(match["n"].replace(",", "")):
+                amounts.add(match.group("n"))
     return amounts
+
+
+def _is_money_number(text: str, start: int, end: int) -> bool:
+    """Whether the number at *start:end* has its own currency marker."""
+    lead = text[max(0, start - 24) : end]
+    if any(m.end("n") == len(lead) for m in _PROSE_MONEY_PREFIX.finditer(lead)):
+        return True
+    return _PROSE_MONEY_SUFFIX.match(text[start : end + 24]) is not None
 
 
 def _tables_and_prose(answer: str) -> "tuple[List[_Value], str]":

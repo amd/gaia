@@ -66,10 +66,13 @@
  * `microsoft` Outlook.com connector), is now valid wherever a provider
  * string is accepted or returned. No existing field or value changed
  * (additive).
+ * Schema 2.15 (additive over 2.14, #6043): the published OpenAPI document
+ * now lists the stateful `/v1/email/agent/*` routes the sidecar already
+ * served. No request or response shape changed (additive).
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
-export const SCHEMA_VERSION = "2.14" as const;
+export const SCHEMA_VERSION = "2.15" as const;
 
 /**
  * The five-bucket triage taxonomy (schema 2.0 — contract.py: EmailCategory).

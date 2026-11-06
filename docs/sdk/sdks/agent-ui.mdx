@@ -542,6 +542,39 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | `preferred_backend` | The saved choice, which may be an untested one saved before GAIA stopped offering it; `null` means none was saved and Lemonade picks |
   </Accordion>
 
+  <Accordion title="GET /api/system/resources">
+    This PC's CPU, memory, GPU, NPU and network use for the chat's resource strip, with about a minute of history (oldest first, one sample per `interval_ms`). Needs the `X-Gaia-UI: 1` header. Sampling starts on the first request and stops on its own about 15 seconds after the last one. `ready` is `false` until the first sample is in. `503` when CPU or memory can't be read, with the reason in `detail`; a GPU or network failure alone is reported in `devices_error` or `networks_error` instead.
+
+    On Windows the figures come from the counters Task Manager reads: CPU is `% Processor Utility`, a GPU or NPU (a compute-only adapter) is its busiest engine, and `networks` lists the connected hardware adapters (no Hyper-V, WSL or VPN interfaces). On Linux, AMD GPUs are read from sysfs and networks are interfaces with a `device` link; macOS reports CPU, memory and its `en` interfaces.
+
+    **Response:**
+    ```json
+    {
+      "interval_ms": 1000,
+      "ready": true,
+      "cpu": { "percent": 20.4, "ghz": 4.7, "history": [18.2, 20.4] },
+      "memory": { "used_bytes": 48318382080, "total_bytes": 68289282048, "percent": 70.8, "history": [70.5, 70.8] },
+      "devices": [
+        { "id": "0x00000000_0x0000d938", "name": "AMD Radeon(TM) 8060S Graphics", "kind": "gpu", "percent": 14.0, "memory_used_bytes": 32212254720, "history": [12.0, 14.0] },
+        { "id": "0x00000000_0x0000f994", "name": "NPU Compute Accelerator Device", "kind": "npu", "percent": 0.0, "memory_used_bytes": 12261240832, "history": [0.0, 0.0] }
+      ],
+      "networks": [
+        { "id": "net_0006008007000000", "name": "Ethernet 3", "description": "Realtek Gaming 2.5GbE Family Controller", "kind": "ethernet", "send_bps": 52008, "recv_bps": 47055, "send_history": [68447, 52008], "recv_history": [60059, 47055] }
+      ]
+    }
+    ```
+
+    | Field | Description |
+    |-------|-------------|
+    | `cpu.ghz` | Current clock speed, or `null` when the OS doesn't report it |
+    | `memory.used_bytes` | Total less available, as Task Manager's "In use" |
+    | `devices[].kind` | `gpu` or `npu` |
+    | `devices[].memory_used_bytes` | Dedicated plus shared memory the device holds, or `null` when not reported |
+    | `networks[].kind` | `ethernet`, `wifi`, or `network` when the OS doesn't say which |
+    | `networks[].send_bps`, `recv_bps` | Bits per second over the last interval; the histories are the same per sample |
+    | `devices_error`, `networks_error` | Why GPUs and NPUs, or network adapters, can't be read while CPU and memory still can (for example, no GPU counters in a VM); `null` otherwise. That list is then empty |
+  </Accordion>
+
   <Accordion title="PUT /api/system/model-server/backend">
     Save the llama.cpp backend for chat models as `llamacpp_backend` in `~/.gaia/config.json`. It applies the next time a chat model loads; the embedding model keeps its own backend.
 

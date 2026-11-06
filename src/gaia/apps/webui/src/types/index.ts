@@ -1305,3 +1305,55 @@ export interface SkillInfo {
     /** Absent when an older GAIA agent answered the listing. */
     source?: SkillSource | null;
 }
+
+// ── Resource usage (GET /api/system/resources) ────────────────────────────
+
+/** One CPU, memory, GPU, NPU or network reading; histories are oldest first, one per interval. */
+export interface CpuUsage {
+    percent: number;
+    ghz: number | null;
+    history: number[];
+}
+
+export interface MemoryUsage {
+    used_bytes: number;
+    total_bytes: number;
+    percent: number;
+    history: number[];
+}
+
+export interface DeviceUsage {
+    id: string;
+    name: string;
+    kind: 'gpu' | 'npu';
+    percent: number;
+    memory_used_bytes: number | null;
+    history: number[];
+}
+
+export interface NetworkUsage {
+    id: string;
+    /** The connection's name, such as "Ethernet 3". */
+    name: string;
+    /** The adapter's hardware name. */
+    description: string;
+    kind: 'ethernet' | 'wifi' | 'network';
+    send_bps: number;
+    recv_bps: number;
+    send_history: number[];
+    recv_history: number[];
+}
+
+export interface ResourceUsage {
+    interval_ms: number;
+    /** False until the first sample is in. */
+    ready: boolean;
+    cpu?: CpuUsage | null;
+    memory?: MemoryUsage | null;
+    devices?: DeviceUsage[];
+    networks?: NetworkUsage[];
+    /** Why GPUs and NPUs can't be read, when CPU and memory still can. */
+    devices_error?: string | null;
+    /** Why network adapters can't be read, when CPU and memory still can. */
+    networks_error?: string | null;
+}

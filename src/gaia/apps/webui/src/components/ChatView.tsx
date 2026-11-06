@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Clock } from 'lucide-react';
+import { Activity, Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Clock } from 'lucide-react';
 import { MessageBubble, cleanToolCallContent, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep } from '../utils/streamSteps';
@@ -41,9 +41,11 @@ import * as messageQueue from '../utils/messageQueue';
 import type { QueuedMessage } from '../utils/messageQueue';
 import { SessionPanel, SessionPanelToggle } from './session-panel/SessionPanel';
 import { PrivateChatButton } from './PrivateChatButton';
+import { ResourceMonitor } from './ResourceMonitor';
 import { OfflineNotice } from './session-panel/OfflineNotice';
 import { ExportErrorBar } from './ExportErrorBar';
 import { useSessionPanelStore } from '../stores/sessionPanelStore';
+import { useResourceMonitorStore } from '../stores/resourceMonitorStore';
 import { useAttachments } from '../hooks/useAttachments';
 import { useAnswerComparison } from '../hooks/useAnswerComparison';
 import { useContextUsage } from '../hooks/useContextUsage';
@@ -428,6 +430,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const panelWidth = useSessionPanelStore((s) => s.width);
     const revealPanelSection = useSessionPanelStore((s) => s.reveal);
+    const showResources = useResourceMonitorStore((s) => s.visible);
+    const setShowResources = useResourceMonitorStore((s) => s.setVisible);
+    const resourcesToggleRef = useRef<HTMLButtonElement>(null);
+    const closeResources = useCallback(() => {
+        setShowResources(false);
+        // The close button unmounts with the strip; keep keyboard focus nearby.
+        resourcesToggleRef.current?.focus();
+    }, [setShowResources]);
 
     const jumpToMessage = useJumpToMessage(messagesScrollRef, isNearBottomRef);
 
@@ -1617,6 +1627,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     )}
                 </div>
                 <div className="task-header-right">
+                    <button
+                        ref={resourcesToggleRef}
+                        className="btn-icon-sm task-header-resources"
+                        onClick={() => setShowResources(!showResources)}
+                        aria-pressed={showResources}
+                        aria-label={t('resources.toggle')}
+                        title={t(showResources ? 'resources.hide' : 'resources.show')}
+                    >
+                        <Activity size={15} aria-hidden="true" />
+                    </button>
                     <PrivateChatButton isPrivate={!!session?.private} onToggle={handleTogglePrivate} />
                     <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files on this PC" aria-label="Browse files on this PC">
                         <FolderSearch size={15} />
@@ -1627,6 +1647,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <SessionPanelToggle messages={messages} busy={isStreaming} />
                 </div>
             </header>
+
+            {showResources && <ResourceMonitor onClose={closeResources} />}
 
             {sessionDocs.length > 0 && (() => {
                 const sorted = [...sessionDocs].sort((a, b) => {
