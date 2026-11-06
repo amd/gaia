@@ -115,10 +115,22 @@ _LOOK_ONLY_TOOLS = (
 )
 
 _AI = r"(?:ai|a\.i\.|llm|language model|assistant|agent|chatbot|bot|model|copilot)s?"
+# Who an address or note is for. "Agent", "assistant", "model" and "bot" are
+# also people ("Note to agents: showings start Monday"), so they need an AI
+# qualifier; the rest only ever mean software.
+_AI_QUALIFIER = (
+    r"(?:ai|a\.i\.|llm|gpt|genai|gen-ai|generative\s+ai"
+    r"|(?:large\s+)?language\s+model|chatbot|copilot)"
+)
+_AI_ADDRESSEE = (
+    rf"(?:{_AI_QUALIFIER}[\s-]+(?:agent|assistant|model|bot)s?"
+    r"|(?:ais?|a\.i\.|llms?|gpts?|(?:large\s+)?language\s+models?|chatbots?"
+    r"|copilots?)(?![\w-]))"
+)
 
 # "AI assistants reading this: ..." — an address followed by a colon or a verb.
 _ADDRESS = re.compile(
-    rf"\b(?:ai\s+|llm\s+)?{_AI}\s+(?:that\s+(?:is|are)\s+)?"
+    rf"\b{_AI_ADDRESSEE}\s+(?:that\s+(?:is|are)\s+)?"
     r"(?:reading|processing|parsing|summari[sz]ing|seeing|viewing|analy[sz]ing)\s+"
     r"(?:this|these)\b[^\n.]{0,40}?(?::|,\s*(?:please\s+)?(?:run|execute|delete|"
     r"ignore|send|email|open|download|report|reply|do\b))",
@@ -128,7 +140,7 @@ _ADDRESS = re.compile(
 # LLM:" is a log call.
 _NOTE_TO_AI = re.compile(
     r"(?:^[\s#/*<!>\-\[(]*|<!--\s*)(?:note|message|instructions?)\s+(?:to|for)\s+"
-    rf"(?:the\s+|any\s+|all\s+)?(?:ai\s+)?{_AI}\s*:",
+    rf"(?:the\s+|any\s+|all\s+)?{_AI_ADDRESSEE}\s*:",
     re.IGNORECASE | re.MULTILINE,
 )
 _TAG = re.compile(
