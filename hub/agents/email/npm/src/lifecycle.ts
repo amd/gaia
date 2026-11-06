@@ -333,7 +333,7 @@ export interface VersionCheckOptions {
  * Fetch /version and refuse a sidecar whose apiVersion MAJOR differs from what
  * this client expects. A MAJOR bump means a breaking contract change, so we fail
  * loudly rather than send requests the server may reject or mis-handle. A higher
- * MINOR (same major) is accepted (backward-compatible additions).
+ * MINOR (same major) is accepted, but a MINOR bump can be breaking (2.3 was); see CONTRACT.md's version history.
  */
 export async function checkVersion(
   client: EmailClient,

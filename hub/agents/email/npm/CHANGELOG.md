@@ -213,6 +213,10 @@ behind any entry — API shapes, endpoints, and version semantics — see
   `/health`, `/version`, and the other exempt routes as public) — nothing about
   which calls need a token, or when, has changed (#2993).
 
+- **The docs give the right undo window.** Archive and quarantine can be undone
+  for 120 seconds by default, not 30; set `GAIA_EMAIL_UNDO_WINDOW_SECONDS` to
+  change it.
+
 ## [0.6.0] - 2026-08-12
 
 - **Work Microsoft 365 mailboxes are now supported alongside Gmail and personal
