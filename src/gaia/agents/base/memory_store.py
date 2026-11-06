@@ -1095,7 +1095,7 @@ class MemoryStore:
             content = content[:MAX_TURN_LENGTH]
         now = _now_iso()
         with self._locked():
-            if erase_count is not None and self._erase_count_locked() != erase_count:
+            if self._erased_since_for_write_locked(erase_count):
                 logger.info(
                     "[MemoryStore] turn not stored: all memory was erased after "
                     "it began"
@@ -1386,12 +1386,22 @@ class MemoryStore:
         now = _now_iso()
 
         with self._locked():
-            if source in TEACHING_SOURCES:
-                # Taught again on purpose, so it is no longer forgotten.
-                self._unforget_locked(content)
+            # Write lock before the dedup read: every chat has its own connection,
+            # and two that both read "no match" would each insert the fact.
+            if not self._conn.in_transaction:
+                self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                if source in TEACHING_SOURCES:
+                    # Taught again on purpose, so it is no longer forgotten.
+                    self._unforget_locked(content)
 
-            # Check for dedup match (scoped to category + context + entity)
-            existing_id = self._find_similar_locked(content, category, context, entity)
+                # Check for dedup match (scoped to category + context + entity)
+                existing_id = self._find_similar_locked(
+                    content, category, context, entity
+                )
+            except BaseException:
+                self._conn.rollback()
+                raise
 
             if existing_id:
                 # Update existing: replace content with newer, take max confidence.
@@ -1493,14 +1503,11 @@ class MemoryStore:
     ) -> Optional[str]:
         """Find existing knowledge with >80% word overlap in same category+context+entity.
 
-        Must be called with self._lock held.
-
-        Cross-process note: self._lock is a threading.Lock — it protects against
-        concurrent inserts within the *same process* only. Two separate processes
-        may both see no duplicate and both insert, resulting in brief redundancy.
-        This is intentionally accepted: the next store() call from either process
-        will detect the overlap and deduplicate. SQLite WAL mode ensures each
-        INSERT is atomic so no data is corrupted.
+        Must be called with self._lock held and SQLite's write lock taken
+        (``BEGIN IMMEDIATE``): self._lock only covers this one connection, so
+        without the write lock another connection — another chat, the Memory
+        page, another process — can insert the same fact between this read and
+        the caller's insert.
         """
         safe_query = _sanitize_fts5_query(content, use_and=False)
         if not safe_query:
@@ -2793,7 +2800,7 @@ class MemoryStore:
             error = error[:MAX_FTS_QUERY_LENGTH]
 
         with self._locked():
-            if erase_count is not None and self._erase_count_locked() != erase_count:
+            if self._erased_since_for_write_locked(erase_count):
                 logger.info(
                     "[MemoryStore] %s call not logged: all memory was erased "
                     "after its turn began",
@@ -3593,7 +3600,9 @@ class MemoryStore:
         enabled: bool = True,
         embedding: bytes | None = None,
         skill_id: str | None = None,
-    ) -> str:
+        *,
+        erase_count: int | None = None,
+    ) -> str | None:
         """Insert or update a procedure row (procedural memory).
 
         With ``skill_id`` None a new ``proc_<uuid>`` id is generated and a row
@@ -3617,9 +3626,13 @@ class MemoryStore:
             enabled: False disables recall without deleting the row.
             embedding: 768-float32 BLOB over ``when_to_use`` (its own FAISS index).
             skill_id: existing procedure id to update; None inserts a new row.
+            erase_count: :meth:`erase_count` when the work producing this
+                procedure began; if all memory was erased since, nothing is
+                written.
 
         Returns:
-            The procedure id (existing on update, new ``proc_<uuid>`` on insert).
+            The procedure id (existing on update, new ``proc_<uuid>`` on
+            insert), or None when an erase since ``erase_count`` dropped it.
 
         Raises:
             ValueError: if ``name``, ``when_to_use``, or ``markdown_body`` is
@@ -3638,6 +3651,12 @@ class MemoryStore:
         now = _now_iso()
 
         with self._locked():
+            if self._erased_since_for_write_locked(erase_count):
+                logger.info(
+                    "[MemoryStore] procedure not stored: all memory was erased "
+                    "after it began"
+                )
+                return None
             try:
                 # existing_id is the str id only when skill_id was provided AND
                 # matches a row — keeping it a narrowed str (not str | None) so
@@ -4283,6 +4302,8 @@ class MemoryStore:
         outcome: str,
         goal: str | None = None,
         detail: str | None = None,
+        *,
+        erase_count: int | None = None,
     ) -> int:
         """Record that synthesis already handed these sessions to the distiller.
 
@@ -4298,9 +4319,12 @@ class MemoryStore:
                 ``"unusable"`` (SKIP / unparseable / truncated output).
             goal: The cluster goal, kept for the log trail.
             detail: Why, for the ``unusable`` case.
+            erase_count: :meth:`erase_count` when the pass began; if all memory
+                was erased since, nothing is written (``goal`` is the user's
+                own first message).
 
         Returns:
-            Number of sessions marked.
+            Number of sessions marked (0 when an erase dropped the write).
 
         Raises:
             ValueError: ``outcome`` is not one of ``SYNTHESIS_OUTCOMES`` —
@@ -4317,6 +4341,12 @@ class MemoryStore:
         now = _now_iso()
         rows = [(sid, outcome, goal, detail, now) for sid in ids]
         with self._locked():
+            if self._erased_since_for_write_locked(erase_count):
+                logger.info(
+                    "[MemoryStore] synthesis marks not stored: all memory was "
+                    "erased after the pass began"
+                )
+                return 0
             try:
                 self._conn.executemany(
                     "INSERT INTO synthesis_marks "
@@ -4598,6 +4628,29 @@ class MemoryStore:
             "SELECT value FROM meta WHERE key = ?", (self._ERASE_COUNT_KEY,)
         ).fetchone()
         return int(row[0]) if row is not None else 0
+
+    def _erased_since_for_write_locked(self, erase_count: Optional[int]) -> bool:
+        """Check *erase_count* under SQLite's write lock, ahead of a write.
+
+        The process lock alone misses an erase still uncommitted on another
+        connection. ``BEGIN IMMEDIATE`` waits for it, so the count read here is
+        final until this write commits. On True the transaction it began is
+        rolled back.
+        """
+        if erase_count is None:
+            return False
+        began = not self._conn.in_transaction
+        if began:
+            self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            erased = self._erase_count_locked() != erase_count
+        except Exception:
+            if began:
+                self._conn.rollback()
+            raise
+        if erased and began:
+            self._conn.rollback()
+        return erased
 
     def erased_since(self, erase_count: Optional[int]) -> bool:
         """Whether memory was erased after *erase_count* was read (None: no)."""

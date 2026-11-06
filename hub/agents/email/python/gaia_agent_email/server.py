@@ -249,9 +249,9 @@ app = build_app()
 
 def _read_declared_skill_sets() -> list[str]:
     """Skill-set names this build declares. Raises if the manifest is unreadable."""
-    from gaia.hub.manifest import parse as parse_manifest
-
     from gaia_agent_email.agent import EmailTriageAgent
+
+    from gaia.hub.manifest import parse as parse_manifest
 
     return list(parse_manifest(EmailTriageAgent.SKILL_MANIFEST).skill_sets.set_names)
 

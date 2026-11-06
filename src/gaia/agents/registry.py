@@ -47,6 +47,10 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     "code_index": ("gaia.agents.tools.code_index_tools", "CodeIndexToolsMixin"),
     "file_search": ("gaia.agents.tools.file_tools", "FileSearchToolsMixin"),
     "file_io": ("gaia.agents.tools.file_io_tools", "FileIOToolsMixin"),
+    "file_monitor": (
+        "gaia.agents.tools.file_monitor_tools",
+        "FileToolsMixin",
+    ),
     "shell": ("gaia.agents.tools.shell_tools", "ShellToolsMixin"),
     "cli_setup": ("gaia.agents.tools.cli_setup_tools", "CliSetupToolsMixin"),
     "screenshot": ("gaia.agents.tools.screenshot_tools", "ScreenshotToolsMixin"),

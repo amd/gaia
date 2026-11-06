@@ -16,11 +16,20 @@ const {
   IPC_RETRY_REQUEST,
   IPC_OPEN_LOG_FILE,
   IPC_REVERT_REQUEST,
+  IPC_CLOSE_LOCKERS_REQUEST,
 } = require("../../src/gaia/apps/webui/services/engine-install.cjs");
+const { summarizeHolders } = require("../../src/gaia/apps/webui/services/lock-holders.cjs");
 
 const LOG_PATH = "/mock/home/.gaia/install.log";
+const OWN_PID = 500;
 
-function setup({ ensureBackend = jest.fn(async () => "/mock/gaia"), window: win, previousVersion = null } = {}) {
+function setup({
+  ensureBackend = jest.fn(async () => "/mock/gaia"),
+  window: win,
+  previousVersion = null,
+  lockHolders,
+  platform = "win32",
+} = {}) {
   const handlers = new Map();
   const ipcMain = { handle: (channel, fn) => handlers.set(channel, fn) };
   const installer = {
@@ -42,6 +51,9 @@ function setup({ ensureBackend = jest.fn(async () => "/mock/gaia"), window: win,
     onFailed,
     previousVersion: () => previousVersion,
     revert,
+    ...(lockHolders ? { lockHolders } : {}),
+    ownPid: OWN_PID,
+    platform,
   });
   const invoke = (channel, ...args) => handlers.get(channel)({}, ...args);
   return { engine, installer, shell, send, onFailed, revert, invoke };
@@ -139,6 +151,25 @@ describe("a failed install", () => {
     engine.stop();
   });
 
+  test("a log that can't be read still shows the failure screen, saying why", async () => {
+    const { engine, installer, send, onFailed } = setup({
+      ensureBackend: jest.fn().mockRejectedValue(installError("boom")),
+    });
+    installer.readLogTail.mockImplementation(() => {
+      throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
+    });
+
+    engine.run();
+    await tick();
+
+    expect(sent(send).at(-1)).toMatchObject({
+      phase: "failed",
+      error: { logTail: ["The install log could not be read: EBUSY: resource busy or locked"] },
+    });
+    expect(onFailed).toHaveBeenCalled();
+    engine.stop();
+  });
+
   test("the failure is sent before the window is surfaced", async () => {
     const { engine, send, onFailed } = setup({
       ensureBackend: jest.fn().mockRejectedValue(installError("boom")),
@@ -232,6 +263,64 @@ describe("a failed install", () => {
   });
 });
 
+describe("quitting during the install", () => {
+  /** An install that runs until its signal aborts, then rejects the way the installer does. */
+  function runningInstall({ stopMs = 0 } = {}) {
+    const seen = {};
+    const ensureBackend = jest.fn(
+      ({ signal }) =>
+        new Promise((resolve, reject) => {
+          seen.signal = signal;
+          signal.addEventListener("abort", () =>
+            setTimeout(() => reject(Object.assign(new Error("The install stopped because GAIA is quitting"), { name: "InstallCancelled" })), stopMs)
+          );
+        })
+    );
+    return { ensureBackend, seen };
+  }
+
+  test("stop() stops the running install and waits until it has ended", async () => {
+    const { ensureBackend, seen } = runningInstall({ stopMs: 50 });
+    const { engine } = setup({ ensureBackend });
+    const run = engine.run();
+    await tick();
+    expect(seen.signal.aborted).toBe(false);
+
+    let stopped = false;
+    const stopping = engine.stop().then(() => {
+      stopped = true;
+    });
+    expect(seen.signal.aborted).toBe(true);
+    await tick();
+    expect(stopped).toBe(false);
+
+    await stopping;
+    await expect(run).resolves.toBe(false);
+  });
+
+  test("a stopped install is not shown or reported as a failure", async () => {
+    const { ensureBackend } = runningInstall();
+    const { engine, send, onFailed } = setup({ ensureBackend });
+    const run = engine.run();
+    await tick();
+
+    await engine.stop();
+    await run;
+
+    expect(sent(send).some((s) => s.phase === "failed")).toBe(false);
+    expect(onFailed).not.toHaveBeenCalled();
+    expect(console.error).not.toHaveBeenCalled();
+    expect(ensureBackend).toHaveBeenCalledTimes(1);
+  });
+
+  test("stop() before any install, or after one finished, returns at once", async () => {
+    const { engine } = setup();
+    await expect(engine.stop()).resolves.toBeUndefined();
+    await engine.run();
+    await expect(engine.stop()).resolves.toBeUndefined();
+  });
+});
+
 describe("install:open-log-file", () => {
   test("opens only the installer log, ignoring a renderer-supplied path", async () => {
     const { invoke, shell } = setup();
@@ -289,6 +378,131 @@ describe("going back after a failed update", () => {
   });
 });
 
+describe("a file another program holds open", () => {
+  const LOCKED_FILE = "C:\\Users\\you\\.gaia\\venv\\Scripts\\gaia.exe";
+  const DEMO_GAIA = "C:\\Users\\you\\demo-home\\.gaia\\venv\\Scripts\\gaia.exe";
+  const CODE = "C:\\Program Files\\VS Code\\Code.exe";
+  const raw = (pid, p, ancestors = []) => ({ pid, name: p.split("\\").pop(), path: p, commandLine: p, ancestors });
+  const lockedError = () =>
+    installError("GAIA couldn't replace its own files because another program has them open (gaia.exe).", {
+      stage: "install-package",
+      reason: "locked",
+      lockedFiles: [LOCKED_FILE],
+    });
+
+  function lockHoldersReturning(...answers) {
+    const queue = [...answers];
+    return {
+      queryLockHolders: jest.fn(async () => queue.length > 1 ? queue.shift() : queue[0]),
+      summarizeHolders,
+      endProcessTrees: jest.fn(async () => {}),
+    };
+  }
+
+  test("the failure names who holds it", async () => {
+    const lockHolders = lockHoldersReturning([raw(32852, DEMO_GAIA)]);
+    const { engine, send } = setup({ ensureBackend: jest.fn().mockRejectedValue(lockedError()), lockHolders });
+
+    engine.run();
+    await tick();
+
+    expect(lockHolders.queryLockHolders).toHaveBeenCalledWith([LOCKED_FILE]);
+    expect(sent(send).at(-1).error.lockedBy).toEqual([
+      { pid: 32852, name: "gaia.exe", path: DEMO_GAIA, folder: "C:\\Users\\you\\demo-home", isGaia: true },
+    ]);
+    engine.stop();
+  });
+
+  test("Close it and continue ends exactly the GAIA processes shown, then installs again", async () => {
+    const lockHolders = lockHoldersReturning([raw(32852, DEMO_GAIA)]);
+    const ensureBackend = jest.fn().mockRejectedValueOnce(lockedError()).mockResolvedValueOnce("/mock/gaia");
+    const { engine, invoke } = setup({ ensureBackend, lockHolders });
+
+    const done = engine.run();
+    await tick();
+    expect(lockHolders.endProcessTrees).not.toHaveBeenCalled();
+
+    await expect(invoke(IPC_CLOSE_LOCKERS_REQUEST)).resolves.toBe(true);
+
+    expect(lockHolders.endProcessTrees).toHaveBeenCalledWith([32852]);
+    await expect(done).resolves.toBe(true);
+    expect(ensureBackend).toHaveBeenCalledTimes(2);
+    expect(lockHolders.endProcessTrees.mock.invocationCallOrder[0]).toBeLessThan(
+      ensureBackend.mock.invocationCallOrder[1]
+    );
+  });
+
+  test("a program that isn't GAIA is never closed", async () => {
+    const lockHolders = lockHoldersReturning([raw(4100, CODE)]);
+    const { engine, send, invoke } = setup({ ensureBackend: jest.fn().mockRejectedValue(lockedError()), lockHolders });
+
+    engine.run();
+    await tick();
+
+    expect(sent(send).at(-1).error.lockedBy).toEqual([expect.objectContaining({ pid: 4100, isGaia: false })]);
+    await expect(invoke(IPC_CLOSE_LOCKERS_REQUEST)).resolves.toBe(false);
+    expect(lockHolders.endProcessTrees).not.toHaveBeenCalled();
+    engine.stop();
+  });
+
+  test("a pid that now belongs to a different program is left alone", async () => {
+    const lockHolders = lockHoldersReturning([raw(32852, DEMO_GAIA)], [raw(32852, CODE)]);
+    const ensureBackend = jest.fn().mockRejectedValueOnce(lockedError()).mockResolvedValueOnce("/mock/gaia");
+    const { engine, invoke } = setup({ ensureBackend, lockHolders });
+
+    const done = engine.run();
+    await tick();
+    await invoke(IPC_CLOSE_LOCKERS_REQUEST);
+
+    expect(lockHolders.endProcessTrees).toHaveBeenCalledWith([]);
+    await done;
+  });
+
+  test("a close that fails keeps the failure on screen and doesn't install", async () => {
+    const lockHolders = lockHoldersReturning([raw(32852, DEMO_GAIA)]);
+    lockHolders.endProcessTrees.mockRejectedValue(new Error("Could not end process 32852: Access is denied."));
+    const ensureBackend = jest.fn().mockRejectedValue(lockedError());
+    const { engine, invoke } = setup({ ensureBackend, lockHolders });
+
+    engine.run();
+    await tick();
+
+    await expect(invoke(IPC_CLOSE_LOCKERS_REQUEST)).rejects.toThrow("Access is denied");
+    expect(ensureBackend).toHaveBeenCalledTimes(1);
+    expect(invoke(IPC_RETRY_REQUEST)).toBe(true);
+    engine.stop();
+  });
+
+  test("a lookup that fails leaves lockedBy empty and is logged", async () => {
+    const lockHolders = lockHoldersReturning([]);
+    lockHolders.queryLockHolders.mockRejectedValue(new Error("powershell timed out"));
+    const { engine, send } = setup({ ensureBackend: jest.fn().mockRejectedValue(lockedError()), lockHolders });
+
+    engine.run();
+    await tick();
+
+    expect(sent(send).at(-1).error).toMatchObject({ reason: "locked", lockedBy: null });
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("powershell timed out"));
+    engine.stop();
+  });
+
+  test("off Windows nothing is looked up", async () => {
+    const lockHolders = lockHoldersReturning([]);
+    const { engine, send } = setup({
+      ensureBackend: jest.fn().mockRejectedValue(lockedError()),
+      lockHolders,
+      platform: "linux",
+    });
+
+    engine.run();
+    await tick();
+
+    expect(lockHolders.queryLockHolders).not.toHaveBeenCalled();
+    expect(sent(send).at(-1).error.lockedBy).toBeNull();
+    engine.stop();
+  });
+});
+
 describe("preload bridge", () => {
   const preload = fs.readFileSync(
     path.resolve(__dirname, "../../src/gaia/apps/webui/preload.cjs"),
@@ -300,6 +514,7 @@ describe("preload bridge", () => {
     ["status", `ipcRenderer.invoke("${IPC_STATUS_REQUEST}")`],
     ["retry", `ipcRenderer.invoke("${IPC_RETRY_REQUEST}")`],
     ["openLogFile", `ipcRenderer.invoke("${IPC_OPEN_LOG_FILE}")`],
+    ["closeLockingPrograms", `ipcRenderer.invoke("${IPC_CLOSE_LOCKERS_REQUEST}")`],
   ])("gaiaInstall.%s uses the channel main handles", (name, call) => {
     expect(preload).toContain(`${name}: `);
     expect(preload).toContain(call);

@@ -15,7 +15,6 @@ from enum import Enum
 from typing import Any, Dict, Iterator, Optional, Tuple
 
 from gaia.llm.lemonade_client import (
-    CLOUD_RECIPE,
     DEFAULT_CONTEXT_SIZE,
     DEFAULT_MODEL_NAME,
     PROBE_TIMEOUT,
@@ -23,11 +22,16 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     LemonadeStatus,
+    LoadedModelMissingError,
     _model_ids_match,
     check_lemonade_version,
     cloud_model_provider,
     fit_ctx_to_free_memory,
+    is_cloud_model_entry,
     is_llm_model_entry,
+    lemonade_log_hint,
+    loaded_ctx_size,
+    remember_engine_start_failure,
     resolve_ctx_size,
     resolve_default_chat_model,
     resolve_effective_ctx_size,
@@ -36,6 +40,7 @@ from gaia.llm.lemonade_client import (
     runs_on_npu,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
+from gaia.llm.surface_hints import surface_wording
 from gaia.logger import get_logger
 
 
@@ -44,15 +49,6 @@ def _preload_model() -> str:
     chat model, or Gemma when that default is a cloud model (nothing to load)."""
     model = resolve_default_chat_model()
     return DEFAULT_MODEL_NAME if cloud_model_provider(model) else model
-
-
-def _is_cloud_entry(entry: dict) -> bool:
-    """True when a ``loaded_models`` entry is gateway-routed rather than local.
-
-    Checked on both the recipe and the labels because the two Lemonade
-    surfaces that populate this list do not agree on which one they set.
-    """
-    return entry.get("recipe") == CLOUD_RECIPE or "cloud" in (entry.get("labels") or [])
 
 
 #: Seconds between "still waiting" log lines while another preload runs.
@@ -399,7 +395,7 @@ class LemonadeManager:
         except LemonadeClientError as e:
             cls._log.error("%s", e)
             if not quiet:
-                print(f"❌ {e}", file=sys.stderr)
+                print(f"❌ {surface_wording(str(e), 'cli')}", file=sys.stderr)
             return False
         return True
 
@@ -540,8 +536,7 @@ class LemonadeManager:
             f"To fix: run `gaia init` to install and load {_preload_model()}, or "
             f"load an LLM yourself "
             f"({describe_start_hint(min_context_size).instruction}).\n"
-            f"See the Lemonade server log for details "
-            f"(typical path: ~/.cache/lemonade/server.log)."
+            f"{lemonade_log_hint(base_url)}"
         )
         cls._log.warning(message)
         if not quiet:
@@ -906,7 +901,8 @@ class LemonadeManager:
                         # about chat capacity — and neither does a gateway
                         # model, which is resident nowhere local.
                         llm_models_loaded = any(
-                            is_llm_model_entry(model) and not _is_cloud_entry(model)
+                            is_llm_model_entry(model)
+                            and not is_cloud_model_entry(model)
                             for model in (status.loaded_models or [])
                         )
 
@@ -1006,6 +1002,7 @@ class LemonadeManager:
                     from gaia.daemon.errors import (
                         DaemonError,
                         LemonadeNotAnsweringError,
+                        LemonadeStartFailedError,
                     )
 
                     try:
@@ -1014,6 +1011,8 @@ class LemonadeManager:
                         if not cls._wait_for_gaia_lemonade(quiet):
                             return False
                     except DaemonError as e:
+                        if isinstance(e, LemonadeStartFailedError):
+                            remember_engine_start_failure(e.reason)
                         cls._log.error("Could not start GAIA's Lemonade Server: %s", e)
                         if not quiet:
                             print(
@@ -1090,7 +1089,7 @@ class LemonadeManager:
                 llm_models_loaded = any(
                     # A gateway model is resident nowhere local, so it must
                     # not count as "an LLM is loaded" for context-size decisions.
-                    is_llm_model_entry(model) and not _is_cloud_entry(model)
+                    is_llm_model_entry(model) and not is_cloud_model_entry(model)
                     for model in status.loaded_models
                 )
 
@@ -1128,7 +1127,7 @@ class LemonadeManager:
                     if status.loaded_models is None:
                         status.loaded_models = []
                     llm_models_loaded = any(
-                        is_llm_model_entry(model) and not _is_cloud_entry(model)
+                        is_llm_model_entry(model) and not is_cloud_model_entry(model)
                         for model in status.loaded_models
                     )
 
@@ -1237,7 +1236,7 @@ class LemonadeManager:
         llm_models = [
             m
             for m in status.loaded_models
-            if is_llm_model_entry(m) and not _is_cloud_entry(m)
+            if is_llm_model_entry(m) and not is_cloud_model_entry(m)
         ]
         if not llm_models:
             return None
@@ -1421,7 +1420,11 @@ class LemonadeManager:
         except LemonadeStartError as e:
             cls._log.error("Could not start the local model server: %s", e)
             if not quiet:
-                print(f"\n❌ {e}", file=sys.stderr, flush=True)
+                print(
+                    f"\n❌ {surface_wording(str(e), 'cli')}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             return False
         finally:
             lock.acquire()
@@ -1537,8 +1540,7 @@ class LemonadeManager:
                 f"To recover manually: stop the running server, then restart it "
                 f"({describe_start_hint(requested_ctx).instruction}) and "
                 f"re-run your GAIA command.\n"
-                f"See the Lemonade server log for details "
-                f"(typical path: ~/.cache/lemonade/server.log)."
+                f"{lemonade_log_hint(client.base_url)}"
             ) from e
         finally:
             lock.acquire()
@@ -1598,7 +1600,7 @@ class LemonadeManager:
         llm_models = [
             m
             for m in status.loaded_models
-            if is_llm_model_entry(m) and not _is_cloud_entry(m)
+            if is_llm_model_entry(m) and not is_cloud_model_entry(m)
         ]
         if not llm_models:
             return False
@@ -1657,7 +1659,18 @@ class LemonadeManager:
             # (now resolvable, since loading forces Lemonade to read the
             # GGUF metadata) so the cached/reported value is honest (#2992).
             new_status = client.get_status()
-            reported_ctx = new_status.context_size or 0
+            if not any(
+                _model_ids_match(m.get("model_name") or m.get("id"), model_id)
+                for m in new_status.loaded_models or []
+            ):
+                raise LoadedModelMissingError(
+                    f"Lemonade at {client.base_url} accepted the load of "
+                    f"{model_id} at ctx_size={requested_ctx}, but its /health "
+                    f"no longer lists {model_id}, so its context window is "
+                    f"unknown. Another load may have evicted it. "
+                    f"{lemonade_log_hint(client.base_url)}"
+                )
+            reported_ctx = loaded_ctx_size(new_status.loaded_models, model_id) or 0
             new_ceiling = (
                 client.get_model_max_context_window(model_id, status=new_status)
                 or ceiling
@@ -1709,6 +1722,8 @@ class LemonadeManager:
             # loop-breaking assumption otherwise).
             cls._context_size = effective_ctx
             return success
+        except LoadedModelMissingError:
+            raise
         except Exception as e:
             cls._log.warning(f"Auto-reload failed: {e}")
             return False
@@ -1723,6 +1738,7 @@ class LemonadeManager:
 
     @classmethod
     def _remember_server(cls, client: LemonadeClient) -> None:
+        remember_engine_start_failure(None)
         cls._base_url = client.base_url
         cls._follows_gaia_lemonade = client.follows_gaia_lemonade is True
 

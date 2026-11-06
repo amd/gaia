@@ -21,8 +21,9 @@ type Capacity struct {
 	MemorySource string
 	// DiskFreeGB is negative when Lemonade did not report its model store.
 	DiskFreeGB float64
-	// NPUMemoryGB is the system RAM an FLM model loads into: installed RAM
-	// less an APU's GPU carve-out. 0 when Lemonade reports no available NPU.
+	// NPUMemoryGB is the system RAM an FLM model loads into: the RAM the OS
+	// sees, so installed RAM less an APU's GPU carve-out. 0 when Lemonade
+	// reports no available NPU.
 	NPUMemoryGB float64
 }
 
@@ -56,6 +57,7 @@ func (g *gpuList) UnmarshalJSON(b []byte) error {
 }
 
 type systemInfo struct {
+	OSVersion      string `json:"OS Version"`
 	PhysicalMemory string `json:"Physical Memory"`
 	Devices        struct {
 		AMD     gpuList `json:"amd_gpu"`
@@ -120,6 +122,11 @@ func npuMemoryGB(info systemInfo) float64 {
 	physical := physicalMemoryGB(info.PhysicalMemory)
 	if info.Devices.NPU == nil || !info.Devices.NPU.Available || physical <= 0 {
 		return 0
+	}
+	// Only a Windows Lemonade reports installed RAM; Linux's MemTotal is
+	// already without the carve-out.
+	if !strings.HasPrefix(strings.ToLower(info.OSVersion), "windows") {
+		return physical
 	}
 	carveOut := 0.0
 	for _, src := range []struct {

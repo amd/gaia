@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/amd/gaia/tui/internal/gaiainit"
 )
 
 // Timeouts mirror src/gaia/daemon/{instance,client}.py.
@@ -362,7 +364,7 @@ const installGaiaHint = "Install GAIA with `curl -fsSL https://amd-gaia.ai/insta
 
 // gaiaDaemonStart builds the default launcher command.
 func gaiaDaemonStart(ctx context.Context) (*exec.Cmd, error) {
-	bin, err := exec.LookPath("gaia")
+	bin, err := gaiainit.ResolveCLI()
 	if err != nil {
 		return nil, &StartError{Reason: unresolvableGaiaReason(findInstalledButUnresolvable())}
 	}
@@ -386,7 +388,7 @@ type installEvidence struct {
 func unresolvableGaiaReason(ev installEvidence) string {
 	switch {
 	case ev.description == "":
-		return "the `gaia` CLI is not on PATH, so the daemon cannot be launched. " +
+		return "the `gaia` CLI is not on PATH or in ~/.gaia/bin, so the daemon cannot be launched. " +
 			installGaiaHint
 	case ev.runnable:
 		return fmt.Sprintf(

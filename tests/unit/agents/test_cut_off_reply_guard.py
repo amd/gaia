@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from gaia import cli_agent
 from gaia.agents.base.agent import (
     _CUT_OFF_FAILURE_ANSWER,
     _MAX_CUT_OFF_CONTINUATIONS,
@@ -267,6 +268,55 @@ def test_cut_off_on_the_last_step_is_an_honest_failure(agent):
 
     assert len(sent) == 1
     assert _final(result) == _CUT_OFF_FAILURE_ANSWER
+
+
+def test_repeated_cut_offs_fail_the_turn_and_the_live_gate(agent):
+    _stub_chat(agent, *[(TR8319_CB_REPLY, "length")] * (_MAX_CUT_OFF_CONTINUATIONS + 3))
+
+    result = agent.process_query("Fix gfx90a PR testing", max_steps=20)
+
+    assert result["model_failed"] is True
+    reason, remedy = cli_agent._failed_response(result)
+    assert "cut off at the output-token limit" in reason
+    assert remedy == cli_agent._UNUSABLE_REMEDY
+
+
+def test_a_recovered_cut_off_passes_the_live_gate(agent):
+    _stub_chat(agent, (TR8319_CB_REPLY, "length"), ("gfx90a is MI200.", "stop"))
+
+    result = agent.process_query("What about gfx90a?", max_steps=10)
+
+    assert result["model_failed"] is False
+    assert cli_agent._failed_response(result) is None
+
+
+BAD_TOOL_CALL = '{"__tool_calls__": [{"function": {"name": "x", "arguments": "{'
+
+
+def test_unparsable_replies_the_agent_gave_up_on_fail_the_live_gate(agent):
+    _stub_chat(agent, *[(BAD_TOOL_CALL, "stop")] * 3)
+
+    result = agent.process_query("test", max_steps=10)
+
+    reason, _ = cli_agent._failed_response(result)
+    assert reason.startswith("the model never gave a usable reply")
+
+
+def test_an_unparsable_reply_that_was_retried_passes_the_live_gate(agent):
+    good = json.dumps({"thought": "Done.", "answer": "All good."})
+    _stub_chat(agent, (BAD_TOOL_CALL, "stop"), (good, "stop"))
+
+    result = agent.process_query("test", max_steps=10)
+
+    assert cli_agent._failed_response(result) is None
+
+
+def test_a_parse_error_before_the_step_cap_answer_passes_the_live_gate(agent):
+    good = json.dumps({"thought": "Done.", "answer": "gfx90a is MI200."})
+    _stub_chat(agent, (BAD_TOOL_CALL, "stop"), (good, "stop"))
+    result = agent.process_query("test", max_steps=1)
+    assert result["max_steps_reached"] is True
+    assert cli_agent._failed_response(result) is None
 
 
 CONTROLS = [

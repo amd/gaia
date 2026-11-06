@@ -454,7 +454,7 @@ class TestGaiaDispatch:
                 raise raises
             return True
 
-        monkeypatch.setattr(cloud_keys, "ensure_authenticated", _ensure)
+        monkeypatch.setattr(cloud_keys, "reconnect_provider", _ensure)
 
     def test_a_cloud_model_gets_its_key_back_before_init(self, monkeypatch):
         """After Lemonade restarts it has forgotten the key, and /init would

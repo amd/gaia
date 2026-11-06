@@ -99,6 +99,15 @@ describe('NewChat while GAIA is starting', () => {
         expect(onSend).not.toHaveBeenCalled();
     });
 
+    it('keeps the message box open once every boot task has finished', () => {
+        useChatStore.setState({ systemStatus: {
+            init_state: 'initializing',
+            init_tasks: [{ name: 'Loading AI model', status: 'done' }],
+        } as SystemStatus });
+        render(<NewChat onSend={vi.fn().mockResolvedValue(undefined)} />);
+        expect(screen.getByLabelText('Message')).not.toBeDisabled();
+    });
+
     it('sends once GAIA is ready', () => {
         useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
         const onSend = vi.fn().mockResolvedValue(undefined);

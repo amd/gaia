@@ -138,6 +138,8 @@ If a step fails, the window shows the error with a **Try again** button, and **D
 
 After an app update, the same screen updates the backend and then the GAIA agent. Your models stay as they are. If the agent update fails, **Try again** picks it up, and the next launch does too.
 
+Before it updates the backend, the app stops GAIA's background service (the GAIA daemon) and the agents it runs, because Windows can't replace files a running program holds. The service has no window, so if it won't stop, the screen says so: restart your PC, then choose **Try again**.
+
 ### Choose where chat runs
 
 The app then opens on its setup screen, which asks where chat should run:
@@ -228,12 +230,34 @@ with no address uses the one `gaia lemonade detect` finds on this PC.
   request timeout (`global_timeout` in its config).
 
 `LEMONADE_BASE_URL` (and `LEMONADE_API_KEY`) still work and win over this setting.
+Choosing GAIA's own in first-run setup (when that server isn't answering) or in
+**Settings › Advanced** sets GAIA's own up and ignores that value from then on. Both
+name the address before you switch, and Settings says it is ignored while it is still
+set. Set it to a different address and it applies again.
 The choice is stored as `lemonade_mode` and `lemonade_base_url` in
 `~/.gaia/config.json`. Switching tells a running GAIA daemon right away. It stops
 GAIA's own server when you switch to yours, and starts it again when you switch back.
 Switching back needs GAIA's own server installed, and waits until it answers: if it
 isn't installed or won't start, the switch is refused or undone and nothing changes. Run `gaia init --gaia-lemonade` to install it and switch in one
 step.
+
+### A Lemonade on another computer
+
+GAIA can use a Lemonade Server on another computer on your network, such as a
+desktop with a bigger GPU. Lemonade only answers its own computer at first, so set
+up that computer before you connect:
+
+1. **Let other computers reach it.** On the server computer, run
+   `lemonade config set host=0.0.0.0`. The setting is saved and applies right away.
+2. **Lock it with a key.** Set `LEMONADE_API_KEY` in the server's environment.
+   Without a key, anyone on your network can use the server and change its models.
+3. **Open the port.** Allow incoming connections to port 13305, Lemonade's default,
+   in the server computer's firewall.
+
+Then, on the GAIA computer, open **Settings → Advanced → Model server**, enter the
+server's address (for example `http://192.168.1.100:13305`) and its key, and choose
+**Use this server**. GAIA checks that the server answers before it saves the address.
+If it doesn't answer, check the three steps above.
 
 ## Updating GAIA
 
@@ -315,6 +339,8 @@ To turn update checks off entirely, set `GAIA_DISABLE_UPDATE=1` before launching
 
 GAIA follows the platform convention: removing the app leaves your user data (chats, documents, downloaded models) behind by default. To remove the data too, run the `gaia uninstall` CLI from a terminal — it has tiered flags so you can decide exactly what to keep.
 
+The Windows uninstaller and `apt remove` also stop GAIA's background service (the GAIA daemon) and the agents it runs. macOS and AppImage have no uninstall step, so after you delete the app they keep running until you restart.
+
 ### Windows
 
 The Windows uninstallers keep data by default. Choosing Yes to the additional
@@ -380,7 +406,7 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Chat file attachments | `~/.gaia/chat/uploads/` |
 | Configuration | `~/.gaia/electron-config.json` |
 | Logs | `~/.gaia/gaia.log` (`$GAIA_HOME/gaia.log` when `GAIA_HOME` is set), or the path in `GAIA_LOG_FILE` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |
-| Terminal UI and agent binaries (one-line installer) | `~/.gaia/bin/` |
+| Terminal UI and agent binaries (one-line installer). It also holds the `gaia`, `gaia-cli` and `gaia-mcp` commands (links on Linux and macOS, copies of the launchers on Windows), and is the only GAIA directory the installer puts on your PATH | `~/.gaia/bin/` |
 | Agent run traces | `~/.gaia/traces/` |
 | Daemon state (token, custody database, logs) | `~/.gaia/host/` (`$GAIA_HOME/host/` when `GAIA_HOME` is set) |
 | Models (managed by Lemonade) | `~/.cache/lemonade/models/` |

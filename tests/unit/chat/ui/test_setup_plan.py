@@ -24,6 +24,7 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.model_fit import MachineCapacity
 from gaia.ui import setup_plan as sp
+from gaia.ui.database import ChatDatabase
 from gaia.ui.routers import setup as setup_router
 
 _REAL_LEMONADE = sp._lemonade
@@ -123,6 +124,18 @@ def test_cold_pc_with_a_cloud_default_still_names_a_local_model(no_server, confi
     plan = sp.build_plan()
     assert plan["chat_model"]["id"] == DEFAULT_MODEL_NAME
     assert plan["chat_model"]["user_set"] is False
+
+
+def test_cold_pc_after_picking_a_local_model_still_builds_a_plan(
+    no_server, config_file
+):
+    """With no server, nobody can say the last local model is downloaded."""
+    config_file.write_text(
+        json.dumps({"last_provider": "local", "last_model": "gemma4-it-e4b-FLM"})
+    )
+    plan = sp.build_plan()
+    assert plan["chat_model"]["id"] == DEFAULT_MODEL_NAME
+    assert plan["decided_after_server"] is True
 
 
 def test_cold_pc_with_a_local_default_names_it_and_skips_the_hardware_pick(
@@ -372,6 +385,7 @@ def test_picking_a_model_before_gaias_own_runs_says_to_start_setup(lemonade_targ
 def client():
     app = FastAPI()
     app.include_router(setup_router.router)
+    app.state.db = ChatDatabase(":memory:")
     return TestClient(app)
 
 
@@ -655,7 +669,7 @@ def test_run_endpoint_asks_before_downloading_past_the_free_space(
     monkeypatch.setattr(
         setup_router.runner,
         "start",
-        lambda *a, **k: seen.append(k) or {"state": "running"},
+        lambda *a, chat_model_for, **k: seen.append(k) or {"state": "running"},
     )
     r = client.post("/api/setup/run", json={}, headers=UI)
     assert r.status_code == 409
@@ -752,7 +766,7 @@ def test_upgrade_embedded_run_uses_no_model_downloads(client, flm_box, monkeypat
     monkeypatch.setattr(
         setup_router.runner,
         "start",
-        lambda *a, **k: seen.append(k) or {"state": "running"},
+        lambda *a, chat_model_for, **k: seen.append(k) or {"state": "running"},
     )
     r = client.post("/api/setup/run", json={"upgrade_embedded": True}, headers=UI)
     assert r.status_code == 200
@@ -996,3 +1010,105 @@ def test_a_pc_without_an_npu_is_not_offered_one(running):
     fake.get_system_info = no_npu
     ids = [e["id"] for e in sp.build_plan()["catalog"]]
     assert NPU_DEFAULT_MODEL_NAME not in ids
+
+
+def _flm_backend(fake, state, message=None):
+    """Lemonade sees the NPU, and reports its FastFlowLM backend in *state*."""
+    report = fake.get_system_info
+
+    def info(timeout=None):
+        out = report(timeout)
+        backend = {"state": state, **({"message": message} if message else {})}
+        out["recipes"] = {"flm": {"backends": {"npu": backend}}}
+        return out
+
+    fake.get_system_info = info
+
+
+def test_an_npu_model_fastflowlm_cant_run_here_does_not_fit_and_says_why(running):
+    """An NPU with room is not enough: Settings checks the backend, and so must setup (#6632)."""
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    fake = running(MachineCapacity(96, "AMD iGPU", 500, npu_memory_gb=64))
+    _flm_backend(fake, "unsupported", "FLM does not support this kernel")
+    entry = _entry(sp.build_plan(), NPU_DEFAULT_MODEL_NAME)
+    assert entry["fits"] is False and entry["fit_code"] == "npu"
+    assert "Ryzen AI NPU" in entry["fit_reason"]
+    assert "FLM does not support this kernel" in entry["fit_reason"]
+    # Its memory numbers stay: the reason is the backend, not the size.
+    assert entry["need_gb"] is not None
+
+
+@pytest.mark.parametrize("state", ["installed", "installable", "update_required"])
+def test_an_npu_model_whose_backend_runs_or_installs_still_fits(running, state):
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    fake = running(MachineCapacity(96, "AMD iGPU", 500, npu_memory_gb=64))
+    _flm_backend(fake, state)
+    entry = _entry(sp.build_plan(), NPU_DEFAULT_MODEL_NAME)
+    assert entry["fits"] is True and entry["fit_code"] is None
+
+
+def test_a_model_too_big_for_memory_says_memory(flm_box):
+    flm_box()
+    qwen = _entry(sp.build_plan(), LARGE_DEFAULT_MODEL_NAME)
+    assert qwen["fits"] is False and qwen["fit_code"] == "memory"
+
+
+def test_choosing_an_npu_model_that_cant_run_here_is_refused_not_confirmed(
+    client, running
+):
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    fake = running(MachineCapacity(96, "AMD iGPU", 500, npu_memory_gb=64))
+    _flm_backend(fake, "unsupported")
+    body = {"model_id": NPU_DEFAULT_MODEL_NAME, "acknowledge_no_fit": True}
+    r = client.post("/api/setup/chat-model", json=body, headers=UI)
+    assert r.status_code == 409
+    assert "can't run on this PC" in r.json()["detail"]
+    assert GaiaConfig.load().default_model is None
+
+
+def test_setup_refuses_to_start_on_a_saved_npu_model_this_pc_cant_run(
+    client, running, monkeypatch
+):
+    """`gaia init --profile npu` saved the NPU model; FastFlowLM can't run here (#6632)."""
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    GaiaConfig.save_key("default_model", NPU_DEFAULT_MODEL_NAME)
+    GaiaConfig.save_key("last_model", NPU_DEFAULT_MODEL_NAME)
+    fake = running(MachineCapacity(96, "AMD iGPU", 500, npu_memory_gb=64))
+    _flm_backend(fake, "unsupported", "FLM does not support this kernel")
+    started = []
+    monkeypatch.setattr(
+        setup_router.runner, "start", lambda *a, **k: started.append(k) or {}
+    )
+    # Acknowledging low disk confirms the disk, not a model nothing here runs.
+    for body in ({}, {"acknowledge_low_disk": True}):
+        r = client.post("/api/setup/run", json=body, headers=UI)
+        assert r.status_code == 409
+        detail = r.json()["detail"]
+        assert "can't run on this PC" in detail
+        assert "Ryzen AI NPU" in detail and "Choose another chat model" in detail
+        assert "gaia " not in detail
+    assert started == []
+
+
+def test_a_cloud_setup_is_not_refused_for_a_saved_npu_model(
+    client, running, monkeypatch
+):
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    GaiaConfig.save_key("default_model", NPU_DEFAULT_MODEL_NAME)
+    fake = running(MachineCapacity(96, "AMD iGPU", 500, npu_memory_gb=64))
+    _flm_backend(fake, "unsupported")
+    started = []
+    monkeypatch.setattr(
+        setup_router.runner, "start", lambda *a, **k: started.append(a) or {}
+    )
+    r = client.post("/api/setup/run", json={"skip_chat_model": True}, headers=UI)
+    assert r.status_code == 200
+    assert len(started) == 1

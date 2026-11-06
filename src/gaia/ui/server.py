@@ -76,6 +76,7 @@ from .routers import mcp as mcp_router_mod
 from .routers import memory as memory_router_mod
 from .routers import onboarding as onboarding_router_mod
 from .routers import providers as providers_router_mod
+from .routers import resources as resources_router_mod
 from .routers import schedules as schedules_router_mod
 from .routers import sessions as sessions_router_mod
 from .routers import setup as setup_router_mod
@@ -295,7 +296,8 @@ def _flagship_missing_message(registry) -> str:
     return (
         "The GAIA agent is not installed, so the scheduled task could not run"
         + (f" (it failed to load: {reason})" if reason else "")
-        + ". Run `gaia init` to install it, then re-run the scheduled task."
+        + ". Open Settings > Setup and press Run setup again, then re-run the "
+        "scheduled task."
     )
 
 
@@ -341,11 +343,6 @@ def _run_scheduled_prompt(
     except ImportError as e:
         raise RuntimeError(_scheduled_import_error(e)) from e
 
-    # Beta dynamic tool loader (#1798). Inert here: scheduled runs
-    # use the default "full" prompt profile and the loader only
-    # activates on the "doc" profile — wired for future-proofing so
-    # this path doesn't silently diverge if that ever changes.
-    dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
     # Nobody is watching a scheduled run, so confirmation-gated tools
     # (shell, file writes) are denied here — same posture as an
     # autonomous background tick (#2210).
@@ -354,7 +351,6 @@ def _run_scheduled_prompt(
         max_steps=_SCHEDULED_MAX_STEPS,
         silent_mode=True,
         debug=False,
-        dynamic_tools=dynamic_tools,
         memory_incognito=not memory_enabled(db),
     )
     with writing_tool_registry():
@@ -486,6 +482,21 @@ class _ScheduledRuns:
 
 
 # ── Application Factory ────────────────────────────────────────────────────
+
+
+def _tripwire_sweep() -> None:
+    try:
+        from gaia.connectors.api import tripwire_check
+
+        tripwire_check()
+        logger.info("connections: tripwire sweep complete")
+    except Exception as e:  # pylint: disable=broad-except
+        logger.warning(
+            "connections: tripwire sweep failed (%s). /api/connections "
+            "endpoints may surface stale-credential errors at first call instead.",
+            e,
+            exc_info=True,
+        )
 
 
 def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
@@ -784,25 +795,11 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         logger.info("Connector activation watcher started")
 
         # ── Connections (issue #915) ────────────────────────────────────
-        # Eager tripwire sweep so a rotated OAuth client_id surfaces in
-        # the server logs at boot (and clears stale entries) BEFORE any
-        # SSE client connects. Per plan amendment A3, missing
-        # GAIA_GOOGLE_CLIENT_ID logs a loud warning but does NOT crash
-        # the lifespan — chat/documents/files/tunnel/mcp routers stay
-        # available; only /api/connections returns 503 until the env
-        # var is set.
-        try:
-            from gaia.connectors.api import tripwire_check
-
-            tripwire_check()
-            logger.info("connections: tripwire sweep complete")
-        except Exception as e:  # noqa: BLE001 — defense in depth
-            logger.warning(
-                "connections: tripwire sweep failed (%s); proceeding "
-                "without it. /api/connections endpoints may surface "
-                "stale-credential errors at first call instead.",
-                e,
-            )
+        # Off the startup path: each keychain read can wait on a macOS prompt.
+        # Daemon, so a prompt left open never holds up shutdown.
+        threading.Thread(
+            target=_tripwire_sweep, name="connections-tripwire", daemon=True
+        ).start()
 
         # ── Connectors live-reload (issue #1004) ────────────────────────
         # Wire the McpServerHandler.reload_callback so a Settings →
@@ -955,6 +952,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(onboarding_router_mod.router)
     app.include_router(setup_router_mod.router)
     app.include_router(gpu_memory_router_mod.router)
+    app.include_router(resources_router_mod.router)
     app.include_router(lemonade_router_mod.router)
     app.include_router(providers_router_mod.router)
     app.include_router(spending_router_mod.router)

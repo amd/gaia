@@ -21,7 +21,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -71,14 +73,34 @@ const (
 	InstallPowerShellCommand = "irm https://amd-gaia.ai/install.ps1 | iex"
 )
 
-// Binary resolves the `gaia` CLI on PATH. A package var, not a bare
-// exec.LookPath call, so tests can substitute a stub without spawning the real
-// CLI (mirrors daemon.Options.StartCommand's injection point).
+// ResolveCLI finds the `gaia` CLI on PATH, else in ~/.gaia/bin, where the
+// installer links it. A terminal opened before the installer edited the shell's
+// startup file has no PATH entry for that folder yet.
+func ResolveCLI() (string, error) {
+	bin, pathErr := exec.LookPath("gaia")
+	if pathErr == nil {
+		return bin, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("%w, and the home folder is unknown: %w", pathErr, err)
+	}
+	// LookPath on a full path still checks it is executable (and adds .exe on Windows).
+	bin, err = exec.LookPath(filepath.Join(home, ".gaia", "bin", "gaia"))
+	if err != nil {
+		return "", fmt.Errorf("%w, and %w", pathErr, err)
+	}
+	return bin, nil
+}
+
+// Binary resolves the `gaia` CLI. A package var, not a bare ResolveCLI call,
+// so tests can substitute a stub without spawning the real CLI (mirrors
+// daemon.Options.StartCommand's injection point).
 var Binary = func() (string, error) {
-	bin, err := exec.LookPath("gaia")
+	bin, err := ResolveCLI()
 	if err != nil {
 		return "", fmt.Errorf(
-			"%w: the `gaia` CLI is not on PATH, so setup cannot run. "+
+			"%w: the `gaia` CLI is not on PATH or in ~/.gaia/bin, so setup cannot run. "+
 				"Install GAIA with `"+InstallCommand+"` "+
 				"(on Windows: `"+InstallPowerShellCommand+"`), or "+
 				"`pip install amd-gaia` into the Python environment on your PATH, "+

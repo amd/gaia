@@ -874,6 +874,14 @@ class EmbeddedLemonade:
         """
         return self.daemon_path.is_file()
 
+    def is_incomplete(self) -> bool:
+        """Whether this version was unpacked but its ``lemond`` is gone.
+
+        Still GAIA's server to start: setup repairs it, and a system install
+        on the default port is not the one this machine was set up with.
+        """
+        return self.dist_dir.is_dir() and not self.daemon_path.is_file()
+
     def replaces_older_install(self) -> bool:
         """Whether an older version is unpacked, which this one upgrades.
 
@@ -2055,6 +2063,11 @@ class EmbeddedLemonade:
             str(port),
         ]
         log.info("Starting embedded Lemonade: %s", " ".join(argv))
+        if sys.platform.startswith("linux"):
+            from gaia.llm.npu_linux import raise_memlock_soft_limit
+
+            # FastFlowLM pins the model in locked memory, and inherits lemond's limit.
+            raise_memlock_soft_limit()
 
         # Own group/session so the server outlives the CLI process that spawned
         # it. A hidden console, not none: lemond's llama/whisper/kokoro children

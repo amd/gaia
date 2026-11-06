@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CornerDownRight, FileDiff as FileDiffIcon, GitBranch, GitCommit, GitPullRequest, Loader2, Undo2, X } from 'lucide-react';
 import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
+import { requestErrorParam, requestErrorText } from '../../utils/requestErrors';
 import { log } from '../../utils/logger';
 import { useTurnEnd } from '../../hooks/useTurnEnd';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
@@ -22,16 +23,11 @@ import { untrackedWarning } from '../../utils/untrackedWork';
 import { DiffCard } from '../render/DiffCard';
 import { PanelSection } from './PanelSection';
 import type { ChatFileChange, GitRepo, SessionChanges, SessionGit } from '../../types/sessionPanel';
-import { ref, type MessageKey } from '../../i18n/registry';
+import { ref, type MessageKey, type Param } from '../../i18n/registry';
 import { tEn, useT, type Translate } from '../../i18n/useT';
 
 function plural(n: number, one: string, many = `${one}s`): string {
     return `${n} ${n === 1 ? one : many}`;
-}
-
-function errorText(err: unknown): string {
-    if (err instanceof api.ApiError) return err.detail || err.message;
-    return err instanceof Error ? err.message : String(err);
 }
 
 function baseName(path: string): string {
@@ -70,7 +66,7 @@ interface ChangesSectionProps {
 export function ChangesSection({ sessionId, busy, onJumpToMessage }: ChangesSectionProps) {
     const t = useT();
     const [changes, setChanges] = useState<SessionChanges | null>(null);
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<Param | null>(null);
     // Kept here: after Undo all the list empties, and the result must stay readable.
     const [undone, setUndone] = useState<string | null>(null);
 
@@ -83,7 +79,7 @@ export function ChangesSection({ sessionId, busy, onJumpToMessage }: ChangesSect
             })
             .catch((err) => {
                 log.ui.warn(`Could not total what session=${sessionId} changed`, err);
-                setError(errorText(err));
+                setError(requestErrorParam(err));
             });
     }, [sessionId]);
     useEffect(load, [load]);
@@ -152,7 +148,7 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
             await refreshTurnChanges(sessionId);
         } catch (err) {
             const conflict = (err as { reason?: unknown } | null)?.reason === 'conflict';
-            setMessage(errorText(err));
+            setMessage(requestErrorText(err));
             setPhase(conflict ? 'conflict' : 'idle');
         }
     };
@@ -289,7 +285,7 @@ function ChatChangesReview({ changes, onClose }: { changes: SessionChanges; onCl
 function GitActions({ sessionId, busy, onCommitted }: { sessionId: string; busy: boolean; onCommitted: () => void }) {
     const t = useT();
     const [git, setGit] = useState<SessionGit | null>(null);
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<Param | null>(null);
     const [dialog, setDialog] = useState<{ kind: 'commit' | 'pr'; repo: GitRepo } | null>(null);
     const [done, setDone] = useState<string | null>(null);
 
@@ -300,7 +296,7 @@ function GitActions({ sessionId, busy, onCommitted }: { sessionId: string; busy:
                 setGit(expectShape(res, (r) => Array.isArray(r.repos), 'list of git repositories'));
                 setError(null);
             })
-            .catch((err) => setError(errorText(err)));
+            .catch((err) => setError(requestErrorParam(err)));
     }, [sessionId]);
     useEffect(load, [load]);
     useTurnEnd(busy, load);
@@ -381,7 +377,7 @@ function GitDialog({ sessionId, kind, repo, onClose, onDone }: {
                 onDone(`Opened ${res.url}`);
             }
         } catch (err) {
-            setError(errorText(err));
+            setError(requestErrorText(err));
             setRunning(false);
         }
     };

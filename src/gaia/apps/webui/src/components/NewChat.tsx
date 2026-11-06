@@ -13,11 +13,13 @@ import { TryChips } from './TryChips';
 import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
+import { isStarting } from '../services/statusPoll';
 import { useChatStore } from '../stores/chatStore';
 import { displayModelName, useModelNames, useModelStore } from '../stores/modelStore';
 import * as messageQueue from '../utils/messageQueue';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { log } from '../utils/logger';
+import { requestErrorText } from '../utils/requestErrors';
 import { durationMs, prefersReducedMotion } from '../utils/motion';
 import { deviceLabel } from '../utils/modelLabels';
 import type { StartScreen } from '../types';
@@ -163,7 +165,7 @@ function SetupFailed({ error }: { error: string }) {
 /** An empty chat: a greeting and the composer over the NPU backdrop. Created on the first message. */
 export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatProps) {
     const t = useT();
-    const starting = useChatStore((s) => s.systemStatus?.init_state === 'initializing');
+    const starting = useChatStore((s) => isStarting(s.systemStatus));
     const download = useChatStore((s) => s.systemStatus?.download_progress ?? null);
     // Moot once chats run in the cloud or a local model has loaded after all.
     const setupError = useChatStore((s) => (s.systemStatus?.model_loaded ? null : s.systemStatus?.setup_error ?? null));
@@ -192,7 +194,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
             })
             .catch((err) => {
                 log.api.warn('New-chat start screen unavailable', err);
-                if (live.current) setStartError(err instanceof Error ? err.message : String(err));
+                if (live.current) setStartError(requestErrorText(err));
             });
     }, []);
 
@@ -247,7 +249,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
             // Nothing was sent, so every message goes back in the box.
             const held = heldRef.current.splice(0);
             setText([draft || message, ...held].join('\n\n'));
-            setError(err instanceof Error ? err.message : String(err));
+            setError(requestErrorText(err));
         } finally {
             sendingRef.current = false;
             setSending(false);

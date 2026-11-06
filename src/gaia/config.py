@@ -138,6 +138,10 @@ class GaiaConfig:
         lemonade_base_url: The user's Lemonade Server, for ``external`` mode.
         lemonade_api_key_stored: Its API key is in the OS credential store.
             The key itself is never written here.
+        lemonade_env_url_ignored: The ``LEMONADE_BASE_URL`` value the person
+            chose GAIA's own server over in the Agent UI. While the variable
+            still holds it, GAIA ignores the variable (and ``LEMONADE_API_KEY``
+            with it); any other value applies again.
         lemonade_idle_timeout_minutes: Stop GAIA's own Lemonade Server once no
             GAIA process has held it, and it has served no request, for this
             many minutes, so its memory goes back to the system. 0 keeps it
@@ -163,6 +167,10 @@ class GaiaConfig:
             ``.claude/skills`` the agent puts in its prompt: ``full``, ``off``,
             or ``None`` (set it to ``auto``) to decide per model. See
             :mod:`gaia.project_context`.
+        dynamic_tools: Start a flagship session on its most-used tools, in short
+            form, and move to every tool at most once, so the first reply reads
+            less and the prompt cache survives. Applies to new sessions.
+            ``GAIA_DYNAMIC_TOOLS`` overrides it.
     """
 
     profile: str = "chat"
@@ -175,6 +183,7 @@ class GaiaConfig:
     lemonade_mode: Optional[str] = None
     lemonade_base_url: Optional[str] = None
     lemonade_api_key_stored: bool = False
+    lemonade_env_url_ignored: Optional[str] = None
     lemonade_idle_timeout_minutes: int = 15
     llamacpp_backend: Optional[str] = None
     context_sizes: Dict[str, int] = field(default_factory=dict)
@@ -182,6 +191,7 @@ class GaiaConfig:
     undo_max_mb: int = 500
     skipped_models: List[str] = field(default_factory=list)
     project_context: Optional[str] = None
+    dynamic_tools: bool = True
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None

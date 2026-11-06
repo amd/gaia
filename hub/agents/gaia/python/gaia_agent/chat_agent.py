@@ -6,14 +6,18 @@ Chat Agent - Interactive chat with RAG and file search capabilities.
 
 import dataclasses
 import errno
+import functools
+import importlib.util
 import os
 import platform
 import re
 import shutil
 import sqlite3
+import threading
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Dict, FrozenSet, List, Optional
+from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Optional, Set
 
 from gaia.config import gaia_home
 from gaia.logger import get_logger
@@ -42,7 +46,7 @@ from gaia_agent.python_jobs import (
     stopped_job_result,
     watch_folders,
 )
-from gaia_agent.python_runner import python_command
+from gaia_agent.python_runner import BUNDLED_LIBRARIES, is_frozen, python_command
 from gaia_agent.session import SessionManager
 from gaia_agent.tool_bundles import PROFILE_TOOL_CONFIGS
 from gaia_agent.tool_requests import requested_tools
@@ -58,15 +62,20 @@ from gaia.agents.base.context_eviction import (
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import before_change, note_untracked
 from gaia.agents.base.memory import MemoryMixin
-from gaia.agents.base.model_features import features_for_model, withheld_tools
+from gaia.agents.base.model_features import (
+    FEATURE_TOOLS,
+    features_for_model,
+    withheld_tools,
+)
 from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 
 # dynamic_tools_env_override is re-exported so callers importing it from
 # this module keep working; its canonical home is the core tool_loader
 # so the UI settings router shares it without depending on this wheel (#1102).
 from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F401
-from gaia.agents.base.tool_loader import ToolLoader
+from gaia.agents.base.tool_loader import ToolLoader, format_tool_docs
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
@@ -96,6 +105,8 @@ from gaia.agents.tools.workspace_paths import (
 from gaia.env import child_env
 from gaia.llm.inference_location import InferenceLocation, resolve_inference_location
 from gaia.llm.lemonade_client import (
+    CONVERSATION_SLOT,
+    FULL_TOOLS_SLOT,
     _endpoint_label,
     configured_lemonade_url,
     resolve_default_chat_model,
@@ -117,14 +128,28 @@ from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.utils.user_folders import documents_dir
 from gaia.vlm.mixin import VLMToolsMixin
 
-# Sentinel for not-yet-built lazy attributes (``rag``, ``session_manager`` —
-# #2323 Increment 3). Distinct from ``None`` so a degraded/failed build
-# (which legitimately caches ``None``) is never mistaken for "not attempted
-# yet" and rebuilt on every access.
+# Sentinel for not-yet-built lazy attributes (``rag``, ``session_manager``).
+# Distinct from ``None``. A missing RAG extra caches ``None``; any other RAG
+# startup failure leaves ``rag`` unset so the next access tries again.
 _UNSET = object()
 
 #: Longest request_user_input waits for an answer, in seconds.
 USER_INPUT_MAX_WAIT_S = 600
+
+#: ``search_tools``: searches a turn before it must get on with the job, longest
+#: query embedded, tools and skills returned, and tools returned with full docs.
+MAX_TOOL_SEARCHES = 3
+MAX_TOOL_SEARCH_CHARS = 500
+TOOL_SEARCH_HITS = 5
+SKILL_SEARCH_HITS = 3
+EXTRACTION_TOOLS = ("extract_document_items", "save_extracted_items")
+TOOL_SEARCH_DOCS = 2
+
+#: History size, in rough tokens, at which the slot the conversation is not on
+#: gives up its prefix. Slots share one KV pool, and when a side job overflows it
+#: llama.cpp purges the conversation rather than the idle prefix: a 52K Gemma
+#: chat re-read for 257 s. By this size that prefix saves little on a jump anyway.
+IDLE_PREFIX_MAX_HISTORY_TOKENS = 12_000
 
 # Tools that create files; an agent with none of them gets no scratch directory.
 _FILE_CREATING_TOOLS = frozenset(
@@ -164,6 +189,59 @@ def _imports_gaia_tools(code: str) -> Optional[str]:
     return match.group(0).strip() if match else None
 
 
+#: The line in a Python tool's docstring that :func:`_lists_script_libraries` fills.
+SCRIPT_LIBRARIES_PLACEHOLDER = "{script_libraries}"
+
+
+@functools.lru_cache(maxsize=1)
+def script_libraries() -> tuple:
+    """Import names of the bundled libraries a script can import here.
+
+    A frozen build carries every one (its release smoke test imports each); a
+    source install has whatever its environment holds, and a library the
+    description names but the interpreter lacks costs a failed run.
+    """
+    if is_frozen():
+        return tuple(BUNDLED_LIBRARIES.values())
+    present = []
+    for name in BUNDLED_LIBRARIES.values():
+        try:
+            found = importlib.util.find_spec(name) is not None
+        except (ImportError, ValueError) as e:
+            logger.warning(
+                "run_python: could not check whether %s is installed, so the "
+                "tool description leaves it out: %s",
+                name,
+                e,
+            )
+            continue
+        if found:
+            present.append(name)
+    missing = [n for n in BUNDLED_LIBRARIES.values() if n not in present]
+    if missing:
+        logger.info(
+            "run_python: not installed here, left out of its description: %s",
+            ", ".join(missing),
+        )
+    return tuple(present)
+
+
+def _lists_script_libraries(f):
+    """Name, in *f*'s docstring, only the libraries a script can import here."""
+    if SCRIPT_LIBRARIES_PLACEHOLDER not in (f.__doc__ or ""):
+        raise ValueError(
+            f"{f.__name__}'s docstring has no {SCRIPT_LIBRARIES_PLACEHOLDER} line"
+        )
+    names = script_libraries()
+    line = (
+        f"Has {', '.join(names)}; no pip."
+        if names
+        else "Has only the standard library; no pip."
+    )
+    f.__doc__ = f.__doc__.replace(SCRIPT_LIBRARIES_PLACEHOLDER, line)
+    return f
+
+
 def _script_source(path: Path) -> str:
     """The script that just ran, so its output counts as a test run only if it ran one."""
     try:
@@ -172,6 +250,32 @@ def _script_source(path: Path) -> str:
         # Gone or unreadable after the run: its output alone proves nothing.
         logger.debug("execute_python_file: cannot re-read %s: %s", path, e)
         return ""
+
+
+#: Standard-library route for a bundled library this interpreter lacks.
+_STDLIB_ROUTES: Dict[str, str] = {
+    "pandas": "csv to read the file and statistics for the math",
+    "numpy": "statistics and math",
+    "openpyxl": "csv, saving a .csv file instead of a workbook",
+    "xlsxwriter": "csv, saving a .csv file instead of a workbook",
+}
+
+_MISSING_MODULE_LINE = re.compile(r"No module named '([A-Za-z_][\w.]*)'")
+
+
+def _missing_library_hint(stderr_line: str) -> Optional[str]:
+    """How to retry when a script imports a bundled library this Python lacks."""
+    match = _MISSING_MODULE_LINE.search(stderr_line or "")
+    module = match.group(1).split(".")[0] if match else None
+    if module not in BUNDLED_LIBRARIES.values():
+        return None
+    route = _STDLIB_ROUTES.get(module, "the standard library only")
+    if module in _STDLIB_ROUTES:
+        route = f"{route} from the standard library"
+    return (
+        f"{module} is not installed in this Python and pip is not available. "
+        f"Retry now without it, using {route}."
+    )
 
 
 def _python_run_result(
@@ -205,6 +309,9 @@ def _python_run_result(
         result["error"] = f"Python exited with code {code}" + (
             f": {last[:300]}" if last else ""
         )
+        hint = _missing_library_hint(last)
+        if hint:
+            result["error"] += f". {hint}"
     return result
 
 
@@ -291,6 +398,8 @@ class ChatAgentConfig:
     claude_model: str = "claude-sonnet-5"
     base_url: Optional[str] = None
     model_id: Optional[str] = None  # None = use default model (Gemma)
+    # True: build without starting Lemonade or preloading; the first request loads.
+    skip_lemonade: bool = False
 
     # Execution settings
     max_steps: int = field(default_factory=default_max_steps)
@@ -398,13 +507,10 @@ class ChatAgentConfig:
     #   "full"  — all tools and prompt sections (backward-compatible default)
     prompt_profile: str = "full"
 
-    # Dynamic tool loading (#1449) — experimental, default-off, doc profile only.
-    # When on, each turn surfaces CORE + semantically-matched tools instead of
-    # the full registry, shrinking first-turn prefill. Env overrides resolved in
-    # __init__: GAIA_DYNAMIC_TOOLS / GAIA_DYNAMIC_TOOLS_TAU / GAIA_DYNAMIC_TOOLS_MAX.
+    # Dynamic tool loading: a session starts on the core tools in thin form and
+    # moves to every tool at most once; search_tools finds what is missing.
+    # Default off here; the flagship turns it on. GAIA_DYNAMIC_TOOLS overrides it.
     dynamic_tools: bool = False
-    dynamic_tools_threshold: float = 0.20  # inclusive cosine; calibrated #1449
-    dynamic_tools_max: int = 14  # cap (11 CORE + 3 dynamic slots)
 
     # Per-agent identity for the connectors activation filter (#1005).
     # Must be set BEFORE ``Agent.__init__`` runs ``_register_tools``, because
@@ -469,6 +575,12 @@ class ChatAgent(
 
     # Dynamic MCP loader — registry exposes this for the Settings "Active for" panel.
     CONSUMES_MCP_SERVERS: ClassVar[bool] = True
+
+    # Tool-list bookkeeping for the session; reset by ``_on_task_start`` when the
+    # conversation is empty.
+    _tool_notice_due: bool = False
+    _model_called: bool = False
+    _released_slots: FrozenSet[int] = frozenset()
 
     def __init__(self, config: Optional[ChatAgentConfig] = None):
         """
@@ -560,28 +672,25 @@ class ChatAgent(
         # actual ``RAGSDK`` construction — which does the real dependency and
         # model work — is deferred to first ``self.rag`` access (the `rag`
         # property below), so the lean "chat" profile (and file/data/web)
-        # never pays for it. Degrade-to-``None``-on-failure semantics are
-        # unchanged; only the timing of the attempt (and its warning log)
-        # moves from "always at construction" to "first access, if any".
-        try:
-            self._rag_config = RAGConfig(
-                model=effective_model_id,
-                embedding_model=effective_embedding_model,
-                chunk_size=config.chunk_size,
-                chunk_overlap=config.chunk_overlap,  # Configurable overlap for context preservation
-                max_chunks=config.max_chunks,
-                show_stats=config.show_stats,
-                use_local_llm=not config.use_claude,
-                use_llm_chunking=config.use_llm_chunking,  # Enable semantic chunking
-                base_url=effective_base_url,  # Pass base_url to RAG for VLM client
-                allowed_paths=config.allowed_paths,  # Pass allowed paths to RAG SDK
-            )
-        except Exception as e:
-            logger.warning(
-                "RAG not available (install with: uv pip install -e '.[rag]'): %s", e
-            )
-            logger.debug("RAG init traceback:", exc_info=True)
-            self._rag_config = None
+        # never pays for it. A missing extra stays unavailable; any other
+        # startup failure is retried on the next access.
+        self._rag_config_kwargs = {
+            "model": effective_model_id,
+            "embedding_model": effective_embedding_model,
+            "chunk_size": config.chunk_size,
+            "chunk_overlap": config.chunk_overlap,
+            "max_chunks": config.max_chunks,
+            "show_stats": config.show_stats,
+            "use_local_llm": not config.use_claude,
+            "use_llm_chunking": config.use_llm_chunking,
+            "base_url": effective_base_url,
+            "allowed_paths": config.allowed_paths,
+        }
+        self._rag_config = _UNSET
+        self._rag_missing = False
+        self._rag_init_error: Optional[BaseException] = None
+        self._rag_failure_logged = None
+        self._ensure_rag_config()
         self._rag = _UNSET
 
         # File system monitoring
@@ -658,12 +767,13 @@ class ChatAgent(
         self.conversation_history: List[Dict[str, str]] = (
             []
         )  # Track conversation for persistence
-        # Dynamic tool loader (#1449): semantic per-turn tool selection. Built
-        # only for the doc profile with the toggle on (config or env); otherwise
-        # None → full registry / legacy prompt. Embedding fns are injected so the
-        # loader never imports MemoryMixin; they resolve lazily on first select(),
-        # by which point init_memory() has probed the embedder.
+        # Dynamic tool loading: built for a profile with bundles when the toggle
+        # is on (config or env); otherwise None → every tool in full. Embedding
+        # fns are injected so the loader never imports MemoryMixin; they resolve
+        # lazily, by which point init_memory() has probed the embedder.
         self._dynamic_tools_validated = False
+        self._tool_docs_sent: Set[str] = set()
+        self._tool_searches = 0
         self.tool_loader = self._maybe_build_tool_loader()
 
         # Initialize memory subsystem (before super().__init__ which calls _register_tools)
@@ -696,6 +806,7 @@ class ChatAgent(
             # Unset lets the base resolve the port only after starting the server.
             base_url=config.base_url,
             model_id=effective_model_id,  # Pass the effective model to parent
+            skip_lemonade=config.skip_lemonade,
             max_steps=config.max_steps,
             debug_prompts=config.debug_prompts,
             show_prompts=config.show_prompts,
@@ -728,14 +839,23 @@ class ChatAgent(
             # A prompt cached during init predates the scratch line.
             self.__dict__.pop("_system_prompt_cache", None)
 
-        # Index initial documents (only if RAG is available)
-        if self.rag_documents and self.rag:
-            self._index_documents(self.rag_documents)
-        elif self.rag_documents and not self.rag:
-            logger.warning(
-                "RAG dependencies not installed. Cannot index documents. "
-                'Install with: uv pip install -e ".[rag]"'
-            )
+        # Index initial documents (only if RAG is available). Read once: a
+        # non-import failure is not cached, so a second ``self.rag`` would
+        # rebuild immediately.
+        if self.rag_documents:
+            rag = self.rag
+            if rag:
+                self._index_documents(self.rag_documents)
+            elif self._rag_missing:
+                logger.warning(
+                    "RAG dependencies not installed. Cannot index documents. "
+                    'Install with: uv pip install -e ".[rag]"'
+                )
+            else:
+                logger.warning(
+                    "Cannot index documents; RAG failed to start: %s",
+                    self._rag_init_error,
+                )
 
         # Restore agent-indexed documents from prior turns using UI session ID.
         # When the agent indexes a document during a turn (via its index_document
@@ -840,23 +960,66 @@ class ChatAgent(
 
     @property
     def rag(self) -> Optional[RAGSDK]:
-        """Lazily-built ``RAGSDK`` — constructed transparently on ANY first
-        access (not just tool dispatch — ~15 sites across ``interactive.py`` and the
-        Agent UI's ``_chat_helpers.py`` read ``agent.rag`` directly).
+        """Lazily-built ``RAGSDK``, or None when document Q&A cannot start.
 
-        Degrades to ``None`` on failure and never raises — the lean "chat"
-        profile still reads ``self.rag`` every turn via ``_indexed_documents_line``
-        (gated so it never reaches this for chat/file/data/web, but a raise
-        here would crash any profile that does). Cached after the first
-        build attempt (success or failure) — never retried.
+        A missing extra (``ImportError``) is cached: installing it needs a new
+        process. Any other startup failure is left unset and tried again on
+        the next access, and document tools report that failure instead of
+        "not installed". Never raises — a profile that only checks ``self.rag``
+        must keep working. A failed build reruns on every read, so
+        ``RAGSDK.__init__`` must stay cheap (no network or model loads).
         """
         if self._rag is _UNSET:
-            self._rag = self._build_rag()
+            built = self._build_rag()
+            if built is not None or self._rag_missing:
+                self._rag = built
+            return built
         return self._rag
 
     @rag.setter
     def rag(self, value: Optional[RAGSDK]) -> None:
         self._rag = value
+
+    def _ensure_rag_config(self) -> Optional[RAGConfig]:
+        """Return the eager ``RAGConfig``, retrying a non-import failure.
+
+        A missing extra is remembered (``_rag_missing``) so later accesses do
+        not rebuild. Any other error stays unset and is tried again.
+        """
+        if self._rag_config is not _UNSET:
+            return self._rag_config
+        if self._rag_missing:
+            return None
+        try:
+            built = RAGConfig(**self._rag_config_kwargs)
+        except ImportError as e:
+            self._record_rag_failure(e, missing=True)
+            return None
+        except Exception as e:  # pylint: disable=broad-except
+            # RAG is optional: chat still runs. The cause is kept for tools.
+            self._record_rag_failure(e, missing=False)
+            return None
+        self._rag_config = built
+        return built
+
+    def _record_rag_failure(self, exc: BaseException, *, missing: bool) -> None:
+        """Remember *exc*. Only a missing extra is described as not installed."""
+        self._rag_init_error = exc
+        if missing:
+            self._rag_missing = True
+        signature = (missing, type(exc), str(exc))
+        if signature == getattr(self, "_rag_failure_logged", None):
+            logger.debug("RAG init failed again: %s", exc)
+            return
+        self._rag_failure_logged = signature
+        if missing:
+            logger.warning(
+                "RAG not available (install with: uv pip install -e '.[rag]'): %s",
+                exc,
+            )
+        else:
+            logger.warning("RAG failed to start: %s", exc)
+        logger.debug("RAG init traceback:", exc_info=True)
 
     def _build_rag(self) -> Optional[RAGSDK]:
         """Build the ``RAGSDK`` from the ``RAGConfig`` frozen in ``__init__``.
@@ -865,19 +1028,26 @@ class ChatAgent(
         confinement stays inspectable regardless of profile; only the actual
         SDK construction — the real dependency/model work — is deferred here.
         """
-        if self._rag_config is None:
-            # RAGConfig construction itself already failed in __init__ (and
-            # was already logged there) — nothing to retry.
+        config = (
+            self._rag_config
+            if self._rag_config is not _UNSET
+            else self._ensure_rag_config()
+        )
+        if config is None:
             return None
         try:
             # Shared, so access the user grants mid-chat reaches indexing too.
-            return RAGSDK(self._rag_config, path_validator=self.path_validator)
-        except Exception as e:
-            logger.warning(
-                "RAG not available (install with: uv pip install -e '.[rag]'): %s", e
-            )
-            logger.debug("RAG init traceback:", exc_info=True)
+            sdk = RAGSDK(config, path_validator=self.path_validator)
+        except ImportError as e:
+            self._record_rag_failure(e, missing=True)
             return None
+        except Exception as e:  # pylint: disable=broad-except
+            # Same as config: keep chat up, but do not pretend the extra is missing.
+            self._record_rag_failure(e, missing=False)
+            return None
+        self._rag_init_error = None
+        self._rag_failure_logged = None
+        return sdk
 
     @property
     def session_manager(self) -> SessionManager:
@@ -944,7 +1114,7 @@ class ChatAgent(
     # ── dynamic tool loader (#1449) ───────────────────────────────────────
 
     def _maybe_build_tool_loader(self) -> Optional[ToolLoader]:
-        """Construct the semantic tool loader, or ``None`` when inactive.
+        """Construct the tool loader, or ``None`` when inactive.
 
         Active for a profile with a :data:`PROFILE_TOOL_CONFIGS` entry (``doc``,
         ``full``) and the toggle resolved on (config field, overridable by
@@ -964,8 +1134,6 @@ class ChatAgent(
             optional_tools=profile_config.optional,
             embed_fn=self._embed_text,
             embed_batch_fn=self._embed_texts_batch,
-            threshold=self._resolve_dynamic_tools_threshold(),
-            max_tools=self._resolve_dynamic_tools_max(),
         )
 
     def _workspace_core_tools(self) -> FrozenSet[str]:
@@ -983,36 +1151,6 @@ class ChatAgent(
             return override
         return bool(self.config.dynamic_tools)
 
-    def _resolve_dynamic_tools_threshold(self) -> float:
-        """Threshold: ``GAIA_DYNAMIC_TOOLS_TAU`` wins; malformed value fails loudly."""
-        raw = os.getenv("GAIA_DYNAMIC_TOOLS_TAU")
-        if raw is None:
-            return float(self.config.dynamic_tools_threshold)
-        try:
-            return float(raw)
-        except ValueError as e:
-            raise ValueError(
-                f"GAIA_DYNAMIC_TOOLS_TAU must be a float, got {raw!r}"
-            ) from e
-
-    def _resolve_dynamic_tools_max(self) -> int:
-        """Cap: ``GAIA_DYNAMIC_TOOLS_MAX`` wins; malformed value fails loudly.
-
-        Grown by any workspace-added CORE tools (e.g. the shell in a repo
-        session) so they don't eat into the dynamic selection budget.
-        """
-        raw = os.getenv("GAIA_DYNAMIC_TOOLS_MAX")
-        if raw is None:
-            return int(self.config.dynamic_tools_max) + len(
-                self._workspace_core_tools()
-            )
-        try:
-            return int(raw)
-        except ValueError as e:
-            raise ValueError(
-                f"GAIA_DYNAMIC_TOOLS_MAX must be an int, got {raw!r}"
-            ) from e
-
     def _embed_texts_batch(self, texts) -> "Any":
         """Batch-embed *texts* into L2-normalized float32 rows (one call).
 
@@ -1027,77 +1165,267 @@ class ChatAgent(
         norms[norms == 0] = 1.0
         return vecs / norms
 
-    def _dynamic_tools_active(self) -> bool:
-        """True when dynamic selection should run this turn.
+    def _thin_tool_schemas(self) -> bool:
+        """Thin ``tools=`` on local models, where the prompt is read token by token."""
+        return (
+            getattr(self, "tool_loader", None) is not None and not self._hosted_model()
+        )
 
-        Off-states (any → full registry): loader not built (toggle off / wrong
-        profile), embedder session-disabled, or memory disabled
+    def _tool_docs(self, names: List[str]) -> str:
+        """Render *names* as ``[Tool docs: ...]`` blocks and note them as sent."""
+        self._tool_docs_sent.update(names)
+        schemas = self._build_openai_tool_schemas(filter_to=names)
+        return "\n\n".join(format_tool_docs(schema) for schema in schemas)
+
+    def _dynamic_tools_active(self) -> bool:
+        """True when the tool list is the loader's to decide this turn.
+
+        Off-states (any → every tool): loader not built (toggle off / wrong
+        profile), a hosted model, embedder session-disabled, or memory disabled
         (``GAIA_MEMORY_DISABLED`` tears down ``_memory_store``).
         """
         return (
-            self.tool_loader is not None
+            self._thin_tool_schemas()
             and not self.tool_loader.session_disabled
             and getattr(self, "_memory_store", None) is not None
         )
 
-    def _select_tools_for_turn(self, user_input: str) -> Optional[List[str]]:
-        """Return this turn's tool subset in admission order, or ``None``.
-
-        The SKILL signal (#1451) and the semantic query use deliberately
-        different inputs: ``skill_tools`` derives from the **clean current goal**
-        (``_refresh_recalled_skills`` ran recall on ``user_input`` alone, before
-        this hook), while the semantic ``query`` is previous + current. The
-        asymmetry is intentional — skill recall matches a goal-shaped trigger,
-        not a conversation window, so feeding it the prior turn would blur the
-        match; semantic selection wants the prior turn for context like
-        "summarize it". ``_recalled_skill_tools`` is ``[]`` on every off-state
-        (no recall / memory disabled), so the loader runs on CORE + semantic
-        exactly as in Parts 1-2.
-
-        The ``tools_required`` of loaded skills whose body renders this turn
-        join the same signal, ahead of recalled-procedure tools: the user's
-        skill is the stronger signal. A skill stops contributing when the body
-        filter hides it or it is unloaded.
-
-        Tools the current message explicitly asks for (``requested_tools``)
-        go ahead of both: semantic ranking alone dropped ``run_shell_command``
-        from "use your shell tool to run pwd".
-        """
-        if not self._dynamic_tools_active():
-            return None
+    def _validate_tool_config(self) -> None:
+        """Fail loudly on first use if a CORE/bundle name left the registry."""
         if not self._dynamic_tools_validated:
-            # Fail loudly on first activation if a CORE/bundle name doesn't exist
-            # in the live registry (drift). The reverse direction is the CI test.
             self.tool_loader.validate_registry(
                 self._tools_registry, withheld=withheld_tools(self.model_features)
             )
             self._dynamic_tools_validated = True
-        query = self._build_tool_selection_query(user_input)
-        skill_tools = self._loaded_skill_tools()
-        for name in self._recalled_skill_tools():
-            if name not in skill_tools:
-                skill_tools.append(name)
+
+    def _standing_skill_tools(self) -> List[str]:
+        """Tools that join the list for the skills in use, without a jump.
+
+        A loaded skill's own tools are registered whether or not its body renders
+        this turn, and an undeclared one cannot be called.
+        """
+        tools = self._loaded_skill_tools()
+        for skill in getattr(self, "loaded_skills", {}).values():
+            tools.extend(skill.namespaced_tool_name(tool) for tool in skill.tool_names)
+        return tools
+
+    def _select_tools_for_turn(self, user_input: str) -> Optional[List[str]]:
+        """Return this turn's tool list, or ``None`` for every tool.
+
+        Active skills' tools join the list. What the turn cannot do without
+        moves the session to the full list before the model is asked: a tool the
+        user's message names, or a tool of a procedure recalled for this goal.
+        Retrieval scores only the user's own words: the memory block's timestamp
+        and the previous turn pushed "What is 17 times 23?" over the bar, and a
+        wrong jump is the most expensive mistake here.
+        """
+        if not self._dynamic_tools_active():
+            return None
+        self._validate_tool_config()
+        # A rebuilt agent can't know what this chat's list was, and its slot is
+        # most likely gone: one re-read now beats a second one at the next tool.
+        if self.tool_loader.turns == 0 and getattr(self, "conversation_history", None):
+            self.tool_loader.jump("resumed")
+        words = getattr(self, "_original_user_input", None) or user_input
         return self.tool_loader.select(
-            query,
+            words,
             self._tools_registry,
-            skill_tools=skill_tools,
-            requested_tools=requested_tools(user_input, self._tools_registry),
+            skill_tools=self._standing_skill_tools(),
+            requested_tools=[
+                *requested_tools(words, self._tools_registry),
+                *self._recalled_skill_tools(),
+            ],
         )
 
-    def _admit_skill_tools(self, names: List[str]) -> None:
-        """Admit a just-loaded skill's tools into the loader (no-op when inactive).
+    def _apply_tool_filter(self, new_filter: Optional[List[str]]) -> None:
+        """Swap the list, and note a re-read of a conversation the model has seen."""
+        previous = self._active_tool_filter
+        extraction = getattr(self, "_extraction_ledger", None)
+        if new_filter is not None and extraction is not None and extraction.offered:
+            # Through the loader, or the next turn's list drops them again.
+            self.tool_loader.admit_tools(EXTRACTION_TOOLS, self._tools_registry)
+        super()._apply_tool_filter(new_filter)
+        if self._active_tool_filter != previous and (
+            getattr(self, "conversation_history", None)
+            or (previous is not None and self._model_called)
+        ):
+            self._tool_notice_due = True
 
-        Keeps the loader's loaded set and ``_active_tool_filter`` in step, so the
-        next turn's selection still carries them and calling one doesn't register
-        as an escape hatch.
-        """
-        if self.tool_loader is not None:
+    def _tool_list_notice(self) -> bool:
+        """True once, for the first request after the list changed."""
+        due, self._tool_notice_due = self._tool_notice_due, False
+        return due
+
+    def _before_model_call(self, messages: List[Dict[str, Any]]) -> None:
+        """Free the idle prefix before a long conversation can lose its own."""
+        self._model_called = True
+        if not self._thin_tool_schemas():
+            return
+        idle = CONVERSATION_SLOT if self.tool_loader.jumped else FULL_TOOLS_SLOT
+        if idle in self._released_slots:
+            return
+        size = sum(len(str(message.get("content") or "")) for message in messages) // 4
+        if size < IDLE_PREFIX_MAX_HISTORY_TOKENS:
+            return
+        self._released_slots = self._released_slots | {idle}
+        backend = getattr(self.chat.llm_client, "_backend", None)
+        if backend is None or backend.slot_count(self.model_id) <= FULL_TOOLS_SLOT:
+            return
+        logger.info("Releasing slot %d: the conversation has grown past it", idle)
+        self.chat.send_messages(
+            [{"role": "user", "content": "OK"}], max_tokens=1, id_slot=idle
+        )
+
+    def _conversation_request_kwargs(self) -> Dict[str, Any]:
+        """Continue on the primed slot once the session is on the full list."""
+        if self._dynamic_tools_active() and self.tool_loader.jumped:
+            return {"id_slot": FULL_TOOLS_SLOT}
+        return {}
+
+    def _admit_skill_tools(self, names: List[str]) -> bool:
+        """Put a just-loaded skill's tools on the list."""
+        if not self._dynamic_tools_active():
+            return False
+        self._apply_tool_filter(
             self.tool_loader.admit_tools(names, self._tools_registry)
+        )
+        return True
 
-    def _on_tool_invoked(self, tool_name: str) -> None:
-        """Record tool-use recency for the loader's LRU (no-op when inactive)."""
-        if self.tool_loader is not None:
-            self.tool_loader.record_tool_use(tool_name)
+    def _drop_skill_tools(self, names: List[str]) -> None:
+        """Take an unloaded skill's tools off the list."""
+        if not self._dynamic_tools_active():
+            super()._drop_skill_tools(names)
+            return
+        self._apply_tool_filter(
+            self.tool_loader.remove_tools(names, self._tools_registry)
+        )
+
+    def _warm_tool_filter(self) -> Optional[List[str]]:
+        """The core list, with the tool embeddings built for the first turn."""
+        if not self._dynamic_tools_active():
+            return super()._warm_tool_filter()
+        self._validate_tool_config()
+        self.tool_loader.admit_tools(self._standing_skill_tools(), self._tools_registry)
+        return self.tool_loader.warm(self._tools_registry)
+
+    def _prime_second_prefix(
+        self, say: Callable[[str], None], cancel: Optional[threading.Event]
+    ) -> None:
+        """Prime the full tool list on its own slot, so a first task starts at once.
+
+        Needs the third slot: anywhere else it would overwrite the prefix just
+        primed, or a side job would overwrite it.
+        """
+        if not self._dynamic_tools_active() or self.tool_loader.jumped:
+            return
+        backend = getattr(self.chat.llm_client, "_backend", None)
+        slots = backend.slot_count(self.model_id) if backend is not None else 1
+        if slots <= FULL_TOOLS_SLOT:
+            logger.info(
+                "Full tool list not primed: %s has %d slot(s), so a first task "
+                "reads it then",
+                self.model_id,
+                slots,
+            )
+            return
+        core = self._active_tool_filter
+        notice_due = self._tool_notice_due
+        say("Reading the full tool list")
+        self._apply_tool_filter(list(self._tools_registry))
+        try:
+            self._send_warm_up(cancel, id_slot=FULL_TOOLS_SLOT)
+        finally:
+            self._apply_tool_filter(core)
+            self._tool_notice_due = notice_due
+
+    def _search_tools(self, query: str) -> Dict[str, Any]:
+        """Find tools and installed skills for *query*; ``search_tools``'s body."""
+        query = " ".join(str(query).split())[:MAX_TOOL_SEARCH_CHARS]
+        # Not run, so never learned: they describe this call, not the world.
+        if not query:
+            return {
+                "status": "error",
+                "error": "Say what you want to do in `query`.",
+                **NOT_EXECUTED,
+            }
+        if self._tool_searches >= MAX_TOOL_SEARCHES:
+            return {
+                "status": "error",
+                "error": f"Searched {MAX_TOOL_SEARCHES} times this turn. Use a tool "
+                "from your list, or tell the user what is missing.",
+                **NOT_EXECUTED,
+            }
+        self._tool_searches += 1
+        loader = self.tool_loader
+        registry = self._tools_registry
+        tool_docs = {
+            name: text
+            for name, text in loader.tool_docs(registry).items()
+            if name != "search_tools"
+        }
+        skill_docs = {
+            name: f"{name}: {skill.description}"
+            for name, skill in self.skill_manager.discover().items()
+            if name not in self.loaded_skills
+        }
+        try:
+            tools = [
+                name for name, _ in loader.rank(query, tool_docs, TOOL_SEARCH_HITS)
+            ]
+            skills = loader.rank(query, skill_docs, SKILL_SEARCH_HITS)
+        except Exception as exc:  # noqa: BLE001 — reported to the model as a tool error
+            logger.warning("search_tools failed for %r: %s", query, exc)
+            return {
+                "status": "error",
+                "error": f"Tool search is unavailable right now ({exc}). Use a tool "
+                "from your list.",
+            }
+        current = self._active_tool_filter
+        if current is not None and any(name not in current for name in tools):
+            loader.jump("search")
+            self._apply_tool_filter(loader.offered(registry))
+        if not tools and not skills:
+            return {
+                "status": "success",
+                "tools": [],
+                "skills": [],
+                "message": "Nothing matches. Tell the user this is not available.",
+            }
+        return {
+            "status": "success",
+            "tools": tools,
+            "skills": [
+                {"name": name, "description": skill_docs[name].split(": ", 1)[1]}
+                for name, _ in skills
+            ],
+            "docs": self._tool_docs(tools[:TOOL_SEARCH_DOCS]),
+            "next_step": "Call a tool above directly. Call load_skill first for a "
+            "skill.",
+        }
+
+    def _on_task_start(self, user_input: str) -> None:
+        """Docs go again each turn: a history trim may have dropped them."""
+        super()._on_task_start(user_input)
+        self._tool_docs_sent.clear()
+        self._tool_searches = 0
+        if not getattr(self, "conversation_history", None):
+            self._released_slots = frozenset()
+            self._model_called = False
+
+    def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
+        """Answer a malformed call with the tool's full docs, once a turn.
+
+        The thin list carries parameter names but not how to fill them in.
+        """
+        result = super()._execute_tool(tool_name, tool_args)
+        if (
+            self._thin_tool_schemas()
+            and isinstance(result, dict)
+            and result.get("error_type") == "invalid_arguments"
+            and tool_name not in self._tool_docs_sent
+        ):
+            result = {**result, "tool_docs": self._tool_docs([tool_name])}
+        return result
 
     def _build_tool_selection_query(self, user_input: str) -> str:
         """Build the selection query: previous user message + current, last 4K chars.
@@ -1487,7 +1815,14 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
 """
         # Only advertise web and media tools the profile registers.
-        unsupported = "**UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md ."
+        # List only what this session lacks; a contradicting line wins on Gemma.
+        lacking = ["cloud storage", "file conversion", "live collaboration"]
+        if not self._offers_scheduling():
+            lacking.insert(0, "scheduling")
+        # The email tools only read mail, so sending stays unsupported either way.
+        reads_email = bool(FEATURE_TOOLS["email"] & set(self._tools_registry))
+        lacking.insert(0, "sending email" if reads_email else "email")
+        unsupported = f"**UNSUPPORTED:** {', '.join(lacking).capitalize()} — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md ."
         if "web_browse" in spec.tool_groups:
             unsupported += " Web browsing IS supported via `search_web` / `fetch_page` / `download_file`."
         unsupported += " Image analysis IS supported via `analyze_image`."
@@ -1507,22 +1842,17 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 **IMAGE GENERATION:** Not available in this session. Never offer or claim it.
 """
 
-        # Native-only escape-hatch menu (#1450): non-native models already
-        # self-recover via the free full-registry path and are the
-        # TTFT-sensitive case, so we don't tax them with the menu. Lives in
-        # this stable prefix (before the volatile tools tail) → no KV thrash.
-        # Non-empty only where both halves line up: the profile's
-        # ``prompt_blocks`` names "load_tools_menu" and ``_maybe_build_tool_loader``
-        # built a loader for it (the "doc" and "full" profiles).
+        # How to read the thin list. Only where it is thin and native: a text-path
+        # model's tool block is its docs. The profile's ``prompt_blocks`` must also
+        # name "load_tools_menu" (the "doc" and "full" profiles do).
         load_tools_menu = ""
-        loader = getattr(self, "tool_loader", None)
-        if loader is not None and self._uses_native_tool_calls():
+        if self._thin_tool_schemas() and self._uses_native_tool_calls():
             load_tools_menu = (
-                "\n\n==== LOADABLE TOOL BUNDLES ====\n"
-                "Your visible tools are trimmed to what this turn needs. If a "
-                "capability you need is missing, call load_tools(bundle) with "
-                "one of these names; its tools become available on your next "
-                "step:\n" + loader.format_bundle_menu()
+                "\n\n**TOOLS:** Your list holds common tools; more exist. Only "
+                "call a tool in your list. If the one you need is missing, call "
+                "search_tools with what you want to do. Never say you cannot do "
+                "something before you have searched. Full documentation appears "
+                "in `[Tool docs: name]` blocks.\n"
             )
 
         # Assemble prompt from this profile's declared block keys (ProfileSpec,
@@ -1543,7 +1873,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         prompt = base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
         if not spec.early_return:
             prompt += self._session_folders_line()
-        if getattr(self.config, "surface", None) == "agent_ui":
+        if self._offers_scheduling():
             prompt += _AGENT_UI_SCHEDULE_LINE
         scratch_dir = getattr(self, "scratch_dir", None)
         if scratch_dir is not None:
@@ -1888,48 +2218,24 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         self._register_loop_control_tools()  # set_loop_state, request_user_input
         self.register_reasoning_effort_tools()  # only for models that grade reasoning
 
-        # load_tools escape hatch (#1450, Part 2) — registered ONLY when the
-        # dynamic loader is active, so the loader-off path stays byte-identical.
-        # It is in every profile's CORE set, so once registered it renders in
-        # both prompt paths every active turn (cap- and eviction-exempt).
+        # search_tools — registered ONLY when the loader exists, so the loader-off
+        # path stays byte-identical.
         if self.tool_loader is not None:
 
             @tool
-            def load_tools(bundle: str) -> dict:
-                """Load a bundle of tools so you can call them on your next step.
+            def search_tools(query: str) -> dict:
+                """Call before saying you can't do something: finds any tool or skill.
 
-                Call when the capability you need is not in your current tool
-                list. The bundle's tools become available on your **next**
-                step; then call the one you need.
+                Tools it finds can be called on your next step. A skill it finds
+                needs load_skill first.
 
                 Args:
-                    bundle: A bundle name from the "Loadable tool bundles" menu
-                        when one is shown (e.g. "file_search", "rag_index"), or
-                        a specific tool name to load its owning bundle.
+                    query: What you want to do, in plain words.
 
                 Returns:
-                    The resolved bundle and the full loaded_tools list now
-                    available to call.
+                    Matching tools with their docs, and matching installed skills.
                 """
-                # load_tools is registered only inside ``if self.tool_loader is
-                # not None`` and the loader is never re-nulled after construction,
-                # so the loader is always live here.
-                loader = self.tool_loader
-                try:
-                    loaded = loader.load_bundle(bundle, self._tools_registry)
-                except KeyError:
-                    return {
-                        "status": "error",
-                        "error": f"Unknown bundle '{bundle}'. Choose one of: "
-                        f"{', '.join(loader.bundle_names())}",
-                    }
-                # Make the expansion visible to the next model step in this query.
-                self._apply_tool_filter(loaded)
-                return {
-                    "status": "success",
-                    "bundle": bundle,
-                    "loaded_tools": loaded,
-                }
+                return self._search_tools(query)
 
         # Inline list_files — only for profiles that need file operations
         if spec.generic_file_ops:
@@ -1977,6 +2283,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     return {"status": "error", "error": str(e)}
 
             @tool(timeout_arg="timeout")
+            @_lists_script_libraries
             def execute_python_file(
                 file_path: str, args: str = "", timeout: int = DEFAULT_PYTHON_TIMEOUT
             ) -> dict:
@@ -1987,8 +2294,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 project's packages. Any other script runs from its own folder.
                 Relative paths resolve against that working directory.
 
-                Has pypdf, pypdfium2, docx, pptx, openpyxl, xlsxwriter,
-                reportlab, pandas, numpy, matplotlib; no pip.
+                {script_libraries}
 
                 Args:
                     file_path: Path to the .py file to run
@@ -2106,6 +2412,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     return {"status": "error", "error": str(e), "has_errors": True}
 
             @tool(timeout_arg="timeout")
+            @_lists_script_libraries
             def run_python(code: str, timeout: int = DEFAULT_PYTHON_TIMEOUT) -> dict:
                 """Run a Python snippet and return what it prints.
 
@@ -2117,8 +2424,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 No access to your tools: `from gaia import <tool>` fails —
                 call it directly as a tool.
 
-                Has pypdf, pypdfium2, docx, pptx, openpyxl, xlsxwriter,
-                reportlab, pandas, numpy, matplotlib; no pip.
+                {script_libraries}
 
                 Args:
                     code: Python source to run; print() whatever you need back.
@@ -2847,23 +3153,25 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             """Turn text into one WAV audio file with an installed local TTS model.
 
             Use this when the user asks to hear, narrate, or save text as audio.
-            It never downloads a model. Empty output_path writes a WAV under
-            ~/.gaia/tts/. Use a listed Kokoro voice; unknown voices are refused
+            It never downloads a model. Empty output_path writes a WAV to GAIA's
+            audio folder. Use a listed Kokoro voice; unknown voices are refused
             before Lemonade can return a server error. Long text is split at
             sentence boundaries and joined into one file.
 
             Args:
                 text: Text to speak.
-                output_path: Optional WAV destination. Empty uses ~/.gaia/tts/.
+                output_path: Optional WAV destination. Empty uses GAIA's audio folder.
                 voice: Kokoro voice, such as af_bella, am_michael, bf_emma, or
                     bm_george.
                 speed: Speech rate from 0.5 to 2.0; 1.0 is normal.
 
             Returns:
-                status, output_path, duration_seconds, voice, model, chunks.
+                status, output_path, audio_path, duration_seconds, voice, model,
+                chunks.
             """
             import time
 
+            import gaia.config as gaia_config
             from gaia.audio.lemonade_tts import (
                 DEFAULT_TTS_MODEL,
                 KOKORO_VOICES,
@@ -2887,11 +3195,16 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             if not text or not text.strip():
                 return {"status": "error", "error": "text to speak must not be empty."}
             if not output_path:
-                # GAIA's own output folder, not the user's files.
-                tts_dir = Path.home() / ".gaia" / "tts"
+                # Where the Agent UI serves inline audio from (gaia.ui.generated_media).
+                tts_dir = (
+                    Path(gaia_config.GAIA_CONFIG_DIR)
+                    / "cache"
+                    / "audio"
+                    / "generations"
+                )
                 tts_dir.mkdir(parents=True, exist_ok=True)
                 ts = time.strftime("%Y%m%d_%H%M%S")
-                destination = tts_dir / f"speech_{ts}.wav"
+                destination = tts_dir / f"speech_{ts}_{uuid.uuid4().hex[:10]}.wav"
             else:
                 destination = _workspace_target(self, output_path)
                 denied = write_access_error(self, destination)
@@ -2927,6 +3240,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 "status": "success",
                 "output_path": str(destination),
                 "file_path": str(destination),
+                "audio_path": str(destination),
                 "duration_seconds": round(duration, 2),
                 "voice": voice,
                 "model": model,
@@ -2993,6 +3307,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             for _name in _chat_exclude:
                 self._instance_tools.pop(_name, None)
         self._offer_features(self.model_features)
+
+    def _offers_scheduling(self) -> bool:
+        """The Agent UI has a Scheduled tasks panel; other surfaces don't."""
+        return getattr(self.config, "surface", None) == "agent_ui"
 
     def _offers_image_generation(self) -> bool:
         """Image generation is on in the config and the model is offered it."""

@@ -99,14 +99,25 @@ _CONNECTION_SHAPED_RE = re.compile(
 )
 
 
+#: Wording of a message that already tells the user what to do next.
+_ALREADY_ADVISED_RE = re.compile(
+    r"send (?:the|your) message again|run setup again", re.IGNORECASE
+)
+
+
 def _augment_error_detail(detail: str, profile: RelayProfile = EMAIL_PROFILE) -> str:
     """Append (never substitute) an actionable hint to connection-shaped
     error text — boundary translation, not a fallback: the original detail
-    is preserved verbatim at the front."""
-    if profile.lemonade_hint and _CONNECTION_SHAPED_RE.search(detail):
-        from gaia.llm.lemonade_launcher import describe_start_hint
+    is preserved verbatim at the front. Text that already names its next
+    step is left alone, so the user never reads two versions of it."""
+    if (
+        profile.lemonade_hint
+        and not _ALREADY_ADVISED_RE.search(detail)
+        and _CONNECTION_SHAPED_RE.search(detail)
+    ):
+        from gaia.llm.lemonade_launcher import server_down_advice
 
-        return f"{detail}{profile.lemonade_hint} {describe_start_hint().instruction}"
+        return f"{detail}{profile.lemonade_hint} {server_down_advice()}"
     return detail
 
 
@@ -274,6 +285,8 @@ def _dispatch_one(
         for key in ("phase", "words", "chars", "queue"):
             if key in event:
                 status[key] = event[key]
+        if event.get("retracts_answer"):
+            status["retracts_answer"] = True
         handler._emit(status)
 
     elif etype == "token":
@@ -284,7 +297,10 @@ def _dispatch_one(
     elif etype == "reasoning":
         delta = event.get("delta", "")
         if delta:
-            handler._emit({"type": "thinking", "content": delta})
+            thinking = {"type": "thinking", "content": delta}
+            if event.get("retracts_answer"):
+                thinking["retracts_answer"] = True
+            handler._emit(thinking)
 
     elif etype == "tool_call":
         tool = str(event.get("tool") or "unknown")
@@ -379,6 +395,8 @@ def _dispatch_one(
         if event.get("failed") is True:
             # The sidecar's turn ended on a model failure; the answer says so.
             out["failed"] = True
+            if isinstance(event.get("failure"), str):
+                out["failure"] = event["failure"]
         # Same top-level fields an in-process answer carries, so the turn's
         # token counts and cost are recorded for a relayed turn too.
         usage = event.get("usage")

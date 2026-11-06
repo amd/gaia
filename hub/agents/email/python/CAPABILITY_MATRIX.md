@@ -9,18 +9,30 @@ python hub/agents/email/python/packaging/capability_matrix.py
 
 ## Definitions
 
-- **tools_count**: the number of internal @tool-decorated agent-loop functions across gaia_agent_email/tools/*.py mixins plus the framework output reader (one per capability the agent's own LLM tool-calling loop can invoke). This is distinct from, and larger than, the REST API's 23 functional verbs and the MCP interface's 4 task-level tools -- both smaller, purpose-built surfaces for external callers, not agent-loop tools.
+- **tools_count**: the number of internal @tool-decorated agent-loop functions across gaia_agent_email/tools/*.py mixins plus the framework output reader (one per capability the agent's own LLM tool-calling loop can invoke). This is distinct from, and larger than, the REST API's 35 functional verbs and the MCP interface's 4 task-level tools -- both smaller, purpose-built surfaces for external callers, not agent-loop tools.
 - **no quality eval sentinel**: `no quality eval (contract-tested only)` -- the op is contract/shape-tested only; no judged quality bar exists for it.
 
 ## Capability matrix
 
-27 exposed ops (23 REST functional + 4 MCP) and their eval coverage:
+39 exposed ops (35 REST functional + 4 MCP) and their eval coverage:
 
 | Op | Surface | Eval coverage |
 |---|---|---|
 | `/v1/connections` | REST | no quality eval (contract-tested only) |
 | `/v1/connections/{provider} (DELETE)` | REST | no quality eval (contract-tested only) |
 | `/v1/connections/{provider} (POST)` | REST | no quality eval (contract-tested only) |
+| `agent/autonomy` | REST | no quality eval (contract-tested only) |
+| `agent/autonomy/run` | REST | no quality eval (contract-tested only) |
+| `agent/autonomy/undo` | REST | no quality eval (contract-tested only) |
+| `agent/autonomy/{session_id}` | REST | no quality eval (contract-tested only) |
+| `agent/cancel` | REST | no quality eval (contract-tested only) |
+| `agent/confirm-tool` | REST | no quality eval (contract-tested only) |
+| `agent/memory` | REST | no quality eval (contract-tested only) |
+| `agent/memory/{session_id}` | REST | no quality eval (contract-tested only) |
+| `agent/query` | REST | no quality eval (contract-tested only) |
+| `agent/session` | REST | no quality eval (contract-tested only) |
+| `agent/session/{session_id}` | REST | no quality eval (contract-tested only) |
+| `agent/session/{session_id}/history` | REST | no quality eval (contract-tested only) |
 | `archive` | REST | no quality eval (contract-tested only) |
 | `attention` | REST | no quality eval (contract-tested only) |
 | `briefing` | REST | briefing |
@@ -67,7 +79,7 @@ python hub/agents/email/python/packaging/capability_matrix.py
   - `summarize_tools`: 1
   - `voice_tools`: 2
   - `waiting_on_you_tools`: 1
-- REST functional verbs: **23** (26 total operations in the frozen contract, including health/version/init probes)
+- REST functional verbs: **35** (38 total operations in the frozen contract, including health/version/init probes)
 - MCP tools: **4**
   - `draft_reply`
   - `send_email`
@@ -80,7 +92,7 @@ python hub/agents/email/python/packaging/capability_matrix.py
   - `followups`: enforce=False, acceptance_enforce=None, wired=False
   - `perf`: enforce=False, acceptance_enforce=None, wired=True
   - `quality`: enforce=False, acceptance_enforce=True, wired=True
-- Additionally served but **out of the frozen contract** (footnote context, not guarded machinery): `agent_routes.py` 12 session routes (includes the autonomy control surface, #2529), `connector_routes.py` 4 OAuth routes, `server.py` 2 inline probes -- ~43 total routes served by the sidecar.
+- Additionally served but **out of the frozen contract** (footnote context, not guarded machinery): `connector_routes.py` 4 OAuth routes and `server.py` 2 inline probes -- ~44 total routes served by the sidecar.
 
 ## MCP Scope Decision
 

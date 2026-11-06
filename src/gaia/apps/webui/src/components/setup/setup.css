@@ -666,3 +666,14 @@
     gap: 8px;
     justify-items: start;
 }
+
+.setup-npu-problems {
+    display: grid;
+    gap: 6px;
+    max-inline-size: 60ch;
+}
+.setup-npu-problems p,
+.setup-npu-problems ul { margin: 0; }
+.setup-npu-problems ul { padding-inline-start: 20px; display: grid; gap: 4px; }
+.setup-npu-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.setup-npu-error { color: var(--danger); }
