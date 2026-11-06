@@ -141,5 +141,20 @@ def test_retry_never_escalates_broken(monkeypatch):
     assert calls["n"] == 1  # no retries spent on a real failure
 
 
+def test_request_timeout_408_is_warning_and_retried(monkeypatch):
+    """shields.io answers 408 under CI load; that is a blip, not a dead badge."""
+    err = urllib.error.HTTPError(
+        "https://img.shields.io/x.svg", 408, "Request Timeout", hdrs=None, fp=None
+    )
+    monkeypatch.setattr(cdl.time, "sleep", lambda s: None)
+    with patch("urllib.request.urlopen", side_effect=err) as urlopen:
+        status, detail = cdl.check_external_link_with_retries(
+            "https://img.shields.io/x.svg"
+        )
+    assert status == "warning"
+    assert "408" in detail
+    assert urlopen.call_count == 1 + cdl.EXTERNAL_LINK_RETRIES
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

@@ -13,7 +13,7 @@ from typing import Dict, Optional, Tuple
 __version__ = "0.25.4"
 
 # Lemonade version used across CI and installer
-LEMONADE_VERSION = "2026.45.3"
+LEMONADE_VERSION = "2026.44.1"
 
 # Oldest Lemonade Server GAIA runs against. Anything older is refused, and
 # GAIA's own embedded server is upgraded on start. Raised by hand, never by a
