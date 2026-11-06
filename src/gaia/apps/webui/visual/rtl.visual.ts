@@ -303,6 +303,33 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** A quoted path with " - " and double spaces; the chip and the prompt must show it as typed. */
+const QUOTED_PATH = 'C:\\gtest\\run-rc11\\fx\\Team Docs  -  AMD Shared\\budget.txt';
+
+async function withQuotedPath(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: `Please index "${QUOTED_PATH}" into my document library`, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a quoted path with double spaces is one chip, spaces kept (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withQuotedPath);
+        const chips = page.locator('.file-path-link');
+        await expect(chips).toHaveCount(1);
+        // innerText follows white-space, so collapsed spaces would show here; toHaveText would hide them.
+        expect(await chips.evaluateAll((els) => els.map((el) => (el as HTMLElement).innerText))).toEqual([QUOTED_PATH]);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath('quoted-path.png') });
+    });
+}
+
 /** POST /api/chat/send answers with one "Reading your request" status, then holds the turn open. */
 function holdOnReading(): void {
     const realFetch = window.fetch.bind(window);
@@ -881,6 +908,22 @@ for (const locale of ['ar', 'en']) {
             if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
         });
     }
+
+    test(`desktop app on a desktop with no tray (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await withDesktopBridges(p, {}, { available: false, reason: 'no-host' });
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const desktop = page.locator('.settings-disclosure', { hasText: /Desktop app|تطبيق سطح المكتب/ });
+        await expect(desktop).toBeVisible();
+        await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+        await desktop.scrollIntoViewIfNeeded();
+        await expect(desktop.locator('#desktop-minimizeToTray-hint')).toContainText('AppIndicator');
+        await shot(page, `desktop-${locale}-no-tray`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
 
     test(`notifications on the desktop app (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withDesktopBridges(p); });
@@ -1707,6 +1750,18 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre')).toEqual([]);
         await shot(page, `permission-path-${locale}`);
+    });
+
+    test(`a path-access prompt keeps a path's double spaces (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, [{ ...PATH_PROMPT[0], args: { path: QUOTED_PATH, kind: 'file' } }]);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('index my budget');
+        await page.keyboard.press('Enter');
+        const shown = page.locator('.perm-card-question bdi[dir="ltr"]').first();
+        await expect(shown).toBeVisible();
+        expect(await shown.evaluate((el) => (el as HTMLElement).innerText)).toBe(QUOTED_PATH);
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `permission-path-spaced-${locale}`);
     });
 }
 

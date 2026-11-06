@@ -173,7 +173,12 @@ class TestResolver:
 
     def test_no_embedded_install_means_system(self, machine):
         machine.embedded.daemon_path.unlink()
+        machine.embedded.dist_dir.rmdir()
         assert gaia_runs_lemonade() is False
+
+    def test_an_install_missing_lemond_is_still_gaias_own(self, machine):
+        machine.embedded.daemon_path.unlink()
+        assert gaia_runs_lemonade() is True
 
     def _only_this_version_on_disk(self, machine, version: str):
         machine.embedded.daemon_path.unlink()

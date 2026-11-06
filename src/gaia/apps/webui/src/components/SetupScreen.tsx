@@ -836,6 +836,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         && (fullRun.models ?? []).length > 0
         && (fullRun.models ?? []).every((m) => m.state === 'ready' || m.state === 'skipped' || m.state === 'verifying' || m.state === 'unchecked')
         && !moving;
+    // Its row in the download list says why and offers Retry, so nothing below repeats it.
+    const componentFailed = !!fullRun && runFailed && !fullRun.problem
+        && Object.values(fullRun.components ?? {}).includes('failed');
 
     const catalog = catalogOf(plan);
     const pending = selection ? pendingDownloads(catalog, selection) : [];
@@ -1209,7 +1212,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.download.title')}</h1>
                             <p className="setup-lede">{t('setup.download.lede')}</p>
-                            {plan && <section className="setup-card" aria-label={t('setup.contents.title')}><DownloadContents plan={plan} run={fullRun} /></section>}
+                            {plan && <section className="setup-card" aria-label={t('setup.contents.title')}><DownloadContents plan={plan} run={fullRun} onRetry={retryRun} retryDisabled={busy} /></section>}
                             {(fullRun.models?.length ?? 0) > 0 ? (
                                 <div className={lostContact ? 'is-stale' : undefined}>
                                     <DownloadProgress
@@ -1260,7 +1263,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     </SetupFooter>
                                 </>
                             )}
-                            {runFailed && downloadDone && fullRun.state === 'failed' && !fullRun.model_failed && (
+                            {runFailed && downloadDone && !componentFailed && fullRun.state === 'failed' && !fullRun.model_failed && (
                                 fullRun.problem
                                     ? <ServerProblem problem={fullRun.problem} onRetry={retryRun} onUseGaia={() => void start(true, lastRun.current.options)} />
                                     : (
@@ -1275,7 +1278,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         </div>
                                     )
                             )}
-                            {runFailed && downloadDone && (
+                            {runFailed && downloadDone && !componentFailed && (
                                 <>
                                     <p className="setup-hint">{t('setup.download.finishNote')}</p>
                                     <SetupFooter>
@@ -1283,7 +1286,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     </SetupFooter>
                                 </>
                             )}
-                            {runFailed && !downloadDone && !(fullRun.models ?? []).some((m) => m.state === 'failed' || m.state === 'cancelled') && (
+                            {runFailed && !downloadDone && !componentFailed && !(fullRun.models ?? []).some((m) => m.state === 'failed' || m.state === 'cancelled') && (
                                 <>
                                     <RunError run={fullRun} />
                                     {fullRun.problem

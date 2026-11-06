@@ -122,7 +122,7 @@ def test_learning_queued_before_forget_everything_does_not_refill_memory(store):
         erase_count=began,
     )
 
-    assert applied == 0
+    assert applied.stored == 0
     assert store._conn.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0] == 0
 
 
@@ -136,7 +136,7 @@ def test_something_said_after_forget_everything_is_learned(store):
         erase_count=store.erase_count(),
     )
 
-    assert applied == 1
+    assert applied.stored == 1
 
 
 def _on_disk(tmp_path) -> bytes:
@@ -385,7 +385,7 @@ def test_an_erase_between_two_extracted_memories_stops_the_second(
         erase_count=began,
     )
 
-    assert applied == 1
+    assert applied.stored == 1
     assert _rows(store, "knowledge") == 0
 
 
