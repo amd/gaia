@@ -162,8 +162,9 @@ _SLACK = ConnectorSpec(
                 "You need permission to install apps there; guest accounts can't, "
                 "and some workspaces need an admin to approve it. "
                 "Click **Create Slack app**, pick your workspace, and click **Next**, "
-                "then **Create**. Click **Install to Workspace**, then **Allow**. "
-                "Copy the **Bot User OAuth Token** that Slack shows and paste it here. "
+                "then **Create**. Install the app to your workspace and click **Allow**. "
+                "Open **OAuth & Permissions** in Slack's left menu, copy the "
+                "**Bot User OAuth Token**, and paste it here. "
                 "Then type `/invite @GAIA` in each channel GAIA should read."
             ),
             secret=True,

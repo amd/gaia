@@ -32,11 +32,14 @@ keyring, and the server gets it through a `$keyring` reference when it starts.
 and click **Create Slack app**. Slack opens with a read-only app named GAIA
 already filled in, so you don't pick any permissions yourself.
 
-1. Pick your workspace and click **Next**, then **Create**.
-2. Click **Install to Workspace**, then **Allow**. You need permission to
+1. Pick your workspace and click **Next**, then **Create**. If you own the
+   workspace, Slack shows **Create and Install** instead.
+2. Install the app to your workspace and click **Allow**. You need permission to
    install apps in the workspace: guest accounts can't, and some company
    workspaces need an admin to approve new apps first.
-3. Copy the **Bot User OAuth Token**. It starts with `xoxb-`.
+3. Slack opens the app's **Basic Information** page. Open **OAuth &
+   Permissions** in the left menu and copy the **Bot User OAuth Token**. It
+   starts with `xoxb-`.
 4. In Slack, invite the bot to each channel it should read
    (`/invite @GAIA`). A bot sees only the channels it's in.
 
