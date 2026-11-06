@@ -67,7 +67,7 @@ import numpy as np
 
 from gaia.agents.base import turn_metrics
 from gaia.agents.base.console import SilentConsole
-from gaia.agents.base.history import MEMORY_CONTEXT_HEADER
+from gaia.agents.base.history import MEMORY_CONTEXT_HEADER, frame_user_message
 from gaia.agents.base.memory_store import (
     CONSOLIDATION_MIN_TURNS,
     EXTRACTABLE_CATEGORIES,
@@ -3897,10 +3897,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             with turn_metrics.pre_turn_span(self, "skill_recall"):
                 self._refresh_recalled_skills(user_input)
 
-            # Prepend dynamic context to the user message
             with turn_metrics.pre_turn_span(self, "memory_context"):
                 dynamic = self.get_memory_dynamic_context()
-            augmented = f"{dynamic}\n\n{user_input}" if dynamic else user_input
+            augmented = frame_user_message(dynamic, user_input)
 
             return super().process_query(augmented, **kwargs)
         finally:
