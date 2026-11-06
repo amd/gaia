@@ -33,6 +33,7 @@ from gaia.agents.base.denied_effects import (
     effects_of_shell_command,
     render_call,
 )
+from gaia.agents.base.history import frame_user_message
 from gaia.agents.base.tools import tool
 from gaia.ui.sse_handler import SSEOutputHandler
 
@@ -663,9 +664,9 @@ def test_the_question_quotes_the_users_words_not_the_memory_context(tmp_path, sc
     console = _AskingConsole("__NO_RESPONSE__")
     agent = _agent(console, tmp_path)
     agent._original_user_input = "check the tie order in sorting.py"
-    agent._current_query = (
-        "[GAIA Memory Context]\nCurrent time: 2026-09-29\n\n"
-        "check the tie order in sorting.py"
+    agent._current_query = frame_user_message(
+        "[GAIA Memory Context]\nCurrent time: 2026-09-29",
+        "check the tie order in sorting.py",
     )
     agent._execute_tool("run_shell_command", {"command": "pytest -q"})
 
