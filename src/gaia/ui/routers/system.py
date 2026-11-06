@@ -1102,12 +1102,13 @@ async def _check_model_status(model_name: str) -> ModelStatus:
     return status
 
 
-def _resolve_dynamic_tools_setting(db: ChatDatabase) -> tuple[bool, bool]:
-    """Return ``(effective, locked)`` for the Beta dynamic tool loader (#1798).
+def _resolve_dynamic_tools_setting() -> tuple[bool, bool]:
+    """Return ``(effective, locked)`` for dynamic tool loading.
 
     ``GAIA_DYNAMIC_TOOLS`` wins when set (``locked=True`` ⇒ the frontend
     reflects the effective value and disables the toggle, never a silent
-    no-op); otherwise the persisted ``dynamic_tools`` setting is authoritative.
+    no-op); otherwise ``dynamic_tools`` in ``~/.gaia/config.json`` decides, the
+    one place every agent process reads, the flagship's sidecar included.
     Delegates the env parse to ``dynamic_tools_env_override`` so the UI and
     ``ChatAgent._resolve_dynamic_tools_enabled`` share one truthy set.
     """
@@ -1115,12 +1116,12 @@ def _resolve_dynamic_tools_setting(db: ChatDatabase) -> tuple[bool, bool]:
     # (no cycle, no module-load cost). The helper lives in the core tool_loader
     # (not an agent wheel) so this core UI setting works without one installed.
     from gaia.agents.base.tool_loader import dynamic_tools_env_override
+    from gaia.config import GaiaConfig
 
-    persisted = db.get_setting("dynamic_tools", "false") == "true"
     override = dynamic_tools_env_override()
     if override is not None:
         return override, True
-    return persisted, False
+    return GaiaConfig.load().dynamic_tools, False
 
 
 @router.get("/api/settings", response_model=SettingsResponse)
@@ -1130,7 +1131,7 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
-    dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting(db)
+    dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting()
     logger.debug(
         "Settings loaded: custom_model=%s, context_size=%s, agent_mode=%s, "
         "dynamic_tools=%s (locked=%s)",
@@ -1224,14 +1225,16 @@ async def update_settings(
     ):
         # Persist the user's intent even while GAIA_DYNAMIC_TOOLS locks the
         # effective value — so their choice applies once the env var is unset.
-        db.set_setting("dynamic_tools", "true" if request.dynamic_tools else "false")
+        from gaia.config import GaiaConfig
+
+        GaiaConfig.save_key("dynamic_tools", request.dynamic_tools)
         logger.info("Dynamic tools setting persisted: %s", request.dynamic_tools)
 
     custom_model = db.get_setting("custom_model")
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
-    dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting(db)
+    dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting()
     model_status = await _check_model_status(custom_model) if custom_model else None
     return SettingsResponse(
         custom_model=custom_model or None,

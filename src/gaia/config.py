@@ -167,6 +167,10 @@ class GaiaConfig:
             ``.claude/skills`` the agent puts in its prompt: ``full``, ``off``,
             or ``None`` (set it to ``auto``) to decide per model. See
             :mod:`gaia.project_context`.
+        dynamic_tools: Start a flagship session on its most-used tools, in short
+            form, and move to every tool at most once, so the first reply reads
+            less and the prompt cache survives. Applies to new sessions.
+            ``GAIA_DYNAMIC_TOOLS`` overrides it.
     """
 
     profile: str = "chat"
@@ -187,6 +191,7 @@ class GaiaConfig:
     undo_max_mb: int = 500
     skipped_models: List[str] = field(default_factory=list)
     project_context: Optional[str] = None
+    dynamic_tools: bool = True
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None

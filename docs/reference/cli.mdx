@@ -1880,6 +1880,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) for commands that load without naming a model. A model always runs on the device it was built for |
 | `context_sizes` | _(empty)_ | Context window per local model, set in the Agent UI under **Settings → Model** (`gaia config set` refuses it). A model not listed gets GAIA's automatic size; `GAIA_CTX_SIZE` overrides it |
 | `custom_models` | _(empty)_ | Local models you added from a Hugging Face link, managed with [`gaia model`](#model-command), the Agent UI or the TUI (`gaia config set` refuses it) |
+| `dynamic_tools` | `true` | Start each flagship session on its most-used tools in short form and move to every tool at most once, which cuts the first reply and keeps the prompt cache warm. Applies to new sessions. `GAIA_DYNAMIC_TOOLS` overrides it |
 | `profile` | `chat` | Last `gaia init` profile |
 | `vision_model` | _(unset)_ | Model that reads scans and images, when you chose one in setup. Unset uses the chat model if it reads images, otherwise Gemma 4 E4B; when that one isn't downloaded, a tested image-reading model that is |
 | `skipped_models` | _(empty)_ | Models you chose not to download; `gaia init` and first-run setup leave them out. Comma-separated with `gaia config set`; also set by `gaia init --skip-model` and the setup screens. See [Choosing models](#choosing-models) |

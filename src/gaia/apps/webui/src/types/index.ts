@@ -510,7 +510,7 @@ export interface Settings {
     model_status: ModelStatus | null;
     /** Persisted context window size override (tokens). null = use default 32768. */
     context_size: number | null;
-    /** Beta dynamic tool loader (#1798). Effective value: GAIA_DYNAMIC_TOOLS wins when set, else the persisted setting. */
+    /** Dynamic tool loading. Effective value: GAIA_DYNAMIC_TOOLS wins when set, else config.json. */
     dynamic_tools: boolean;
     /** True when GAIA_DYNAMIC_TOOLS locks the value — the toggle reflects the effective value and disables. */
     dynamic_tools_locked: boolean;
@@ -909,7 +909,7 @@ export interface StreamEvent {
     // Agent-specific fields
     status?: string;
     message?: string;
-    /** Model phase on a status event: reading, loading_model, reasoning, tool_call, … */
+    /** Model phase on a status event: reading, loading_tools, loading_model, reasoning, tool_call, … */
     phase?: string;
     /** Drop the answer text streamed since the last tool. On `thinking`: it was this reasoning.
      *  On `status`: the reply was cut off (the model server stopped) and starts over. */
