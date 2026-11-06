@@ -8324,7 +8324,10 @@ Do NOT wrap conversational replies in JSON.
         from gaia.llm.providers.lemonade import (
             LemonadeError,
             classify_lemonade_exception,
+            wording_for_model,
         )
+
+        model = getattr(self, "model_id", None)
 
         # 1. Direct match anywhere in the cause chain.
         cur: Optional[BaseException] = exc
@@ -8338,7 +8341,7 @@ Do NOT wrap conversational replies in JSON.
             if isinstance(cur, LemonadeError):
                 msg = getattr(cur, "user_message", None)
                 if msg:
-                    return str(msg)
+                    return wording_for_model(str(msg), model)
             prev = cur
             cur = cur.__cause__ or cur.__context__
 
@@ -8350,7 +8353,7 @@ Do NOT wrap conversational replies in JSON.
         if classified is not None:
             msg = getattr(classified, "user_message", None)
             if msg:
-                return str(msg)
+                return wording_for_model(str(msg), model)
         return None
 
     def _cloud_account_refusal(self, exc: BaseException) -> Optional[str]:
