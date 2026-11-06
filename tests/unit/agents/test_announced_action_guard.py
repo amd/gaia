@@ -178,6 +178,10 @@ REAL_ANSWERS = [
         "totals when the run is allowed.",
         id="denied-when-allowed",
     ),
+    pytest.param(
+        "From your notes:\n\n> I'll run the tests now.",
+        id="quoted-last-line",
+    ),
 ]
 
 
@@ -336,3 +340,13 @@ def test_honest_ending_is_not_mistaken_for_planning_text(agent):
     final = _final_text(result)
     assert final.startswith("I didn't finish:")
     assert "I'll check the sales file now." in final
+
+
+def test_planning_phrase_guard_shares_the_reprompt_budget(agent):
+    # "i'll check" also trips the planning-phrase guard; it must not loop past the cap.
+    sent = _script(agent, *[_answer("I'll check the releases page now.")] * 8)
+
+    result = agent.process_query("Latest Lemonade release?", max_steps=20)
+
+    assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
+    assert _final_text(result).startswith("I didn't finish:")

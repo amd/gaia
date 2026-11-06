@@ -1471,7 +1471,8 @@ _DRAFT_PATTERN = re.compile(
     r"|sincerely|warmly|all the best)\s*[,!.]?\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
-_LIST_ITEM_PATTERN = re.compile(r"^\s*(?:[-*+•]|\d+[.)])\s")
+# A list item or a quoted line is content the user asked for or quoted.
+_LIST_ITEM_PATTERN = re.compile(r"^\s*(?:(?:[-*+•]|\d+[.)])\s|>)")
 _UNFINISHED_STEP_QUOTE_MAX_CHARS = 200
 
 
@@ -1545,7 +1546,7 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     sentences = re.split(r"(?<=[.!?])\s+", last_line)
     if (
         not _DRAFT_PATTERN.search(text)
-        and not _LIST_ITEM_PATTERN.match(last_line)
+        and not _LIST_ITEM_PATTERN.match(paragraphs[-1].splitlines()[-1])
         and _announces_action(
             sentences[-1],
             short=len(paragraphs[-1]) <= _UNFINISHED_PARAGRAPH_MAX_CHARS,
@@ -12439,6 +12440,9 @@ Do NOT wrap conversational replies in JSON.
                     )
                 )
                 if is_planning_text and steps_taken < steps_limit - 1:
+                    if unfinished_kind == "narration":
+                        # Same budget as the narration re-prompt, so the turn can end.
+                        unfinished_answer_reprompts += 1
                     # Inject a correction message and continue the loop to force the answer
                     logger.debug(
                         "[WORKFLOW] Blocking planning-only response as final answer: %s",
