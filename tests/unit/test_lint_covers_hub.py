@@ -61,6 +61,12 @@ def test_flake8_checks_every_hub_python_package(monkeypatch):
     )
 
 
+def test_hub_flake8_no_longer_ignores_f811(monkeypatch):
+    lint = _load_lint(monkeypatch)
+
+    assert "F811" not in lint.HUB_FLAKE8_IGNORES.split(",")
+
+
 def test_the_core_is_still_formatted(monkeypatch):
     lint = _load_lint(monkeypatch)
 
