@@ -424,3 +424,64 @@ def test_planning_phrase_guard_shares_the_reprompt_budget(agent):
 
     assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
     assert _final_text(result).startswith("I didn't finish:")
+
+
+# rc13 integration build, Gemma 4 E4B (NPU): two edits left "oat oat milk",
+# then the answer ended on a write it never made.
+TODO_FIX_ANSWER = (
+    'The previous edits went wrong: the file now reads "oat oat milk".\n\n'
+    "**Corrected Plan:**\n"
+    "1. Read the current content of `todo.txt`.\n"
+    "2. Construct the exact desired content.\n"
+    "3. Use `write_file` to completely replace the file with the correct "
+    "content.\n\n"
+    "The desired content is:\n\n"
+    "```\n- eggs\n- oat milk\n- bread\n- apples\n```\n\n"
+    "Executing the final write now."
+)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(TODO_FIX_ANSWER, id="todo-plan-then-executing-now"),
+        pytest.param("Executing the final write now.", id="executing-now"),
+        pytest.param("Okay, running the search next.", id="running-next"),
+        pytest.param("Now writing the corrected file now.", id="now-writing-now"),
+    ],
+)
+def test_progressive_announcements_are_narration(answer):
+    assert _unfinished_answer_kind(answer) == "narration"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(
+            "Running the tests now shows 12 passing and 0 failing.",
+            id="progressive-with-result",
+        ),
+        pytest.param("Writing to that folder needs admin rights.", id="no-cue"),
+        pytest.param(
+            "Hi Sam,\n\nThe report is attached. Sending the invoice now.",
+            id="drafted-email",
+        ),
+    ],
+)
+def test_progressive_statements_are_not_narration(answer):
+    assert _unfinished_answer_kind(answer) is None
+
+
+def test_plan_ending_on_executing_now_ends_honestly(agent):
+    sent = _script(agent, *[_answer(TODO_FIX_ANSWER)] * 5)
+
+    result = agent.process_query(
+        'In todo.txt change "milk" to "oat milk" and add "- apples" at the end.',
+        max_steps=20,
+    )
+
+    assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
+    assert "Executing the final write now." in sent[1][-1]["content"]
+    final = _final_text(result)
+    assert final.startswith("I didn't finish:")
+    assert "Executing the final write now." in final

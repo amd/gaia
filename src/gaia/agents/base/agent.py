@@ -1500,6 +1500,14 @@ _FUTURE_ACTION_PATTERN = re.compile(
 _THIS_TURN_PATTERN = re.compile(
     r"\bnow\b(?!\s+that)|\bbefore\s+\w+ing\b", re.IGNORECASE
 )
+# "Executing the final write now.": a step in the present tense, due this turn.
+_PROGRESSIVE_STEP_PATTERN = re.compile(
+    r"^(?:(?:ok(?:ay)?|so|alright|now)[,.]?\s+)?"
+    r"(?:executing|running|performing|writing|applying|calling|fetching"
+    r"|searching|saving|updating|creating|making|proceeding)\b"
+    r"[^.!?:]{0,80}\b(?:now|next)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
 _UNFINISHED_STEP_QUOTE_MAX_CHARS = 200
 
 
@@ -1509,8 +1517,12 @@ def _announces_action(sentence: str, short: bool = True) -> bool:
     Past the short-paragraph limit it needs an immediacy cue; within it, a bare
     "I'll check X." counts, but a lead clause ("As the owner, …") must be one.
     """
+    if _DEFERRED_ACTION_PATTERN.search(sentence):
+        return False
+    if _PROGRESSIVE_STEP_PATTERN.match(sentence):
+        return True
     match = _ANNOUNCED_ACTION_PATTERN.match(sentence)
-    if not match or _DEFERRED_ACTION_PATTERN.search(sentence):
+    if not match:
         return False
     if match.group("we") and not re.search(r"\bnow\b", sentence, re.IGNORECASE):
         return False  # "Next, we'll run the migration." is a tutorial step.
