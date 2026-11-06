@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """A huge message is also saved to a file, so the model can use tools on it."""
 
+import os
+import queue
 from types import SimpleNamespace
 
 from gaia.agents.base.agent import LONG_MESSAGE_CHARS, Agent
@@ -59,6 +61,32 @@ def test_the_file_holds_the_users_words_not_the_framed_message(tmp_path):
     (saved,) = tmp_path.glob("message-*.txt")
     assert saved.read_text(encoding="utf-8") == paste
     assert sent.endswith(framed)
+
+
+def test_a_deleted_scratch_folder_is_recreated_private(tmp_path):
+    scratch = tmp_path / "scratch"
+    sent = _agent(str(scratch))._with_long_message_file(_paste())
+    assert scratch.is_dir()
+    assert str(scratch) in sent
+    if os.name != "nt":
+        assert scratch.stat().st_mode & 0o077 == 0
+
+
+def test_a_long_follow_up_mid_turn_is_saved_too(tmp_path):
+    paste = _paste()
+    agent = _agent(str(tmp_path))
+    agent._original_user_input = "short first question"
+    agent._followup_queue = queue.Queue()
+    agent._followup_queue.put(paste)
+    agent.console = SimpleNamespace(print_info=lambda *_: None)
+    messages, conversation = [], []
+
+    assert agent._drain_followups(messages, conversation) == 1
+
+    saved = list(tmp_path.glob("message-*.txt"))
+    assert [p.read_text(encoding="utf-8") for p in saved] == [paste]
+    assert str(saved[0]) in messages[0]["content"]
+    assert str(saved[0]) not in conversation[0]["content"]
 
 
 def test_no_scratch_folder_sends_the_message_unchanged(caplog):

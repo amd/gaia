@@ -10229,7 +10229,12 @@ Do NOT wrap conversational replies in JSON.
             framed = self.FOLLOWUP_PREAMBLE + text
             # Two dicts, not one shared object: every other append in this loop
             # builds its own, and downstream code edits entries in place.
-            messages.append({"role": "user", "content": framed})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": self._with_long_message_file(framed, raw=text),
+                }
+            )
             conversation.append({"role": "user", "content": framed})
             taken += 1
             # The user is owed visible proof their message landed — silence here
@@ -10238,13 +10243,17 @@ Do NOT wrap conversational replies in JSON.
             logger.info("Folded a mid-turn follow-up into the running turn")
         return taken
 
-    def _with_long_message_file(self, user_input: str) -> str:
+    def _with_long_message_file(
+        self, user_input: str, raw: Optional[str] = None
+    ) -> str:
         """*user_input*, led by where its full text is saved when it is huge.
 
         A model asked to count or search a long paste otherwise tries to copy
-        it into a tool call, which no output budget fits.
+        it into a tool call, which no output budget fits. *raw* is the user's
+        own words when *user_input* is framed; it defaults to this turn's query.
         """
-        raw = getattr(self, "_original_user_input", None) or user_input
+        if raw is None:
+            raw = getattr(self, "_original_user_input", None) or user_input
         if not isinstance(raw, str) or len(raw) < LONG_MESSAGE_CHARS:
             return user_input
         scratch = getattr(self._read_validator(), "scratch_dir", None)
@@ -10258,7 +10267,9 @@ Do NOT wrap conversational replies in JSON.
         digest = hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:12]
         path = Path(scratch) / f"message-{digest}.txt"
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
+            from gaia.security import ensure_scratch_dir
+
+            ensure_scratch_dir(path.parent)
             path.write_text(raw, encoding="utf-8")
         except OSError as e:
             logger.warning("Could not save a long message to %s: %s", path, e)
