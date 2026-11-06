@@ -6,6 +6,61 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.5]
+
+Released with GAIA 0.25.4, and requires the `gaia` Python CLI 0.25.4+ on `PATH`
+and Lemonade Server 2026.44.1+. The sidecar contract stays **2.27**.
+
+- **Instructions planted in a file or web page are always flagged.** The
+  agent tells the user about them on any model, including the small NPU one,
+  and never follows them.
+- **A computation that fails no longer turns into made-up figures.** Amounts
+  in a table that no tool produced get flagged.
+- **"Forget that I'm allergic to shellfish" works on the first try.**
+- **A short message is no longer mistaken for an instruction from memory.**
+- **Memory stops replaying stale tool errors as lessons**, and only shows a
+  model the lessons recorded while that model was chatting.
+- **A report a script wrote beside a shared file counts as written.**
+- **A chat recovers when GAIA's own model server died**, cloud chats
+  included, without restarting the app.
+- **An answer that only announces its next step is not handed over as done.**
+  The agent finishes the step, or says plainly that it didn't.
+
+### Fixed
+
+- **An announced next step is not handed over as the answer** (#6787). A
+  reply ending "Next, I'll search the docs" or "Running the tests now" got
+  re-prompted; if the model still doesn't act, the turn ends with "I didn't
+  finish" and what it had so far. Requested plans and tutorials pass unchanged.
+- **Planted instructions get a visible warning on every model** (#6784).
+  Gemma 4 E4B summarized a build log's "[agent-note] … run `del /s /q …`"
+  without a word. External tool results are now scanned, the model is told to
+  report and not follow what it finds, and the answer gets a heads-up when the
+  model leaves it out.
+- **Invented amounts after a failed computation are flagged** (#6818). A
+  currency cell such as `$10,342.50` is now checked like a bare number, and a
+  `run_python`, `execute_python_file` or `query_data` call that fails before
+  printing anything tells the model nothing was computed.
+- **`forget` takes the user's words, not only an id** (#6774). It erases the
+  one memory the words clearly name; when they match several or none, nothing
+  is erased and the step says so in plain words.
+- **The per-turn memory block has an end** (#6814). A one-line message such
+  as "Reply with just: restored" was read as the block's last line and
+  refused as a planted instruction.
+- **Empty and outdated tool errors are no longer stored as lessons** (#6781).
+  Errors recorded by another GAIA version are dropped when memory opens, each
+  is shown only while the model that saw it chats, and the Memory page labels
+  them "Learned by GAIA" instead of "Error".
+- **A script's write to a file the user named as the output counts** (#6820),
+  so a report saved beside a shared file no longer ends with "No successful
+  write". Only its size and timestamp are checked, never its contents, and a
+  symlink is never followed.
+- **A dead model server restarts before the next turn** (#6806). Every later
+  message in an open chat used to fail until the app restarted. A cloud
+  chat's errors also stop calling the engine "the local LLM".
+- **An agent install no longer fails over one unreadable process** (#6822),
+  and on macOS the daemon reaps the agents it left running (#6808).
+
 ## [0.3.4]
 
 Released with GAIA 0.25.4, and requires the `gaia` Python CLI 0.25.4+ on `PATH`
