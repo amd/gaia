@@ -1,10 +1,14 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """A final answer that only announces its next action ("I will perform one
-final search…") is re-prompted, and never handed to the user as the answer.\n\nSeen on Gemma 4 E4B (NPU) in v0.25.4-rc13 and in the ai-pc-evals data tasks\n(amd/gaia#6753, thread 1).\n
+final search…") is re-prompted, and never handed to the user as the answer.
+
+Seen on Gemma 4 E4B (NPU) in v0.25.4-rc13 and in the ai-pc-evals data tasks
+(amd/gaia#6753, thread 1).
 """
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,6 +16,7 @@ import pytest
 from gaia.agents.base.agent import (
     _MAX_UNFINISHED_ANSWER_REPROMPTS,
     Agent,
+    _split_announced_step,
     _unfinished_answer_kind,
 )
 from gaia.agents.base.verification import strip_verification_scope
@@ -498,3 +503,73 @@ def test_plan_ending_on_executing_now_ends_honestly(agent):
     final = _final_text(result)
     assert final.startswith("I didn't finish:")
     assert "Executing the final write now." in final
+
+
+# Gemma 4 E4B (NPU): after one analyze_data_file call, the answer laid out a
+# run_python plan and ended without running it.
+PLAN_INSTEAD_OF_WORK = (
+    Path(__file__).parents[2]
+    / "fixtures"
+    / "agent_answers"
+    / "plan_instead_of_work.txt"
+).read_text(encoding="utf-8")
+
+
+def test_tool_plan_in_place_of_the_work_is_narration():
+    assert _unfinished_answer_kind(PLAN_INSTEAD_OF_WORK) == "narration"
+    body, step = _split_announced_step(PLAN_INSTEAD_OF_WORK)
+    assert (
+        step == "I will use the `run_python` tool to load the CSV data using `pandas`."
+    )
+    assert "Here is the plan" not in body
+    assert body.startswith("The previous tool call returned a result")
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(
+            "Here is how I would approach it:\n"
+            "1. I will load the CSV with pandas.\n"
+            "2. I will filter out the returned orders.\n"
+            "3. I will group by region and sum units times price.",
+            id="tutorial-without-a-tool",
+        ),
+        pytest.param(
+            "Here is the plan:\n"
+            "1. I will use the `run_python` tool to load the CSV.\n"
+            "2. I will group by region.\n\n"
+            "Results: North $12,400.50, South $9,870.00, West $15,210.25.",
+            id="plan-then-results",
+        ),
+        pytest.param(
+            "Hi team,\n\nNext steps for the migration:\n"
+            "1. I will use the `deploy` tool to stage the build.\n"
+            "2. I will run the smoke tests.\n\nThanks,\nSam",
+            id="drafted-email-plan",
+        ),
+        pytest.param(
+            "Your notes say:\n\n"
+            "> 1. I will use the `run_python` tool to load the data.\n"
+            "> 2. I will print the totals.",
+            id="quoted-plan",
+        ),
+    ],
+)
+def test_plan_look_alikes_are_not_narration(answer):
+    assert _unfinished_answer_kind(answer) is None
+
+
+def test_tool_plan_in_place_of_the_work_ends_honestly(agent):
+    sent = _script(agent, *[_answer(PLAN_INSTEAD_OF_WORK)] * 5)
+
+    result = agent.process_query(
+        "What is the net revenue excluding returned orders, broken down by region?",
+        max_steps=20,
+    )
+
+    assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
+    assert "I will use the `run_python` tool" in sent[1][-1]["content"]
+    final = _final_text(result)
+    assert final.startswith("I didn't finish:")
+    assert "I will use the `run_python` tool" in final

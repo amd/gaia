@@ -1586,6 +1586,8 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     last_line = re.sub(r"[*_`#>]", "", paragraphs[-1].splitlines()[-1]).strip()
     if last_line.endswith(":") and not _EMOJI_SHORTCODE_END_PATTERN.search(last_line):
         return "narration"
+    if not _DRAFT_PATTERN.search(text) and _tool_plan_step(paragraphs):
+        return "narration"
 
     sentences = re.split(r"(?<=[.!?])\s+", last_line)
     plain_paragraph = re.sub(r"[*_`#>]", "", paragraphs[-1])
@@ -1617,13 +1619,58 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     return None
 
 
+# A plan step the agent could have run itself: it names a tool ("use the
+# `run_python` tool", "call `query_data`").
+_TOOL_NAMING_PATTERN = re.compile(
+    r"\btools?\b|`[a-z][a-z0-9]*_[a-z0-9_]+`", re.IGNORECASE
+)
+_PLAN_ITEM_PATTERN = re.compile(r"^\s*(?:[-*+•]|\**\d+[.)]\**)\s+(?P<item>.+)$")
+_CLOSING_LINE_MAX_CHARS = 300
+
+
+def _tool_plan_step(paragraphs: List[str]) -> Optional[Tuple[str, str]]:
+    """The plan paragraph and its first tool step, when a tool plan ends the answer.
+
+    The plan lists two or more first-person future steps, one naming a tool, and
+    at most one short closing line follows it with no figures, so no result.
+    """
+    for plan_at in (-1, -2):
+        if len(paragraphs) < -plan_at:
+            return None
+        closing = paragraphs[plan_at + 1 :] if plan_at == -2 else []
+        if closing and (
+            len(closing[0]) > _CLOSING_LINE_MAX_CHARS or re.search(r"\d", closing[0])
+        ):
+            return None
+        items = [
+            m.group("item").strip()
+            for m in map(_PLAN_ITEM_PATTERN.match, paragraphs[plan_at].splitlines())
+            if m
+        ]
+        future = [
+            item
+            for item in items
+            if _FUTURE_ACTION_PATTERN.match(re.sub(r"[*_`]", "", item))
+        ]
+        tool_steps = [item for item in future if _TOOL_NAMING_PATTERN.search(item)]
+        if len(future) >= 2 and tool_steps:
+            return paragraphs[plan_at], tool_steps[0]
+    return None
+
+
 def _split_announced_step(answer: str) -> Tuple[str, Optional[str]]:
     """Split a narrated answer into (what came before, the announced step).
 
-    The step is the last sentence when it announces an action or ends in a
-    colon; otherwise (a plan) it is ``None`` and the whole text is kept.
+    The step is a tool plan's first tool step, else the last sentence when it
+    announces an action or ends in a colon; otherwise (a plan) it is ``None``
+    and the whole text is kept.
     """
     text = (answer or "").strip()
+    prose = _FENCED_BLOCK_PATTERN.sub("", text)
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", prose) if p.strip()]
+    plan = _tool_plan_step(paragraphs)
+    if plan:
+        return text[: text.rfind(plan[0])].rstrip(), plan[1]
     last_line = text.splitlines()[-1] if text else ""
     sentence = re.split(r"(?<=[.!?])\s+", last_line.strip())[-1]
     plain = re.sub(r"[*_`#>]", "", sentence).replace("’", "'").strip()
