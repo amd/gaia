@@ -21,6 +21,17 @@ def test_the_requests_that_limit_an_edit():
     assert limits_edit("Fix the typo and don't touch anything else")
     assert limits_edit("Update the title, leave the rest as is")
     assert not limits_edit("Rewrite the intro so it reads better")
+    assert not limits_edit("Use nothing else but tabs; reformat the whole file")
+
+
+def test_common_words_do_not_hide_a_removed_line():
+    request = (
+        "In notes.txt change the title to Draft and add a line at the end. "
+        "Change nothing else."
+    )
+    assert unasked(removed_lines("Call the bank", "Draft"), request) == [
+        "Call the bank"
+    ]
 
 
 def test_the_gemma_edit_that_replaced_eggs_is_caught():
@@ -74,6 +85,29 @@ def test_the_agent_keeps_unasked_removals_only_for_limited_requests():
     open_ended._note_edit_removals(edit, {"status": "success"})
     assert open_ended._turn_unasked_removals == []
 
+    twice = _agent(REQUEST)
+    twice._note_edit_removals(edit, {"status": "success"})
+    twice._note_edit_removals(edit, {"status": "success"})
+    assert twice._turn_unasked_removals == [("todo.txt", "- eggs")]
+
     failed = _agent(REQUEST)
     failed._note_edit_removals(edit, {"status": "error", "error": "no match"})
     assert failed._turn_unasked_removals == []
+
+
+def test_a_line_a_later_edit_puts_back_is_not_reported():
+    agent = _agent(REQUEST)
+    path = "C:/x/todo.txt"
+    agent._note_edit_removals(
+        {"file_path": path, "old_content": "- eggs", "new_content": "- apples"},
+        {"status": "success"},
+    )
+    agent._note_edit_removals(
+        {
+            "file_path": path,
+            "old_content": "- apples",
+            "new_content": "- eggs\n- apples",
+        },
+        {"status": "success"},
+    )
+    assert agent._turn_unasked_removals == []

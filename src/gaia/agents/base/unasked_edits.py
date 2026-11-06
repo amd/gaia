@@ -13,13 +13,22 @@ from typing import Iterable, List, Sequence
 #: Requests that limit an edit to what they name.
 _KEEP_REST_RE = re.compile(
     r"\b(?:change|touch|modify|edit|alter)\s+nothing\s+else\b"
-    r"|\bnothing\s+else\b"
     r"|\b(?:do\s*n[o']?t|don't)\s+(?:change|touch|modify|edit)\s+"
     r"(?:anything|the\s+rest)\b"
     r"|\bleave\s+(?:the\s+rest|everything\s+else)\b",
     re.IGNORECASE,
 )
 _WORD_RE = re.compile(r"[A-Za-z0-9]{3,}")
+#: Words too common to show that a request named a line.
+_COMMON = frozenset(
+    "the and for with that this from into then than are was were but not all "
+    "any you your our its has have had add end top line lines file text also "
+    "change nothing else keep leave rest".split()
+)
+
+
+def _distinctive(text: str) -> List[str]:
+    return [w.lower() for w in _WORD_RE.findall(text) if w.lower() not in _COMMON]
 
 
 def limits_edit(request: str) -> bool:
@@ -39,12 +48,11 @@ def removed_lines(old_content: str, new_content: str) -> List[str]:
 
 def unasked(lines: Iterable[str], request: str) -> List[str]:
     """The *lines* none of whose words the request mentions."""
-    asked = {word.lower() for word in _WORD_RE.findall(request or "")}
+    asked = set(_distinctive(request or ""))
     return [
         line
         for line in lines
-        if _WORD_RE.findall(line)
-        and not any(word.lower() in asked for word in _WORD_RE.findall(line))
+        if _distinctive(line) and not any(w in asked for w in _distinctive(line))
     ]
 
 

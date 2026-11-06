@@ -7175,8 +7175,15 @@ Do NOT wrap conversational replies in JSON.
         removals = getattr(self, "_turn_unasked_removals", None)
         if removals is None:
             return
+        restored = {line.strip() for line in new.splitlines()}
+        removals[:] = [
+            (path, line)
+            for path, line in removals
+            if path != name or line not in restored
+        ]
         for line in unasked(removed_lines(old, new), str(request)):
-            removals.append((name, line))
+            if (name, line) not in removals:
+                removals.append((name, line))
 
     def _flag_planted_instructions(
         self, tool_name: str, tool_args: Any, result: Any
