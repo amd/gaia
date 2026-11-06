@@ -152,7 +152,7 @@ def test_a_framework_python_sidecar_is_recognised_by_its_real_executable(
     monkeypatch.setattr(
         ledger, "_pid_cmdline", lambda pid: f"{live_exe} -m app --port {live_port}"
     )
-    monkeypatch.setattr(ledger, "_pid_exe", lambda pid: live_exe, raising=False)
+    monkeypatch.setattr(ledger, "_pid_exe", lambda pid: live_exe)
     killed = []
     monkeypatch.setattr(ledger, "_tree_kill", killed.append)
     ledger.record_spawn(
@@ -166,6 +166,84 @@ def test_a_framework_python_sidecar_is_recognised_by_its_real_executable(
 
     assert ledger.reap_stale(builtin_specs()) == ([4242] if reaped else [])
     assert killed == ([4242] if reaped else [])
+
+
+def _reap_one(monkeypatch, recorded_argv, port, live_cmdline, live_exe):
+    """Reap one recorded live pid against a faked process; return the kills."""
+    from gaia.daemon.sidecars.spec import builtin_specs
+
+    monkeypatch.setattr(ledger, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(ledger, "_probe_health", lambda port: None)
+    monkeypatch.setattr(ledger, "_pid_cmdline", lambda pid: live_cmdline)
+    monkeypatch.setattr(ledger, "_pid_exe", lambda pid: live_exe)
+    killed = []
+    monkeypatch.setattr(ledger, "_tree_kill", killed.append)
+    ledger.record_spawn(
+        agent_id="gaia",
+        pid=4242,
+        port=port,
+        mode="user",
+        argv=recorded_argv,
+        started_at=time.time(),
+    )
+    assert ledger.reap_stale(builtin_specs()) == killed
+    return killed
+
+
+def test_a_same_version_framework_python_running_another_module_is_spared(
+    monkeypatch,
+):
+    live = f"{_FRAMEWORK}/3.12/{_APP}"
+    killed = _reap_one(
+        monkeypatch,
+        [f"{_FRAMEWORK}/3.12/bin/python", "-m", "app", "--port", "45999"],
+        45999,
+        f"{live} -m other --port 45999",
+        live,
+    )
+    assert killed == []
+
+
+_VENV_PY = "/home/u/.venv/bin/python"
+_BASE_PY = "/usr/bin/python3.12"
+
+
+@pytest.mark.parametrize(
+    "live_args, reaped",
+    [
+        ("-m app --port 45999", True),
+        ("serve.py --port 45999", False),
+    ],
+)
+def test_a_venv_sidecar_matches_its_base_interpreter_only_with_its_own_args(
+    monkeypatch, live_args, reaped
+):
+    """A venv's python resolves to the base interpreter; that alone is not identity."""
+    real = ledger.os.path.realpath
+    monkeypatch.setattr(
+        ledger.os.path,
+        "realpath",
+        lambda p, **kw: _BASE_PY if str(p) in (_VENV_PY, _BASE_PY) else real(p, **kw),
+    )
+    killed = _reap_one(
+        monkeypatch,
+        [_VENV_PY, "-m", "app", "--port", "45999"],
+        45999,
+        f"{_BASE_PY} {live_args}",
+        _BASE_PY,
+    )
+    assert killed == ([4242] if reaped else [])
+
+
+def test_a_recorded_port_does_not_match_a_longer_live_port(monkeypatch):
+    killed = _reap_one(
+        monkeypatch,
+        ["/bin/python", "-m", "app", "--port", "4599"],
+        4599,
+        "/bin/python -m app --port 45999",
+        "/bin/python",
+    )
+    assert killed == []
 
 
 def test_a_cmdline_psutil_cannot_read_skips_the_pid_instead_of_crashing(

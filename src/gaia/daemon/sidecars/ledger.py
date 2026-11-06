@@ -226,10 +226,20 @@ def _same_program(recorded: str, live_exe: Optional[str]) -> bool:
     )
 
 
+def _has_tokens(cmdline: str, text: str) -> bool:
+    """Whether *text* appears in *cmdline* on whitespace boundaries."""
+    return f" {text} " in f" {cmdline} "
+
+
 def _cmdline_matches(pid: int, cmdline: Optional[str], argv: list, port) -> bool:
-    if not (cmdline and argv and f"--port {port}" in cmdline):
+    if not (cmdline and argv and _has_tokens(cmdline, f"--port {port}")):
         return False
-    return str(argv[0]) in cmdline or _same_program(str(argv[0]), _pid_exe(pid))
+    if str(argv[0]) in cmdline:
+        return True
+    # A matching executable alone is any same-interpreter process, so the
+    # recorded arguments must be on the live command line too.
+    rest = " ".join(map(str, argv[1:]))
+    return _has_tokens(cmdline, rest) and _same_program(str(argv[0]), _pid_exe(pid))
 
 
 def _mismatch(cmdline: Optional[str], argv: list, port) -> str:
@@ -239,7 +249,7 @@ def _mismatch(cmdline: Optional[str], argv: list, port) -> str:
     missing = []
     if not argv or str(argv[0]) not in cmdline:
         missing.append("the recorded executable")
-    if f"--port {port}" not in cmdline:
+    if not _has_tokens(cmdline, f"--port {port}"):
         missing.append(f"--port {port}")
     return "its command line lacks " + " and ".join(missing)
 
@@ -251,9 +261,10 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
     are separate pieces of evidence and never conflated):
 
     - pid ALIVE → kill (tree-kill) iff the CMDLINE gate passes: ``--port
-      <port>`` appears in the live cmdline AND the recorded ``argv[0]`` either
-      appears there too or is the process's own executable (the same file, or
-      a macOS framework Python's ``bin/`` interpreter and its Python.app). A live
+      <port>`` appears as whole tokens in the live cmdline AND the recorded
+      ``argv[0]`` either appears there too or is the process's own executable
+      (the same file, or a macOS framework Python's ``bin/`` interpreter and
+      its Python.app) with the rest of the recorded argv on the cmdline. A live
       pid is NEVER killed on port evidence alone — the pid may have been reused
       by an innocent process while our orphaned child still serves the port.
       If the cmdline gate fails but the port probe confirms our service, log a
