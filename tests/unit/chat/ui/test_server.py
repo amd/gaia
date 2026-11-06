@@ -1131,10 +1131,23 @@ class TestNetworkPolicySetting:
         monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
         assert client.get("/api/settings").json()["network_policy"] == "cloud_allowed"
 
+    def test_unrecognized_stricter_policy_is_reported_as_local_only(
+        self, client, monkeypatch, tmp_path
+    ):
+        policy = tmp_path / "policy.json"
+        policy.write_text('{"network_policy":"offline"}', encoding="utf-8")
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(policy))
+        response = client.get("/api/settings")
+        assert response.status_code == 200
+        assert response.json()["network_policy"] == "local_ai_only"
+
     def test_local_only_clears_a_cloud_ui_choice_but_keeps_a_local_one(
         self, client, db, monkeypatch, tmp_path
     ):
         monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        monkeypatch.setattr("gaia.llm.cloud_keys.users_lemonade_url", lambda: None)
+        monkeypatch.setattr("gaia.llm.cloud_keys.drop_runtime_keys", lambda: [])
+        monkeypatch.setattr("gaia.ui.routers.system.security.require_local_pc", lambda _request: None)
         db.set_setting("custom_model", "fireworks.glm-5p3-flash")
 
         turned_on = client.put(
@@ -1152,6 +1165,29 @@ class TestNetworkPolicySetting:
             == 200
         )
         assert db.get_setting("custom_model") == "Qwen3.6-35B-A3B-GGUF"
+
+    def test_policy_cleanup_warnings_are_returned(self, client, monkeypatch, tmp_path):
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        from gaia.llm.cloud_keys import CloudKeyError
+
+        monkeypatch.setattr("gaia.llm.cloud_keys.users_lemonade_url", lambda: None)
+        monkeypatch.setattr("gaia.ui.routers.system.security.require_local_pc", lambda _request: None)
+        monkeypatch.setattr(
+            "gaia.llm.cloud_keys.drop_runtime_keys",
+            lambda: (_ for _ in ()).throw(CloudKeyError("server refused")),
+        )
+        response = client.put("/api/settings", json={"network_policy": "local_ai_only"})
+        assert response.status_code == 200
+        assert "server refused" in response.json()["policy_warnings"][0]
+
+    def test_policy_changes_are_local_pc_only(self, client):
+        response = client.put(
+            "/api/settings",
+            json={"network_policy": "cloud_allowed"},
+            headers={"X-Forwarded-For": "203.0.113.7"},
+        )
+        assert response.status_code == 403
+        assert "PC running GAIA" in response.json()["detail"]
 
 
 class TestAgentModeSetting:

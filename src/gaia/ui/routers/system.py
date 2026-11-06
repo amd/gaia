@@ -53,6 +53,7 @@ from ..models import (
     WorkInProgress,
 )
 from ..run_manager import run_manager
+from .. import security
 
 # "autonomous" is intentionally absent: its observation cycle is unimplemented
 # (#2005) and accepting it would silently behave as "goal_driven".
@@ -1141,7 +1142,7 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
         dynamic_tools_locked,
     )
     model_status = await _check_model_status(custom_model) if custom_model else None
-    from gaia.llm.local_only import effective_policy
+    from gaia.llm.local_only import cloud_blocked
 
     return SettingsResponse(
         custom_model=custom_model or None,
@@ -1150,13 +1151,15 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
         agent_mode=agent_mode,
         dynamic_tools=dynamic_tools,
         dynamic_tools_locked=dynamic_tools_locked,
-        network_policy=effective_policy().value,
+        network_policy="local_ai_only" if cloud_blocked() else "cloud_allowed",
     )
 
 
 @router.put("/api/settings", response_model=SettingsResponse)
 async def update_settings(
-    request: SettingsUpdateRequest, db: ChatDatabase = Depends(get_db)
+    request: SettingsUpdateRequest,
+    http_request: Request,
+    db: ChatDatabase = Depends(get_db),
 ):
     """Update user settings.
 
@@ -1235,6 +1238,7 @@ async def update_settings(
         "network_policy" in request.model_fields_set
         and request.network_policy is not None
     ):
+        security.require_local_pc(http_request)
         from gaia.llm import local_only
 
         try:
@@ -1260,7 +1264,7 @@ async def update_settings(
     agent_mode = resolve_agent_mode(db)
     dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting(db)
     model_status = await _check_model_status(custom_model) if custom_model else None
-    from gaia.llm.local_only import effective_policy
+    from gaia.llm.local_only import cloud_blocked
 
     return SettingsResponse(
         custom_model=custom_model or None,
@@ -1269,7 +1273,7 @@ async def update_settings(
         agent_mode=agent_mode,
         dynamic_tools=dynamic_tools,
         dynamic_tools_locked=dynamic_tools_locked,
-        network_policy=effective_policy().value,
+        network_policy="local_ai_only" if cloud_blocked() else "cloud_allowed",
         policy_warnings=policy_warnings,
     )
 

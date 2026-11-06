@@ -263,7 +263,12 @@ def apply_policy(value: str) -> Dict[str, Any]:
 
     try:
         result["users_url"] = users_lemonade_url()
-        if not result["users_url"]:
+        if result["users_url"]:
+            result["warnings"].append(
+                f"Your Lemonade Server at {result['users_url']} keeps any cloud keys it holds. "
+                "GAIA will not send it cloud requests."
+            )
+        else:
             result["dropped"] = drop_runtime_keys()
     except CloudKeyError as e:
         result["warnings"].append(
