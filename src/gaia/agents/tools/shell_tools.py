@@ -1144,6 +1144,12 @@ def skill_granted_binaries(host: Any) -> frozenset:
 READS_WITHOUT_A_SKILL = frozenset({"gh"})
 
 
+#: CLIs whose plain reads skip the prompt WITHOUT counting as granted: they
+#: still run exactly as an ungranted call does, and only a lone command that
+#: both the policy's read tier and the ungranted floor accept is exempt.
+UNPROMPTED_READS = frozenset({"git"})
+
+
 def shell_granted_binaries(host: Any) -> frozenset:
     """The CLIs the shell treats as granted: *host*'s skill grants plus
     :data:`READS_WITHOUT_A_SKILL`.
@@ -3452,8 +3458,6 @@ class ShellToolsMixin:
             return True
 
         granted = shell_granted_binaries(self)
-        if not granted:
-            return False
 
         command = (tool_args or {}).get("command")
         if not isinstance(command, str):
@@ -3476,12 +3480,22 @@ class ShellToolsMixin:
             validate_invocation,
         )
 
+        lone = len(steps) == 1 and len(steps[0].segments) == 1
         for segment in map(policy_argv, (s for step in steps for s in step.segments)):
             binary = normalize_binary(segment[0])
-            if binary not in granted:
-                return False
             policy = BINARY_POLICIES.get(binary)
             if policy is None or validate_invocation(policy, segment) is not None:
+                return False
+            if binary in granted:
+                continue
+            if not (lone and binary in UNPROMPTED_READS):
+                return False
+            # An ungranted call runs through cmd.exe on Windows, which expands
+            # %VAR% and ^ — a "read" could print a secret from the environment.
+            if _pipe_dialect() == "cmd" and not _CMD_PLAIN_LINE.fullmatch(command):
+                return False
+            # Exactly what the ungranted path would run, or it is asked about.
+            if self._validate_command(segment[0].lower(), segment, command) is not None:
                 return False
 
         # A grant covers its reads where they are allowed to run; a path past

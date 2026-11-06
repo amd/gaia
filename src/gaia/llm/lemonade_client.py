@@ -3687,6 +3687,26 @@ def _endpoint_label(base_url: Optional[str]) -> Optional[str]:
     return f"{host}:{port}" if port else host
 
 
+#: Said when the model server's own key check refuses GAIA, not a provider.
+OWN_KEY_REFUSED = (
+    "GAIA's model server refused GAIA's access key (HTTP 401), so the request "
+    "never reached the cloud provider. The server was most likely restarted "
+    "with a new key: restart GAIA so it picks the new one up. If you set "
+    "LEMONADE_API_KEY yourself, update it to the server's current key."
+)
+
+
+def _own_key_refused(body: Any) -> bool:
+    """The model server's key check answered a 401, not a provider behind it.
+
+    Lemonade's own refusal is a bare string (``{"error": "Invalid or missing
+    API key"}``); a provider error it forwards is a structured object.
+    """
+    if isinstance(body, dict):
+        body = body.get("error")
+    return isinstance(body, str)
+
+
 def _cloud_request_error(
     status: Optional[int],
     provider: Optional[str] = None,
@@ -6272,6 +6292,12 @@ class LemonadeClient:
 
             if response.status_code == 401:
                 if self.cloud_model_provider(model):
+                    try:
+                        refused = _own_key_refused(response.json())
+                    except ValueError:
+                        refused = False
+                    if refused:
+                        raise LemonadeAuthError(OWN_KEY_REFUSED)
                     raise _cloud_request_error(
                         response.status_code, self.cloud_model_provider(model)
                     )
@@ -6738,8 +6764,10 @@ class LemonadeClient:
             if tokens_generated and self.cloud_model_provider(model):
                 _remember_cloud_availability(model, ok=True)
 
-        except openai.AuthenticationError:
+        except openai.AuthenticationError as e:
             if self.cloud_model_provider(model):
+                if _own_key_refused(getattr(e, "body", None)):
+                    raise LemonadeAuthError(OWN_KEY_REFUSED) from None
                 raise _cloud_request_error(401) from None
             # Fixed-string error: do NOT include str(e), as the OpenAI SDK's
             # exception may stringify the failing request including its
