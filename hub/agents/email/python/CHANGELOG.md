@@ -17,6 +17,12 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A sidecar left running for days keeps working.** The one-file binary
+  unpacks its files into the OS temp folder, and macOS deletes files there
+  that are older than three days, so a long-running sidecar lost files it
+  still read. It now marks its own unpacked files as in use at startup and
+  every six hours. Leftovers from a sidecar that has exited still get
+  cleaned (#6850).
 - **A chat that switches model mid-conversation gets the model it asked
   for.** `POST /v1/email/query` with a `session_id` used to keep running the
   session's agent on whatever model it was first built with, even when a later

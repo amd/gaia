@@ -55,4 +55,7 @@ from gaia_agent.server import (  # noqa: E402,F401  (re-exported for the freeze/
 )
 
 if __name__ == "__main__":  # pragma: no cover
+    from gaia.sidecar.bundle_freshness import keep_unpacked_bundle_fresh
+
+    keep_unpacked_bundle_fresh()
     sys.exit(main())
