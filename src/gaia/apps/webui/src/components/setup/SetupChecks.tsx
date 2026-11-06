@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { Check, ChevronRight, Circle, HelpCircle, Loader2, X } from 'lucide-react';
 import { useT } from '../../i18n/useT';
 import type { PreflightReport, SetupPlan, SetupRunStatus } from '../../types';
-import { formatSize, ltrIn } from './format';
+import { formatSize, ltrIn, totalMemory } from './format';
 
 /** `question`: waiting on the user, not on work. */
 type RowState = 'done' | 'active' | 'waiting' | 'failed' | 'question';
@@ -48,9 +48,11 @@ export function SetupChecks({ hardware, hardwareError, plan, serverRun, awaiting
     const device = [hardware?.gpu_name, hardware?.npu_detected ? t('setup.checks.npu') : null].filter(Boolean).join(' · ');
     // The setup choice is made from this value. Do not show the OS-visible RAM
     // here: an iGPU carve-out can make it look lower than the next screen.
-    const modelMemory = !hardwareError && plan?.capacity_gb != null
-        ? formatSize(plan.capacity_gb)
-        : null;
+    const modelMemory = hardwareError ? null
+        : plan?.capacity_gb != null ? formatSize(plan.capacity_gb)
+            // Like the next screen: the OS figure when the server couldn't size memory.
+            : serverUp ? totalMemory(plan?.system?.physical_memory, hardware?.ram_gb)
+                : null;
     const memoryState: RowState = hardwareError
         ? 'failed'
         : modelMemory

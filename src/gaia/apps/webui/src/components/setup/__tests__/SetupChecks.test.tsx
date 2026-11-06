@@ -93,6 +93,19 @@ describe('Checking this PC', () => {
         expect(row('Memory for models')).toHaveTextContent('103.1 GB');
     });
 
+    it('shows the OS figure, like the next screen, when the server answered but could not size memory', () => {
+        const plan = { ...COLD_BIG(), capacity_gb: null, memory_gb: null } as SetupPlan;
+        show({ hardware: { ...HARDWARE, ram_gb: 63.6 }, plan });
+        fireEvent.click(screen.getByRole('button', { name: 'All 5 checks passed' }));
+        expect(row('Memory for models')).toHaveTextContent('63.6 GB');
+    });
+
+    it('marks the memory row failed when the server run failed', () => {
+        show({ hardware: HARDWARE, plan: DOWN, serverRun: { state: 'failed', server_only: true, steps: [] } });
+        expect(row('Memory for models')).toHaveClass('is-failed');
+        expect(row('Memory for models')).not.toHaveTextContent('GB');
+    });
+
     it('marks the hardware rows failed when they could not be read, inventing no value', () => {
         show({ hardwareError: 'timed out', plan: DOWN });
         expect(row('Memory for models')).toHaveClass('is-failed');
