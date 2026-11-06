@@ -524,7 +524,18 @@ for (const locale of ['ar', 'en']) {
                 json: {
                     messages: [
                         { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Summarize the Q1 plan.', created_at: OLD_FILE.at, rag_sources: null },
-                        { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'The plan has three goals.', created_at: OLD_FILE.at, rag_sources: null },
+                        {
+                            id: 2,
+                            session_id: ANSWER_SESSION,
+                            role: 'assistant',
+                            content: 'The plan has three goals.',
+                            created_at: OLD_FILE.at,
+                            rag_sources: null,
+                            library_notices: [
+                                'schedule-fall.xlsx was kept in your documents library for this chat.',
+                                'run.exe couldn\'t be added to your documents (.exe files are not supported).',
+                            ],
+                        },
                     ],
                     total: 2,
                 },
@@ -542,6 +553,8 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.msg-stats-ts')).toHaveText(month);
         await expect(page.getByText('q1-summary.csv')).toBeVisible();
         await expect(page.locator('.sp-list[aria-label]')).toContainText(month);
+        await expect(page.locator('.library-notices')).toContainText('schedule-fall.xlsx');
+        await expect(page.locator('.library-notices')).toContainText('run.exe');
         await page.getByText('The plan has three goals.').hover();
         await shot(page, `dates-${locale}-answer`);
         expect(await audit(page)).toEqual([]);

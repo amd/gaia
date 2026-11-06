@@ -709,6 +709,8 @@ class MessageResponse(BaseModel):
     agent_steps: Optional[List[AgentStepResponse]] = None
     stats: Optional[InferenceStatsResponse] = None
     turn_summary: Optional[TurnSummaryResponse] = None
+    # Notices from indexing files into the document library during this turn.
+    library_notices: Optional[List[str]] = None
     # The user's Stop ended this reply before it finished.
     stopped: bool = False
 
