@@ -98,6 +98,36 @@ def test_reap_after_stop_kills_a_real_recorded_sidecar():
         proc.stdout.close()
 
 
+@pytest.mark.parametrize(
+    "cmdline, reason",
+    [
+        (None, "its command line could not be read"),
+        ("/bin/python serve --port 1", "its command line lacks --port 45999"),
+    ],
+)
+def test_a_skipped_live_pid_says_why(monkeypatch, caplog, cmdline, reason):
+    """The log names what failed the identity check, never the foreign cmdline."""
+    from gaia.daemon.sidecars.spec import builtin_specs
+
+    monkeypatch.setattr(ledger, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(ledger, "_pid_cmdline", lambda pid: cmdline)
+    monkeypatch.setattr(ledger, "_probe_health", lambda port: None)
+    ledger.record_spawn(
+        agent_id="gaia",
+        pid=4242,
+        port=45999,
+        mode="user",
+        argv=["/bin/python", "--port", "45999"],
+        started_at=time.time(),
+    )
+
+    with caplog.at_level("INFO", logger="gaia.daemon.sidecars.ledger"):
+        assert ledger.reap_stale(builtin_specs()) == []
+
+    assert reason in caplog.text
+    assert "serve" not in caplog.text
+
+
 # --- gaia daemon stop --------------------------------------------------------
 
 

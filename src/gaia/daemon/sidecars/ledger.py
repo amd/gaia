@@ -142,7 +142,12 @@ def _pid_cmdline(pid: int) -> Optional[str]:
 
     try:
         return " ".join(psutil.Process(pid).cmdline())
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
+    except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+        logger.info(
+            "sidecar ledger: cannot read pid=%s's command line (%s)",
+            pid,
+            type(e).__name__,
+        )
         return None
 
 
@@ -185,6 +190,18 @@ def _cmdline_matches(cmdline: Optional[str], argv: list, port) -> bool:
     return bool(
         cmdline and argv and str(argv[0]) in cmdline and f"--port {port}" in cmdline
     )
+
+
+def _mismatch(cmdline: Optional[str], argv: list, port) -> str:
+    """Which recorded part the live cmdline lacks; never the cmdline itself."""
+    if not cmdline:
+        return "its command line could not be read"
+    missing = []
+    if not argv or str(argv[0]) not in cmdline:
+        missing.append("the recorded executable")
+    if f"--port {port}" not in cmdline:
+        missing.append(f"--port {port}")
+    return "its command line lacks " + " and ".join(missing)
 
 
 def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
@@ -248,7 +265,8 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
                     )
                 continue
             if _pid_alive(pid):
-                if _cmdline_matches(_pid_cmdline(pid), argv, port):
+                cmdline = _pid_cmdline(pid)
+                if _cmdline_matches(cmdline, argv, port):
                     logger.info(
                         "sidecar ledger: reaping stale %s sidecar pid=%s port=%s",
                         agent_id,
@@ -271,10 +289,11 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
                     )
                 else:
                     logger.info(
-                        "sidecar ledger: pid=%s no longer matches %s (reused); "
-                        "leaving it alone",
+                        "sidecar ledger: pid=%s no longer matches %s (%s; pid "
+                        "reused?); leaving it alone",
                         pid,
                         agent_id,
+                        _mismatch(cmdline, argv, port),
                     )
                 continue
             # pid dead — check whether a re-parented child still owns the port.
