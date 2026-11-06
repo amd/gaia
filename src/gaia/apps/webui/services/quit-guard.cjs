@@ -220,8 +220,10 @@ function attachWindowGuards(win, { app, guard, getTray, isQuitting, platform, re
     if (isQuitting()) return;
     const tray = getTray();
     const action = tray ? tray.closeAction : "quit";
-    // isMinimized() catches a title-bar minimize; Wayland may not report one, hence the flag too.
-    const minimized = action === "minimize" && (minimizedByClose || win.isMinimized());
+    // A focused window was closed from its own title bar, whatever isMinimized() says
+    // (Wayland can leave it stale after a dock restore). Unfocused and minimized: the dock's Quit.
+    const minimized =
+      action === "minimize" && !win.isFocused() && (minimizedByClose || win.isMinimized());
     if (action === "hide" || (action === "minimize" && !minimized)) {
       event.preventDefault();
       if (action === "hide") {

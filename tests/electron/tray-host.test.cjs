@@ -159,6 +159,7 @@ describe("closing the window on a desktop without a tray", () => {
     win.hide = jest.fn();
     win.minimize = jest.fn();
     win.isMinimized = jest.fn(() => false);
+    win.isFocused = jest.fn(() => false);
     const app = { quit: jest.fn() };
     attachWindowGuards(win, {
       app,

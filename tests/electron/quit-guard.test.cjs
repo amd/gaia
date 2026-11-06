@@ -341,6 +341,7 @@ describe("attachWindowGuards", () => {
     win.hide = jest.fn();
     win.minimize = jest.fn();
     win.isMinimized = jest.fn(() => false);
+    win.isFocused = jest.fn(() => false);
     const app = { quit: jest.fn() };
     const guard = { confirmed, allow: jest.fn() };
     const tray = {
@@ -421,6 +422,17 @@ describe("attachWindowGuards", () => {
     expect(win.minimize).not.toHaveBeenCalled();
     expect(ev.preventDefault).toHaveBeenCalled();
     expect(app.quit).toHaveBeenCalledTimes(1);
+  });
+
+  test("a focused window still reported minimized (stale after a Wayland dock restore) minimizes, never quits", () => {
+    const { win, close, app } = setup({ closeAction: "minimize", noticeDue: false });
+    close();
+    win.isMinimized.mockReturnValue(true);
+    win.isFocused.mockReturnValue(true);
+    const ev = close();
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(win.minimize).toHaveBeenCalledTimes(2);
+    expect(app.quit).not.toHaveBeenCalled();
   });
 
   test.each([["restore"], ["focus"], ["show"]])(
