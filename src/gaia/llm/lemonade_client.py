@@ -49,7 +49,7 @@ import requests
 from openai import OpenAI
 
 from gaia.env import child_env, load_env
-from gaia.llm import call_ledger
+from gaia.llm import call_ledger, stream_watchdog
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
@@ -972,12 +972,25 @@ def _wait_for_drains(model: str) -> None:
     from gaia.daemon import broker_client
 
     started = time.monotonic()
+    limit, source = broker_client.current_wait_limit()
     next_update = started
     while True:
+        now = time.monotonic()
+        waited = now - started
+        if limit is not None and waited >= limit:
+            raise broker_client.BrokerUnavailableError(
+                f"no turn on '{model}' within the {limit:g}s wait limit: a "
+                "stopped reply in this process is still finishing. The model is "
+                "busy, not broken." + broker_client.wait_limit_hint(source),
+                status_code=504,
+            )
         with _DRAINING_CHANGED:
             if not _DRAINING.get(key):
                 break
-            _DRAINING_CHANGED.wait(broker_client.LOCAL_WAIT_POLL_S)
+            wait = broker_client.LOCAL_WAIT_POLL_S
+            if limit is not None:
+                wait = min(wait, limit - waited)
+            _DRAINING_CHANGED.wait(wait)
         now = time.monotonic()
         if now >= next_update:
             broker_client.notify_wait(
@@ -6732,6 +6745,21 @@ class LemonadeClient:
                 finally:
                     http_client.close()
 
+            def _on_drain() -> Callable[[], None]:
+                """Keep both local and cross-process ownership through a drain."""
+                local_end = _begin_drain(model)
+                from gaia.daemon.broker_client import defer_lease_release
+
+                lease_end = defer_lease_release()
+
+                def end() -> None:
+                    try:
+                        local_end()
+                    finally:
+                        lease_end()
+
+                return end
+
             return watch_stream(
                 produce,
                 limits=limits,
@@ -6739,7 +6767,7 @@ class LemonadeClient:
                 is_output=_chunk_carries_output,
                 # FastFlowLM's engine restarts when a reply is cut off mid-stream.
                 drain_on_abandon=runs_on_npu(model),
-                on_drain=lambda: _begin_drain(model),
+                on_drain=_on_drain,
             )
 
         def _convert(stream) -> Generator[Dict[str, Any], None, None]:
@@ -8675,7 +8703,8 @@ class LemonadeClient:
 
         The lease declares how long its holder may keep the slot: one request
         of *request_timeout* (the request budget when not given), the retry
-        deadline after which no new attempt starts, and a model load.
+        deadline after which no new attempt starts, a model load, and the
+        bounded NPU reply-drain window after a caller stops reading.
 
         Serializes this load against every other process sharing the
         single-tenant Lemonade slot, and every request to a local model against
@@ -8720,7 +8749,9 @@ class LemonadeClient:
             on_wait=_on_wait,
             max_hold_s=(request_timeout or request_budget_seconds())
             + RetryPolicy.from_env().deadline
-            + LEASE_LOAD_MARGIN_S,
+            + LEASE_LOAD_MARGIN_S
+            # A stopped NPU reply may keep the lease while the worker drains it.
+            + stream_watchdog.DRAIN_LIMIT_S,
         )
 
         @contextmanager

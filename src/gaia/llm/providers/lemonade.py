@@ -1544,7 +1544,7 @@ class LemonadeProvider(LLMClient):
                 "%s kept writing after its tool call; stopped the stream there",
                 self._last_model,
             )
-            # The client reads out the rest: cutting FastFlowLM off restarts it.
+            # On the NPU, the client reads out the rest: cutting FastFlowLM off restarts it.
             close = getattr(response, "close", None)
             if close is not None:
                 close()
