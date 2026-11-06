@@ -147,7 +147,10 @@ def _build_clock(
     oversight — reconciling jobs before an executor exists would permanently
     fail-mark every one of them on first fire.
     """
-    return DaemonClock(db_path, executors=executors or {})
+    from gaia.automations.daemon_tick import AutomationsTick
+
+    # GAIA automations keep their own store; the clock only gives them a pass.
+    return DaemonClock(db_path, executors=executors or {}, on_pass=[AutomationsTick()])
 
 
 def _build_register(

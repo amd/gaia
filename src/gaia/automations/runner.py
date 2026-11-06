@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: MIT
 """Runs what is due, through whatever app delivers it.
 
-The app (the Discord bridge today) supplies a :class:`Sink`: how to post a
-message, and how to run an agent turn whose final answer may be filtered
-before anyone sees it. Everything about *when GAIA speaks* lives here, so
+Whoever owns the tick (see :mod:`.tick`) supplies a :class:`Sink`: how to
+post a message, and how to run an agent turn whose final answer may be
+filtered before anyone sees it. The daemon's sink queues both in the
+:mod:`.outbox` for the Discord bridge; a bridge running without a daemon
+delivers them itself. Everything about *when GAIA speaks* lives here, so
 each app behaves the same:
 
 * a reminder speaks once; a summary always;
@@ -57,16 +59,21 @@ def run_due(sink: Sink, now: Optional[float] = None) -> List[store.Automation]:
     """Run everything due; returns what ran."""
     due = store.take_due(now if now is not None else time.time())
     for item in due:
+        # A sink that queues for later needs to know which automation it holds.
+        target = sink.for_item(item) if hasattr(sink, "for_item") else sink
         try:
-            run_one(item, sink)
+            run_one(item, target)
         except Exception as e:  # noqa: BLE001 - one bad run must not lose the rest
             log.exception("Automation %s (%s) failed to run", item.id, item.name)
             if not item.repeats:
                 _requeue(item)
-            sink.post(
-                f"⚠️ {_bold(item.name)} could not run: {e}. "
-                + ("It will try again in a minute." if not item.repeats else "")
-            )
+            try:
+                target.post(
+                    f"⚠️ {_bold(item.name)} could not run: {e}. "
+                    + ("It will try again in a minute." if not item.repeats else "")
+                )
+            except Exception:  # noqa: BLE001 - logged; the rest must still run
+                log.exception("Could not tell the user %s failed", item.name)
     return due
 
 
@@ -181,24 +188,36 @@ def headline(answer: str) -> str:
     return " ".join(first.split())[:200]
 
 
-def alert_filter(item: store.Automation) -> AnswerFilter:
-    """Post an alert's answer only when it is news, and remember it."""
+class AlertFilter:
+    """Post an alert's answer only when it is news, and remember it.
 
-    def keep(answer: str) -> Optional[str]:
-        if is_silent(answer):
-            log.info("Alert %s: nothing to report", item.id)
-            # All clear: the same news, should it come back, is news again.
-            if item.last_alert:
-                store.record_alert(item.id, "")
+    Holds only the automation's id, so a delivery queued for later can name
+    it, and compares against the headline stored when the answer arrives.
+    """
+
+    def __init__(self, automation_id: str) -> None:
+        self.automation_id = automation_id
+
+    def __call__(self, answer: str) -> Optional[str]:
+        # All clear (""): the same news, should it come back, is news again.
+        news = "" if is_silent(answer) else headline(answer)
+        recorded = store.record_news(self.automation_id, news)
+        if recorded is None:
+            log.info("Alert %s was removed before it answered", self.automation_id)
             return None
-        news = headline(answer)
-        if news and news == item.last_alert:
-            log.info("Alert %s: same news as last time, not sent again", item.id)
+        if not news:
+            log.info("Alert %s: nothing to report", self.automation_id)
             return None
-        store.record_alert(item.id, news)
+        if not recorded:
+            log.info(
+                "Alert %s: same news as last time, not sent again", self.automation_id
+            )
+            return None
         return answer
 
-    return keep
+
+def alert_filter(item: store.Automation) -> AlertFilter:
+    return AlertFilter(item.id)
 
 
 def _alert(item: store.Automation, sink: Sink) -> None:

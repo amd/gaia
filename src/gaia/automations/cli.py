@@ -81,8 +81,25 @@ def _watches() -> list:
     ]
 
 
+def _waiting() -> list:
+    """What already ran and waits for the Discord bridge to deliver it."""
+    from gaia.automations import outbox
+
+    return [
+        {
+            "id": f"waiting:{d.id}",
+            "name": d.name,
+            "kind": "waiting",
+            "status": "ran "
+            + time.strftime("%a %H:%M", time.localtime(d.due_at))
+            + "; reaches your Discord DM when the Discord bridge runs",
+        }
+        for d in outbox.pending()
+    ]
+
+
 def run_list(*, as_json: bool = True, emit: Emit = print) -> int:
-    items = [store.describe(a) for a in store.load()] + _watches()
+    items = [store.describe(a) for a in store.load()] + _watches() + _waiting()
     if as_json:
         emit(json.dumps(items, indent=2, ensure_ascii=False))
         return 0
@@ -92,6 +109,9 @@ def run_list(*, as_json: bool = True, emit: Emit = print) -> int:
     for a in items:
         if a["kind"] == "watch":
             emit(f"{a['id']}  {a['name']} — instant alerts ({a['status']})")
+            continue
+        if a["kind"] == "waiting":
+            emit(f"{a['id']}  {a['name']} — {a['status']}")
             continue
         every = f"every {a['every']}" if "every" in a else "once"
         emit(

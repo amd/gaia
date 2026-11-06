@@ -246,18 +246,6 @@ def _after(slot: float, every: int, now: float) -> float:
     return slot
 
 
-def _record(item_id: str, **changes: Any) -> Optional[Automation]:
-    with _locked():
-        items = load()
-        item = next((a for a in items if a.id == item_id), None)
-        if item is None:
-            return None
-        for key, value in changes.items():
-            setattr(item, key, value)
-        save(items)
-        return item
-
-
 def record_check(
     item_id: str,
     *,
@@ -285,8 +273,29 @@ def record_check(
         return 1 if ran else item.failures
 
 
-def record_alert(item_id: str, headline: str) -> None:
-    _record(item_id, last_alert=headline)
+def record_news(item_id: str, news: str) -> Optional[bool]:
+    """Keep *news* as an alert's last headline, in one locked step.
+
+    Returns None when the automation is gone, False when *news* is what it
+    last said, and True when it was stored. Empty *news* clears it.
+    """
+    with _locked():
+        items = load()
+        item = next((a for a in items if a.id == item_id), None)
+        if item is None:
+            return None
+        if news and news == item.last_alert:
+            return False
+        if item.last_alert != news:
+            item.last_alert = news
+            save(items)
+        return True
+
+
+def snapshot() -> List[Automation]:
+    """Every automation, read under the lock another process writes with."""
+    with _locked():
+        return load()
 
 
 def describe(item: Automation, now: Optional[float] = None) -> Dict[str, Any]:

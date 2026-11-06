@@ -28,6 +28,7 @@ from __future__ import annotations
 import ast
 import logging
 import os
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -447,3 +448,53 @@ def test_no_autonomy_reference_in_scheduler_wiring():
     assert offenders == [], (
         "found a forbidden 'autonomy' reference (case-insensitive) in: " f"{offenders}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Pass hooks: GAIA automations ride the daemon clock
+# ---------------------------------------------------------------------------
+
+
+def test_build_clock_gives_automations_a_pass(daemon_home):
+    from gaia.automations.daemon_tick import AutomationsTick
+
+    clock = daemon_server._build_clock(str(paths.scheduler_db_path()))
+
+    assert [type(h) for h in clock._on_pass] == [AutomationsTick]
+
+
+def test_every_polling_pass_runs_the_hooks_and_a_failing_one_is_logged(
+    daemon_home, caplog
+):
+    calls = []
+
+    def boom():
+        calls.append("boom")
+        raise RuntimeError("hook broke")
+
+    clock = DaemonClock(
+        str(paths.scheduler_db_path()),
+        executors={},
+        poll_seconds=0.05,
+        on_pass=[boom, lambda: calls.append("ok")],
+    )
+    with caplog.at_level(logging.ERROR, logger="gaia.daemon.scheduler.clock"):
+        clock.start()
+        try:
+            deadline = time.time() + 5
+            while calls.count("ok") < 2 and time.time() < deadline:
+                time.sleep(0.02)
+        finally:
+            clock.stop()
+
+    assert calls.count("ok") >= 2, "one failing hook must not stop the others"
+    assert any("hook broke" in (r.exc_text or "") for r in caplog.records)
+
+
+def test_stopping_the_clock_stops_hooks_that_hold_something(daemon_home):
+    hook = mock.Mock()
+    clock = DaemonClock(str(paths.scheduler_db_path()), executors={}, on_pass=[hook])
+    clock.start()
+    clock.stop()
+
+    hook.stop.assert_called_once_with()

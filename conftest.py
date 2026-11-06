@@ -476,6 +476,24 @@ def _guard_real_gaia_home():
             )
         return real_post_start(*args, **kwargs)
 
+    from gaia.automations import files as automation_files
+
+    real_write_json = automation_files.write_json
+
+    def guarded_write_json(path, data):
+        # A daemon's clock runs the automations pass on every poll.
+        if _is_real_gaia_home(path):
+            pytest.fail(
+                _REAL_HOME_MESSAGE.format(
+                    action=f"write {Path(path).name} in",
+                    home=_REAL_GAIA_HOME,
+                    harm="it would take, queue or drop your own reminders.",
+                    hint="Set GAIA_CONFIG_DIR or GAIA_HOME to tmp_path.",
+                ),
+                pytrace=False,
+            )
+        return real_write_json(path, data)
+
     def guarded_spawn(*args, **kwargs):
         home = _child_gaia_home(os.environ)
         if _is_real_gaia_home(home):
@@ -502,6 +520,7 @@ def _guard_real_gaia_home():
         # sqlite3.dbapi2 is the module SQLAlchemy and other drivers bind.
         for module in (sqlite3, sqlite3.dbapi2):
             mp.setattr(module, "connect", _guard_connect(module.connect))
+        mp.setattr(automation_files, "write_json", guarded_write_json)
         yield
 
 
