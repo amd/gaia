@@ -137,6 +137,27 @@ class Smoke:
         self.check(
             "-m gaia.cli runs the CLI", result.returncode == 0, result.stderr[-800:]
         )
+        # The one-line installers give it the gaia-mcp name too.
+        mcp = self.exe.with_name("gaia-mcp" + self.exe.suffix)
+        shutil.copy2(self.exe, mcp)
+        try:
+            result = subprocess.run(
+                [str(mcp), "--help"],
+                env=self.env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+                check=False,
+            )
+        finally:
+            mcp.unlink()
+        self.check(
+            "runs as gaia-mcp under that name",
+            result.returncode == 0 and "MCP Bridge" in result.stdout,
+            (result.stdout + result.stderr)[-800:],
+        )
 
     def init_check(self) -> None:
         result = self.run("init", "--check", "--profile", "gaia", "--json", timeout=180)
