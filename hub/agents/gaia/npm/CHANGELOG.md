@@ -30,19 +30,6 @@ the new session `tools` and `grants` routes, so probe `/version` first.
 - **The binary ships no GPL or AGPL code**, and the agent is one Python
   package.
 
-### Fixed
-
-- **A chat sent while GAIA's AI engine can't start says so, and how to fix
-  it.** With GAIA's own model server missing, a cloud-model chat waited ~30 s
-  and then showed "Failed to start the query run: Request failed:
-  HTTPConnectionPool(host='localhost', port=13305) …" with a terminal command.
-  Building the agent now asks the daemon for GAIA's server instead of probing
-  the default port, and `/query` answers `503` with the classified message
-  ("GAIA's AI engine couldn't start … Open Settings > Setup and press Run setup
-  again") worded for the request's `surface`. Errors mid-run use the same
-  wording; only a model server the user runs, not GAIA's own, still gets
-  this machine's start instruction.
-
 ### Changed
 
 - **Updating the agent on a Mac no longer asks for keychain access again.** When
@@ -180,6 +167,17 @@ the new session `tools` and `grants` routes, so probe `/version` first.
   drop it: an Agent UI from before this release hides these skills.
 
 ### Fixed
+
+- **A chat sent while GAIA's AI engine can't start says so, and how to fix
+  it.** With GAIA's own model server missing, a cloud-model chat waited ~30 s
+  and then showed "Failed to start the query run: Request failed:
+  HTTPConnectionPool(host='localhost', port=13305) …" with a terminal command.
+  Building the agent now asks the daemon for GAIA's server instead of probing
+  the default port, and `/query` answers `503` with the classified message
+  ("GAIA's AI engine couldn't start … Open Settings > Setup and press Run setup
+  again") worded for the request's `surface`. Errors mid-run use the same
+  wording; only a model server the user runs, not GAIA's own, still gets
+  this machine's start instruction.
 
 - **Reasoning no longer shows as the answer when a model sends only `</think>`.**
   A model whose chat template opens the reasoning block streamed that reasoning
