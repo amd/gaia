@@ -174,6 +174,22 @@ def test_an_estimate_beside_an_exact_amount_is_left_alone():
     assert content_findings(answer, _turn_records(ran)) == []
 
 
+def test_prose_summing_up_a_written_file_is_left_to_the_file_check():
+    report = "| Region | Net |\n|---|---|\n| North | $2,708.95 |\n"
+    write = _rec(
+        "write_file",
+        {"file_path": "revenue.md", "content": report},
+        {"status": "success", "file_path": "revenue.md"},
+    )
+    records = _turn_records(DENIED) + [write]
+
+    summary = "Wrote `revenue.md`: North came to $2,708.95."
+    assert content_findings(summary, records, QUERY) == []
+    findings = content_findings(summary + " South was $2,334.24.", records, QUERY)
+    assert [f.gate for f in findings] == [CONTENT]
+    assert "2,334.24" in findings[0].note and "2,708.95" not in findings[0].note
+
+
 # ---------------------------------------------------------------------------
 # Through the real loop, with a scripted model
 # ---------------------------------------------------------------------------

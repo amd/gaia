@@ -41,7 +41,7 @@ from gaia.agents.base.claims import (
     admits_unverified,
     read_claims,
 )
-from gaia.agents.base.completion import mentioned_paths
+from gaia.agents.base.completion import WRITE_TOOLS, mentioned_paths
 from gaia.agents.base.verification import is_check_execution, observed_text
 
 LOOK = "look"
@@ -608,15 +608,8 @@ def _states_money(text: str) -> bool:
     return False
 
 
-def presented_values(answer: str) -> List[_Value]:
-    """Values *answer* presents as data, in order, without duplicates.
-
-    Table cells that are one value, fields of an untagged/CSV/JSON code block,
-    and — only when the answer has one of those or states an exact amount of
-    money — decimals, dates and percentages in its prose. Code blocks in a
-    language, inline code, small whole numbers, estimates and version numbers
-    are left alone.
-    """
+def _tables_and_prose(answer: str) -> "tuple[List[_Value], str]":
+    """Values in *answer*'s tables and data blocks, and the prose around them."""
     values: List[_Value] = []
 
     def data_block(match: "re.Match[str]") -> str:
@@ -635,6 +628,19 @@ def presented_values(answer: str) -> List[_Value]:
     lines = text.splitlines()
     values.extend(_table_values(lines))
     prose = "\n".join(line for line in lines if not line.strip().startswith("|"))
+    return values, prose
+
+
+def presented_values(answer: str) -> List[_Value]:
+    """Values *answer* presents as data, in order, without duplicates.
+
+    Table cells that are one value, fields of an untagged/CSV/JSON code block,
+    and — only when the answer has one of those or states an exact amount of
+    money — decimals, dates and percentages in its prose. Code blocks in a
+    language, inline code, small whole numbers, estimates and version numbers
+    are left alone.
+    """
+    values, prose = _tables_and_prose(answer)
     if not values and not _states_money(prose):
         return []  # no table, data block or amount: prose numbers are not data
     values.extend(_prose_values(prose))
@@ -792,10 +798,21 @@ def content_findings(
         if v.number is not None and len(by_value) < 20:
             by_value.setdefault(v.number, {v.number}).update(corpus.sources(v))
     operands = list(by_value.values())
+    # Prose summing up a file the turn wrote is the deliverable check's to note.
+    written = _Corpus(
+        ""
+        if _tables_and_prose(answer)[0]
+        else "\n".join(
+            observed_text(r.get("args") or {})
+            for r in records
+            if _name(r) in WRITE_TOOLS
+        )
+    )
     missing = [
         v.text
         for v in values
         if v not in grounded
+        and not written.holds(v)
         and not (
             v.number is not None and (_derived(v, operands) or _total_of(v, grounded))
         )
