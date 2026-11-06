@@ -267,7 +267,9 @@ def test_reprompts_are_bounded_per_turn(agent):
     result = agent.process_query("Do the task", max_steps=20)
 
     assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
-    assert _final_text(result) == f"Executing step {_MAX_UNFINISHED_ANSWER_REPROMPTS}:"
+    final = _final_text(result)
+    assert final.startswith("I didn't finish:")
+    assert f'"Executing step {_MAX_UNFINISHED_ANSWER_REPROMPTS}:"' in final
 
 
 def test_no_reprompt_on_last_step(agent):
@@ -276,7 +278,8 @@ def test_no_reprompt_on_last_step(agent):
     result = agent.process_query("Document the env var", max_steps=1)
 
     assert len(sent) == 1
-    assert _final_text(result) == NARRATION
+    assert _final_text(result).startswith("I didn't finish:")
+    assert NARRATION in _final_text(result)
 
 
 def test_completed_answer_is_not_reprompted(agent):

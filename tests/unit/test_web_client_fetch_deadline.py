@@ -143,7 +143,8 @@ def test_a_caller_timeout_is_capped_by_the_deadline(server):
 
 
 def test_a_fast_fetch_is_unaffected(server):
-    response = _client(fetch_deadline=1).get(server + "/fast")
+    # Roomy, so a busy runner cannot turn this into a race with the timer.
+    response = _client(fetch_deadline=60).get(server + "/fast")
     assert response.text == "<html>ok</html>"
 
 
@@ -365,12 +366,33 @@ def test_a_read_failing_just_before_the_deadline_counts_as_the_deadline():
         assert not client_mod._is_deadline_failure(error, deadline)
 
 
-def test_the_rate_limit_wait_is_not_charged_to_the_deadline(server):
-    """The wait between two fetches to one host is GAIA's own pacing."""
-    client = WebClient(timeout=10, rate_limit=1.5, fetch_deadline=1)
+def test_the_rate_limit_wait_is_not_charged_to_the_deadline(server, monkeypatch):
+    """The wait between two fetches to one host is GAIA's own pacing.
+
+    The client's clock is faked so the wait is an hour that takes no real time:
+    charged to the 60 s deadline it would fail the fetch every time.
+    """
+    from types import SimpleNamespace
+
+    from gaia.web import client as client_mod
+
+    skipped = []
+
+    def fake_sleep(seconds):
+        skipped.append(seconds)
+
+    def fake_monotonic():
+        return time.monotonic() + sum(skipped)
+
+    monkeypatch.setattr(
+        client_mod, "time", SimpleNamespace(monotonic=fake_monotonic, sleep=fake_sleep)
+    )
+    client = WebClient(timeout=10, rate_limit=3600, fetch_deadline=60)
     client.get(server + "/fast")
-    response = client.get(server + "/fast")  # waits ~1.5 s first
+    before = len(skipped)
+    response = client.get(server + "/fast")
     assert response.text == "<html>ok</html>"
+    assert len(skipped) == before + 1 and skipped[-1] > 3500, skipped
 
 
 @pytest.fixture
@@ -430,7 +452,7 @@ def socks5_relay(monkeypatch):
 
 def test_fetches_through_a_socks_proxy_still_work(server, socks5_relay):
     proxy, hits = socks5_relay
-    response = _client(fetch_deadline=5).get(
+    response = _client(fetch_deadline=60).get(
         server + "/fast", proxies={"http": proxy, "https": proxy}
     )
     assert response.text == "<html>ok</html>"
