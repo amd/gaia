@@ -506,8 +506,17 @@ def test_prices_typed_into_a_script_that_writes_the_report_are_still_flagged():
 
 @pytest.mark.parametrize(
     "report_open",
-    ["rep = open('bom.md').read()", "open('bom.md', 'a').write('checked')"],
-    ids=["read-back", "append"],
+    [
+        "rep = open('bom.md').read()",
+        "open('bom.md', 'a').write('checked')",
+        "rep = open('bom.md').read()\n"
+        "open('bom.md', 'w').write(rep.replace('Total', 'Total (' + str(2) + ')'))",
+        "from pathlib import Path\n"
+        "Path('bom.md').write_text(Path('bom.md').read_text().replace('TBD', '1'))",
+        "import pandas as pd\n"
+        "df = pd.read_csv('bom.md')\ndf.loc[0, 'Qty'] = 4\ndf.to_csv('bom.md')",
+    ],
+    ids=["read-back", "append", "patch-open", "patch-path", "patch-pandas"],
 )
 def test_a_script_that_did_not_write_the_report_does_not_source_it(report_open):
     records = [

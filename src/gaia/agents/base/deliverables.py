@@ -784,9 +784,30 @@ def _truncates(call: ast.Call, named: Dict[str, str]) -> Optional[str]:
     return None
 
 
+def _reads(call: ast.Call, named: Dict[str, str]) -> Optional[str]:
+    """The path *call* reads: ``open(p)``, ``Path(p).read_text()``,
+    ``pd.read_csv(p)``."""
+    func = call.func
+    ident = getattr(func, "id", getattr(func, "attr", None))
+    if ident == "open" and isinstance(func, ast.Name):
+        return _literal_path(_call_arg(call, 0, "file"), named)
+    if ident in ("read_text", "read_bytes") and isinstance(func, ast.Attribute):
+        receiver = func.value
+        if isinstance(receiver, ast.Call) and receiver.args:
+            return _literal_path(receiver.args[0], named)
+        return None
+    if ident in _PY_READERS - {"open", "Path"}:
+        target = (call.args or [k.value for k in call.keywords] or [None])[0]
+        return _literal_path(target, named)
+    return None
+
+
 def _script_io(record: Dict[str, Any]) -> Optional[Tuple[List[str], Set[str]]]:
     """``(files opened, files replaced)`` by a ``run_python`` script, or
     ``None`` when its figures may not come from those files.
+
+    A file the script read and then saved back is not one it replaced: what
+    it patched in place, another tool wrote.
 
     Each file it opens is named, as a literal or a name bound once to one; it
     reaches no other data; and it types no figure beyond a small count —
@@ -803,6 +824,7 @@ def _script_io(record: Dict[str, Any]) -> Optional[Tuple[List[str], Set[str]]]:
         return None
     opened: List[str] = []
     replaced: Set[str] = set()
+    read_from: Set[str] = set()
     named = _string_names(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant):
@@ -829,6 +851,10 @@ def _script_io(record: Dict[str, Any]) -> Optional[Tuple[List[str], Set[str]]]:
             wrote = _truncates(node, named)
             if wrote is not None:
                 replaced.add(_basename(wrote))
+            else:
+                source = _reads(node, named)
+                if source is not None:
+                    read_from.add(_basename(source))
             func = node.func
             if getattr(func, "id", getattr(func, "attr", None)) not in _PY_READERS:
                 continue
@@ -837,7 +863,7 @@ def _script_io(record: Dict[str, Any]) -> Optional[Tuple[List[str], Set[str]]]:
             if path is None:
                 return None
             opened.append(_basename(path))
-    return opened, replaced
+    return opened, replaced - read_from
 
 
 def _script_written(
