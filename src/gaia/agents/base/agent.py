@@ -1404,7 +1404,7 @@ _TOOL_MARKUP_FAILURE_ANSWER = (
 )
 _EMOJI_SHORTCODE_END_PATTERN = re.compile(r":[a-z0-9_+-]+:$", re.IGNORECASE)
 _NEXT_STEP_INTENT_PATTERN = re.compile(
-    r"^(?:(?:ok(?:ay)?|so|alright|next|then|finally)[,.]?\s+)?"
+    r"^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+|(?:next|then|finally)[,.]?\s+(?!we\b))?"
     r"(?:executing step|first step|(?:my|our) next step"
     r"|now,? i need to|now,? i'll|now,? i will|i'll now|i will now"
     r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b)"
@@ -1418,7 +1418,7 @@ _PLAN_HEADING_PATTERN = re.compile(
 # "Before finalizing, I will perform one final search…": a step never taken.
 _ANNOUNCED_ACTION_PATTERN = re.compile(
     r"^(?P<lead>[^,;:]{1,60},\s+)?"
-    r"(?:i'll|i will|i'm going to|i am going to|we'll|we will)\s+"
+    r"(?:i'll|i will|i'm going to|i am going to)\s+"
     r"(?:(?:now|next|then|also|first|quickly|immediately|go ahead and"
     r"|proceed to|need to|try to|attempt to)\s+)*"
     r"(?:perform|run|re-?run|search|check|re-?check|fetch|look(?!\s+forward)"
@@ -1437,7 +1437,7 @@ _IMMEDIACY_PATTERN = re.compile(
     r"|\bnext\s*[.!]?\s*$|\bto (?:confirm|verify|double-check|make sure|be sure)\b"
     r"|^(?:next|then|first|finally|now|before\s+\w+ing\b[^,]*|to (?:confirm|verify"
     r"|be sure|make sure|double-check)[^,]*),"
-    r"|^(?:i'll|i will|i'm going to|i am going to|we'll|we will)\s+"
+    r"|^(?:i'll|i will|i'm going to|i am going to)\s+"
     r"(?:next|then|first|now)\b",
     re.IGNORECASE,
 )
@@ -1473,6 +1473,12 @@ _DRAFT_PATTERN = re.compile(
 )
 # A list item or a quoted line is content the user asked for or quoted.
 _LIST_ITEM_PATTERN = re.compile(r"^\s*(?:(?:[-*+•]|\d+[.)])\s|>)")
+# Each future action a paragraph announces. Two or more is a plan or a
+# tutorial the user asked for ("First, I'll… Next, I'll… Finally, I'll…").
+_FUTURE_ACTION_PATTERN = re.compile(
+    r"\b(?:i'll|i will|i'm going to|i am going to|we'll|we will)\s+\w",
+    re.IGNORECASE,
+)
 _UNFINISHED_STEP_QUOTE_MAX_CHARS = 200
 
 
@@ -1544,8 +1550,11 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
         return "narration"
 
     sentences = re.split(r"(?<=[.!?])\s+", last_line)
+    plain_paragraph = re.sub(r"[*_`#>]", "", paragraphs[-1])
+    is_plan = len(_FUTURE_ACTION_PATTERN.findall(plain_paragraph)) >= 2
     if (
-        not _DRAFT_PATTERN.search(text)
+        not is_plan
+        and not _DRAFT_PATTERN.search(text)
         and not _LIST_ITEM_PATTERN.match(paragraphs[-1].splitlines()[-1])
         and _announces_action(
             sentences[-1],

@@ -182,6 +182,36 @@ REAL_ANSWERS = [
         "From your notes:\n\n> I'll run the tests now.",
         id="quoted-last-line",
     ),
+    # A plan or tutorial the user asked for announces its steps on purpose.
+    pytest.param(
+        "Here's your plan for the afternoon:\n\nFirst, I'll clear my inbox. "
+        "Next, I'll review the two open PRs. Finally, I'll test the release "
+        "candidate.",
+        id="plan-user-asked",
+    ),
+    pytest.param(
+        "Your afternoon plan: first, I'll clear my inbox, then I'll review the "
+        "PRs. Finally, I'll test the release.",
+        id="plan-one-paragraph",
+    ),
+    pytest.param(
+        "To set up the database, install Postgres and create a user called app "
+        "with a password. Then create the app database and grant the user "
+        "access to it.\n\nFinally, we'll test the connection to make sure it "
+        "works.",
+        id="tutorial-finally-well",
+    ),
+    pytest.param(
+        "We've created the table and inserted the sample rows. Next, we'll run "
+        "the migration.",
+        id="tutorial-next-well",
+    ),
+    pytest.param("Next, we'll run the migration.", id="next-well-alone"),
+    pytest.param(
+        "Install Postgres and create the app user.\n\nFinally, we need to "
+        "restart the service.",
+        id="tutorial-finally-we-need-to",
+    ),
 ]
 
 
