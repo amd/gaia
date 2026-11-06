@@ -945,7 +945,13 @@ class RAGSDK:
         """
         # Security check: Validate path against allowed directories
         # Use prompt_user=False to prevent blocking on input() in server contexts
-        if not self.path_validator.is_path_allowed(file_path, prompt_user=False):
+        read_only = "r" in mode and "+" not in mode
+        allowed = (
+            self.path_validator.validate_read(file_path, prompt_user=False)[0]
+            if read_only
+            else self.path_validator.is_path_allowed(file_path, prompt_user=False)
+        )
+        if not allowed:
             raise PermissionError(f"Access denied: {file_path} is not in allowed paths")
 
         import stat

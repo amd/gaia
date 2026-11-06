@@ -66,9 +66,10 @@ _spec.loader.exec_module(capability_matrix)
 # is in the loop_control bundle but registers on gpt-oss only, so not counted.
 # 98 with the three audio_generation tools (music, sound effects, model list).
 # 101 with get_thread, list_connected_mailboxes and list_waiting_on_you.
-# 102 with `forget_everything`, 103 once search_tools became a default tool;
-# 110 with the five guide-card tools and the two calculator-card tools.
-_EXPECTED_TOOLS_TOTAL = 110
+# 102 with `forget_everything`, 103 once search_tools became a default tool.
+# 105 with analyze_transcript and export_transcript;
+# 112 with the five guide-card tools and the two calculator-card tools.
+_EXPECTED_TOOLS_TOTAL = 112
 # 11 since #3235 put `load_skill` in the core set: the shortlist prompt tells
 # the model to call it even when the skills bundle was not selected.
 # 16 with `sleep`, which joins the core set rather than a bundle: waiting out a

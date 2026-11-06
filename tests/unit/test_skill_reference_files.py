@@ -295,8 +295,9 @@ def test_any_folder_name_works_including_reference_and_references(agent):
 
 def test_read_only_grant_refuses_home_and_drive_root(agent):
     validator = agent.path_validator
+    before = set(validator.read_only_paths)
     home = Path.home()
     for too_broad in (home, Path(home.anchor), home / "skills" / ".." / ".."):
         with pytest.raises(ValueError, match="covers the drive or home folder"):
             validator.add_read_only_path(str(too_broad))
-    assert not validator.read_only_paths
+    assert validator.read_only_paths == before

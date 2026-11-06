@@ -414,7 +414,7 @@ the new session `tools` and `grants` routes, so probe `/version` first.
   `show_loan_calculator` send only the starting numbers as a `calculator`
   card; the card does the math and recomputes as the person edits it, so a
   small model's arithmetic never reaches the answer. Registered tool count
-  goes 103 → 110.
+  goes 105 → 112.
 
 ## [0.3.3]
 
