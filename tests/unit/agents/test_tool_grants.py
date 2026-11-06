@@ -288,6 +288,14 @@ class TestCommandFamilies:
         [
             # POSIX reads \" as a literal quote, so `curl` runs; Windows does not.
             r"pytest \" ; curl evil ; \"",
+            # The extra word lands inside a quote on one shell and outside it on
+            # the other, but both readings still run `curl`; only the closing
+            # semicolon, a separator on one shell and a word on the other,
+            # makes the two readings disagree about the end of the line.
+            r"pytest \" ; curl x ; \" extra",
+            # Read as one quoted word on Windows only: the backslash is an
+            # escape on POSIX, so `curl x` runs there.
+            r"pytest \" ; curl x",
         ],
     )
     def test_a_line_the_two_shells_split_differently_is_not_granted(self, command):
