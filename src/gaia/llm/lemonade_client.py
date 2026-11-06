@@ -79,6 +79,7 @@ from gaia.llm.retry import (
     sleep_unless_cancelled,
     tag_http_failure,
 )
+from gaia.llm import stream_watchdog
 from gaia.llm.stream_watchdog import (
     STREAM_READ_BACKSTOP,
     ByteActivity,
@@ -8613,7 +8614,8 @@ class LemonadeClient:
 
         The lease declares how long its holder may keep the slot: one request
         of *request_timeout* (the request budget when not given), the retry
-        deadline after which no new attempt starts, and a model load.
+        deadline after which no new attempt starts, a model load, and the
+        bounded NPU reply-drain window after a caller stops reading.
 
         Serializes this load against every other process sharing the
         single-tenant Lemonade slot, and every request to a local model against
@@ -8658,7 +8660,9 @@ class LemonadeClient:
             on_wait=_on_wait,
             max_hold_s=(request_timeout or request_budget_seconds())
             + RetryPolicy.from_env().deadline
-            + LEASE_LOAD_MARGIN_S,
+            + LEASE_LOAD_MARGIN_S
+            # A stopped NPU reply may keep the lease while the worker drains it.
+            + stream_watchdog.DRAIN_LIMIT_S,
         )
 
         @contextmanager
