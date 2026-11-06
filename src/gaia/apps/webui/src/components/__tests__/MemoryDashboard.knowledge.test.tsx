@@ -165,4 +165,16 @@ describe('MemoryDashboard tool-error rows', () => {
         const cell = await screen.findByText('load_skill: No skill named note-taker', { selector: '.mem-content-cell *, .mem-content-cell' });
         expect(within(cell.closest('tr')!).getByText('Learned by GAIA')).toBeInTheDocument();
     });
+
+    it('keeps the Error label for an error the user wrote, and in the category picker', async () => {
+        const OWN = { ...LESSON, id: 'k3', source: 'user', content: 'The VPN drops on hotel wifi' };
+        mockedApi.getKnowledge.mockResolvedValue({ items: [ENTRY, LESSON, OWN], total: 3, offset: 0, limit: 25 });
+        render(<MemoryDashboard />);
+        fireEvent.click(await screen.findByRole('tab', { name: /Advanced/ }));
+        const cell = await screen.findByText('The VPN drops on hotel wifi', { selector: '.mem-content-cell *, .mem-content-cell' });
+        const row = within(cell.closest('tr')!);
+        expect(row.getByText('Error')).toBeInTheDocument();
+        expect(row.queryByText('Learned by GAIA')).not.toBeInTheDocument();
+        expect(screen.queryByRole('option', { name: 'Learned by GAIA' })).not.toBeInTheDocument();
+    });
 });
