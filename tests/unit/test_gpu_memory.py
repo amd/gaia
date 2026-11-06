@@ -351,6 +351,16 @@ class TestLinuxSplit:
         # 64 GiB carve-out back to the 62.4 GiB OS-visible value.
         assert result["total_gb"] == pytest.approx(135.7, abs=0.05)
 
+    def test_linux_installed_memory_is_not_given_the_carve_out_twice(self, box):
+        # A Lemonade that reports installed RAM on Linux: it already counts the
+        # carve-out, so it doesn't match MemTotal and nothing is added back.
+        info = linux_igpu(128, 62.5, carve_gb=64)
+        info["Physical Memory"] = "128 GB"
+        box.info = info
+        box.meminfo(62.4)
+        result = gm.describe(info, LOCAL)
+        assert result["total_gb"] == pytest.approx(128 * GB_PER_GIB, abs=0.05)
+
     def test_total_ram_from_meminfo_when_lemonade_omits_it(self, box):
         info = linux_igpu(128, 62.5)
         del info["Physical Memory"]
