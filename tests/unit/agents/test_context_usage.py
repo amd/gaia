@@ -122,7 +122,7 @@ def test_warns_with_the_oldest_questions_before_they_are_dropped(window):
     "question, quoted",
     [
         ("what is the capital of France", "what is the capital of France"),
-        ("some context first\n\nthen the question", "then the question"),
+        ("first paragraph\n\nthen the question", "first paragraph then the question"),
     ],
 )
 def test_warning_quotes_the_user_not_the_injected_memory_block(
@@ -135,7 +135,7 @@ def test_warning_quotes_the_user_not_the_injected_memory_block(
     )
     turns = []
     while True:
-        turns.append(_text_turn(f"{memory}\n\n{question}", 120))
+        turns.append(_text_turn(history.frame_user_message(memory, question), 120))
         usage = history.context_usage(_agent(), turns)
         if usage["at_risk"]:
             break

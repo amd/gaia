@@ -1255,6 +1255,22 @@ export interface SpendingReport {
     price_source: string;
 }
 
+/** GET /api/spending/chat/{session_id}: this chat's and today's cloud answers at list price. */
+export interface ChatSpending {
+    /** The model asked about has a known cloud price; only then is spending shown. */
+    paid: boolean;
+    model: string | null;
+    chat: {
+        usd: number;
+        answers: number;
+        /** Cloud answers with no price, such as a stopped one, counted apart rather than as $0. */
+        unpriced_answers: number;
+        items: Array<{ message_id: number; created_at: string; model: string | null; kind: string; usd: number | null }>;
+    };
+    today: { usd: number; answers: number; unpriced_answers: number; chats: number; since: string };
+    price_source: string;
+}
+
 export interface ConnectProviderBody {
     api_key?: string;
     base_url?: string;

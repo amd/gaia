@@ -158,6 +158,13 @@
     font-size: 13px;
 }
 
+.settings-report {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+}
+
 .settings-ok {
     color: var(--accent-green);
     font-size: 13px;

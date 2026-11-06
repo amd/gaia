@@ -233,7 +233,7 @@ turns:
     objective: "Ask about the CFO approval threshold"
     ground_truth:
       doc_id: budget_2025
-      fact_id: cfo_threshold
+      fact_id: cfo_approval_threshold
       expected_answer: "$50,000"
     success_criteria: "Agent states the CFO approval threshold is $50,000"
 
@@ -241,7 +241,7 @@ turns:
     objective: "Ask if a $75,000 expense needs CFO approval"
     ground_truth:
       doc_id: budget_2025
-      fact_id: cfo_threshold
+      fact_id: cfo_approval_threshold
       expected_behavior: "Agent applies the $50K threshold to conclude $75K needs CFO approval"
     success_criteria: "Agent correctly reasons that $75,000 exceeds the $50,000 threshold"
 

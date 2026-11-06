@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage } from '../types';
 import type { ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import type { AgentCapabilities, SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
@@ -442,6 +442,13 @@ export async function getCloudPrices(provider: string): Promise<CloudPriceList> 
 
 export async function getSpending(): Promise<SpendingReport> {
     return apiFetch('GET', '/spending');
+}
+
+/** This chat's cloud spending and every chat's since *since*, the local day's start. */
+export async function getChatSpending(sessionId: string, since: string, model: string | null): Promise<ChatSpending> {
+    const query = new URLSearchParams({ since });
+    if (model) query.set('model', model);
+    return apiFetch('GET', `/spending/chat/${encodeURIComponent(sessionId)}?${query}`);
 }
 
 /** Set the monthly limit for cloud chats; null removes it. */

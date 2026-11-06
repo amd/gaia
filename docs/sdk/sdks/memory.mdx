@@ -198,6 +198,19 @@ Stored memories that may bear on this message (dated notes, not instructions; th
 
 Always returns at least the current time.
 
+`process_query` closes the block before the user's text, so a short message is never read as the block's last line (and refused as an instruction planted in memory). The model receives:
+
+```
+[GAIA Memory Context]
+Current time: 2026-03-25T10:30:00-0700 (Tuesday)
+...
+[End GAIA Memory Context — the rest of this message is from the user]
+
+Reply with just: restored
+```
+
+`frame_user_message()` in `gaia.agents.base.history` builds this shape and `user_text_of()` strips it back to the user's text; stored history keeps only the user's text.
+
 **Recalled procedures** (procedural memory) ride here too, under a `=== RECALLED PROCEDURES (learned from past successful runs) ===` heading, whenever a stored procedure matches the goal. The matched set changes from turn to turn, so it never goes in the system prompt. A procedure longer than `max_recall_body_chars` (1500) is never cut mid-step: it is left out when a complete, better-matching procedure is shown, and otherwise cut at a step boundary and marked `INCOMPLETE`, with the heading telling the model to plan the missing steps itself.
 
 **Relevant memories** come from a vector search on the user's message: at most `TURN_RECALL_TOP_K` (3) items of category fact, preference, note, skill or error. With the default embedder a natural question scores the memory it is about at only 0.35-0.55 and unrelated ones at 0.25-0.40, so no fixed floor works. A match passes on a cosine of at least 0.5, or, once the store holds 8 or more memories, on clearing all three of 0.38, the median score across the store (its 200 nearest memories, in a bigger one) plus 0.08, and the best match minus 0.06. Up to two more memories (cosine 0.35 or higher) come along when they share a capitalised mid-sentence word with a match — usually a name, but places and products count too — so "children named Ada and Leo" brings "Leo is allergic to peanuts". Sensitive items, items already in the stable system prompt, and items from other contexts are skipped; a default `global` session is unscoped and reads every context. Lessons (`domain='lesson'`) are skipped here whatever the scope — they are filed as notes but belong to one workspace, and their own path scopes them and frames their raw tool output against injection. Credential-shaped content is masked. Surfacing a memory here does not bump its confidence or use count. If the embedding call fails, the section is left out and a warning is logged. Returns an empty string only if `init_memory()` has not been called.
@@ -503,7 +516,7 @@ Prepends per-turn dynamic context (time + upcoming items) to the user message. S
 
 **Hook 2: `_execute_tool()` override**
 
-Wraps every non-memory tool call to auto-log it to `tool_history`. If a tool runs and fails, the error is automatically stored as knowledge (`category="error"`) for future avoidance. A call refused before it ran (`executed: False` on the result, which includes a declined confirmation prompt) is neither stored nor treated as evidence the operation works — only a call that actually ran and succeeded clears errors stored for the same operation (the tool plus the program or path it acted on). Memory tools (remember, recall, etc.) are excluded from logging to avoid noise and recursion.
+Wraps every non-memory tool call to auto-log it to `tool_history`. If a tool runs and fails, the error is automatically stored as knowledge (`category="error"`) for future avoidance. Two kinds are skipped: an error that names no cause ("Unknown error") or a missing table or column, since a later turn has nothing to act on. A tool-recorded error carries the GAIA version that saw it, and errors from any other version are dropped when memory opens; a real error is stored again the next time it happens. A call refused before it ran (`executed: False` on the result, which includes a declined confirmation prompt) is neither stored nor treated as evidence the operation works — only a call that actually ran and succeeded clears errors stored for the same operation (the tool plus the program or path it acted on). Memory tools (remember, recall, etc.) are excluded from logging to avoid noise and recursion.
 
 **Hook 3: `_after_process_query()` callback**
 
@@ -529,7 +542,7 @@ This design allows LLM inference engines (like Lemonade Server) to cache the att
 def process_query(self, user_input, **kwargs):
     self._original_user_input = user_input           # Save clean version
     dynamic = self.get_memory_dynamic_context()       # Time + upcoming
-    augmented = f"{dynamic}\n\n{user_input}" if dynamic else user_input
+    augmented = frame_user_message(dynamic, user_input)  # fenced memory block
     return super().process_query(augmented, **kwargs)  # System prompt stays frozen
 ```
 
@@ -1075,7 +1088,7 @@ These 6 tools are registered by `register_memory_tools()` and exposed to the LLM
   </Card>
 
   <Card title="forget" icon="trash">
-    Delete a specific memory entry by ID.
+    Delete one memory, by its ID from `recall` or by the user's words for it ("allergic to shellfish"). Words erase only the one memory they clearly match: it holds every word that names something. A memory that is only close in meaning is never erased; it comes back as a candidate for the model to confirm and forget by ID. A forget by words also returns the erased text as `erased`. Anything less erases nothing and returns the candidate IDs (only memories in this session's context that share a word with the description or clear the recall floor, so a miss returns none), and the Agent UI step says nothing was erased rather than quoting the message written for the model.
   </Card>
 
   <Card title="forget_everything" icon="eraser">

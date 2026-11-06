@@ -2960,6 +2960,20 @@ model with no known price reads as unknown, never $0. Cloud models from
     `allowed_over`). **500** when the saved limit is unreadable.
   </Accordion>
 
+  <Accordion title="GET /api/spending/chat/{session_id}">
+    Takes `since` and `model` as query parameters.
+    What one chat's cloud answers cost, and every chat's answers since `since`
+    (an ISO instant: the start of the viewer's local day). Sums the cost each
+    answer's turn summary saved, cache discounts included; answers on this PC
+    are left out. `paid` is true when `model` has a known cloud price, the only
+    time the composer shows it. `chat` carries `usd`, `answers`,
+    `unpriced_answers` (stopped or unpriced answers, counted apart, never as
+    $0) and `items` (`message_id`, `created_at`, `model`, `kind`, `usd` per
+    answer); `today` carries `usd`, `answers`, `unpriced_answers` and `chats`.
+    **404** for an unknown chat, **422** when `since` isn't an ISO timestamp,
+    **500** when a saved answer's summary is unreadable.
+  </Accordion>
+
   <Accordion title="PUT /api/spending/limit">
     Set the monthly limit: `{"limit_usd": 10}`, or `null` for none. **422**
     for a limit of $0 or less. Once `total_usd` reaches it, a chat turn on a
