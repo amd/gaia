@@ -55,6 +55,17 @@ def test_real_404_is_still_broken():
     assert "404" in detail
 
 
+def test_a_server_timeout_408_is_warning_not_broken():
+    """shields.io answers 408 under load; that is a timeout, not a dead badge."""
+    err = urllib.error.HTTPError(
+        "https://img.shields.io/x", 408, "Request Timeout", hdrs=None, fp=None
+    )
+    with patch("urllib.request.urlopen", side_effect=err):
+        status, detail = cdl.check_external_link("https://img.shields.io/x")
+    assert status == "warning"
+    assert "408" in detail
+
+
 def test_unrelated_exception_stays_broken():
     """The catch-all must still fire for genuinely unexpected errors."""
     with patch("urllib.request.urlopen", side_effect=ValueError("bad url")):
