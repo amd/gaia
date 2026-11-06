@@ -15,10 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import threading
 import hashlib
 import hmac
 import secrets as _secrets
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -390,7 +390,6 @@ class PhoneService:
     def raise_alert(
         self,
         source: str,
-        kind: Optional[str] = None,
         *,
         reason: str = "",
         rule_key: Optional[str] = None,
@@ -895,8 +894,6 @@ class PhoneService:
             await step()
         except PhoneError as e:
             self._note_error(e)
-        except asyncio.CancelledError:
-            raise
         except Exception as e:  # pylint: disable=broad-exception-caught
             log.exception("phone: alert loop step failed")
             self.last_error = {
