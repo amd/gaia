@@ -10,6 +10,14 @@ func (m ChatModel) applySetupChatModel(model string) (ChatModel, tea.Cmd) {
 	if model == "" || !m.supportsModelCommand() {
 		return m, nil
 	}
+	// The setup choice supersedes any model-restore request waiting behind the
+	// first-boot gate, whichever way the switch is applied. Clear it before the
+	// branch: a client that cannot edit its pending launch falls back to /model,
+	// and releaseAfterSetupGate must not restore the old model afterward.
+	m.startup = startupModel{}
+	if model == m.modelID {
+		return m, nil
+	}
 	// First-run setup can finish before the agent process starts. In that case
 	// change its launch model directly: the following warm-up is then the first
 	// turn and cannot race a separate /model turn. A running session must use
@@ -19,10 +27,6 @@ func (m ChatModel) applySetupChatModel(model string) (ChatModel, tea.Cmd) {
 		m.modelBackend = "lemonade"
 		m.modelRemote = false
 		m.claudeMode = false
-		// The setup choice supersedes any model-restore request that was
-		// waiting behind the first-boot gate; otherwise releaseAfterSetupGate
-		// could restore the old model immediately after this selection.
-		m.startup = startupModel{}
 		m.rememberModel(savedChoice{provider: "local", model: model})
 		return m, nil
 	}
