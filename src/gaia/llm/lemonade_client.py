@@ -583,8 +583,9 @@ def downloaded_vision_model(
     """A downloaded :data:`VISION_CHAT_MODELS` entry to read images with instead
     of ``configured``, which the catalog lists as not downloaded; else None.
 
-    Only a tested default is replaced, never ``vision_model`` from setup or a
-    model outside the set. A loaded candidate wins, then the order below.
+    Any :data:`VISION_CHAT_MODELS` name is replaced, whoever passed it, except
+    ``vision_model`` from setup; a model outside the set never is. A loaded
+    candidate wins, then the order below.
     """
     from gaia.config import GaiaConfig
 

@@ -149,6 +149,8 @@ class VLMClient:
             if self.vlm_model in available_models:
                 logger.debug(f"VLM model available: {self.vlm_model}")
                 return True
+            if self._use_downloaded_tested_model():
+                return True
             else:
                 logger.warning(f"❌ VLM model not found: {self.vlm_model}")
                 logger.warning("")
@@ -283,6 +285,26 @@ Output format: Clean markdown with the ACTUAL text from the image."""
             logger.debug(traceback.format_exc())
             raise VLMExtractionError(str(e), page_num, image_num) from e
 
+    def _use_downloaded_tested_model(self, entries: Optional[list] = None) -> bool:
+        """Switch to a downloaded tested vision model when ``vlm_model`` isn't one.
+
+        ``entries`` is the full catalog (``show_all``); read here when not given.
+        """
+        from gaia.llm.lemonade_client import downloaded_vision_model
+
+        if entries is None:
+            catalog = self.client.list_models(show_all=True)
+            entries = catalog.get("data", []) if isinstance(catalog, dict) else []
+        substitute = downloaded_vision_model(self.vlm_model, entries, self.client)
+        if not substitute:
+            return False
+        logger.info(
+            f"Reading images with {substitute}: {self.vlm_model} is not downloaded"
+        )
+        self.vlm_model = substitute
+        self._vlm_catalog_checked = True
+        return True
+
     def _refuse_missing_vlm(self, page_num: int, image_num: int) -> None:
         """Raise when the catalog explicitly says the VLM isn't downloaded.
 
@@ -296,7 +318,6 @@ Output format: Clean markdown with the ACTUAL text from the image."""
             LemonadeClientError,
             _model_ids_match,
             cloud_model_provider,
-            downloaded_vision_model,
         )
         from gaia.llm.surface_hints import VISION_DOWNLOAD_HINT
 
@@ -324,13 +345,7 @@ Output format: Clean markdown with the ACTUAL text from the image."""
             self._vlm_catalog_checked = True
             return
 
-        substitute = downloaded_vision_model(self.vlm_model, entries, self.client)
-        if substitute:
-            logger.info(
-                f"Reading images with {substitute}: {self.vlm_model} is not downloaded"
-            )
-            self.vlm_model = substitute
-            self._vlm_catalog_checked = True
+        if self._use_downloaded_tested_model(entries):
             return
 
         size = entry.get("size")
