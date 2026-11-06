@@ -402,11 +402,11 @@ def _forget_root(word: str) -> str:
 def _forget_shared(words: set, content: str) -> set:
     """The *words* that *content* holds, as written or as a kin word.
 
-    Only a whole word reaches its kin: "allergy" meets "allergic", "allerg"
-    meets nothing.
+    Two words are kin only when both lost an ending: "allergy" meets
+    "allergic", but "cookies" doesn't meet "cook" and "allerg" meets nothing.
     """
     held = _forget_words(content)
-    roots = {_forget_root(w) for w in held}
+    roots = {_forget_root(w) for w in held if _forget_root(w) != w}
     return {
         w
         for w in words

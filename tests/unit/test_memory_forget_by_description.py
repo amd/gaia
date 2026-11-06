@@ -566,3 +566,18 @@ def test_an_ambiguous_result_lists_ids_and_contents_in_the_message(store):
     assert "forget(knowledge_id=" in result["message"]
     assert store.get_item(mine) is not None
     assert store.get_item(partners) is not None
+
+
+@pytest.mark.parametrize(
+    "words, content",
+    [
+        ("cookies", "User likes to cook pasta"),
+        ("party", "User is part of the chess club"),
+    ],
+)
+def test_a_word_is_kin_only_to_a_word_that_also_lost_an_ending(store, words, content):
+    """ "cookies" cut to "cook" is not the verb "cook"."""
+    result, ids, kept = _forget(store, [content, TEA], words)
+
+    assert result["status"] == "error"
+    assert kept == ids
