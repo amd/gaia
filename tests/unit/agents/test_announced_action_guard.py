@@ -239,6 +239,23 @@ REAL_ANSWERS = [
         id="commit-message-we-now",
     ),
     pytest.param("Next, let's run the migration.", id="tutorial-lets"),
+    # "to make sure" / "to confirm" / "now that" do not turn a plan into a step.
+    pytest.param(
+        "Here's the migration plan:\n\nFirst, I'll back up the database. Next, "
+        "I'll apply the schema change. Finally, I'll run the tests to make sure "
+        "everything works.",
+        id="plan-to-make-sure",
+    ),
+    pytest.param(
+        "Your rollout plan: I'll deploy to staging first. Then I'll run the "
+        "smoke tests to confirm it works.",
+        id="plan-to-confirm",
+    ),
+    pytest.param(
+        "Here's what I'd do: I'll merge the PR, then I'll cut the RC now that "
+        "CI is green.",
+        id="plan-now-that",
+    ),
 ]
 
 

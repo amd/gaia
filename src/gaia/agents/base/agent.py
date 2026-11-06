@@ -1498,9 +1498,7 @@ _FUTURE_ACTION_PATTERN = re.compile(
 # A last sentence tied to this turn is a step even after a plan-like lead-in
 # ("I'll keep this short. I'll check the releases page now.").
 _THIS_TURN_PATTERN = re.compile(
-    r"\bnow\b|\bbefore\s+\w+ing\b"
-    r"|\bto (?:confirm|verify|double-check|make sure|be sure)\b",
-    re.IGNORECASE,
+    r"\bnow\b(?!\s+that)|\bbefore\s+\w+ing\b", re.IGNORECASE
 )
 _UNFINISHED_STEP_QUOTE_MAX_CHARS = 200
 
