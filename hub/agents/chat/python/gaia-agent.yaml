@@ -22,7 +22,7 @@ python:
   entry_class: ChatAgent
   dependencies:
     - "amd-gaia>=0.25.4"
-    - "gaia-agent-gaia>=0.3.3"
+    - "gaia-agent-gaia>=0.3.5"
 
 requirements:
   min_memory_gb: 8

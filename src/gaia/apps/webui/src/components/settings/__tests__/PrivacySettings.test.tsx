@@ -90,3 +90,20 @@ describe('PrivacySettings delete all chats', () => {
         expect(useChatStore.getState().sessions).toEqual([TRIP, TAXES]);
     });
 });
+
+describe('PrivacySettings troubleshooting report', () => {
+    it('says nothing is sent and offers to save a report', async () => {
+        mockedApi.createSetupReport.mockResolvedValue({ name: 'diagnostics-20261104-192300.tgz', path: 'C:\Users\you\.gaia\diagnostics-20261104-192300.tgz', size_bytes: 900 });
+        mockedApi.fetchSetupReport.mockResolvedValue(new Blob(['x']));
+        URL.createObjectURL = vi.fn(() => 'blob:report');
+        URL.revokeObjectURL = vi.fn();
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        render(<PrivacySettings />);
+        expect(screen.getByRole('region', { name: 'Troubleshooting report' })).toHaveTextContent('Nothing is sent anywhere.');
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: 'Save a troubleshooting report' }));
+        });
+        expect(mockedApi.createSetupReport).toHaveBeenCalledTimes(1);
+        await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('diagnostics-20261104-192300.tgz'));
+    });
+});

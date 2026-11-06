@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { Check, ChevronRight, Circle, HelpCircle, Loader2, X } from 'lucide-react';
 import { useT } from '../../i18n/useT';
 import type { PreflightReport, SetupPlan, SetupRunStatus } from '../../types';
-import { ltrIn, totalMemory } from './format';
+import { formatSize, ltrIn, totalMemory } from './format';
 
 /** `question`: waiting on the user, not on work. */
 type RowState = 'done' | 'active' | 'waiting' | 'failed' | 'question';
@@ -46,14 +46,30 @@ export function SetupChecks({ hardware, hardwareError, plan, serverRun, awaiting
         : whose;
     const hwState: RowState = hardware ? 'done' : hardwareError ? 'failed' : 'active';
     const device = [hardware?.gpu_name, hardware?.npu_detected ? t('setup.checks.npu') : null].filter(Boolean).join(' · ');
+    // The setup choice is made from this value. Do not show the OS-visible RAM
+    // here: an iGPU carve-out can make it look lower than the next screen.
+    const modelMemory = hardwareError ? null
+        : plan?.capacity_gb != null ? formatSize(plan.capacity_gb)
+            // Like the next screen: the OS figure when the server couldn't size memory.
+            : serverUp ? totalMemory(plan?.system?.physical_memory, hardware?.ram_gb)
+                : null;
+    const memoryState: RowState = hardwareError
+        ? 'failed'
+        : modelMemory
+            ? 'done'
+            : serverFailed
+                ? 'failed'
+                : awaitingChoice
+                    ? 'waiting'
+                    : 'active';
     const rows: Row[] = [
         // A failed read says why on its first row, so the failure isn't a bare red mark.
         { id: 'device', label: t('setup.checks.device'), value: hardwareError ? `${t('setup.system.unread')} ${hardwareError}` : device || null, state: hwState },
         {
             id: 'memory',
-            label: t('setup.checks.memory'),
-            value: totalMemory(plan?.system?.physical_memory, hardware?.ram_gb),
-            state: hwState,
+            label: t('setup.found.memory'),
+            value: modelMemory,
+            state: memoryState,
         },
         {
             id: 'disk',

@@ -53,6 +53,7 @@ from gaia.daemon.constants import (
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars.errors import (
     HealthTimeoutError,
+    SidecarInhibitedError,
     SidecarNotRunningError,
     SidecarSpawnError,
     SidecarUnresponsiveError,
@@ -278,6 +279,10 @@ class AgentSidecarManager:
         # daemon resolves the caller's identity from it (never from the request).
         self.custody_url: Optional[str] = None
         self.custody_secret: Optional[str] = None
+        # Mints the /host/v1/keychain credential, delivered as a file the sidecar
+        # deletes. Per spawn: a reap revokes it, and this manager may start again.
+        self.mint_keychain_secret: Optional[Callable[[], str]] = None
+        self._keychain_secret_path: Optional[Path] = None
         # LEMONADE_BASE_URL and GAIA_LEMONADE_EMBEDDED as the sidecar got them.
         self._spawned_lemonade: Tuple[Optional[str], Optional[str]] = (None, None)
 
@@ -561,6 +566,19 @@ class AgentSidecarManager:
 
             spawn_env[CUSTODY_URL_ENV_VAR] = self.custody_url
             spawn_env[CUSTODY_SECRET_ENV_VAR] = self.custody_secret
+        from gaia.daemon.custody.constants import KEYCHAIN_SECRET_FILE_ENV_VAR
+
+        spawn_env.pop(KEYCHAIN_SECRET_FILE_ENV_VAR, None)
+        if (
+            self.custody_url
+            and self.mint_keychain_secret
+            and self._binary_reads_keychain_file()
+        ):
+            self._cleanup_keychain_secret_file()
+            self._keychain_secret_path = self._create_secret_file(
+                self.mint_keychain_secret()
+            )
+            spawn_env[KEYCHAIN_SECRET_FILE_ENV_VAR] = str(self._keychain_secret_path)
         # Supervision handshake (V2-15, #2156): tell the sidecar the daemon owns
         # the clock so it gates its own embedded schedulers off — the daemon
         # drives them from the single reconciled clock. A sidecar spawned any
@@ -595,6 +613,17 @@ class AgentSidecarManager:
         if not self._atexit_registered:
             atexit.register(self.shutdown)
             self._atexit_registered = True
+
+    def _binary_reads_keychain_file(self) -> bool:
+        minimum = self.spec.keychain_file_min_version
+        # Dev mode runs ``uvicorn server:app``, which never reaches entry.main()
+        # to read and delete the file. Its interpreter doesn't change on update.
+        if (self.resolved_mode or self.mode) == "dev":
+            return False
+        version = self.installed_binary_version
+        return bool(
+            minimum and version and _version_tuple(version) >= _version_tuple(minimum)
+        )
 
     def _resolve_secret_delivery(self) -> "tuple[str, str]":
         """Pick the delivery leg ("file" | "env") BEFORE spawn, plus the reason.
@@ -680,7 +709,11 @@ class AgentSidecarManager:
             )
 
     def _write_secret_file(self) -> Path:
-        """Create the owner-only launch-secret file; loud error, no env fallback.
+        self._secret_path = self._create_secret_file(self.auth_token)
+        return self._secret_path
+
+    def _create_secret_file(self, secret: str) -> Path:
+        """Create an owner-only secret file; loud error, no env fallback.
 
         A fresh ``mkdtemp`` dir (0700) + ``O_CREAT|O_EXCL`` at 0600 means the
         secret never exists on disk with looser permissions, even mid-write.
@@ -699,7 +732,7 @@ class AgentSidecarManager:
             path = secret_dir / "launch-secret"
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:
-                os.write(fd, self.auth_token.encode("utf-8"))
+                os.write(fd, secret.encode("utf-8"))
             finally:
                 os.close(fd)
             if os.name != "nt":
@@ -723,7 +756,6 @@ class AgentSidecarManager:
         except SidecarSpawnError:
             self._remove_secret_dir(secret_dir)
             raise
-        self._secret_path = path
         return path
 
     @staticmethod
@@ -738,9 +770,18 @@ class AgentSidecarManager:
 
     def _cleanup_secret_file(self) -> None:
         path = self._secret_path
+        self._secret_path = None
+        self._remove_secret_file(path)
+        self._cleanup_keychain_secret_file()
+
+    def _cleanup_keychain_secret_file(self) -> None:
+        path = self._keychain_secret_path
+        self._keychain_secret_path = None
+        self._remove_secret_file(path)
+
+    def _remove_secret_file(self, path: Optional[Path]) -> None:
         if path is None:
             return
-        self._secret_path = None
         try:
             path.unlink(missing_ok=True)
             path.parent.rmdir()
@@ -760,8 +801,32 @@ class AgentSidecarManager:
         each time. A genuine hang (``HealthTimeoutError``) is NOT retried — that
         would just multiply the wait — and surfaces loudly on the first attempt.
         """
-        with self._lock:
-            return self._start_locked(max_attempts)
+        try:
+            with self._lock:
+                return self._start_locked(max_attempts)
+        except SidecarInhibitedError:
+            raise
+        except (SidecarSpawnError, HealthTimeoutError) as e:
+            self._record_start_failure(e)
+            raise
+
+    def _record_start_failure(self, exc: BaseException) -> None:
+        """Save a local fault record for a sidecar that never came up."""
+        from gaia.llm.failure_record import record_local_failure
+
+        record_id = record_local_failure(
+            exc,
+            where="sidecar_start",
+            kind="sidecar_start",
+            agent=self.spec.agent_id,
+            extra={"mode": self.resolved_mode, "sidecar_url": self.base_url},
+        )
+        if record_id:
+            logger.error(
+                "%s sidecar failed to start; problem report saved as %s",
+                self.spec.agent_id,
+                record_id,
+            )
 
     def _start_locked(self, max_attempts: int) -> str:
         if self.is_running:

@@ -429,7 +429,7 @@ def _replay_cloud_key(model_id: str) -> bool:
     """
     import requests
 
-    from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, ensure_authenticated
+    from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, reconnect_provider
     from gaia.llm.gateway import GatewayError
 
     provider = str(model_id or "").lower().split(".", 1)[0]
@@ -438,7 +438,7 @@ def _replay_cloud_key(model_id: str) -> bool:
     from gaia.llm.local_only import CloudDisabledError
 
     try:
-        return ensure_authenticated(provider)
+        return reconnect_provider(provider)
     except CloudDisabledError as e:
         logger.warning(str(e))
         return False

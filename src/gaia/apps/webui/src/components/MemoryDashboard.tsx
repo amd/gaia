@@ -1640,7 +1640,9 @@ export function MemoryDashboard() {
                                                         >
                                                             <td>
                                                                 <span className={`mem-cat-badge ${entry.category}`}>
-                                                                    <Code value={entry.category} keys={CATEGORY_KEYS} />
+                                                                    {entry.category === 'error' && entry.source === 'error_auto'
+                                                                        ? t('mem.cat.errorLearned')
+                                                                        : <Code value={entry.category} keys={CATEGORY_KEYS} />}
                                                                 </span>
                                                             </td>
                                                             <td>

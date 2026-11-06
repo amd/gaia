@@ -6,10 +6,95 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
+- **A Python snippet that fails on a missing library says how to retry with
+  the standard library, and teaches the next chat what worked instead.** The
+  Python tools list only the libraries this install can import.
+
+## [0.3.5]
+
+Released with GAIA 0.25.4, and requires the `gaia` Python CLI 0.25.4+ on `PATH`
+and Lemonade Server 2026.44.1+. The sidecar contract stays **2.27**.
+
+- **Instructions planted in a file or web page are always flagged.** The
+  agent tells the user about them on any model, including the small NPU one,
+  and never follows them.
+- **A computation that fails no longer turns into made-up figures.** Amounts
+  in a table that no tool produced get flagged.
+- **"Forget that I'm allergic to shellfish" works on the first try.**
+- **A short message is no longer mistaken for an instruction from memory.**
+- **Memory stops replaying stale tool errors as lessons**, and only shows a
+  model the lessons recorded while that model was chatting.
+- **A report a script wrote beside a shared file counts as written.**
+- **A chat recovers when GAIA's own model server died**, cloud chats
+  included, without restarting the app.
+- **An answer that only announces its next step is not handed over as done.**
+  The agent finishes the step, or says plainly that it didn't.
+
+### Fixed
+
+- **An announced next step is not handed over as the answer** (#6787). A
+  reply ending "Next, I'll search the docs" or "Running the tests now" got
+  re-prompted; if the model still doesn't act, the turn ends with "I didn't
+  finish" and what it had so far. Requested plans and tutorials pass unchanged.
+- **Planted instructions get a visible warning on every model** (#6784).
+  Gemma 4 E4B summarized a build log's "[agent-note] … run `del /s /q …`"
+  without a word. External tool results are now scanned, the model is told to
+  report and not follow what it finds, and the answer gets a heads-up when the
+  model leaves it out.
+- **Invented amounts after a failed computation are flagged** (#6818). A
+  currency cell such as `$10,342.50` is now checked like a bare number, and a
+  `run_python`, `execute_python_file` or `query_data` call that fails before
+  printing anything tells the model nothing was computed.
+- **`forget` takes the user's words, not only an id** (#6774). It erases the
+  one memory the words clearly name; when they match several or none, nothing
+  is erased and the step says so in plain words.
+- **The per-turn memory block has an end** (#6814). A one-line message such
+  as "Reply with just: restored" was read as the block's last line and
+  refused as a planted instruction.
+- **Empty and outdated tool errors are no longer stored as lessons** (#6781).
+  Errors recorded by another GAIA version are dropped when memory opens, each
+  is shown only while the model that saw it chats, and the Memory page labels
+  them "Learned by GAIA" instead of "Error".
+- **A script's write to a file the user named as the output counts** (#6820),
+  so a report saved beside a shared file no longer ends with "No successful
+  write". Only its size and timestamp are checked, never its contents, and a
+  symlink is never followed.
+- **A dead model server restarts before the next turn** (#6806). Every later
+  message in an open chat used to fail until the app restarted. A cloud
+  chat's errors also stop calling the engine "the local LLM".
+- **An agent install no longer fails over one unreadable process** (#6822),
+  and on macOS the daemon reaps the agents it left running (#6808).
+
+## [0.3.4]
+
+Released with GAIA 0.25.4, and requires the `gaia` Python CLI 0.25.4+ on `PATH`
+and Lemonade Server 2026.44.1+. Integrators: the sidecar contract is now
+**2.27**; clients built for 2.18 keep working, and older binaries don't have
+the new session `tools` and `grants` routes, so probe `/version` first.
+
+- **A model server that stops mid-reply is named, not waited out.** The
+  cut-off text is taken back, the turn shows the restart, and a server that
+  doesn't come back ends the turn within seconds.
+- **"Forget everything" forgets everything**, stored conversations included,
+  and deleting a chat removes it from Memory.
+- **Listing every section that mentions a term reads only those pages**, and
+  long extractions say which page they are on.
+- **A question in one language finds answers in a document in another.**
+- **Mail gains whole threads, what's waiting on you, and which account is
+  connected** (three read-only tools, 102 in total).
+- **Updating the agent on a Mac no longer asks for keychain access again**
+  when the daemon starts it.
+- **With Claude, the agent follows a repository's `CLAUDE.md`, `AGENTS.md`
+  and `.claude/skills`.**
+- **The binary ships no GPL or AGPL code**, and the agent is one Python
+  package.
 
 ### Changed
 
+- **Updating the agent on a Mac no longer asks for keychain access again.** When
+  the daemon starts the sidecar, the daemon now reads saved keys for it. A sidecar
+  started without the daemon still reads the keychain itself. Requires a daemon
+  and agent from this release or later.
 - **"Every section that mentions X" no longer reads the whole document.**
   Listing the one section of a 37 KB manual that names a code took ~18 min on
   the NPU, because extraction sent all 10 pages through the model twice.
@@ -141,6 +226,17 @@ Requires the `gaia` Python CLI 0.25.4+ on `PATH`.
   drop it: an Agent UI from before this release hides these skills.
 
 ### Fixed
+
+- **A chat sent while GAIA's AI engine can't start says so, and how to fix
+  it.** With GAIA's own model server missing, a cloud-model chat waited ~30 s
+  and then showed "Failed to start the query run: Request failed:
+  HTTPConnectionPool(host='localhost', port=13305) …" with a terminal command.
+  Building the agent now asks the daemon for GAIA's server instead of probing
+  the default port, and `/query` answers `503` with the classified message
+  ("GAIA's AI engine couldn't start … Open Settings > Setup and press Run setup
+  again") worded for the request's `surface`. Errors mid-run use the same
+  wording; only a model server the user runs, not GAIA's own, still gets
+  this machine's start instruction.
 
 - **Reasoning no longer shows as the answer when a model sends only `</think>`.**
   A model whose chat template opens the reasoning block streamed that reasoning

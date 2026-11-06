@@ -1386,12 +1386,22 @@ class MemoryStore:
         now = _now_iso()
 
         with self._locked():
-            if source in TEACHING_SOURCES:
-                # Taught again on purpose, so it is no longer forgotten.
-                self._unforget_locked(content)
+            # Write lock before the dedup read: every chat has its own connection,
+            # and two that both read "no match" would each insert the fact.
+            if not self._conn.in_transaction:
+                self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                if source in TEACHING_SOURCES:
+                    # Taught again on purpose, so it is no longer forgotten.
+                    self._unforget_locked(content)
 
-            # Check for dedup match (scoped to category + context + entity)
-            existing_id = self._find_similar_locked(content, category, context, entity)
+                # Check for dedup match (scoped to category + context + entity)
+                existing_id = self._find_similar_locked(
+                    content, category, context, entity
+                )
+            except BaseException:
+                self._conn.rollback()
+                raise
 
             if existing_id:
                 # Update existing: replace content with newer, take max confidence.
@@ -1493,14 +1503,11 @@ class MemoryStore:
     ) -> Optional[str]:
         """Find existing knowledge with >80% word overlap in same category+context+entity.
 
-        Must be called with self._lock held.
-
-        Cross-process note: self._lock is a threading.Lock — it protects against
-        concurrent inserts within the *same process* only. Two separate processes
-        may both see no duplicate and both insert, resulting in brief redundancy.
-        This is intentionally accepted: the next store() call from either process
-        will detect the overlap and deduplicate. SQLite WAL mode ensures each
-        INSERT is atomic so no data is corrupted.
+        Must be called with self._lock held and SQLite's write lock taken
+        (``BEGIN IMMEDIATE``): self._lock only covers this one connection, so
+        without the write lock another connection — another chat, the Memory
+        page, another process — can insert the same fact between this read and
+        the caller's insert.
         """
         safe_query = _sanitize_fts5_query(content, use_and=False)
         if not safe_query:

@@ -33,7 +33,6 @@ and the CLI rather than ``providers.get()`` alone, per plan amendment A1.
 
 from __future__ import annotations
 
-import importlib
 import zlib
 
 import pytest
@@ -629,11 +628,13 @@ class TestMicrosoftWorkCatalog:
 
 
 class TestNoImportSideEffects:
-    def test_importing_microsoft_module_does_not_register(self, monkeypatch):
+    def test_importing_microsoft_module_does_not_register(
+        self, monkeypatch, reload_module
+    ):
         # Mirror A-Crit-3 from the Google work: providers/microsoft.py must
         # have NO side effects on import — registration is lazy via get().
         from gaia.connectors.providers import microsoft as ms_mod
 
         monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_ID", raising=False)
-        importlib.reload(ms_mod)
+        reload_module(ms_mod)
         assert "microsoft" not in providers._registry  # type: ignore[attr-defined]

@@ -15,6 +15,7 @@
 import * as api from './api';
 import type { StreamEvent } from '../types';
 import { wakeActiveRunsPoll } from './activeRuns';
+import { isStarting } from './statusPoll';
 import { useChatStore } from '../stores/chatStore';
 import * as messageQueue from '../utils/messageQueue';
 import { describeStreamError, isStreamInterrupted } from '../utils/streamErrors';
@@ -214,7 +215,7 @@ export const sendInBackground: QueuedSend = (sessionId, text) => new Promise((re
 export function startQueueDispatcher(send: QueuedSend = sendInBackground): () => void {
     const run = () => {
         const s = useChatStore.getState();
-        if (s.systemStatus?.init_state === 'initializing') return;
+        if (isStarting(s.systemStatus)) return;
         for (const sessionId of Object.keys(s.messageQueues)) {
             if (views.has(sessionId) || !idleByPoll(sessionId)) continue;
             void dispatchNext(sessionId, send, () => !views.has(sessionId));
