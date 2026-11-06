@@ -113,3 +113,31 @@ def test_an_unexplained_crash_keeps_its_label_and_is_shown_once(ui_chat):
     assert done.get("failed") is True
     assert done["content"].startswith("Agent error: ")
     assert done["content"].count("missing_field") == 1
+
+
+class _CutOffAgent(_EngineDownAgent):
+    def process_query(self, _message, **_kwargs):
+        self.console.print_streaming_text("The first half of the answer", True)
+        raise KeyError("missing_field")
+
+
+def test_a_crash_after_partial_text_still_sends_the_error_event(ui_chat):
+    db, session = ui_chat
+    helpers._store_agent(
+        session["id"], "accounts/fireworks/models/x", [], _CutOffAgent(), "chat"
+    )
+    events = _events(db, session)
+
+    assert any(e.get("type") == "chunk" for e in events), events
+    assert not [e for e in events if e.get("type") == "error"], events
+    errors = [e for e in events if e.get("type") == "agent_error"]
+    assert len(errors) == 1 and errors[0].get("fatal") is True, events
+    assert "missing_field" in errors[0]["content"]
+    (done,) = [e for e in events if e.get("type") == "done"]
+    assert done.get("failed") is True
+    assert done["content"].startswith("The first half of the answer")
+    assert "[Error: 'missing_field']" in done["content"]
+
+    (stored,) = [m for m in db.get_messages(session["id"]) if m["role"] == "assistant"]
+    steps = [s for s in stored["agent_steps"] or [] if s["type"] == "error"]
+    assert [s["detail"] for s in steps] == [errors[0]["content"]]
