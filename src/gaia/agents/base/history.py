@@ -4,6 +4,7 @@
 """Model-facing conversation history, budgeted without splitting tool groups."""
 
 import json
+import re
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass
@@ -648,13 +649,23 @@ MEMORY_CONTEXT_FOOTER = (
 
 _FOOTER_BREAK = MEMORY_CONTEXT_FOOTER + "\n\n"
 
+# Stored memories can quote or imitate the boundary. Treat separator, case,
+# and dash variants as the same marker so none can close the user-message fence.
+_FOOTER_SEPARATOR = r"(?:[^\S\n]|[-_‐-―−])*"
+_FOOTER_LIKE_LINE = re.compile(
+    rf"^.*\bend{_FOOTER_SEPARATOR}gaia{_FOOTER_SEPARATOR}memory"
+    rf"{_FOOTER_SEPARATOR}context\b.*(?:\n|$)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 
 def frame_user_message(context: str, user_input: str) -> str:
     """*user_input* behind the per-turn context block, fenced off from it."""
     if not context:
         return user_input
-    # A stored note quoting the footer must not end the block early.
-    context = context.replace(MEMORY_CONTEXT_FOOTER, "").rstrip()
+    # A stored note quoting the footer, or a near-copy, must not end the block
+    # early.
+    context = _FOOTER_LIKE_LINE.sub("", context).rstrip()
     if not context.startswith(MEMORY_CONTEXT_HEADER):
         context = f"{MEMORY_CONTEXT_HEADER}\n{context}"
     return f"{context}\n{_FOOTER_BREAK}{user_input}"

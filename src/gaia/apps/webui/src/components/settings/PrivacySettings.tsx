@@ -6,8 +6,16 @@ import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
 import { useInferencePlace } from '../../stores/modelStore';
 import { useT } from '../../i18n/useT';
+import { TroubleshootingReport, type ReportClasses } from '../TroubleshootingReport';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import { UndoHistorySettings } from './UndoHistorySettings';
+
+const REPORT_CLASSES: ReportClasses = {
+    root: 'settings-report',
+    button: 'btn-secondary',
+    hint: 'settings-hint',
+    error: 'settings-error',
+};
 
 /** Where data lives and goes, and how to delete it. */
 export function PrivacySettings() {
@@ -58,6 +66,10 @@ export function PrivacySettings() {
                         <bdi dir="ltr" className="setting-path">{dataDir}</bdi>
                     </div>
                 )}
+            </section>
+            <section className="settings-card" aria-label={t('settings.privacy.reportTitle')}>
+                <p className="settings-note">{t('settings.privacy.reportNote')}</p>
+                <TroubleshootingReport classes={REPORT_CLASSES} />
             </section>
             <SettingsDisclosure title={t('settings.privacy.undo')}>
                 <UndoHistorySettings />

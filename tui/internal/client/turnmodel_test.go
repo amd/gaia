@@ -73,7 +73,7 @@ func TestAFlagshipBelowTheSwitchContractIsRefusedWithTheFix(t *testing.T) {
 	}
 }
 
-// Every sidecar numbers its own contract: email at 2.14+ still has no model switch.
+// Every sidecar numbers its own contract: email at 2.15+ still has no model switch.
 func TestOnlyTheFlagshipSwitchesModels(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.15"
