@@ -22,6 +22,7 @@ import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
+import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
@@ -151,6 +152,13 @@ function useElapsedSeconds(active: boolean, key?: string): number {
     }, [active, key]);
     return elapsed;
 }
+
+const CHAT_REPORT_CLASSES: ReportClasses = {
+    root: 'msg-report',
+    button: 'msg-try-again',
+    hint: 'msg-report-hint',
+    error: 'msg-report-error',
+};
 
 /** Detect if message content looks like an error. */
 export function isErrorContent(content: string): boolean {
@@ -695,6 +703,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             <RotateCw size={12} aria-hidden="true" />
                             {t('msg.tryAgain')}
                         </button>
+                    )}
+                    {message.role === 'assistant' && !isStreaming && (namesFailureRecord(message.content) || namesFailureRecord(message.failureText ?? '')) && (
+                        <TroubleshootingReport classes={CHAT_REPORT_CLASSES} note={t('msg.reportNote')} />
                     )}
                     {message.role === 'assistant'
                         && !isStreaming

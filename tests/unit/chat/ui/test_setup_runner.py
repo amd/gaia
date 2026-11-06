@@ -2428,3 +2428,46 @@ def test_retry_on_a_plan_model_repeats_its_load_without_downloading(monkeypatch)
     assert not runner.busy_with(GEMMA)
     # The load check is no Test-step row; a retest of it must not add one.
     assert not any(t["subject"] == GEMMA for t in runner.status()["tests"])
+
+
+def test_report_waits_for_a_failed_runs_problem_report(monkeypatch):
+    """A report asked for the moment a run fails still names its problem report."""
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(False, state="failed")
+    runner._run = run
+    saving = threading.Event()
+
+    def slow_record(_run, _cause):
+        saving.set()
+        time.sleep(0.5)
+        return "GF-20261104-192233-3f2a"
+
+    monkeypatch.setattr(sr, "_record_setup_failure", slow_record)
+    with runner._lock:
+        runner._recording = threading.Thread(
+            target=runner._record_failure, args=(run, None), daemon=True
+        )
+    runner._recording.start()
+    assert saving.wait(5)
+
+    report = runner.report()
+
+    assert any(
+        "GF-20261104-192233-3f2a" in line
+        for line in report["log_tail"]
+        + [line for lines in report["logs"].values() for line in lines]
+    )
+    assert "problem_report" not in report
+
+
+def test_report_says_when_the_problem_report_is_still_saving(monkeypatch):
+    runner = sr.SetupRunner()
+    runner._run = sr.SetupRun(False, state="failed")
+    release = threading.Event()
+    monkeypatch.setattr(sr, "_RECORD_WAIT_S", 0.1)
+    runner._recording = threading.Thread(target=release.wait, args=(5,), daemon=True)
+    runner._recording.start()
+    try:
+        assert "still being saved" in runner.report()["problem_report"]
+    finally:
+        release.set()

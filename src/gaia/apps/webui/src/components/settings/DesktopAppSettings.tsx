@@ -17,7 +17,12 @@ const TOGGLES: Array<{ key: keyof TraySettings; label: MessageKey; hint: Message
 ];
 
 /** Toggles that only work with a tray icon to bring the window back. */
-const NEEDS_TRAY: ReadonlySet<keyof TraySettings> = new Set(['minimizeToTray', 'startMinimized']);
+const NEEDS_TRAY: ReadonlySet<keyof TraySettings> = new Set(['startMinimized']);
+
+/** Hints that change where there is no tray: closing then minimizes to the dock. */
+const NO_TRAY_HINT: Partial<Record<keyof TraySettings, MessageKey>> = {
+    minimizeToTray: 'settings.desktop.keepRunningNoTray',
+};
 
 /** Why those toggles are off, or null while they work (or the check hasn't finished). */
 function noTrayHint(host: TrayHost | null): MessageKey | null {
@@ -69,6 +74,7 @@ export function DesktopAppSettings() {
                 <span className="settings-label" id="desktop-app-label">{t('settings.desktop.title')}</span>
                 {TOGGLES.map(({ key, label, hint }) => {
                     const blockedBy = NEEDS_TRAY.has(key) ? noTray : null;
+                    const shownHint = (noTray && NO_TRAY_HINT[key]) || hint;
                     return (
                         <div key={key}>
                             <label className="setting-row">
@@ -89,7 +95,7 @@ export function DesktopAppSettings() {
                                 </span>
                             </label>
                             <p className="settings-hint" id={`desktop-${key}-hint`}>
-                                {blockedBy ? t(blockedBy) : t(hint, { tray: TRAY })}
+                                {blockedBy ? t(blockedBy) : t(shownHint, { tray: TRAY })}
                             </p>
                         </div>
                     );

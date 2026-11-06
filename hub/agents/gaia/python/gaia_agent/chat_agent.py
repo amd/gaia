@@ -6,6 +6,8 @@ Chat Agent - Interactive chat with RAG and file search capabilities.
 
 import dataclasses
 import errno
+import functools
+import importlib.util
 import os
 import platform
 import re
@@ -43,7 +45,7 @@ from gaia_agent.python_jobs import (
     stopped_job_result,
     watch_folders,
 )
-from gaia_agent.python_runner import python_command
+from gaia_agent.python_runner import BUNDLED_LIBRARIES, is_frozen, python_command
 from gaia_agent.session import SessionManager
 from gaia_agent.tool_bundles import PROFILE_TOOL_CONFIGS
 from gaia_agent.tool_requests import requested_tools
@@ -168,6 +170,59 @@ def _imports_gaia_tools(code: str) -> Optional[str]:
     return match.group(0).strip() if match else None
 
 
+#: The line in a Python tool's docstring that :func:`_lists_script_libraries` fills.
+SCRIPT_LIBRARIES_PLACEHOLDER = "{script_libraries}"
+
+
+@functools.lru_cache(maxsize=1)
+def script_libraries() -> tuple:
+    """Import names of the bundled libraries a script can import here.
+
+    A frozen build carries every one (its release smoke test imports each); a
+    source install has whatever its environment holds, and a library the
+    description names but the interpreter lacks costs a failed run.
+    """
+    if is_frozen():
+        return tuple(BUNDLED_LIBRARIES.values())
+    present = []
+    for name in BUNDLED_LIBRARIES.values():
+        try:
+            found = importlib.util.find_spec(name) is not None
+        except (ImportError, ValueError) as e:
+            logger.warning(
+                "run_python: could not check whether %s is installed, so the "
+                "tool description leaves it out: %s",
+                name,
+                e,
+            )
+            continue
+        if found:
+            present.append(name)
+    missing = [n for n in BUNDLED_LIBRARIES.values() if n not in present]
+    if missing:
+        logger.info(
+            "run_python: not installed here, left out of its description: %s",
+            ", ".join(missing),
+        )
+    return tuple(present)
+
+
+def _lists_script_libraries(f):
+    """Name, in *f*'s docstring, only the libraries a script can import here."""
+    if SCRIPT_LIBRARIES_PLACEHOLDER not in (f.__doc__ or ""):
+        raise ValueError(
+            f"{f.__name__}'s docstring has no {SCRIPT_LIBRARIES_PLACEHOLDER} line"
+        )
+    names = script_libraries()
+    line = (
+        f"Has {', '.join(names)}; no pip."
+        if names
+        else "Has only the standard library; no pip."
+    )
+    f.__doc__ = f.__doc__.replace(SCRIPT_LIBRARIES_PLACEHOLDER, line)
+    return f
+
+
 def _script_source(path: Path) -> str:
     """The script that just ran, so its output counts as a test run only if it ran one."""
     try:
@@ -176,6 +231,32 @@ def _script_source(path: Path) -> str:
         # Gone or unreadable after the run: its output alone proves nothing.
         logger.debug("execute_python_file: cannot re-read %s: %s", path, e)
         return ""
+
+
+#: Standard-library route for a bundled library this interpreter lacks.
+_STDLIB_ROUTES: Dict[str, str] = {
+    "pandas": "csv to read the file and statistics for the math",
+    "numpy": "statistics and math",
+    "openpyxl": "csv, saving a .csv file instead of a workbook",
+    "xlsxwriter": "csv, saving a .csv file instead of a workbook",
+}
+
+_MISSING_MODULE_LINE = re.compile(r"No module named '([A-Za-z_][\w.]*)'")
+
+
+def _missing_library_hint(stderr_line: str) -> Optional[str]:
+    """How to retry when a script imports a bundled library this Python lacks."""
+    match = _MISSING_MODULE_LINE.search(stderr_line or "")
+    module = match.group(1).split(".")[0] if match else None
+    if module not in BUNDLED_LIBRARIES.values():
+        return None
+    route = _STDLIB_ROUTES.get(module, "the standard library only")
+    if module in _STDLIB_ROUTES:
+        route = f"{route} from the standard library"
+    return (
+        f"{module} is not installed in this Python and pip is not available. "
+        f"Retry now without it, using {route}."
+    )
 
 
 def _python_run_result(
@@ -209,6 +290,9 @@ def _python_run_result(
         result["error"] = f"Python exited with code {code}" + (
             f": {last[:300]}" if last else ""
         )
+        hint = _missing_library_hint(last)
+        if hint:
+            result["error"] += f". {hint}"
     return result
 
 
@@ -2047,6 +2131,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     return {"status": "error", "error": str(e)}
 
             @tool(timeout_arg="timeout")
+            @_lists_script_libraries
             def execute_python_file(
                 file_path: str, args: str = "", timeout: int = DEFAULT_PYTHON_TIMEOUT
             ) -> dict:
@@ -2057,8 +2142,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 project's packages. Any other script runs from its own folder.
                 Relative paths resolve against that working directory.
 
-                Has pypdf, pypdfium2, docx, pptx, openpyxl, xlsxwriter,
-                reportlab, pandas, numpy, matplotlib; no pip.
+                {script_libraries}
 
                 Args:
                     file_path: Path to the .py file to run
@@ -2176,6 +2260,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     return {"status": "error", "error": str(e), "has_errors": True}
 
             @tool(timeout_arg="timeout")
+            @_lists_script_libraries
             def run_python(code: str, timeout: int = DEFAULT_PYTHON_TIMEOUT) -> dict:
                 """Run a Python snippet and return what it prints.
 
@@ -2187,8 +2272,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 No access to your tools: `from gaia import <tool>` fails —
                 call it directly as a tool.
 
-                Has pypdf, pypdfium2, docx, pptx, openpyxl, xlsxwriter,
-                reportlab, pandas, numpy, matplotlib; no pip.
+                {script_libraries}
 
                 Args:
                     code: Python source to run; print() whatever you need back.

@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -254,6 +254,19 @@ const audit = (page: Page): Promise<string[]> =>
             const rtl = getComputedStyle(reply).direction === 'rtl';
             const gap = rtl ? box.right - inner.right : inner.left - box.left;
             if (gap < 8) problems.push(`failed reply's text touches its bar (${Math.round(gap)}px): ${label(reply)}`);
+        }
+
+        // An amount with its unit or sign reads as one token; split over two lines it reads as two.
+        for (const amount of document.querySelectorAll('.popover bdi[dir="ltr"]')) {
+            const text = amount.textContent?.trim() ?? '';
+            if (!shown(amount) || text.length > 16 || !/\d/.test(text)) continue;
+            const lines = new Set([...amount.getClientRects()].map((r) => Math.round(r.top)));
+            if (lines.size > 1) problems.push(`an amount wraps across lines: ${label(amount)}`);
+        }
+
+        // A popover that opens scrolled down hides its first lines behind the fold.
+        for (const popover of document.querySelectorAll('.popover')) {
+            if (shown(popover) && popover.scrollTop > 0) problems.push(`popover opens scrolled past its top: ${label(popover)}`);
         }
 
         // An icon and its label need space between them, in either direction.
@@ -925,7 +938,8 @@ for (const locale of ['ar', 'en']) {
         await expect(desktop).toBeVisible();
         await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
         await desktop.scrollIntoViewIfNeeded();
-        await expect(desktop.locator('#desktop-minimizeToTray-hint')).toContainText('AppIndicator');
+        await expect(desktop.locator('#desktop-minimizeToTray-hint')).not.toContainText('AppIndicator');
+        await expect(desktop.locator('#desktop-minimizeToTray-hint')).toContainText(locale === 'ar' ? 'شريط التطبيقات' : 'dock');
         await shot(page, `desktop-${locale}-no-tray`);
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
@@ -984,6 +998,57 @@ for (const locale of ['ar', 'en']) {
         });
     }
 }
+
+const FLASH = 'fireworks.deepseek-v4p1-flash';
+
+/** The answer chat on DeepSeek on Fireworks, with three priced answers and a stopped one. */
+async function withCloudSpending(page: Page): Promise<void> {
+    const sessions = SESSIONS.map((s) => (s.id === ANSWER_SESSION
+        ? { ...s, model: FLASH, effective_model: FLASH, inference_remote: true, inference_provider: 'fireworks', inference_provider_name: 'Fireworks AI' }
+        : s));
+    await page.route((url) => url.pathname === '/api/sessions', (route) => route.fulfill({ json: { sessions, total: sessions.length } }));
+    await page.route('**/api/providers/active', (route) => route.fulfill({
+        json: { provider: 'fireworks', model: FLASH, label: 'DeepSeek V4.1 Flash', remote: true, is_default: false, restore: { status: 'none', message: null } },
+    }));
+    const at = (minutesAgo: number) => new Date(NOW.getTime() - minutesAgo * 60_000).toISOString();
+    await page.route((url) => url.pathname === `/api/spending/chat/${ANSWER_SESSION}`, (route) => route.fulfill({
+        json: {
+            paid: true, model: FLASH, price_source: 'Fireworks AI list price',
+            chat: {
+                usd: 0.0431, answers: 4, unpriced_answers: 1,
+                items: [
+                    { message_id: 2, created_at: at(40), model: 'DeepSeek V4.1 Flash', kind: 'estimate', usd: 0.0214 },
+                    { message_id: 4, created_at: at(25), model: 'DeepSeek V4.1 Flash', kind: 'estimate', usd: 0.0008 },
+                    { message_id: 6, created_at: at(12), model: 'DeepSeek V4.1 Flash', kind: 'unreported', usd: null },
+                    { message_id: 8, created_at: at(2), model: 'DeepSeek V4.1 Flash', kind: 'estimate', usd: 0.0209 },
+                ],
+            },
+            today: { usd: 0.3127, answers: 19, unpriced_answers: 1, chats: 5, since: NOW.toISOString() },
+        },
+    }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`cloud spending chip and breakdown (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withCloudSpending);
+        const chip = page.locator('.spend-meter');
+        await expect(chip).toContainText('$0.04');
+        await expect(chip).toContainText('$0.31');
+        await shot(page, `spend-chip-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        await chip.click();
+        await expect(page.locator('.spend-meter-answers .context-meter-row')).toHaveCount(4);
+        await shot(page, `spend-popover-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.spend-meter-panel')).toEqual([]);
+    });
+}
+
+test('no spending chip on a model on this PC', async ({ page }) => {
+    await open(page, `#${ANSWER_SESSION}`, 'en');
+    await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+    await expect(page.locator('.spend-meter')).toHaveCount(0);
+});
 
 for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
     test(`settings ${section} pane has no leftover English`, async ({ page }) => {
@@ -1246,6 +1311,36 @@ async function expectVisibleTryAgain(page: Page, locale: string): Promise<void> 
         return o;
     });
     expect(opacity).toBeGreaterThan(0.99);
+}
+
+const FAILED_WITH_REPORT =
+    "The model call failed at step 1, so this request is unfinished. Couldn't reach the local LLM.\n\n"
+    + 'Nothing had run yet.\n\n'
+    + 'A problem report for this was saved on this PC as GF-20261104-192233-3f2a; nothing was sent anywhere.';
+
+/** A chat whose last turn failed and named the problem report GAIA saved for it. */
+async function withFailureReport(page: Page): Promise<void> {
+    await page.route(new RegExp(`/api/sessions/${ANSWER_SESSION}/messages(\\?|$)`), (route) => route.fulfill({
+        json: {
+            messages: [
+                { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Summarize the minutes', created_at: '2026-11-04T19:22:00Z', rag_sources: null },
+                { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: FAILED_WITH_REPORT, created_at: '2026-11-04T19:22:33Z', rag_sources: null },
+            ],
+            total: 2,
+        },
+    }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a failed answer offers its troubleshooting report (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFailureReport);
+        const report = page.locator('.msg-report');
+        await expect(report.getByRole('button')).toHaveText(locale === 'ar' ? /حفظ تقرير لاستكشاف الأخطاء/ : /Save a troubleshooting report/);
+        await expect(report.locator('.msg-report-hint')).toContainText(locale === 'ar' ? 'لا يُرسَل شيء' : 'nothing is sent');
+        await report.scrollIntoViewIfNeeded();
+        await shot(page, `failed-answer-report-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
 
 const PARTIAL_ANSWER = 'Coral reefs cover less than one percent of the ocean floor.';

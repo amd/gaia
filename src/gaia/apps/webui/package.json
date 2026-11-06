@@ -3,6 +3,7 @@
   "version": "0.25.4",
   "type": "module",
   "productName": "GAIA Agent UI",
+  "desktopName": "gaia-desktop.desktop",
   "description": "Chat with the GAIA agent - local and private by default on AMD Ryzen AI, cloud models when you choose them",
   "author": "AMD AI Group",
   "license": "MIT",
