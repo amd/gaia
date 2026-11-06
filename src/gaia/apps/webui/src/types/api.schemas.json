@@ -2034,6 +2034,174 @@
     "title": "HTTPValidationError",
     "type": "object"
   },
+  "ImageModel": {
+    "properties": {
+      "default_size": {
+        "title": "Default Size",
+        "type": "string"
+      },
+      "default_steps": {
+        "title": "Default Steps",
+        "type": "integer"
+      },
+      "downloaded": {
+        "title": "Downloaded",
+        "type": "boolean"
+      },
+      "downloads_on_first_use": {
+        "title": "Downloads On First Use",
+        "type": "boolean"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "recipe": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Recipe"
+      },
+      "size_gb": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Size Gb"
+      },
+      "sizes": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Sizes",
+        "type": "array"
+      }
+    },
+    "required": [
+      "id",
+      "downloaded",
+      "downloads_on_first_use",
+      "default_size",
+      "default_steps",
+      "sizes"
+    ],
+    "title": "ImageModel",
+    "type": "object"
+  },
+  "ImageSettings": {
+    "properties": {
+      "chat_model": {
+        "title": "Chat Model",
+        "type": "string"
+      },
+      "chat_model_creates_images": {
+        "title": "Chat Model Creates Images",
+        "type": "boolean"
+      },
+      "max_steps": {
+        "default": 100,
+        "title": "Max Steps",
+        "type": "integer"
+      },
+      "model": {
+        "title": "Model",
+        "type": "string"
+      },
+      "model_available": {
+        "title": "Model Available",
+        "type": "boolean"
+      },
+      "models": {
+        "items": {
+          "$ref": "#/components/schemas/ImageModel"
+        },
+        "title": "Models",
+        "type": "array"
+      },
+      "size": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Size"
+      },
+      "steps": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Steps"
+      }
+    },
+    "required": [
+      "model",
+      "size",
+      "steps",
+      "models",
+      "model_available",
+      "chat_model",
+      "chat_model_creates_images"
+    ],
+    "title": "ImageSettings",
+    "type": "object"
+  },
+  "ImageSettingsUpdate": {
+    "description": "Fields left out keep their value; ``null`` size or steps means automatic.",
+    "properties": {
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "size": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Size"
+      },
+      "steps": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Steps"
+      }
+    },
+    "title": "ImageSettingsUpdate",
+    "type": "object"
+  },
   "IndexFolderRequest": {
     "description": "Request to index all supported documents in a folder.",
     "properties": {

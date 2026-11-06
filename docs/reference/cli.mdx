@@ -1856,6 +1856,9 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `undo_retention_days` | `7` | Days to keep the copies that let a turn's file changes be undone — see [Undo a turn](/guides/agent-ui#undo-a-turn) |
 | `undo_max_mb` | `500` | Megabytes those copies may use; the oldest turns are removed first; the size limit never removes the newest |
 | `project_context` | _(unset = auto)_ | Whether the agent puts a repository's `CLAUDE.md`, `AGENTS.md` and `.claude/skills` in its prompt: `full`, `off`, or `auto` to decide per model (Claude gets them, other models don't). `GAIA_PROJECT_CONTEXT` overrides it — see [Project instructions and skills](/guides/project-map#project-instructions-and-skills) |
+| `image_model` | _(unset = `SDXL-Turbo`)_ | The Lemonade model GAIA creates images with when a request names none — see [Settings → Image creation](/guides/agent-ui#settings) |
+| `image_size` | _(unset = auto)_ | `WIDTHxHEIGHT` for those images, or `auto` for the model's own default. Sizes differ per model, so set it to `auto` when you change `image_model` here (Settings and `/image` do that for you) |
+| `image_steps` | _(unset = auto)_ | Generation steps (1–100), or `auto` for the model's own default |
 | `network_policy` | `cloud_allowed` | `local_ai_only` makes GAIA refuse every cloud AI model — see [Local only](#local-only). Stored in `~/.gaia/policy.json`, not in `config.json` |
 
 ### Local only

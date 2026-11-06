@@ -16,6 +16,7 @@ export type SettingsSection =
     | 'general'
     | 'setup'
     | 'model'
+    | 'images'
     | 'permissions'
     | 'skills'
     | 'connectors'

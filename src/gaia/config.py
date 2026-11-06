@@ -12,10 +12,11 @@ Stored at ``~/.gaia/config.json``.
 import json
 import logging
 import os
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Dict, Iterator, List, Optional
+from typing import Any, Callable, ClassVar, Dict, Iterator, List, Optional, Tuple
 
 # Re-exported: the resolver lives in a leaf module so gaia.logger can use it.
 from gaia.home import (  # noqa: F401  pylint: disable=unused-import
@@ -62,6 +63,54 @@ class GaiaConfigError(Exception):
     but corrupt/unreadable* file is, so it surfaces loudly instead of being
     silently swallowed into defaults.
     """
+
+
+#: The most image-generation steps a saved setting may ask for.
+IMAGE_MAX_STEPS = 100
+
+_IMAGE_SIZE_RE = re.compile(r"^([1-9][0-9]{1,4})x([1-9][0-9]{1,4})$")
+
+
+def parse_image_size(size: str) -> Tuple[int, int]:
+    """``(width, height)`` for a ``WIDTHxHEIGHT`` string; raises ValueError otherwise."""
+    match = _IMAGE_SIZE_RE.match(str(size).strip())
+    if not match:
+        raise ValueError(
+            f"Image size must be WIDTHxHEIGHT, such as 1024x1024, got {size!r}."
+        )
+    return int(match.group(1)), int(match.group(2))
+
+
+def check_image_setting(key: str, value: Any) -> Any:
+    """*value* for ``image_model``, ``image_size`` or ``image_steps``, with
+    ``auto`` or empty meaning the model's default; raises on anything else.
+
+    Only the shape is checked here: whether a model takes a size needs
+    Lemonade's catalog, which :mod:`gaia.sd.settings` reads.
+    """
+    word = str(value if value is not None else "").strip()
+    if not word or word.lower() == "auto":
+        return None
+    if key == "image_model":
+        return word
+    if key == "image_size":
+        try:
+            width, height = parse_image_size(word)
+        except ValueError as e:
+            raise GaiaConfigError(f"image_size: {e}") from e
+        return f"{width}x{height}"
+    try:
+        steps = int(word)
+    except ValueError as e:
+        raise GaiaConfigError(
+            f"image_steps must be a whole number from 1 to {IMAGE_MAX_STEPS}, or auto; "
+            f"got {value!r}."
+        ) from e
+    if not 1 <= steps <= IMAGE_MAX_STEPS:
+        raise GaiaConfigError(
+            f"image_steps must be from 1 to {IMAGE_MAX_STEPS}, or auto; got {steps}."
+        )
+    return steps
 
 
 class UnsafeGaiaHomeError(RuntimeError):
@@ -167,6 +216,13 @@ class GaiaConfig:
             ``.claude/skills`` the agent puts in its prompt: ``full``, ``off``,
             or ``None`` (set it to ``auto``) to decide per model. See
             :mod:`gaia.project_context`.
+        image_model: The Lemonade model GAIA creates images with when the
+            request names none. ``None`` uses SDXL-Turbo. The Agent UI and the
+            TUI share it.
+        image_size: ``WIDTHxHEIGHT`` for those images, or ``None`` (set it to
+            ``auto``) for the model's own default.
+        image_steps: Generation steps, or ``None`` (``auto``) for the model's
+            default. More steps add detail and time.
         dynamic_tools: Start a flagship session on its most-used tools, in short
             form, and move to every tool at most once, so the first reply reads
             less and the prompt cache survives. Applies to new sessions.
@@ -191,6 +247,9 @@ class GaiaConfig:
     undo_max_mb: int = 500
     skipped_models: List[str] = field(default_factory=list)
     project_context: Optional[str] = None
+    image_model: Optional[str] = None
+    image_size: Optional[str] = None
+    image_steps: Optional[int] = None
     dynamic_tools: bool = True
 
     #: Field values as last read from or written to the file (not a field).
@@ -238,6 +297,8 @@ class GaiaConfig:
             return cls._coerce_model_list(value)
         if key == "project_context":
             return cls._check_project_context(value, "gaia config", "Use one of those.")
+        if key in ("image_model", "image_size", "image_steps"):
+            return check_image_setting(key, value)
         if cls._is_int_field(key):
             return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):

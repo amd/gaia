@@ -1008,6 +1008,32 @@ Deleting a chat deletes its copies.
   </Accordion>
 </AccordionGroup>
 
+### Image creation
+
+<AccordionGroup>
+  <Accordion title="GET /api/images/settings">
+    The saved image model, size and steps, and the models this Lemonade
+    offers: `{"model": "SDXL-Turbo", "size": null, "steps": null,
+    "max_steps": 100, "models": [{"id": "Z-Image-Turbo", "downloaded": true,
+    "downloads_on_first_use": false, "default_size": "1024x1024",
+    "default_steps": 9, "sizes": ["512x512", "1024x1024", ...]}, ...],
+    "model_available": true, "chat_model": "Qwen3.6-35B-A3B-GGUF",
+    "chat_model_creates_images": true}`. `null` size or steps is the model's
+    own default. Models are the downloaded image models plus the legacy SD
+    models that download on first use; sizes stay under each model's
+    `soft_pixel_cap`. Stored as `image_model`, `image_size` and `image_steps`
+    in `~/.gaia/config.json`, which the TUI reads too. **503** when Lemonade's
+    catalog can't be read.
+  </Accordion>
+
+  <Accordion title="PUT /api/images/settings">
+    Save any of `model`, `size` (`WIDTHxHEIGHT`, or `null` for automatic) and
+    `steps` (1–100, or `null`). A new model resets size and steps to automatic
+    unless the request sets them. **422** names a model that isn't on this
+    Lemonade or a size it doesn't take, and nothing is saved.
+  </Accordion>
+</AccordionGroup>
+
 ### Chat
 
 <AccordionGroup>

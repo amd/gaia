@@ -28,6 +28,7 @@ import {
     Circle,
     Sparkles,
     Link,
+    ImageIcon,
     AudioLines,
     Captions,
     type LucideIcon,
@@ -107,6 +108,8 @@ const TOOL_ICON: Record<string, LucideIcon> = {
     forget: Brain,
     forget_everything: Brain,
     search_past_conversations: Brain,
+    // Images
+    generate_image: ImageIcon,
     request_user_input: MessageCircleQuestionMark,
     // Skills
     load_skill: Sparkles,
@@ -632,9 +635,9 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                         value={statusFilter}
                         onChange={(e) => setStatusFilter(e.target.value as 'all' | 'success' | 'error')}
                     >
-                        <option value="all">{t('activity.filter.all')}</option>
-                        <option value="success">{t('activity.filter.success')}</option>
-                        <option value="error">{t('activity.filter.error')}</option>
+                        <option value="all">{t.bare('activity.filter.all')}</option>
+                        <option value="success">{t.bare('activity.filter.success')}</option>
+                        <option value="error">{t.bare('activity.filter.error')}</option>
                     </select>
                 </div>
             )}

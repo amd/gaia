@@ -839,7 +839,7 @@ much they use now.
 
 One window with General (language; appearance: Light, Dark, Match system; colors; the
 [desktop app's tray switches](#the-tray-icon); shortcuts),
-Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, the `.claude/skills` folder of the project GAIA is working in, or your other Claude Code skill folders, with **Use** to try one),
+Model, Image creation, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, the `.claude/skills` folder of the project GAIA is working in, or your other Claude Code skill folders, with **Use** to try one),
 Connectors, Memory, Notifications, Privacy and Advanced (model server and
 llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
 back).
@@ -878,6 +878,17 @@ at the bottom of the sidebar shows whether the model is loaded, warming up or
 stopped, where it runs, memory in use and free, and its context window, with a
 **Restart** button. On a Lemonade you run yourself, GAIA asks before Restart
 reloads its model and never starts that server for you.
+
+**Settings → Image creation** picks the model GAIA makes pictures with, the
+size and the number of steps (more steps add detail and time). The models are
+the image models downloaded in Lemonade, plus the older SD models that download
+the first time you use them; each offers only the sizes it handles well.
+**Automatic** keeps the model's own size or steps. Asking for a size or a
+model in the chat still overrides these. On a chat model too small to be
+offered image creation (Gemma 4 E4B), the section says so and links to
+**Settings → Model**. A created image shows in the chat, and the activity line
+reads "Created an image". The [terminal app](/guides/tui) uses the same
+settings.
 
 **Settings → Notifications** picks, for each event (needs your approval, has a
 question, finished), a **Banner**, a **Badge** only, or **Off**, plus a sound

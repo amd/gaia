@@ -34,8 +34,11 @@ they did not say, and build that instead.
 
 Call `list_sd_models()` first. It lists downloaded image models, including
 TheNoise models. Select an exact model ID from its `models` list, and read
-`image_defaults`. The `default_model` is only used when `model` is omitted.
-Do not assume a model is resident or silently switch to a different model.
+`image_defaults`. `default_model` is the image model the user chose in their
+settings (SDXL-Turbo when they chose none). Omit `model`, or pass
+`default_model`, and GAIA also uses the size and steps they chose; name another
+model only when they ask for it. Do not assume a model is resident or silently
+switch to a different model.
 
 Legacy SD models include approximate time estimates. For TheNoise models,
 no reliable device-independent estimate is available; do not invent one.
@@ -55,11 +58,11 @@ Then say the expanded prompt back to the user with the result. They cannot
 correct a prompt they never saw, and "make it warmer" is only meaningful if
 they know what you asked for.
 
-## The default is a few-step model — do not over-tune it
+## Few-step models — do not over-tune them
 
-SDXL-Turbo is the default and it is distilled to converge in about **4 steps**
-with **CFG around 1.0**. The knobs that matter on a normal model do nothing
-useful here:
+SDXL-Turbo, the default when the user has chosen no model, and the other Turbo
+and distilled models converge in about **4 steps** with **CFG around 1.0**. The
+knobs that matter on a normal model do nothing useful on them:
 
 - Raising `steps` to 30 costs seven times the wall clock and does not improve
   the image.
@@ -68,7 +71,8 @@ useful here:
 - Long negative-prompt boilerplate ("blurry, low quality, watermark, extra
   fingers…") is wasted. Spend those words describing what you *do* want.
 
-Leave `steps`, `cfg_scale`, and `size` unset unless you have a reason. The
+Leave `steps`, `cfg_scale`, and `size` unset unless you have a reason: GAIA
+then uses the size and steps the user chose, or the model's own. The
 legacy SD models use their historical defaults; TheNoise models use Lemonade's
 per-model image defaults. Never force SDXL's 20 steps or 7.5 CFG onto a
 4-step or 8-step distilled TheNoise model.
