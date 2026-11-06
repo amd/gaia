@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
-import logging
 import secrets
 import sys
 import threading
@@ -29,6 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 from pydantic import BaseModel, Field
 
 from gaia.config import GaiaConfig, GaiaConfigError
+from gaia.logger import get_logger
 from gaia.voice.audio import ASR_RATE, TTS_RATE
 from gaia.voice.errors import VoiceError
 from gaia.voice.lemonade import (
@@ -41,7 +41,7 @@ from gaia.voice.lemonade import (
 )
 from gaia.voice.session import FRAME_MS, VoiceOptions, VoiceSession
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 PREFIX = "/daemon/v1/voice"
 #: The only models this router will download: the speech models voice uses.

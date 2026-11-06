@@ -10,13 +10,13 @@ See docs/plans/voice.mdx.
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
 from gaia.config import GaiaConfig, GaiaConfigError
+from gaia.logger import get_logger
 from gaia.ui.security import is_allowed_host, is_allowed_origin
 from gaia.voice.errors import VoiceError
 from gaia.voice.lemonade import (
@@ -28,7 +28,7 @@ from gaia.voice.lemonade import (
     resolve_target,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter(tags=["voice"])
 

@@ -223,6 +223,8 @@ func (c *Conn) send(v map[string]string) error {
 	case <-c.done:
 		return errors.New("the voice session has ended")
 	default:
+		// Close off the hot path: Close writes to the socket and may block.
+		go c.Close()
 		return errors.New("the voice session is not keeping up; it was closed")
 	}
 }

@@ -111,6 +111,7 @@ class VoiceSession:
         self._last_level = 0.0
         self._started_at = 0.0
         self._closed = False
+        self._limit_sent = False
         self.speaking = False
 
     # ---- lifecycle -------------------------------------------------------
@@ -169,8 +170,10 @@ class VoiceSession:
             self.options.purpose == "dictation"
             and time.monotonic() - self._started_at > MAX_DICTATION_SECONDS
         ):
-            await self._emit({"type": "limit", "seconds": MAX_DICTATION_SECONDS})
-            await self.commit()
+            if not self._limit_sent:
+                self._limit_sent = True
+                await self._emit({"type": "limit", "seconds": MAX_DICTATION_SECONDS})
+                await self.commit()
             return
         await self._listener.send_pcm16(frame)
         now = time.monotonic()
