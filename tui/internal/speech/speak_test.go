@@ -111,17 +111,9 @@ func TestStoppingMidPlayKillsPlaybackAndCleansUp(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v", err)
 	}
-	// The prefetched second file is removed by a goroutine once it lands.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		matches, _ := os.ReadDir(dir)
-		if len(matches) == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("temporary audio left behind: %v", matches)
-		}
-		time.Sleep(10 * time.Millisecond)
+	// Nothing may land after Speak returns: the caller's temp dir is cleaned then.
+	if matches, _ := os.ReadDir(dir); len(matches) != 0 {
+		t.Fatalf("temporary audio left behind: %v", matches)
 	}
 }
 
