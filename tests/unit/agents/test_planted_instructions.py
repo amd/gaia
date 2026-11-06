@@ -424,3 +424,11 @@ def test_the_note_does_not_carry_into_the_next_turn(reader):
     chat.send_messages = MagicMock(return_value=resp)
     reader.chat = chat
     assert "Heads up:" not in reader.process_query("capital?", max_steps=2)["result"]
+
+
+def test_the_flag_survives_a_result_too_large_for_context(reader):
+    reader.file_text = ("filler line of an ordinary build log\n" * 20000) + BUILD_LOG
+    sent = _script(reader, "The cart total test failed.")
+    result = reader.process_query("why did the build fail?", max_steps=4)
+    assert PLANTED_INSTRUCTIONS_KEY in sent[-1]
+    assert "Heads up:" in result["result"]
