@@ -98,6 +98,12 @@ answer, so it can be piped or captured; progress, warnings and logs go to
 stderr. GAIA starts Lemonade Server through the daemon if it is not running, so
 there is nothing to launch first.
 
+Where the agent ships as its own program, as in the desktop app, the terminal
+installers and the one-line installer, `gaia -p` and `gaia chat` run it through
+GAIA's background service in the current folder. Confirmation-gated tools are
+refused there, so `--dangerously-skip-permissions`, `--full-access` and
+`--base-url` work only with the agent package installed, as in a source checkout.
+
 ```bash
 gaia -p "Summarize README.md in three bullets"
 gaia -p "Reply with exactly: pong" --model amd.DeepSeek-V4.1-Flash

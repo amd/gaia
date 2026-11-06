@@ -1261,8 +1261,7 @@ def resolve_installable_version(
         raise CoreTooOldError(
             f"No published version of '{agent_id}' runs on GAIA {core}: the "
             f"oldest needs GAIA {required} or newer. Upgrade with "
-            f"`{catalog_mod.CORE_UPGRADE_COMMAND}` (or re-run the installer from "
-            f"https://amd-gaia.ai), then install '{agent_id}' again.",
+            f"{catalog_mod.core_upgrade_hint()}, then install '{agent_id}' again.",
             required=required,
             core=core,
         )
@@ -1277,8 +1276,8 @@ def resolve_installable_version(
         )
         raise CoreTooOldError(
             f"'{agent_id}' {version} needs GAIA {floor} or newer, and this is "
-            f"GAIA {core}. Upgrade with `{catalog_mod.CORE_UPGRADE_COMMAND}` (or "
-            f"re-run the installer from https://amd-gaia.ai), then retry.{hint}",
+            f"GAIA {core}. Upgrade with {catalog_mod.core_upgrade_hint()}, "
+            f"then retry.{hint}",
             required=floor,
             core=core,
         )

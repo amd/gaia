@@ -327,6 +327,8 @@ def run_query(
     renderer: Optional[ConsoleRenderer] = None,
     verbose: bool = False,
     trace: bool = False,
+    working_directory: Optional[str] = None,
+    allowed_paths: Optional[List[str]] = None,
 ) -> QueryOutcome:
     """Ensure the daemon + *agent_id* sidecar, stream ``POST /v1/<agent>/query``
     through the relay, and render the canonical SSE events.
@@ -344,6 +346,9 @@ def run_query(
     as ``QueryOutcome.trace_path``) — the relay-path equivalent of the in-process
     agent's ``--trace``, which has no agent object here to introspect. A run cut
     short by Ctrl-C or a dead sidecar still writes what it saw.
+
+    ``working_directory`` and ``allowed_paths`` give the agent the caller's
+    folder, as an in-process agent run from it would have; omitted, likewise.
 
     The CLI presents ONLY the daemon client token; it never learns the sidecar's
     port or bearer. Returns a :class:`QueryOutcome` whose ``exit_code`` is 0 on a
@@ -370,6 +375,10 @@ def run_query(
         payload["max_steps"] = max_steps
     if session_id:
         payload["session_id"] = session_id
+    if working_directory:
+        payload["working_directory"] = working_directory
+    if allowed_paths:
+        payload["allowed_paths"] = list(allowed_paths)
 
     url = f"{inst.base_url}/v1/{agent_id}/query"
     headers = {

@@ -111,11 +111,9 @@ var Binary = func() (string, error) {
 	bin, err := ResolveCLI()
 	if err != nil {
 		return "", fmt.Errorf(
-			"%w: the `gaia` CLI is not on PATH or in ~/.gaia/bin, so setup cannot run. "+
-				"Install GAIA with `"+InstallCommand+"` "+
-				"(on Windows: `"+InstallPowerShellCommand+"`), or "+
-				"`pip install amd-gaia` into the Python environment on your PATH, "+
-				"then retry. From a clone of the repo, `pip install -e .` works too",
+			"%w: the `gaia` CLI is not beside gaia-tui, on PATH or in ~/.gaia/bin, so setup cannot run. "+
+				"Reinstall GAIA from https://amd-gaia.ai/#install, or run `"+InstallCommand+"` "+
+				"(on Windows: `"+InstallPowerShellCommand+"`), then retry",
 			ErrNoCLI)
 	}
 	return bin, nil
