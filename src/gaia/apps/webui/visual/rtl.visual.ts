@@ -656,10 +656,11 @@ interface ModelPageOptions {
     models?: unknown[];
     status?: unknown;
     theme?: 'light' | 'dark';
+    fireworks?: Record<string, unknown>;
 }
 
-async function openModelPage(page: Page, locale: string, { models = MODEL_LIST, status, theme = 'light' }: ModelPageOptions = {}): Promise<void> {
-    await open(page, '', locale, (p) => withModelPage(p, models, SETUP_PLAN, status), theme);
+async function openModelPage(page: Page, locale: string, { models = MODEL_LIST, status, theme = 'light', fireworks }: ModelPageOptions = {}): Promise<void> {
+    await open(page, '', locale, (p) => withModelPage(p, models, SETUP_PLAN, status, fireworks), theme);
     const sidebar = page.getByRole('button', { name: /Open sidebar/ });
     if (await sidebar.isVisible()) await sidebar.click();
     await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -755,6 +756,15 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('.settings-card .model-row').first()).toBeVisible();
             await expect(page.locator('.model-in-use .is-device')).toHaveText('GPU');
             await shot(page, `model-${locale}-cloud`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('an environment key that is not connected says why there are no models', async ({ page }) => {
+            await openModelPage(page, locale, { fireworks: { key_source: 'environment', key_from_gaia_env: true, key_hint: null, models_discovered: false } });
+            await page.getByRole('radio', { name: /Fireworks AI/ }).click();
+            await expect(page.locator('.settings-key-masked')).toBeVisible();
+            await expect(page.locator('.settings-key-status.settings-error')).toBeVisible();
+            await shot(page, `model-${locale}-cloud-env-key-not-connected`);
             expect(await audit(page)).toEqual([]);
         });
 

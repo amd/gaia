@@ -36,9 +36,15 @@ const RESTORE_RETRIES = 24;
 export const MODEL_RETRY_INITIAL_MS = 1_000;
 export const MODEL_RETRY_MAX_MS = 30_000;
 let restoreRetries = 0;
+let restoreTimer: ReturnType<typeof setTimeout> | null = null;
 let namesRequested = false;
 let failRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let failRetryMs = MODEL_RETRY_INITIAL_MS;
+
+function clearRestoreRetry(): void {
+    if (restoreTimer) clearTimeout(restoreTimer);
+    restoreTimer = null;
+}
 
 function clearFailRetry(): void {
     if (failRetryTimer) clearTimeout(failRetryTimer);
@@ -48,6 +54,7 @@ function clearFailRetry(): void {
 /** Forget pending retries and backoff, so each test starts from a fresh launch. */
 export function resetModelRetryForTests(): void {
     clearFailRetry();
+    clearRestoreRetry();
     failRetryMs = MODEL_RETRY_INITIAL_MS;
     restoreRetries = 0;
     namesRequested = false;
@@ -81,17 +88,20 @@ export const useModelStore = create<ModelState>((set, get) => ({
             clearFailRetry();
             failRetryMs = MODEL_RETRY_INITIAL_MS;
             const r = active.restore;
-            // The model server is still starting; the saved model is checked once it answers.
-            if (r?.status === 'pending' && restoreRetries < RESTORE_RETRIES) {
+            // The server is still starting, or a cloud key may arrive: check the saved model again.
+            const recheck = r?.status === 'pending' || (r?.status === 'failed' && r.retry);
+            if (recheck && !restoreTimer && restoreRetries < RESTORE_RETRIES) {
                 restoreRetries += 1;
-                setTimeout(() => { void get().refresh(); }, RESTORE_RETRY_MS);
+                restoreTimer = setTimeout(() => { restoreTimer = null; void get().refresh(); }, RESTORE_RETRY_MS);
             }
+            const recovered = (r?.status === 'restored' || r?.status === 'none') && !r.message
+                && get().restoreNotice?.ok === false;
             set({
                 active,
                 error: null,
                 ...(r && r.status !== 'none' && r.message
                     ? { restoreNotice: { ok: r.status === 'restored', message: r.message } }
-                    : {}),
+                    : recovered ? { restoreNotice: null } : {}),
             });
         } catch (err) {
             set({ error: err instanceof Error ? err.message : String(err) });
@@ -111,6 +121,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     },
     select: async (model) => {
         forgetModelChecks();
+        clearRestoreRetry();
         const active = await api.selectModel(model);
         // Sessions name the model they run; refetch so the chip doesn't lag a poll behind.
         let sessions: Session[] | null = null;
