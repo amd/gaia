@@ -280,11 +280,8 @@ TURN_RECALL_MIN_FIELD = 8
 #: Memories scored to measure the field.
 TURN_RECALL_FIELD_SIZE = 200
 
-#: forget() given the user's words instead of an id: memories looked up, and
-#: the similarity that alone makes one a match. Above the recall bar, since a
-#: wrong match erases the wrong memory.
+#: forget() given the user's words instead of an id: memories looked up.
 FORGET_LOOKUP_TOP_K = 10
-FORGET_SURE_SIMILARITY = 0.6
 #: Words that say nothing about which memory a forget means.
 _FORGET_FILLER = frozenset(
     "a an and the to of for in on at or that this these those it its is am are "
@@ -2228,9 +2225,11 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         Candidates come from the search ``recall`` runs, scoped like turn
         recall, and must share a naming word or clear the recall floor. One
-        matches when it holds every naming word of the description, or scores
-        FORGET_SURE_SIMILARITY on meaning, and is about the same person with
-        the same polarity (``_forget_sure_of``). Two matches are no match.
+        matches when it holds every naming word of the description and is
+        about the same person with the same polarity (``_forget_sure_of``).
+        Two matches are no match. Meaning alone only makes a candidate for the
+        model to confirm by id: "allergic to peanuts" scores 0.62 on "User is
+        allergic to shellfish".
         """
         ctx = self._memory_context
         contexts = None if ctx == "global" else (ctx, "global")
@@ -2254,14 +2253,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             if shared or similarity.get(item["id"], 0.0) >= TURN_RECALL_MIN_SIMILARITY:
                 candidates.append(item)
         # Filler alone names no memory, whatever it scores.
+        if not words:
+            return None, candidates
         matches = [
             item
             for item in candidates
-            if words
-            and (
-                words <= _forget_words(str(item.get("content", "")))
-                or similarity.get(item["id"], 0.0) >= FORGET_SURE_SIMILARITY
-            )
+            if words <= _forget_words(str(item.get("content", "")))
         ]
         if len(matches) == 1 and _forget_sure_of(description, matches[0]):
             return matches[0], candidates

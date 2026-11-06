@@ -24,7 +24,7 @@ import pytest
 
 faiss = pytest.importorskip("faiss")
 
-from gaia.agents.base.memory import FORGET_SURE_SIMILARITY, MemoryMixin
+from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.memory_store import MemoryStore
 from gaia.agents.base.tool_outcome import tool_result_failed
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -177,21 +177,88 @@ def test_a_description_matching_nothing_erases_nothing(store):
     assert store.get_item(tea) is not None
 
 
-def test_a_sure_similarity_alone_is_a_match(store):
-    """A paraphrase shares no words but scores clear of the bar on meaning."""
-    host = _Host(store)
-    shellfish, tea = host.save(SHELLFISH), host.save(TEA)
-    near = 0.9 * _hashed(SHELLFISH) + 0.1 * _hashed("seafood")
-    host.vectors["my seafood allergy"] = near / np.linalg.norm(near)
-    assert float(host.vectors["my seafood allergy"] @ _hashed(SHELLFISH)) >= (
-        FORGET_SURE_SIMILARITY
+def _scoring(words: str, content: str, score: float) -> Dict[str, np.ndarray]:
+    """An embedding for *words* whose cosine with *content* is exactly *score*."""
+    target = _hashed(content)
+    other = _hashed(words) - float(_hashed(words) @ target) * target
+    other = other / np.linalg.norm(other)
+    vec = score * target + float(np.sqrt(1 - score**2)) * other
+    return {words: vec.astype(np.float32)}
+
+
+def test_meaning_alone_is_a_candidate_not_an_erase(store):
+    """A paraphrase sharing no words is offered for the model to confirm by id."""
+    result, ids, kept = _forget(
+        store,
+        [SHELLFISH, TEA],
+        "my seafood allergy",
+        vectors=_scoring("my seafood allergy", SHELLFISH, 0.9),
     )
 
+    assert result["status"] == "error"
+    assert tool_result_failed(result)
+    assert "Nothing was erased" in result["message"]
+    assert ids[0] in [c["knowledge_id"] for c in result["candidates"]]
+    assert kept == ids
+
+
+def test_a_sibling_memory_close_in_meaning_is_not_erased(store):
+    """ "allergic to peanuts" scored 0.62 on the shellfish allergy and erased it."""
+    result, ids, kept = _forget(
+        store,
+        [SHELLFISH, TEA],
+        "allergic to peanuts",
+        vectors=_scoring("allergic to peanuts", SHELLFISH, 0.62),
+    )
+
+    assert result["status"] == "error"
+    assert ids[0] in [c["knowledge_id"] for c in result["candidates"]]
+    assert kept == ids
+
+
+@pytest.mark.parametrize(
+    "words, content, score",
+    [
+        ("allergic to tree nuts", SHELLFISH, 0.95),
+        ("allergic to shellfish and peanuts", SHELLFISH, 0.99),
+        ("favourite tea is matcha", TEA, 0.9),
+        ("cat is called Mochi", CAT, 0.9),
+    ],
+    ids=["other-allergen", "extra-word", "other-tea", "other-name"],
+)
+def test_a_near_miss_is_never_erased_however_close(store, words, content, score):
+    """Most words shared and a near-perfect score: one word differs, so ask."""
+    result, ids, kept = _forget(
+        store,
+        [SHELLFISH, TEA, CAT],
+        words,
+        vectors=_scoring(words, content, score),
+    )
+
+    assert result["status"] == "error"
+    assert tool_result_failed(result)
+    assert kept == ids
+
+
+def test_the_exact_words_still_erase_beside_a_close_sibling(store):
+    """Peanuts saved too: the words name it, so only it goes."""
+    peanuts = "User is allergic to peanuts"
+    host = _Host(store)
+    shellfish, tea = host.save(SHELLFISH), host.save(TEA)
+    # An entity of its own, so the store keeps both allergies.
+    nuts = store.store(
+        category="fact", content=peanuts, context="global", entity="user:peanuts"
+    )
+    assert host._embed_and_index(nuts, peanuts, "test memory")
+    host.vectors.update(_scoring("allergic to peanuts", SHELLFISH, 0.62))
+
     with _tools(host) as tools:
-        result = tools["forget"](knowledge_id="my seafood allergy")
+        result = tools["forget"](knowledge_id="allergic to peanuts")
 
     assert result["status"] == "removed"
-    assert store.get_item(shellfish) is None
+    assert result["erased"] == peanuts
+    assert store.get_item(nuts) is None
+    assert store.get_item(shellfish) is not None
     assert store.get_item(tea) is not None
 
 
@@ -416,29 +483,6 @@ def test_a_negated_memory_is_not_erased_by_the_plain_words(store):
 
     assert result["status"] == "error"
     assert kept == ids
-
-
-def test_a_score_just_under_the_bar_is_not_a_match(store):
-    host = _Host(store)
-    shellfish, tea = host.save(SHELLFISH), host.save(TEA)
-    off = _hashed("crustacean reaction")
-    target = _hashed(SHELLFISH)
-    # Mix toward the memory until it scores just under the bar.
-    for weight in np.linspace(0.0, 1.0, 201):
-        vec = weight * target + (1 - weight) * off
-        vec = vec / np.linalg.norm(vec)
-        if float(vec @ target) >= FORGET_SURE_SIMILARITY:
-            break
-        under = vec
-    host.vectors["crustacean reaction"] = under
-    assert float(under @ target) < FORGET_SURE_SIMILARITY
-
-    with _tools(host) as tools:
-        result = tools["forget"](knowledge_id="crustacean reaction")
-
-    assert result["status"] == "error"
-    assert store.get_item(shellfish) is not None
-    assert store.get_item(tea) is not None
 
 
 def test_an_id_of_a_privileged_row_is_still_refused(store):
