@@ -322,6 +322,23 @@ class TestTranslatorNarration:
         assert result["data"] == {"type": "chart", "points": [1, 2]}
         assert result["preview"] == "chart rendered · 8ms"
 
+    def test_render_map_without_a_card_payload_stays_a_plain_result(self):
+        """A mapped tool that produced no verified payload must not draw a broken card."""
+        translator = CanonicalTranslator(
+            RUN_ID, agent_id="gaia", render_tool_map={"generate_image": "media"}
+        )
+        translator.translate({"type": "tool_start", "tool": "generate_image"})
+        translator.translate({"type": "tool_args", "args": {}})
+        (result,) = translator.translate(
+            {
+                "type": "tool_result",
+                "summary": "image output is no longer available",
+                "success": True,
+            }
+        )
+        assert "render" not in result
+        assert result["data"]["summary"] == "image output is no longer available"
+
     def test_synthesized_result_from_bare_tool_end_has_a_preview(self):
         translator = _tr()
         translator.translate({"type": "tool_start", "tool": "list_skills"})
