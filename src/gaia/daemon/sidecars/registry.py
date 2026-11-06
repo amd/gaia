@@ -82,6 +82,7 @@ class SidecarRegistry:
         on_started: Optional[Callable[[str, AgentSidecarManager], None]] = None,
         custody_auth=None,
         custody_base_url: Optional[str] = None,
+        keychain_auth=None,
     ):
         self._specs = dict(specs)
         self.max_live = max_live
@@ -101,6 +102,7 @@ class SidecarRegistry:
         # (they fall back to their own embedded provider).
         self._custody_auth = custody_auth
         self._custody_base_url = custody_base_url
+        self._keychain_auth = keychain_auth
         # agent_id -> (manager, per-agent lock). The registry lock guards this
         # map (atomic get-or-create); the per-agent lock serializes the slow
         # is_running-check + start() so N concurrent first ensures spawn ONE
@@ -159,12 +161,18 @@ class SidecarRegistry:
         if self._custody_auth is not None and self._custody_base_url:
             manager.custody_url = self._custody_base_url
             manager.custody_secret = self._custody_auth.mint(agent_id)
+            if self._keychain_auth is not None and spec.daemon_owns_keychain:
+                manager.mint_keychain_secret = lambda: self._keychain_auth.mint(
+                    agent_id
+                )
         return manager
 
     def _revoke_custody(self, agent_id: str) -> None:
         """Drop *agent_id*'s custody secret binding (idempotent)."""
         if self._custody_auth is not None:
             self._custody_auth.revoke(agent_id)
+        if self._keychain_auth is not None:
+            self._keychain_auth.revoke(agent_id)
 
     def ensure(
         self,
