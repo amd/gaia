@@ -233,6 +233,11 @@ type Settings struct {
 	Limits       Limits          `json:"limits"`
 	KeepAwake    bool            `json:"keep_awake"`
 	Rules        map[string]Rule `json:"rules"`
+	// Talking on calls: the PIN itself never comes back, only whether one is set.
+	PinSet        bool   `json:"pin_set"`
+	TalkAvailable bool   `json:"talk_available"`
+	TalkOnCalls   bool   `json:"talk_on_calls"`
+	Voice         string `json:"voice"`
 }
 
 // Delivery is one call or text an alert made.
@@ -302,6 +307,18 @@ func (c *Client) Settings(ctx context.Context) (Settings, error) {
 func (c *Client) PutSettings(ctx context.Context, patch map[string]any) (Settings, error) {
 	var out Settings
 	return out, c.call(ctx, http.MethodPut, "/settings", patch, &out)
+}
+
+// SetPin sets the PIN a caller types on the keypad. It goes in the body only.
+func (c *Client) SetPin(ctx context.Context, pin string) (Settings, error) {
+	var out Settings
+	return out, c.call(ctx, http.MethodPost, "/pin", map[string]string{"pin": pin}, &out)
+}
+
+// ClearPin removes the PIN, so calls can't talk.
+func (c *Client) ClearPin(ctx context.Context) (Settings, error) {
+	var out Settings
+	return out, c.call(ctx, http.MethodDelete, "/pin", nil, &out)
 }
 
 // SetKeys checks the Twilio keys with Twilio and stores them. The token goes

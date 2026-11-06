@@ -122,6 +122,19 @@ func HeldText(held string) string {
 	return "Held: " + strings.ReplaceAll(held, "_", " ")
 }
 
+// TalkStatus says whether a call can talk with GAIA, or what is missing.
+func TalkStatus(s Settings) (ready bool, text string) {
+	switch {
+	case !s.TalkOnCalls:
+		return false, "Talking on calls is off"
+	case !s.PinSet:
+		return false, "Set a PIN"
+	case !s.TalkAvailable:
+		return false, "Turn on mobile access so calls can reach this PC"
+	}
+	return true, "Ready: calls can talk"
+}
+
 // OutcomeText says how a call or text ended, in words.
 func OutcomeText(outcome string, reached bool) string {
 	switch {

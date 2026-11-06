@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/phone"
+	"github.com/amd/gaia/tui/internal/speech"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
@@ -56,9 +57,15 @@ const (
 	secBook
 	secRules
 	secAlerts
+	secTalk
 )
 
-var sectionNames = []string{"Setup", "Phone book", "Rules", "Alerts"}
+var sectionNames = []string{"Setup", "Phone book", "Rules", "Alerts", "Talk on calls"}
+
+// talkExplainer is how talking on a call works, in one line.
+const talkExplainer = "After the alert sentence the call connects to this PC: enter your PIN on the keypad, " +
+	"then talk with GAIA. Answer approvals with yes or no, or 1 or 2 on the keypad. " +
+	"You can also call GAIA's number from a number in your phone book."
 
 type item struct {
 	id    string
@@ -91,10 +98,13 @@ type Model struct {
 
 	sec    section
 	cursor int
-	form   *form
-	busy   string
-	notice string
-	errMsg string
+	// picking is the voice list, open over the Talk on calls rows.
+	picking bool
+	pick    int
+	form    *form
+	busy    string
+	notice  string
+	errMsg  string
 }
 
 // New builds the panel over api.
@@ -170,6 +180,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.form != nil {
 			return m.formKey(msg)
+		}
+		if m.picking {
+			return m.pickKey(msg)
 		}
 		return m.key(msg)
 	case tea.MouseMsg:
@@ -306,8 +319,23 @@ func (m Model) items() []item {
 			}
 			out = append(out, item{fmt.Sprintf("alert:%d", a.ID), a.Title, value})
 		}
+	case secTalk:
+		out = append(out, item{"talk", "Talk on calls", onOff(set.TalkOnCalls)})
+		if set.PinSet {
+			out = append(out, item{"pin", "Change the PIN", "set"}, item{"pin_clear", "Remove the PIN", ""})
+		} else {
+			out = append(out, item{"pin", "Set a PIN", "not set"})
+		}
+		out = append(out, item{"voice", "Voice", voiceName(set.Voice)})
 	}
 	return out
+}
+
+func voiceName(id string) string {
+	if v, ok := speech.LookupVoice(id); ok {
+		return v.Name
+	}
+	return id
 }
 
 func idNumber(id, prefix string) int {
@@ -326,7 +354,7 @@ func (m Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.goSection((int(m.sec) + 1) % len(sectionNames)), nil
 	case "shift+tab", "left":
 		return m.goSection((int(m.sec) + len(sectionNames) - 1) % len(sectionNames)), nil
-	case "1", "2", "3", "4":
+	case "1", "2", "3", "4", "5":
 		return m.goSection(int(msg.String()[0] - '1')), nil
 	case "up", "k":
 		if m.cursor > 0 {
@@ -453,6 +481,26 @@ func (m Model) activate(it item) (tea.Model, tea.Cmd) {
 	case it.id == "limits":
 		m.form = limitsForm(m.settings.Limits)
 		return m, textinput.Blink
+	case it.id == "talk":
+		on := !m.settings.TalkOnCalls
+		return m.patch("Talking on calls is "+onOff(on)+".", map[string]any{"talk_on_calls": on})
+	case it.id == "pin":
+		m.form = pinForm(m.settings.PinSet)
+		return m, textinput.Blink
+	case it.id == "pin_clear":
+		return m.act("pin", "Removing the PIN…", func(ctx context.Context, api *phone.Client) (string, *phone.Started, error) {
+			_, err := api.ClearPin(ctx)
+			return "PIN removed. Calls can't talk with GAIA until you set one.", nil, err
+		})
+	case it.id == "voice":
+		m.picking = true
+		m.pick = 0
+		for i, v := range speech.Voices() {
+			if v.ID == m.settings.Voice {
+				m.pick = i
+			}
+		}
+		return m, nil
 	case strings.HasPrefix(it.id, "alert:"):
 		id := idNumber(it.id, "alert:")
 		if it.value != "open" && !strings.HasPrefix(it.value, "open ·") {
@@ -532,6 +580,19 @@ func quietForm(q *phone.Quiet) *form {
 		[]string{"From", "Until"}, []textinput.Model{start, end})
 }
 
+func pinForm(set bool) *form {
+	pin := field("4 to 8 digits", 8)
+	// Never readable off the screen, including through the control API.
+	pin.EchoMode = textinput.EchoPassword
+	pin.EchoCharacter = '•'
+	title := "Set a PIN"
+	if set {
+		title = "Change the PIN"
+	}
+	return newForm("pin", title, "A caller types it on the keypad before talking with GAIA.",
+		[]string{"PIN"}, []textinput.Model{pin})
+}
+
 func limitsForm(l phone.Limits) *form {
 	calls, texts, agent := field("0–20", 2), field("0–50", 2), field("0–5", 1)
 	calls.SetValue(strconv.Itoa(l.CallsPerDay))
@@ -569,6 +630,19 @@ func (m Model) formKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.submit()
+	}
+	if f.kind == "pin" && msg.Type == tea.KeyRunes {
+		// The keypad has digits only, so the field takes nothing else.
+		digits := []rune{}
+		for _, r := range msg.Runes {
+			if r >= '0' && r <= '9' {
+				digits = append(digits, r)
+			}
+		}
+		if len(digits) == 0 {
+			return m, nil
+		}
+		msg.Runes = digits
 	}
 	var cmd tea.Cmd
 	f.fields[f.focus], cmd = f.fields[f.focus].Update(msg)
@@ -640,6 +714,18 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		}
 		return m.patch("Quiet hours "+start+"–"+end+".",
 			map[string]any{"quiet_hours": map[string]any{"start": start, "end": end}})
+	case "pin":
+		pin := m.value(0)
+		// Cleared at once; the PIN lives only in the closure below.
+		f.fields[0].SetValue("")
+		if len(pin) < 4 || len(pin) > 8 || strings.Trim(pin, "0123456789") != "" {
+			m.errMsg = "A PIN is 4 to 8 digits."
+			return m, nil
+		}
+		return m.act("pin", "Saving the PIN…", func(ctx context.Context, api *phone.Client) (string, *phone.Started, error) {
+			_, err := api.SetPin(ctx, pin)
+			return "PIN saved.", nil, err
+		})
 	case "limits":
 		keys := []string{"calls_per_day", "texts_per_day", "agent_calls_per_day"}
 		was := []int{m.settings.Limits.CallsPerDay, m.settings.Limits.TextsPerDay, m.settings.Limits.AgentCallsPerDay}
@@ -659,6 +745,30 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.patch("Limits saved.", map[string]any{"limits": changed})
+	}
+	return m, nil
+}
+
+func (m Model) pickKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	voices := speech.Voices()
+	switch msg.String() {
+	case "esc":
+		m.picking = false
+	case "up", "k":
+		if m.pick > 0 {
+			m.pick--
+		}
+	case "down", "j":
+		if m.pick < len(voices)-1 {
+			m.pick++
+		}
+	case "enter", " ":
+		m.picking = false
+		v := voices[m.pick]
+		if v.ID == m.settings.Voice {
+			return m, nil
+		}
+		return m.patch("Calls use "+v.Name+".", map[string]any{"voice": v.ID})
 	}
 	return m, nil
 }
@@ -774,8 +884,20 @@ func (m Model) render() ([]string, []hit) {
 	add(tabs.String())
 	add(divStyle.Render(strings.Repeat("─", width)))
 
+	if m.sec == secTalk && m.form == nil {
+		ready, text := phone.TalkStatus(m.settings)
+		style := warnStyle
+		if ready {
+			style = onStyle
+		}
+		lines = append(lines, para(style, text)...)
+		lines = append(lines, para(dimStyle, talkExplainer)...)
+		add("")
+	}
 	if m.form != nil {
 		lines = append(lines, m.formLines(width)...)
+	} else if m.picking {
+		lines = append(lines, m.voiceLines(width)...)
 	} else {
 		for i, it := range m.items() {
 			mark, label := "  ", textStyle.Render(it.label)
@@ -953,15 +1075,35 @@ func (m Model) formLines(width int) []string {
 	return out
 }
 
+func (m Model) voiceLines(width int) []string {
+	voices := speech.Voices()
+	out := []string{" " + titleStyle.Render("Voice for calls")}
+	room := max(m.height-14, 3)
+	start := max(0, min(m.pick-room/2, len(voices)-room))
+	for i := start; i < len(voices) && i < start+room; i++ {
+		mark, name := "  ", textStyle.Render(voices[i].Name)
+		if i == m.pick {
+			mark, name = selStyle.Render("▸ "), selStyle.Render(voices[i].Name)
+		}
+		out = append(out, " "+mark+name)
+	}
+	return out
+}
+
 func (m Model) keysHint() string {
 	if m.form != nil {
 		return "Enter next / save · Tab move · Esc cancel"
+	}
+	if m.picking {
+		return "↑/↓ choose · Enter use this voice · Esc cancel"
 	}
 	switch m.sec {
 	case secBook:
 		return "a add · Enter or x remove · Tab section · Esc back"
 	case secRules:
 		return "Enter on/off · s steps · u urgent · +/- minutes · Tab section · Esc back"
+	case secTalk:
+		return "Enter choose · ↑/↓ move · Tab section · Esc back"
 	case secAlerts:
 		return "Enter mark handled · r refresh · Tab section · Esc back"
 	}

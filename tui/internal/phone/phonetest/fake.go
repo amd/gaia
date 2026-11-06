@@ -38,6 +38,8 @@ type Fake struct {
 	KeysError *phone.Error
 	// Missing makes every route a 404, like a daemon without phone alerts.
 	Missing bool
+	// Pin is the PIN last set, kept so a test can check what was sent.
+	Pin string
 
 	requests []Request
 	srv      *httptest.Server
@@ -58,6 +60,7 @@ func New(t *testing.T) *Fake {
 		Settings: map[string]any{
 			"enabled": false, "provider": "simulated", "from_number": "",
 			"texts_enabled": false, "quiet_hours": nil, "keep_awake": true,
+			"pin_set": false, "talk_available": false, "talk_on_calls": true, "voice": "af_nicole",
 			"limits": map[string]any{"calls_per_day": 6, "texts_per_day": 20, "agent_calls_per_day": 2},
 			"rules": map[string]any{
 				"schedule_failed":  map[string]any{"on": true, "steps": "notify_text_call", "urgent": false},
@@ -129,6 +132,19 @@ func (f *Fake) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		merge(f.Settings, body)
+		writeJSON(w, 200, f.Settings)
+	case route == "POST /pin":
+		pin, _ := body["pin"].(string)
+		if len(pin) < 4 || len(pin) > 8 || strings.Trim(pin, "0123456789") != "" {
+			fail(w, 422, "bad_request", "A PIN is 4 to 8 digits.")
+			return
+		}
+		f.Pin = pin
+		f.Settings["pin_set"] = true
+		writeJSON(w, 200, f.Settings)
+	case route == "DELETE /pin":
+		f.Pin = ""
+		f.Settings["pin_set"] = false
 		writeJSON(w, 200, f.Settings)
 	case route == "POST /simulated":
 		f.Settings["provider"], f.Settings["from_number"] = "simulated", "+15550100000"
