@@ -220,6 +220,12 @@ class GatewayTransport:
 
         return self._call(go)
 
+    def unpin(self, channel_id: str, message_id: str) -> None:
+        async def go() -> None:
+            await self._channel(channel_id).get_partial_message(int(message_id)).unpin()
+
+        self._call(go)
+
     def pin(self, channel_id: str, message_id: str) -> None:
         async def go() -> None:
             await self._channel(channel_id).get_partial_message(int(message_id)).pin()

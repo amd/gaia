@@ -82,7 +82,7 @@ def discord_start(body: StartRequest) -> Dict[str, Any]:
         raise HTTPException(
             status_code=500,
             detail="The Discord bridge did not stop, so it could not restart. "
-            "Close GAIA's Discord process in Task Manager, then try again.",
+            + cli.stop_failed_hint(),
         )
     cli.start_detached(model=body.model, take_over=body.take_over, emit=lambda _l: None)
     return _status()
@@ -90,11 +90,11 @@ def discord_start(body: StartRequest) -> Dict[str, Any]:
 
 @router.post("/discord/stop", dependencies=[Depends(require_ui_header)])
 def discord_stop() -> Dict[str, Any]:
-    if not _cli().stop():
+    cli = _cli()
+    if not cli.stop():
         raise HTTPException(
             status_code=500,
-            detail="The Discord bridge did not stop. Close GAIA's Discord process "
-            "in Task Manager, then try again.",
+            detail="The Discord bridge did not stop. " + cli.stop_failed_hint(),
         )
     return _status()
 
@@ -107,7 +107,7 @@ def discord_pair() -> Dict[str, Any]:
         raise HTTPException(
             status_code=500,
             detail="The Discord bridge did not stop, so the pairing was kept. "
-            "Close GAIA's Discord process in Task Manager, then try again.",
+            + cli.stop_failed_hint(),
         )
     cli.reset_pairing()
     cli.start_detached(emit=lambda _line: None)
@@ -117,7 +117,10 @@ def discord_pair() -> Dict[str, Any]:
 @router.post("/discord/disconnect", dependencies=[Depends(require_ui_header)])
 def discord_disconnect() -> Dict[str, Any]:
     """Stop the bridge and forget the token, the pairing and the status."""
-    _cli().disconnect()
+    try:
+        _cli().disconnect()
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
     return _status()
 
 

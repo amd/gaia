@@ -88,3 +88,23 @@ def test_connect_starts_the_bridge(monkeypatch):
     )
     assert response.status_code == 200
     assert started and started[0]["model"] == "fireworks.deepseek-v4p1-flash"
+
+
+def test_disconnect_keeps_everything_when_the_bridge_will_not_stop(monkeypatch):
+    from gaia.messaging.discord import credentials, state
+
+    state.save_config(state.BridgeConfig(bot_id="9", owner_id="111"))
+    cleared = []
+    monkeypatch.setattr(credentials, "clear", lambda: cleared.append(1))
+    monkeypatch.setattr(discord_cli, "stop", lambda **_: False)
+    response = make_client().post("/api/messaging/discord/disconnect")
+    assert response.status_code == 500
+    assert "did not stop" in response.json()["detail"]
+    assert cleared == [], "the token must be kept while the bridge still runs"
+    assert state.load_config().owner_id == "111"
+
+
+def test_stop_failure_names_this_os_tool(monkeypatch):
+    monkeypatch.setattr(discord_cli, "stop", lambda **_: False)
+    detail = make_client().post("/api/messaging/discord/stop").json()["detail"]
+    assert "gaia discord start" in detail

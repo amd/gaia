@@ -481,7 +481,7 @@ def run_stop(*, emit: Callable[[str], None] = print) -> int:
     if stop():
         emit("Stopped the Discord bridge.")
         return 0
-    emit("❌ The Discord bridge did not stop. Close it from Task Manager, then retry.")
+    emit(f"❌ The Discord bridge did not stop. {stop_failed_hint()}")
     return 1
 
 
@@ -511,9 +511,31 @@ def reset_pairing() -> None:
     state.save_config(config)
 
 
+def stop_failed_hint() -> str:
+    """How to end a bridge that would not stop, in this OS's own words."""
+    tool = {
+        "win32": "Task Manager",
+        "darwin": "Activity Monitor",
+    }.get(sys.platform, "your system monitor")
+    return (
+        f"End the process running `gaia discord start` in {tool} (or restart "
+        "the PC), then try again."
+    )
+
+
 def disconnect() -> None:
-    """Stop the bridge and forget the token, the pairing and the status."""
-    stop()
+    """Stop the bridge and forget the token, the pairing and the status.
+
+    Raises:
+        RuntimeError: the bridge did not stop, so nothing was forgotten. A
+            running bridge already holds the token and keeps answering; wiping
+            its files would show "not connected" while it still runs.
+    """
+    if not stop():
+        raise RuntimeError(
+            "The Discord bridge did not stop, so it was not disconnected. "
+            + stop_failed_hint()
+        )
     credentials.clear()
     state.clear_config()
     state.status_path().unlink(missing_ok=True)
@@ -783,7 +805,11 @@ def main(args) -> int:
     if action == "unwatch":
         return run_unwatch(repo=args.repo)
     if action == "disconnect":
-        disconnect()
+        try:
+            disconnect()
+        except RuntimeError as e:
+            print(f"❌ {e}")
+            return 1
         print("Disconnected Discord: the token, the pairing and the bridge are gone.")
         return 0
     print(

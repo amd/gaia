@@ -27,6 +27,7 @@ class FakeTransport:
         self.pinned = []
         self.pin_list = []
         self.deleted = []
+        self.unpinned = []
         self.missed = 0
         self._next = 1000
 
@@ -56,6 +57,10 @@ class FakeTransport:
 
     def pins(self, channel_id):
         return list(self.pin_list)
+
+    def unpin(self, channel_id, message_id):
+        self.unpinned.append(message_id)
+        self.pin_list = [p for p in self.pin_list if p.id != message_id]
 
     def pin(self, channel_id, message_id):
         self.pinned.append(message_id)
@@ -693,3 +698,22 @@ def test_the_agent_gets_only_a_gaia_shim_and_never_the_token(monkeypatch):
     assert credentials.BOT_TOKEN_ENV_VAR not in env
     first = env["PATH"].split(os.pathsep)[0]
     assert sorted(p.name for p in Path(first).iterdir()) in (["gaia"], ["gaia.exe"])
+
+
+def test_a_lease_from_a_pc_gone_for_a_day_is_unpinned():
+    ad, clock = make()
+    ad.transport.pin_list.append(
+        _foreign_lease(ad, clock.now - da.ABANDONED_LEASE_SECONDS - 60)
+    )
+    ad.on_ready()
+    assert ad.current_state == state.STATE_CONNECTED
+    assert ad.transport.unpinned == ["1"]
+
+
+def test_a_recent_foreign_lease_is_left_pinned():
+    ad, clock = make()
+    ad.transport.pin_list.append(
+        _foreign_lease(ad, clock.now - da.LEASE_FRESH_SECONDS - 60)
+    )
+    ad.on_ready()
+    assert ad.transport.unpinned == []

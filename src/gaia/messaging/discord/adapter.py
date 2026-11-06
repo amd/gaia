@@ -103,6 +103,8 @@ PAIRING_MAX_GUESSES = 5
 
 #: A lease newer than this belongs to a PC that is still answering.
 LEASE_FRESH_SECONDS = 180.0
+#: A foreign lease untouched this long belongs to a PC that is gone.
+ABANDONED_LEASE_SECONDS = 86400.0
 LEASE_PREFIX = "🟢 GAIA is answering from"
 _LEASE_RE = re.compile(r"lease ([0-9a-f]{8,32}) at (\d+)")
 
@@ -219,6 +221,8 @@ class Transport(Protocol):
     def pins(self, channel_id: str) -> List[PinnedMessage]: ...
 
     def pin(self, channel_id: str, message_id: str) -> None: ...
+
+    def unpin(self, channel_id: str, message_id: str) -> None: ...
 
 
 # ----------------------------------------------------------------------
@@ -639,6 +643,7 @@ class DiscordAdapter:
         now = int(self._clock())
         ours: Optional[PinnedMessage] = None
         foreign_at = 0
+        abandoned: List[str] = []
         for pin in self.transport.pins(channel):
             if pin.author_id != self.config.bot_id:
                 continue
@@ -648,7 +653,10 @@ class DiscordAdapter:
             if match.group(1) == self.config.instance_id:
                 ours = pin
             else:
-                foreign_at = max(foreign_at, int(match.group(2)))
+                at = int(match.group(2))
+                foreign_at = max(foreign_at, at)
+                if now - at > ABANDONED_LEASE_SECONDS:
+                    abandoned.append(pin.id)
         newer_foreign = foreign_at > self._lease_at if heartbeat else False
         fresh_foreign = now - foreign_at < LEASE_FRESH_SECONDS
         if not force and (newer_foreign or (not heartbeat and fresh_foreign)):
@@ -669,6 +677,13 @@ class DiscordAdapter:
                     "this PC cannot prove it is the one answering. " + RESTART_HINT
                 )
             self.transport.pin(channel, message_id)
+        for message_id in abandoned:
+            # A PC that went quiet a day ago is gone; its pin would otherwise
+            # stay until the DM's pin limit makes pinning ours fail.
+            try:
+                self.transport.unpin(channel, message_id)
+            except Exception as e:  # noqa: BLE001 - the lease itself is held
+                log.warning("Could not unpin an abandoned Discord lease: %s", e)
         self._lease_at = now
         return True
 

@@ -71,9 +71,10 @@ gaia discord schedule-add --every 3h --prompt "Using the gh CLI, summarize activ
 - **Say what will happen, in plain words.** For example: "Done. I'll DM you
   right away when someone else opens a PR or issue or comments on amd/gaia, and
   every 3 hours I'll send a short summary of what kovtcharov and kovtcharov-amd
-  did." Don't show ids, flags, or the commands unless asked.
+  did." The user saw each command in its Allow prompt; the summary is the plain
+  version, and anything they ask about (ids, the exact prompt) you show in full.
 - **To change or stop something,** list first, then remove by id. "Stop the
   updates" with more than one schedule means asking which one, or all of them.
 - **If a command fails because Discord isn't connected,** say the updates go to
   Discord and that it is connected under Settings → Messaging in the GAIA app.
-  Don't tell the user to run a command.
+  Point them to that screen; it does the setup for them.
