@@ -633,17 +633,18 @@ def _tables_and_prose(answer: str) -> "tuple[List[_Value], str]":
     return values, prose
 
 
-def presented_values(answer: str) -> List[_Value]:
+def presented_values(answer: str, prose_figures: bool = False) -> List[_Value]:
     """Values *answer* presents as data, in order, without duplicates.
 
     Table cells that are one value, fields of an untagged/CSV/JSON code block,
-    and — only when the answer has one of those — decimals, dates and
-    percentages in its prose. Without a table or block, only the exact amounts
-    of money its prose states are data. Code blocks in a language, inline
-    code, small whole numbers, estimates and version numbers are left alone.
+    and — only when the answer has one of those, or *prose_figures* is set —
+    decimals, dates and percentages in its prose. Otherwise only the exact
+    amounts of money its prose states are data. Code blocks in a language,
+    inline code, small whole numbers, estimates and version numbers are left
+    alone.
     """
     values, prose = _tables_and_prose(answer)
-    if values:
+    if values or prose_figures:
         values.extend(_prose_values(prose))
     else:
         # A date or percentage beside a price in a chat reply is not data.
@@ -777,6 +778,18 @@ def _total_of(value: _Value, grounded: Sequence[_Value]) -> bool:
     return len(parts) > 2 and _rounds_to(sum(parts), value)
 
 
+#: Tools that run a computation the model would otherwise do in its head.
+SCRIPT_COMPUTATION_TOOLS = frozenset(
+    {"run_python", "execute_python_file", "query_data"}
+)
+
+
+def _computation_failed(records: Sequence[Dict[str, Any]]) -> bool:
+    """A script was asked for this turn and none of its runs succeeded."""
+    scripts = [r for r in records if _name(r) in SCRIPT_COMPUTATION_TOOLS]
+    return bool(scripts) and not any(_ran(r) and not r.get("failed") for r in scripts)
+
+
 def content_findings(
     answer: str, records: Sequence[Dict[str, Any]], context: str = ""
 ) -> List[Finding]:
@@ -786,13 +799,15 @@ def content_findings(
     and earlier messages. A value one arithmetic step from two grounded
     numbers the answer also states, prose included, is grounded (a total, a
     difference, an average of two, a ratio) — computed from the shown numbers
-    and from the evidence values they round. Silent when no tool ran: an
+    and from the evidence values they round, so a ratio worked out wrong is
+    still a finding. After a computation that failed, decimals in prose count
+    too: the model has done the arithmetic itself. Silent when no tool ran: an
     answer from knowledge has nothing to be grounded in, and the look check
     owns that case.
     """
     if not any(_ran(r) for r in records):
         return []
-    values = presented_values(answer)
+    values = presented_values(answer, prose_figures=_computation_failed(records))
     if not values:
         return []
     corpus = _Corpus("\n".join([context] + [evidence_text(r) for r in records]))

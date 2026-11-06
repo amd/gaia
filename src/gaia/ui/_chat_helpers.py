@@ -2926,6 +2926,31 @@ def _agent_ui_wording(text: str) -> str:
     return surface_wording(text, "agent_ui")
 
 
+def _model_failure_text(exc: BaseException, model_id: Optional[str]) -> Optional[str]:
+    """What the chat says when *exc* failed a model call, naming its fault record.
+
+    None when *exc* is not a model-call failure. Blocks on short local probes,
+    so async callers run it in a thread.
+    """
+    from gaia.llm.failure_record import (
+        is_model_call_failure,
+        record_local_failure,
+        record_note,
+    )
+
+    classified = _classify_chat_exception(exc)
+    if classified is not None:
+        message = wording_for_model(classified.user_message, model_id)
+    elif is_model_call_failure(exc):
+        # GAIA's own client wording, e.g. how much memory a load needed.
+        message = str(exc)
+    else:
+        return None
+    note = record_note(record_local_failure(exc, where="ui_chat", model=model_id))
+    message = _agent_ui_wording(message)
+    return f"{message}\n\n{note}" if note else message
+
+
 def _echoes_failed_tool(event: dict, steps: list) -> bool:
     """A recoverable error right after a failed tool repeats that tool's error.
 
@@ -4125,12 +4150,11 @@ async def _get_chat_response(
         # when we have one, instead of a stock "trouble connecting"
         # blob.  Falls back to the generic copy when we can't
         # classify the exception.
-        classified = _classify_chat_exception(e)
-        if classified is not None:
-            chat_model = db.get_setting("custom_model") or session.get("model")
-            return _agent_ui_wording(
-                wording_for_model(classified.user_message, chat_model)
-            )
+        # Off the event loop: the fault record probes Lemonade and lists processes.
+        chat_model = db.get_setting("custom_model") or session.get("model")
+        failure = await asyncio.to_thread(_model_failure_text, e, chat_model)
+        if failure is not None:
+            return failure
         # Same as the streamed path: the real reason, not a guess at one.
         return _agent_ui_wording(f"Agent error: {e}")
 
@@ -4631,11 +4655,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # raw exception string. ``_classify_chat_exception`` walks
                 # the exception chain so we catch errors raised inside
                 # AgentSDK that wrap the original LemonadeError.
-                classified = _classify_chat_exception(e)
-                if classified is not None:
-                    result_holder["error"] = _agent_ui_wording(
-                        wording_for_model(classified.user_message, model_id)
-                    )
+                failure = _model_failure_text(e, model_id)
+                if failure is not None:
+                    result_holder["error"] = failure
                     result_holder["error_explained"] = True
                 else:
                     result_holder["error"] = _agent_ui_wording(str(e))
