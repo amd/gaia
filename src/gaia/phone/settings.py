@@ -27,6 +27,8 @@ DEFAULTS: Dict[str, Any] = {
     "cooldown_minutes": 30,
     "simulated_outcome": "human",
     "keep_awake": True,
+    "talk_on_calls": True,
+    "voice": "af_nicole",
     "rules": {
         "schedule_failed": {"on": True, "steps": "notify_text_call", "urgent": False},
         "approval_waiting": {
@@ -72,7 +74,13 @@ def apply_patch(current: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any
             if value not in PROVIDERS:
                 raise _bad(f"provider must be one of {', '.join(PROVIDERS)}")
             out[key] = value
-        elif key in ("texts_enabled", "keep_awake"):
+        elif key == "voice":
+            from gaia.audio.lemonade_tts import KOKORO_VOICES
+
+            if value not in KOKORO_VOICES:
+                raise _bad("voice must be one of the Kokoro voices")
+            out[key] = value
+        elif key in ("texts_enabled", "keep_awake", "talk_on_calls"):
             out[key] = _bool(key, value)
         elif key == "quiet_hours":
             out[key] = _quiet(value)

@@ -179,6 +179,11 @@ def _phone_alerts_stay_in_the_test(monkeypatch):
     )
     monkeypatch.setattr(phone_client, "get_settings", lambda: None)
 
+    def no_daemon(*_a, **_k):
+        raise RuntimeError("tests never reach a running daemon")
+
+    monkeypatch.setattr(phone_client, "call_daemon", no_daemon)
+
 
 @pytest.fixture(autouse=True)
 def _reset_model_broker_state():

@@ -72,6 +72,8 @@ class Provider(Protocol):
 
     def text_status(self, sid: str) -> TextStatus: ...
 
+    def set_voice_url(self, number: str, url: str) -> None: ...
+
 
 class TwilioProvider:
     """Twilio over its REST API with an Account SID and Auth Token (or API key)."""
@@ -154,6 +156,25 @@ class TwilioProvider:
                 out.append((created, str(call["sid"])))
         return [sid for _, sid in sorted(out, reverse=True)]
 
+    def set_voice_url(self, number: str, url: str) -> None:
+        """Point *number*'s incoming calls at *url* (GAIA's call webhook)."""
+        found = (
+            self._request(
+                "GET", "/IncomingPhoneNumbers.json", params={"PhoneNumber": number}
+            ).get("incoming_phone_numbers")
+            or []
+        )
+        if not found:
+            raise PhoneError(
+                "provider_error", f"{number} isn't on this Twilio account."
+            )
+        sid = found[0]["sid"]
+        self._request(
+            "POST",
+            f"/IncomingPhoneNumbers/{sid}.json",
+            data={"VoiceUrl": url, "VoiceMethod": "POST"},
+        )
+
     # ---- texts ----------------------------------------------------------
 
     def send_text(self, to: str, from_number: str, body: str) -> str:
@@ -232,6 +253,8 @@ class SimulatedProvider:  # pylint: disable=unused-argument
     _ids: itertools.count = field(default_factory=lambda: itertools.count(1))
     _polls: Dict[str, int] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    #: Where a real number's incoming calls would be pointed.
+    voice_url: str = ""
 
     def check(self, from_number: str) -> None:
         return None
@@ -264,3 +287,6 @@ class SimulatedProvider:  # pylint: disable=unused-argument
 
     def text_status(self, sid: str) -> TextStatus:
         return TextStatus("delivered")
+
+    def set_voice_url(self, number: str, url: str) -> None:
+        self.voice_url = url

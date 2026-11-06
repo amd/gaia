@@ -133,7 +133,7 @@ def test_masked():
 
 def test_call_script_escapes_and_repeats():
     script = templates.call_script("A & B <x>")
-    assert script.count("<Say>A &amp; B &lt;x&gt;</Say>") == 2
+    assert script.count(">A &amp; B &lt;x&gt;</Say>") == 2
     assert script.endswith("<Hangup/></Response>")
 
 

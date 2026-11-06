@@ -30,6 +30,12 @@ _TITLES: Dict[str, str] = {
     "test": "Test alert",
 }
 
+HELLO_LINE = "Hi, it's GAIA."
+UNAVAILABLE_LINE = (
+    "This is GAIA. Talking on a call needs mobile access to be on. Open GAIA on "
+    "your PC to turn it on."
+)
+
 ADDED_LINE = (
     "A phone number was added to your GAIA phone book. If you didn't do this, "
     "open GAIA now."
@@ -71,8 +77,30 @@ def notice_sentence(line: str) -> str:
     return f"This is GAIA on your PC. {line}"
 
 
+#: Twilio's voice for the fixed sentences; a younger female voice, to match
+#: the Kokoro voice GAIA talks in once the call connects to the PC.
+SAY_VOICE = "Polly.Salli"
+
+
+def _say(sentence: str) -> str:
+    return f'<Say voice="{SAY_VOICE}">{escape(sentence)}</Say>'
+
+
 def call_script(sentence: str, repeat: int = 2) -> str:
     """TwiML that says *sentence* *repeat* times, then hangs up."""
-    said = escape(sentence)
-    body = '<Pause length="1"/>'.join(f"<Say>{said}</Say>" for _ in range(repeat))
+    body = '<Pause length="1"/>'.join(_say(sentence) for _ in range(repeat))
     return f"<Response>{body}<Hangup/></Response>"
+
+
+def talk_script(sentence: str, stream_url: str, token: str) -> str:
+    """TwiML that says *sentence* once, then connects the call's audio to the PC.
+
+    The token is one-time and names this call to the PC; the PIN is asked for
+    there, before any conversation.
+    """
+    url = escape(stream_url, {'"': "&quot;"})
+    tok = escape(token, {'"': "&quot;"})
+    return (
+        f'<Response>{_say(sentence)}<Connect><Stream url="{url}">'
+        f'<Parameter name="token" value="{tok}"/></Stream></Connect></Response>'
+    )

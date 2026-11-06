@@ -105,7 +105,9 @@ DEFAULT_PORT = 4200
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 # API paths that bypass tunnel authentication (monitoring / preflight)
-_AUTH_EXEMPT_PATHS = {"/api/health"}
+# The phone webhook can't carry the tunnel token; Twilio's signature, checked by
+# the daemon, authenticates it instead.
+_AUTH_EXEMPT_PATHS = {"/api/health", "/api/phone/incoming"}
 
 # HttpOnly cookie name used to bootstrap tunnel auth from the QR-code URL.
 # When a mobile browser opens ``https://<tunnel>/?token=<uuid>`` the SPA
@@ -779,6 +781,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         scheduler = Scheduler(db=db, executor=_schedule_executor)
         app.state.scheduler = scheduler
         await scheduler.start()
+        # Lets phone calls reach this PC while mobile access is on.
+        phone_publisher = asyncio.create_task(
+            phone_router_mod.publish_talk_endpoint(app)
+        )
         logger.info("Task scheduler started (timeout=%ss)", _sched_timeout)
 
         # Start document file monitor for auto re-indexing
@@ -844,6 +850,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         # Shutdown
         remove_local_work(active_turns_in_flight)
+        phone_publisher.cancel()
         await scheduler.shutdown()
         logger.info("Task scheduler stopped")
         await agent_loop.stop()

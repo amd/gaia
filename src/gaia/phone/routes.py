@@ -77,6 +77,29 @@ class ClearRule(BaseModel):
     rule_key: str = Field(min_length=1, max_length=120)
 
 
+class Pin(BaseModel):
+    pin: str = Field(min_length=4, max_length=8)
+
+
+class TalkEndpoint(BaseModel):
+    url: Optional[str] = Field(default=None, max_length=500)
+
+
+class TalkClaim(BaseModel):
+    token: str = Field(min_length=10, max_length=100)
+
+
+class TalkPin(BaseModel):
+    call_id: str = Field(min_length=32, max_length=32)
+    pin: str = Field(max_length=8)
+
+
+class Incoming(BaseModel):
+    url: str = Field(max_length=500)
+    params: dict
+    signature: str = Field(default="", max_length=200)
+
+
 class AgentAlert(BaseModel):
     reason: str = Field(default="", max_length=500)
 
@@ -99,12 +122,53 @@ def build_phone_router(
 
     @router.get(f"{API_PREFIX}/settings", dependencies=auth)
     def get_settings() -> dict:
-        return service.settings()
+        return service.public_settings()
+
+    @router.post(f"{API_PREFIX}/pin", dependencies=auth)
+    def set_pin(body: Pin) -> dict:
+        try:
+            service.set_pin(body.pin)
+        except PhoneError as e:
+            raise _fail(e) from e
+        return service.public_settings()
+
+    @router.delete(f"{API_PREFIX}/pin", dependencies=auth)
+    def clear_pin() -> dict:
+        service.clear_pin()
+        return service.public_settings()
+
+    @router.post(f"{API_PREFIX}/talk-endpoint", dependencies=auth)
+    def talk_endpoint(body: TalkEndpoint) -> dict:
+        try:
+            service.set_talk_endpoint(body.url)
+        except PhoneError as e:
+            raise _fail(e) from e
+        return {"talk_available": service.talk_endpoint() is not None}
+
+    @router.post(f"{API_PREFIX}/talk/claim", dependencies=auth)
+    def talk_claim(body: TalkClaim) -> dict:
+        try:
+            return service.claim_talk(body.token)
+        except PhoneError as e:
+            raise _fail(e) from e
+
+    @router.post(f"{API_PREFIX}/talk/pin", dependencies=auth)
+    def talk_pin(body: TalkPin) -> dict:
+        try:
+            return service.check_pin(body.call_id, body.pin)
+        except PhoneError as e:
+            raise _fail(e) from e
+
+    @router.post(f"{API_PREFIX}/talk/incoming", dependencies=auth)
+    def talk_incoming(body: Incoming) -> dict:
+        params = {str(k): str(v) for k, v in body.params.items()}
+        return {"twiml": service.incoming_call(body.url, params, body.signature)}
 
     @router.put(f"{API_PREFIX}/settings", dependencies=auth)
     def put_settings(patch: dict = Body(...)) -> dict:
         try:
-            return service.update_settings(patch)
+            service.update_settings(patch)
+            return service.public_settings()
         except PhoneError as e:
             raise _fail(e) from e
 

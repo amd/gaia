@@ -81,3 +81,36 @@ def clear_rule(rule_key: str) -> None:
         _post("/alerts/clear", {"rule_key": rule_key})
     except (requests.RequestException, OSError, RuntimeError) as e:
         log.warning("phone: could not clear alert %s: %s", rule_key, e)
+
+
+def call_daemon(method: str, path: str, body: Optional[dict] = None) -> dict:
+    """One phone-service request that must succeed; raises RuntimeError with
+    the daemon's own message otherwise."""
+    from gaia.daemon.client import attach
+
+    inst = attach(timeout=1.5, patient=False)
+    if inst is None:
+        raise RuntimeError("GAIA's background service isn't running.")
+    try:
+        response = requests.request(
+            method,
+            f"http://{inst.host}:{inst.port}/daemon/v1/phone{path}",
+            json=body,
+            headers={"Authorization": f"Bearer {inst.token}"},
+            timeout=TIMEOUT,
+        )
+    except requests.RequestException as e:
+        raise RuntimeError(f"GAIA's background service didn't answer: {e}") from e
+    try:
+        payload = response.json()
+    except ValueError as e:
+        raise RuntimeError(
+            f"GAIA's background service sent {response.status_code} without JSON."
+        ) from e
+    if response.status_code >= 400:
+        detail = payload.get("detail") if isinstance(payload, dict) else None
+        message = detail.get("message") if isinstance(detail, dict) else str(detail)
+        raise RuntimeError(
+            message or f"Phone service refused ({response.status_code})."
+        )
+    return payload

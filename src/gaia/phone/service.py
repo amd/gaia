@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import hashlib
 import hmac
+import re
 import secrets as _secrets
 import threading
 import time
@@ -50,6 +51,12 @@ TICK_SECONDS = 1.0
 CALL_GIVE_UP_SECONDS = 600
 #: How long GAIA's model server must keep failing before it alerts.
 HEALTH_ALERT_SECONDS = 300
+#: The Agent UI republishes its call address every minute while mobile access
+#: is on; an address older than this is treated as gone.
+TALK_ENDPOINT_TTL = 180
+TALK_TOKEN_TTL = 900
+PIN_ATTEMPTS = 3
+_PIN_RE = re.compile(r"^\d{4,8}$")
 SOURCES = ("schedule", "approval", "health", "agent", "test")
 _SOURCE_RULE = {
     "schedule": "schedule_failed",
@@ -125,6 +132,10 @@ class PhoneService:
         self._unhealthy_since: Optional[float] = None
         self._health_reason = ""
         self._health_alerted = False
+        self._talk_endpoint: Optional[str] = None
+        self._talk_endpoint_at = 0.0
+        self._talk_tokens: Dict[str, Dict[str, Any]] = {}
+        self._talk_calls: Dict[str, Dict[str, Any]] = {}
         self._awake = awake
         self._raise_lock = threading.Lock()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -134,6 +145,155 @@ class PhoneService:
 
     def settings(self) -> Dict[str, Any]:
         return with_defaults(self.store.get_settings())
+
+    def public_settings(self) -> Dict[str, Any]:
+        """Settings without the PIN's hash, plus whether one is set."""
+        out = {k: v for k, v in self.settings().items() if k != "pin"}
+        out["pin_set"] = bool(self.settings().get("pin"))
+        out["talk_available"] = self.talk_endpoint() is not None
+        return out
+
+    # ---------------------------------------------------------------- talking
+
+    def set_pin(self, pin: str) -> None:
+        if not _PIN_RE.match(str(pin or "")):
+            raise PhoneError("bad_request", "A PIN is 4 to 8 digits.")
+        salt = uuid.uuid4().hex
+        settings = self.settings()
+        settings["pin"] = {"salt": salt, "hash": _hash(str(pin), salt)}
+        self.store.put_settings(settings)
+
+    def clear_pin(self) -> None:
+        settings = self.settings()
+        settings.pop("pin", None)
+        self.store.put_settings(settings)
+
+    def set_talk_endpoint(self, url: Optional[str]) -> None:
+        """Where the PC takes a call's audio (``wss://…``), or None when off.
+
+        A new address also points GAIA's Twilio number at the PC, so calling
+        GAIA works without touching the Twilio console.
+        """
+        if url is not None and not str(url).startswith("wss://"):
+            raise PhoneError("bad_request", "The call address must be wss://.")
+        changed = url != self._talk_endpoint
+        self._talk_endpoint = url
+        self._talk_endpoint_at = self.clock()
+        settings = self.settings()
+        if changed and url and settings["provider"] == "twilio":
+            incoming = "https://" + url[len("wss://") :].rsplit("/api/", 1)[0]
+            incoming += "/api/phone/incoming"
+            provider = self._provider_for(settings)
+            provider.set_voice_url(settings["from_number"], incoming)
+
+    def incoming_call(self, url: str, params: Dict[str, str], signature: str) -> str:
+        """TwiML for a call to GAIA's number: the PIN step, or a rejection."""
+        settings = self.settings()
+        reject = "<Response><Reject/></Response>"
+        if settings["provider"] != "twilio" or not settings["enabled"]:
+            return reject
+        token = self.secrets.get(_SECRET_TOKEN) or ""
+        if not token or not _twilio_signature_ok(token, url, params, signature):
+            log.warning("phone: incoming call with a bad Twilio signature refused")
+            return reject
+        try:
+            caller = normalize(params.get("From", ""))
+        except PhoneError:
+            return reject
+        if self.store.contact_by_number(caller) is None:
+            log.info("phone: call from a number outside the phone book refused")
+            return reject
+        endpoint = self._talk_ready(settings)
+        if endpoint is None:
+            return templates.call_script(templates.UNAVAILABLE_LINE, repeat=1)
+        now = self.clock()
+        talk = _secrets.token_urlsafe(24)
+        self._talk_tokens[talk] = {
+            "alert_id": None,
+            "incoming": True,
+            "expires": now + TALK_TOKEN_TTL,
+        }
+        return templates.talk_script(templates.HELLO_LINE, endpoint, talk)
+
+    def talk_endpoint(self) -> Optional[str]:
+        if self._talk_endpoint and (
+            self.clock() - self._talk_endpoint_at <= TALK_ENDPOINT_TTL
+        ):
+            return self._talk_endpoint
+        return None
+
+    def _talk_ready(self, settings: Dict[str, Any]) -> Optional[str]:
+        if not settings.get("talk_on_calls") or not settings.get("pin"):
+            return None
+        return self.talk_endpoint()
+
+    def claim_talk(self, token: str) -> Dict[str, Any]:
+        """Trade a call's one-time token for what the PC may know about it."""
+        now = self.clock()
+        entry = self._talk_tokens.pop(str(token or ""), None)
+        if entry is None or entry["expires"] < now:
+            raise PhoneError("not_found", "That call isn't known or has expired.")
+        alert = self.store.alert(entry["alert_id"]) if entry["alert_id"] else None
+        if entry["alert_id"] and alert is None:
+            raise PhoneError("not_found", "That call's alert is gone.")
+        call_id = uuid.uuid4().hex
+        self._talk_calls[call_id] = {
+            "alert_id": alert["id"] if alert else None,
+            "tries": 0,
+            "ok": False,
+        }
+        return {
+            "call_id": call_id,
+            "alert_id": alert["id"] if alert else None,
+            "incoming": bool(entry.get("incoming")),
+            "title": templates.alert_title(alert["kind"]) if alert else "",
+            "voice": self.settings()["voice"],
+        }
+
+    def check_pin(self, call_id: str, pin: str) -> Dict[str, Any]:
+        call = self._talk_calls.get(str(call_id or ""))
+        if call is None:
+            raise PhoneError("not_found", "That call isn't known.")
+        stored = self.settings().get("pin")
+        if not stored or call["tries"] >= PIN_ATTEMPTS:
+            return {"ok": False, "tries_left": 0}
+        ok = hmac.compare_digest(_hash(str(pin), stored["salt"]), stored["hash"])
+        if ok:
+            call["ok"] = True
+            if call["alert_id"]:
+                # Whoever answered proved they're you: stop calling about it.
+                self.store.update_alert(
+                    call["alert_id"], reached=1, text_sent=1, call_due_at=None
+                )
+            return {"ok": True, "tries_left": PIN_ATTEMPTS - call["tries"]}
+        call["tries"] += 1
+        left = PIN_ATTEMPTS - call["tries"]
+        if not left:
+            log.warning(
+                "phone: three wrong PINs on a call about alert %s", call["alert_id"]
+            )
+            self.last_error = {
+                "code": "verification_failed",
+                "message": "Someone entered three wrong PINs on a call from GAIA.",
+                "at": self.clock(),
+            }
+        return {"ok": False, "tries_left": left}
+
+    def _alert_script(self, alert: Dict[str, Any], settings: Dict[str, Any]) -> str:
+        sentence = templates.alert_call_sentence(alert["kind"])
+        endpoint = self._talk_ready(settings)
+        if endpoint is None:
+            return templates.call_script(sentence)
+        now = self.clock()
+        self._talk_tokens = {
+            t: e for t, e in self._talk_tokens.items() if e["expires"] >= now
+        }
+        token = _secrets.token_urlsafe(24)
+        self._talk_tokens[token] = {
+            "alert_id": alert["id"],
+            "expires": now + TALK_TOKEN_TTL,
+        }
+        return templates.talk_script(sentence, endpoint, token)
 
     def update_settings(self, patch: Dict[str, Any]) -> Dict[str, Any]:
         current = self.settings()
@@ -600,7 +760,7 @@ class PhoneService:
             await self._send(
                 "call",
                 target["id"],
-                templates.call_script(templates.alert_call_sentence(alert["kind"])),
+                self._alert_script(alert, settings),
                 purpose="alert",
                 alert_id=alert["id"],
             )
@@ -920,6 +1080,19 @@ class PhoneService:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
+
+
+def _twilio_signature_ok(
+    auth_token: str, url: str, params: Dict[str, str], signature: str
+) -> bool:
+    """Twilio's request signature: HMAC-SHA1 of the URL plus each POST
+    parameter's name and value in name order, keyed by the Auth Token."""
+    import base64
+
+    data = url + "".join(f"{k}{params[k]}" for k in sorted(params))
+    digest = hmac.new(auth_token.encode(), data.encode(), hashlib.sha1).digest()
+    expected = base64.b64encode(digest).decode()
+    return bool(signature) and hmac.compare_digest(expected, signature)
 
 
 def _minutes(hhmm: str) -> int:
