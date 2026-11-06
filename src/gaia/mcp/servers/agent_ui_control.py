@@ -178,6 +178,9 @@ class TurnTracker:
         self.done_stats: Optional[Dict[str, Any]] = None
         self.message_id: Optional[int] = None
         self.cancelled = False
+        # A backend terminal event is distinct from a transport disconnect: the
+        # backend may still list it briefly, but re-attaching would replay it.
+        self.saw_done = False
         self.stop_requested = False
         self.history_notice: Optional[str] = None
         self.live_status: Optional[str] = None
@@ -231,7 +234,10 @@ class TurnTracker:
                 if k in event
             }
         elif etype == "done":
+            self.saw_done = True
             failed = bool(event.get("failed")) or self.error is not None
+            if failed and self.error is None:
+                self.error = str(event.get("failure") or event.get("content") or "Unknown error")
             self._finish_locked(
                 "cancelled"
                 if event.get("cancelled")
@@ -762,7 +768,7 @@ class TurnRegistry:
         # attaching then would replay the turn we just watched end.
         if (
             current is not None
-            and current.outcome in ("completed", "cancelled")
+            and (current.outcome in ("completed", "cancelled") or current.saw_done)
             and time.monotonic() - (current.ended_at or 0) < ATTACH_GRACE_S
         ):
             return current, ""

@@ -88,6 +88,18 @@ class Run:
             self.emit({"type": "done", "message_id": 7, "content": "Hello there"})
             self.end()
             return
+        if self.scenario == "failed":
+            self.emit({"type": "chunk", "content": "Partial answer"})
+            self.emit(
+                {
+                    "type": "done",
+                    "message_id": 11,
+                    "content": "The model rejected this request.",
+                    "failed": True,
+                }
+            )
+            self.end()
+            return
         self.emit({"type": "status", "status": "working", "message": "Planning"})
         self.emit({"type": "status", "status": "working", "message": "Writing"})
         self.emit({"type": "tool_start", "tool": "write_file", "detail": "Write file"})
@@ -673,6 +685,20 @@ def test_finished_turn_is_not_replaced_by_a_replay_of_itself(backend, turns):
     backend.lingering.add("s1")
     status = turns.status("s1")
     assert status["origin"] == "mcp" and status["outcome"] == "completed"
+    assert turns.wait("s1", until="idle", timeout_ms=1000)["matched"]
+    assert backend.attaches == 0
+
+
+def test_failed_done_is_not_replaced_by_a_replay_of_itself(backend, turns):
+    """A failed backend terminal event gets the same short attach grace."""
+    backend.sessions["s1"] = "failed"
+    turns.start("s1", "hi")
+    assert turns.wait("s1", until="idle", timeout_ms=5000)["matched"]
+    backend.lingering.add("s1")
+
+    status = turns.status("s1")
+    assert status["origin"] == "mcp" and status["outcome"] == "error"
+    assert status["error"] == "The model rejected this request."
     assert turns.wait("s1", until="idle", timeout_ms=1000)["matched"]
     assert backend.attaches == 0
 
