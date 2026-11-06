@@ -975,6 +975,7 @@ const messages: Messages = {
     'setup.key.where': 'يبقى مفتاحك على هذا الجهاز، في التخزين الآمن لنظامك.',
     'setup.key.usersServer': 'يستخدم GAIA هذا المزود كما هو مضبوط في خادم Lemonade لديك. ولا يرسل مفتاحًا إلى خادمك ولا يغيّر إعداده.',
     'setup.key.placeholder': 'الصق مفتاح API (اتركه فارغًا لاستخدام مفتاح حفظته من قبل)',
+    'setup.key.foundEnv': 'وُجد مفتاح ⁦{name}⁩ في متغيرات البيئة (ينتهي بـ ⁦…{hint}⁩). اختر «اختبار واتصال» لاستخدامه.',
     'setup.key.label': 'مفتاح API',
     'setup.key.connect': 'اختبار واتصال',
     'setup.key.testing': 'جارٍ اختبار مفتاحك…',

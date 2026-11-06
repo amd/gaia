@@ -345,8 +345,24 @@ def test_env_key_with_no_provider_registered_is_connected_at_startup(
     assert fw["models_discovered"] is True
     assert fw["key_source"] == "environment"
     assert fw["env_var"] == "FIREWORKS_API_KEY"
-    assert fw["key_hint"] is None
+    assert fw["key_hint"] == ENV_KEY[-4:]
     assert ENV_KEY not in resp.text
+
+
+def test_env_key_hint_shows_before_lemonade_is_up(client, lemonade, keys, monkeypatch):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    lemonade.down = True
+    resp = client.get("/api/providers")
+    fw = next(p for p in resp.json()["providers"] if p["id"] == "fireworks")
+    assert fw["key_source"] == "environment"
+    assert fw["key_hint"] == ENV_KEY[-4:]
+    assert ENV_KEY not in resp.text
+
+
+def test_no_env_hint_for_a_key_only_lemonade_holds(client, lemonade, keys, monkeypatch):
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "env_var_set": True}
+    assert _fireworks_view(client)["key_hint"] is None
 
 
 def test_stored_key_with_no_provider_registered_is_connected_at_startup(
@@ -613,6 +629,48 @@ def test_active_restore_fails_without_a_working_key(client, lemonade, keys, db):
     assert body["restore"]["status"] == "failed"
     assert "Fireworks AI has no working key" in body["restore"]["message"]
     assert db.get_setting("custom_model") is None
+
+
+def test_restore_connects_fireworks_from_an_env_key_on_a_fresh_lemonade(
+    client, lemonade, keys, replay, db, monkeypatch
+):
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    _write_config({"last_model": model})
+    lemonade.models = _cloud_models()
+    resp = client.get("/api/providers/active")
+    body = resp.json()
+    assert body["restore"]["status"] == "restored", body["restore"]
+    assert lemonade.call("POST", "install")["json"]["provider"] == "fireworks"
+    assert replay == [ENV_KEY]
+    assert db.get_setting("custom_model") == model
+    assert ENV_KEY not in resp.text
+
+
+def test_a_failed_cloud_restore_is_checked_again_and_clears(client, lemonade, keys, db):
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    _write_config({"last_model": model})
+    lemonade.models = _cloud_models()
+    keys["ensure_result"] = False
+    failed = client.get("/api/providers/active").json()["restore"]
+    assert failed["status"] == "failed"
+    assert failed["retry"] is True
+
+    keys["ensure_result"] = True
+    again = client.get("/api/providers/active").json()
+    assert again["restore"]["status"] == "restored", again["restore"]
+    assert again["model"] == model
+
+
+def test_a_failed_local_restore_is_not_checked_again(client, lemonade, keys, db):
+    _write_config({"last_model": "Llama-3-8B-GGUF"})
+    lemonade.models = _CATALOG
+    failed = client.get("/api/providers/active").json()["restore"]
+    assert failed["status"] == "failed"
+    assert not failed.get("retry")
+    calls = len(lemonade.calls)
+    client.get("/api/providers/active")
+    assert not [c for c in lemonade.calls[calls:] if c["path"] == "health"]
 
 
 def test_active_restore_fails_for_a_local_model_not_downloaded(
