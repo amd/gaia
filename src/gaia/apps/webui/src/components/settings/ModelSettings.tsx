@@ -397,7 +397,7 @@ export function ModelSettings() {
                                             {t('settings.key.reconnect')}
                                         </button>
                                     )}
-                                    {provider.key_source !== 'environment' && (confirmForget ? (
+                                    {(provider.key_source !== 'environment' || provider.key_from_gaia_env) && (confirmForget ? (
                                         <>
                                             <span className="settings-hint">{t('settings.key.removeAsk')}</span>
                                             <button type="button" className="btn-danger" onClick={() => void forget()} disabled={busy !== null}>{t('settings.models.remove')}</button>
@@ -406,16 +406,18 @@ export function ModelSettings() {
                                     ) : (
                                         <>
                                             <button type="button" className="btn-secondary" onClick={() => setReplacingKey(true)} disabled={busy !== null}>{t('settings.key.replace')}</button>
-                                            <button
-                                                type="button"
-                                                className="btn-secondary settings-key-remove"
-                                                onClick={() => setConfirmForget(true)}
-                                                disabled={busy !== null}
-                                                aria-label={t('settings.key.remove')}
-                                                title={t('settings.key.remove')}
-                                            >
-                                                <Trash2 size={14} aria-hidden="true" />
-                                            </button>
+                                            {provider.key_source !== 'environment' && (
+                                                <button
+                                                    type="button"
+                                                    className="btn-secondary settings-key-remove"
+                                                    onClick={() => setConfirmForget(true)}
+                                                    disabled={busy !== null}
+                                                    aria-label={t('settings.key.remove')}
+                                                    title={t('settings.key.remove')}
+                                                >
+                                                    <Trash2 size={14} aria-hidden="true" />
+                                                </button>
+                                            )}
                                         </>
                                     ))}
                                 </div>
@@ -442,6 +444,9 @@ export function ModelSettings() {
                                         </button>
                                     )}
                                 </div>
+                            )}
+                            {provider.key_source && !connected && !provider.error && !replacingKey && (
+                                <p className="settings-hint">{t('settings.key.notConnectedHint', { name: provider.name })}</p>
                             )}
                             {provider.error && <p className="settings-error" role="alert">{provider.error}</p>}
                         </form>

@@ -227,7 +227,7 @@ def test_download_endpoint_accepts_a_user_model_lemonade_registered(
         return result
 
     assert asyncio.run(_run()) == {"status": "downloading", "model": "user.My-Own-GGUF"}
-    assert started == [("user.My-Own-GGUF", False)]
+    assert started == [("user.My-Own-GGUF", False, False)]
     url, params = lemonade_models.calls[0]
     assert url.endswith("/models") and params == {"show_all": "true"}
 

@@ -492,12 +492,48 @@ VISION_OFF_ON_NPU = (
     "Settings > Model."
 )
 
+#: Why there is no vision model on the NPU when none that reads images is downloaded.
+VISION_NOT_INSTALLED = (
+    "No image-reading model is installed on this PC, and the chat model runs on "
+    "the NPU, which doesn't read images. To read images, pick Gemma 4 E4B as the "
+    "chat model in Settings > Model (GAIA offers to download it), then ask again."
+)
+
+
+def vision_off_reason(base_url: Optional[str] = None) -> str:
+    """Why reading images is off, once :func:`resolve_default_vision_model` gave None.
+
+    Switching chat to the GPU installs nothing, so with no image-reading model
+    downloaded the remedy names the download too.
+    """
+    from gaia.config import GaiaConfig
+    from gaia.installer.model_choice import VISION_ONLY_MODELS
+
+    readers = [*VISION_CHAT_MODELS, *VISION_ONLY_MODELS]
+    chosen = GaiaConfig.load().vision_model
+    if chosen:
+        readers.append(chosen)
+    try:
+        catalog = LemonadeClient(base_url=base_url, verbose=False).list_models()
+    except LemonadeClientError as e:
+        return (
+            "GAIA can't read this image: it couldn't check which models are "
+            f"installed on this PC ({e}). Ask again in a moment. {APP_RESTART_HINT}"
+        )
+    installed = any(
+        _model_ids_match(entry.get("id"), reader)
+        for entry in catalog.get("data", [])
+        for reader in readers
+    )
+    return VISION_OFF_ON_NPU if installed else VISION_NOT_INSTALLED
+
 
 def resolve_default_vision_model() -> Optional[str]:
     """The model that reads text in scans and images when nobody passed one.
 
     None while the chat model runs on the NPU: reading images is off there, so
-    no second model is loaded next to it (:data:`VISION_OFF_ON_NPU` says why).
+    no second model is loaded next to it (:func:`vision_off_reason` says why).
+    A cloud chat leaves the NPU idle, so images are read there.
     Otherwise ``vision_model`` from setup when the user chose one; else the
     model chat reopens on, then the default chat model, whichever reads
     images first, because those are already downloaded; else
@@ -507,16 +543,14 @@ def resolve_default_vision_model() -> Optional[str]:
 
     config = GaiaConfig.load()
     model = resolve_default_chat_model()
-    # The model chat reopens on, unless that runs in the cloud.
-    current = config.last_model
-    if not current or current.startswith("claude-") or cloud_model_provider(current):
-        current = model
-    if runs_on_npu(current):
+    current = config.last_model or model
+    cloud = current.startswith("claude-") or bool(cloud_model_provider(current))
+    if not cloud and runs_on_npu(current):
         return None
     chosen = config.vision_model
     if chosen:
         return chosen
-    if current in VISION_CHAT_MODELS:
+    if not cloud and current in VISION_CHAT_MODELS:
         return current
     return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
 
@@ -3499,6 +3533,25 @@ class CloudModelUnavailableError(LemonadeClientError):
         self.status = 404
 
 
+class CloudProviderDisconnectedError(LemonadeClientError):
+    """GAIA's Lemonade lost a cloud provider (a restart) and could not get it back.
+
+    The 404 it answered says nothing about the model, so it is not reported as one.
+    """
+
+    def __init__(self, provider: str, model_id: Optional[str], reason: str):
+        from gaia.llm.inference_location import provider_phrase
+
+        where = provider_phrase(provider)
+        super().__init__(
+            f"GAIA's AI engine lost its connection to {where} (it may have "
+            f"restarted), and {reason}. Reconnect {where} {TUI_PROVIDER_SETTINGS}, "
+            "then send your message again."
+        )
+        self.provider = provider
+        self.model_id = model_id
+
+
 def describe_version_refusal(
     found_version: Optional[str], min_version: str, url: Optional[str] = None
 ) -> str:
@@ -4582,6 +4635,9 @@ class LemonadeClient:
         handoff.pending = False
         if not self.follows_gaia_lemonade:
             return False
+        # The daemon already tried to start it and said why it can't.
+        if isinstance(error, GaiaLemonadeStartError):
+            return False
         # Handed off as gone, it is resent even if it is back by now: the
         # retries that would have covered a quick restart were skipped.
         if not handed_off and not self._gaia_lemonade_gone():
@@ -4829,14 +4885,14 @@ class LemonadeClient:
         Returns whether the provider is usable afterwards (True when *model*
         needs no kept key).
         """
-        from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, ensure_authenticated
+        from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, reconnect_provider
         from gaia.llm.gateway import GatewayError
 
         provider = self.cloud_model_provider(model or self.model or "")
         if provider not in PROVIDERS:
             return True
         try:
-            usable = ensure_authenticated(provider, client=self)
+            usable = reconnect_provider(provider, client=self)
         except (CloudKeyError, GatewayError, requests.RequestException) as e:
             self.log.warning(
                 f"Could not give the restarted Lemonade Server the kept {provider} "
@@ -5995,10 +6051,81 @@ class LemonadeClient:
                 **kwargs,
             )
 
-        first = self._survive_gaia_lemonade_stop(_call, model)
+        try:
+            first = self._survive_gaia_lemonade_stop(_call, model)
+        except CloudModelUnavailableError as e:
+            if not self._reconnected_cloud_provider(e, model):
+                raise
+            first = self._survive_gaia_lemonade_stop(_call, model)
         if not stream or not self.follows_gaia_lemonade:
             return first
-        return self._stream_surviving_gaia_lemonade_stop(first, _call, model)
+        return self._stream_surviving_cloud_disconnect(
+            self._stream_surviving_gaia_lemonade_stop(first, _call, model),
+            lambda: self._stream_surviving_gaia_lemonade_stop(_call(), _call, model),
+            model,
+        )
+
+    def _stream_surviving_cloud_disconnect(
+        self,
+        first: Iterator[Dict[str, Any]],
+        start: Callable[[], Iterator[Dict[str, Any]]],
+        model: str,
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Stream *first*, starting over once with ``start()`` if it 404ed
+        before its first chunk because GAIA's server had lost the provider."""
+        yielded = False
+        try:
+            for chunk in first:
+                yielded = True
+                yield chunk
+            return
+        except CloudModelUnavailableError as e:
+            if yielded or not self._reconnected_cloud_provider(e, model):
+                raise
+        yield from start()
+
+    def _reconnected_cloud_provider(
+        self, error: CloudModelUnavailableError, model: str
+    ) -> bool:
+        """After a cloud 404: True when GAIA's server had lost the provider and
+        has it back, so the request may be sent once more; False when it still
+        held the provider's key and the 404 is about the model.
+
+        Raises:
+            CloudProviderDisconnectedError: it was lost and could not be brought back.
+        """
+        from gaia.llm.cloud_keys import (
+            PROVIDERS,
+            CloudKeyError,
+            provider_lost,
+            reconnect_provider,
+        )
+        from gaia.llm.gateway import GatewayError
+        from gaia.llm.local_only import CloudDisabledError
+
+        provider = error.provider or self.cloud_model_provider(model)
+        if not self.follows_gaia_lemonade or provider not in PROVIDERS:
+            return False
+        try:
+            if not provider_lost(provider, client=self):
+                return False
+            if reconnect_provider(provider, client=self):
+                reason = None
+            elif provider == "fireworks":
+                reason = "GAIA could not give it a working key"
+            else:
+                reason = "GAIA does not set the gateway up again on its own"
+        except (CloudKeyError, GatewayError, requests.RequestException) as e:
+            if isinstance(e, CloudDisabledError):
+                raise
+            reason = f"reconnecting failed: {str(e).rstrip('.')}"
+        if reason is not None:
+            raise CloudProviderDisconnectedError(provider, model, reason) from error
+        self.log.warning(
+            f"GAIA's Lemonade Server had lost the {provider} provider; reconnected "
+            "it and sending the request once more."
+        )
+        return True
 
     def _chat_completions_once(
         self,

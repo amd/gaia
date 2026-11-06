@@ -90,22 +90,28 @@ export function useModelActions(defaultModelName?: string, contextSize?: number)
         }
     }, [modelName, contextSize, startPolling]);
 
-    const downloadModel = useCallback(async (force = false, name?: string) => {
-        const target = name ?? modelName;
-        setIsDownloadingModel(true);
-        setDownloadError(null);
-        try {
-            await api.downloadModel(target, force);
-            log.system.info(`Download model triggered: ${target} (force=${force})`);
-            if (downloadTimerRef.current) clearTimeout(downloadTimerRef.current);
-            downloadTimerRef.current = setTimeout(() => setIsDownloadingModel(false), DOWNLOAD_SPINNER_TIMEOUT_MS);
-            startPolling(target, 'download');
-        } catch (err) {
-            log.system.error('Failed to trigger model download', err);
-            setDownloadError(err instanceof Error ? err.message : String(err));
-            setIsDownloadingModel(false);
-        }
-    }, [modelName, startPolling]);
+    const downloadModel = useCallback(
+        async (force = false, name?: string, loadAfter = false) => {
+            const target = name ?? modelName;
+            setIsDownloadingModel(true);
+            setDownloadError(null);
+            try {
+                await api.downloadModel(target, force, loadAfter);
+                log.system.info(`Download model triggered: ${target} (force=${force})`);
+                if (downloadTimerRef.current) clearTimeout(downloadTimerRef.current);
+                downloadTimerRef.current = setTimeout(
+                    () => setIsDownloadingModel(false),
+                    DOWNLOAD_SPINNER_TIMEOUT_MS,
+                );
+                startPolling(target, 'download');
+            } catch (err) {
+                log.system.error('Failed to trigger model download', err);
+                setDownloadError(err instanceof Error ? err.message : String(err));
+                setIsDownloadingModel(false);
+            }
+        },
+        [modelName, startPolling],
+    );
 
     return { isLoadingModel, isDownloadingModel, downloadError, loadModel, downloadModel };
 }
