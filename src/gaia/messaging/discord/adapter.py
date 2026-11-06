@@ -72,7 +72,8 @@ DISCORD_REPLY_NOTE = (
     "or name. Discord shows no tables: use a short bullet list instead. A "
     "file you write is posted here on its own, just above your reply. The "
     "user is likely on their phone: never tell them to run a command; name the "
-    "GAIA app screen that does it, like Settings → Connectors.)"
+    "GAIA app screen that does it, like Settings → Connectors. Reminders, "
+    "alerts and watches have no screen: they change them by asking you here.)"
 )
 
 PAIRING_PROMPT = (

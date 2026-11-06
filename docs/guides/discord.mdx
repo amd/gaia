@@ -79,8 +79,9 @@ the PDF I just sent", "write the meeting notes to notes.md".
   size, with the file attached for you to read before you allow it. **Always allow** is remembered across
   restarts until you pair again or disconnect; `gaia discord always-allowed --forget` clears
   it. Unanswered prompts are denied after ten minutes.
-- **GitHub reads don't ask:** listing or viewing PRs, issues, runs and releases with `gh`
-  runs without a prompt. Comments, new PRs and other writes still ask.
+- **Reads don't ask:** listing or viewing PRs, issues, runs and releases with `gh`, and
+  GAIA listing its own automations or checking a branch's CI, run without a prompt.
+  Comments, new PRs, new or changed automations and other writes still ask.
 - **Stop:** press **Stop** under "Thinking…", or send just "stop" or "cancel". It ends what
   is running and drops anything still waiting behind it.
 - **Quick follow-ups** sent while GAIA is busy are answered together, so "actually, only

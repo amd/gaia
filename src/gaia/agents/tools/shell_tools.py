@@ -1139,9 +1139,10 @@ def skill_granted_binaries(host: Any) -> frozenset:
 
 
 #: CLIs whose read-only policy tier runs unasked with no skill loaded. A read
-#: of ``gh`` changes nothing, so asking about each one only trains a click;
-#: its writes still go through the policy's prompts like any granted CLI's.
-READS_WITHOUT_A_SKILL = frozenset({"gh"})
+#: of ``gh``, or GAIA listing its own automations, changes nothing, so asking
+#: about each one only trains a click; writes still prompt as for any granted
+#: CLI. ``git`` is not here: a repository's own settings can run programs.
+READS_WITHOUT_A_SKILL = frozenset({"gh", "gaia"})
 
 
 def shell_granted_binaries(host: Any) -> frozenset:

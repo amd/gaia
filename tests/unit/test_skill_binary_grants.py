@@ -878,10 +878,10 @@ def test_an_agent_with_no_grant_reads_gh_unasked_and_asks_for_everything_else():
 
 
 def test_the_exemption_is_dropped_when_the_skill_unloads():
-    host = _Gated("gaia")
-    assert _needs_modal(host, "gaia automation list") is False
+    host = _Gated("pip")
+    assert _needs_modal(host, "pip list") is False
     host._granted_binaries.revoke_skill("github-triage")
-    assert _needs_modal(host, "gaia automation list") is True
+    assert _needs_modal(host, "pip list") is True
 
 
 def test_only_the_policy_enforcing_tool_can_be_exempt():
@@ -2517,3 +2517,31 @@ def test_a_git_read_still_asks_without_a_skill():
     on the strength of looking read-only."""
     assert _needs_modal(_Gated(), "git status") is True
     assert _needs_modal(_Gated(), "git log -3 --oneline") is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gaia automation list",
+        "gaia automation ci-status --repo amd/gaia --branch main",
+        "gaia discord watches",
+    ],
+)
+def test_gaia_reading_its_own_automations_does_not_ask(command):
+    """A heartbeat checking main ran with no skill loaded and stopped to ask."""
+    assert _needs_modal(_Gated(), command) is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gaia automation remove --all",
+        'gaia automation add --name x --at 5m --say "hi"',
+        "gaia discord always-allowed --forget",
+        "gaia discord watch --repo amd/gaia",
+        "gaia config set default_model x",
+        "gaia init",
+    ],
+)
+def test_gaia_changes_and_other_commands_still_ask(command):
+    assert _needs_modal(_Gated(), command) is True
