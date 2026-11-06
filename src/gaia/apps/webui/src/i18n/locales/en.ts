@@ -976,6 +976,7 @@ export const enMessages = {
     'setup.key.usersServer': "GAIA uses this provider as your Lemonade Server already has it set up. It doesn't send your server a key or change its setup.",
     'setup.key.placeholder': 'Paste your API key (leave blank to use one you saved before)',
     'setup.key.label': 'API key',
+    'setup.key.foundEnv': 'Found a {name} key in your environment (ends …{hint}). Test and connect to use it.',
     'setup.key.connect': 'Test and connect',
     'setup.key.testing': 'Testing your key…',
     'setup.download.step': 'Download',

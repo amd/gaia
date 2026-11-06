@@ -1080,7 +1080,8 @@ export interface ActiveModel {
     inference_remote?: boolean | null;
     inference_description?: string | null;
     /** `pending` while the model server is still starting; ask again. */
-    restore?: { status: 'restored' | 'failed' | 'none' | 'pending'; message: string | null };
+    /** `retry`: a failed cloud restore the backend checks again on the next read. */
+    restore?: { status: 'restored' | 'failed' | 'none' | 'pending'; message: string | null; retry?: boolean };
 }
 
 export interface ProvidersResponse {

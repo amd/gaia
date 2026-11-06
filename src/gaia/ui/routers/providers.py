@@ -311,16 +311,23 @@ def _key_source(
     return "environment" if env else None
 
 
-def _key_hint(provider: str, key_source: Optional[str]) -> Optional[str]:
-    """The saved key's last characters, so the user can tell which key it is."""
+def _key_hint(
+    provider: str, key_source: Optional[str], lemond_env: bool = False
+) -> Optional[str]:
+    """The key's last characters, so the user can tell which key it is."""
     from gaia.connectors.credential_wait import CredentialStoreWaiting
 
-    if key_source not in ("stored", "lemonade"):
+    if key_source == "environment":
+        # Lemonade's own environment may hold a different key than GAIA's.
+        env = None if lemond_env else _env_key(provider)
+        key = env[1] if env else None
+    elif key_source not in ("stored", "lemonade"):
         return None
-    try:
-        key = _bounded_recall(provider)
-    except CredentialStoreWaiting:
-        return None
+    else:
+        try:
+            key = _bounded_recall(provider)
+        except CredentialStoreWaiting:
+            return None
     if not key or len(key) < _MIN_KEY_LENGTH_FOR_HINT:
         return None
     return key[-_KEY_HINT_LENGTH:]
@@ -355,7 +362,7 @@ def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, 
         {
             "registered": entry is not None,
             "key_source": key_source,
-            "key_hint": _key_hint(provider, key_source),
+            "key_hint": _key_hint(provider, key_source, lemond_env),
             "key_state": key_state,
             "key_message": key_message,
             "models_discovered": bool(entry and entry.get("models_discovered")),
@@ -674,10 +681,15 @@ def _check_model_available(model_id: str) -> Optional[str]:
         return "Local only is on, so cloud models can't run"
     try:
         if provider != LOCAL:
-            _require_loopback(_base_url())
-            if not ensure_authenticated(
-                provider, recall=lambda: _bounded_recall(provider)
+            base_url = _base_url()
+            _require_loopback(base_url)
+            entry = _cloud_entry(provider)
+            # The restore can run before /api/providers registers Fireworks.
+            if entry is None and _needs_key(
+                provider, entry, _key_source(entry, provider)
             ):
+                _register_on_gaias_server(provider, base_url)
+            if not ensure_authenticated(provider, recall=lambda: _usable_key(provider)):
                 return f"{_NAMES[provider]} has no working key"
         models = _list_models(provider)
         found = _listed(models, model_id)
@@ -709,7 +721,8 @@ def restore_last_model(db: ChatDatabase) -> Dict[str, Any]:
     """
     global _restore_result
     with _restore_lock:
-        if _restore_result is not None:
+        # A cloud model can start working later (a key arrives); check it again.
+        if _restore_result is not None and not _restore_result.get("retry"):
             return _restore_result
         from gaia.config import GaiaConfig, GaiaConfigError
 
@@ -755,6 +768,7 @@ def restore_last_model(db: ChatDatabase) -> Dict[str, Any]:
                     f"Couldn't restore your last model, {model_label(last)}: {reason}. "
                     "Pick a model to continue."
                 ),
+                "retry": provider_of(last) != LOCAL and not cloud_blocked(),
             }
         return _restore_result
 
