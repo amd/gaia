@@ -3125,7 +3125,7 @@ async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str
         resolve_lemonade_api_key,
         resolve_lemonade_base_url,
     )
-    from gaia.llm.lemonade_launcher import describe_start_hint
+    from gaia.llm.lemonade_launcher import server_down_advice
     from gaia.llm.lemonade_manager import LemonadeManager
 
     base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
@@ -3138,7 +3138,7 @@ async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str
         logger.warning("Empty-answer health check of %s failed: %s", base_url, e)
         return (
             f"No answer came back because Lemonade Server at {base_url} isn't "
-            f"responding. {describe_start_hint().instruction}"
+            f"responding. {server_down_advice(base_url)}"
         )
     if resp.status_code in (401, 403):
         # Running, so the start hint would be wrong; the key is what to fix.
@@ -3151,7 +3151,7 @@ async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str
         return (
             f"No answer came back because Lemonade Server at {base_url} failed "
             f"its health check (HTTP {resp.status_code}). "
-            f"{describe_start_hint().instruction}"
+            f"{server_down_advice(base_url)}"
         )
     if not model_id or cloud_model_provider(model_id):
         return None
@@ -4595,6 +4595,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 classified = _classify_chat_exception(e)
                 if classified is not None:
                     result_holder["error"] = _agent_ui_wording(classified.user_message)
+                    result_holder["error_explained"] = True
                 else:
                     result_holder["error"] = _agent_ui_wording(str(e))
             finally:
@@ -4990,9 +4991,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         for s in captured_steps:
             s["active"] = False
 
-        # Check for errors from the agent thread
+        # The agent thread's error rides on the closing `done`; an `error` event too showed it twice.
         if result_holder["error"]:
-            error_msg = f"Agent error: {result_holder['error']}"
+            error_msg = (
+                result_holder["error"]
+                if result_holder.get("error_explained")
+                else f"Agent error: {result_holder['error']}"
+            )
             if not full_response:
                 blocked_alert_steps = _blocked_policy_steps()
                 if blocked_alert_steps:
@@ -5003,18 +5008,35 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     full_response += f"\n\n[Error: {result_holder['error']}]"
                 else:
                     full_response = error_msg
+                    # Same shape as a relayed sidecar's terminal error.
+                    step_id += 1
+                    for s in captured_steps:
+                        s["active"] = False
+                    captured_steps.append(
+                        {
+                            "id": step_id,
+                            "type": "error",
+                            "label": "Error",
+                            "detail": error_msg,
+                            "active": False,
+                            "success": False,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        }
+                    )
+                    yield _sse(
+                        {"type": "agent_error", "content": error_msg, "fatal": True}
+                    )
             else:
                 # Partial response exists -- append error notice so user knows
                 # the response may be incomplete
                 full_response += f"\n\n[Error: {result_holder['error']}]"
-            error_data = json.dumps({"type": "error", "content": error_msg})
-            yield f"data: {error_data}\n\n"
 
         # A model failure ended the turn. The streamed text is only its opening
         # sentence, so the message must say what happened.
         turn_failed, failure_text = _turn_failure(
             answer_event, fatal_error, result_holder.get("result")
         )
+        turn_failed = turn_failed or bool(result_holder["error"])
         if turn_failed and answer_event is None:
             explained = _agent_ui_wording(failure_text or result_holder["answer"] or "")
             if explained and explained not in full_response:
