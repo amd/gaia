@@ -323,6 +323,9 @@ with `gaia config set network_policy cloud_allowed`. Details and limits:
   `LEMONADE_FIREWORKS_API_KEY` and `LEMONADE_AMD_API_KEY`, set in the **Lemonade
   server process**, take precedence over pasted keys. A conflict is reported
   explicitly.
+- In the Agent UI, a `FIREWORKS_API_KEY` set in GAIA's own environment connects
+  Fireworks without pasting it. First-run setup names it by its last four
+  characters, and a remembered Fireworks model is restored with it at launch.
 - **Ctrl+D** in provider setup clears that provider's key, both in Lemonade and
   the kept copy, so it does not come back next launch. Environment keys remain
   active. **Esc** cancels input or an in-progress connection.

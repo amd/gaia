@@ -295,3 +295,9 @@ def test_a_path_outside_the_document_roots_names_no_env_var(tmp_path, monkeypatc
     assert "move or copy it" in detail
     assert utils.DOCUMENT_ROOTS_ENV not in detail
     assert "restart GAIA" not in detail
+
+
+def test_the_vision_download_hint_names_the_agent_ui_path():
+    worded = surface_wording(surface_hints.VISION_DOWNLOAD_HINT, "agent_ui")
+    assert worded == surface_hints.AGENT_UI_VISION_DOWNLOAD_STEP
+    assert "TUI" not in worded and not COMMAND.search(worded)

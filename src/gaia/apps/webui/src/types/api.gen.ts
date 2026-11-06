@@ -1361,5 +1361,6 @@ export interface Gaia_Ui_Routers_Setup__DownloadModelRequest {
 }
 export interface Gaia_Ui_Routers_System__DownloadModelRequest {
   force?: boolean;
+  load_after?: boolean;
   model_name: string;
 }

@@ -272,8 +272,16 @@ Load ${modelName} anyway?`)) return false;
     }
 }
 
-export async function downloadModel(modelName: string, force = false): Promise<{ status: string; model: string }> {
-    return apiFetch('POST', '/system/download-model', { model_name: modelName, force });
+export async function downloadModel(
+    modelName: string,
+    force = false,
+    loadAfter = false,
+): Promise<{ status: string; model: string }> {
+    return apiFetch('POST', '/system/download-model', {
+        model_name: modelName,
+        force,
+        load_after: loadAfter,
+    });
 }
 
 // -- Agents --------------------------------------------------------------------
