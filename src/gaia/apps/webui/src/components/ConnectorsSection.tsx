@@ -102,6 +102,8 @@ export function ConnectorsSection() {
     const [disconnectNotice, setDisconnectNotice] = useState<string | null>(null);
     const [expanded, setExpanded] = useState<string | null>(null);
     const [query, setQuery] = useState('');
+    // Kept here, not in the tile: a first save moves the tile into "Connected" and remounts it.
+    const [checks, setChecks] = useState<Record<string, McpCheck | null>>({});
 
     const load = useCallback(async () => {
         try {
@@ -176,6 +178,8 @@ export function ConnectorsSection() {
                     expanded={expanded === c.id}
                     onToggle={() => toggle(c.id)}
                     onChanged={() => void onChanged(c.id)}
+                    check={checks[c.id] ?? null}
+                    onCheck={(next) => setChecks((prev) => ({ ...prev, [c.id]: next }))}
                 />
             ))}
         </div>
@@ -253,16 +257,22 @@ export function ConnectorsSection() {
 
 // ── ConnectorTile ────────────────────────────────────────────────────────────
 
+type McpCheck = { state: 'checking' } | { state: 'ok' } | { state: 'failed'; detail: string };
+
 function ConnectorTile({
     connector,
     expanded,
     onToggle,
     onChanged,
+    check,
+    onCheck,
 }: {
     connector: ConnectorRow;
     expanded: boolean;
     onToggle: () => void;
     onChanged: () => void;
+    check: McpCheck | null;
+    onCheck: (next: McpCheck | null) => void;
 }) {
     const t = useT();
     // Status for the tile header (#1004): an unconfigured connector's group already says so,
@@ -310,7 +320,12 @@ function ConnectorTile({
                     {connector.type === 'oauth_pkce' ? (
                         <OAuthConfigureBody connector={connector} onChanged={onChanged} />
                     ) : (
-                        <MCPServerConfigureBody connector={connector} onChanged={onChanged} />
+                        <MCPServerConfigureBody
+                            connector={connector}
+                            onChanged={onChanged}
+                            check={check}
+                            onCheck={onCheck}
+                        />
                     )}
                     {connector.configured && (
                         <ConnectorAgentGrants
@@ -826,9 +841,13 @@ function OAuthClientEditor({
 function MCPServerConfigureBody({
     connector,
     onChanged,
+    check,
+    onCheck,
 }: {
     connector: ConnectorRow;
     onChanged: () => void;
+    check: McpCheck | null;
+    onCheck: (next: McpCheck | null) => void;
 }) {
     const t = useT();
     const [values, setValues] = useState<Record<string, string>>(() =>
@@ -862,8 +881,20 @@ function MCPServerConfigureBody({
             setTimeout(() => setSaved(false), 2200);
         } catch (e) {
             setErr(e instanceof Error ? e.message : String(e));
+            return;
         } finally {
             setBusy(false);
+        }
+        void handleCheck();
+    };
+
+    const handleCheck = async () => {
+        onCheck({ state: 'checking' });
+        try {
+            const result = await api.testConnector(connector.id);
+            onCheck(result.ok ? { state: 'ok' } : { state: 'failed', detail: result.detail });
+        } catch (e) {
+            onCheck({ state: 'failed', detail: e instanceof Error ? e.message : String(e) });
         }
     };
 
@@ -872,6 +903,7 @@ function MCPServerConfigureBody({
         setErr(null);
         try {
             await api.disconnectConnector(connector.id);
+            onCheck(null);
             setValues(Object.fromEntries(connector.mcp_env_keys.map((k) => [k, ''])));
             onChanged();
         } catch (e) {
@@ -973,6 +1005,15 @@ function MCPServerConfigureBody({
                 {connector.configured && (
                     <button
                         className="btn-secondary"
+                        disabled={busy || check?.state === 'checking'}
+                        onClick={() => void handleCheck()}
+                    >
+                        {t('settings.connectors.check')}
+                    </button>
+                )}
+                {connector.configured && (
+                    <button
+                        className="btn-secondary"
                         disabled={busy}
                         onClick={() => void handleDisconnect()}
                     >
@@ -990,6 +1031,31 @@ function MCPServerConfigureBody({
                     </a>
                 )}
             </div>
+            {check?.state === 'checking' && (
+                <p className="connector-check" role="status">
+                    <Loader2 size={12} className="spin" />
+                    {t('settings.connectors.checking', { name: connector.display_name })}
+                </p>
+            )}
+            {check?.state === 'ok' && (
+                <p className="connector-check connector-check--ok" role="status">
+                    <CheckCircle2 size={12} />
+                    {t('settings.connectors.checkOk', { name: connector.display_name })}
+                </p>
+            )}
+            {check?.state === 'failed' && (
+                <div className="connector-check connector-check--failed" role="alert">
+                    <p>
+                        {keyless
+                            ? t('settings.connectors.checkFailed', { name: connector.display_name })
+                            : t('settings.connectors.checkFailedKey', { name: connector.display_name })}
+                    </p>
+                    <details>
+                        <summary>{t('settings.connectors.checkDetails')}</summary>
+                        <pre dir="ltr">{check.detail}</pre>
+                    </details>
+                </div>
+            )}
         </div>
     );
 }

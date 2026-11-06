@@ -12,7 +12,7 @@ Tests cover:
 - McpServerHandler.get_credential fails closed on missing keyring entry
 - McpServerHandler.disconnect removes entry from mcp_servers.json
 - McpServerHandler.disconnect deletes keyring entries
-- McpServerHandler.test returns ok=True when all keys present
+- McpServerHandler.test starts the server once and reports whether it started
 - McpServerHandler.test returns ok=False with detail on missing keys
 - mcp_servers.json has no plaintext secrets after configure
 - MCPClient._resolve_keyring_refs resolves references
@@ -256,19 +256,75 @@ class TestDisconnect:
 # ---------------------------------------------------------------------------
 
 
+_FAKE_SERVER = """
+import json, sys, time
+mode = sys.argv[1]
+if mode == "auth-fails":
+    sys.stderr.write("Authentication failed - check your tokens\\n")
+    sys.exit(1)
+if mode == "hangs":
+    time.sleep(60)
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg:
+        continue
+    if msg["method"] == "initialize":
+        result = {"protocolVersion": msg["params"]["protocolVersion"],
+                  "capabilities": {"tools": {}},
+                  "serverInfo": {"name": "fake", "version": "0"}}
+    elif msg["method"] == "tools/list":
+        result = {"tools": [{"name": "ping", "description": "", "inputSchema": {"type": "object"}}]}
+    else:
+        result = {}
+    print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
+"""
+
+
+def _configured_fake(fake_home, mode, **extra):
+    import sys
+
+    script = fake_home / "fake_server.py"
+    script.write_text(_FAKE_SERVER)
+    spec = _make_spec(id="mcp-fake", mcp_env_keys=())
+    _write_mcp_servers_json(
+        {spec.id: {"command": sys.executable, "args": [str(script), mode], **extra}}
+    )
+    return spec
+
+
 class TestHealthCheck:
     @pytest.mark.asyncio
-    async def test_ok_when_all_keys_present(self):
-        spec = _make_spec()
-        handler = McpServerHandler()
+    async def test_a_server_that_starts_passes(self, fake_home):
+        spec = _configured_fake(fake_home, "works")
 
-        with patch(
-            "gaia.connectors.mcp_server.keyring.get_password",
-            return_value="some-value",
-        ):
-            result = await handler.test(spec)
+        result = await McpServerHandler().test(spec)
 
-        assert result["ok"] is True
+        assert result == {"ok": True, "detail": "started, 1 tool"}
+
+    @pytest.mark.asyncio
+    async def test_a_server_that_rejects_its_token_fails_with_its_reason(
+        self, fake_home
+    ):
+        spec = _configured_fake(fake_home, "auth-fails")
+
+        result = await McpServerHandler().test(spec)
+
+        assert result["ok"] is False
+        assert "Authentication failed" in result["detail"]
+
+    @pytest.mark.asyncio
+    async def test_a_server_that_never_answers_fails_at_its_timeout(self, fake_home):
+        spec = _configured_fake(fake_home, "hangs", timeout=1)
+
+        result = await McpServerHandler().test(spec)
+
+        assert result == {"ok": False, "detail": "did not start within 1 seconds"}
+
+    @pytest.mark.asyncio
+    async def test_an_unconfigured_server_fails(self):
+        result = await McpServerHandler().test(_make_spec(mcp_env_keys=()))
+
+        assert result == {"ok": False, "detail": "not configured"}
 
     @pytest.mark.asyncio
     async def test_fail_when_key_missing(self):
@@ -283,14 +339,6 @@ class TestHealthCheck:
 
         assert result["ok"] is False
         assert "GITHUB_TOKEN" in result["detail"]
-
-    @pytest.mark.asyncio
-    async def test_ok_when_no_keys_required(self):
-        spec = _make_spec(mcp_env_keys=())
-        handler = McpServerHandler()
-        result = await handler.test(spec)
-        assert result["ok"] is True
-        assert result["detail"] == "no_secrets_required"
 
 
 # ---------------------------------------------------------------------------

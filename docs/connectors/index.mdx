@@ -81,7 +81,17 @@ yet. Track progress and request priorities at
 ## Check your setup
 
 Run `gaia connectors test <id>` (for example `gaia connectors test google`)
-to run a connector's health check. Every agent that needs a connector
+to run a connector's health check, or click **Check** on a connected tile in
+Settings → Connectors. GAIA also runs it right after you save a key.
+
+- **Accounts (OAuth):** GAIA refreshes the sign-in, so a revoked account fails.
+- **MCP servers:** GAIA starts the server once, the way chat does, and reports
+  whether it started. A server that checks its key at startup, like Slack,
+  fails on a revoked or wrong key. Others, like GitHub and Tavily, only check
+  the key when a tool runs, so they start fine even with a bad one. A passing
+  check means the server starts; it doesn't prove the key works.
+
+Every agent that needs a connector
 declares it, so the connector's **Per-agent grants** section in Settings →
 Connectors lists each one with the scopes it asks for — the GAIA agent, for
 example, appears under Google with its mailbox scopes.

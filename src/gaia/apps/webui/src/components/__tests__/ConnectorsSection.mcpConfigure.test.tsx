@@ -15,6 +15,7 @@ vi.mock('../../services/api', () => ({
     disableConnector: vi.fn(),
     listConnectorGrants: vi.fn(),
     listConnectorActivations: vi.fn(),
+    testConnector: vi.fn(),
 }));
 
 vi.mock('../../hooks/useConnectorsSSE', () => ({
@@ -62,6 +63,7 @@ beforeEach(() => {
     mocked.listConnectorGrants.mockResolvedValue({ grants: [] } as never);
     mocked.listConnectorActivations.mockResolvedValue({ activations: {} } as never);
     mocked.configureConnector.mockResolvedValue({ configured: true } as never);
+    mocked.testConnector.mockResolvedValue({ ok: true, detail: 'started, 1 tool' });
 });
 
 describe('MCP connector configure panel', () => {
@@ -107,5 +109,35 @@ describe('MCP connector configure panel', () => {
                 GITHUB_TOKEN: 'ghp_test',
             }),
         );
+    });
+
+    it('checks that the server starts right after a save', async () => {
+        const github = { id: 'mcp-github', display_name: 'GitHub', mcp_env_keys: ['GITHUB_TOKEN'] };
+        mocked.getConnector.mockResolvedValue(mcpRow({ ...github, configured: true }));
+        await openTile(mcpRow(github));
+        fireEvent.change(screen.getByPlaceholderText('Enter value'), {
+            target: { value: 'ghp_test' },
+        });
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+        expect(await screen.findByText('GitHub started without errors.')).toBeInTheDocument();
+        expect(mocked.testConnector).toHaveBeenCalledWith('mcp-github');
+    });
+
+    it('says a connected server that will not start is broken, with the reason', async () => {
+        mocked.testConnector.mockResolvedValue({
+            ok: false,
+            detail: 'Authentication failed - check your Slack tokens',
+        });
+        await openTile(
+            mcpRow({ id: 'mcp-slack', display_name: 'Slack', configured: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'] }),
+        );
+
+        fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+
+        expect(
+            await screen.findByText("Slack didn't start. Check the token, then save it again."),
+        ).toBeInTheDocument();
+        expect(screen.getByText('Authentication failed - check your Slack tokens')).toBeInTheDocument();
     });
 });
