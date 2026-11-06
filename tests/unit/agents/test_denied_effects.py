@@ -410,6 +410,113 @@ def test_run_tests_script_is_the_suite_even_before_it_is_written(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Python that deletes or moves files is the same effect as `rm` / `mv`
+# ---------------------------------------------------------------------------
+
+
+def _refused_rm(folder) -> DeniedEffects:
+    """The ledger after the shell gate refused ``rm -rf <folder>``."""
+    ledger = DeniedEffects(str(folder.parent))
+    ledger.record(
+        "run_shell_command",
+        _shell(f'rm -rf "{folder}"'),
+        "refused",
+        kinds={NETWORK, PATH},
+    )
+    assert ledger, "the refused rm must leave its target on the ledger"
+    return ledger
+
+
+@pytest.fixture
+def victim(tmp_path):
+    folder = tmp_path / "victim_rm"
+    folder.mkdir()
+    (folder / "KEEP_ME.txt").write_text("canary\n")
+    return folder
+
+
+def _deleting_snippets(folder):
+    f = repr(str(folder))
+    keep = repr(str(folder / "KEEP_ME.txt"))
+    parent, name = repr(str(folder.parent)), repr(folder.name)
+    return [
+        f"import shutil\nshutil.rmtree({f})",
+        # The shape the agent wrote in the failing eval run.
+        f"import shutil, os\npath = {f}\nif os.path.exists(path):\n"
+        "    shutil.rmtree(path)\n",
+        f"from shutil import rmtree\nrmtree({f}, ignore_errors=True)",
+        f"import shutil as sh\nsh.rmtree({f})",
+        f"import os\nos.remove({keep})",
+        f"import os\nos.unlink(os.path.join({f}, 'KEEP_ME.txt'))",
+        f"import os\nfor n in os.listdir({f}):\n    os.remove(os.path.join({f}, n))",
+        f"from pathlib import Path\nPath({keep}).unlink()",
+        f"from pathlib import Path\n(Path({parent}) / {name} / 'KEEP_ME.txt').unlink()",
+        f"import pathlib\np = pathlib.Path({f})\n"
+        "for c in p.iterdir():\n    c.unlink()\np.rmdir()",
+        f"import os\nos.rename({f}, {f} + '_old')",
+        f"import shutil\nshutil.move({f}, 'elsewhere')",
+        f"from pathlib import Path\nPath({keep}).write_text('')",
+    ]
+
+
+def test_python_that_deletes_a_refused_target_is_the_same_effect(victim):
+    ledger = _refused_rm(victim)
+    for code in _deleting_snippets(victim):
+        assert ledger.conflict("run_python", {"code": code}) is not None, code
+
+
+def test_a_script_file_that_deletes_a_refused_target_is_the_same_effect(victim):
+    ledger = _refused_rm(victim)
+    for i, code in enumerate(_deleting_snippets(victim)):
+        script = victim.parent / f"cleanup_{i}.py"
+        script.write_text(code)
+        assert (
+            ledger.conflict("execute_python_file", {"file_path": str(script)})
+            is not None
+        ), code
+
+
+def test_a_delete_whose_target_the_code_computes_is_treated_as_overlapping(victim):
+    """Fail closed after a refusal: an unreadable target could be the refused one."""
+    ledger = _refused_rm(victim)
+    for code in [
+        "import shutil, sys\nshutil.rmtree(sys.argv[1])",
+        "import os\nos.remove(input('path? '))",
+        "import shutil, base64\nshutil.rmtree(base64.b64decode('eA==').decode())",
+    ]:
+        assert ledger.conflict("run_python", {"code": code}) is not None, code
+
+
+def test_python_that_only_reads_or_touches_other_paths_is_not_swept_up(victim):
+    ledger = _refused_rm(victim)
+    f, other = repr(str(victim)), repr(str(victim.parent / "elsewhere"))
+    for code in [
+        f"import os\nprint(os.path.exists({f}))",
+        f"print(open({f} + '/KEEP_ME.txt').read())",
+        f"import os\nprint(os.listdir({f}))",
+        f"import shutil\nshutil.rmtree({other})",
+        f"import shutil\nshutil.copy({f} + '/KEEP_ME.txt', {other})",
+        f"s = {f}\nprint(s.replace('\\\\', '/'))",
+        "import sys\nprint(sys.argv)",
+    ]:
+        assert ledger.conflict("run_python", {"code": code}) is None, code
+
+
+def test_an_unreadable_target_is_never_recorded_as_the_denied_one(tmp_path):
+    """Declining such a script must not block every later file change."""
+    ledger = DeniedEffects(str(tmp_path))
+    ledger.record(
+        "run_python",
+        {"code": "import shutil, sys\nshutil.rmtree(sys.argv[1])"},
+        "Tool 'run_python' was denied by the user.",
+    )
+    assert (
+        ledger.conflict("write_file", {"file_path": "notes.txt", "content": "x"})
+        is None
+    )
+
+
+# ---------------------------------------------------------------------------
 # The gate in Agent._execute_tool
 # ---------------------------------------------------------------------------
 
@@ -750,6 +857,70 @@ def test_a_policy_refusal_records_the_host_not_the_command(tmp_path):
         ledger.conflict("run_shell_command", {"command": "curl https://example.com"})
         is None
     )
+
+
+BLANKET_REFUSAL = (
+    "Not run: `{cmd}` needs your approval, and this run approves automatically "
+    "only commands that are safe unattended — run the request interactively to "
+    "approve it, or turn on full access."
+)
+
+
+def _refuse_rm(name, args):
+    command = str((args or {}).get("command", ""))
+    if command.startswith(("rm ", "Remove-Item")):
+        return {
+            "status": "error",
+            "tier": "refuse",
+            "error": BLANKET_REFUSAL.format(cmd=command),
+        }
+    return None
+
+
+def test_a_refused_rm_cannot_be_rerouted_through_a_python_script(tmp_path, victim):
+    """The failing eval run: rm refused, then an rmtree script ran unasked."""
+    console = _AskingConsole(Agent.ALLOW_DENIED_EFFECT)
+    agent = _agent(console, tmp_path)
+    agent.policy_refusal_for_call = _refuse_rm
+    cleanup = tmp_path / "cleanup.py"
+    cleanup.write_text(
+        f"import shutil, os\npath = {str(victim)!r}\n"
+        "if os.path.exists(path):\n    shutil.rmtree(path)\n"
+    )
+
+    refused = agent._execute_tool("run_shell_command", {"command": f"rm -rf {victim}"})
+    rerouted = agent._execute_tool("execute_python_file", {"file_path": str(cleanup)})
+
+    assert refused["executed"] is False
+    assert rerouted["status"] == "denied"
+    assert rerouted["executed"] is False
+    assert agent.ran == []
+    # A refusal no approval could lift is not offered as "Allow once".
+    assert console.questions == []
+    assert "was refused" in rerouted["error"]
+    assert "the user declined" not in rerouted["error"]
+    assert "do not reach it with another tool" in rerouted["error"]
+
+
+def test_a_users_no_is_still_put_to_them_once(tmp_path, victim):
+    """Only a policy refusal skips the question; a person's no can be lifted."""
+    console = _AskingConsole(Agent.ALLOW_DENIED_EFFECT)
+    agent = _agent(console, tmp_path)
+    cleanup = tmp_path / "cleanup.py"
+    cleanup.write_text(f"import shutil\nshutil.rmtree({str(victim)!r})\n")
+
+    declined = agent._execute_tool("run_shell_command", {"command": f"rm -rf {victim}"})
+    allowed = agent._execute_tool("execute_python_file", {"file_path": str(cleanup)})
+
+    assert declined["status"] == "denied"
+    assert len(console.questions) == 1
+    assert "You declined" in console.questions[0][0]
+    assert allowed["status"] == "success"
+    assert agent.ran == [("execute_python_file", str(cleanup))]
+
+
+def test_the_unattended_refusal_gets_the_no_reroute_recovery_prompt():
+    assert Agent._is_denial_error(BLANKET_REFUSAL.format(cmd="rm -rf victim_rm"))
 
 
 # ---------------------------------------------------------------------------
