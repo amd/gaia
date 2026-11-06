@@ -3248,6 +3248,8 @@ func (m ChatModel) phasePhrase() string {
 			return "Reading the tool results"
 		}
 		return "Reading your request"
+	case "loading_tools":
+		return "Loading more tools"
 	case "reasoning":
 		if m.phase.words > 0 {
 			return "Reasoning · " + commas(m.phase.words) + " words"

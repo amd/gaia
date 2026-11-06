@@ -812,22 +812,31 @@ NPU_BACKEND_INSTALL_TIMEOUT = 600  # seconds; the FastFlowLM release download
 # own prompt (memory extraction, titles) first saved the conversation's cache to
 # host RAM — ~87s for a 30K-token Qwen3-30B context on a Radeon 8060S. A second
 # slot over one shared KV pool keeps the conversation resident, so the RAM copy
-# buys nothing; the similarity floor keeps a short side prompt off its slot.
+# buys nothing; the similarity floor keeps a short side prompt off its slot. The
+# third slot holds the full tool list primed, out of the side jobs' way.
 # Args the user saved for the model in Lemonade win (users_llamacpp_args).
 CHAT_LLAMACPP_ARGS = (
-    "--parallel 2 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5"
+    "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5"
 )
 #: Slots requests are pinned to (llama.cpp ``id_slot``). Left to LRU, a memory
 #: extraction landed on the conversation's slot and overwrote it, and the next
 #: turn re-read 28K tokens (109s). llama.cpp defers a request pinned to a slot
-#: it lacks forever, so the side slot is used only when the load reports it.
+#: it lacks forever, so the side slot is used only when the load reports it. A
+#: session that moves to the full tool list continues on ``FULL_TOOLS_SLOT``.
 CONVERSATION_SLOT = 0
 SIDE_SLOT = 1
+FULL_TOOLS_SLOT = 2
 
 #: Chat flags GAIA has saved into Lemonade's recipe_options.json itself: the
-#: current set and the single-slot set before it. Saved args outside this set
-#: are the user's, and a chat load keeps them instead of sending GAIA's.
-_GAIA_SAVED_CHAT_ARGS = frozenset({CHAT_LLAMACPP_ARGS, "--parallel 1"})
+#: current set and the ones before it. Saved args outside this set are the
+#: user's, and a chat load keeps them instead of sending GAIA's.
+_GAIA_SAVED_CHAT_ARGS = frozenset(
+    {
+        CHAT_LLAMACPP_ARGS,
+        "--parallel 2 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5",
+        "--parallel 1",
+    }
+)
 
 
 def users_llamacpp_args(catalog_entry: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -9290,7 +9299,7 @@ class LemonadeClient:
                 self.log.warning(
                     f"Could not read the model catalog at {self.base_url}/models "
                     f"to check {model_name}'s recipe ({e}); loading it without "
-                    "the two-slot chat flags, so side requests will evict the "
+                    "the multi-slot chat flags, so side requests will evict the "
                     "conversation cache."
                 )
             if recipe == "llamacpp":

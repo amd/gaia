@@ -855,6 +855,7 @@ const messages: Messages = {
     // Settings
     'settings.title': 'الإعدادات',
     'settings.sections': 'أقسام الإعدادات',
+    'chat.loadingTools': 'جارٍ تحميل المزيد من الأدوات',
     'settings.close': 'إغلاق الإعدادات',
     'settings.loading': 'جارٍ التحميل…',
     'settings.section.general': 'عام',
@@ -1622,8 +1623,8 @@ const messages: Messages = {
     'settings.advanced.save': 'حفظ',
     'settings.advanced.saved': 'تم الحفظ',
     'settings.advanced.saveFailed': 'تعذّر الحفظ',
-    'settings.advanced.dynamicTitle': 'تجريبي: الأدوات الديناميكية',
-    'settings.advanced.dynamicDesc': 'يقلّص قائمة الأدوات في كل دور إلى مجموعة مطابقة دلاليًا لتسريع أول استجابة. لا ينطبق هذا على وكيل GAIA بعد.',
+    'settings.advanced.dynamicTitle': 'الأدوات الديناميكية',
+    'settings.advanced.dynamicDesc': 'يبدأ كل محادثة بأكثر أدوات GAIA استخدامًا ويضيف الباقي عندما تحتاج إليه المهمة، فيصل الرد الأول أسرع. ينطبق ذلك على المحادثات الجديدة.',
     'settings.advanced.dynamicEnable': 'تفعيل تحميل الأدوات الديناميكي',
     'settings.advanced.dynamicOn': 'تفعيل الأدوات الديناميكية',
     'settings.advanced.dynamicOff': 'إيقاف الأدوات الديناميكية',
