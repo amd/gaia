@@ -109,6 +109,29 @@ Repeats of the same alert within 30 minutes join the open one.
 Emergency Bypass for it, and turn on Settings › Focus › Allow repeated calls. On Android, star the
 contact and allow starred contacts through Do Not Disturb.
 
+## Talking with GAIA on a call
+
+With mobile access on and a PIN set, a call from GAIA doesn't end after the
+alert. It connects to your PC:
+
+1. GAIA says the alert, then asks for your PIN. Enter it on the keypad and press **#**.
+2. Talk normally. GAIA answers in her own voice (Settings › Phone › Voice), from
+   your PC: the same agent, tools and memory as a chat.
+3. When something needs your OK, she says what she wants to do. Say **yes** or
+   **no**, or press **1** to allow or **2** to deny.
+4. Say **bye**, or hang up. The call is saved as a chat named "Phone call".
+
+Nothing is said and nothing runs before the right PIN. Three wrong PINs end the
+call. Without mobile access, calls say the alert sentence and hang up.
+
+## Calling GAIA
+
+Call GAIA's Twilio number from a number in your phone book. She asks for your
+PIN, then it's the same conversation. GAIA points the Twilio number at your PC
+whenever mobile access is on, so there's nothing to set in the Twilio console.
+Calls from any other number are rejected, and a caller ID that looks like
+yours still needs the PIN.
+
 ## Letting an agent alert you
 
 Turn on **Agents may alert me** to give the GAIA agent an `alert_owner` tool. The agent can then
