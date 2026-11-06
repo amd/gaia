@@ -294,7 +294,7 @@ export async function speak(
     text: string,
     opts: { voice?: string; speed?: number; signal?: AbortSignal } = {},
 ): Promise<Blob> {
-    const url = `${API_BASE}/speech`;
+    const url = `${getApiBase()}/speech`;
     const t = log.api.time();
     log.api.info(`POST ${url}`, { chars: text.length, voice: opts.voice });
     const res = await fetch(url, {
