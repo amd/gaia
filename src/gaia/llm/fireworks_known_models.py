@@ -17,6 +17,7 @@ once the list answers.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Dict, List
@@ -114,10 +115,18 @@ def start_env(config_dir: Path) -> Dict[str, str]:
         return {}
     from gaia.llm.cloud_keys import recall_key
     from gaia.llm.local_only import cloud_blocked
+    from gaia.llm.providers.fireworks import API_KEY_ENV_VARS
 
     if cloud_blocked():
         return {}
-    key = recall_key("fireworks")
+    key = next(
+        (
+            value.strip()
+            for name in API_KEY_ENV_VARS
+            if (value := os.environ.get(name)) and value.strip()
+        ),
+        None,
+    ) or recall_key("fireworks")
     check = check_model_list(key) if key else None
     if check is None or check.state is not ModelListState.FAILING:
         log.info("Fireworks' model list no longer needs the known models.")
