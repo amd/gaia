@@ -24,20 +24,50 @@ REPO_SRC = Path(__file__).resolve().parents[2] / "src"
 
 #: Prepended to a racing script. ``together()`` blocks until every racer is
 #: ready, so the processes overlap instead of running one after another.
+#: Every wait is bounded: a racer whose test died must exit, not spin forever.
 _TOGETHER = """
-import os as _os, time as _time
+import os as _os, sys as _sys, time as _time
+
+_WAIT_S = float(_os.environ.get("GAIA_TEST_WAIT_S", "120"))
+
+def _give_up(path, what):
+    print(f"racer gave up after {_WAIT_S:g}s waiting for {what} file {path}",
+          file=_sys.stderr)
+    _sys.exit(3)
 
 def together():
+    global _released
     open(_os.environ["GAIA_TEST_READY"], "w").close()
-    while not _os.path.exists(_os.environ["GAIA_TEST_GO"]):
+    go, deadline = _os.environ["GAIA_TEST_GO"], _time.monotonic() + _WAIT_S
+    while not _os.path.exists(go):
+        if _time.monotonic() > deadline:
+            _give_up(go, "go")
         _time.sleep(0.005)
+    _released = _time.monotonic()
 
 def finished():
     open(_os.environ["GAIA_TEST_DONE"], "w").close()
 
 def others_finished():
-    return _os.path.exists(_os.environ["GAIA_TEST_DONE"])
+    done = _os.environ["GAIA_TEST_DONE"]
+    if _os.path.exists(done):
+        return True
+    if _time.monotonic() > _released + _WAIT_S:
+        _give_up(done, "done")
+    return False
 """
+
+
+def _kill_all(procs) -> None:
+    """Kill and reap every racer still running, so a failed test leaves none."""
+    for proc in procs:
+        if proc.poll() is None:
+            proc.kill()
+    for proc in procs:
+        proc.wait()
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe:
+                pipe.close()
 
 
 def _spawn(code: str, tmp_path: Path, *args: str, env_extra=None) -> subprocess.Popen:
@@ -55,35 +85,72 @@ def _spawn(code: str, tmp_path: Path, *args: str, env_extra=None) -> subprocess.
     )
 
 
-def _race(tmp_path: Path, specs, tag: str = "race") -> list:
+def _race(tmp_path: Path, specs, tag: str = "race", ready_timeout: float = 60) -> list:
     """Start ``(script, *args)`` racers and release them at the same instant."""
     go, done = tmp_path / f"{tag}-go", tmp_path / f"{tag}-done"
     procs, readies = [], []
-    for i, (code, *args) in enumerate(specs):
-        ready = tmp_path / f"{tag}-ready-{i}"
-        readies.append(ready)
-        env = {
-            "GAIA_TEST_READY": str(ready),
-            "GAIA_TEST_GO": str(go),
-            "GAIA_TEST_DONE": str(done),
-        }
-        procs.append(_spawn(_TOGETHER + code, tmp_path, *args, env_extra=env))
-    deadline = time.monotonic() + 60
-    while not all(r.exists() for r in readies):
-        for proc in procs:
-            assert proc.poll() is None, proc.communicate()
-        assert time.monotonic() < deadline, "racers never became ready"
-        time.sleep(0.01)
+    try:
+        for i, (code, *args) in enumerate(specs):
+            ready = tmp_path / f"{tag}-ready-{i}"
+            readies.append(ready)
+            env = {
+                "GAIA_TEST_READY": str(ready),
+                "GAIA_TEST_GO": str(go),
+                "GAIA_TEST_DONE": str(done),
+            }
+            procs.append(_spawn(_TOGETHER + code, tmp_path, *args, env_extra=env))
+        deadline = time.monotonic() + ready_timeout
+        while not all(r.exists() for r in readies):
+            for proc in procs:
+                assert proc.poll() is None, proc.communicate()
+            assert time.monotonic() < deadline, "racers never became ready"
+            time.sleep(0.01)
+    except BaseException:
+        _kill_all(procs)
+        raise
     go.touch()
     return procs
 
 
 def _finish(procs, timeout: float = 120):
     results = []
-    for proc in procs:
-        out, err = proc.communicate(timeout=timeout)
-        results.append((proc.returncode, out, err))
+    try:
+        for proc in procs:
+            out, err = proc.communicate(timeout=timeout)
+            results.append((proc.returncode, out, err))
+    except BaseException:
+        _kill_all(procs)
+        raise
     return results
+
+
+def test_race_that_fails_before_release_leaves_no_racer_running(tmp_path, monkeypatch):
+    spawned, real_spawn = [], _spawn
+
+    def spawn(*args, **kwargs):
+        spawned.append(real_spawn(*args, **kwargs))
+        return spawned[-1]
+
+    monkeypatch.setattr(sys.modules[__name__], "_spawn", spawn)
+    specs = [("together()\n",), ("together()\n",), ("import time\ntime.sleep(600)\n",)]
+    with pytest.raises(AssertionError, match="never became ready"):
+        _race(tmp_path, specs, ready_timeout=15)
+    assert len(spawned) == 3
+    assert [p.poll() for p in spawned if p.poll() is None] == []
+
+
+def test_racer_gives_up_when_never_released(tmp_path):
+    go = tmp_path / "never-go"
+    env = {
+        "GAIA_TEST_READY": str(tmp_path / "ready"),
+        "GAIA_TEST_GO": str(go),
+        "GAIA_TEST_DONE": str(tmp_path / "done"),
+        "GAIA_TEST_WAIT_S": "0.5",
+    }
+    proc = _spawn(_TOGETHER + "together()\n", tmp_path, env_extra=env)
+    rc, _, err = _finish([proc], timeout=60)[0]
+    assert rc != 0
+    assert str(go) in err
 
 
 # --------------------------------------------------------------------------
@@ -590,7 +657,10 @@ def fetcher(url):
         return b"id: demo\\nname: Demo\\n"
     if url.endswith(artifact):
         ready.touch()
+        deadline = time.monotonic() + 120
         while not go.exists():
+            if time.monotonic() > deadline:
+                sys.exit(f"gave up after 120s waiting for go file {go}")
             time.sleep(0.01)
         return b"wheel-bytes"
     raise AssertionError(url)

@@ -295,6 +295,7 @@ def run(host: str = HOST) -> None:
     from gaia.daemon.lifetime import (
         DaemonIdle,
         LifetimeWatch,
+        app_path_from_env,
         exit_with_pid_from_env,
         idle_exit_seconds_from_env,
     )
@@ -303,6 +304,7 @@ def run(host: str = HOST) -> None:
     from gaia.daemon.sidecars.spec import builtin_specs
 
     exit_with_pid = exit_with_pid_from_env()
+    app_path = app_path_from_env()
     idle_limit = idle_exit_seconds_from_env()
 
     # One-time versioned state migration (§0.10 step 0). Runs before the port is
@@ -404,13 +406,15 @@ def run(host: str = HOST) -> None:
     )
 
     # Exit once nothing can find this daemon (its home or instance.json is
-    # gone), the GAIA_DAEMON_EXIT_WITH_PID process has exited, or, outside the
-    # default home, nothing has used it for the idle limit.
+    # gone), the GAIA_DAEMON_EXIT_WITH_PID process has exited, the app that
+    # started it was deleted, or, outside the default home, nothing has used it
+    # for the idle limit.
     lifetime = LifetimeWatch(
         _exit_on_own,
         exit_with_pid=exit_with_pid,
         idle=idle,
         idle_limit=idle_limit,
+        app_path=app_path,
     )
 
     _register = _build_register(

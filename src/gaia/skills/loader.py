@@ -24,7 +24,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Optional
 
-from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.tools import _TOOL_REGISTRY, tool_build
 from gaia.logger import get_logger
 from gaia.skills.errors import FORMAT_DOCS_URL, SkillValidationError
 from gaia.skills.format import SKILL_TOOLS_FILENAME, Skill, SkillTool
@@ -102,7 +102,10 @@ def register_skill_tools(skill: Skill) -> dict[str, dict[str, Any]]:
         try:
             if added_syspath:
                 sys.path.insert(0, skill_dir)
-            module = _import_tools_module(module_name, tools_path, skill)
+            # Its own scope: the bare names are swapped for namespaced ones below,
+            # so sharing one with the agent's tools is not a collision.
+            with tool_build():
+                module = _import_tools_module(module_name, tools_path, skill)
             # A skill tool may share an unqualified name with a registry tool
             # (a skill providing ``search_web`` alongside BrowserToolsMixin is
             # exactly what the ``<skill>/<tool>`` namespace exists for), and the

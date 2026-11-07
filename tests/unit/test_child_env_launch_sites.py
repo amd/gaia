@@ -182,6 +182,7 @@ def test_diarization_engine_install_is_trimmed(monkeypatch):
     run = Recorder(raises=subprocess.CalledProcessError(1, ["pip"]))
     monkeypatch.setattr(diarize, "_package_installed", lambda: False)
     monkeypatch.delattr(diarize.sys, "frozen", raising=False)
+    monkeypatch.setattr("gaia.agents.install_hints._pip_available", lambda: True)
     monkeypatch.setattr(diarize.subprocess, "run", run)
 
     with pytest.raises(diarize.DiarizationError):

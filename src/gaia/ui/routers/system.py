@@ -31,7 +31,7 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.lemonade_manager import gpu_display_info
 
-from .. import warmup
+from .. import security, warmup
 from ..agent_loop import resolve_agent_mode
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_dispatch_queue
@@ -713,11 +713,18 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                     # frontend can name it precisely in the warning banner.
                     status.default_model_name = custom_model or default_model
 
-                # When no LLM is loaded, check if the expected model is downloaded.
+                # When the expected model isn't loaded, check if it is downloaded.
                 # Respects the custom_model override.
                 # Uses show_all=true to see models that are in the catalog but not
                 # yet pulled to disk.
-                if not status.model_loaded and status.default_model_name:
+                expected_missing = (
+                    not status.model_loaded or not status.expected_model_loaded
+                )
+                if (
+                    expected_missing
+                    and status.default_model_name
+                    and not status.default_model_is_cloud
+                ):
                     _target = status.default_model_name
                     try:
                         catalog_resp = await client.get(
@@ -999,13 +1006,18 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
 
 
 @router.post("/api/system/warm-up", response_model=WarmUpStatus)
-async def request_warm_up():
+async def request_warm_up(fresh: bool = False):
     """Prime the prompt a new chat's first turn sends; returns the warm-up state.
 
     Called when the user opens a new chat. Debounced and single-flight, so a
     repeat call while one runs, or just after one finished, changes nothing.
+    ``?fresh=true`` retries a picked model's load: it skips the debounce and
+    runs after a warm-up already under way.
     """
-    warmup.request_warm_up("new chat")
+    if fresh:
+        warmup.request_warm_up("model pick retry", fresh=True)
+    else:
+        warmup.request_warm_up("new chat")
     return WarmUpStatus(**warmup.warm_up_status())
 
 
@@ -1090,12 +1102,13 @@ async def _check_model_status(model_name: str) -> ModelStatus:
     return status
 
 
-def _resolve_dynamic_tools_setting(db: ChatDatabase) -> tuple[bool, bool]:
-    """Return ``(effective, locked)`` for the Beta dynamic tool loader (#1798).
+def _resolve_dynamic_tools_setting() -> tuple[bool, bool]:
+    """Return ``(effective, locked)`` for dynamic tool loading.
 
     ``GAIA_DYNAMIC_TOOLS`` wins when set (``locked=True`` ⇒ the frontend
     reflects the effective value and disables the toggle, never a silent
-    no-op); otherwise the persisted ``dynamic_tools`` setting is authoritative.
+    no-op); otherwise ``dynamic_tools`` in ``~/.gaia/config.json`` decides, the
+    one place every agent process reads, the flagship's sidecar included.
     Delegates the env parse to ``dynamic_tools_env_override`` so the UI and
     ``ChatAgent._resolve_dynamic_tools_enabled`` share one truthy set.
     """
@@ -1103,12 +1116,12 @@ def _resolve_dynamic_tools_setting(db: ChatDatabase) -> tuple[bool, bool]:
     # (no cycle, no module-load cost). The helper lives in the core tool_loader
     # (not an agent wheel) so this core UI setting works without one installed.
     from gaia.agents.base.tool_loader import dynamic_tools_env_override
+    from gaia.config import GaiaConfig
 
-    persisted = db.get_setting("dynamic_tools", "false") == "true"
     override = dynamic_tools_env_override()
     if override is not None:
         return override, True
-    return persisted, False
+    return GaiaConfig.load().dynamic_tools, False
 
 
 @router.get("/api/settings", response_model=SettingsResponse)
@@ -1118,7 +1131,7 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
-    dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting(db)
+    dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting()
     logger.debug(
         "Settings loaded: custom_model=%s, context_size=%s, agent_mode=%s, "
         "dynamic_tools=%s (locked=%s)",
@@ -1129,6 +1142,8 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
         dynamic_tools_locked,
     )
     model_status = await _check_model_status(custom_model) if custom_model else None
+    from gaia.llm.local_only import cloud_blocked
+
     return SettingsResponse(
         custom_model=custom_model or None,
         model_status=model_status,
@@ -1136,12 +1151,15 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
         agent_mode=agent_mode,
         dynamic_tools=dynamic_tools,
         dynamic_tools_locked=dynamic_tools_locked,
+        network_policy="local_ai_only" if cloud_blocked() else "cloud_allowed",
     )
 
 
 @router.put("/api/settings", response_model=SettingsResponse)
 async def update_settings(
-    request: SettingsUpdateRequest, db: ChatDatabase = Depends(get_db)
+    request: SettingsUpdateRequest,
+    http_request: Request,
+    db: ChatDatabase = Depends(get_db),
 ):
     """Update user settings.
 
@@ -1212,15 +1230,44 @@ async def update_settings(
     ):
         # Persist the user's intent even while GAIA_DYNAMIC_TOOLS locks the
         # effective value — so their choice applies once the env var is unset.
-        db.set_setting("dynamic_tools", "true" if request.dynamic_tools else "false")
+        from gaia.config import GaiaConfig
+
+        GaiaConfig.save_key("dynamic_tools", request.dynamic_tools)
         logger.info("Dynamic tools setting persisted: %s", request.dynamic_tools)
+
+    policy_warnings: List[str] = []
+    policy_notices: List[Dict[str, Any]] = []
+    if (
+        "network_policy" in request.model_fields_set
+        and request.network_policy is not None
+    ):
+        security.require_local_pc(http_request)
+        from gaia.llm import local_only
+
+        try:
+            result = local_only.apply_policy(request.network_policy)
+        except (ValueError, OSError) as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        policy_warnings = result["warnings"]
+        policy_notices = result["notices"]
+        if result["policy"] is local_only.NetworkPolicy.LOCAL_AI_ONLY:
+            # Preserve a local custom model; only a cloud selection would keep
+            # the UI pointing at a model the shared cleanup has removed.
+            custom = (db.get_setting("custom_model") or "").strip()
+            if custom and (
+                cloud_model_provider(custom) or custom.lower().startswith("claude")
+            ):
+                db.set_setting("custom_model", None)
+        logger.info("Network policy set: %s", result["policy"].value)
 
     custom_model = db.get_setting("custom_model")
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
-    dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting(db)
+    dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting()
     model_status = await _check_model_status(custom_model) if custom_model else None
+    from gaia.llm.local_only import cloud_blocked
+
     return SettingsResponse(
         custom_model=custom_model or None,
         model_status=model_status,
@@ -1228,6 +1275,9 @@ async def update_settings(
         agent_mode=agent_mode,
         dynamic_tools=dynamic_tools,
         dynamic_tools_locked=dynamic_tools_locked,
+        network_policy="local_ai_only" if cloud_blocked() else "cloud_allowed",
+        policy_warnings=policy_warnings,
+        policy_notices=policy_notices,
     )
 
 
@@ -1467,7 +1517,7 @@ async def work_in_progress(request: Request, db: ChatDatabase = Depends(get_db))
         # A model download started from Retry or Settings runs outside a setup run.
         setup=setup_status.get("state") in ("running", "verifying")
         or any(
-            m.get("state") in ("queued", "downloading")
+            m.get("state") in ("queued", "downloading", "verifying")
             for m in setup_status.get("models") or []
         ),
     )

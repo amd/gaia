@@ -51,6 +51,7 @@ from gaia.agents.install_hints import (
     gaia_extra_requirements,
     resolve_pip_frontend,
 )
+from gaia.frozen import is_frozen
 from gaia.installer import model_choice
 from gaia.installer._stdin import stdin_is_tty
 from gaia.llm.model_fit import MachineCapacity, format_gb
@@ -363,8 +364,9 @@ def resolve_init_chat_model(
     client, *, reset_corrupt: bool, enforce_fit: bool, profile: str = "gaia"
 ) -> ChatModelChoice:
     """The chat model `gaia init` sets up: the user's ``default_model`` when it
-    is a local Lemonade model, else the largest default that fits this machine
-    (Qwen3.6 35B A3B wherever a GPU holds it, Gemma 4 E4B everywhere else).
+    is a local Lemonade model, else the downloaded local model they last
+    chatted on, else the largest default that fits this machine (Qwen3.6 35B
+    A3B wherever a GPU holds it, Gemma 4 E4B everywhere else).
 
     ``--check`` and ``run()`` both go through here so they can never disagree
     about what "set up" means on this machine. ``reset_corrupt`` is run()'s
@@ -382,12 +384,13 @@ def resolve_init_chat_model(
 
     on_npu = profile == "npu"
     try:
-        configured = GaiaConfig.load().default_model
+        config = GaiaConfig.load()
     except GaiaConfigError as e:
         if not reset_corrupt:
             raise
         log.warning("Ignoring corrupt config; gaia init rewrites it: %s", e)
-        configured = None
+        config = None
+    configured = config.default_model if config else None
     # A Claude or cloud default has nothing to download; the local chat model
     # then follows the hardware, and the user's setting is left as it is.
     # `--profile npu` asks for the NPU, so a GPU default does not hold there;
@@ -402,6 +405,9 @@ def resolve_init_chat_model(
         if enforce_fit:
             _refuse_if_it_does_not_fit(client, configured)
         return ChatModelChoice(model_id=configured, user_set=True, skipped=[])
+    in_use = _local_model_in_use(client, config, on_npu)
+    if in_use:
+        return ChatModelChoice(model_id=in_use, user_set=True, skipped=[])
     recommend = recommend_npu_chat_model if on_npu else recommend_default_chat_model
     model_id, skipped, capacity = recommend(client)
     capacity_pick = (
@@ -416,6 +422,22 @@ def resolve_init_chat_model(
         capacity=capacity,
         capacity_pick=capacity_pick,
     )
+
+
+def _local_model_in_use(client, config, on_npu: bool) -> Optional[str]:
+    """The downloaded local model last chatted on, or None.
+
+    Someone who set up on a cloud model and then picked a local one has no
+    local ``default_model``; setup must not then demand the hardware defaults.
+    """
+    from gaia.llm.lemonade_client import cloud_model_provider, runs_on_npu
+
+    model = config.last_model if config else None
+    if not model or config.last_provider != "local" or cloud_model_provider(model):
+        return None
+    if on_npu and not runs_on_npu(model):
+        return None
+    return model if client.check_model_available(model) else None
 
 
 def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
@@ -535,11 +557,17 @@ def _snapshot_bytes(snapshot: Path) -> Optional[int]:
 def bytes_already_on_disk(client, model_ids, store_path: Optional[str]) -> dict:
     """Bytes of each model Lemonade's store already holds: finished files and
     the ``.partial`` ones an interrupted pull left. None for a model GAIA
-    cannot look up: a store not on this PC, or no known checkpoint."""
+    cannot look up: a store not on this PC, one this user cannot read, or no
+    known checkpoint."""
     from gaia.llm.lemonade_client import _model_ids_match
 
     store = Path(store_path) if store_path else None
-    if store is None or not store.is_dir():
+    try:
+        readable = store is not None and store.is_dir()
+    except OSError as e:
+        log.warning("Cannot read Lemonade's model store %s: %s", store, e)
+        readable = False
+    if not readable:
         return {m: None for m in model_ids}
     catalog = client.list_models(show_all=True).get("data", [])
     found = {}
@@ -553,11 +581,16 @@ def bytes_already_on_disk(client, model_ids, store_path: Optional[str]) -> dict:
             continue
         repo = checkpoint.split(":", 1)[0]
         snapshots = store / ("models--" + repo.replace("/", "--")) / "snapshots"
-        counted = (
-            [_snapshot_bytes(s) for s in snapshots.iterdir() if s.is_dir()]
-            if snapshots.is_dir()
-            else []
-        )
+        try:
+            counted = (
+                [_snapshot_bytes(s) for s in snapshots.iterdir() if s.is_dir()]
+                if snapshots.is_dir()
+                else []
+            )
+        except OSError as e:
+            log.warning("Cannot read Lemonade's model store %s: %s", snapshots, e)
+            found[model_id] = None
+            continue
         found[model_id] = None if None in counted else sum(counted)
     return found
 
@@ -885,20 +918,29 @@ def check_setup_status(
 
 
 def _terminal_installer_agent() -> Optional[Path]:
-    """The flagship install.sh / install.ps1 put in GAIA's bin dir, else None.
+    """The flagship an installer shipped outside the hub, else None.
 
-    Those installers ship it there, on PATH, with no hub sentinel; the TUI runs
-    it from PATH.
+    install.sh / install.ps1 put it in GAIA's bin dir. The terminal packages
+    ship it with the frozen gaia: beside it (Windows setup) or on PATH (.deb,
+    .rpm, .pkg). None of them write a hub sentinel; the TUI runs it from any
+    of these places. A pip install's PATH is not trusted for it.
     """
     from gaia.home import gaia_home
 
     name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
-    path = gaia_home() / "bin" / name
-    if not path.is_file():
-        return None
-    if sys.platform != "win32" and not os.access(path, os.X_OK):
-        return None
-    return path
+    candidates = [gaia_home() / "bin" / name]
+    if is_frozen():
+        candidates.append(Path(sys.executable).parent / name)
+        on_path = shutil.which("gaia-agent")
+        if on_path:
+            candidates.append(Path(on_path))
+    for path in candidates:
+        if not path.is_file():
+            continue
+        if sys.platform != "win32" and not os.access(path, os.X_OK):
+            continue
+        return path
+    return None
 
 
 def _agent_ready_for_check(agent_id: str) -> bool:
@@ -1446,7 +1488,8 @@ class InitCommand:
         self._setup_verified = True
         self.skip_models = skip_models
         self.skip_webui_build = skip_webui_build
-        self.skip_pip_extras = skip_pip_extras
+        # The frozen app bundles its packages and has no pip to add more.
+        self.skip_pip_extras = skip_pip_extras or is_frozen()
         self.force_reinstall = force_reinstall
         self.force_models = force_models
         self.yes = yes

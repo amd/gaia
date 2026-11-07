@@ -463,6 +463,34 @@ class TestEntryPointDiscovery:
         assert agent.kind == "created"
         assert agent._gaia_namespaced_agent_id == "installed:hub-chat"
 
+    @pytest.mark.parametrize(
+        "dist, expected",
+        [(SimpleNamespace(version="0.1.0"), "0.1.0"), (None, None)],
+    )
+    def test_entry_point_records_its_package_version(self, monkeypatch, dist, expected):
+        registration = AgentRegistration(
+            id="my-agent",
+            name="My Agent",
+            description="",
+            source="installed",
+            conversation_starters=[],
+            factory=lambda **kw: None,
+            agent_dir=None,
+            models=[],
+        )
+        entry_point = self._entry_point("my-agent", lambda: registration)
+        entry_point.dist = dist
+        monkeypatch.setattr(
+            registry_module.importlib.metadata,
+            "entry_points",
+            self._entry_points(entry_point),
+        )
+
+        registry = AgentRegistry()
+        registry._discover_installed_agents()
+
+        assert registry.get("my-agent").version == expected
+
     def test_entry_point_does_not_override_existing_agent(self, monkeypatch):
         existing = AgentRegistration(
             id="chat",

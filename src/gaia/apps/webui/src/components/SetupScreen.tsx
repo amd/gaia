@@ -399,8 +399,17 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         mounted.current = true;
         return () => { mounted.current = false; };
     }, []);
-    const { network: gateway, recheck: recheckGateway } = useGatewayNetwork();
-    const unreachable = (id: ProviderId) => id === 'amd' && gateway?.reachable === false;
+    const { network: gateway, providers, recheck: recheckGateway } = useGatewayNetwork();
+    const providerFor = (id: ProviderId) => providers.find((p) => p.id === id);
+    const chosenProvider = providerFor(choice);
+    const envKey = chosenProvider?.key_source === 'environment' && chosenProvider.key_hint
+        ? chosenProvider
+        : undefined;
+    const cloudProviderBlocked = (id: ProviderId) => !!providerFor(id)?.blocked;
+    const unavailable = (id: ProviderId) => cloudProviderBlocked(id) || (id === 'amd' && gateway?.reachable === false);
+    const unavailableNote = (id: ProviderId) => cloudProviderBlocked(id)
+        ? t('settings.privacy.localOnlyBlocked')
+        : t('setup.key.gatewayOff');
 
     const cloud = choice !== 'local';
     const serverRun = run?.server_only ? run : null;
@@ -1144,14 +1153,15 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         type="button"
                                         role="radio"
                                         aria-checked={choice === c.id}
-                                        className={`setup-choice${choice === c.id ? ' is-active' : ''}${unreachable(c.id) ? ' is-disabled' : ''}`}
+                                        className={`setup-choice${choice === c.id ? ' is-active' : ''}${unavailable(c.id) ? ' is-disabled' : ''}`}
                                         onClick={() => switchCloud(c.id)}
-                                        disabled={keyState.busy || unreachable(c.id)}
+                                        disabled={keyState.busy || unavailable(c.id)}
+                                        title={cloudProviderBlocked(c.id) ? t('settings.privacy.localOnlyBlocked') : undefined}
                                     >
                                         <Cloud size={16} aria-hidden="true" />
                                         <span>
                                             <span className="setup-choice-title"><bdi>{choiceTitle(c, t)}</bdi></span>
-                                            <span className="setup-choice-note">{unreachable(c.id) ? t('setup.key.gatewayOff') : t(c.note)}</span>
+                                            <span className="setup-choice-note">{unavailable(c.id) ? unavailableNote(c.id) : t(c.note)}</span>
                                         </span>
                                     </button>
                                 ))}
@@ -1159,7 +1169,11 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             {gateway?.reachable === false && (
                                 <button type="button" className="link-btn setup-start" onClick={recheckGateway}>{t('setup.key.checkAgain')}</button>
                             )}
-                            {choice === 'fireworks' && !usersServer && (
+
+                            {cloudProviderBlocked(choice) && (
+                                <p className="setup-a11y-alert" role="alert">{t('settings.privacy.localOnlyBlocked')}</p>
+                            )}
+                            {choice === 'fireworks' && !usersServer && !cloudProviderBlocked(choice) && (
                                 <section className="setup-card">
                                     <h3 className="mc-job-title">{t('setup.key.getOne')}</h3>
                                     <ol className="setup-key-steps">
@@ -1169,12 +1183,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     </ol>
                                 </section>
                             )}
-                            {choice === 'amd' && !usersServer && (
+                            {choice === 'amd' && !usersServer && !cloudProviderBlocked(choice) && (
                                 <section className="setup-card">
                                     <p className="setup-hint"><a href={GATEWAY_GUIDE_URL} target="_blank" rel="noreferrer">{t('setup.key.gatewayHelp')}</a></p>
                                 </section>
                             )}
-                            <CloudPrices provider={choice} limit={3} />
+                            {!cloudProviderBlocked(choice) && <CloudPrices provider={choice} limit={3} />}
                             <p className="setup-hint">{usersServer ? t('setup.key.usersServer') : t('setup.key.where')}</p>
                             <div className="setup-row">
                                 {!usersServer && <input
@@ -1187,12 +1201,15 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     aria-label={t('setup.key.label')}
                                 />}
                             </div>
+                            {envKey && !usersServer && !key && (
+                                <p className="setup-hint" role="status">{t('setup.key.foundEnv', { name: envKey.name, hint: envKey.key_hint ?? '' })}</p>
+                            )}
                             {keyState.busy && !keyState.waiting && <p className="setup-hint" role="status">{t('setup.key.testing')}</p>}
                             {keyState.busy && keyState.waiting && <p className="setup-hint" role="status">{keyState.waiting}</p>}
                             {keyState.error && <p className="setup-error" role="alert">{keyState.error}</p>}
                             <SetupFooter>
                                 <button type="button" className="btn-secondary" onClick={backToPlan} disabled={keyState.busy}>{t('setup.back')}</button>
-                                <button type="submit" form="setup-key-form" className="btn-primary" disabled={keyState.busy || unreachable(choice) || runGoing}>
+                                <button type="submit" form="setup-key-form" className="btn-primary" disabled={keyState.busy || unavailable(choice) || runGoing}>
                                     {keyState.busy && <Loader2 size={13} className="spin" />} {t('setup.key.connect')}
                                 </button>
                             </SetupFooter>

@@ -18,6 +18,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT
 from gaia.ui import _chat_helpers
 from gaia.ui._chat_helpers import (
     _EMPTY_MODEL_ANSWER_MSG,
@@ -469,10 +470,18 @@ class TestEmptyAnswerOutcome:
 _BASE = "http://lemonade.test:8000/api/v1"
 
 
-def _probe(model_id, handler):
+def _probe(model_id, handler, gaias_own=True):
     """Run the backend probe against a fake Lemonade served by ``handler``."""
     real_client = httpx.AsyncClient
     with (
+        patch(
+            "gaia.llm.lemonade_launcher.gaia_runs_lemonade",
+            return_value=gaias_own,
+        ),
+        patch(
+            "gaia.llm.lemonade_launcher.describe_start_hint",
+            return_value=MagicMock(instruction="START-HINT"),
+        ),
         patch.object(_chat_helpers, "_eval_provider_kwargs", return_value={}),
         patch(
             "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
@@ -481,10 +490,6 @@ def _probe(model_id, handler):
         patch(
             "httpx.AsyncClient",
             lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
-        ),
-        patch(
-            "gaia.llm.lemonade_launcher.describe_start_hint",
-            return_value=MagicMock(instruction="START-HINT"),
         ),
     ):
         return asyncio.run(_empty_answer_backend_problem(model_id))
@@ -511,13 +516,20 @@ class TestEmptyAnswerBackendProblem:
         problem = _probe("Gemma-4-E4B-it-GGUF", refuse)
         assert _BASE in problem
         assert "isn't responding" in problem
+        assert problem.endswith(APP_SERVER_DOWN_HINT)
+        assert "gaia " not in problem
+
+    def test_a_server_the_user_runs_gets_its_start_hint(self):
+        def refuse(request):
+            raise httpx.ConnectError("connection refused", request=request)
+
+        problem = _probe("Gemma-4-E4B-it-GGUF", refuse, gaias_own=False)
         assert problem.endswith("START-HINT")
-        assert "lemonade-server serve" not in problem
 
     def test_unhealthy_status_names_the_http_code(self):
         problem = _probe("M-GGUF", lambda request: httpx.Response(503))
         assert "HTTP 503" in problem
-        assert problem.endswith("START-HINT")
+        assert problem.endswith(APP_SERVER_DOWN_HINT)
 
     @pytest.mark.parametrize("status", [401, 403])
     def test_a_rejected_key_names_the_key_not_a_start_hint(self, status):
@@ -533,6 +545,17 @@ class TestEmptyAnswerBackendProblem:
 
     def test_cloud_model_skips_the_loaded_check(self):
         assert _probe("fireworks.some-model", _health()) is None
+
+    def test_a_discovered_cloud_model_skips_the_loaded_check(self):
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models(
+            {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+        )
+        try:
+            assert _probe("opencode.big-model", _health()) is None
+        finally:
+            lc.record_cloud_models({"data": []})
 
     def test_eval_on_claude_never_touches_lemonade(self):
         with (
@@ -660,7 +683,6 @@ class TestSessionAgentKwargsShape:
             "allowed_paths",
             "working_directory",
             "ui_session_id",
-            "dynamic_tools",
             "memory_incognito",
             "surface",
         }
@@ -685,28 +707,6 @@ class TestSessionAgentKwargsShape:
             memory_incognito=True,
         )
         assert kwargs["memory_incognito"] is True
-
-    def test_dynamic_tools_defaults_off_and_forwards_when_set(self):
-        """The Beta tool-loader toggle (#1798) defaults off and round-trips
-        through the helper — the field that makes the UI toggle apply."""
-        from gaia.ui._chat_helpers import _session_agent_kwargs
-
-        off = _session_agent_kwargs(
-            rag_file_paths=[],
-            library_paths=[],
-            allowed=["/root"],
-            session_id="s",
-        )
-        assert off["dynamic_tools"] is False
-
-        on = _session_agent_kwargs(
-            rag_file_paths=[],
-            library_paths=[],
-            allowed=["/root"],
-            session_id="s",
-            dynamic_tools=True,
-        )
-        assert on["dynamic_tools"] is True
 
     def test_empty_rag_file_paths_propagates_to_rag_documents(self):
         """Invariant checked by ``test_streaming_registered_agent_does_not_double_index``.

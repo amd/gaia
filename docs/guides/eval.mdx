@@ -28,7 +28,7 @@ Unlike unit tests that check individual functions, Agent Eval tests the **full s
 <Steps>
   <Step title="Install eval dependencies">
     ```bash
-    uv pip install -e ".[eval]"
+    uv pip install -e ".[eval,ui]"
     ```
   </Step>
 
@@ -83,7 +83,7 @@ Unlike unit tests that check individual functions, Agent Eval tests the **full s
         ```bash
         GAIA_MEMORY_ADMIN=1 GAIA_EVAL_SCRIPTED_USER=1 \
         GAIA_EVAL_MAILBOX=$PWD/tests/fixtures/gaia/email/eval_inbox.mbox \
-        uv run python -m gaia.ui.server
+        python -m gaia.ui.server
         ```
       </Tab>
       <Tab title="PowerShell">

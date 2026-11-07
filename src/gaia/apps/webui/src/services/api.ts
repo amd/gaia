@@ -3,15 +3,13 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage } from '../types';
 import type { ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import type { AgentCapabilities, SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
-
-const API_BASE = getApiBase();
 
 // -- Helpers -------------------------------------------------------------------
 
@@ -38,7 +36,7 @@ export function parseErrorDetail(errorText: string): string {
 }
 
 /** `detail.status` from a structured error body, e.g. `needs_key`; null otherwise. */
-function parseErrorStatus(errorText: string): string | null {
+export function parseErrorStatus(errorText: string): string | null {
     try {
         const status = JSON.parse(errorText).detail?.status;
         return typeof status === 'string' ? status : null;
@@ -104,7 +102,7 @@ function hasUsefulServerDetail(detail: string): boolean {
     return text !== '' && !isBareInternalError(text) && !/^[<{[]/.test(text);
 }
 
-function getFriendlyError(status: number, detail: string): string {
+export function getFriendlyError(status: number, detail: string): string {
     switch (status) {
         case 403: return detail || 'Access denied.';
         // Prefer the backend's detail for 404s — the previous canned string
@@ -150,7 +148,7 @@ export async function apiFetch<T>(
     extraHeaders?: Record<string, string>,
     signal?: AbortSignal,
 ): Promise<T> {
-    const url = `${API_BASE}${path}`;
+    const url = `${getApiBase()}${path}`;
     const t = log.api.time();
 
     log.api.info(`${method} ${url}`, body !== undefined ? { body: redactSecrets(body) } : '');
@@ -217,9 +215,15 @@ export async function getSystemStatus(signal?: AbortSignal): Promise<SystemStatu
     return apiFetch<SystemStatus>('GET', '/system/status', undefined, undefined, signal);
 }
 
+/** This PC's CPU, memory, GPU and NPU load, with about a minute of history. */
+export async function getResourceUsage(signal?: AbortSignal): Promise<ResourceUsage> {
+    return apiFetch<ResourceUsage>('GET', '/system/resources', undefined, undefined, signal);
+}
+
 /** Ask the backend to prime a new chat's prompt. Debounced and single-flight there. */
-export async function requestWarmUp(): Promise<WarmUpStatus> {
-    return apiFetch<WarmUpStatus>('POST', '/system/warm-up');
+/** `fresh` retries a picked model's load, queued behind a warm-up already running. */
+export async function requestWarmUp(fresh = false): Promise<WarmUpStatus> {
+    return apiFetch<WarmUpStatus>('POST', fresh ? '/system/warm-up?fresh=true' : '/system/warm-up');
 }
 
 export async function getWarmUp(): Promise<WarmUpStatus> {
@@ -440,6 +444,13 @@ export async function getSpending(): Promise<SpendingReport> {
     return apiFetch('GET', '/spending');
 }
 
+/** This chat's cloud spending and every chat's since *since*, the local day's start. */
+export async function getChatSpending(sessionId: string, since: string, model: string | null): Promise<ChatSpending> {
+    const query = new URLSearchParams({ since });
+    if (model) query.set('model', model);
+    return apiFetch('GET', `/spending/chat/${encodeURIComponent(sessionId)}?${query}`);
+}
+
 /** Set the monthly limit for cloud chats; null removes it. */
 export async function setSpendingLimit(limitUsd: number | null): Promise<SpendingReport> {
     return apiFetch('PUT', '/spending/limit', { limit_usd: limitUsd });
@@ -593,7 +604,7 @@ export interface StreamCallbacks {
 /** Agent event types that represent activity rather than content. */
 const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'commentary', 'plan',
-    'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
+    'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'skill_use', 'agent_error',
     'permission_request', 'needs_confirmation', 'needs_input', 'policy_alert',
     'followup_taken', 'followup_returned', 'followup_unavailable', 'context_usage',
 ]);
@@ -626,7 +637,7 @@ export function sendMessageStream(
     log.stream.info(`Starting SSE stream for session=${sessionId}`, { messageLength: message.length });
 
     const headers = watchHeaders(controller, callbacks, SEND_HEADER_TIMEOUT_MS, SEND_WAITING_NOTICE_MS);
-    fetch(`${API_BASE}/chat/send`, {
+    fetch(`${getApiBase()}/chat/send`, {
         method: 'POST',
         headers: { ...UI_HEADER, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -913,7 +924,7 @@ export function attachToRun(
     log.stream.info(`Attaching to background run for session=${sessionId}`);
 
     const headers = watchHeaders(controller, callbacks, ATTACH_HEADER_TIMEOUT_MS);
-    fetch(`${API_BASE}/chat/attach?session_id=${encodeURIComponent(sessionId)}`, {
+    fetch(`${getApiBase()}/chat/attach?session_id=${encodeURIComponent(sessionId)}`, {
         method: 'GET',
         signal: controller.signal,
     })
@@ -972,7 +983,7 @@ export async function uploadDocumentByPath(filepath: string): Promise<Document> 
  * consistent with the rest of the app.
  */
 export async function uploadDocumentBlob(file: File): Promise<Document> {
-    const url = `${API_BASE}/documents/upload`;
+    const url = `${getApiBase()}/documents/upload`;
     const t = log.api.time();
     log.api.info(`POST ${url}`, { fileName: file.name, size: file.size });
 
@@ -1028,7 +1039,7 @@ export async function getDocumentStatus(id: string): Promise<{
  * system browser (the shell hands http links to it).
  */
 export function documentFileUrl(id: string, page?: number): string {
-    const url = new URL(`${API_BASE}/documents/${encodeURIComponent(id)}/file`, window.location.href);
+    const url = new URL(`${getApiBase()}/documents/${encodeURIComponent(id)}/file`, window.location.href);
     if (page) url.hash = `page=${page}`;
     return url.href;
 }
@@ -1085,7 +1096,7 @@ export async function uploadFile(file: File): Promise<{
     content_type: string;
     is_image: boolean;
 }> {
-    const url = `${API_BASE}/files/upload`;
+    const url = `${getApiBase()}/files/upload`;
     const t = log.api.time();
     log.api.info(`POST ${url}`, { fileName: file.name, size: file.size });
 
@@ -1108,6 +1119,34 @@ export async function uploadFile(file: File): Promise<{
     const data = await res.json();
     log.api.timed(`POST ${url} -> ${res.status}`, t, data);
     return data;
+}
+
+/** Upload a recording, reporting progress: it can take minutes, and fetch cannot say. */
+export function uploadMedia(file: File, onProgress: (percent: number) => void, signal?: AbortSignal): ReturnType<typeof uploadFile> {
+    const url = `${getApiBase()}/files/upload-media?name=${encodeURIComponent(file.name)}`;
+    log.api.info(`POST ${url}`, { fileName: file.name, size: file.size });
+
+    return new Promise((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        request.open('POST', url);
+        for (const [name, value] of Object.entries(UI_HEADER)) request.setRequestHeader(name, value);
+        request.upload.onprogress = (event) => {
+            if (event.lengthComputable) onProgress(Math.floor((event.loaded / event.total) * 100));
+        };
+        request.onerror = () => reject(new ApiError(getFriendlyError(0, 'network error'), 0, 'network error', null));
+        request.onabort = () => reject(new DOMException('Upload cancelled', 'AbortError'));
+        signal?.addEventListener('abort', () => request.abort());
+        request.onload = () => {
+            if (request.status >= 200 && request.status < 300) {
+                resolve(JSON.parse(request.responseText));
+                return;
+            }
+            log.api.error(`POST ${url} - HTTP ${request.status}`, { errorText: request.responseText });
+            const detail = parseErrorDetail(request.responseText);
+            reject(new ApiError(getFriendlyError(request.status, detail), request.status, detail, parseErrorStatus(request.responseText)));
+        };
+        request.send(file);
+    });
 }
 
 // -- File Search & Preview ----------------------------------------------------------

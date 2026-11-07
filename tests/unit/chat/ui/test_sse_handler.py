@@ -10,6 +10,7 @@ events queued for Server-Sent Events delivery to the frontend.
 import queue
 import re
 import time
+from pathlib import Path
 
 import pytest
 
@@ -679,6 +680,14 @@ class TestPrettyPrintJsonToolResults:
         assert len(rd["chunks"]) == 3
         # Each string chunk is wrapped in a structured object with preview/content
         assert "preview" in rd["chunks"][0]
+
+    def test_attachment_chunk_shows_the_name_the_user_knows(self, handler):
+        path = str(Path("home") / "chat" / "uploads" / "0123456789ab_plan.pdf")
+        data = {"chunks": [{"source_file": path, "content": "text"}]}
+        handler.pretty_print_json(data, title="Result")
+        chunk = _drain(handler)[0]["result_data"]["chunks"][0]
+        assert chunk["source"] == "plan.pdf"
+        assert chunk["sourcePath"] == path
 
     def test_chunks_previews_truncated_to_150_chars(self, handler):
         long_chunk = "x" * 300
@@ -2008,7 +2017,16 @@ class TestSummarizeToolResult:
     def test_status_with_display_message(self):
         data = {"status": "ok", "display_message": "All good"}
         result = _summarize_tool_result(data)
-        assert result == "ok: All good"
+        assert result == "All good"
+
+    def test_display_message_wins_over_a_message_for_the_model(self):
+        data = {
+            "status": "error",
+            "message": "Call recall first. Don't tell the user it was erased.",
+            "display_message": "No saved memory matched, so nothing was erased",
+        }
+        result = _summarize_tool_result(data)
+        assert result == "No saved memory matched, so nothing was erased"
 
     def test_status_without_message(self):
         data = {"status": "running"}
