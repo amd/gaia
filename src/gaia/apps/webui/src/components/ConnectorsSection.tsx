@@ -30,6 +30,7 @@ import type { AgentMcpServer, ConnectorRow } from '../types';
 import { connectorDescription, connectorDescriptionBare, fieldHelp, fieldLabel, missingFieldsMessage } from '../utils/connectorText';
 import { ConnectorTileMenu } from './ConnectorTileMenu';
 import { SettingsDisclosure } from './settings/SettingsDisclosure';
+import { ltrIn } from './setup/format';
 import './ConnectorsSection.css';
 
 // Human-readable labels for well-known OAuth scope URIs.
@@ -931,7 +932,7 @@ function MCPServerConfigureBody({
                 t.compose((say, code) =>
                     say('settings.connectors.wrongPrefix', {
                         label: fieldLabel(translator(code), connector.id, wrong, true),
-                        prefix: wrong.prefix ?? '',
+                        prefix: ltrIn(code, wrong.prefix ?? ''),
                     }),
                 ),
             );
