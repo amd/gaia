@@ -128,3 +128,105 @@ def test_explicit_model_wins_over_device(gaia_home, monkeypatch):
     assert code == 0
     assert calls["init"]["model"] == GGUF_MODEL
     assert calls["client"]["model"] == GGUF_MODEL
+
+
+SAVED_DEFAULT = "Qwen3.6-35B-A3B-GGUF"
+
+
+@pytest.fixture
+def saved_default_model(gaia_home, monkeypatch):
+    """A config.json carrying default_model, as on a 64 GB+ Strix Halo."""
+    import json
+
+    import gaia.config
+
+    config_file = gaia_home / "config.json"
+    config_file.write_text(json.dumps({"default_model": SAVED_DEFAULT}))
+    monkeypatch.setattr(gaia.config, "GAIA_CONFIG_FILE", config_file)
+    return config_file
+
+
+def test_saved_default_model_does_not_override_device(saved_default_model, monkeypatch):
+    calls = {}
+    _stub_init_and_client(monkeypatch, calls)
+    code = _run_main(["prompt", "hi", "--device", "npu"], monkeypatch, _devices())
+
+    assert code == 0
+    assert calls["init"]["model"] == NPU_DEFAULT_MODEL_NAME
+    assert calls["client"]["model"] == NPU_DEFAULT_MODEL_NAME
+
+
+def test_saved_default_model_npu_unavailable_fails_loudly(
+    saved_default_model, monkeypatch, capsys
+):
+    calls = {}
+    _stub_init_and_client(monkeypatch, calls)
+    code = _run_main(
+        ["prompt", "hi", "--device", "npu"],
+        monkeypatch,
+        _devices(npu_available=False),
+    )
+
+    assert code == 1
+    assert "NPU not available" in capsys.readouterr().err
+    assert calls == {}
+
+
+def test_saved_default_model_still_applies_without_device(
+    saved_default_model, monkeypatch
+):
+    calls = {}
+    _stub_init_and_client(monkeypatch, calls)
+    code = _run_main(["prompt", "hi"], monkeypatch, _devices())
+
+    assert code == 0
+    assert calls["init"]["model"] == SAVED_DEFAULT
+
+
+def _probe_raises(monkeypatch, exc):
+    def boom(self):
+        raise exc
+
+    monkeypatch.setattr(cli.LemonadeClient, "get_system_info", boom)
+
+
+def test_unreachable_server_skips_the_device_check(gaia_home, monkeypatch):
+    import requests
+
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    calls = {}
+    _stub_init_and_client(monkeypatch, calls)
+    err = LemonadeClientError("Request failed: connection refused")
+    err.__cause__ = requests.exceptions.ConnectionError("refused")
+    monkeypatch.setattr(sys, "argv", ["gaia", "prompt", "hi", "--device", "npu"])
+    _probe_raises(monkeypatch, err)
+
+    cli.main()
+
+    assert calls["init"]["model"] == NPU_DEFAULT_MODEL_NAME
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Request failed with status 500: internal error",
+        "Request failed with status 401: unauthorized",
+    ],
+)
+def test_reachable_server_error_is_not_swallowed(
+    gaia_home, monkeypatch, capsys, message
+):
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    calls = {}
+    _stub_init_and_client(monkeypatch, calls)
+    monkeypatch.setattr(sys, "argv", ["gaia", "prompt", "hi", "--device", "npu"])
+    _probe_raises(monkeypatch, LemonadeClientError(message))
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 1
+    assert message in capsys.readouterr().err
+    assert calls == {}
