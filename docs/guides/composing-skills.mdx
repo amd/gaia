@@ -130,11 +130,14 @@ from pathlib import Path
 from typing import ClassVar, List, Optional
 
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+from gaia.security import PathValidator
 
 _HERE = Path(__file__).resolve().parent
 
 
-class MyReviewAgent(Agent):
+class MyReviewAgent(Agent, FileIOToolsMixin):
     # Highest-precedence discovery root: the skills you bundle always win over a
     # same-named user or Claude Code copy. Both lines below are optional — a
     # skills/ folder and a gaia-agent.yaml beside this module are found without
@@ -143,16 +146,23 @@ class MyReviewAgent(Agent):
     # Opt in to the declarative blocks.
     SKILL_MANIFEST: ClassVar[Optional[str]] = str(_HERE / "gaia-agent.yaml")
 
+    def __init__(self, **kwargs):
+        # FileIOToolsMixin reads this off the agent, so set it before
+        # super().__init__() runs _register_tools().
+        self.path_validator = PathValidator()
+        super().__init__(**kwargs)
+
     # Abstract on the base Agent, so the class cannot be created without it.
-    # The skills bring the tools, so there is nothing to register here.
     def _register_tools(self) -> None:
-        pass
+        _TOOL_REGISTRY.clear()
+        self.register_file_io_tools()
+        self._snapshot_tools()
 ```
 
-That is enough. `Agent.__init__` resolves a set and loads it — the always-on
-skills plus that set's, in declaration order. `_register_tools()` is the one
-method every `Agent` subclass must define; here it can stay empty because the
-loaded skills supply the tools.
+`Agent.__init__` resolves a set and loads it — the always-on skills plus that
+set's, in declaration order. A skill only names the tools its recipe uses, so
+the agent has to register them itself. `api-compatibility` needs `read_file`
+and `search_code`, and `FileIOToolsMixin` provides both.
 
 ## 4. Choose the set at runtime
 
