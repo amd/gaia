@@ -136,7 +136,7 @@ The first time you launch the desktop app, its window opens right away and sets 
 
 If a step fails, the window shows the error with a **Try again** button, and **Details** shows the end of the install log.
 
-After an app update, the same screen updates the backend and then the GAIA agent. Your models stay as they are. If the agent update fails, **Try again** picks it up, and the next launch does too.
+After an app update, the same screen updates the backend and then the GAIA agent. Your models stay as they are. If the agent update fails, **Try again** picks it up, and the next launch does too. If the disk has less than 2 GB free, the update stops before changing anything and says how much space to free; your installed GAIA stays as it was.
 
 Before it updates the backend, the app stops GAIA's background service (the GAIA daemon) and the agents it runs, because Windows can't replace files a running program holds. The service has no window, so if it won't stop, the screen says so: restart your PC, then choose **Try again**.
 

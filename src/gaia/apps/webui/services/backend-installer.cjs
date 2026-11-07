@@ -1188,7 +1188,7 @@ async function runPreChecks(opts = {}) {
 // ── uv install ───────────────────────────────────────────────────────────────
 
 class InstallError extends Error {
-  constructor(message, { stage, code, suggestion, reason, lockedFiles } = {}) {
+  constructor(message, { stage, code, suggestion, reason, lockedFiles, keepState } = {}) {
     super(message);
     this.name = "InstallError";
     this.stage = stage || null;
@@ -1197,6 +1197,8 @@ class InstallError extends Error {
     this.reason = reason || null;
     // The files another program held open, for main to find who holds them.
     this.lockedFiles = lockedFiles || null;
+    // Nothing was touched, so the recorded state still holds.
+    this.keepState = Boolean(keepState);
   }
 }
 
@@ -1208,8 +1210,37 @@ class InstallCancelled extends Error {
   }
 }
 
+/** ENOSPC on POSIX (os error 28) and ERROR_DISK_FULL on Windows (os error 112). */
+function isDiskFullError(output) {
+  return /No space left on device|not enough space on the disk|os error (28|112)\b/i.test(output || "");
+}
+
+/**
+ * The pre-check found too little space to install. `keep`: a working install
+ * is in place and the refusal leaves it, and its recorded state, untouched.
+ */
+function lowDiskError(disk, { keep, installedVersion }) {
+  const mb = (bytes) => Math.round(bytes / (1024 * 1024));
+  const requiredMb = mb(disk.requiredBytes);
+  const freeMb = disk.freeBytes != null ? mb(disk.freeBytes) : null;
+  const need = freeMb != null ? `${requiredMb - freeMb} MB more` : `${requiredMb} MB`;
+  const kept = keep ? ` Your installed GAIA${installedVersion ? ` ${installedVersion}` : ""} was not changed.` : "";
+  return new InstallError(
+    `Not enough free disk space${keep ? " to update GAIA" : ""}. Required: ${requiredMb} MB${
+      freeMb != null ? `, available: ${freeMb} MB` : ""
+    }.${kept}`,
+    {
+      stage: STAGES.PRE_CHECKS,
+      reason: FAILURE_REASONS.DISK,
+      suggestion: `Free at least ${need} at ${path.dirname(GAIA_HOME)}, then try again.`,
+      keepState: keep,
+    }
+  );
+}
+
 /** Which FAILURE_REASONS a uv failure's output shows, or null. */
 function failureReason(output) {
+  if (isDiskFullError(output)) return FAILURE_REASONS.DISK;
   if (isFileLockedError(output)) return FAILURE_REASONS.LOCKED;
   if (isTlsCertError(output)) return FAILURE_REASONS.TLS;
   if (isTransientNetworkError(output)) return FAILURE_REASONS.NETWORK;
@@ -2265,31 +2296,6 @@ async function ensureBackend(opts = {}) {
       }
     }
 
-    // Disk check failure: fatal, surface as InstallError.
-    if (!preChecks.disk.ok) {
-      const freeMb =
-        preChecks.disk.freeBytes != null
-          ? Math.round(preChecks.disk.freeBytes / (1024 * 1024))
-          : null;
-      const requiredMb = Math.round(
-        preChecks.disk.requiredBytes / (1024 * 1024)
-      );
-      const err = new InstallError(
-        `Not enough free disk space. Required: ${requiredMb} MB${
-          freeMb != null ? `, available: ${freeMb} MB` : ""
-        }.`,
-        {
-          stage: STAGES.PRE_CHECKS,
-          reason: FAILURE_REASONS.DISK,
-          suggestion: `Free at least ${requiredMb} MB at ${path.dirname(
-            GAIA_HOME
-          )} and try again.`,
-        }
-      );
-      setState(STATES.FAILED, { stage: STAGES.PRE_CHECKS, message: err.message });
-      throw err;
-    }
-
     // Network check is ADVISORY, never fatal. A failed HEAD probe is most often
     // a corporate TLS-inspection proxy whose root CA isn't in Node's bundled
     // trust store (#1572) — the machine is online and `uv`/`pip`, which honor
@@ -2325,8 +2331,9 @@ async function ensureBackend(opts = {}) {
       prev.stage === LEGACY_SETUP_STAGE ||
       prev.stage === STAGES.VERIFY ||
       prev.stage === STAGES.AGENT_REFRESH;
+    let installedVersion = null;
     if (existingBin) {
-      const installedVersion = getInstalledVersion(existingBin);
+      installedVersion = getInstalledVersion(existingBin);
       const versionMatches =
         expectedVersion !== null && installedVersion === toPep440(expectedVersion);
       if (versionMatches && packageFinished && prev && prev.stage === STAGES.AGENT_REFRESH) {
@@ -2350,6 +2357,12 @@ async function ensureBackend(opts = {}) {
       );
     } else {
       log("GAIA backend not found — installing from scratch");
+    }
+
+    // Checked only once there is something to install, so a full disk never stops a current install.
+    if (!preChecks.disk.ok) {
+      const keep = Boolean(existingBin) && packageFinished && prev?.state !== STATES.FAILED;
+      throw lowDiskError(preChecks.disk, { keep, installedVersion });
     }
 
     await installBackend(opts);
@@ -2378,6 +2391,10 @@ async function ensureBackend(opts = {}) {
       throw err;
     }
     if (err instanceof InstallError) {
+      if (err.keepState) {
+        log(`Install refused; the recorded state is unchanged: ${err.message}`);
+        throw err;
+      }
       setState(STATES.FAILED, {
         stage: err.stage || null,
         message: err.message,
