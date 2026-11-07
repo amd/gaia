@@ -157,6 +157,49 @@ describe('MCP connector configure panel', () => {
         expect(screen.queryByText(/Check the token/)).not.toBeInTheDocument();
     });
 
+    it('clears the check result when the server is turned off', async () => {
+        const slack = { id: 'mcp-slack', display_name: 'Slack', configured: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'] };
+        mocked.getConnector.mockResolvedValue(mcpRow({ ...slack, enabled: false }));
+        await openTile(mcpRow(slack));
+        fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+        expect(await screen.findByText('Slack started without errors.')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('checkbox', { name: /this MCP server/ }));
+
+        await waitFor(() => expect(mocked.disableConnector).toHaveBeenCalledWith('mcp-slack'));
+        await waitFor(() =>
+            expect(screen.queryByText('Slack started without errors.')).not.toBeInTheDocument(),
+        );
+    });
+
+    it('shows the newest check when an older one finishes last', async () => {
+        let finishFirst: (r: { ok: boolean; detail: string }) => void = () => {};
+        mocked.testConnector
+            .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+            .mockResolvedValueOnce({ ok: true, detail: 'started, 1 tool' });
+        const slack = { id: 'mcp-slack', display_name: 'Slack', configured: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'] };
+        mocked.getConnector.mockResolvedValue(mcpRow(slack));
+        await openTile(mcpRow(slack));
+
+        const save = async (token: string) => {
+            fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: token } });
+            // The button reads "Saved" for a moment after the first save.
+            fireEvent.click(screen.getByRole('button', { name: /^Saved?$/ }));
+            await waitFor(() =>
+                expect(mocked.configureConnector).toHaveBeenLastCalledWith('mcp-slack', { SLACK_MCP_XOXB_TOKEN: token }),
+            );
+        };
+        await save('xoxb-old');
+        await save('xoxb-new');
+        expect(await screen.findByText('Slack started without errors.')).toBeInTheDocument();
+
+        finishFirst({ ok: false, detail: 'Authentication failed - check your Slack tokens' });
+
+        await new Promise((r) => setTimeout(r, 0));
+        expect(screen.getByText('Slack started without errors.')).toBeInTheDocument();
+        expect(screen.queryByText(/Authentication failed/)).not.toBeInTheDocument();
+    });
+
     it('offers no Check on a server that is turned off', async () => {
         await openTile(
             mcpRow({ id: 'mcp-slack', display_name: 'Slack', configured: true, enabled: false, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'] }),
