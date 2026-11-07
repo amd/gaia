@@ -5248,6 +5248,12 @@
             },
             "description": "Server-Sent Events stream (text/event-stream). Each `data:` line is one canonical event discriminated on `type`, one of: status {message} | token {delta} | tool_call {tool, args} | tool_result {tool, render?, data} | needs_confirmation {run_id, action, summary} | needs_input {run_id, request_id, question, options, allow_free_text, respond_url, timeout_seconds?} | final {answer, usage?} | error {detail, status}. The stream is terminated by exactly one `final` or one `error`; `needs_input` pauses the run until POST /v1/email/query/{run_id}/respond delivers the answer, then the SAME stream continues. `:`-prefixed heartbeat comments may appear at any time and carry no payload."
           },
+          "400": {
+            "description": "`provider` is set to something other than `lemonade`: the email agent runs local inference only."
+          },
+          "409": {
+            "description": "The session already has a turn in progress, or `run_id` is already in flight."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -5257,6 +5263,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "description": "The run failed to start after the agent was built."
+          },
+          "502": {
+            "description": "The email agent could not be built, or could not be switched to the requested `model`."
           }
         },
         "security": [
@@ -5297,6 +5309,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "404": {
+            "description": "No run with this `run_id` is in flight: it finished, was cancelled, or the id is wrong."
           },
           "422": {
             "content": {
@@ -5357,6 +5372,12 @@
               }
             },
             "description": "Successful Response"
+          },
+          "404": {
+            "description": "No run with this `run_id` is in flight: it finished, was cancelled, or the id is wrong."
+          },
+          "409": {
+            "description": "The run is not waiting on this `request_id`: the question was already answered, timed out, or belongs to another run."
           },
           "422": {
             "content": {
