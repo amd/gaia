@@ -49,6 +49,7 @@ import requests
 from openai import OpenAI
 
 from gaia.env import child_env, load_env
+from gaia.llm import call_ledger, stream_watchdog
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
@@ -537,7 +538,8 @@ def resolve_default_vision_model() -> Optional[str]:
     Otherwise ``vision_model`` from setup when the user chose one; else the
     model chat reopens on, then the default chat model, whichever reads
     images first, because those are already downloaded; else
-    :data:`DEFAULT_MODEL_NAME`.
+    :data:`DEFAULT_MODEL_NAME`. When that isn't downloaded, the VLM client
+    reads with :func:`downloaded_vision_model` instead.
     """
     from gaia.config import GaiaConfig
 
@@ -574,6 +576,50 @@ def resident_vision_model(configured: str, base_url: Optional[str] = None) -> st
         if entry.get("model_name") in VISION_CHAT_MODELS:
             return entry["model_name"]
     return configured
+
+
+def downloaded_vision_model(
+    configured: str, catalog_entries: list, client: "LemonadeClient"
+) -> Optional[str]:
+    """A downloaded :data:`VISION_CHAT_MODELS` entry to read images with instead
+    of ``configured``, which the catalog lists as not downloaded; else None.
+
+    Any :data:`VISION_CHAT_MODELS` name is replaced, whoever passed it, except
+    ``vision_model`` from setup; a model outside the set never is. A loaded
+    candidate wins, then the order below.
+    """
+    from gaia.config import GaiaConfig
+
+    if configured not in VISION_CHAT_MODELS:
+        return None
+    candidates = [
+        name
+        for name in (
+            DEFAULT_MODEL_NAME,
+            LARGE_DEFAULT_MODEL_NAME,
+            FLASH_OPTION_MODEL_NAME,
+        )
+        if not _model_ids_match(name, configured)
+        and any(
+            isinstance(entry, dict)
+            and _model_ids_match(entry.get("id"), name)
+            and entry.get("downloaded") is True
+            for entry in catalog_entries
+        )
+    ]
+    if not candidates or _model_ids_match(GaiaConfig.load().vision_model, configured):
+        return None
+    if len(candidates) > 1:
+        try:
+            loaded = client.health_check().get("all_models_loaded") or []
+        except LemonadeClientError as e:
+            log.warning("Could not read the loaded models from Lemonade: %s", e)
+            loaded = []
+        for entry in loaded:
+            for name in candidates:
+                if _model_ids_match(entry.get("model_name"), name):
+                    return name
+    return candidates[0]
 
 
 # Default embedding model: EmbeddingGemma 300M (768-dim). Not a Lemonade
@@ -766,22 +812,31 @@ NPU_BACKEND_INSTALL_TIMEOUT = 600  # seconds; the FastFlowLM release download
 # own prompt (memory extraction, titles) first saved the conversation's cache to
 # host RAM — ~87s for a 30K-token Qwen3-30B context on a Radeon 8060S. A second
 # slot over one shared KV pool keeps the conversation resident, so the RAM copy
-# buys nothing; the similarity floor keeps a short side prompt off its slot.
+# buys nothing; the similarity floor keeps a short side prompt off its slot. The
+# third slot holds the full tool list primed, out of the side jobs' way.
 # Args the user saved for the model in Lemonade win (users_llamacpp_args).
 CHAT_LLAMACPP_ARGS = (
-    "--parallel 2 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5"
+    "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5"
 )
 #: Slots requests are pinned to (llama.cpp ``id_slot``). Left to LRU, a memory
 #: extraction landed on the conversation's slot and overwrote it, and the next
 #: turn re-read 28K tokens (109s). llama.cpp defers a request pinned to a slot
-#: it lacks forever, so the side slot is used only when the load reports it.
+#: it lacks forever, so the side slot is used only when the load reports it. A
+#: session that moves to the full tool list continues on ``FULL_TOOLS_SLOT``.
 CONVERSATION_SLOT = 0
 SIDE_SLOT = 1
+FULL_TOOLS_SLOT = 2
 
 #: Chat flags GAIA has saved into Lemonade's recipe_options.json itself: the
-#: current set and the single-slot set before it. Saved args outside this set
-#: are the user's, and a chat load keeps them instead of sending GAIA's.
-_GAIA_SAVED_CHAT_ARGS = frozenset({CHAT_LLAMACPP_ARGS, "--parallel 1"})
+#: current set and the ones before it. Saved args outside this set are the
+#: user's, and a chat load keeps them instead of sending GAIA's.
+_GAIA_SAVED_CHAT_ARGS = frozenset(
+    {
+        CHAT_LLAMACPP_ARGS,
+        "--parallel 2 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5",
+        "--parallel 1",
+    }
+)
 
 
 def users_llamacpp_args(catalog_entry: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -926,12 +981,25 @@ def _wait_for_drains(model: str) -> None:
     from gaia.daemon import broker_client
 
     started = time.monotonic()
+    limit, source = broker_client.current_wait_limit()
     next_update = started
     while True:
+        now = time.monotonic()
+        waited = now - started
+        if limit is not None and waited >= limit:
+            raise broker_client.BrokerUnavailableError(
+                f"no turn on '{model}' within the {limit:g}s wait limit: a "
+                "stopped reply in this process is still finishing. The model is "
+                "busy, not broken." + broker_client.wait_limit_hint(source),
+                status_code=504,
+            )
         with _DRAINING_CHANGED:
             if not _DRAINING.get(key):
                 break
-            _DRAINING_CHANGED.wait(broker_client.LOCAL_WAIT_POLL_S)
+            wait = broker_client.LOCAL_WAIT_POLL_S
+            if limit is not None:
+                wait = min(wait, limit - waited)
+            _DRAINING_CHANGED.wait(wait)
         now = time.monotonic()
         if now >= next_update:
             broker_client.notify_wait(
@@ -1484,6 +1552,19 @@ def _chosen_ctx_size(model: str, base_url: Optional[str]) -> Optional[int]:
     return tokens
 
 
+def _noted_stream(stream: Generator, noted: Dict[str, Any]) -> Generator:
+    """*stream*, closing its call-ledger entry when it ends, fails or is dropped."""
+    try:
+        yield from stream
+    except GeneratorExit:
+        call_ledger.end(noted, outcome="closed by caller")
+        raise
+    except Exception as e:
+        call_ledger.end(noted, error=e)
+        raise
+    call_ledger.end(noted)
+
+
 def resolve_ctx_size(
     model: Optional[str] = None,
     device: Optional[str] = None,
@@ -1508,21 +1589,31 @@ def resolve_ctx_size(
         # GAIA_CTX_SIZE (applied below) wins, so it can rescue a size that no longer fits.
         pinned = bool(os.environ.get("GAIA_CTX_SIZE", "").strip())
         chosen = None if pinned else _chosen_ctx_size(model, base_url)
+        inputs: Dict[str, Any] = {}
         if chosen is not None:
             # The user's pick is not shrunk to free memory; the load refuses instead.
-            ctx = chosen
+            ctx, how = chosen, "chosen in Settings"
         elif requirement is not None:
-            ctx = fit_ctx_to_free_memory(
-                model, _model_ctx_size(requirement, base_url), base_url
-            )
+            sized = _model_ctx_size(requirement, base_url)
+            ctx = fit_ctx_to_free_memory(model, sized, base_url)
+            how = "sized to this PC's memory, then to memory free now"
+            inputs = {
+                "for_capacity": sized,
+                "after_free_memory": ctx,
+                "min_ctx_size": requirement.min_ctx_size,
+                "scales_with_memory": requirement.scales_with_memory,
+            }
         else:
-            ctx = NPU_CTX_SIZE if runs_on_npu(model) else GPU_CTX_SIZE
+            on_npu = runs_on_npu(model)
+            ctx = NPU_CTX_SIZE if on_npu else GPU_CTX_SIZE
+            how = "NPU default" if on_npu else "GPU default"
     else:
         if device is None:
             from gaia.config import GaiaConfig
 
             device = GaiaConfig.load().default_device
         ctx = profile_ctx_size(device)
+        how = f"{device} profile"
 
     override = os.environ.get("GAIA_CTX_SIZE", "").strip()
     if override:
@@ -1543,6 +1634,10 @@ def resolve_ctx_size(
             "may be truncated. Increase or unset GAIA_CTX_SIZE if replies are empty.",
             ctx,
             DEFAULT_CONTEXT_SIZE,
+        )
+    if model:
+        call_ledger.note_ctx_choice(
+            model, ctx, "GAIA_CTX_SIZE" if override else how, **inputs
         )
     return ctx
 
@@ -2270,10 +2365,16 @@ def no_thinking_kwargs(model_id: Optional[str]) -> Dict[str, Any]:
 
     A thinking model bills its reasoning against ``max_tokens``, so a side call
     that wants a few hundred tokens of JSON instead reasons until the cap and
-    returns nothing. Empty for cloud models and for local models whose template
-    has no thinking switch (``requested_thinking`` is None), which send nothing.
+    returns nothing. Empty for local models whose template has no thinking switch
+    (``requested_thinking`` is None), and for cloud models, which reject the field
+    or do not reason, except DeepSeek: it reasons hard, and spent 7,274 of 8,192
+    tokens on one reply, and accepts the switch.
     """
-    if not isinstance(model_id, str) or cloud_model_provider(model_id):
+    if not isinstance(model_id, str):
+        return {}
+    if cloud_model_provider(model_id):
+        if "deepseek" in model_id.lower():
+            return {"chat_template_kwargs": {"enable_thinking": False}}
         return {}
     mr = find_model_requirement(model_id)
     if mr is not None and mr.reasoning_effort:
@@ -6051,19 +6152,36 @@ class LemonadeClient:
                 **kwargs,
             )
 
-        try:
-            first = self._survive_gaia_lemonade_stop(_call, model)
-        except CloudModelUnavailableError as e:
-            if not self._reconnected_cloud_provider(e, model):
-                raise
-            first = self._survive_gaia_lemonade_stop(_call, model)
-        if not stream or not self.follows_gaia_lemonade:
-            return first
-        return self._stream_surviving_cloud_disconnect(
-            self._stream_surviving_gaia_lemonade_stop(first, _call, model),
-            lambda: self._stream_surviving_gaia_lemonade_stop(_call(), _call, model),
-            model,
+        noted = call_ledger.begin(
+            "chat",
+            url=f"{getattr(self, 'base_url', None)}/chat/completions",
+            model=model,
+            **call_ledger.chat_shape(
+                messages, tools, max_completion_tokens or max_tokens, stream
+            ),
         )
+        try:
+            try:
+                first = self._survive_gaia_lemonade_stop(_call, model)
+            except CloudModelUnavailableError as e:
+                if not self._reconnected_cloud_provider(e, model):
+                    raise
+                first = self._survive_gaia_lemonade_stop(_call, model)
+        except Exception as e:
+            call_ledger.end(noted, error=e)
+            raise
+        if not stream:
+            call_ledger.end(noted)
+            return first
+        if self.follows_gaia_lemonade:
+            first = self._stream_surviving_cloud_disconnect(
+                self._stream_surviving_gaia_lemonade_stop(first, _call, model),
+                lambda: self._stream_surviving_gaia_lemonade_stop(
+                    _call(), _call, model
+                ),
+                model,
+            )
+        return _noted_stream(first, noted)
 
     def _stream_surviving_cloud_disconnect(
         self,
@@ -6642,6 +6760,21 @@ class LemonadeClient:
                 finally:
                     http_client.close()
 
+            def _on_drain() -> Callable[[], None]:
+                """Keep both local and cross-process ownership through a drain."""
+                local_end = _begin_drain(model)
+                from gaia.daemon.broker_client import defer_lease_release
+
+                lease_end = defer_lease_release()
+
+                def end() -> None:
+                    try:
+                        local_end()
+                    finally:
+                        lease_end()
+
+                return end
+
             return watch_stream(
                 produce,
                 limits=limits,
@@ -6649,7 +6782,7 @@ class LemonadeClient:
                 is_output=_chunk_carries_output,
                 # FastFlowLM's engine restarts when a reply is cut off mid-stream.
                 drain_on_abandon=runs_on_npu(model),
-                on_drain=lambda: _begin_drain(model),
+                on_drain=_on_drain,
             )
 
         def _convert(stream) -> Generator[Dict[str, Any], None, None]:
@@ -7480,8 +7613,15 @@ class LemonadeClient:
         return catalog
 
     def cloud_model_provider(self, model: str) -> Optional[str]:
-        """Return the provider for a built-in or previously discovered cloud model."""
-        return cloud_model_provider(model, self._model_metadata.get(model))
+        """Return the provider for a built-in or previously discovered cloud model.
+
+        The catalog is shared across clients, so a new client still recognises a
+        model another client discovered, before it has read the catalog itself.
+        """
+        metadata = self._model_metadata.get(model)
+        if metadata is None and is_cloud_model(model):
+            metadata = {"recipe": CLOUD_RECIPE}
+        return cloud_model_provider(model, metadata)
 
     def _from_server(self) -> str:
         """`` from the model server at host:port`` for an error, or ``""``.
@@ -8585,7 +8725,8 @@ class LemonadeClient:
 
         The lease declares how long its holder may keep the slot: one request
         of *request_timeout* (the request budget when not given), the retry
-        deadline after which no new attempt starts, and a model load.
+        deadline after which no new attempt starts, a model load, and the
+        bounded NPU reply-drain window after a caller stops reading.
 
         Serializes this load against every other process sharing the
         single-tenant Lemonade slot, and every request to a local model against
@@ -8630,7 +8771,9 @@ class LemonadeClient:
             on_wait=_on_wait,
             max_hold_s=(request_timeout or request_budget_seconds())
             + RetryPolicy.from_env().deadline
-            + LEASE_LOAD_MARGIN_S,
+            + LEASE_LOAD_MARGIN_S
+            # A stopped NPU reply may keep the lease while the worker drains it.
+            + stream_watchdog.DRAIN_LIMIT_S,
         )
 
         @contextmanager
@@ -9005,6 +9148,13 @@ class LemonadeClient:
                 f"loading {model_name}: {e} Try again in a moment. "
                 f"{APP_RESTART_HINT}"
             ) from e
+        call_ledger.note_memory_check(
+            model_name,
+            window=window,
+            size_gb=requirement.size_gb,
+            fits=None if verdict is None else verdict.fits,
+            reason=None if verdict is None else verdict.reason,
+        )
         if verdict is None:
             self.log.debug(
                 f"Free GPU memory is not reported here; loading {model_name} "
@@ -9162,7 +9312,7 @@ class LemonadeClient:
                 self.log.warning(
                     f"Could not read the model catalog at {self.base_url}/models "
                     f"to check {model_name}'s recipe ({e}); loading it without "
-                    "the two-slot chat flags, so side requests will evict the "
+                    "the multi-slot chat flags, so side requests will evict the "
                     "conversation cache."
                 )
             if recipe == "llamacpp":
@@ -9240,6 +9390,9 @@ class LemonadeClient:
                 f"{wait}s, or at once if the model's load options change."
             )
 
+        noted = call_ledger.begin(
+            "load", url=url, request=dict(request_data), timeout_s=timeout
+        )
         try:
             if managed_embedder and request_data.get("llamacpp_backend") != "cpu":
                 response = self._post_embedder_load(
@@ -9249,10 +9402,12 @@ class LemonadeClient:
                 response = self._post_load_with_transient_retry(
                     url, request_data, timeout, model_name, load_retries
                 )
+            call_ledger.end(noted)
             self.log.debug(f"Loaded {model_name} successfully: response={response}")
             self.model = model_name
             return response
         except Exception as e:
+            call_ledger.end(noted, error=e)
             original_error = str(e)
 
             # Check if this is a corrupt/incomplete download error

@@ -242,6 +242,12 @@ def test_api_lifecycle_never_echoes_token(ui_api_client, monkeypatch, caplog):
     monkeypatch.setattr(router._emitter, "emit", _record)
     # Keep the real reload hook from rebuilding session agents mid-test.
     monkeypatch.setattr(_HANDLER_REGISTRY["mcp_server"], "_reload", None)
+    # Test starts the server; a unit test stands in for the real npx process.
+    started = []
+    monkeypatch.setattr(
+        "gaia.connectors.mcp_server._start_once",
+        lambda name, entry: started.append(name) or {"ok": True, "detail": "started"},
+    )
     caplog.set_level(logging.DEBUG)
     headers = {"X-Gaia-UI": "1"}
 
@@ -259,6 +265,7 @@ def test_api_lifecycle_never_echoes_token(ui_api_client, monkeypatch, caplog):
     summary = ui_api_client.get("/api/connectors/mcp-slack")
     tested = ui_api_client.post("/api/connectors/mcp-slack/test", headers=headers)
     assert tested.json()["ok"] is True
+    assert started == ["mcp-slack"]
     deleted = ui_api_client.delete("/api/connectors/mcp-slack", headers=headers)
     assert deleted.status_code == 204
 

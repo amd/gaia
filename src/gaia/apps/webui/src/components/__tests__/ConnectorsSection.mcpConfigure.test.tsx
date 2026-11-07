@@ -17,6 +17,7 @@ vi.mock('../../services/api', () => ({
     listConnectorActivations: vi.fn(),
     activateConnectorAgent: vi.fn(),
     deactivateConnectorAgent: vi.fn(),
+    testConnector: vi.fn(),
 }));
 
 vi.mock('../../hooks/useConnectorsSSE', () => ({
@@ -65,6 +66,7 @@ beforeEach(() => {
     mocked.listConnectorGrants.mockResolvedValue({ grants: [] } as never);
     mocked.listConnectorActivations.mockResolvedValue({ activations: {} } as never);
     mocked.configureConnector.mockResolvedValue({ configured: true } as never);
+    mocked.testConnector.mockResolvedValue({ ok: true, detail: 'started, 1 tool' });
 });
 
 describe('MCP connector configure panel', () => {
@@ -245,5 +247,127 @@ describe('MCP connector configure panel', () => {
         expect(screen.getAllByRole('checkbox', { name: "Can't use Slack in chat" })).toHaveLength(2);
         expect(screen.getByRole('checkbox', { name: /this MCP server/ })).toBeInTheDocument();
         useChatStore.setState({ agents: [] as never });
+    });
+
+    it('checks that the server starts right after a save', async () => {
+        const github = { id: 'mcp-github', display_name: 'GitHub', mcp_env_keys: ['GITHUB_TOKEN'] };
+        mocked.getConnector.mockResolvedValue(mcpRow({ ...github, configured: true }));
+        await openTile(mcpRow(github));
+        fireEvent.change(screen.getByPlaceholderText('Enter value'), {
+            target: { value: 'ghp_test' },
+        });
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+        expect(await screen.findByText('GitHub started without errors.')).toBeInTheDocument();
+        expect(mocked.testConnector).toHaveBeenCalledWith('mcp-github');
+    });
+
+    it('says a connected server that will not start is broken, with the reason', async () => {
+        mocked.testConnector.mockResolvedValue({
+            ok: false,
+            detail: 'Authentication failed - check your Slack tokens',
+        });
+        await openTile(
+            mcpRow({ id: 'mcp-slack', display_name: 'Slack', configured: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'] }),
+        );
+
+        fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+
+        expect(
+            await screen.findByText("Slack didn't start. Check the token, then save it again."),
+        ).toBeInTheDocument();
+        expect(screen.getByText('Authentication failed - check your Slack tokens')).toBeInTheDocument();
+    });
+
+    it('does not blame the token when the server was only slow to start', async () => {
+        mocked.testConnector.mockResolvedValue({
+            ok: false,
+            reason: 'timeout',
+            detail: 'did not start within 10 seconds',
+        });
+        await openTile(
+            mcpRow({ id: 'mcp-slack', display_name: 'Slack', configured: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'] }),
+        );
+
+        fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+
+        expect(await screen.findByText(/Slack took too long to start/)).toBeInTheDocument();
+        expect(screen.queryByText(/Check the token/)).not.toBeInTheDocument();
+    });
+
+    it('clears the check result when the server is turned off', async () => {
+        const slack = { id: 'mcp-slack', display_name: 'Slack', configured: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'] };
+        mocked.getConnector.mockResolvedValue(mcpRow({ ...slack, enabled: false }));
+        await openTile(mcpRow(slack));
+        fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+        expect(await screen.findByText('Slack started without errors.')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('checkbox', { name: /this MCP server/ }));
+
+        await waitFor(() => expect(mocked.disableConnector).toHaveBeenCalledWith('mcp-slack'));
+        await waitFor(() =>
+            expect(screen.queryByText('Slack started without errors.')).not.toBeInTheDocument(),
+        );
+    });
+
+    it('clears the check result when the single switch is turned off', async () => {
+        useChatStore.setState({ agents: [GAIA] as never });
+        mocked.listConnectorActivations.mockResolvedValue({
+            activations: { 'installed:gaia': true },
+        } as never);
+        mocked.deactivateConnectorAgent.mockResolvedValue({} as never);
+        const slack = { id: 'mcp-slack', display_name: 'Slack', configured: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'] };
+        mocked.getConnector.mockResolvedValue(mcpRow(slack));
+        await openTile(mcpRow(slack));
+        expect(screen.queryByRole('checkbox', { name: /this MCP server/ })).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+        expect(await screen.findByText('Slack started without errors.')).toBeInTheDocument();
+        expect(mocked.testConnector).toHaveBeenCalledWith('mcp-slack');
+
+        fireEvent.click(await screen.findByRole('checkbox', { name: 'GAIA can use Slack in chat' }));
+
+        await waitFor(() =>
+            expect(mocked.deactivateConnectorAgent).toHaveBeenCalledWith('mcp-slack', 'installed:gaia'),
+        );
+        await waitFor(() =>
+            expect(screen.queryByText('Slack started without errors.')).not.toBeInTheDocument(),
+        );
+        useChatStore.setState({ agents: [] as never });
+    });
+
+    it('shows the newest check when an older one finishes last', async () => {
+        let finishFirst: (r: { ok: boolean; detail: string }) => void = () => {};
+        mocked.testConnector
+            .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+            .mockResolvedValueOnce({ ok: true, detail: 'started, 1 tool' });
+        const slack = { id: 'mcp-slack', display_name: 'Slack', configured: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'] };
+        mocked.getConnector.mockResolvedValue(mcpRow(slack));
+        await openTile(mcpRow(slack));
+
+        const save = async (token: string) => {
+            fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: token } });
+            // The button reads "Saved" for a moment after the first save.
+            fireEvent.click(screen.getByRole('button', { name: /^Saved?$/ }));
+            await waitFor(() =>
+                expect(mocked.configureConnector).toHaveBeenLastCalledWith('mcp-slack', { SLACK_MCP_XOXB_TOKEN: token }),
+            );
+        };
+        await save('xoxb-old');
+        await save('xoxb-new');
+        expect(await screen.findByText('Slack started without errors.')).toBeInTheDocument();
+
+        finishFirst({ ok: false, detail: 'Authentication failed - check your Slack tokens' });
+
+        await new Promise((r) => setTimeout(r, 0));
+        expect(screen.getByText('Slack started without errors.')).toBeInTheDocument();
+        expect(screen.queryByText(/Authentication failed/)).not.toBeInTheDocument();
+    });
+
+    it('offers no Check on a server that is turned off', async () => {
+        await openTile(
+            mcpRow({ id: 'mcp-slack', display_name: 'Slack', configured: true, enabled: false, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'] }),
+        );
+
+        expect(screen.queryByRole('button', { name: 'Check' })).not.toBeInTheDocument();
     });
 });

@@ -20,7 +20,6 @@ import time
 import uuid
 from collections import deque
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterator, List, Optional
 
 from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, call_risk
@@ -49,6 +48,7 @@ from gaia.ui.event_narration import (
     tool_phrase,
 )
 from gaia.ui.turn_summary import TurnLedger, search_hits
+from gaia.upload_names import display_file_name, upload_original_name
 from gaia.utils.json_string import (
     JsonStringStreamDecoder,
     extract_json_string_field,
@@ -835,6 +835,9 @@ class SSEOutputHandler(OutputHandler):
         event.update(_mcp_identity(tool_name))
         self._emit(event)
 
+    def print_skill_use(self, name: str, loaded: List[str], how: str):
+        self._emit({"type": "skill_use", "skill": name, "how": how, "loaded": loaded})
+
     def print_tool_complete(self):
         self._tool_start_time = None  # Reset in case tool_result was skipped
         success, self._last_tool_success = self._last_tool_success, True
@@ -975,7 +978,7 @@ class SSEOutputHandler(OutputHandler):
                             {
                                 "id": c.get("chunk_id", 0),
                                 "source": (
-                                    Path(c["source_file"]).name
+                                    display_file_name(c["source_file"])
                                     if c.get("source_file")
                                     else None
                                 ),
@@ -2746,7 +2749,8 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         if data.get("already_indexed"):
             return f"Already indexed ({chunks} chunks)"
         if filename:
-            return f"Indexed {filename} ({chunks} chunks)"
+            shown = upload_original_name(filename) or filename
+            return f"Indexed {shown} ({chunks} chunks)"
         return f"Indexed document ({chunks} chunks)"
 
     # File read results

@@ -403,6 +403,9 @@ async function startBackend() {
         PYTHONUNBUFFERED: "1",
         ...(app.isPackaged && {
           GAIA_BUNDLED_LEMONADE_DIR: path.join(process.resourcesPath, "vendor", "lemonade"),
+          // The daemon exits once this is deleted: a Trashed macOS app or a
+          // deleted AppImage runs no uninstall step. An AppImage's exe is a mount.
+          GAIA_APP_PATH: process.env.APPIMAGE || app.getPath("exe"),
         }),
       },
       detached: false,
@@ -733,11 +736,10 @@ function createWindow() {
     platform: process.platform,
     reportNoticeError: (err) => {
       console.error("[main] First-close notice failed:", err.message);
-      const where = process.platform === "darwin" ? "menu bar" : "tray";
+      const { message, detail } = trayManager.closeNoticeText();
       dialog.showErrorBox(
         "GAIA is still running",
-        `GAIA is still running in the ${where}. Quit from the ${where} menu to stop it.\n\n` +
-          `(The usual notice failed: ${err.message})`
+        `${message} ${detail}\n\n(The usual notice failed: ${err.message})`
       );
     },
   });
@@ -1396,14 +1398,20 @@ function workCanBeLost() {
   return Boolean(trayManager && backendProcess);
 }
 
-/** Ask about losing work in front of the window, even when it was hidden in the tray. */
+/** Ask about losing work in front of the window, even when it was hidden or minimized. */
 function askAboutRunningWork(action) {
   return confirmQuit({
     action,
     getWork: () => fetchWorkInProgress(backendPort),
     showMessageBox: (opts) => {
       if (!mainWindow || mainWindow.isDestroyed()) return dialog.showMessageBox(opts);
+      const wasMinimized = mainWindow.isMinimized();
+      if (wasMinimized) mainWindow.restore();
       if (!mainWindow.isVisible()) mainWindow.show();
+      // Wayland can't un-minimize a window, and a modal would stay minimized with it.
+      if (process.platform === "linux" && wasMinimized && !mainWindow.isFocused()) {
+        return dialog.showMessageBox(opts);
+      }
       return dialog.showMessageBox(mainWindow, opts);
     },
   });

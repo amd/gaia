@@ -33,11 +33,12 @@ MACOS = "Unit Tests (macOS, py3.12)"
 UNIT_RC = next(c for c in crc.RC_REPORTED if c.workflow == "test_unit.yml")
 
 
-def run(conclusion, status="completed", minutes=0, run_id=1):
+def run(conclusion, status="completed", minutes=0, run_id=1, event="workflow_dispatch"):
     return {
         "id": run_id,
         "status": status,
         "conclusion": conclusion,
+        "event": event,
         "html_url": f"https://example/run/{run_id}",
         "created_at": (T0 + timedelta(minutes=minutes))
         .isoformat()
@@ -165,10 +166,15 @@ def test_an_advisory_check_is_never_also_required():
 def test_every_test_unit_job_is_reported_on_an_rc():
     # A new job must show up in the RC summary, not be silently dropped.
     # "Select unit tests" only feeds the Linux job: if it fails, that job is
-    # skipped, and the report says so.
+    # skipped, and the report says so. The result gate and the nightly alert
+    # run no tests of their own.
     rows = [c.jobs for c in crc.RC_REPORTED if c.workflow == "test_unit.yml"]
     named = [n for jobs in rows for n in jobs]
-    assert set(_job_names("test_unit.yml")) - set(named) == {"Select unit tests"}
+    assert set(_job_names("test_unit.yml")) - set(named) == {
+        "Select unit tests",
+        "Unit Tests Result",
+        "Report the nightly result",
+    }
     assert len(named) == len(set(named)), "a job is reported twice"
 
 
@@ -721,3 +727,59 @@ def test_only_a_403_blames_permissions(monkeypatch, code, hinted):
         crc.fetch_runs("amd/gaia", "lint.yml", "abc", "tok")
     assert f"HTTP {code}" in str(exc.value)
     assert ("actions: write" in str(exc.value)) is hinted
+
+
+# ── Only a full-suite run of test_unit.yml passes a final ───────────────
+
+
+FINAL_UNIT = next(c for c in crc.FINAL_REQUIRED if c.workflow == "test_unit.yml")
+
+
+@pytest.mark.parametrize("event", ["push", "merge_group", "pull_request"])
+def test_a_run_that_may_have_selected_tests_does_not_pass_a_final(event):
+    # Pushes select on Windows and macOS; the queue and PRs select everywhere.
+    v = crc.judge(FINAL_UNIT, [run("success", event=event)], "amd/gaia", "v1.0.0")
+    assert v.state == "missing"
+    assert "gh workflow run test_unit.yml" in v.remedy
+
+
+@pytest.mark.parametrize("event", ["workflow_dispatch", "schedule"])
+def test_a_dispatched_or_nightly_run_passes_a_final(event):
+    v = crc.judge(FINAL_UNIT, [run("success", event=event)], "amd/gaia", "v1.0.0")
+    assert v.state == "success"
+
+
+def test_a_final_dispatches_the_full_suite_when_only_a_push_run_passed():
+    started: list = []
+    clock = Clock()
+    crc.check(
+        "amd/gaia",
+        "v1.0.0",
+        (FINAL_UNIT,),
+        lambda w: [run("success", event="push")],
+        started.append,
+        wait_minutes=0,
+        sleep=clock.sleep,
+        now=clock.now,
+    )
+    assert started == [FINAL_UNIT]
+
+
+def test_a_merge_queue_run_is_never_the_rc_linux_row():
+    # A queue run selects tests even on Linux; the row claims the full suite.
+    green = {1: unit_jobs()}
+    v = crc.judge(
+        UNIT_RC,
+        [run("success", event="merge_group")],
+        "amd/gaia",
+        "v1.0.0-rc1",
+        _jobs_for(green),
+    )
+    assert v.state == "missing"
+
+
+def test_a_check_without_events_reads_every_run():
+    v = crc.judge(
+        C("lint.yml"), [run("success", event="merge_group")], "amd/gaia", "v1.0.0"
+    )
+    assert v.state == "success"

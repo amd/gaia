@@ -1960,7 +1960,6 @@ def _session_agent_kwargs(
     allowed: list,
     session_id: str,
     working_directory: Optional[str] = None,
-    dynamic_tools: bool = False,
     memory_incognito: bool = False,
 ) -> dict:
     """Build the session-scoped ChatAgentConfig fields.
@@ -1974,12 +1973,6 @@ def _session_agent_kwargs(
     identical bundle — this PR's blocker bug was one of them forgetting a
     field.
 
-    ``dynamic_tools`` is the Beta tool-loader toggle (#1798): a valid
-    ``ChatAgentConfig`` field whose effect is only observable on the ``doc``
-    agent (``_maybe_build_tool_loader`` gates on ``prompt_profile == "doc"``).
-    Threading it here is what makes the UI toggle actually apply on the
-    loader-active path.
-
     Unknown kwargs are filtered by each factory (manifest agents via
     ``dataclasses.fields`` / ``AgentManifest``) so this stays safe to pass
     to agents that don't need RAG or a path validator.
@@ -1990,7 +1983,6 @@ def _session_agent_kwargs(
         "allowed_paths": allowed,
         "working_directory": working_directory or _session_working_directory(),
         "ui_session_id": session_id,
-        "dynamic_tools": dynamic_tools,
         "memory_incognito": memory_incognito,
         "surface": "agent_ui",
     }
@@ -2911,6 +2903,17 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+def _insert_skill_step(steps: list, step: dict) -> None:
+    """Put a skill step before the running tool call that brought the skill in."""
+    for i in range(len(steps) - 1, -1, -1):
+        if steps[i].get("type") == "tool":
+            if steps[i].get("active"):
+                steps.insert(i, step)
+                return
+            break
+    steps.append(step)
+
+
 def _close_reasoning(steps: list, now_ms: int) -> None:
     """Record how long the reasoning just before the answer ran, on its last piece."""
     run = []
@@ -2932,6 +2935,31 @@ def _agent_ui_wording(text: str) -> str:
     from gaia.llm.surface_hints import surface_wording
 
     return surface_wording(text, "agent_ui")
+
+
+def _model_failure_text(exc: BaseException, model_id: Optional[str]) -> Optional[str]:
+    """What the chat says when *exc* failed a model call, naming its fault record.
+
+    None when *exc* is not a model-call failure. Blocks on short local probes,
+    so async callers run it in a thread.
+    """
+    from gaia.llm.failure_record import (
+        is_model_call_failure,
+        record_local_failure,
+        record_note,
+    )
+
+    classified = _classify_chat_exception(exc)
+    if classified is not None:
+        message = wording_for_model(classified.user_message, model_id)
+    elif is_model_call_failure(exc):
+        # GAIA's own client wording, e.g. how much memory a load needed.
+        message = str(exc)
+    else:
+        return None
+    note = record_note(record_local_failure(exc, where="ui_chat", model=model_id))
+    message = _agent_ui_wording(message)
+    return f"{message}\n\n{note}" if note else message
 
 
 def _echoes_failed_tool(event: dict, steps: list) -> bool:
@@ -3842,10 +3870,6 @@ async def _get_chat_response(
             )
             model_id = custom_model
 
-        # Beta dynamic tool loader (#1798). Effective only on the doc agent;
-        # GAIA_DYNAMIC_TOOLS still overrides per ChatAgent's resolver.
-        dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
-
         session_id = request.session_id
         stored_agent_type = session.get("agent_type") or "chat"
         agent_type = request.agent_type or stored_agent_type
@@ -3994,7 +4018,6 @@ async def _get_chat_response(
                             allowed=allowed,
                             session_id=session_id,
                             working_directory=working_directory,
-                            dynamic_tools=dynamic_tools,
                             memory_incognito=_memory_off(session, db),
                         ),
                         # Forwarded only here (not via _session_agent_kwargs, which
@@ -4138,12 +4161,11 @@ async def _get_chat_response(
         # when we have one, instead of a stock "trouble connecting"
         # blob.  Falls back to the generic copy when we can't
         # classify the exception.
-        classified = _classify_chat_exception(e)
-        if classified is not None:
-            chat_model = db.get_setting("custom_model") or session.get("model")
-            return _agent_ui_wording(
-                wording_for_model(classified.user_message, chat_model)
-            )
+        # Off the event loop: the fault record probes Lemonade and lists processes.
+        chat_model = db.get_setting("custom_model") or session.get("model")
+        failure = await asyncio.to_thread(_model_failure_text, e, chat_model)
+        if failure is not None:
+            return failure
         # Same as the streamed path: the real reason, not a guess at one.
         return _agent_ui_wording(f"Agent error: {e}")
 
@@ -4289,10 +4311,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 model_id,
             )
             model_id = custom_model
-
-        # Beta dynamic tool loader (#1798). Effective only on the doc agent;
-        # GAIA_DYNAMIC_TOOLS still overrides per ChatAgent's resolver.
-        dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
 
         stored_agent_type = session.get("agent_type") or "chat"
         agent_type = request.agent_type or stored_agent_type
@@ -4515,7 +4533,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                     allowed=allowed,
                                     session_id=session_id,
                                     working_directory=working_directory,
-                                    dynamic_tools=dynamic_tools,
                                     memory_incognito=_memory_off(session, db),
                                 ),
                                 # See the non-streaming path: email-only kwarg,
@@ -4649,11 +4666,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # raw exception string. ``_classify_chat_exception`` walks
                 # the exception chain so we catch errors raised inside
                 # AgentSDK that wrap the original LemonadeError.
-                classified = _classify_chat_exception(e)
-                if classified is not None:
-                    result_holder["error"] = _agent_ui_wording(
-                        wording_for_model(classified.user_message, model_id)
-                    )
+                failure = _model_failure_text(e, model_id)
+                if failure is not None:
+                    result_holder["error"] = failure
                     result_holder["error_explained"] = True
                 else:
                     result_holder["error"] = _agent_ui_wording(str(e))
@@ -4855,6 +4870,23 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "mcpServerLabel": event.get("mcp_server_label"),
                             "mcpTool": event.get("mcp_tool"),
                         }
+                    )
+                elif event_type == "skill_use" and event.get("how") != "model":
+                    # A load_skill call is already its own step.
+                    step_id += 1
+                    _insert_skill_step(
+                        captured_steps,
+                        {
+                            "id": step_id,
+                            "type": "tool",
+                            "label": "Using use_skill",
+                            "tool": "use_skill",
+                            "detail": event.get("skill"),
+                            "narration": f"Using skill: {event.get('skill')}",
+                            "active": False,
+                            "success": True,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        },
                     )
                 elif event_type == "tool_args" and captured_steps:
                     # Update the last TOOL step (not just last step, since thinking

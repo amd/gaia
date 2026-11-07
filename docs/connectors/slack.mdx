@@ -108,7 +108,10 @@ copy the **Bot User OAuth Token** instead.
 
 ### `invalid_auth` / `missing_scope`
 
-The token is wrong, revoked, or missing a scope from Step 1. Add the scope,
+The token is wrong, revoked, or missing a scope from Step 1. The Slack server
+checks its token when it starts, so **Check** on the tile (or
+`gaia connectors test mcp-slack`) reports a revoked or wrong token as
+"didn't start", with Slack's reason under **Details**. Add the scope,
 reinstall the app to the workspace, then **Disconnect** the tile (or
 `gaia connectors disconnect mcp-slack`) and configure it again with the new
 token.

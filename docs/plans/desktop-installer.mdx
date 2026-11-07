@@ -220,9 +220,9 @@ Three tiers, default to keeping user data.
 | Platform | Default uninstall flow | Purge access |
 |---|---|---|
 | **Windows NSIS** | Standard "Add or Remove Programs" entry. NSIS uninstaller wizard with optional "Also remove user data" checkbox that maps to `gaia uninstall --purge` | Wizard checkbox + silent flag `/PURGE=1` |
-| **macOS DMG** | **Drag the GAIA app from `/Applications` to the Trash.** This is what users already know how to do — the most familiar Mac UX. User data in `~/.gaia/` is left behind (same as every other Mac app). | Documented one-liner in README, FAQ, and release notes: `~/.gaia/venv/bin/gaia uninstall --purge` |
+| **macOS DMG** | **Drag the GAIA app from `/Applications` to the Trash.** This is what users already know how to do — the most familiar Mac UX. User data in `~/.gaia/` is left behind (same as every other Mac app). The app's GAIA daemon and agents stop within seconds: the daemon exits once the app path it was started with (`GAIA_APP_PATH`) is gone. | Documented one-liner in README, FAQ, and release notes: `~/.gaia/venv/bin/gaia uninstall --purge` |
 | **Linux DEB** | `apt remove gaia-agent-ui` and `apt purge gaia-agent-ui` preserve per-user data. `prerm` script stops the GAIA Agent UI Electron process and each user's GAIA daemon with its agents (does NOT kill the user-launched `gaia chat --ui` backend, which the user may want to keep running). `postrm` prints a pointer to explicit per-user cleanup. | Run `gaia uninstall --purge` as the user |
-| **Linux AppImage** | Delete the `.AppImage` file. User data orphaned (consistent with how all AppImages work). | `~/.gaia/venv/bin/gaia uninstall --purge` from CLI |
+| **Linux AppImage** | Delete the `.AppImage` file. User data orphaned (consistent with how all AppImages work). The GAIA daemon and agents stop within seconds, once the `.AppImage` (`GAIA_APP_PATH`) is gone. | `~/.gaia/venv/bin/gaia uninstall --purge` from CLI |
 
 ### §5.2 The unifying piece: `gaia uninstall` CLI
 

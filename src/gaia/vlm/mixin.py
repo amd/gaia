@@ -204,7 +204,7 @@ class VLMToolsMixin:
                 "image_path": str(path),
                 "focus": focus,
                 "description": description,
-                "model": self.vlm_model,
+                "model": self.vlm_client.vlm_model,
             }
 
         except Exception as e:
@@ -251,7 +251,7 @@ class VLMToolsMixin:
                 "image_path": str(path),
                 "question": question,
                 "answer": answer,
-                "model": self.vlm_model,
+                "model": self.vlm_client.vlm_model,
             }
 
         except Exception as e:
