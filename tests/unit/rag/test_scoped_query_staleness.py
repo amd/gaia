@@ -7,14 +7,18 @@ foreground budget the index tool uses, so the answer is never built from the
 old generation and nothing stale is served silently.
 """
 
+import os
 import threading
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools import rag_tools
 from gaia.agents.tools.rag_tools import RAGToolsMixin
+from gaia.rag.sdk import RAGSDK, RAGConfig
 
 CALL_DEADLINE_S = 5.0
 
@@ -185,3 +189,61 @@ def test_a_failed_reindex_reports_the_error(tmp_path):
     assert result["status"] == "error", result
     assert "Re-indexing doc.txt failed" in result["error"]
     assert "file locked" in result["error"]
+
+
+OLD = "The launch is on Tuesday in Lisbon. " * 30
+NEW = "The launch moved to Friday in Oslo. " * 30
+
+
+def _real_sdk(tmp_path):
+    """A real SDK with a deterministic embedder, as in the re-index tests."""
+    pytest.importorskip("faiss", reason="Real vector-index tests require faiss-cpu")
+    config = RAGConfig(
+        cache_dir=str(tmp_path / "cache"),
+        allowed_paths=[str(tmp_path)],
+        use_llm_chunking=False,
+    )
+    with patch("gaia.rag.sdk.AgentSDK"):
+        sdk = RAGSDK(config)
+    sdk.encoded = 0
+
+    def _encode(texts, **_kwargs):
+        sdk.encoded += len(texts)
+        return np.ones((len(texts), 4), dtype="float32")
+
+    sdk._load_embedder = lambda: None
+    sdk._encode_texts = _encode
+    sdk._get_hmac_key = lambda: b"test-cache-key" * 3
+    return sdk
+
+
+def _write_keeping_stat(path: Path, text: str):
+    """Rewrite *path* with the same size and modification time as before."""
+    st = path.stat()
+    path.write_text(text, encoding="utf-8")
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+
+
+def test_a_real_sdk_serves_the_current_text_after_a_same_size_edit(tmp_path):
+    """End to end on the real SDK: a same-size edit with the mtime restored
+    defeats timestamp checks, and the scoped query re-indexes inside its
+    budget and serves the edited text instead of the old one (#6932)."""
+    doc = tmp_path / "plan.txt"
+    doc.write_text(OLD, encoding="utf-8")
+    sdk = _real_sdk(tmp_path)
+    assert sdk.index_document(str(doc))["success"]
+
+    _write_keeping_stat(doc, NEW)
+    host = _RagHost(sdk)
+    host.register_rag_tools()
+
+    result = _call(
+        "query_specific_file", file_path=str(doc), query="launch location"
+    )
+
+    assert result["status"] == "success", result
+    served = " ".join(
+        chunk.get("content", "") for chunk in result.get("chunks", [])
+    )
+    assert "Oslo" in served
+    assert "Lisbon" not in served
