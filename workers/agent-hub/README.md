@@ -106,6 +106,9 @@ the cycle.
   after the winner committed. When the loser's checksum differs from the one
   the catalog lists, it gets `409 concurrent_publish_conflict` instead of
   `version_exists`, so a release job can't report it as already published.
+  A re-run stays red too: when the filename is already listed, the stored
+  object's R2 sha256 is compared with the listed one before `version_exists`,
+  and the release publisher checks the downloaded bytes against the catalog.
 - **Multi-platform releases.** A single `<id>@<version>` may hold more than one
   artifact — one per platform for a native binary (e.g. the frozen email agent
   ships four binaries under `email@0.1.0`). The first publish of a version
