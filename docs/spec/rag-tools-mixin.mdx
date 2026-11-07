@@ -45,7 +45,7 @@ attribute (see below):
 
 | Attribute | Type | Notes |
 |---|---|---|
-| `self.rag` | `RAGSDK` | The document index and query engine. A stand-in must accept `index_document(path, progress_callback=None)`. |
+| `self.rag` | `RAGSDK` | The document index and query engine. A stand-in must accept `index_document(path, progress_callback=None)` and `is_current(path)`. |
 | `self.indexed_files` | `set` or `list` | Tracks which files are indexed. |
 | `self.max_chunks` | `int` | Default chunk count for retrieval. |
 | `self.current_session` | any, or `None` | `None` is a valid, expected value. |
@@ -306,7 +306,9 @@ class RAGToolsMixin:
         and the call returns "in_progress" with chunks_embedded, total_chunks,
         elapsed_seconds and estimated_seconds_remaining. Calling it again with
         the same path waits on that job; query_specific_file's auto-index
-        behaves the same way.
+        behaves the same way. A document already indexed returns
+        "already_indexed" unless it changed since, in which case it is
+        re-indexed and the result has "reindexed": true.
 
         Args:
             file_path: Path to PDF to index
