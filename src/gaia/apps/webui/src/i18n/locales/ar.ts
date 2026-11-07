@@ -1733,7 +1733,7 @@ const messages: Messages = {
     'settings.connectors.serversHint': 'أضف أدوات من خدمات أخرى.',
     'settings.connectors.agentServers': 'خوادم الوكلاء المخصصين',
     'settings.connectors.unavailable': 'غير متاحة',
-    'settings.connectors.unavailableHint': 'تعذّر على GAIA قراءة هذه الموصلات. أعد تشغيل GAIA. إذا تكرر ذلك، شغّل gaia diagnostics وأرفق الملف بتقرير الخطأ.',
+    'settings.connectors.unavailableHint': 'تعذّر على GAIA قراءة هذه الموصلات. أعد تشغيل GAIA للمحاولة مرة أخرى. إذا تكرر ذلك، يُرجى الإبلاغ عن الخطأ.',
     'settings.connectors.unavailableStatus': 'تعذّر التحميل',
     'settings.connectors.notRevoked': 'قُطع الاتصال محليًا، لكن المزوّد لم يؤكد الإلغاء ({reason}). قد يظل ظاهرًا كمتصل في أذونات التطبيقات بحسابك.',
     'settings.connectors.localOnly': 'قُطع الاتصال محليًا. {reason}',
