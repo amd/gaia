@@ -235,6 +235,31 @@ def _rag_not_available() -> str:
     return f"RAG not available. {missing_extra_hint('rag')}"
 
 
+def _kick_stale_reindexes(rag: Any) -> List[str]:
+    """Start a background re-index for every indexed file whose bytes changed
+    since it was indexed, and return the file names whose *old* generation
+    this query will still serve until those re-indexes finish (#6939).
+
+    The kick is non-blocking: each stale file goes through
+    :func:`_index_within_budget` with a zero budget, which starts the job and
+    returns at once; the SDK's own changed-file handling re-indexes it with
+    the same lock guidance as #6911. Files that are already being indexed
+    rejoin their running job instead of starting a second one.
+    """
+    if rag is None:
+        return []
+    still: List[str] = []
+    for path in sorted(rag.indexed_files):
+        if not rag.is_current(str(path)):
+            _result, job = _index_within_budget(rag, str(path), budget=0)
+            still.append(Path(job.path).name)
+    return still
+
+
+def _rag_not_available() -> str:
+    return f"RAG not available. {missing_extra_hint('rag')}"
+
+
 def _rag_unavailable_message(host: Any) -> str:
     """Why a document tool cannot run.
 
@@ -688,6 +713,11 @@ class RAGToolsMixin:
                         ),
                     }
 
+                # An edited file re-indexes in the background so later queries
+                # serve its current text; this one may still use the old
+                # generation, and the response names those files.
+                reindexing_files = _kick_stale_reindexes(rag)
+
                 # Generate multiple search keys for better retrieval
                 search_keys = self._generate_search_keys(query)
                 logger.info(f"Generated {len(search_keys)} search keys for query")
@@ -853,6 +883,8 @@ class RAGToolsMixin:
                         "relevance_scores": [],
                         "instruction": "Inform the user that no relevant information was found in the documents for their query.",
                     }
+                    if reindexing_files:
+                        result["reindexing_files"] = reindexing_files
                     if debug_info:
                         result["debug_info"] = debug_info
                     return result
@@ -1009,6 +1041,11 @@ class RAGToolsMixin:
                     "num_chunks": len(formatted_chunks),
                     "search_keys_used": search_keys,
                     "source_files": matched_source_files,
+                    **(
+                        {"reindexing_files": reindexing_files}
+                        if reindexing_files
+                        else {}
+                    ),
                     "instruction": _documents_instruction(
                         _chunks_have_pages(formatted_chunks),
                         all("page" in chunk for chunk in formatted_chunks),
@@ -1539,6 +1576,11 @@ class RAGToolsMixin:
                 if not self.rag.chunks:
                     return {"status": "error", "error": self._no_documents_message()}
 
+                # An edited file re-indexes in the background so later searches
+                # serve its current text; this one may still use the old
+                # generation, and the response names those files.
+                reindexing_files = _kick_stale_reindexes(self.rag)
+
                 # Search through chunks for pattern
                 matching_chunks = []
                 pattern_lower = pattern.lower()
@@ -1587,6 +1629,8 @@ class RAGToolsMixin:
                         "matches": [],
                         "count": 0,
                     }
+                    if reindexing_files:
+                        result["reindexing_files"] = reindexing_files
                     if debug_info:
                         result["debug_info"] = debug_info
                     return result
@@ -1601,6 +1645,11 @@ class RAGToolsMixin:
                     "count": len(matching_chunks),
                     "showing": len(limited_matches),
                     "instruction": "Use these exact matches to answer the user's question.",
+                    **(
+                        {"reindexing_files": reindexing_files}
+                        if reindexing_files
+                        else {}
+                    ),
                 }
 
                 # Add debug info to result if debug mode is enabled
