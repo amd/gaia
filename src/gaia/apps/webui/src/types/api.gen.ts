@@ -86,6 +86,7 @@ export interface ApiSchemas {
   ParseScheduleRequest: ParseScheduleRequest;
   ParseScheduleResponse: ParseScheduleResponse;
   PermissionModeRequest: PermissionModeRequest;
+  PolicyNotice: PolicyNotice;
   PreflightReport: PreflightReport;
   PullRequestRequest: PullRequestRequest;
   QuickLink: QuickLink;
@@ -1034,6 +1035,15 @@ export interface PermissionModeRequest {
   mode: string;
 }
 /**
+ * Structured Local only notice translated by the Agent UI.
+ */
+export interface PolicyNotice {
+  code: string;
+  reason?: string | null;
+  severity: "info" | "warning";
+  url?: string | null;
+}
+/**
  * Result of the first-run hardware scan.
  */
 export interface PreflightReport {
@@ -1236,6 +1246,9 @@ export interface SettingsResponse {
   dynamic_tools?: boolean;
   dynamic_tools_locked?: boolean;
   model_status?: ModelStatus | null;
+  network_policy?: "cloud_allowed" | "local_ai_only";
+  policy_notices?: PolicyNotice[];
+  policy_warnings?: string[];
 }
 /**
  * Request to update user settings.
@@ -1257,6 +1270,10 @@ export interface SettingsUpdateRequest {
    * Dynamic tool loading: send the tool list in short form and full docs only as needed, to cut first-turn TTFT without breaking the prompt cache. Applies to new chats. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.
    */
   dynamic_tools?: boolean | null;
+  /**
+   * Whether GAIA may use cloud AI models. Setting local_ai_only blocks cloud models, clears saved cloud model choices, and removes cloud keys from GAIA's running Lemonade server. Omit to leave the policy unchanged.
+   */
+  network_policy?: ("cloud_allowed" | "local_ai_only") | null;
 }
 /**
  * ``skip_chat_model`` when the chat runs on a cloud provider;

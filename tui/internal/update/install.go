@@ -57,7 +57,7 @@ var (
 	// startDetached opens the Windows setup without waiting for it.
 	startDetached = func(path string) error { return exec.Command(path).Start() }
 	// windowsSetupDir is where the GAIA Windows setup installed the terminal
-	// (HKCU\Software\GAIA\TerminalHub InstallDir), or "".
+	// (HKCU\Software\GAIA\gaia-tui InstallDir), or "".
 	windowsSetupDir = setupInstallDir
 )
 

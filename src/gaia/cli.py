@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -395,6 +396,21 @@ class GaiaCliClient:
             sys.exit(1)
 
 
+def _probe_error_is_unreachable(err: LemonadeClientError) -> bool:
+    """True when a device probe failed only because Lemonade isn't reachable
+    yet (connection refused / timeout), not because the server errored."""
+    import requests
+
+    # Prefer the requests exception in the cause chain over message matching.
+    cause = err.__cause__ or err.__context__
+    if isinstance(
+        cause, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)
+    ):
+        return True
+    # Fallback for wrappers that don't preserve __cause__.
+    return str(err).startswith("Request failed:") and "with status" not in str(err)
+
+
 def resolve_effective_device(
     effective_device: str, device_was_explicit: bool, devices: dict
 ) -> str:
@@ -479,6 +495,39 @@ async def async_main(action, **kwargs):
         "stats": "minimal",
     }
 
+    # `gaia prompt --device npu` must run the NPU twin, not the GPU default
+    # (#3827): map an explicit --device to its device config's model the same
+    # way `gaia chat` does. An explicit --device fails loudly when the
+    # hardware isn't available, per the NPU guide's fallback behaviour; an
+    # explicit --model always wins.
+    if (
+        action == "prompt"
+        and kwargs.get("device") is not None
+        and kwargs.get("model") is None
+    ):
+        from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
+
+        try:
+            _prompt_devices = (
+                LemonadeClient(verbose=False).get_system_info().get("devices", {})
+            )
+            kwargs["device"] = resolve_effective_device(
+                kwargs["device"], True, _prompt_devices
+            )
+        except LemonadeClientError as _prompt_probe_err:
+            # Only an unreachable server skips the check; init below surfaces
+            # it. Any other server error is real and must not be hidden.
+            if not _probe_error_is_unreachable(_prompt_probe_err):
+                raise
+            log.debug(
+                "Device probe skipped (Lemonade not reachable yet): %s",
+                _prompt_probe_err,
+            )
+        for _dc in DEFAULT_DEVICE_CONFIGS:
+            if _dc.device == kwargs["device"]:
+                kwargs["model"] = _dc.model
+                break
+
     # Initialize Lemonade with agent-specific profile
     lemonade_base_url = kwargs.get("base_url")  # May be None if not specified
     if action in action_to_agent and not kwargs.get("no_lemonade_check", False):
@@ -525,19 +574,14 @@ async def async_main(action, **kwargs):
     elif action == "chat":
         if agent_registry is not None:
             return _run_registered_agent(kwargs["agent"], kwargs, agent_registry)
-        # `gaia chat` runs the flagship; it ships as the gaia-agent-gaia wheel.
+        # `gaia chat` runs the flagship in this process from the gaia-agent-gaia
+        # package, or, where the agent ships as its own binary (as the apps
+        # ship it), on that binary through the daemon, as the Agent UI does.
         try:
             from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
             from gaia_agent.interactive import interactive_mode
-        except ImportError as e:
-            raise RuntimeError(
-                agent_import_error_message(
-                    e,
-                    "The GAIA agent is not installed",
-                    "gaia-agent-gaia",
-                    next_step="Then re-run `gaia chat`.",
-                )
-            ) from e
+        except ImportError:
+            return _gaia_chat_relay(kwargs)
 
         try:
             # Use silent mode when debug is off to hide intermediate processing
@@ -580,32 +624,9 @@ async def async_main(action, **kwargs):
                         effective_device, device_was_explicit, _devices
                     )
                 except LemonadeClientError as _probe_err:
-                    # Only treat "server not reachable yet" (connection refused /
-                    # timeout) as a soft pass. A reachable but broken server
-                    # (HTTP 4xx/5xx, 401 auth) must NOT silently let an explicit
-                    # --device proceed; surface it so the user sees the real
-                    # failure. The agent runtime re-validates the device
-                    # regardless (LemonadeManager.ensure_ready).
-                    #
-                    # Prefer the original requests exception preserved in the
-                    # cause chain over message-string matching — the client
-                    # wraps RequestException without an HTTP status, but the
-                    # exact wrapper text can change independently of this guard.
-                    import requests
-
-                    _cause = _probe_err.__cause__ or _probe_err.__context__
-                    _unreachable = isinstance(
-                        _cause,
-                        (
-                            requests.exceptions.ConnectionError,
-                            requests.exceptions.Timeout,
-                        ),
-                    ) or (
-                        # Fallback for wrappers that don't preserve __cause__.
-                        str(_probe_err).startswith("Request failed:")
-                        and "with status" not in str(_probe_err)
-                    )
-                    if not _unreachable:
+                    # A reachable but broken server (4xx/5xx, 401) must not let
+                    # an explicit --device through unchecked.
+                    if not _probe_error_is_unreachable(_probe_err):
                         raise
                     log.debug(
                         "Device probe: Lemonade not reachable yet (%s)", _probe_err
@@ -1049,15 +1070,9 @@ def _launch_interactive_cli(log=None):
         try:
             from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
             from gaia_agent.interactive import interactive_mode
-        except ImportError as e:
-            raise RuntimeError(
-                agent_import_error_message(
-                    e,
-                    "The GAIA agent is not installed",
-                    "gaia-agent-gaia",
-                    next_step="Then re-run `gaia chat`.",
-                )
-            ) from e
+        except ImportError:
+            # The agent ships as its own binary: chat with it through the daemon.
+            sys.exit(_gaia_chat_relay({}))
 
         config = GaiaAgentConfig(
             base_url=base_url or resolve_lemonade_base_url(),
@@ -2651,7 +2666,7 @@ Examples (code search):
 
 rag: `pr` is offline and deterministic: retrieval only, over documents committed
 in the gaia repository, plus the hard cases that need no LLM. `full` downloads
-FinanceBench, public AMD documents, XQuAD and Wikipedia distractors (pinned,
+public AMD documents, an arXiv paper, XQuAD and Wikipedia distractors (pinned,
 sha256-checked, cached in ~/.gaia/cache/eval-retrieval), generates answers, and
 runs the scale tiers. The labels and the `pr` documents are read from a gaia
 checkout: the current directory, or --repo-root. Needs a running Lemonade.
@@ -2711,7 +2726,7 @@ embeddings and no LLM, against a `git grep` baseline. Needs Lemonade and git.
     rag_retrieval_group.add_argument(
         "--datasets",
         default=None,
-        help="Comma-separated subset: repo_docs, technical_docs, financebench, xquad",
+        help="Comma-separated subset: repo_docs, technical_docs, xquad",
     )
     rag_retrieval_group.add_argument(
         "--retrieval-only",
@@ -2751,12 +2766,6 @@ embeddings and no LLM, against a `git grep` baseline. Needs Lemonade and git.
         type=int,
         default=None,
         help="Questions per XQuAD language (default: 40)",
-    )
-    rag_retrieval_group.add_argument(
-        "--financebench-docs",
-        type=int,
-        default=None,
-        help="Keep only the questions over the first N FinanceBench filings",
     )
     rag_retrieval_group.add_argument(
         "--no-vlm",
@@ -4190,7 +4199,6 @@ _RETRIEVAL_ONLY_FLAGS = {
         "no_hard_cases",
         "xquad_languages",
         "xquad_per_language",
-        "financebench_docs",
         "no_vlm",
         "offline",
         "fetch_only",
@@ -4276,11 +4284,14 @@ def _handle_eval_retrieval(args):
         run_hard_cases=not args.no_hard_cases,
         xquad_languages=_split(args.xquad_languages),
         xquad_per_language=args.xquad_per_language,
-        financebench_docs=args.financebench_docs,
         offline=args.offline,
         keep_work=args.keep_work,
         vlm=False if args.no_vlm else None,
     )
+    try:
+        runner.check_datasets(opts.datasets or suite.datasets)
+    except ValueError as e:
+        sys.exit(f"gaia eval retrieval: {e}")
     with exclusive_eval(f"gaia eval retrieval --suite {args.suite}"):
         results = runner.run(opts)
     print()
@@ -5069,8 +5080,8 @@ def main():
 
     # Apply the persistent default_model (issue #98) for model-bearing commands.
     # Precedence: explicit --model flag > config default_model > built-in default.
-    # An explicit `chat --device` requests a device-specific model, so it keeps
-    # precedence over the config default there.
+    # An explicit `chat --device` / `prompt --device` requests a device-specific
+    # model, so it keeps precedence over the config default there.
     if (
         args.action in ("prompt", "chat", "llm")
         and getattr(args, "model", None) is None
@@ -5085,13 +5096,13 @@ def main():
         # builtin_default=None: leave args.model unset when no config default so
         # each command keeps applying its own built-in default downstream.
         # A non-flagship agent keeps its own model default, as in the Agent UI.
-        if not (
-            args.action == "chat"
-            and (
-                getattr(args, "device", None)
-                or getattr(args, "agent", None) not in (None, "gaia")
-            )
-        ):
+        _device_picks_model = args.action in ("chat", "prompt") and getattr(
+            args, "device", None
+        )
+        _agent_keeps_own = args.action == "chat" and getattr(
+            args, "agent", None
+        ) not in (None, "gaia")
+        if not (_device_picks_model or _agent_keeps_own):
             resolved = _cfg.resolve_model(args.model, None)
             if resolved:
                 args.model = resolved
@@ -6790,6 +6801,71 @@ def handle_email_command(args):
         sys.exit(1)
 
 
+def _gaia_chat_relay(kwargs: dict) -> int:
+    """`gaia chat` on the GAIA agent's own binary, through the daemon relay.
+
+    One `--query`, or a REPL whose turns share one sidecar session, so the
+    conversation carries over. Options that configure an in-process agent
+    (documents to index, watched folders, other providers) are refused.
+    """
+    from gaia.daemon.agent_query import ConsoleRenderer, run_query
+    from gaia.daemon.errors import DaemonError
+
+    unsupported = [
+        flag
+        for flag, key in (
+            ("--index", "index"),
+            ("--watch", "watch"),
+            ("--use-claude", "use_claude"),
+            ("--use-chatgpt", "use_chatgpt"),
+            ("--list-tools", "list_tools"),
+        )
+        if kwargs.get(key)
+    ]
+    if unsupported:
+        print(
+            f"❌ {', '.join(unsupported)} needs the GAIA agent in this process, "
+            "and here it runs as its own program through GAIA's background "
+            "service. Run without it, or from a GAIA install that includes the "
+            "agent package (https://amd-gaia.ai/docs/reference/dev).",
+            file=sys.stderr,
+        )
+        return 1
+
+    cwd = os.getcwd()
+    turn = dict(
+        model=kwargs.get("model"),
+        max_steps=kwargs.get("max_steps"),
+        verbose=bool(kwargs.get("debug")),
+        trace=bool(kwargs.get("trace")),
+        working_directory=cwd,
+        allowed_paths=[cwd, *(kwargs.get("allowed_paths") or [])],
+    )
+    try:
+        query = kwargs.get("query")
+        if query:
+            renderer = ConsoleRenderer(verbose=turn["verbose"])
+            return run_query("gaia", query, renderer=renderer, **turn).exit_code
+        session_id = str(uuid.uuid4())
+        print("GAIA — enter a message, or '/quit' to exit.\n")
+        while True:
+            try:
+                message = input("you> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return 0
+            if not message:
+                continue
+            if message in ("/quit", "/exit", "/q"):
+                return 0
+            renderer = ConsoleRenderer(verbose=turn["verbose"])
+            run_query("gaia", message, session_id=session_id, renderer=renderer, **turn)
+    except DaemonError as e:
+        get_logger(__name__).error("gaia chat relay failed: %s", e)
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
+
+
 def _email_interactive(*, model, verbose: bool, trace: bool = False) -> int:
     """REPL over the daemon relay — reads queries from stdin until EOF / ``/quit``.
 
@@ -7284,59 +7360,38 @@ def handle_config_command(args):
 
 def _handle_network_policy(action, value) -> None:
     """``gaia config get|set network_policy``: lives in policy.json, not config.json."""
-    from gaia.config import GaiaConfigError
     from gaia.llm import local_only
 
     if action == "get":
         print(local_only.effective_policy().value)
         return
     try:
-        stored = local_only.set_policy(value)
+        result = local_only.apply_policy(value)
     except (ValueError, OSError) as e:
         print(f"❌ {e}", file=sys.stderr)
         sys.exit(1)
+    stored = result["policy"]
     print(f"✅ Set network_policy = {stored.value}")
     print(f"   Saved to {local_only.policy_path()}")
     if stored is not local_only.NetworkPolicy.LOCAL_AI_ONLY:
         return
     print("   No GAIA AI request will reach a cloud model.")
-    try:
-        cleared = local_only.clear_saved_cloud_models()
-    except GaiaConfigError as e:
-        print(f"⚠️  Saved models were not checked: {e}", file=sys.stderr)
-        return
-    if cleared:
+    for key, model in result["cleared"]:
+        print(f"   Cleared {key} (was {model}): it is a cloud model.")
+    if result["cleared"]:
         from gaia.llm.lemonade_client import resolve_default_chat_model
 
-        for key, model in cleared:
-            print(f"   Cleared {key} (was {model}): it is a cloud model.")
         print(f"   GAIA now uses {resolve_default_chat_model()} by default.")
-    from gaia.llm.cloud_keys import (
-        CloudKeyError,
-        drop_runtime_keys,
-        users_lemonade_url,
-    )
-
-    try:
-        users_url = users_lemonade_url()
-        if users_url:
-            print(
-                f"   Left your Lemonade Server at {users_url} as is: any cloud "
-                "keys it holds stay there, and GAIA won't send it cloud requests."
-            )
-            return
-        dropped = drop_runtime_keys()
-    except CloudKeyError as e:
+    if result["users_url"]:
         print(
-            f"⚠️  Lemonade still holds any cloud key GAIA gave it ({e}). GAIA "
-            "won't use it; restart Lemonade to drop it.",
-            file=sys.stderr,
+            f"   Left your Lemonade Server at {result['users_url']} as is: any cloud "
+            "keys it holds stay there, and GAIA won't send it cloud requests."
         )
-        return
-    # Names come from a fixed table, never from the key-handling call.
     for provider, name in (("fireworks", "Fireworks AI"), ("amd", "AMD LLM Gateway")):
-        if provider in dropped:
+        if provider in result["dropped"]:
             print(f"   Removed the {name} key from the running Lemonade Server.")
+    for warning in result["warnings"]:
+        print(f"⚠️  {warning}", file=sys.stderr)
 
 
 #: Keys that pick which Lemonade GAIA uses; setting one probes and switches.
@@ -9415,7 +9470,7 @@ def handle_agent_list(_args):
         ):
             print(
                 f"A version marked 'needs GAIA' installs after upgrading the core: "
-                f"{catalog.CORE_UPGRADE_COMMAND}"
+                f"{catalog.core_upgrade_hint()}"
             )
 
 
@@ -10251,7 +10306,7 @@ def _handle_hub_list(args):
             f"{state:<12} {_fmt_size(a.get('download_size_bytes')):<8} "
             f"{a.get('name') or ''}"
         )
-    from gaia.hub.catalog import CORE_UPGRADE_COMMAND
+    from gaia.hub.catalog import core_upgrade_hint
 
     for a in agents:
         if a.get("core_gate_error"):
@@ -10262,7 +10317,7 @@ def _handle_hub_list(args):
                 f"\n{a.get('id')} {a.get('latest_version')} needs GAIA "
                 f"{a['requires_gaia_version']} or newer"
                 + (f"; this core installs {usable}" if usable else "")
-                + f". Upgrade: {CORE_UPGRADE_COMMAND}"
+                + f". Upgrade: {core_upgrade_hint()}"
             )
     hidden = body.get("unsupervised_filtered") or []
     if hidden:
