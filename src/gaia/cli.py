@@ -395,6 +395,21 @@ class GaiaCliClient:
             sys.exit(1)
 
 
+def _probe_error_is_unreachable(err: LemonadeClientError) -> bool:
+    """True when a device probe failed only because Lemonade isn't reachable
+    yet (connection refused / timeout), not because the server errored."""
+    import requests
+
+    # Prefer the requests exception in the cause chain over message matching.
+    cause = err.__cause__ or err.__context__
+    if isinstance(
+        cause, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)
+    ):
+        return True
+    # Fallback for wrappers that don't preserve __cause__.
+    return str(err).startswith("Request failed:") and "with status" not in str(err)
+
+
 def resolve_effective_device(
     effective_device: str, device_was_explicit: bool, devices: dict
 ) -> str:
@@ -478,6 +493,39 @@ async def async_main(action, **kwargs):
         "talk": "talk",
         "stats": "minimal",
     }
+
+    # `gaia prompt --device npu` must run the NPU twin, not the GPU default
+    # (#3827): map an explicit --device to its device config's model the same
+    # way `gaia chat` does. An explicit --device fails loudly when the
+    # hardware isn't available, per the NPU guide's fallback behaviour; an
+    # explicit --model always wins.
+    if (
+        action == "prompt"
+        and kwargs.get("device") is not None
+        and kwargs.get("model") is None
+    ):
+        from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
+
+        try:
+            _prompt_devices = (
+                LemonadeClient(verbose=False).get_system_info().get("devices", {})
+            )
+            kwargs["device"] = resolve_effective_device(
+                kwargs["device"], True, _prompt_devices
+            )
+        except LemonadeClientError as _prompt_probe_err:
+            # Only an unreachable server skips the check; init below surfaces
+            # it. Any other server error is real and must not be hidden.
+            if not _probe_error_is_unreachable(_prompt_probe_err):
+                raise
+            log.debug(
+                "Device probe skipped (Lemonade not reachable yet): %s",
+                _prompt_probe_err,
+            )
+        for _dc in DEFAULT_DEVICE_CONFIGS:
+            if _dc.device == kwargs["device"]:
+                kwargs["model"] = _dc.model
+                break
 
     # Initialize Lemonade with agent-specific profile
     lemonade_base_url = kwargs.get("base_url")  # May be None if not specified
@@ -580,32 +628,9 @@ async def async_main(action, **kwargs):
                         effective_device, device_was_explicit, _devices
                     )
                 except LemonadeClientError as _probe_err:
-                    # Only treat "server not reachable yet" (connection refused /
-                    # timeout) as a soft pass. A reachable but broken server
-                    # (HTTP 4xx/5xx, 401 auth) must NOT silently let an explicit
-                    # --device proceed; surface it so the user sees the real
-                    # failure. The agent runtime re-validates the device
-                    # regardless (LemonadeManager.ensure_ready).
-                    #
-                    # Prefer the original requests exception preserved in the
-                    # cause chain over message-string matching — the client
-                    # wraps RequestException without an HTTP status, but the
-                    # exact wrapper text can change independently of this guard.
-                    import requests
-
-                    _cause = _probe_err.__cause__ or _probe_err.__context__
-                    _unreachable = isinstance(
-                        _cause,
-                        (
-                            requests.exceptions.ConnectionError,
-                            requests.exceptions.Timeout,
-                        ),
-                    ) or (
-                        # Fallback for wrappers that don't preserve __cause__.
-                        str(_probe_err).startswith("Request failed:")
-                        and "with status" not in str(_probe_err)
-                    )
-                    if not _unreachable:
+                    # A reachable but broken server (4xx/5xx, 401) must not let
+                    # an explicit --device through unchecked.
+                    if not _probe_error_is_unreachable(_probe_err):
                         raise
                     log.debug(
                         "Device probe: Lemonade not reachable yet (%s)", _probe_err
@@ -5069,8 +5094,8 @@ def main():
 
     # Apply the persistent default_model (issue #98) for model-bearing commands.
     # Precedence: explicit --model flag > config default_model > built-in default.
-    # An explicit `chat --device` requests a device-specific model, so it keeps
-    # precedence over the config default there.
+    # An explicit `chat --device` / `prompt --device` requests a device-specific
+    # model, so it keeps precedence over the config default there.
     if (
         args.action in ("prompt", "chat", "llm")
         and getattr(args, "model", None) is None
@@ -5085,13 +5110,13 @@ def main():
         # builtin_default=None: leave args.model unset when no config default so
         # each command keeps applying its own built-in default downstream.
         # A non-flagship agent keeps its own model default, as in the Agent UI.
-        if not (
-            args.action == "chat"
-            and (
-                getattr(args, "device", None)
-                or getattr(args, "agent", None) not in (None, "gaia")
-            )
-        ):
+        _device_picks_model = args.action in ("chat", "prompt") and getattr(
+            args, "device", None
+        )
+        _agent_keeps_own = args.action == "chat" and getattr(
+            args, "agent", None
+        ) not in (None, "gaia")
+        if not (_device_picks_model or _agent_keeps_own):
             resolved = _cfg.resolve_model(args.model, None)
             if resolved:
                 args.model = resolved
