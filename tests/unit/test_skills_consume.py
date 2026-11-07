@@ -617,6 +617,64 @@ def test_an_unreadable_manifest_raises_rather_than_assuming_no_skills(
         agent_class(silent_mode=True)
 
 
+def test_a_frozen_bundle_manifest_survives_its_temp_copy_being_deleted(
+    tmp_path, monkeypatch
+):
+    """macOS clears old $TMPDIR files under a long-running onefile build (#6850)."""
+    import sys
+
+    from gaia.agents.base import agent as agent_module
+
+    bundle = tmp_path / "_MEI123"
+    manifest = bundle / "gaia_agent" / "gaia-agent.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("id: demo\nskills: [coding]\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
+    monkeypatch.setattr(agent_module, "_BUNDLED_MANIFESTS", {})
+
+    first = agent_module.parse_skill_manifest(manifest)
+    manifest.unlink()
+
+    assert agent_module.parse_skill_manifest(manifest) is first
+    assert [ref.name for ref in first.always] == ["coding"]
+
+
+def test_a_manifest_outside_a_bundle_is_reread_each_time(tmp_path, monkeypatch):
+    """A custom agent's manifest can be edited while GAIA runs."""
+    from gaia.agents.base import agent as agent_module
+
+    monkeypatch.delattr("sys._MEIPASS", raising=False)
+    manifest = tmp_path / "gaia-agent.yaml"
+    manifest.write_text("id: demo\nskills: [coding]\n", encoding="utf-8")
+    agent_module.parse_skill_manifest(manifest)
+    manifest.write_text("id: demo\nskills: [summarize]\n", encoding="utf-8")
+
+    reread = agent_module.parse_skill_manifest(manifest)
+    assert [ref.name for ref in reread.always] == ["summarize"]
+
+
+def test_a_missing_manifest_says_it_is_gone_not_to_fix_the_yaml(tmp_path):
+    from gaia.agents.base.agent import parse_skill_manifest
+
+    with pytest.raises(SkillValidationError, match="no longer exists") as excinfo:
+        parse_skill_manifest(tmp_path / "gaia-agent.yaml")
+    assert "Fix the YAML" not in str(excinfo.value)
+
+
+def test_a_deleted_bundle_manifest_tells_the_user_to_restart_the_agent(
+    tmp_path, monkeypatch
+):
+    import sys
+
+    from gaia.agents.base import agent as agent_module
+
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+    monkeypatch.setattr(agent_module, "_BUNDLED_MANIFESTS", {})
+
+    with pytest.raises(SkillValidationError, match="gaia daemon stop-agent"):
+        agent_module.parse_skill_manifest(tmp_path / "gaia_agent" / "gaia-agent.yaml")
+
+
 def test_an_agent_whose_manifest_declares_no_skills_loads_none(
     tmp_path, monkeypatch, custom_agent_harness
 ):

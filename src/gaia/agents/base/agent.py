@@ -19,6 +19,7 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -2196,6 +2197,20 @@ def _offer_skill_tools(agent: Any, skill: Any) -> None:
         agent._apply_tool_filter([*current, *missing])
 
 
+_BUNDLED_MANIFESTS: Dict[str, "SkillSets"] = {}
+
+
+def _bundled_file_key(path: Path) -> Optional[str]:
+    """*path* as a cache key when it sits inside a frozen onefile bundle, else ``None``."""
+    bundle = getattr(sys, "_MEIPASS", None)
+    if not bundle:
+        return None
+    resolved = os.path.abspath(path)
+    if not is_inside_folder(resolved, bundle):
+        return None
+    return resolved
+
+
 def parse_skill_manifest(path: Optional[Path]) -> "SkillSets":
     """Parse the ``skills:`` / ``skill_sets:`` blocks of an agent manifest.
 
@@ -2206,26 +2221,55 @@ def parse_skill_manifest(path: Optional[Path]) -> "SkillSets":
     :func:`gaia.hub.manifest.parse` so a custom agent under
     ``~/.gaia/agents/<id>/`` — whose manifest need not carry the hub's
     publishing fields — declares skills the same way a packaged agent does.
+
+    A manifest inside a frozen bundle is read once per process: the bundle
+    never changes, and the OS may delete its temp-folder copy while we run.
     """
     from gaia.skills.sets import SkillSets, parse_skill_sets
 
     if path is None:
         return SkillSets()
 
+    bundled_key = _bundled_file_key(Path(path))
+    if bundled_key is not None and bundled_key in _BUNDLED_MANIFESTS:
+        return _BUNDLED_MANIFESTS[bundled_key]
+
     import yaml
 
     try:
-        data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
+        text = Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        hint = (
+            "The agent's unpacked files were cleared while it ran (macOS deletes "
+            "old temp files); restart it with `gaia daemon stop-agent <id> && "
+            "gaia daemon start-agent <id>`."
+            if bundled_key is not None
+            else "Restore the file, or point SKILL_MANIFEST at one that exists."
+        )
+        raise _skill_validation_error(
+            f"The agent manifest at {path} no longer exists. {hint}"
+        ) from exc
+    except OSError as exc:
+        raise _skill_validation_error(
+            f"Could not read the agent manifest at {path}: {exc}. Check the "
+            "file's permissions — GAIA will not assume the agent declares no "
+            "skills."
+        ) from exc
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
         raise _skill_validation_error(
             f"Could not read the agent manifest at {path}: {exc}. Fix the "
             "YAML — an unreadable manifest may be hiding a 'skills:' block, "
             "so GAIA will not assume the agent declares none."
         ) from exc
 
-    if data is None:
-        return SkillSets()
-    return parse_skill_sets(data, where=f" in {path}")
+    declarations = (
+        SkillSets() if data is None else parse_skill_sets(data, where=f" in {path}")
+    )
+    if bundled_key is not None:
+        _BUNDLED_MANIFESTS[bundled_key] = declarations
+    return declarations
 
 
 def _with_resolved_target(prompt_args: Any, preflight: Any) -> Any:
