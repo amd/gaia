@@ -23,6 +23,9 @@ mailbox, no LLM.
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
 # EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
@@ -33,6 +36,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from gaia_agent_email import __version__ as package_version  # noqa: E402
 from gaia_agent_email import caller_auth as _caller_auth  # noqa: E402
 from gaia_agent_email import export_openapi  # noqa: E402
+from gaia_agent_email import query_routes  # noqa: E402
 from gaia_agent_email.contract import (  # noqa: E402
     SCHEMA_VERSION,
     BatchTriageRequest,
@@ -218,6 +222,51 @@ def test_query_route_streams_event_stream(spec):
         "application/json"
     ]["schema"]
     assert req == {"$ref": "#/components/schemas/QueryRequest"}
+
+
+def _statuses_raised_by_query_routes() -> dict:
+    """Map each ``query_routes`` POST path to the HTTP statuses its handler raises."""
+    tree = ast.parse(Path(query_routes.__file__).read_text(encoding="utf-8"))
+    raised = {}
+    for func in ast.walk(tree):
+        if not isinstance(func, ast.AsyncFunctionDef):
+            continue
+        paths = [
+            dec.args[0].value
+            for dec in func.decorator_list
+            if isinstance(dec, ast.Call)
+            and isinstance(dec.func, ast.Attribute)
+            and dec.func.attr == "post"
+            and dec.args
+            and isinstance(dec.args[0], ast.Constant)
+        ]
+        statuses = {
+            str(kw.value.value)
+            for call in ast.walk(func)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "HTTPException"
+            for kw in call.keywords
+            if kw.arg == "status_code" and isinstance(kw.value, ast.Constant)
+        }
+        for path in paths:
+            raised[path] = statuses
+    return raised
+
+
+def test_query_routes_document_every_status_they_raise(spec):
+    """A generated client only knows the statuses the spec lists, so every
+    ``HTTPException`` a /query route raises must appear in its responses (#4429)."""
+    raised = _statuses_raised_by_query_routes()
+    assert set(raised) == {
+        "/query",
+        "/query/{run_id}/cancel",
+        "/query/{run_id}/respond",
+    }
+    for route, statuses in raised.items():
+        documented = set(spec["paths"]["/v1/email" + route]["post"]["responses"])
+        missing = sorted(statuses - documented)
+        assert not missing, f"POST /v1/email{route} raises {missing} undocumented"
 
 
 @pytest.mark.parametrize(

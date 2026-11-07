@@ -26,6 +26,12 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **The OpenAPI contract lists the errors the `/query` routes return (#4429).**
+  `POST /v1/email/query` documents 400, 409, 500 and 502, `/query/{run_id}/cancel`
+  documents 404, and `/query/{run_id}/respond` documents 404 and 409. The routes
+  already returned them, but `openapi.email.json` listed only 200 and 422, so
+  generated clients never saw them. No request or response shape changed.
+
 - **A sidecar left running for days keeps working.** The one-file binary
   unpacks its files into the OS temp folder, and macOS deletes files there
   that are older than three days, so a long-running sidecar lost files it

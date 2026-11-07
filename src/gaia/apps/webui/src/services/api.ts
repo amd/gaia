@@ -36,7 +36,7 @@ export function parseErrorDetail(errorText: string): string {
 }
 
 /** `detail.status` from a structured error body, e.g. `needs_key`; null otherwise. */
-function parseErrorStatus(errorText: string): string | null {
+export function parseErrorStatus(errorText: string): string | null {
     try {
         const status = JSON.parse(errorText).detail?.status;
         return typeof status === 'string' ? status : null;
@@ -102,7 +102,7 @@ function hasUsefulServerDetail(detail: string): boolean {
     return text !== '' && !isBareInternalError(text) && !/^[<{[]/.test(text);
 }
 
-function getFriendlyError(status: number, detail: string): string {
+export function getFriendlyError(status: number, detail: string): string {
     switch (status) {
         case 403: return detail || 'Access denied.';
         // Prefer the backend's detail for 404s — the previous canned string

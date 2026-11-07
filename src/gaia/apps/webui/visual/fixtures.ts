@@ -207,6 +207,16 @@ const ROUTES: Record<string, unknown> = {
     'GET /skills': { skills: [] },
     'GET /system/resources': RESOURCES,
     'GET /system/model-server': { reachable: true, error: null, base_url: 'http://127.0.0.1:13305', port: 13305, owner: 'gaia' },
+    'GET /speech/settings': {
+        voice: 'bf_emma', speed: 125, auto: true, min_speed: 50, max_speed: 200,
+        voices: [
+            { id: 'af_bella', name: 'Bella', accent: 'american', gender: 'female', quality: 'A-' },
+            { id: 'af_nicole', name: 'Nicole', accent: 'american', gender: 'female', quality: 'B-' },
+            { id: 'am_michael', name: 'Michael', accent: 'american', gender: 'male', quality: 'C+' },
+            { id: 'bf_emma', name: 'Emma', accent: 'british', gender: 'female', quality: 'B-' },
+            { id: 'bm_george', name: 'George', accent: 'british', gender: 'male', quality: 'C' },
+        ],
+    },
     'GET /lemonade/target': { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: 'http://127.0.0.1:13305', saved_base_url: null, api_key_stored: false, env_override: null },
 };
 
@@ -366,10 +376,17 @@ const connector = (id: string, display_name: string, type: string, over: Record<
 });
 
 const CONNECTORS = [
-    connector('google', 'Google', 'oauth_pkce', { configured: true, account_id: 'someone.with.a.long.address@example.com' }),
+    connector('google', 'Google', 'oauth_pkce', {
+        configured: true, account_id: 'someone.with.a.long.address@example.com',
+        description: 'Connect GAIA to your Google account for Gmail, Calendar, Drive, and more.',
+    }),
     connector('git', 'Git', 'mcp_server', { configured: true }),
     connector('github-mcp', 'GitHub', 'mcp_server', { configured: true, enabled: false, mcp_env_keys: ['GITHUB_TOKEN'] }),
-    connector('microsoft', 'Microsoft', 'oauth_pkce', { supports_device_code: true }),
+    // The catalog's own description, so the Arabic scenes show its translation.
+    connector('microsoft', 'Microsoft', 'oauth_pkce', {
+        supports_device_code: true,
+        description: 'Connect GAIA to your personal Microsoft account (Outlook.com, Hotmail, or Live) for Outlook mail, calendar, OneDrive, and more via Microsoft Graph. For a Microsoft 365 work or school account, use the Microsoft Work or School connector instead.',
+    }),
     connector('slack', 'Slack', 'oauth_pkce', {
         configurable: false, config_error: 'No client configured',
         oauth_setup_fields: [{ key: 'client_id', label: 'Client ID', kind: 'text', required: true, placeholder: '1234.5678', help_md: 'From your Slack app.' }],
@@ -379,8 +396,13 @@ const CONNECTORS = [
 ];
 
 /** Settings > Connectors with accounts and servers in each state, or the given rows. */
-export async function withConnectors(page: Page, connectors: unknown[] = CONNECTORS): Promise<void> {
+export async function withConnectors(
+    page: Page,
+    connectors: unknown[] = CONNECTORS,
+    extra: Record<string, unknown> = {},
+): Promise<void> {
     const answers: Record<string, unknown> = {
+        ...extra,
         'GET /connectors': { connectors },
         'GET /connectors/agent-mcps': {
             agent_mcps: [{ agent_id: 'reports', agent_name: 'Reports', server_name: 'warehouse', command: 'uvx', args: ['warehouse-mcp', '--read-only'], disabled: false, config_path: 'C:\\Users\\you\\.gaia\\agents\\reports\\mcp_servers.json' }],

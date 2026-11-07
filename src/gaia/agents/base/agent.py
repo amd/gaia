@@ -12,6 +12,7 @@ import ast
 import contextlib
 import contextvars
 import datetime
+import hashlib
 import inspect
 import json
 import math
@@ -185,7 +186,9 @@ from gaia.llm.lemonade_client import (
 from gaia.llm.providers.lemonade import (
     CONNECTION_FAILURE_RE,
     MODEL_SERVER_DOWN,
+    LemonadeContextOverflowError,
     LemonadeStreamCutOffError,
+    classify_lemonade_exception,
 )
 from gaia.llm.reasoning import split_reasoning as _split_reasoning
 from gaia.llm.reasoning import strip_reasoning
@@ -213,6 +216,9 @@ if TYPE_CHECKING:
 # Set up logging via the project logger; importing this module must not
 # reconfigure the root logger.
 logger = get_logger(__name__)
+
+#: A message this long is also saved to a file the model can read with tools.
+LONG_MESSAGE_CHARS = 20_000
 
 
 def _skill_validation_error(message: str) -> Exception:
@@ -916,6 +922,16 @@ _NO_TOOLS_RETRY_NOTE = (
 class _NotAnAnswer(ValueError):
     """The closing reply came back, but it was a tool call or nothing."""
 
+    #: The trimmed history it was asked with, so the retry doesn't trim again.
+    sent: Optional[List[Dict[str, Any]]] = None
+
+
+class _ClosingOverflow(RuntimeError):
+    """The closing call, and its one trimmed retry, were both too long."""
+
+    def __init__(self) -> None:
+        super().__init__(_CONTEXT_STILL_OVERFLOWING_MESSAGE)
+
 
 # Stands in for a call the loop stopped before it ran, so the transcript
 # accounts for every id the model asked for.
@@ -1583,6 +1599,8 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     last_line = re.sub(r"[*_`#>]", "", paragraphs[-1].splitlines()[-1]).strip()
     if last_line.endswith(":") and not _EMOJI_SHORTCODE_END_PATTERN.search(last_line):
         return "narration"
+    if not _DRAFT_PATTERN.search(text) and _tool_plan_step(paragraphs):
+        return "narration"
 
     sentences = re.split(r"(?<=[.!?])\s+", last_line)
     plain_paragraph = re.sub(r"[*_`#>]", "", paragraphs[-1])
@@ -1614,13 +1632,86 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     return None
 
 
+# A plan step the agent could have run itself: it uses, calls or runs a tool
+# ("use the `run_python` tool", "call `query_data`"), not just a code name.
+_TOOL_NAMING_PATTERN = re.compile(
+    r"\b(?:use|using|call|calling|run|running|invoke|invoking)\s+(?:the\s+)?"
+    r"(?:`[\w-]+`\s+tool\b|[\w-]+\s+tool\b|`[a-z][a-z0-9]*_[a-z0-9_]+`)",
+    re.IGNORECASE,
+)
+_PLAN_ITEM_PATTERN = re.compile(r"^\s*(?:[-*+•]|\**\d+[.)]\**)\s+(?P<item>.+)$")
+# A plan that waits for the user's go-ahead is the answer they asked for.
+_ASKS_GO_AHEAD_PATTERN = re.compile(
+    r"\?\s*$|\b(?:let me know|tell me|say the word|want me to|would you like"
+    r"|shall i|should i|do you want|your (?:go-ahead|ok(?:ay)?)"
+    r"|confirm\w*|proceed\w*|approv\w*|once you"
+    r"|nothing(?:'s| has| was| is)(?: been)? changed yet"
+    r"|reply\s+(?:with\s+)?(?:[\"'“‘][^\"'”’\n]+[\"'”’]|\w+)\s+to)\b",
+    re.IGNORECASE,
+)
+_CLOSING_LINE_MAX_CHARS = 300
+
+
+def _tool_plan_step(paragraphs: List[str]) -> Optional[Tuple[str, str]]:
+    """The plan paragraph and its first tool step, when a tool plan ends the answer.
+
+    The plan lists two or more first-person future steps, one using a tool, and
+    at most one short closing line follows it: no figures, so no result, and no
+    question or request for the go-ahead.
+    """
+    for plan_at in (-1, -2):
+        if len(paragraphs) < -plan_at:
+            return None
+        lines = paragraphs[plan_at].splitlines()
+        last_item = max(
+            (i for i, line in enumerate(lines) if _PLAN_ITEM_PATTERN.match(line)),
+            default=-1,
+        )
+        if last_item < 0:
+            continue
+        # A closing line can sit right under the list, with no blank line.
+        tail = "\n".join(
+            line for line in lines[last_item + 1 :] if not line[:1].isspace()
+        ).strip()
+        closing = [c for c in [tail, *paragraphs[plan_at + 1 :]] if c]
+        if any(
+            len(c) > _CLOSING_LINE_MAX_CHARS
+            or re.search(r"\d", c)
+            or _ASKS_GO_AHEAD_PATTERN.search(c.replace("\u2019", "'"))
+            for c in closing
+        ):
+            return None
+        items = [
+            m.group("item").strip()
+            for m in map(_PLAN_ITEM_PATTERN.match, paragraphs[plan_at].splitlines())
+            if m
+        ]
+        future = [
+            item
+            for item in items
+            if _FUTURE_ACTION_PATTERN.match(
+                re.sub(r"[*_`]", "", item).replace("\u2019", "'")
+            )
+        ]
+        tool_steps = [item for item in future if _TOOL_NAMING_PATTERN.search(item)]
+        if len(future) >= 2 and tool_steps:
+            return paragraphs[plan_at], tool_steps[0]
+    return None
+
+
 def _split_announced_step(answer: str) -> Tuple[str, Optional[str]]:
     """Split a narrated answer into (what came before, the announced step).
 
-    The step is the last sentence when it announces an action or ends in a
-    colon; otherwise (a plan) it is ``None`` and the whole text is kept.
+    The step is a tool plan's first tool step, else the last sentence when it
+    announces an action or ends in a colon; otherwise (a plan) it is ``None``
+    and the whole text is kept.
     """
     text = (answer or "").strip()
+    prose = _FENCED_BLOCK_PATTERN.sub("", text)
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", prose) if p.strip()]
+    plan = _tool_plan_step(paragraphs)
+    if plan:
+        return text[: text.rfind(plan[0])].rstrip(), plan[1]
     last_line = text.splitlines()[-1] if text else ""
     sentence = re.split(r"(?<=[.!?])\s+", last_line.strip())[-1]
     plain = re.sub(r"[*_`#>]", "", sentence).replace("’", "'").strip()
@@ -2338,6 +2429,10 @@ class Agent(abc.ABC):
     # ``_TOOL_REGISTRY`` (backward compat for agents that don't snapshot).
     _instance_tools: Optional[Dict[str, Any]] = None
 
+    # Optional fixed execution boundary. ``None`` preserves the historical
+    # unrestricted behavior; an empty set deliberately permits no tools.
+    _tool_scope: Optional[FrozenSet[str]] = None
+
     # Class-level so a subclass that never runs ``__init__`` still increments.
     _turn_seq: int = 0
 
@@ -2630,6 +2725,7 @@ Do NOT wrap conversational replies in JSON.
         context_eviction_threshold_tokens: int = DEFAULT_EVICT_THRESHOLD_TOKENS,
         context_eviction_keep_steps: int = DEFAULT_EVICT_KEEP_STEPS,
         context_eviction_min_batch_tokens: int = DEFAULT_EVICT_MIN_BATCH_TOKENS,
+        tool_scope: Optional[Sequence[str]] = None,
     ):
         """
         Initialize the Agent with LLM client.
@@ -2674,6 +2770,10 @@ Do NOT wrap conversational replies in JSON.
                           ``conversation_history`` from earlier user requests
                           is sent back to the model. Within one request it is
                           always sent back (default: False).
+            tool_scope: Optional fixed set of tool names allowed to execute.
+                          ``None`` preserves unrestricted execution; an empty
+                          sequence permits no tools. Name resolution and
+                          "did you mean" candidates are restricted as well.
             max_output_tokens: Output-token cap for each LLM reply, thinking
                           included. None (default) picks per model:
                           CLOUD_MAX_OUTPUT_TOKENS for a Lemonade cloud model,
@@ -2710,6 +2810,14 @@ Do NOT wrap conversational replies in JSON.
             )
         self.max_output_tokens = max_output_tokens
         self.device = device
+        if tool_scope is None:
+            self._tool_scope = None
+        else:
+            if isinstance(tool_scope, (str, bytes)):
+                raise TypeError(
+                    "tool_scope must be a sequence of tool names, not a string"
+                )
+            self._tool_scope = frozenset(str(name) for name in tool_scope)
         self.resend_reasoning_across_requests = resend_reasoning_across_requests
         # Stored before _register_tools so an agent's selector hook and the
         # post-registration skill-set load both see the explicit request.
@@ -3844,7 +3952,8 @@ Do NOT wrap conversational replies in JSON.
                     "status": "error",
                     "error": "Extract every source successfully before saving the inventory",
                 }
-            writer = self._tools_registry.get("write_file")
+            registry = self._execution_tool_registry()
+            writer = registry.get("write_file")
             if writer is None:
                 return {
                     "status": "error",
@@ -3946,6 +4055,20 @@ Do NOT wrap conversational replies in JSON.
             }
         self.model_features = features
 
+    def _execution_tool_registry(self) -> MutableMapping[str, Any]:
+        """Return the registry this agent is permitted to execute.
+
+        Lightweight Agent test doubles and older subclasses may not initialize
+        the optional scope field.  Treat a missing field like the constructor's
+        legacy ``None`` default so adding tool scopes does not break those
+        callers.
+        """
+        registry = self._tools_registry
+        scope = getattr(self, "_tool_scope", None)
+        if scope is None:
+            return registry
+        return {name: entry for name, entry in registry.items() if name in scope}
+
     def _format_tools_for_prompt(self, filter_to: Optional[List[str]] = None) -> str:
         """Format the registered tools into a string for the prompt.
 
@@ -3962,6 +4085,9 @@ Do NOT wrap conversational replies in JSON.
         else:
             registry = self._tools_registry
             items = [(n, registry[n]) for n in filter_to if n in registry]
+        scope = getattr(self, "_tool_scope", None)
+        if scope is not None:
+            items = [(n, info) for n, info in items if n in scope]
 
         for name, tool_info in items:
             params_str = ", ".join(
@@ -5266,12 +5392,19 @@ Do NOT wrap conversational replies in JSON.
         return None
 
     def get_tools_info(self) -> Dict[str, Any]:
-        """Get information about all registered tools."""
-        return self._tools_registry
+        """Get information about tools available to this agent."""
+        scope = getattr(self, "_tool_scope", None)
+        if scope is None:
+            return self._tools_registry
+        return {
+            name: self._tools_registry[name]
+            for name in scope
+            if name in self._tools_registry
+        }
 
     def get_tools(self) -> List[Dict[str, Any]]:
-        """Get a list of registered tools for the agent."""
-        return list(self._tools_registry.values())
+        """Get a list of tools available to this agent."""
+        return list(self.get_tools_info().values())
 
     def describe_tools(self) -> List[Dict[str, str]]:
         """The tools this agent can call, for showing them to a user.
@@ -6094,6 +6227,9 @@ Do NOT wrap conversational replies in JSON.
         else:
             registry = self._tools_registry
             items = [(n, registry[n]) for n in filter_to if n in registry]
+        scope = getattr(self, "_tool_scope", None)
+        if scope is not None:
+            items = [(n, info) for n, info in items if n in scope]
 
         schemas = []
         for name, tool_info in items:
@@ -6754,7 +6890,7 @@ Do NOT wrap conversational replies in JSON.
         """
         lower = tool_name.lower()
         suffix = f"_{lower}"
-        registry = self._tools_registry
+        registry = self._execution_tool_registry()
         matches = [n for n in registry if n.lower().endswith(suffix)]
         if len(matches) == 1:
             return matches[0]
@@ -6999,6 +7135,30 @@ Do NOT wrap conversational replies in JSON.
             return None, False
         denial, effect = conflict
         command = render_call(tool_name, tool_args)
+        if denial.refused:
+            # No person said no, so no person is asked to lift it.
+            logger.info(
+                "Refused %s: it %s, refused earlier as %s",
+                tool_name,
+                effect.describe(),
+                denial.rendered,
+            )
+            return (
+                {
+                    **NOT_EXECUTED,
+                    "status": "denied",
+                    "blocked_effect": effect.describe(),
+                    "declined_call": denial.rendered,
+                    "error": (
+                        f"Not run: this {effect.describe()}, and `{denial.rendered}` "
+                        "was refused earlier in this request. No approval can lift "
+                        "that refusal, so do not reach it with another tool, "
+                        "command, or script. Tell the user it was not done and "
+                        "that they can do it themselves."
+                    ),
+                },
+                False,
+            )
         answer = self._ask_to_lift_denial(denial, effect, command)
         if answer is True:
             # Once: the denial stands for any other route this turn.
@@ -7427,15 +7587,29 @@ Do NOT wrap conversational replies in JSON.
         # Exact name first — skill tools register with a literal hyphen
         # (``rss-digest/fetch_rss``); the normalization below is only a typo rescue.
         tool_name = tool_name.strip().removesuffix("()").strip()
-        if tool_name not in self._tools_registry:
+        execution_registry = self._execution_tool_registry()
+        # Dynamic tool loading records recency; it never widens this agent's
+        # execution registry. Scope checks therefore remain authoritative even
+        # when a tool name was registered globally but not shown here.
+        if tool_name not in execution_registry:
             tool_name = tool_name.replace("-", "_")
+        if (
+            getattr(self, "_tool_scope", None) is not None
+            and tool_name in self._tools_registry
+            and tool_name not in execution_registry
+        ):
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error": "Tool is not available to this agent. Use only the tools you were given.",
+            }
 
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
 
         if not tool_name:
             return {**NOT_EXECUTED, "status": "error", "error": "No tool name provided"}
 
-        if tool_name not in self._tools_registry:
+        if tool_name not in execution_registry:
             # Try to resolve unprefixed MCP tool names (e.g. "get_current_time"
             # when registry has "mcp_time_get_current_time"). Local LLMs often
             # strip the mcp_<server>_ prefix.
@@ -7450,7 +7624,7 @@ Do NOT wrap conversational replies in JSON.
                 # the bare server prefix some local models produce.
                 lower = tool_name.lower()
                 candidates = sorted(
-                    n for n in self._tools_registry if n.lower().startswith(lower + "_")
+                    n for n in execution_registry if n.lower().startswith(lower + "_")
                 )[:10]
                 # Bare-prefix detection: EVERY candidate begins with the
                 # requested name + "_". Tells us the model emitted a strict
@@ -7535,6 +7709,10 @@ Do NOT wrap conversational replies in JSON.
                     tool_args,
                     str(refusal.get("error") if isinstance(refusal, dict) else refusal),
                     kinds={NETWORK, PATH},
+                    # Only a refuse-tier no is final; a shape refusal ("use
+                    # write_file") points at a route the user may still allow.
+                    refused=isinstance(refusal, dict)
+                    and refusal.get("tier") == "refuse",
                 )
             return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
 
@@ -7651,7 +7829,7 @@ Do NOT wrap conversational replies in JSON.
         if note_skill is not None:
             note_skill(tool_name)
 
-        tool = self._tools_registry[tool_name]["function"]
+        tool = execution_registry[tool_name]["function"]
         sig = inspect.signature(tool)
 
         # Get required parameters (those without defaults)
@@ -7959,14 +8137,16 @@ Do NOT wrap conversational replies in JSON.
         # Before the closing call, whose stats must not be taken for this step's.
         self._record_unrecorded_step(conversation)
         try:
-            return self._closing_answer_once(messages, conversation, instruction, step)
+            return self._closing_answer_recovering_overflow(
+                messages, conversation, instruction, step
+            )
         except _NotAnAnswer as first:
             logger.info(
                 "Closing reply was not an answer (%s); retrying without tools", first
             )
             try:
-                return self._closing_answer_once(
-                    messages,
+                return self._closing_answer_recovering_overflow(
+                    first.sent if first.sent is not None else messages,
                     conversation,
                     f"{instruction}\n\n{_NO_TOOLS_RETRY_NOTE}",
                     step,
@@ -7975,11 +8155,88 @@ Do NOT wrap conversational replies in JSON.
             except _NotAnAnswer:
                 raise first from None
             except Exception as second:  # noqa: BLE001 - report the first reason
+                if isinstance(second, _ClosingOverflow):
+                    raise
                 cancel_event = getattr(self, "_cancel_event", None)
                 if cancel_event is not None and cancel_event.is_set():
                     raise
                 logger.warning("Closing retry without tools failed: %s", second)
                 raise first from None
+
+    def _closing_answer_recovering_overflow(
+        self,
+        messages: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
+        instruction: str,
+        step: int,
+        offer_tools: bool = True,
+    ) -> Optional[str]:
+        """One closing request, with the loop's own overflow recovery.
+
+        This request carries the whole conversation and is the turn's biggest,
+        so it is the likeliest to overflow (#5064). It gets what a loop step
+        gets: a model loaded with a too-small window is re-raised for the chat
+        helper to reload, and a full conversation is trimmed once and asked
+        again. Anything still refused as too long reaches the caller as
+        ``_CONTEXT_STILL_OVERFLOWING_MESSAGE``, so the answer names the limit
+        instead of repeating the backend's status code and JSON body.
+        """
+        try:
+            return self._closing_answer_once(
+                messages, conversation, instruction, step, offer_tools
+            )
+        except _NotAnAnswer:
+            raise
+        except Exception as exc:  # noqa: BLE001 - overflow or a real failure
+            # Classified, not string-matched: only a length refusal earns a
+            # trim and retry; a network failure whose words happen to include
+            # "context size" would be retried against a full history.
+            if not isinstance(
+                classify_lemonade_exception(exc), LemonadeContextOverflowError
+            ):
+                raise
+            if self._is_loaded_ctx_too_small():
+                self.error_history.append(
+                    {
+                        "step": step,
+                        "error": str(exc),
+                        "type": "llm_wrong_ctx_loaded_reraise",
+                    }
+                )
+                logger.warning(
+                    "Wrong ctx_size loaded at the closing call — re-raising so "
+                    "the chat helper can reload the model: %s",
+                    exc,
+                )
+                raise
+            shrunk, report = self._shrink_for_overflow_retry(messages, str(exc))
+            if not report["fits"]:
+                raise _ClosingOverflow() from exc
+            logger.warning(
+                "Context overflow at the closing call: putting older results "
+                "away freed enough room; asking once more"
+            )
+            # Only the closing request is trimmed; the caller's list is shared
+            # with the turn record and the saved history.
+            try:
+                return self._closing_answer_once(
+                    shrunk, conversation, instruction, step, offer_tools
+                )
+            except _NotAnAnswer as not_answer:
+                not_answer.sent = shrunk
+                raise
+            except Exception as retried:  # noqa: BLE001 - given up outside
+                logger.warning(
+                    "The closing call failed again after trimming: %s", retried
+                )
+                # Only a second overflow means the trimmed request is still too
+                # long; anything else is a real failure and is reported as such.
+                if not isinstance(
+                    classify_lemonade_exception(retried),
+                    LemonadeContextOverflowError,
+                ):
+                    raise
+                raise _ClosingOverflow() from retried
 
     def _closing_answer_once(
         self,
@@ -8597,11 +8854,7 @@ Do NOT wrap conversational replies in JSON.
         Returns ``None`` for unrelated exceptions so the caller falls
         through to its normal generic copy.
         """
-        from gaia.llm.providers.lemonade import (
-            LemonadeError,
-            classify_lemonade_exception,
-            wording_for_model,
-        )
+        from gaia.llm.providers.lemonade import LemonadeError, wording_for_model
 
         model = getattr(self, "model_id", None)
 
@@ -8643,7 +8896,6 @@ Do NOT wrap conversational replies in JSON.
             LemonadeCloudAccountError,
             LemonadeCloudDisconnectedError,
             LemonadeCloudModelUnavailableError,
-            classify_lemonade_exception,
         )
 
         classified = classify_lemonade_exception(exc)
@@ -8887,10 +9139,7 @@ Do NOT wrap conversational replies in JSON.
     @staticmethod
     def _engine_start_failure(exc: BaseException):
         """The typed error when *exc* is GAIA's server failing to start, else None."""
-        from gaia.llm.providers.lemonade import (
-            LemonadeEngineStartError,
-            classify_lemonade_exception,
-        )
+        from gaia.llm.providers.lemonade import LemonadeEngineStartError
 
         typed = classify_lemonade_exception(exc)
         return typed if isinstance(typed, LemonadeEngineStartError) else None
@@ -9026,10 +9275,7 @@ Do NOT wrap conversational replies in JSON.
     @staticmethod
     def _model_server_down(exc: BaseException) -> bool:
         """Whether *exc* is the model server accepting no connection at all."""
-        from gaia.llm.providers.lemonade import (
-            LemonadeServerUnreachableError,
-            classify_lemonade_exception,
-        )
+        from gaia.llm.providers.lemonade import LemonadeServerUnreachableError
 
         return isinstance(
             classify_lemonade_exception(exc), LemonadeServerUnreachableError
@@ -10408,7 +10654,12 @@ Do NOT wrap conversational replies in JSON.
             framed = self.FOLLOWUP_PREAMBLE + text
             # Two dicts, not one shared object: every other append in this loop
             # builds its own, and downstream code edits entries in place.
-            messages.append({"role": "user", "content": framed})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": self._with_long_message_file(framed, raw=text),
+                }
+            )
             conversation.append({"role": "user", "content": framed})
             taken += 1
             # The user is owed visible proof their message landed — silence here
@@ -10416,6 +10667,44 @@ Do NOT wrap conversational replies in JSON.
             self.console.print_info(f"Picked up your follow-up: {text}")
             logger.info("Folded a mid-turn follow-up into the running turn")
         return taken
+
+    def _with_long_message_file(
+        self, user_input: str, raw: Optional[str] = None
+    ) -> str:
+        """*user_input*, led by where its full text is saved when it is huge.
+
+        A model asked to count or search a long paste otherwise tries to copy
+        it into a tool call, which no output budget fits. *raw* is the user's
+        own words when *user_input* is framed; it defaults to this turn's query.
+        """
+        if raw is None:
+            raw = getattr(self, "_original_user_input", None) or user_input
+        if not isinstance(raw, str) or len(raw) < LONG_MESSAGE_CHARS:
+            return user_input
+        scratch = getattr(self._read_validator(), "scratch_dir", None)
+        if not scratch:
+            logger.warning(
+                "A %d-character message was not saved to a file: this agent "
+                "has no scratch folder",
+                len(raw),
+            )
+            return user_input
+        digest = hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:12]
+        path = Path(scratch) / f"message-{digest}.txt"
+        try:
+            from gaia.security import ensure_scratch_dir
+
+            ensure_scratch_dir(path.parent)
+            path.write_text(raw, encoding="utf-8")
+        except OSError as e:
+            logger.warning("Could not save a long message to %s: %s", path, e)
+            return user_input
+        note = (
+            f"[GAIA: the user's message is {len(raw):,} characters long. Its full "
+            f"text is saved at {path}. To count, search or process it, read that "
+            "file with a tool; never copy the message into a tool call.]"
+        )
+        return f"{note}\n\n{user_input}"
 
     def _process_query_impl(
         self,
@@ -10635,7 +10924,9 @@ Do NOT wrap conversational replies in JSON.
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
         messages.recorded.clear()
-        messages.append({"role": "user", "content": user_input})
+        messages.append(
+            {"role": "user", "content": self._with_long_message_file(user_input)}
+        )
 
         # Use provided max_steps or fall back to class default
         steps_limit = max_steps if max_steps is not None else self.max_steps
@@ -13303,7 +13594,7 @@ Do NOT wrap conversational replies in JSON.
                     self._generate_max_steps_message(
                         conversation, tool_steps, steps_limit, findings=True
                     ).rstrip()
-                    + f"\n\nThe summary of what I found couldn't be written: {e}"
+                    + f"\n\n{self._closing_failure_note(e, 'The summary of what I found')}"
                 )
             else:
                 if cap_answer is None:
@@ -13542,7 +13833,8 @@ Do NOT wrap conversational replies in JSON.
 
     _DENIAL_RE = re.compile(
         r"\bwas denied\b|\bdeclined\b|\bdenied by\b|execution denied"
-        r"|with no user response|requires (?:explicit|live) user approval",
+        r"|with no user response|requires (?:explicit|live) user approval"
+        r"|\bneeds your approval\b",
         re.IGNORECASE,
     )
 
@@ -13705,8 +13997,8 @@ Do NOT wrap conversational replies in JSON.
         except Exception as e:  # noqa: BLE001 - the reason goes in the answer
             logger.warning("Could not write the loop-break summary: %s", e)
             return (
-                f"{summary.rstrip()}\n\nThe summary of what I did couldn't be "
-                f"written: {e}",
+                f"{summary.rstrip()}\n\n"
+                f"{self._closing_failure_note(e, 'The summary of what I did')}",
                 steps_taken,
             )
         # Raw, like the summary branches above — the caller finalizes once.
@@ -13758,10 +14050,36 @@ Do NOT wrap conversational replies in JSON.
             logger.warning("Could not write the closing answer: %s", e)
             return (
                 "I stopped because I had started work this request did not ask "
-                f"for, and the closing answer couldn't be written: {e}",
+                f"for, and {self._closing_failure_note(e, 'the closing answer')}",
                 steps_taken,
             )
         return answer, steps_taken
+
+    def _closing_failure_note(self, exc: BaseException, subject: str) -> str:
+        """Why *subject* couldn't be written, in words the user can act on.
+
+        The raw exception went into the answer before this, so a refused
+        closing call put ``status 400`` and a JSON body in front of the reader
+        (#5064). A trim that could not free enough room says so; any other
+        failure of the model service is reported in the provider's own words.
+        """
+        classified = classify_lemonade_exception(exc)
+        if isinstance(exc, _ClosingOverflow) or isinstance(
+            classified, LemonadeContextOverflowError
+        ):
+            return (
+                f"{subject} couldn't be written. "
+                f"{_CONTEXT_STILL_OVERFLOWING_MESSAGE}"
+            )
+        reason = self._extract_lemonade_user_message(exc)
+        if reason:
+            return f"{subject} couldn't be written. {reason}"
+        if classified is not None:
+            return f"{subject} couldn't be written. {classified.user_message}"
+        return (
+            f"{subject} couldn't be written: "
+            f"{(str(exc).strip()[:300] or type(exc).__name__)}"
+        )
 
     def _dedup_mutation_call(
         self,

@@ -339,7 +339,7 @@ To turn update checks off entirely, set `GAIA_DISABLE_UPDATE=1` before launching
 
 GAIA follows the platform convention: removing the app leaves your user data (chats, documents, downloaded models) behind by default. To remove the data too, run the `gaia uninstall` CLI from a terminal — it has tiered flags so you can decide exactly what to keep.
 
-The Windows uninstaller and `apt remove` also stop GAIA's background service (the GAIA daemon) and the agents it runs. macOS and AppImage have no uninstall step, so after you delete the app they keep running until you restart.
+The Windows uninstaller and `apt remove` also stop GAIA's background service (the GAIA daemon) and the agents it runs. macOS and AppImage have no uninstall step, so the daemon watches for it instead: within a few seconds of the app going to the Trash or the `.AppImage` being deleted, it shuts down and stops its agents. A daemon you started from a terminal is not tied to the app and keeps running; stop it with `gaia daemon stop`.
 
 ### Windows
 

@@ -67,6 +67,13 @@ export async function configureConnector(
     return apiFetch('POST', `/connectors/${connectorId}/configure`, { config }, UI_HEADER);
 }
 
+/** Start the connector once and report whether it started. */
+export async function testConnector(
+    connectorId: string,
+): Promise<{ ok: boolean; detail: string; reason?: 'timeout' | 'disabled' }> {
+    return apiFetch('POST', `/connectors/${connectorId}/test`, undefined, UI_HEADER);
+}
+
 export async function disconnectConnector(connectorId: string): Promise<void> {
     await apiFetch<unknown>('DELETE', `/connectors/${connectorId}`, undefined, UI_HEADER);
 }
