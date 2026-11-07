@@ -493,8 +493,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         return () => window.removeEventListener('keydown', handler);
     }, [isStreaming, handleStop]);
 
-    // Send message
-    const sendMessage = useCallback(async (overrideText?: string, options?: SendOptions) => {
+    /** With no text, sends the composer's draft and empties the box; given text is sent as is and the box is left alone. */
+    const sendMessage = useCallback(async (givenText?: string, options?: SendOptions) => {
         // attach=true re-subscribes to a run already in flight server-side
         // (revisiting a backgrounded session, #1580). It reuses the entire
         // stream-event handling below but skips composing/sending a new turn:
@@ -504,8 +504,18 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const fromQueue = options?.queued === true;
         // reconnect=N re-attaches a stream that went silent, replacing the dead one still marked live.
         const reconnect = reattach ? options?.reconnect ?? 0 : 0;
-        const text = (overrideText || input).trim();
-        const hasAttachments = !fromQueue && attach.hasUploaded;
+        const fromComposer = !reattach && givenText === undefined;
+        const text = (fromComposer ? input : givenText ?? '').trim();
+        const hasAttachments = fromComposer && attach.hasUploaded;
+        const hasImage = fromComposer && attach.hasImage;
+        const takeDraft = () => {
+            if (!fromComposer) return text;
+            const composed = attach.compose(text);
+            setInput('');
+            attach.clear();
+            inputRef.current?.focus();
+            return composed;
+        };
 
         // User just sent a message — re-pin scroll to the bottom so the
         // new message and streaming response are visible.
@@ -525,10 +535,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             if (isStreaming && !reconnect) return;
         } else if (!fromQueue && (text || hasAttachments) && !isInitializing && (isStreaming || comparingRef.current || waiting)) {
             // Its own turn by default: a model handed a message mid-turn may finish without answering it.
-            setQueue((q) => messageQueue.enqueue(q, attach.compose(text), 'queued'));
-            setInput('');
-            attach.clear();
-            inputRef.current?.focus();
+            const queued = takeDraft();
+            setQueue((q) => messageQueue.enqueue(q, queued, 'queued'));
             return;
         } else if ((!text && !hasAttachments) || isStreaming || isInitializing) {
             notTaken({ kind: 'busy' });
@@ -539,11 +547,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
 
         // Asked here so a send that was going to be queued or refused asks nothing.
-        if (!reattach && !fromQueue && !(modelKnownReady('chat') && (!attach.hasImage || modelKnownReady('vision')))) {
+        if (!reattach && !fromQueue && !(modelKnownReady('chat') && (!hasImage || modelKnownReady('vision')))) {
             if (checkingModelRef.current) return;
             checkingModelRef.current = true;
             try {
-                if (!(await ensureModel('chat')) || (attach.hasImage && !(await ensureModel('vision')))) return;
+                if (!(await ensureModel('chat')) || (hasImage && !(await ensureModel('vision')))) return;
             } finally {
                 checkingModelRef.current = false;
             }
@@ -553,15 +561,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
         let messageText = text;
         let optimisticUser: Message | null = null;
         if (!reattach) {
-            messageText = fromQueue ? text : attach.compose(text);
+            messageText = takeDraft();
 
             log.chat.info(`Sending message to session=${sessionId}`, { length: messageText.length, preview: messageText.slice(0, 80) });
-
-            if (!fromQueue) {
-                setInput('');
-                inputRef.current?.focus();
-                attach.clear();
-            }
 
             closeForNewTurn();
 
