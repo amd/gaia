@@ -309,6 +309,32 @@ def _memory_tokens(text: str) -> list[str]:
     return _MEMORY_TOKEN_RE.findall(text.lower())
 
 
+def _symbol_base(token: str) -> str | None:
+    """Return the plain value of a signed number or language suffix token."""
+    if not _MEMORY_SYMBOL_RE.fullmatch(token):
+        return None
+    return token[1:] if token[0] in "+-" else token.rstrip("+#")
+
+
+def _has_symbol_conflict(words1: set[str], words2: set[str]) -> bool:
+    """Whether matching plain values carry different meaningful symbols."""
+    variants: list[dict[str, set[str]]] = []
+    for words in (words1, words2):
+        by_base: dict[str, set[str]] = {}
+        for word in words:
+            base = _symbol_base(word) or word
+            by_base.setdefault(base, set()).add(word)
+        variants.append(by_base)
+
+    for base in variants[0].keys() & variants[1].keys():
+        left, right = variants[0][base], variants[1][base]
+        if left != right and any(
+            _symbol_base(word) is not None for word in left | right
+        ):
+            return True
+    return False
+
+
 def content_stems(text: str) -> set:
     """Content words of *text*, cut to a 4-letter stem so "works" meets "working".
 
@@ -388,7 +414,7 @@ def _word_overlap(text1: str, text2: str) -> float:
         words1 = set(re.sub(r"[^\w\s]", " ", text1.lower()).split())
         words2 = set(re.sub(r"[^\w\s]", " ", text2.lower()).split())
 
-    if not words1 or not words2:
+    if not words1 or not words2 or _has_symbol_conflict(words1, words2):
         return 0.0
 
     intersection = words1 & words2
@@ -997,13 +1023,15 @@ class MemoryStore:
             except sqlite3.OperationalError as e:
                 if "duplicate column" not in str(e).lower():
                     raise
-            self._conn.execute("""
+            self._conn.execute(
+                """
                 UPDATE tool_history
                 SET executed = 0
                 WHERE success = 0 AND executed = 1
                   AND (result_summary LIKE '%"status": "denied%'
                        OR result_summary LIKE '%''status'': ''denied''%')
-                """)
+                """
+            )
             self._conn.execute(
                 "UPDATE schema_version SET version = 8, migrated_at = ?", (_now_iso(),)
             )
@@ -2606,14 +2634,16 @@ class MemoryStore:
             {total_items, with_embedding, without_embedding, coverage_pct}
         """
         with self._locked():
-            row = self._conn.execute("""
+            row = self._conn.execute(
+                """
                 SELECT
                     COUNT(*) AS total_items,
                     SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END) AS with_embedding,
                     SUM(CASE WHEN embedding IS NULL THEN 1 ELSE 0 END) AS without_embedding
                 FROM knowledge
                 WHERE superseded_by IS NULL
-                """).fetchone()
+                """
+            ).fetchone()
         total = row[0] or 0
         with_emb = row[1] or 0
         without_emb = row[2] or 0
@@ -4980,11 +5010,13 @@ class MemoryStore:
     def _rebuild_knowledge_fts_locked(self):
         """Rebuild knowledge FTS5 index. Must hold self._lock."""
         self._conn.execute("DELETE FROM knowledge_fts")
-        self._conn.execute("""
+        self._conn.execute(
+            """
             INSERT INTO knowledge_fts (rowid, content, domain, category)
             SELECT rowid, content, COALESCE(domain, ''), category
             FROM knowledge
-            """)
+            """
+        )
 
     def _rebuild_conversations_fts_locked(self):
         """Rebuild conversations FTS5 index. Must hold self._lock."""
