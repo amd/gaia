@@ -96,7 +96,9 @@ class BriefingToolsMixin:
                     if record is None:
                         # Cold path: no scheduled briefing yet — generate one now
                         # across every connected mailbox (never a silent pick-one).
-                        envelope = agent._pre_scan_all_backends(max_messages=max_messages)
+                        envelope = agent._pre_scan_all_backends(
+                            max_messages=max_messages
+                        )
                         record = {
                             "generated_at": datetime.now(timezone.utc).isoformat(),
                             "briefing": envelope,
@@ -117,7 +119,9 @@ class BriefingToolsMixin:
                     )
                     st["result_summary"] = {
                         "stale": stale,
-                        "urgent": record["summary"].get("breakdown", {}).get("urgent", 0),
+                        "urgent": record["summary"]
+                        .get("breakdown", {})
+                        .get("urgent", 0),
                     }
                     return _envelope_ok(record)
                 except ConnectorsError as exc:

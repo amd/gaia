@@ -244,12 +244,16 @@ def test_get_briefing_logs_its_own_tool_name(host, monkeypatch, tmp_path, caplog
     calls = [
         record.getMessage()
         for record in caplog.records
-        if record.name == "gaia_agent_email" and record.__dict__.get("stage") == "tool_call"
+        if record.name == "gaia_agent_email"
+        and record.__dict__.get("stage") == "tool_call"
     ]
     results = [
         record.getMessage()
         for record in caplog.records
-        if record.name == "gaia_agent_email" and record.__dict__.get("stage") == "tool_result"
+        if record.name == "gaia_agent_email"
+        and record.__dict__.get("stage") == "tool_result"
     ]
     assert any(message == "tool_call name=get_briefing" for message in calls)
-    assert any(message.startswith("tool_result name=get_briefing ") for message in results)
+    assert any(
+        message.startswith("tool_result name=get_briefing ") for message in results
+    )
