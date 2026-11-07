@@ -106,6 +106,13 @@ the new session `tools` and `grants` routes, so probe `/version` first.
 - **The binary ships no GPL or AGPL code**, and the agent is one Python
   package.
 
+### Added
+
+- **Claude Code can hand tasks to GAIA.** `gaia-agent --mcp` serves the agent as
+  an MCP server with `gaia_task` and `gaia_status`, which the new GAIA plugin for
+  Claude Code launches. Claude passes summaries, triage and document questions to
+  the local model and gets the answer back in its own conversation (SPEC §5.5).
+
 ### Changed
 
 - **Updating the agent on a Mac no longer asks for keychain access again.** When

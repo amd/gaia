@@ -283,7 +283,8 @@ def test_the_dispatcher_runs_as_a_module_too():
         timeout=120,
     )
     assert "usage:" in result.stdout.lower(), result.stdout + result.stderr
-    assert "two transports" in result.stdout, "the transport help must lead"
+    assert "three transports" in result.stdout, "the transport help must lead"
+    assert "gaia-agent --mcp" in result.stdout
 
 
 def test_the_freeze_entry_runs_a_python_file_before_building_the_agent(tmp_path):

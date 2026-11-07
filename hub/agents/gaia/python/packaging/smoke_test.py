@@ -3,8 +3,10 @@
 """
 No-Python smoke test for the frozen GAIA flagship agent.
 
-One binary serves two transports, and BOTH are spawned in production, so both
-are checked here against the FROZEN BINARY (not ``python -m ...``).
+One binary serves three transports, and ALL are spawned in production, so each
+is checked here against the FROZEN BINARY (not ``python -m ...``). The third,
+``--mcp``, is what Claude Code's GAIA plugin launches: the handshake initializes,
+lists the tools, and waits for ``gaia_status`` to report the agent ready.
 
 HTTP -- what the daemon and the Agent UI use:
 
@@ -431,6 +433,79 @@ def check_stdio_handshake(
         _kill_tree(proc)
 
 
+def check_mcp_handshake(binary: Path) -> bool:
+    """``--mcp``: the MCP server Claude Code's GAIA plugin launches.
+
+    Initializes, lists the tools, then polls ``gaia_status`` until the agent
+    built inside the frozen binary reports ready. A module PyInstaller missed
+    surfaces here as ``failed`` with the import error.
+    """
+    proc = subprocess.Popen(
+        [str(binary), "--mcp"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+
+    def request(request_id: int, method: str, params: dict) -> dict | None:
+        message = {"jsonrpc": "2.0", "id": request_id, "method": method}
+        proc.stdin.write(json.dumps({**message, "params": params}) + "\n")
+        proc.stdin.flush()
+        line = _first_stdout_line(proc, STDIO_HANDSHAKE_DEADLINE_S)
+        if line is None:
+            log(f"FAIL: no answer to MCP {method!r}")
+            return None
+        try:
+            return json.loads(line)
+        except ValueError:
+            log(f"FAIL: MCP stdout carried a non-JSON line: {line.strip()[:400]!r}")
+            return None
+
+    try:
+        init = request(1, "initialize", {"protocolVersion": "2025-06-18"})
+        if (
+            not init
+            or init.get("result", {}).get("serverInfo", {}).get("name") != "gaia"
+        ):
+            log(f"FAIL: bad MCP initialize response: {init!r}")
+            _kill_tree(proc)
+            _log_stderr_tail(proc)
+            return False
+        listed = request(2, "tools/list", {})
+        names = {
+            t.get("name") for t in (listed or {}).get("result", {}).get("tools", [])
+        }
+        if names != {"gaia_task", "gaia_status"}:
+            log(f"FAIL: MCP tools/list offered {sorted(names)}")
+            return False
+        deadline = time.time() + STDIO_HANDSHAKE_DEADLINE_S
+        state, request_id = "starting", 3
+        while state == "starting" and time.time() < deadline:
+            reply = request(request_id, "tools/call", {"name": "gaia_status"})
+            status = (reply or {}).get("result", {}).get("structuredContent", {})
+            state = status.get("state", "no answer")
+            request_id += 1
+            if state == "starting":
+                time.sleep(2)
+        if state != "ready":
+            log(f"FAIL: gaia_status ended {state!r}: {status!r}")
+            _kill_tree(proc)
+            _log_stderr_tail(proc)
+            return False
+        proc.stdin.close()
+        try:
+            proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            log("FAIL: the MCP server did not exit within 60s of stdin closing")
+            return False
+        log(f"MCP handshake check PASS -- model={status.get('model')!r}")
+        return True
+    finally:
+        _kill_tree(proc)
+
+
 def _run_script(binary: Path, workdir: Path, body: str, *args: str, env=None):
     script = workdir / "snippet.py"
     script.write_text(body, encoding="utf-8")
@@ -544,7 +619,7 @@ def check_tls_trust(binary: Path) -> bool:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Smoke-test the frozen GAIA agent binary (both transports)."
+        description="Smoke-test the frozen GAIA agent binary (all transports)."
     )
     parser.add_argument(
         "binary", help="Path to the frozen gaia-agent executable to test."
@@ -607,11 +682,14 @@ def main(argv=None) -> int:
         binary, ["--use-claude"], env=claude_env, backend="claude"
     )
 
+    log("checking the --mcp transport")
+    results["mcp_handshake"] = check_mcp_handshake(binary)
+
     log("checking run_python on the frozen binary")
     results["run_python"] = check_run_python(binary)
     log("checking the agent's tokenizer offline")
     results["tokenizer"] = check_tokenizer(binary)
-    expected = 8
+    expected = 9
     if sys.platform.startswith("linux"):
         log("checking a script's TLS trust store")
         results["tls_trust"] = check_tls_trust(binary)

@@ -1,0 +1,73 @@
+---
+title: "GAIA plugin for Claude Code"
+description: "Scope for a Claude Code plugin that lets Claude hand easy, read-mostly tasks to the GAIA agent running on the local AMD PC, installed with one /plugin command."
+---
+
+**Claude Code can hand easy work to the GAIA agent on the same PC, and the user installs
+that with one command.** Today, offloading a task to the local model means opening GAIA
+separately and copying text between the two. After this work, Claude calls a `gaia_task`
+tool. GAIA runs the task on the local model, and the answer comes back into Claude's
+conversation. Summaries, file triage and document questions stop spending cloud tokens.
+
+```
+/plugin marketplace add amd/gaia
+/plugin install gaia@amd-gaia
+```
+
+It works the same in the Claude Code CLI and in the Claude desktop app's Code tab, which
+loads the same plugins.
+
+## 1. Decisions
+
+| Decision | Choice |
+|---|---|
+| What Claude talks to | **`gaia-agent --mcp`**: a third transport on the flagship binary, next to `--serve` (HTTP) and the default stdio wire. The binary already ships with every install, and the GAIA installer already puts it on PATH. |
+| Agent lifetime | **One agent per Claude session, built once.** Building the agent takes ~42 s and a turn ~2.5 s (`gaia_agent/stdio.py`), so starting a new `gaia -p` per task would spend 42 s on every one. The MCP server answers `initialize` at once and builds the agent in the background. The first `gaia_task` waits for the build to finish. |
+| MCP library | **None: the server is a small JSON-RPC handler written in the agent package.** The frozen binary doesn't bundle the `mcp` package. A server that only needs `initialize`, `tools/list` and `tools/call` over stdio doesn't justify adding it and its dependencies to a 150 MB binary. |
+| Tools | **`gaia_task(task)`** runs one task and returns the answer, plus the model, steps, tool calls and duration. **`gaia_status()`** reports whether GAIA is ready and which model it runs. Nothing else. |
+| Permissions | **Same as `gaia -p` without `--dangerously-skip-permissions`:** GAIA's confirmation-gated tools (writes, shell, sending) are denied, and file access is limited to the folder Claude Code started it in. GAIA reads, searches and drafts; Claude applies changes with its own tools, which the user already controls. One write remains: `download_file` isn't gated and can save a new file (never over an existing one), so `gaia_task` doesn't claim to be read-only. Opting into writes is a later decision. |
+| Memory between tasks | **None.** Each task starts with an empty conversation, so one task's context can't leak into the next. Tasks aren't written into the user's GAIA chat history. **Memory is off for this transport** (`memory_incognito`): nothing from a task is saved, and the user's memories never go into an answer that goes back to Claude. |
+| One at a time | **Tasks run one after another** on the one agent. A task over its time limit (default 300 s) is cancelled and returned as an error that says so. |
+| When Claude delegates | **A skill in the plugin decides it** (`skills/gaia-offload`): summaries of long files or logs, triage across many files, classification and extraction, document Q&A, first drafts of prose. Claude keeps anything that needs judgment, edits, or a final answer the user relies on. It checks GAIA's answer before using it. |
+| Missing setup | **Never downloads, never runs `gaia init` by itself.** If `gaia-agent` isn't installed, the plugin's tools don't start, and the skill tells Claude to say GAIA isn't installed and link the install guide. If the model or Lemonade isn't ready, `gaia_status` and `gaia_task` say what's missing in plain words. |
+| Where it lives | **`hub/plugins/gaia/`** for the plugin and **`.claude-plugin/marketplace.json`** at the repo root, so `amd/gaia` is itself the marketplace. |
+
+## 2. What exists today
+
+- **The agent already runs one query on a long-lived agent** (`run_turn` in
+  `gaia_agent/stdio.py`) and streams canonical events (`status`, `tool_call`, `final`,
+  `error`) to any writable stream. MCP mode collects those events into a tool result.
+- **`gaia -p --output-format json`** already defines the result shape a single task
+  returns (`gaia/print_mode.py`). `gaia_task` returns the same fields, so the two stay
+  comparable.
+- **The installer puts `gaia-agent` on PATH** (`%LOCALAPPDATA%\Programs\GAIA Terminal Hub`
+  on Windows). `npx @amd-gaia/gaia` keeps it in `~/.gaia/agents/gaia/` instead, which is
+  not on PATH. See open question 1.
+- **The Claude Code plugin is already named** in
+  [Two-command setup](/plans/embedded-onboarding) (step 3 and work item 6) and in
+  [Context efficiency](/plans/context-efficiency), which gives `gaia_task` `turn_metrics`
+  and a loud `context_exhausted` failure.
+
+## 3. Work items
+
+| # | Item | Done when |
+|---|---|---|
+| 1 | **`gaia-agent --mcp`**: stdio JSON-RPC server, background agent build, `gaia_task` and `gaia_status`, gated tools denied, a fresh conversation per task, a per-task time limit | Unit tests drive `initialize` → `tools/list` → `tools/call` against a fake agent and assert the exact wire shapes |
+| 2 | **Plugin and marketplace**: `plugin.json`, `.mcp.json`, the `gaia-offload` skill, root `marketplace.json` | `claude plugin validate` passes. A test checks the manifest paths exist and the MCP command matches the binary's flag |
+| 3 | **Docs**: a guide page (install, what gets offloaded, what doesn't, troubleshooting), CLI reference for `--mcp`, links from the two plans above | Pages listed in `docs.json` and the link checker passes |
+| 4 | **Real run**: install the plugin from a local checkout, have Claude offload a summary to GAIA on this PC | The answer comes from the local model, with the run's screenshots and timing in the PR |
+| 5 | **CI golden flow** | Part of [Two-command setup](/plans/embedded-onboarding) item 7, not this PR |
+| 6 | **Claude desktop Chat tab** | A `.mcpb` desktop extension that launches the same `gaia-agent --mcp`. Later PR |
+
+## 4. Open questions
+
+1. **`npx` installs.** Their `gaia-agent` isn't on PATH, so the plugin's server won't
+   start for them. Options: the npm `gaia` command gains `gaia mcp` that runs the cached
+   binary, or `npx @amd-gaia/gaia install` adds its folder to PATH. This PR covers
+   installer users and leaves npx users to a follow-up.
+2. **Through the daemon or not.** [Two-command setup](/plans/embedded-onboarding) says
+   every entry point goes through the daemon. `--mcp` follows the TUI's stdio path instead,
+   which needs no daemon and no port. Once the daemon owns embedded Lemonade, `--mcp` should
+   start it the same way the TUI does.
+3. **Writes.** Should a user be able to let GAIA edit files from Claude (for example a
+   plugin setting that turns on GAIA's accept-edits mode)? Not in this PR.
