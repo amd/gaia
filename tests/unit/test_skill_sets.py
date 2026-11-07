@@ -360,6 +360,7 @@ class _StubAgent:
     _pin_skill_body = Agent._pin_skill_body
     load_skill = Agent.load_skill
     unload_skill = Agent.unload_skill
+    _drop_skill_tools = Agent._drop_skill_tools
     select_skill_set = Agent.select_skill_set
     resolve_skill_set = Agent.resolve_skill_set
     load_skill_set = Agent.load_skill_set

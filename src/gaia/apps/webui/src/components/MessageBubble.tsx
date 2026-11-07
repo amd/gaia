@@ -21,6 +21,8 @@ import { localizeLiveStatus } from '../utils/liveStatus';
 import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
+import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
+import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
@@ -150,6 +152,13 @@ function useElapsedSeconds(active: boolean, key?: string): number {
     }, [active, key]);
     return elapsed;
 }
+
+const CHAT_REPORT_CLASSES: ReportClasses = {
+    root: 'msg-report',
+    button: 'msg-try-again',
+    hint: 'msg-report-hint',
+    error: 'msg-report-error',
+};
 
 /** Detect if message content looks like an error. */
 export function isErrorContent(content: string): boolean {
@@ -380,7 +389,7 @@ function stripUnverifiedScope(content: string): string {
     }
 }
 
-function cleanToolCallContent(content: string, streaming = false): string {
+export function cleanToolCallContent(content: string, streaming = false): string {
     if (!content) return content;
     content = stripUnverifiedScope(content);
     let cleaned = content;
@@ -500,6 +509,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
             : cleanToolCallContent(cutOff ? cutOff.body : message.content, Boolean(isStreaming))),
         [message.content, message.role, isStreaming, cutOff],
     );
+    const readAloudId = `${message.session_id}:${message.id}`;
     const [copied, setCopied] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const collapsibleUser = message.role === 'user' && isLongUserMessage(message.content);
@@ -594,6 +604,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 </button>
                             )}
                             {extraActions}
+                            {message.role === 'assistant' && !isError && cleanedContent.trim() && (
+                                <ReadAloudButton messageId={readAloudId} content={cleanedContent} />
+                            )}
                             <button
                                 className={`msg-copy ${copied ? 'copied' : ''}`}
                                 onClick={handleCopy}
@@ -691,6 +704,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {t('msg.tryAgain')}
                         </button>
                     )}
+                    {message.role === 'assistant' && !isStreaming && (namesFailureRecord(message.content) || namesFailureRecord(message.failureText ?? '')) && (
+                        <TroubleshootingReport classes={CHAT_REPORT_CLASSES} note={t('msg.reportNote')} />
+                    )}
                     {message.role === 'assistant'
                         && !isStreaming
                         && isAuthRequiredMessage(cleanedContent) && (
@@ -712,6 +728,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
                         <TurnChanges sessionId={message.session_id} messageId={message.id} />
                     )}
+                    {message.role === 'assistant' && <ReadAloudNote messageId={readAloudId} />}
+                    {message.role === 'assistant' && <ReadAloudError messageId={readAloudId} />}
                 </div>
             </div>
         </div>

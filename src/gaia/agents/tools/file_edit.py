@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 """Shared rules for GAIA's file-changing tools.
 
-Both rules live here so the separate implementations in ``file_io_tools`` and
+The rules live here so the separate implementations in ``file_io_tools`` and
 ``file_tools`` cannot drift apart.
 
 **Read before edit.** :class:`FileReadRecord` is one agent's record of the
@@ -11,6 +11,11 @@ files it has read. A tool that would change an existing file refuses when the
 file isn't in the record, or when its mtime or size moved since the read.
 Creating a file needs no read, and what the agent wrote or edited itself stays
 unlocked.
+
+**No repeat within a turn.** An edit identical to one already applied to the
+same file this turn — same ``old_content``, same ``new_content`` — is refused.
+When ``old_content`` sits inside ``new_content`` a repeat still matches, and
+"milk" -> "oat milk" twice leaves "oat oat milk".
 
 **Match and replace.** Every ``edit_*`` tool routes through
 :func:`apply_unique_replacement`:
@@ -32,7 +37,7 @@ import os
 import re
 import stat
 import threading
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.logger import get_logger
@@ -65,6 +70,9 @@ AFTER_RADIUS = 2
 # Similarity a line needs against the probe line to anchor a not-found excerpt.
 _ANCHOR_THRESHOLD = 0.6
 
+# Longest before/after text quoted in a repeated-edit refusal.
+MAX_REPEAT_EXAMPLE_CHARS = 200
+
 #: A regular file's ``(st_mtime_ns, st_size)``.
 Stamp = Tuple[int, int]
 
@@ -83,6 +91,21 @@ def stamp_of(file_path: Any) -> Optional[Stamp]:
     if not stat.S_ISREG(st.st_mode):
         return None
     return st.st_mtime_ns, st.st_size
+
+
+def turn_of(host: Any) -> Any:
+    """``host``'s turn counter; a host with no turns is one long turn."""
+    return getattr(host, "_turn_seq", None)
+
+
+def _repeat_outcome(old_content: str, new_content: str) -> str:
+    """What reapplying the edit would do to the text it wrote, or ""."""
+    if new_content.count(old_content) != 1:
+        return ""
+    again = new_content.replace(old_content, new_content, 1)
+    if len(again) > MAX_REPEAT_EXAMPLE_CHARS:
+        return ""
+    return f"; applying it again would change {new_content!r} to {again!r}"
 
 
 def _read_required(message: str, file_path: Any, error_type: str) -> Dict[str, Any]:
@@ -110,11 +133,44 @@ class FileReadRecord:
 
     One per agent instance (see :func:`file_read_record`), for the agent's
     lifetime: another agent's reads say nothing about what this one has seen.
+
+    It also holds the edits applied this turn, so an identical one can be
+    refused (:meth:`repeat_refusal`). That part resets when the turn moves on.
     """
 
     def __init__(self) -> None:
         self._seen: Dict[str, Stamp] = {}
+        self._edits: Set[Tuple[str, str, str]] = set()
+        self._edits_turn: Any = None
         self._lock = threading.Lock()
+
+    def note_edit(
+        self, file_path: Any, old_content: str, new_content: str, turn: Any
+    ) -> None:
+        """Record an edit written to ``file_path`` in ``turn``."""
+        with self._lock:
+            if turn != self._edits_turn:
+                self._edits = set()
+                self._edits_turn = turn
+            self._edits.add((_key(file_path), old_content, new_content))
+
+    def repeat_refusal(
+        self, file_path: Any, old_content: str, new_content: str, turn: Any
+    ) -> Optional[Dict[str, Any]]:
+        """Why this edit must not run again, or ``None`` when it wasn't applied yet."""
+        with self._lock:
+            applied = turn == self._edits_turn and (
+                (_key(file_path), old_content, new_content) in self._edits
+            )
+        if not applied:
+            return None
+        return _read_required(
+            f"This exact edit was already applied to {file_path} this turn"
+            f"{_repeat_outcome(old_content, new_content)}. Nothing was written. "
+            "Read the file with read_file to see its current content.",
+            file_path,
+            "already_applied",
+        )
 
     def note(self, file_path: Any, stamp: Optional[Stamp] = None) -> None:
         """Record ``file_path`` as seen in state ``stamp`` (default: as it is now).
@@ -183,7 +239,7 @@ def read_first_preflight(
     target_of: Callable[[Dict[str, Any]], Any],
     verb: str = "editing",
 ) -> Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    """A ``@tool(preflight=...)`` check: refuse a blind change before the prompt.
+    """A ``@tool(preflight=...)`` check: refuse a blind or repeat edit before the prompt.
 
     ``target_of`` maps the call's arguments to the path the tool would change,
     resolved the way the tool resolves it. The tool body repeats the check,
@@ -210,7 +266,12 @@ def read_first_preflight(
             # doesn't reveal whether a file exists there.
             if validator is not None and validator.is_write_blocked(str(target))[0]:
                 return None
-            return file_read_record(host).refusal(target, verb)
+            reads = file_read_record(host)
+            refusal = reads.refusal(target, verb)
+            old, new = tool_args.get("old_content"), tool_args.get("new_content")
+            if refusal is None and isinstance(old, str) and isinstance(new, str):
+                refusal = reads.repeat_refusal(target, old, new, turn_of(host))
+            return refusal
         except (KeyError, TypeError, ValueError, OSError) as e:
             # Malformed arguments or an unstat-able path: the tool body reports it.
             logger.debug("read-first preflight deferred to the tool: %s", e)

@@ -51,6 +51,7 @@ PROVENANCE_SOURCE = "starter-pack"
 #: AMD's starter pack. Adding a skill to the pack means adding it here.
 STARTER_PACK = frozenset(
     {
+        "analyze-recording",
         "check-in",
         "coding",
         "daily-brief",
@@ -317,6 +318,17 @@ def test_starter_skill_tools_required_are_real_tools(
     )
 
 
+def test_no_two_starter_skills_claim_the_same_loads_with_tool():
+    """A tool that loads a skill must say which one; shared, it can't."""
+    claims: dict[str, list[str]] = {}
+    for skill_dir in STARTER_DIRS:
+        for tool in parse_skill_file(skill_dir).gaia.loads_with:
+            claims.setdefault(tool, []).append(skill_dir.name)
+
+    shared = {tool: names for tool, names in claims.items() if len(names) > 1}
+    assert not shared, f"loads_with tools claimed by more than one skill: {shared}"
+
+
 @pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
 def test_starter_skill_with_a_shell_grant_declares_run_shell_command(skill_dir: Path):
     """A ``shell:execute:*`` grant is only usable through ``run_shell_command``.
@@ -473,6 +485,7 @@ def test_starter_skill_loads_into_an_agent(pack_manager: SkillManager):
         _pin_skill_body = Agent._pin_skill_body
         load_skill = Agent.load_skill
         unload_skill = Agent.unload_skill
+        _drop_skill_tools = Agent._drop_skill_tools
         get_skills_system_prompt = Agent.get_skills_system_prompt
 
         def rebuild_system_prompt(self):

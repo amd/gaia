@@ -241,6 +241,24 @@ Switching back needs GAIA's own server installed, and waits until it answers: if
 isn't installed or won't start, the switch is refused or undone and nothing changes. Run `gaia init --gaia-lemonade` to install it and switch in one
 step.
 
+### A Lemonade on another computer
+
+GAIA can use a Lemonade Server on another computer on your network, such as a
+desktop with a bigger GPU. Lemonade only answers its own computer at first, so set
+up that computer before you connect:
+
+1. **Let other computers reach it.** On the server computer, run
+   `lemonade config set host=0.0.0.0`. The setting is saved and applies right away.
+2. **Lock it with a key.** Set `LEMONADE_API_KEY` in the server's environment.
+   Without a key, anyone on your network can use the server and change its models.
+3. **Open the port.** Allow incoming connections to port 13305, Lemonade's default,
+   in the server computer's firewall.
+
+Then, on the GAIA computer, open **Settings → Advanced → Model server**, enter the
+server's address (for example `http://192.168.1.100:13305`) and its key, and choose
+**Use this server**. GAIA checks that the server answers before it saves the address.
+If it doesn't answer, check the three steps above.
+
 ## Updating GAIA
 
 GAIA checks for new releases and tells you when one is out, then waits for you to
