@@ -42,6 +42,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import sys
 import threading
 import time
@@ -4149,6 +4150,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._turn_tool_record = []
             self._turn_forgot = False
             self._memory_turn_query = user_input
+            self._turn_person_decisions = []
 
             # Recall procedures for this goal (RECALL) from the clean goal,
             # not the augmented message; the dynamic context below carries it.
@@ -4161,7 +4163,16 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             return super().process_query(augmented, **kwargs)
         finally:
-            self._note_user_turn_finished()
+            try:
+                self._record_procedure_outcome()
+            except sqlite3.Error as e:
+                logger.warning(
+                    "[MemoryMixin] could not count this turn on its recalled "
+                    "procedure(s); their track record misses it: %s",
+                    e,
+                )
+            finally:
+                self._note_user_turn_finished()
 
     # ------------------------------------------------------------------
     # Hook 3: _execute_tool Override (auto-logging)

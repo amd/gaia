@@ -1925,6 +1925,7 @@ class SSEOutputHandler(OutputHandler):
         """
         if timeout is _USE_HANDLER_TIMEOUT:
             timeout = self.confirm_timeout_seconds
+        self._answered_prompt = None
         noted, self._noted_call = self._noted_call, None
         call_args = noted[1] if noted is not None and noted[0] == tool_name else None
 
@@ -2108,6 +2109,8 @@ class SSEOutputHandler(OutputHandler):
         result = self._confirm_result
         timed_out = self._confirm_timed_out
         self._clear_pending_confirmation()
+        if not timed_out:
+            self.note_prompt_answered(tool_name)
         if timed_out:
             # The client's own clock ran out and it said so: a timeout, never
             # "the user denied it".

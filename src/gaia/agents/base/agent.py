@@ -7799,6 +7799,15 @@ Do NOT wrap conversational replies in JSON.
                 self._confirmation_wait_s = (
                     getattr(self, "_confirmation_wait_s", 0.0) or 0.0
                 ) + (time.perf_counter() - _confirm_started)
+            # Only a prompt a person answered is an outcome for memory.
+            prompt_answered = getattr(self.console, "take_prompt_answered", None)
+            note_decision = getattr(self, "_note_person_decision", None)
+            if (
+                callable(prompt_answered)
+                and prompt_answered(tool_name)
+                and callable(note_decision)
+            ):
+                note_decision(tool_name, bool(approved))
             if not approved:
                 denied_error = self._confirmation_denied_error(tool_name)
                 denied = {"status": "denied", "error": denied_error}
