@@ -3604,8 +3604,11 @@ These positions indicate where to split the text."""
         large document, and holding the lock across them stalled every other
         document query (#6911). The old version stays searchable while the
         new one builds; the publish step inside :meth:`index_document` swaps
-        the generations atomically. On failure the previous state is
-        restored.
+        the generations atomically. On failure this file's index is cleaned
+        up if a partial one was published; nothing else is touched — a
+        snapshot restore would also revert documents another writer indexed
+        meanwhile, and the shared vector index grows in place, so rolling it
+        back can desync it from the restored chunk lists.
 
         Args:
             file_path: Path to document to reindex
@@ -3617,24 +3620,7 @@ These positions indicate where to split the text."""
         """
         file_path = str(Path(file_path).absolute())
         with self._state_lock:
-            previous_state = {
-                name: getattr(self, name).copy()
-                for name in (
-                    "chunks",
-                    "indexed_files",
-                    "chunk_to_file",
-                    "file_to_chunk_indices",
-                    "file_indices",
-                    "file_embeddings",
-                    "file_metadata",
-                    "file_access_times",
-                    "file_index_times",
-                    "file_content_keys",
-                )
-            }
-            previous_state.update(
-                index=self.index, _access_counter=self._access_counter
-            )
+            previous_key = self.file_content_keys.get(file_path)
 
         # Build the new chunks and embeddings without the lock. The publish
         # step drops this file's old generation and appends the new one under
@@ -3656,8 +3642,12 @@ These positions indicate where to split the text."""
         finally:
             if not succeeded:
                 with self._state_lock:
-                    for name, value in previous_state.items():
-                        setattr(self, name, value)
+                    published_key = self.file_content_keys.get(file_path)
+                    if published_key is not None and published_key != previous_key:
+                        # A new generation of this file was published before
+                        # the failure: remove the partial index without
+                        # touching anything another writer did meanwhile.
+                        self.remove_document(file_path)
                 if result is not None:
                     result["total_indexed_files"] = len(self.indexed_files)
                     result["total_chunks"] = len(self.chunks)

@@ -168,6 +168,37 @@ def test_reindex_builds_without_holding_the_index_lock(tmp_path, doc):
     assert "Lisbon" not in _served(sdk)
 
 
+def test_a_failed_reindex_keeps_documents_indexed_by_others(tmp_path, doc):
+    """Another writer's document, indexed while a re-index builds, survives
+    that re-index failing. Restoring a whole-state snapshot would wipe it,
+    and the shared vector index grows in place, so only the failed file is
+    cleaned up (#6917)."""
+    sdk = _make(tmp_path)
+    assert sdk.index_document(str(doc))["success"]
+    doc.write_text(NEW, encoding="utf-8")
+
+    other = tmp_path / "other.txt"
+    other.write_text("Another document entirely. " * 20, encoding="utf-8")
+    real_encode = sdk._encode_texts
+    state = {"indexed_other": False}
+
+    def encode(texts, **kwargs):
+        if not state["indexed_other"]:
+            state["indexed_other"] = True
+            # Another writer publishes a document while the re-index of *doc*
+            # is still building, then the embedder dies.
+            assert sdk.index_document(str(other))["success"]
+            raise RuntimeError("embedder exploded")
+        return real_encode(texts, **kwargs)
+
+    sdk._encode_texts = encode
+    result = sdk.reindex_document(str(doc))
+
+    assert not result["success"], result
+    assert str(other) in sdk.indexed_files
+    assert "Another document entirely" in _served(sdk)
+
+
 def test_reindex_failure_restores_the_previous_state(tmp_path, doc):
     """A re-index that fails partway leaves the old version indexed and
     served; the swap happens only on success."""
