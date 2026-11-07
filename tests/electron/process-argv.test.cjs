@@ -52,9 +52,9 @@ describe("gaia-ui opens the browser without a shell", () => {
   });
 });
 
-function loadInstaller({ platform, home }) {
+function loadInstaller({ platform, home, lookup = { status: 1 } }) {
   const p = platform === "win32" ? path.win32 : path.posix;
-  const spawnSync = jest.fn(() => ({ status: 1 }));
+  const spawnSync = jest.fn(() => lookup);
   const execFileSync = jest.fn(() => "0\n");
   const fakeFs = {
     ...fs,
@@ -86,15 +86,48 @@ function loadInstaller({ platform, home }) {
 }
 
 describe("the backend installer runs its probes without a shell", () => {
-  test.each([
-    ["win32", "where"],
-    ["linux", "which"],
-  ])("on %s the PATH lookup passes the name as its own argument", (platform, file) => {
-    const home = platform === "win32" ? "C:\\Users\\a" : "/home/a";
-    const { installer, spawnSync } = loadInstaller({ platform, home });
+  test("on Windows the PATH lookup is `where` with the name as its own argument, no console window", () => {
+    const { installer, spawnSync } = loadInstaller({ platform: "win32", home: "C:\\Users\\a" });
 
     expect(installer.findGaiaBin()).toBeNull();
-    expect(spawnSync).toHaveBeenCalledWith(file, ["gaia"], expect.objectContaining({ shell: false }));
+    expect(spawnSync).toHaveBeenCalledWith(
+      "where",
+      ["gaia"],
+      expect.objectContaining({ shell: false, windowsHide: true })
+    );
+  });
+
+  test("elsewhere the lookup is the shell built-in `command -v`, with the name passed as $1", () => {
+    const { installer, spawnSync } = loadInstaller({ platform: "linux", home: "/home/a" });
+
+    expect(installer.findGaiaBin()).toBeNull();
+    const [file, args, opts] = spawnSync.mock.calls[0];
+    expect(file).toBe("sh");
+    expect(args).toEqual(["-c", 'command -v "$1"', "sh", "gaia"]);
+    expect(opts.shell).toBe(false);
+  });
+
+  test("a name on PATH is found", () => {
+    const { installer } = loadInstaller({ platform: "linux", home: "/home/a", lookup: { status: 0 } });
+    expect(installer.findGaiaBin()).toBe("gaia");
+  });
+
+  test.each(["linux", "win32"])("on %s a lookup that can't run is an error, not \"not installed\"", (platform) => {
+    const enoent = Object.assign(new Error("spawnSync ENOENT"), { code: "ENOENT" });
+    const home = platform === "win32" ? "C:\\Users\\a" : "/home/a";
+    const { installer } = loadInstaller({ platform, home, lookup: { status: null, error: enoent } });
+
+    let err;
+    try {
+      installer.findGaiaBin();
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeDefined();
+    expect(err.name).toBe("InstallError");
+    expect(err.message).toMatch(/Could not check whether "gaia" is on PATH/);
+    expect(err.code).toBe("ENOENT");
+    expect(err.suggestion).toMatch(/restart GAIA/);
   });
 
   test("df gets a home path with spaces and metacharacters as one argument", () => {
@@ -119,6 +152,7 @@ describe("the backend installer runs its probes without a shell", () => {
     expect(execFileSync).toHaveBeenCalledTimes(1);
     const [file, args, opts] = execFileSync.mock.calls[0];
     expect(file).toBe("powershell");
+    expect(opts.windowsHide).toBe(true);
     expect(args).toEqual(["-NoProfile", "-Command", "(Get-PSDrive -Name $env:GAIA_DISK_DRIVE).Free"]);
     expect(args.join(" ")).not.toContain(AWKWARD);
     expect(opts.env.GAIA_DISK_DRIVE).toBe("C");

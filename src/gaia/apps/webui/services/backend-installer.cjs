@@ -437,13 +437,23 @@ function makeProgressReporter(onProgress) {
 // ── Command helpers ──────────────────────────────────────────────────────────
 
 /**
- * Check if a command exists on PATH.
+ * Check if a command exists on PATH. Throws when the lookup itself can't run.
  */
 function commandExists(cmd) {
-  const result = spawnSync(IS_WINDOWS ? "where" : "which", [cmd], {
-    stdio: "ignore",
-    shell: false,
-  });
+  // `command -v` is a shell built-in, so it works where `which` isn't installed; the name is $1, never script text.
+  const [file, args] = IS_WINDOWS
+    ? ["where", [cmd]]
+    : ["sh", ["-c", 'command -v "$1"', "sh", cmd]];
+  const result = spawnSync(file, args, { stdio: "ignore", shell: false, windowsHide: true });
+  if (result.error || result.status === null) {
+    const reason = result.error ? result.error.message : `killed by ${result.signal}`;
+    throw new InstallError(`Could not check whether "${cmd}" is on PATH: running ${file} failed (${reason}).`, {
+      code: result.error ? result.error.code : null,
+      suggestion: IS_WINDOWS
+        ? "Make sure C:\\Windows\\System32 is on PATH, then restart GAIA."
+        : "Make sure /bin/sh exists and /bin is on PATH, then restart GAIA.",
+    });
+  }
   return result.status === 0;
 }
 
@@ -848,7 +858,12 @@ function checkDiskSpace() {
       const out = execFileSync(
         "powershell",
         ["-NoProfile", "-Command", "(Get-PSDrive -Name $env:GAIA_DISK_DRIVE).Free"],
-        { encoding: "utf8", timeout: 5000, env: { ...process.env, GAIA_DISK_DRIVE: drive } }
+        {
+          encoding: "utf8",
+          timeout: 5000,
+          windowsHide: true,
+          env: { ...process.env, GAIA_DISK_DRIVE: drive },
+        }
       ).trim();
       const freeBytes = parseInt(out, 10);
       if (!Number.isNaN(freeBytes)) {
