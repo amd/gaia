@@ -147,11 +147,37 @@ past — write the commit message as if it is the only thing the reviewer reads,
 because for a squashed PR it is.
 
 The direct Git policy refuses `push`, `reset --hard`, `clean`, `rebase`,
-`commit --amend`, `git config`. Publishing and history-rewriting are the user's
-to run, and destroying uncommitted work has no undo anywhere. When the work is
-committed and wants pushing, **say so and stop** — *"committed on `fix/discount`;
-run `git push -u origin fix/discount` and I will open the PR"* — rather than
-looking for a spelling that gets through.
+`commit --amend`, and `config`. It also refuses the other remote, history-
+rewriting, and destructive subcommands: `clone`, `fetch`, `pull`, `merge`,
+`cherry-pick`, `revert`, `bisect`, `tag`, `rm`, `mv`, `reset`, `apply`,
+`format-patch`, and `gc`. `config` is also refused even though it is not
+listed in the binary policy's runnable subcommands. These are not alternate
+spellings to try:
+
+- For `push`, `fetch`, `pull`, `clone`, and `config`, tell the user the exact
+  command and let them run it themselves.
+- For `merge`, `cherry-pick`, `revert`, `bisect`, `rebase`, and `apply`, stop at
+  the boundary and hand back the exact command or the current conflict state;
+  do not improvise with another history-changing command. A user may run
+  `merge --continue`, `rebase --continue`, or the corresponding abort command
+  after resolving it themselves.
+- For `rm`, `mv`, `reset`, `clean`, `gc`, and destructive `tag` operations, use
+  the read-only equivalent or ask the user to perform the exact change. Never
+  substitute a shell command or a different Git spelling.
+
+Publishing and history-rewriting are the user's to run, and destroying
+uncommitted work has no undo anywhere. When the work is committed and wants
+pushing, **say so and stop** — *"committed on `fix/discount`; run `git push -u
+origin fix/discount` and I will open the PR"* — rather than looking for a
+spelling that gets through.
+
+The supported Git surface is deliberately smaller: reads (`status`, `diff`,
+`log`, `show`, `branch`, `blame`, `describe`, `rev-parse`, `merge-base`,
+`ls-files`, `ls-tree`, `cat-file`, `grep`, `shortlog`, `help`), local staging and
+commits (`add`, `commit`), branch/file operations that still require approval
+(`checkout`, `switch`, `restore`, `stash`), and the read-only `remote` and
+`branch` views. Anything outside that surface is refused; do not hunt for a
+new spelling.
 
 ## Keep the diff to the change
 
