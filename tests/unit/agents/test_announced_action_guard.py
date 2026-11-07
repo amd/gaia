@@ -612,6 +612,46 @@ def test_plan_look_alikes_are_not_narration(answer):
     assert _unfinished_answer_kind(answer) is None
 
 
+_OLD_FILES_PLAN = (
+    "Here's the plan:\n"
+    "1. I'll use the `list_files` tool to find files older than 30 days.\n"
+    "2. I'll move them to an Archive folder.\n\n"
+)
+
+
+@pytest.mark.parametrize(
+    "closing",
+    [
+        "Once you confirm, I'll start.",
+        "Reply 'go' to proceed.",
+        "Reply ‘go’ to proceed.",
+        'Reply with "yes" to start.',
+        "Reply yes to continue.",
+        "Nothing has been changed yet.",
+        "Nothing’s been changed yet.",
+        "I'll wait for your confirmation before running anything.",
+        "Approve this and I'll run it.",
+        "I'll proceed when you're ready.",
+    ],
+)
+def test_a_plan_waiting_for_the_go_ahead_is_not_narration(closing):
+    assert _unfinished_answer_kind(_OLD_FILES_PLAN + closing) is None
+
+
+@pytest.mark.parametrize(
+    "closing",
+    [
+        "Once it runs, you'll have the list.",
+        "Nothing else is needed from you.",
+        "This shows which folders to reply to first.",
+        "The Archive folder keeps your originals.",
+        "This should give you the breakdown.",
+    ],
+)
+def test_a_plan_with_a_look_alike_closing_line_is_narration(closing):
+    assert _unfinished_answer_kind(_OLD_FILES_PLAN + closing) == "narration"
+
+
 def test_tool_plan_in_place_of_the_work_ends_honestly(agent):
     sent = _script(agent, *[_answer(PLAN_INSTEAD_OF_WORK)] * 5)
 

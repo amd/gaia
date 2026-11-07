@@ -1631,7 +1631,10 @@ _PLAN_ITEM_PATTERN = re.compile(r"^\s*(?:[-*+•]|\**\d+[.)]\**)\s+(?P<item>.+)$
 # A plan that waits for the user's go-ahead is the answer they asked for.
 _ASKS_GO_AHEAD_PATTERN = re.compile(
     r"\?\s*$|\b(?:let me know|tell me|say the word|want me to|would you like"
-    r"|shall i|should i|do you want|your (?:go-ahead|approval|ok(?:ay)?))\b",
+    r"|shall i|should i|do you want|your (?:go-ahead|ok(?:ay)?)"
+    r"|confirm\w*|proceed\w*|approv\w*|once you"
+    r"|nothing(?:'s| has| was| is)(?: been)? changed yet"
+    r"|reply\s+(?:with\s+)?(?:[\"'“‘][^\"'”’\n]+[\"'”’]|\w+)\s+to)\b",
     re.IGNORECASE,
 )
 _CLOSING_LINE_MAX_CHARS = 300
