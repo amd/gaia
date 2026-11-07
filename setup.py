@@ -302,14 +302,6 @@ setup(
         ],
         "eval": [
             "bs4",
-            # The eval-CI recipe starts the Agent UI backend before running
-            # agent/RAG evaluations; keep its runtime dependencies in this
-            # install set so the documented workflow is executable.
-            "fastapi>=0.115.0",
-            "uvicorn>=0.32.0",
-            "python-multipart>=0.0.9",
-            "httpx>=0.27.0,<1.0",
-            "psutil>=5.9.0",
             "numpy>=2.0,<2.3.0",
             "pypdf>=6.20.0",
             "reportlab",

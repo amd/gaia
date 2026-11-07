@@ -41,6 +41,8 @@ OPENAI_SERVER = REPO_ROOT / "src" / "gaia" / "api" / "openai_server.py"
 EMAIL_PYPROJECT = REPO_ROOT / "hub" / "agents" / "email" / "python" / "pyproject.toml"
 CLI_PY = REPO_ROOT / "src" / "gaia" / "cli.py"
 DAEMON_CLIENT_PY = REPO_ROOT / "src" / "gaia" / "daemon" / "client.py"
+EVAL_CI_GUIDE = REPO_ROOT / "docs" / "guides" / "eval-ci.mdx"
+EVAL_GUIDE = REPO_ROOT / "docs" / "guides" / "eval.mdx"
 
 
 def _parse_extra(name: str) -> list[str]:
@@ -140,18 +142,23 @@ def test_keyring_guaranteed_for_api_installs_via_core() -> None:
     )
 
 
-def test_eval_extra_covers_the_documented_ui_backend() -> None:
-    """The eval-CI recipe starts ``gaia.ui.server`` after installing [eval]."""
-    eval_reqs = [
-        r.split(">")[0].split("=")[0].split("<")[0].lower()
-        for r in _parse_extra("eval")
-    ]
-    required = {"fastapi", "uvicorn", "python-multipart", "httpx", "psutil"}
-    missing = sorted(required - set(eval_reqs))
-    assert not missing, (
-        "docs/guides/eval-ci.mdx installs [eval] before starting the Agent UI "
-        f"backend; missing runtime dependencies: {missing}"
-    )
+def test_eval_guides_install_the_complete_eval_stack() -> None:
+    """Eval guides install UI/RAG deps and the flagship agent package.
+
+    The documented workflows start ``gaia.ui.server`` and run the default
+    flagship agent. Keep the recipe aligned with the repository's own eval
+    workflows instead of duplicating [ui] dependencies in [eval].
+    """
+    for guide in (EVAL_CI_GUIDE, EVAL_GUIDE):
+        src = guide.read_text(encoding="utf-8")
+        assert ".[eval,ui]" in src, (
+            f"{guide.relative_to(REPO_ROOT)} must install the UI/RAG extra "
+            "alongside [eval] before starting the Agent UI backend"
+        )
+        assert "hub/agents/gaia/python" in src, (
+            f"{guide.relative_to(REPO_ROOT)} must install the flagship hub "
+            "package so the default eval agent is registered"
+        )
 
 
 def test_api_extra_covers_every_daemon_dep() -> None:
