@@ -576,7 +576,9 @@ async def list_connectors() -> Dict[str, Any]:
             logger.warning(
                 "connectors-list: summary failed for %s (%s)", s.id, type(exc).__name__
             )
-            summaries.append({"id": s.id, "error": "unavailable"})
+            summaries.append(
+                {"id": s.id, "display_name": s.display_name, "error": "unavailable"}
+            )
     return {"connectors": summaries}
 
 

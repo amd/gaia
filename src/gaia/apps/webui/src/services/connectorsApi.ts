@@ -3,14 +3,14 @@
 
 /** Connector calls, re-exported by api.ts; callers keep importing from there. */
 
-import type { AgentMcpServer, ConnectorRow } from '../types';
+import type { AgentMcpServer, ConnectorListEntry, ConnectorRow } from '../types';
 import { apiFetch, UI_HEADER } from './api';
 
 // -- Connections (issue #915) ---------------------------------------------------
 
 // New framework endpoints (T-8b) — /api/connectors
 
-export async function listConnectors(): Promise<{ connectors: ConnectorRow[] }> {
+export async function listConnectors(): Promise<{ connectors: ConnectorListEntry[] }> {
     return apiFetch('GET', '/connectors');
 }
 

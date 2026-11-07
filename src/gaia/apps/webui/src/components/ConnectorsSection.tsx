@@ -26,7 +26,7 @@ import { useChatStore } from '../stores/chatStore';
 import { useConnectorsSSE } from '../hooks/useConnectorsSSE';
 import type { MessageKey } from '../i18n/registry';
 import { translator, useT, type Translate } from '../i18n/useT';
-import type { AgentMcpServer, ConnectorRow } from '../types';
+import type { AgentMcpServer, ConnectorListEntry, ConnectorRow, UnavailableConnectorRow } from '../types';
 import { connectorDescription, connectorDescriptionBare, fieldHelp, fieldLabel, missingFieldsMessage } from '../utils/connectorText';
 import { ConnectorTileMenu } from './ConnectorTileMenu';
 import { SettingsDisclosure } from './settings/SettingsDisclosure';
@@ -99,7 +99,7 @@ function describeDisconnectOutcome(payload: Record<string, unknown>, t: Translat
 
 export function ConnectorsSection() {
     const t = useT();
-    const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
+    const [connectors, setConnectors] = useState<ConnectorListEntry[]>([]);
     const [agentMcps, setAgentMcps] = useState<AgentMcpServer[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -191,15 +191,15 @@ export function ConnectorsSection() {
     );
 
     const q = query.trim().toLowerCase();
-    const shown = connectors.filter(
-        (c) =>
-            !q ||
-            [c.display_name, c.description, connectorDescriptionBare(t, c)].some((s) => s.toLowerCase().includes(q)),
-    );
-    const connected = shown.filter((c) => c.configured);
-    const accounts = shown.filter((c) => !c.configured && c.type === 'oauth_pkce');
-    const servers = shown.filter((c) => !c.configured && c.type !== 'oauth_pkce');
-    const nothingConnected = !connectors.some((c) => c.configured);
+    const searchText = (c: ConnectorListEntry) =>
+        'error' in c ? [c.display_name] : [c.display_name, c.description, connectorDescriptionBare(t, c)];
+    const shown = connectors.filter((c) => !q || searchText(c).some((s) => s.toLowerCase().includes(q)));
+    const unavailable = shown.filter((c): c is UnavailableConnectorRow => 'error' in c);
+    const available = shown.filter((c): c is ConnectorRow => !('error' in c));
+    const connected = available.filter((c) => c.configured);
+    const accounts = available.filter((c) => !c.configured && c.type === 'oauth_pkce');
+    const servers = available.filter((c) => !c.configured && c.type !== 'oauth_pkce');
+    const nothingConnected = !connectors.some((c) => !('error' in c) && c.configured);
 
     const tiles = (rows: ConnectorRow[]) => (
         <div className="connectors-list">
@@ -258,6 +258,13 @@ export function ConnectorsSection() {
                     )}
                     {connectors.length === 0 && !error && <p className="settings-hint">{t('settings.connectors.none')}</p>}
                     {q && shown.length === 0 && <p className="settings-hint">{t('settings.connectors.noMatch')}</p>}
+                    {unavailable.length > 0 && (
+                        <SettingsDisclosure title={t('settings.connectors.unavailable')} hint={t('settings.connectors.unavailableHint')} count={unavailable.length} defaultOpen forceOpen={!!q}>
+                            <div className="connectors-list">
+                                {unavailable.map((c) => <UnavailableTile key={c.id} connector={c} />)}
+                            </div>
+                        </SettingsDisclosure>
+                    )}
                     {connected.length > 0 && (
                         <SettingsDisclosure title={t('settings.connectors.connected')} count={connected.length} defaultOpen forceOpen={!!q}>
                             {tiles(connected)}
@@ -285,6 +292,20 @@ export function ConnectorsSection() {
                 </>
             )}
         </section>
+    );
+}
+
+// ── UnavailableTile ──────────────────────────────────────────────────────────
+
+function UnavailableTile({ connector }: { connector: UnavailableConnectorRow }) {
+    const t = useT();
+    return (
+        <div className="connector-tile">
+            <div className="connector-tile-header connector-tile-header--static">
+                <bdi className="connector-tile-name">{connector.display_name}</bdi>
+                <span className="connector-status disabled">{t('settings.connectors.unavailableStatus')}</span>
+            </div>
+        </div>
     );
 }
 
