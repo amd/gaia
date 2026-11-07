@@ -515,6 +515,19 @@ PLAN_INSTEAD_OF_WORK = (
 ).read_text(encoding="utf-8")
 
 
+def test_a_prose_proceeding_line_is_narration():
+    """Announcing a numbered step in prose is narration, not an answer (#6914).
+
+    The digit in the closing used to exempt the whole answer from the
+    tool-plan guard, and the progressive pattern required a "now/next" tail
+    that "Proceeding with step 1." does not have.
+    """
+    assert (
+        _unfinished_answer_kind(_OLD_FILES_PLAN + "Proceeding with step 1.")
+        == "narration"
+    )
+
+
 def test_tool_plan_in_place_of_the_work_is_narration():
     assert _unfinished_answer_kind(PLAN_INSTEAD_OF_WORK) == "narration"
     body, step = _split_announced_step(PLAN_INSTEAD_OF_WORK)

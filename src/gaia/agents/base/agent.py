@@ -1514,6 +1514,8 @@ _THIS_TURN_PATTERN = re.compile(
     r"\bnow\b(?!\s+that)|\bbefore\s+\w+ing\b", re.IGNORECASE
 )
 # "Executing the final write now.": a step in the present tense, due this turn.
+# Also "Proceeding with step 1.": announcing a numbered step of a plan that
+# was laid out instead of being run (#6914).
 _PROGRESSIVE_STEP_PATTERN = re.compile(
     r"^(?:(?:ok(?:ay)?|so|alright|now)[,.]?\s+)?"
     r"(?:executing|running|performing|writing|applying|calling|fetching"
@@ -1521,7 +1523,8 @@ _PROGRESSIVE_STEP_PATTERN = re.compile(
     r"(?!\s+\w+ly\b)"
     r"(?![^.!?:]*\b(?:comes?|is|are|was|were|works?|returns?|succeeds?|takes?"
     r"|gives?|happens?|follows?)\b)"
-    r"[^.!?:]{0,80}\b(?:now|next)\s*[.!]?\s*$",
+    r"(?:[^.!?:]{0,80}\b(?:now|next)\s*[.!]?\s*$"
+    r"|[^.!?:]{0,60}\bwith\s+step\s*\d+\s*[.!]?\s*$)",
     re.IGNORECASE,
 )
 _UNFINISHED_STEP_QUOTE_MAX_CHARS = 200
