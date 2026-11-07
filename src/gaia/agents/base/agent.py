@@ -2345,6 +2345,48 @@ def _with_resolved_target(prompt_args: Any, preflight: Any) -> Any:
     return {**prompt_args, "file_path": target}
 
 
+def _record_refused_write(
+    agent: Any, tool_name: str, tool_args: Any, result: Any
+) -> None:
+    """Put a write the path sandbox refused on this turn's ledger as final.
+
+    Code run through ``run_python`` or the shell isn't confined by the
+    sandbox, so the ledger is what keeps it off a path a write tool was just
+    refused. getattr throughout: test stubs copy ``_execute_tool``.
+    """
+    ledger = getattr(agent, "_denied_effects", None)
+    if ledger is None or not isinstance(result, dict):
+        return
+    if result.get("status") != "error" or not isinstance(tool_args, dict):
+        return
+    registry = getattr(agent, "_tools_registry", None) or {}
+    preflight = (registry.get(tool_name) or {}).get("preflight")
+    target_of = getattr(preflight, "target_of", None)
+    read_validator = getattr(agent, "_read_validator", None)
+    validator = read_validator() if callable(read_validator) else None
+    if validator is None or not callable(target_of):
+        return
+    try:
+        target = os.path.abspath(str(target_of(tool_args)))
+        real = os.path.realpath(target)
+    except (KeyError, TypeError, ValueError, OSError) as e:
+        logger.debug("could not resolve the refused write's target: %s", e)
+        return
+    # A "read it first" or a size limit is a step to take, not a refusal.
+    if validator.is_path_allowed(real, prompt_user=False) and not (
+        validator.is_write_blocked(real)[0]
+    ):
+        return
+    ledger.record(
+        tool_name,
+        tool_args,
+        str(result.get("error") or "refused by the path sandbox"),
+        kinds={PATH},
+        refused=True,
+        paths=[target, real],
+    )
+
+
 def _scratch_reached_by(agent: Any, tool_name: str, prompt_args: Any) -> str:
     """The scratch folder when this call runs code that may sit in it, else "".
 
@@ -7716,6 +7758,7 @@ Do NOT wrap conversational replies in JSON.
                     refused=isinstance(refusal, dict)
                     and refusal.get("tier") == "refuse",
                 )
+            _record_refused_write(self, tool_name, tool_args, refusal)
             return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
 
         # A "no" covers the effect, not the tool: another route to it is asked
@@ -7752,6 +7795,7 @@ Do NOT wrap conversational replies in JSON.
         # prompt says so, and a person's yes to it grants that one file.
         outside = self._write_target_outside_scope(tool_name, prompt_args)
         if isinstance(outside, dict):
+            _record_refused_write(self, tool_name, tool_args, outside)
             return outside
         auto_approves = None
         if outside is not None:
@@ -7947,6 +7991,7 @@ Do NOT wrap conversational replies in JSON.
                 body = skill_call.wrap(tool) if skill_call is not None else tool
                 result = self._call_tool_bounded(body, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
+            _record_refused_write(self, tool_name, tool_args, result)
             self._fold_tool_usage(tool_name, result)
             return result
         except ToolExecutionTimeout as e:
