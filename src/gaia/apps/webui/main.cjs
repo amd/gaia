@@ -403,6 +403,9 @@ async function startBackend() {
         PYTHONUNBUFFERED: "1",
         ...(app.isPackaged && {
           GAIA_BUNDLED_LEMONADE_DIR: path.join(process.resourcesPath, "vendor", "lemonade"),
+          // The daemon exits once this is deleted: a Trashed macOS app or a
+          // deleted AppImage runs no uninstall step. An AppImage's exe is a mount.
+          GAIA_APP_PATH: process.env.APPIMAGE || app.getPath("exe"),
         }),
       },
       detached: false,
