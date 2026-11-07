@@ -3,12 +3,15 @@
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
 import { Activity, Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Clock } from 'lucide-react';
-import { MessageBubble, isErrorContent, turnEnding } from './MessageBubble';
+import { MessageBubble, cleanToolCallContent, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep } from '../utils/streamSteps';
 import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
+import { useReadAloudStore } from '../stores/readAloudStore';
+import { readsAloudWhenDone } from '../utils/autoReadAloud';
+import { useReadAloudSettings } from '../hooks/useReadAloudSettings';
 import { RecordingProgress } from './RecordingProgress';
 import { ensureModel, modelKnownReady } from '../stores/modelNeededStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
@@ -158,6 +161,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     useEffect(() => {
         if (cards.length > 0) lastCardsRef.current = [...cards];
     }, [cards]);
+    // Auto-read needs the saved choice before the first reply finishes.
+    useReadAloudSettings();
     useEffect(() => {
         if (!isStreaming && prevStreamingRef.current) {
             setStreamEnding(true);
@@ -1120,6 +1125,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     };
                     if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
                     addMessage(assistantMsg);
+                    const readAloud = useReadAloudStore.getState();
+                    if (readAloud.settings?.auto && readsAloudWhenDone(assistantMsg)) {
+                        void readAloud.read(`${sessionId}:${assistantMsg.id}`, cleanToolCallContent(content));
+                    }
                 }
 
                 setStreaming(false);

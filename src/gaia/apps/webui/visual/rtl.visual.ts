@@ -70,6 +70,16 @@ const audit = (page: Page): Promise<string[]> =>
 
         if (document.documentElement.scrollWidth > innerWidth) problems.push('the page scrolls sideways');
 
+        // An <option> holds plain text, so the English hint in brackets can't be
+        // styled quietly there and its brackets scramble in rtl; use t.bare.
+        // Language pickers (options tagged with lang) name each language in English on purpose.
+        for (const option of document.querySelectorAll('option:not([lang])')) {
+            const text = option.textContent ?? '';
+            if (arabic.test(text) && /\([^)]*[A-Za-z]{3,}[^)]*\)/.test(text)) {
+                problems.push(`an <option> carries the English hint: "${text.trim().slice(0, 50)}"`);
+            }
+        }
+
         for (const el of document.querySelectorAll('body *')) {
             if (!shown(el)) continue;
             const box = el.getBoundingClientRect();
@@ -686,6 +696,30 @@ test('settings in the dark theme', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+for (const [locale, theme] of [['ar', 'light'], ['ar', 'dark'], ['en', 'light']] as const) {
+    test(`read-aloud settings (${locale}, ${theme})`, async ({ page }) => {
+        await open(page, '', locale, undefined, theme);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="voice"]').click();
+        await expect(page.locator('#read-aloud-voice')).toHaveValue('bf_emma');
+        await expect(page.locator('#read-aloud-speed')).toHaveValue('125');
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a reply that could not be read aloud (${locale}, ${theme})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route('**/api/speech', (route) =>
+                route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Lemonade Server is not reachable at http://127.0.0.1:13305' }) }),
+            );
+        }, theme);
+        const reply = page.locator('.msg-assistant').last();
+        await reply.hover();
+        await reply.locator('.msg-read-aloud').click();
+        await expect(reply.locator('.msg-read-aloud-error')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 test('the dynamic tools setting', async ({ page }) => {
     await open(page);
     await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -1102,6 +1136,50 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('.connector-tile')).toBeVisible();
             await shot(page, `connectors-${locale}-none`);
             expect(await audit(page)).toEqual([]);
+        });
+
+        test('a connected server that will not start says so, with the reason', async ({ page }) => {
+            const slack = {
+                id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', icon: null, category: 'general', tier: 'core',
+                description: 'Lets GAIA read and post in Slack.', product_url: 'https://example.com', docs_url: null,
+                configured: true, configurable: true, enabled: true, account_id: null, default_scopes: [], available_scopes: [],
+                mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [], supports_device_code: false,
+            };
+            await openConnectors(page, [slack]);
+            await page.route('**/api/connectors/mcp-slack/test', (route) => route.fulfill({
+                json: { ok: false, detail: 'Authentication failed - check your Slack tokens: invalid_auth (token revoked or expired; xoxb token for workspace T0123456789)' },
+            }));
+            await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
+            await page.locator('.connector-detail .configure-actions .btn-secondary').first().click();
+            await expect(page.locator('.connector-check--failed')).toBeVisible();
+            await page.locator('.connector-check--failed summary').click();
+            await expect(page.locator('.connector-check--failed pre')).toBeVisible();
+            await page.locator('.connector-check--failed').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-check-failed`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi, pre, .mcp-key-label')).toEqual([]);
+        });
+
+        test('a server that was only slow to start is not blamed on the token', async ({ page }) => {
+            const slack = {
+                id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', icon: null, category: 'general', tier: 'core',
+                description: 'Lets GAIA read and post in Slack.', product_url: 'https://example.com', docs_url: null,
+                configured: true, configurable: true, enabled: true, account_id: null, default_scopes: [], available_scopes: [],
+                mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [], supports_device_code: false,
+            };
+            await openConnectors(page, [slack]);
+            await page.route('**/api/connectors/mcp-slack/test', (route) => route.fulfill({
+                json: { ok: false, reason: 'timeout', detail: 'did not start within 10 seconds' },
+            }));
+            await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
+            await page.locator('.connector-detail .configure-actions .btn-secondary').first().click();
+            await expect(page.locator('.connector-check--failed')).toBeVisible();
+            await page.locator('.connector-check--failed summary').click();
+            await expect(page.locator('.connector-check--failed pre')).toBeVisible();
+            await page.locator('.connector-check--failed').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-check-slow`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi, pre, .mcp-key-label')).toEqual([]);
         });
 
         test('phone width: a long account stays on screen', async ({ page }) => {

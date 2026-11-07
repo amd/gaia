@@ -21,7 +21,7 @@
 
 "use strict";
 
-const { spawn, exec } = require("child_process");
+const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const { createServer } = require("http");
@@ -122,23 +122,26 @@ async function waitForServer(url, timeoutMs = 30000) {
 }
 
 /**
+ * The program and argv that open `url` in the default browser, run without a shell.
+ */
+function browserCommand(url, platform = process.platform) {
+  if (platform === "win32") return ["rundll32", ["url.dll,FileProtocolHandler", url]];
+  if (platform === "darwin") return ["open", [url]];
+  return ["xdg-open", [url]];
+}
+
+/**
  * Open a URL in the default browser.
  */
-function openBrowser(url) {
-  const platform = process.platform;
-  let cmd;
-  if (platform === "win32") {
-    cmd = `start "" "${url}"`;
-  } else if (platform === "darwin") {
-    cmd = `open "${url}"`;
-  } else {
-    cmd = `xdg-open "${url}"`;
-  }
-  exec(cmd, (err) => {
-    if (err) {
-      console.log(`  Open manually: ${url}`);
-    }
+function openBrowser(url, { spawnFn = spawn, platform = process.platform } = {}) {
+  const [file, args] = browserCommand(url, platform);
+  const child = spawnFn(file, args, { shell: false, stdio: "ignore", detached: true });
+  const openManually = () => console.log(`  Open manually: ${url}`);
+  child.on("error", openManually);
+  child.on("exit", (code) => {
+    if (code) openManually();
   });
+  child.unref();
 }
 
 let shuttingDown = false;
@@ -394,4 +397,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { npmDistTag, helpText, startBackend };
+module.exports = { npmDistTag, helpText, startBackend, browserCommand, openBrowser };

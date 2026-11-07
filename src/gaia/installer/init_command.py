@@ -556,11 +556,17 @@ def _snapshot_bytes(snapshot: Path) -> Optional[int]:
 def bytes_already_on_disk(client, model_ids, store_path: Optional[str]) -> dict:
     """Bytes of each model Lemonade's store already holds: finished files and
     the ``.partial`` ones an interrupted pull left. None for a model GAIA
-    cannot look up: a store not on this PC, or no known checkpoint."""
+    cannot look up: a store not on this PC, one this user cannot read, or no
+    known checkpoint."""
     from gaia.llm.lemonade_client import _model_ids_match
 
     store = Path(store_path) if store_path else None
-    if store is None or not store.is_dir():
+    try:
+        readable = store is not None and store.is_dir()
+    except OSError as e:
+        log.warning("Cannot read Lemonade's model store %s: %s", store, e)
+        readable = False
+    if not readable:
         return {m: None for m in model_ids}
     catalog = client.list_models(show_all=True).get("data", [])
     found = {}
@@ -574,11 +580,16 @@ def bytes_already_on_disk(client, model_ids, store_path: Optional[str]) -> dict:
             continue
         repo = checkpoint.split(":", 1)[0]
         snapshots = store / ("models--" + repo.replace("/", "--")) / "snapshots"
-        counted = (
-            [_snapshot_bytes(s) for s in snapshots.iterdir() if s.is_dir()]
-            if snapshots.is_dir()
-            else []
-        )
+        try:
+            counted = (
+                [_snapshot_bytes(s) for s in snapshots.iterdir() if s.is_dir()]
+                if snapshots.is_dir()
+                else []
+            )
+        except OSError as e:
+            log.warning("Cannot read Lemonade's model store %s: %s", snapshots, e)
+            found[model_id] = None
+            continue
         found[model_id] = None if None in counted else sum(counted)
     return found
 

@@ -4408,6 +4408,148 @@
     "title": "SourceInfo",
     "type": "object"
   },
+  "SpeakRequest": {
+    "properties": {
+      "speed": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Speed"
+      },
+      "text": {
+        "maxLength": 1000,
+        "minLength": 1,
+        "title": "Text",
+        "type": "string"
+      },
+      "voice": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Voice"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "title": "SpeakRequest",
+    "type": "object"
+  },
+  "SpeechModel": {
+    "description": "Whether the voice model is on this PC, so a first read can say it downloads.",
+    "properties": {
+      "downloaded": {
+        "title": "Downloaded",
+        "type": "boolean"
+      },
+      "size_gb": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Size Gb"
+      }
+    },
+    "required": [
+      "downloaded"
+    ],
+    "title": "SpeechModel",
+    "type": "object"
+  },
+  "SpeechSettings": {
+    "properties": {
+      "auto": {
+        "title": "Auto",
+        "type": "boolean"
+      },
+      "max_speed": {
+        "default": 200,
+        "title": "Max Speed",
+        "type": "integer"
+      },
+      "min_speed": {
+        "default": 50,
+        "title": "Min Speed",
+        "type": "integer"
+      },
+      "speed": {
+        "title": "Speed",
+        "type": "integer"
+      },
+      "voice": {
+        "title": "Voice",
+        "type": "string"
+      },
+      "voices": {
+        "items": {
+          "$ref": "#/components/schemas/Voice"
+        },
+        "title": "Voices",
+        "type": "array"
+      }
+    },
+    "required": [
+      "voice",
+      "speed",
+      "auto",
+      "voices"
+    ],
+    "title": "SpeechSettings",
+    "type": "object"
+  },
+  "SpeechSettingsUpdate": {
+    "properties": {
+      "auto": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Auto"
+      },
+      "speed": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Speed"
+      },
+      "voice": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Voice"
+      }
+    },
+    "title": "SpeechSettingsUpdate",
+    "type": "object"
+  },
   "StartAgentServerRequest": {
     "properties": {
       "backend_url": {
@@ -5505,6 +5647,39 @@
       }
     },
     "title": "VisionModelRequest",
+    "type": "object"
+  },
+  "Voice": {
+    "properties": {
+      "accent": {
+        "title": "Accent",
+        "type": "string"
+      },
+      "gender": {
+        "title": "Gender",
+        "type": "string"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "quality": {
+        "title": "Quality",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "accent",
+      "gender",
+      "quality"
+    ],
+    "title": "Voice",
     "type": "object"
   },
   "WarmUpStatus": {

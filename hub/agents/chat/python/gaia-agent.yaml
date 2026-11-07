@@ -14,14 +14,14 @@ icon: message-circle
 tools_count: 71
 
 language: python
-min_gaia_version: "0.25.4"
+min_gaia_version: "0.26.0"
 models: []
 
 python:
   entry_module: gaia_agent_chat
   entry_class: ChatAgent
   dependencies:
-    - "amd-gaia>=0.25.4"
+    - "amd-gaia>=0.26.0"
     - "gaia-agent-gaia>=0.3.5"
 
 requirements:

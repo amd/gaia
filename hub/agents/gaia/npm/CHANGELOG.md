@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
+
 - **The first reply reads far less, and the prompt cache stays warm.**
   A session now starts on the 26 most-used tools in short form and moves to every
   tool at most once, with the full list kept ready so a first task starts as fast
@@ -162,6 +164,10 @@ the new session `tools` and `grants` routes, so probe `/version` first.
   to run `gaia download --agent talk` first. It also takes a `speed` (0.5-2.0),
   defaults to the `af_bella` voice, writes only `.wav` files, and reads long
   text in sentence-sized pieces joined into one file.
+- **Speech the agent saves uses the voice you read replies in.** When the
+  request names no voice or speed, `text_to_speech` now uses the read-aloud
+  voice and speed chosen in the Agent UI (Settings › Read aloud) or the TUI
+  (`/voice`), instead of a fixed `af_bella` at normal speed.
 - **Needs Lemonade Server 2026.44.1 or newer.** `GET /v1/gaia/init` reports
   `min_version: "2026.44.1"` (was `10.2.0`) and answers not-ready on anything
   older. Its `hint` no longer tells you to run `gaia init --force-reinstall`:

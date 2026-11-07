@@ -7613,8 +7613,15 @@ class LemonadeClient:
         return catalog
 
     def cloud_model_provider(self, model: str) -> Optional[str]:
-        """Return the provider for a built-in or previously discovered cloud model."""
-        return cloud_model_provider(model, self._model_metadata.get(model))
+        """Return the provider for a built-in or previously discovered cloud model.
+
+        The catalog is shared across clients, so a new client still recognises a
+        model another client discovered, before it has read the catalog itself.
+        """
+        metadata = self._model_metadata.get(model)
+        if metadata is None and is_cloud_model(model):
+            metadata = {"recipe": CLOUD_RECIPE}
+        return cloud_model_provider(model, metadata)
 
     def _from_server(self) -> str:
         """`` from the model server at host:port`` for an error, or ``""``.

@@ -825,6 +825,12 @@ def render_endpoint_spec_html() -> str:
     (<code>POST /v1/email/draft</code> to mint a single-use token, then
     <code>POST /v1/email/send</code>). Server-side resume is not wired yet;
     <code>confirm_url</code> is omitted.</p>
+  <p class="desc"><b>Errors before the stream opens:</b> <b>400</b> if
+    <code>provider</code> is anything but <code>lemonade</code>; <b>409</b> if the
+    session already has a turn in progress or <code>run_id</code> is already in
+    flight; <b>502</b> if the agent cannot be built or switched to the requested
+    <code>model</code>; <b>500</b> if the run fails to start after that. Once the
+    stream is open, a failure arrives as an <code>error</code> event instead.</p>
 </div>
 
 <div class="endpoint-block">

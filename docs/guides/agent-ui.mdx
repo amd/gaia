@@ -840,7 +840,7 @@ much they use now.
 One window with General (language; appearance: Light, Dark, Match system; colors; the
 [desktop app's tray switches](#the-tray-icon); shortcuts),
 Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, the `.claude/skills` folder of the project GAIA is working in, or your other Claude Code skill folders, with **Use** to try one),
-Connectors, Memory, Notifications, Privacy and Advanced (model server and
+Connectors, Memory, Notifications, Read aloud, Privacy and Advanced (model server and
 llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
 back).
 
@@ -885,6 +885,18 @@ and a taskbar flash when GAIA isn't focused. Alerts fire whether or not the
 notification panel is open, and never for the chat you're looking at. In the
 desktop app it also keeps the PC from idle-sleeping while a chat is working; on
 battery it lets the PC sleep below the level you choose (20% by default).
+
+**Read aloud.** The speaker button on a reply reads it in a voice that runs on
+this PC through Lemonade; press it again to stop. Code blocks and links are
+skipped, so you hear the words. **Settings → Read aloud** picks the voice
+(American or British English, female or male, with **Preview**), the speed
+(0.5× to 2×), and whether every reply is read when it finishes. The voices
+speak English, so a reply in another language is read with an English accent.
+The first reading after a restart takes longer while Lemonade loads the voice.
+On a PC without the voice model, the first press downloads it once (~350 MB)
+and says so under the reply; reading starts when it finishes. (The agent's own
+`text_to_speech` tool never downloads it in the middle of a chat.)
+The [terminal app](/guides/tui) uses the same voice and speed, and so does GAIA when you ask it to save speech to a file.
 
 **One chat at a time on the model.** A second chat sent while another is
 working waits its turn and says so ("Waiting for the GPU — 1st in line", also

@@ -9,7 +9,7 @@
  * shows an OAuth or MCP-key configure form plus per-agent grants.
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
     CheckCircle2,
     AlertCircle,
@@ -25,6 +25,7 @@ import { useConnectorsSSE } from '../hooks/useConnectorsSSE';
 import type { MessageKey } from '../i18n/registry';
 import { useT, type Translate } from '../i18n/useT';
 import type { AgentMcpServer, ConnectorRow } from '../types';
+import { connectorDescription, connectorDescriptionBare, fieldHelp, fieldLabel, missingFieldsMessage } from '../utils/connectorText';
 import { ConnectorTileMenu } from './ConnectorTileMenu';
 import { SettingsDisclosure } from './settings/SettingsDisclosure';
 import './ConnectorsSection.css';
@@ -102,6 +103,34 @@ export function ConnectorsSection() {
     const [disconnectNotice, setDisconnectNotice] = useState<string | null>(null);
     const [expanded, setExpanded] = useState<string | null>(null);
     const [query, setQuery] = useState('');
+    // Kept here, not in the tile: a first save moves the tile into "Connected" and remounts it.
+    const [checks, setChecks] = useState<Record<string, McpCheck | null>>({});
+    // Bumped per connector so a check that a newer check or a toggle replaced can't repaint.
+    const checkRuns = useRef<Record<string, number>>({});
+
+    const setCheck = (id: string, next: McpCheck | null) =>
+        setChecks((prev) => ({ ...prev, [id]: next }));
+
+    const clearCheck = useCallback((id: string) => {
+        checkRuns.current[id] = (checkRuns.current[id] ?? 0) + 1;
+        setCheck(id, null);
+    }, []);
+
+    const runCheck = useCallback(async (id: string) => {
+        const run = (checkRuns.current[id] ?? 0) + 1;
+        checkRuns.current[id] = run;
+        setCheck(id, { state: 'checking' });
+        let next: McpCheck;
+        try {
+            const result = await api.testConnector(id);
+            next = result.ok
+                ? { state: 'ok' }
+                : { state: 'failed', detail: result.detail, slow: result.reason === 'timeout' };
+        } catch (e) {
+            next = { state: 'failed', detail: e instanceof Error ? e.message : String(e) };
+        }
+        if (checkRuns.current[id] === run) setCheck(id, next);
+    }, []);
 
     const load = useCallback(async () => {
         try {
@@ -160,7 +189,9 @@ export function ConnectorsSection() {
 
     const q = query.trim().toLowerCase();
     const shown = connectors.filter(
-        (c) => !q || c.display_name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q),
+        (c) =>
+            !q ||
+            [c.display_name, c.description, connectorDescriptionBare(t, c)].some((s) => s.toLowerCase().includes(q)),
     );
     const connected = shown.filter((c) => c.configured);
     const accounts = shown.filter((c) => !c.configured && c.type === 'oauth_pkce');
@@ -176,6 +207,9 @@ export function ConnectorsSection() {
                     expanded={expanded === c.id}
                     onToggle={() => toggle(c.id)}
                     onChanged={() => void onChanged(c.id)}
+                    check={checks[c.id] ?? null}
+                    onRunCheck={() => void runCheck(c.id)}
+                    onClearCheck={() => clearCheck(c.id)}
                 />
             ))}
         </div>
@@ -253,16 +287,27 @@ export function ConnectorsSection() {
 
 // ── ConnectorTile ────────────────────────────────────────────────────────────
 
+type McpCheck =
+    | { state: 'checking' }
+    | { state: 'ok' }
+    | { state: 'failed'; detail: string; slow?: boolean };
+
 function ConnectorTile({
     connector,
     expanded,
     onToggle,
     onChanged,
+    check,
+    onRunCheck,
+    onClearCheck,
 }: {
     connector: ConnectorRow;
     expanded: boolean;
     onToggle: () => void;
     onChanged: () => void;
+    check: McpCheck | null;
+    onRunCheck: () => void;
+    onClearCheck: () => void;
 }) {
     const t = useT();
     // Status for the tile header (#1004): an unconfigured connector's group already says so,
@@ -310,7 +355,13 @@ function ConnectorTile({
                     {connector.type === 'oauth_pkce' ? (
                         <OAuthConfigureBody connector={connector} onChanged={onChanged} />
                     ) : (
-                        <MCPServerConfigureBody connector={connector} onChanged={onChanged} />
+                        <MCPServerConfigureBody
+                            connector={connector}
+                            onChanged={onChanged}
+                            check={check}
+                            onRunCheck={onRunCheck}
+                            onClearCheck={onClearCheck}
+                        />
                     )}
                     {connector.configured && (
                         <ConnectorAgentGrants
@@ -473,11 +524,11 @@ function OAuthConfigureBody({
     // returns {flow_id, authorization_url} once the credentials land
     // and start_authorization succeeds.
     const handleSaveAndConnect = async () => {
-        const missing = (connector.oauth_setup_fields ?? [])
-            .filter((f) => f.required !== false && !setupValues[f.key]?.trim())
-            .map((f) => f.label);
+        const missing = (connector.oauth_setup_fields ?? []).filter(
+            (f) => f.required !== false && !setupValues[f.key]?.trim(),
+        );
         if (missing.length) {
-            setErr(t('settings.connectors.required', { fields: missing.join(', ') }));
+            setErr(missingFieldsMessage(t, connector.id, missing));
             return;
         }
         setBusy(true);
@@ -520,14 +571,14 @@ function OAuthConfigureBody({
     return (
         <div className="configure-body">
             {connector.description && (
-                <p className="connector-desc"><bdi>{connector.description}</bdi></p>
+                <p className="connector-desc"><bdi>{connectorDescription(t, connector)}</bdi></p>
             )}
             {showSetupForm && (
                 <div className="oauth-setup-form">
                     <p className="connector-desc">{t('settings.connectors.firstSetup')}</p>
                     {setupFields.map((field) => (
                         <label key={field.key} className="oauth-setup-field">
-                            <span className="oauth-setup-label">{field.label}</span>
+                            <span className="oauth-setup-label">{fieldLabel(t, connector.id, field)}</span>
                             <input
                                 type={field.kind === 'secret' ? 'password' : 'text'}
                                 className="oauth-setup-input"
@@ -543,7 +594,7 @@ function OAuthConfigureBody({
                                 spellCheck={false}
                             />
                             {field.help_md && (
-                                <span className="oauth-setup-help"><bdi>{field.help_md}</bdi></span>
+                                <span className="oauth-setup-help"><bdi>{fieldHelp(t, connector.id, field)}</bdi></span>
                             )}
                         </label>
                     ))}
@@ -769,7 +820,7 @@ function OAuthClientEditor({
                     <p className="connector-desc">{t('settings.connectors.clientHelp')}</p>
                     {fields.map((field) => (
                         <label key={field.key} className="oauth-setup-field">
-                            <span className="oauth-setup-label">{field.label}</span>
+                            <span className="oauth-setup-label">{fieldLabel(t, connector.id, field)}</span>
                             <input
                                 type={field.kind === 'secret' ? 'password' : 'text'}
                                 className="oauth-setup-input"
@@ -791,7 +842,7 @@ function OAuthClientEditor({
                                 spellCheck={false}
                             />
                             {field.help_md && (
-                                <span className="oauth-setup-help"><bdi>{field.help_md}</bdi></span>
+                                <span className="oauth-setup-help"><bdi>{fieldHelp(t, connector.id, field)}</bdi></span>
                             )}
                         </label>
                     ))}
@@ -826,9 +877,15 @@ function OAuthClientEditor({
 function MCPServerConfigureBody({
     connector,
     onChanged,
+    check,
+    onRunCheck,
+    onClearCheck,
 }: {
     connector: ConnectorRow;
     onChanged: () => void;
+    check: McpCheck | null;
+    onRunCheck: () => void;
+    onClearCheck: () => void;
 }) {
     const t = useT();
     const [values, setValues] = useState<Record<string, string>>(() =>
@@ -862,9 +919,11 @@ function MCPServerConfigureBody({
             setTimeout(() => setSaved(false), 2200);
         } catch (e) {
             setErr(e instanceof Error ? e.message : String(e));
+            return;
         } finally {
             setBusy(false);
         }
+        onRunCheck();
     };
 
     const handleDisconnect = async () => {
@@ -872,6 +931,7 @@ function MCPServerConfigureBody({
         setErr(null);
         try {
             await api.disconnectConnector(connector.id);
+            onClearCheck();
             setValues(Object.fromEntries(connector.mcp_env_keys.map((k) => [k, ''])));
             onChanged();
         } catch (e) {
@@ -890,6 +950,7 @@ function MCPServerConfigureBody({
     const handleToggleEnabled = async () => {
         setBusy(true);
         setErr(null);
+        onClearCheck();
         try {
             if (connector.enabled) {
                 await api.disableConnector(connector.id);
@@ -907,7 +968,7 @@ function MCPServerConfigureBody({
     return (
         <div className="configure-body">
             {connector.description && (
-                <p className="connector-desc"><bdi>{connector.description}</bdi></p>
+                <p className="connector-desc"><bdi>{connectorDescription(t, connector)}</bdi></p>
             )}
             {err && (
                 <div className="configure-error">
@@ -970,6 +1031,15 @@ function MCPServerConfigureBody({
                         )}
                     </button>
                 )}
+                {connector.configured && connector.enabled !== false && (
+                    <button
+                        className="btn-secondary"
+                        disabled={busy || check?.state === 'checking'}
+                        onClick={onRunCheck}
+                    >
+                        {t('settings.connectors.check')}
+                    </button>
+                )}
                 {connector.configured && (
                     <button
                         className="btn-secondary"
@@ -990,6 +1060,33 @@ function MCPServerConfigureBody({
                     </a>
                 )}
             </div>
+            {check?.state === 'checking' && (
+                <p className="connector-check" role="status">
+                    <Loader2 size={12} className="spin" />
+                    {t('settings.connectors.checking', { name: connector.display_name })}
+                </p>
+            )}
+            {check?.state === 'ok' && (
+                <p className="connector-check connector-check--ok" role="status">
+                    <CheckCircle2 size={12} />
+                    {t('settings.connectors.checkOk', { name: connector.display_name })}
+                </p>
+            )}
+            {check?.state === 'failed' && (
+                <div className="connector-check connector-check--failed" role="alert">
+                    <p>
+                        {check.slow
+                            ? t('settings.connectors.checkSlow', { name: connector.display_name })
+                            : keyless
+                              ? t('settings.connectors.checkFailed', { name: connector.display_name })
+                              : t('settings.connectors.checkFailedKey', { name: connector.display_name })}
+                    </p>
+                    <details>
+                        <summary>{t('settings.connectors.checkDetails')}</summary>
+                        <pre dir="ltr">{check.detail}</pre>
+                    </details>
+                </div>
+            )}
         </div>
     );
 }
