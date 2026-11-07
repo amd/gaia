@@ -819,13 +819,13 @@ export interface MessageResponse {
   content: string;
   created_at: string;
   id: number;
+  library_notices?: string[] | null;
   rag_sources?: SourceInfo[] | null;
   role: string;
   session_id: string;
   stats?: InferenceStatsResponse | null;
   stopped?: boolean;
   turn_summary?: TurnSummaryResponse | null;
-  library_notices?: string[] | null;
 }
 /**
  * RAG source citation.

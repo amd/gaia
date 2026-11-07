@@ -244,14 +244,22 @@ def test_a_file_the_library_cannot_hold_is_named_with_the_reason(home, db):
 
 def test_library_notices_travel_on_done_events_and_persisted_messages(home, db):
     session = db.create_session()
-    notices = ["run.exe couldn't be added to your documents (.exe files are not supported)."]
+    notices = [
+        "run.exe couldn't be added to your documents (.exe files are not supported)."
+    ]
     msg_id = db.add_message(
-        session["id"], "assistant", "I indexed the remaining files.", library_notices=notices
+        session["id"],
+        "assistant",
+        "I indexed the remaining files.",
+        library_notices=notices,
     )
 
     [saved] = db.get_messages(session["id"])
     assert saved["library_notices"] == notices
-    assert _done_event(1, "ok", False, library_notices=notices)["library_notices"] == notices
+    assert (
+        _done_event(1, "ok", False, library_notices=notices)["library_notices"]
+        == notices
+    )
     assert message_to_response(saved).library_notices == notices
     assert msg_id == saved["id"]
 
