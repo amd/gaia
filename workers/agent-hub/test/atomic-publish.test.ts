@@ -185,6 +185,50 @@ describe("catalog writes — concurrent writers don't drop each other", () => {
     expect(manifest!.versions["0.1.0"].artifacts).toHaveLength(1);
   });
 
+  it("a racing publish of the same filename with different bytes fails loudly", async () => {
+    const env = makeEnv();
+    let raced = false;
+    env.bucket.beforePut = async (key) => {
+      if (key !== "agents/chat/manifest.json" || raced) return;
+      raced = true;
+      expect((await publish(env, { ...CHAT, artifact: "other-build" })).status).toBe(201);
+    };
+    const res = await publish(env, CHAT);
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as any;
+    expect(body.error.code).toBe("concurrent_publish_conflict");
+    expect(body.error.message).toMatch(/new version/);
+    const manifest = await readJson<AgentManifest>(env, "agents/chat/manifest.json");
+    expect(manifest!.versions["0.1.0"].artifacts).toHaveLength(1);
+  });
+
+  it("a re-run of the job whose bytes overwrote the committed file stays red", async () => {
+    // The loser's upload lands after the winner committed, so R2 now holds the
+    // loser's bytes under the winner's listed sha256.
+    const env = makeEnv();
+    const key = `agents/chat/0.1.0/${CHAT.filename}`;
+    let raced = false;
+    env.bucket.beforePut = async (k) => {
+      if (k !== key || raced) return;
+      raced = true;
+      expect((await publish(env, { ...CHAT, artifact: "other-build" })).status).toBe(201);
+    };
+    const first = await publish(env, CHAT);
+    expect(((await first.json()) as any).error.code).toBe("concurrent_publish_conflict");
+    env.bucket.beforePut = undefined;
+    expect(await (await env.bucket.get(key))!.text()).toBe(CHAT.artifact);
+
+    const rerun = await publish(env, CHAT);
+    expect(rerun.status).toBe(409);
+    const body = (await rerun.json()) as any;
+    expect(body.error.code).toBe("concurrent_publish_conflict");
+    expect(body.error.message).toMatch(/overwrote/);
+    expect(body.error.message).toMatch(/new version/);
+    // The catalog still lists only the winner.
+    const manifest = await readJson<AgentManifest>(env, "agents/chat/manifest.json");
+    expect(manifest!.versions["0.1.0"].artifacts).toHaveLength(1);
+  });
+
   it("the maintainer reindex is conditional too", async () => {
     const env = makeEnv();
     expect((await publish(env, CHAT)).status).toBe(201);
