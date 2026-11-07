@@ -370,7 +370,9 @@ def _canonical(path: str) -> str:
         # Expands 8.3 short names and follows links, as opening the file would.
         path = os.path.realpath(path)
     except (OSError, ValueError) as e:
-        logger.debug("compared %s as written; could not resolve it: %s", path, e)
+        logger.debug(
+            "compared a target as written; resolving it failed (%s)", type(e).__name__
+        )
     return os.path.normcase(os.path.abspath(path))
 
 
