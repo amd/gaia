@@ -51,6 +51,8 @@ Inference runs locally by default. The sidecar's `/query` endpoint accepts `prov
 
     This is the shipping entry point: it resolves your platform, fetches and SHA-256-verifies the agent binary and the terminal UI, starts the GAIA daemon plus the agent, and drops you at a chat prompt. A hash mismatch is a hard failure — there is no "continue anyway" path.
 
+    The daemon comes from the `gaia` Python CLI (0.26.0 or newer), which `npx` does not install. Install it first with `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows: `irm https://amd-gaia.ai/install.ps1 | iex`).
+
     The [terminal UI](/guides/tui) (`gaia-tui`) now boots straight into this agent — there is nothing to browse or pick.
   </Tab>
   <Tab title="From source">

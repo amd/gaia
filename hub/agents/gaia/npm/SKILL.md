@@ -29,7 +29,7 @@ Two ways in:
 ## 1. Install
 
 ```bash
-npx @amd-gaia/gaia          # no install step; fetches what it needs on first run
+npx @amd-gaia/gaia          # no npm install step; needs the gaia Python CLI (see §5)
 npm install @amd-gaia/gaia  # when you want the programmatic exports
 ```
 
