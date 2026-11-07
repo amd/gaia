@@ -3599,6 +3599,14 @@ These positions indicate where to split the text."""
         """
         Reindex a document (remove old chunks and add new ones).
 
+        The new chunks and embeddings are built without the index lock:
+        extraction and embedding are the minutes-long part of re-indexing a
+        large document, and holding the lock across them stalled every other
+        document query (#6911). The old version stays searchable while the
+        new one builds; the publish step inside :meth:`index_document` swaps
+        the generations atomically. On failure the previous state is
+        restored.
+
         Args:
             file_path: Path to document to reindex
             progress_callback: Passed to :meth:`index_document`.
@@ -3627,42 +3635,32 @@ These positions indicate where to split the text."""
             previous_state.update(
                 index=self.index, _access_counter=self._access_counter
             )
-            # Keep remove+reindex under the same lock so readers never observe a
-            # gap where the document disappeared between generations. Query
-            # paths snapshot state quickly under this same lock and then do the
-            # expensive work outside it.
-            # Remove old version if it exists
-            if file_path in self.indexed_files:
-                self.log.info(f"Removing old version of {file_path}")
-                if not self.remove_document(file_path):
-                    return {
-                        "success": False,
-                        "error": "Failed to remove old version",
-                        "file_name": Path(file_path).name,
-                    }
 
-            # Index the new version
-            self.log.info(f"Indexing new version of {file_path}")
-            succeeded = False
-            result = None
-            try:
-                result = self.index_document(
-                    file_path,
-                    progress_callback=progress_callback,
-                    wait_callback=wait_callback,
-                )
-                succeeded = bool(result.get("success"))
-                if succeeded:
-                    result["reindexed"] = True
-                return result
-            finally:
-                if not succeeded:
-                    # Removal builds a fresh index, so the old generation is intact.
+        # Build the new chunks and embeddings without the lock. The publish
+        # step drops this file's old generation and appends the new one under
+        # the lock, so readers never observe a gap where the document
+        # disappeared between generations.
+        succeeded = False
+        result = None
+        try:
+            result = self.index_document(
+                file_path,
+                progress_callback=progress_callback,
+                wait_callback=wait_callback,
+                force_reindex=True,
+            )
+            succeeded = bool(result.get("success"))
+            if succeeded:
+                result["reindexed"] = True
+            return result
+        finally:
+            if not succeeded:
+                with self._state_lock:
                     for name, value in previous_state.items():
                         setattr(self, name, value)
-                    if result is not None:
-                        result["total_indexed_files"] = len(self.indexed_files)
-                        result["total_chunks"] = len(self.chunks)
+                if result is not None:
+                    result["total_indexed_files"] = len(self.indexed_files)
+                    result["total_chunks"] = len(self.chunks)
 
     def is_current(self, file_path: str) -> bool:
         """Whether *file_path* is indexed from the bytes it holds now.
@@ -3823,6 +3821,7 @@ These positions indicate where to split the text."""
         wait_callback: Optional[Callable[[int], None]] = None,
         heartbeat: Optional[Callable[[], None]] = None,
         display_name: Optional[str] = None,
+        force_reindex: bool = False,
     ) -> Dict[str, Any]:
         """Index a document for retrieval; see :meth:`_index_document`.
 
@@ -3833,13 +3832,19 @@ These positions indicate where to split the text."""
         ``display_name`` is the name the user knows the file by, when
         ``file_path`` is a copy. The returned ``file_name`` and ``error`` use
         it in place of the copy's path.
+
+        ``force_reindex`` rebuilds an already-indexed document in place: the
+        heavy work runs without the index lock and the publish step swaps
+        the old generation atomically. Used by :meth:`reindex_document`.
         """
         if display_name:
             self.log.info(f"Indexing {display_name} (copy at {file_path})")
         previous = getattr(_HEARTBEAT, "fn", None)
         _HEARTBEAT.fn = heartbeat
         try:
-            stats = self._index_document(file_path, progress_callback, wait_callback)
+            stats = self._index_document(
+                file_path, progress_callback, wait_callback, force_reindex
+            )
         finally:
             _HEARTBEAT.fn = previous
         if display_name:
@@ -3855,6 +3860,7 @@ These positions indicate where to split the text."""
         file_path: str,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         wait_callback: Optional[Callable[[int], None]] = None,
+        force_reindex: bool = False,
     ) -> Dict[str, Any]:
         """
         Index a document for retrieval.
@@ -3977,7 +3983,7 @@ These positions indicate where to split the text."""
 
         with self._state_lock:
             was_indexed = file_path in self.indexed_files
-        if was_indexed:
+        if was_indexed and not force_reindex:
             try:
                 current_key = self._content_key(file_path, raise_locked=True)
             except PermissionError as e:
@@ -3991,8 +3997,10 @@ These positions indicate where to split the text."""
                 )
 
         with self._state_lock:
-            # Check if already indexed
-            if file_path in self.indexed_files:
+            # Check if already indexed. A forced re-index skips this: its
+            # publish step swaps the old generation atomically, so the old
+            # version stays searchable while the new one builds (#6911).
+            if file_path in self.indexed_files and not force_reindex:
                 if self.config.show_stats:
                     print(f"📋 Document already indexed: {Path(file_path).name}")
                 self.log.info(f"Document already indexed: {file_path}")
@@ -4246,7 +4254,7 @@ These positions indicate where to split the text."""
             )
 
             with self._state_lock:
-                if self._indexed_from(file_path, content_key):
+                if self._indexed_from(file_path, content_key) and not force_reindex:
                     if self.config.show_stats:
                         print(f"📋 Document already indexed: {Path(file_path).name}")
                     self.log.info(f"Document already indexed: {file_path}")
