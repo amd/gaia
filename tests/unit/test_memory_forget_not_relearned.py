@@ -195,6 +195,8 @@ class TestAForgetTurnDoesNotRelearnIt:
             "Please don't ever forget that I'm vegetarian",
             "I don't want you to forget that I'm vegetarian",
             "Never, ever forget I'm vegetarian",
+            "Don't ever, ever forget that I'm vegetarian",
+            "Please don't, under any circumstances, forget that I'm vegetarian",
             "Make sure you never forget I am vegetarian",
             "Did you forget I'm vegetarian?",
             "You forgot I'm vegetarian. Don’t forget again: I'm vegetarian",
