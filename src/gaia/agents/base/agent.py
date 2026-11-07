@@ -148,6 +148,7 @@ from gaia.agents.base.tools import (
     _TOOL_REGISTRY,
     bare_tool_name,
     describe_registry,
+    tool_build,
     tool_call_progress_message,
 )
 from gaia.agents.base.turn_scope import (
@@ -3018,7 +3019,8 @@ Do NOT wrap conversational replies in JSON.
 
         # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
         # _response_format_template must be set above before this call).
-        self._register_tools()
+        with tool_build():
+            self._register_tools()
         self._install_path_access_prompt()
         from gaia.agents.base.artifacts import ArtifactStore
 
