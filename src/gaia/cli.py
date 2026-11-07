@@ -7309,59 +7309,38 @@ def handle_config_command(args):
 
 def _handle_network_policy(action, value) -> None:
     """``gaia config get|set network_policy``: lives in policy.json, not config.json."""
-    from gaia.config import GaiaConfigError
     from gaia.llm import local_only
 
     if action == "get":
         print(local_only.effective_policy().value)
         return
     try:
-        stored = local_only.set_policy(value)
+        result = local_only.apply_policy(value)
     except (ValueError, OSError) as e:
         print(f"❌ {e}", file=sys.stderr)
         sys.exit(1)
+    stored = result["policy"]
     print(f"✅ Set network_policy = {stored.value}")
     print(f"   Saved to {local_only.policy_path()}")
     if stored is not local_only.NetworkPolicy.LOCAL_AI_ONLY:
         return
     print("   No GAIA AI request will reach a cloud model.")
-    try:
-        cleared = local_only.clear_saved_cloud_models()
-    except GaiaConfigError as e:
-        print(f"⚠️  Saved models were not checked: {e}", file=sys.stderr)
-        return
-    if cleared:
+    for key, model in result["cleared"]:
+        print(f"   Cleared {key} (was {model}): it is a cloud model.")
+    if result["cleared"]:
         from gaia.llm.lemonade_client import resolve_default_chat_model
 
-        for key, model in cleared:
-            print(f"   Cleared {key} (was {model}): it is a cloud model.")
         print(f"   GAIA now uses {resolve_default_chat_model()} by default.")
-    from gaia.llm.cloud_keys import (
-        CloudKeyError,
-        drop_runtime_keys,
-        users_lemonade_url,
-    )
-
-    try:
-        users_url = users_lemonade_url()
-        if users_url:
-            print(
-                f"   Left your Lemonade Server at {users_url} as is: any cloud "
-                "keys it holds stay there, and GAIA won't send it cloud requests."
-            )
-            return
-        dropped = drop_runtime_keys()
-    except CloudKeyError as e:
+    if result["users_url"]:
         print(
-            f"⚠️  Lemonade still holds any cloud key GAIA gave it ({e}). GAIA "
-            "won't use it; restart Lemonade to drop it.",
-            file=sys.stderr,
+            f"   Left your Lemonade Server at {result['users_url']} as is: any cloud "
+            "keys it holds stay there, and GAIA won't send it cloud requests."
         )
-        return
-    # Names come from a fixed table, never from the key-handling call.
     for provider, name in (("fireworks", "Fireworks AI"), ("amd", "AMD LLM Gateway")):
-        if provider in dropped:
+        if provider in result["dropped"]:
             print(f"   Removed the {name} key from the running Lemonade Server.")
+    for warning in result["warnings"]:
+        print(f"⚠️  {warning}", file=sys.stderr)
 
 
 #: Keys that pick which Lemonade GAIA uses; setting one probes and switches.

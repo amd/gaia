@@ -527,6 +527,10 @@ export interface Settings {
     dynamic_tools_locked: boolean;
     /** Background agent behaviour; a legacy stored "autonomous" is reported as "goal_driven". */
     agent_mode: 'manual' | 'goal_driven';
+    /** Shared network policy controlling cloud AI use. */
+    network_policy: 'cloud_allowed' | 'local_ai_only';
+    policy_warnings?: string[];
+    policy_notices?: Array<{ code: string; severity: 'info' | 'warning'; url?: string; reason?: string }>;
 }
 
 /**
@@ -907,6 +911,9 @@ export interface ProviderInfo {
     error?: string;
     /** AMD gateway only: whether its host answers from this network. */
     network?: ProviderNetwork;
+    /** Local only blocks cloud providers without hiding the policy state. */
+    blocked?: boolean;
+    blocked_reason?: string | null;
 }
 
 export interface ProviderNetwork {
@@ -1029,6 +1036,8 @@ export interface ModelPlacement {
 export interface ProviderModelsResponse {
     provider: string;
     models: ProviderModel[];
+    blocked?: boolean;
+    blocked_reason?: string | null;
     memory_gb?: number | null;
     memory_source?: string | null;
     capacity_error?: string | null;

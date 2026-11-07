@@ -308,7 +308,7 @@ export const FAILED_LINK_CHECK = {
 };
 
 /** Settings > Model with `models` on the Local tab; every other answer stays as in ROUTES. */
-export async function withModelPage(page: Page, models: unknown[], plan: unknown, status: unknown = { state: 'idle' }, fireworks: Record<string, unknown> = {}): Promise<void> {
+export async function withModelPage(page: Page, models: unknown[], plan: unknown, status: unknown = { state: 'idle' }, fireworks: Record<string, unknown> = {}, localOnly = false): Promise<void> {
     const answers: Record<string, unknown> = {
         'GET /providers/local/models': { provider: 'local', models, memory_gb: 96, memory_source: 'AMD iGPU', capacity_error: null },
         'GET /providers/local/context': MODEL_CONTEXT,
@@ -319,10 +319,12 @@ export async function withModelPage(page: Page, models: unknown[], plan: unknown
         'GET /providers': {
             providers: [
                 { id: 'local', name: 'Local', remote: false, privacy_notice: 'Runs on this PC. Nothing leaves your machine.' },
-                { id: 'fireworks', name: 'Fireworks AI', remote: true, models_discovered: true, key_source: 'stored', key_hint: 'a1b2', env_var: 'FIREWORKS_API_KEY', privacy_notice: 'Chat history is sent to Fireworks AI.', ...fireworks },
+                { id: 'fireworks', name: 'Fireworks AI', remote: true, models_discovered: true, key_source: 'stored', key_hint: 'a1b2', env_var: 'FIREWORKS_API_KEY', privacy_notice: 'Chat history is sent to Fireworks AI.', ...(localOnly ? { blocked: true, blocked_reason: 'Local only is on; turn it off in Settings to use cloud models.' } : {}), ...fireworks },
             ],
         },
-        'GET /providers/fireworks/models': { provider: 'fireworks', models: FIREWORKS_MODELS },
+        'GET /providers/fireworks/models': localOnly
+            ? { provider: 'fireworks', models: [], blocked: true, blocked_reason: 'Local only is on; turn it off in Settings to use cloud models.' }
+            : { provider: 'fireworks', models: FIREWORKS_MODELS },
         'GET /spending': { month: '2026-10', total_usd: 1.25, turns: 12, unpriced_turns: 0, unreported_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price' },
     };
     await page.route('**/api/**', async (route: Route) => {
@@ -338,8 +340,14 @@ const skill = (name: string, source: string, description: string, over: Record<s
 });
 
 /** Busy answers for the other Settings panes: grants, many skills, a failed MCP server. */
-export async function withSettingsPanes(page: Page): Promise<void> {
+export async function withSettingsPanes(page: Page, options: { networkPolicy?: 'cloud_allowed' | 'local_ai_only'; policyNotices?: unknown[] } = {}): Promise<void> {
     const answers: Record<string, unknown> = {
+        'GET /settings': {
+            custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven',
+            dynamic_tools: false, dynamic_tools_locked: false,
+            network_policy: options.networkPolicy ?? 'cloud_allowed', policy_warnings: [],
+            policy_notices: options.policyNotices ?? [],
+        },
         'GET /memory/settings': { memory_enabled: true },
         'GET /skills': {
             skills: [
@@ -364,7 +372,13 @@ export async function withSettingsPanes(page: Page): Promise<void> {
     await page.route('**/api/**', async (route: Route) => {
         const url = new URL(route.request().url());
         const key = `${route.request().method()} ${url.pathname.replace(/^\/api/, '')}`;
-        if (key in answers) await route.fulfill({ json: answers[key] });
+        if (key === 'PUT /settings' && options.networkPolicy === 'cloud_allowed') {
+            await route.fulfill({ json: {
+                custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven',
+                dynamic_tools: false, dynamic_tools_locked: false, network_policy: 'local_ai_only',
+                policy_warnings: [], policy_notices: options.policyNotices ?? [],
+            } });
+        } else if (key in answers) await route.fulfill({ json: answers[key] });
         else await route.fallback();
     });
 }

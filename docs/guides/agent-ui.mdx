@@ -566,10 +566,11 @@ Open **Settings → Model** (or the model chip in the message box):
 | **Fireworks AI** | An API key | Sent to Fireworks AI (usage may be charged) |
 | **AMD LLM Gateway** | A gateway key (and URL, if not the default) | Sent to your gateway |
 
-- With [Local only](/reference/cli#local-only) on (`gaia config set network_policy local_ai_only`),
-  connecting Fireworks AI or the gateway and selecting a cloud model are refused
-  with a message saying so, and a saved cloud model isn't restored. Settings has no
-  switch for it yet; use the command.
+- With [Local only](/reference/cli#local-only) on, connecting Fireworks AI or the gateway
+  and selecting a cloud model are refused, with the providers shown as blocked. Turn it
+  on or off in **Settings → Privacy → Local only**; the CLI equivalent is
+  `gaia config set network_policy local_ai_only` (or `cloud_allowed`). A saved cloud
+  model isn't restored.
 - Keys are masked, go only to GAIA's local model server and your OS credential
   store, and are refused over mobile access. A saved key shows as a read-only row with
   its last four characters and whether it's connected. **Replace** swaps it, and
