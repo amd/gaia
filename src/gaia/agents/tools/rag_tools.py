@@ -261,16 +261,21 @@ def _kick_stale_reindexes(rag: Any) -> Tuple[List[str], List[str]]:
     reindexing: List[str] = []
     failed: List[str] = []
 
-    def _record_failure(path: str, st, error: object) -> None:
+    def _record_failure(path: str, st, error: object, *, report: bool = True):
+        """Record the failed stat and log; *report* adds the name to the
+        response's failed list — the reap pass records without reporting
+        because the loop over the indexed files reports it right after."""
         if st is not None:
             failures[path] = f"{st.st_size}:{st.st_mtime_ns}"
         else:
             failures[path] = "deleted"
-        failed.append(Path(path).name)
+        if report:
+            failed.append(Path(path).name)
         logger.error(f"Background re-index of {Path(path).name} failed: {error}")
 
     # Reap finished jobs before the loop, so a re-index started by the
-    # previous query has its outcome seen on this one.
+    # previous query has its outcome seen on this one. The reap records and
+    # logs without reporting; the loop reports each failed file exactly once.
     with _INDEX_JOBS_LOCK:
         jobs = _INDEX_JOBS.get(rag) or {}
         for path, job in list(jobs.items()):
@@ -279,9 +284,14 @@ def _kick_stale_reindexes(rag: Any) -> Tuple[List[str], List[str]]:
             del jobs[path]
             path = str(path)
             if job.error is not None:
-                _record_failure(path, _safe_stat(path), job.error)
+                _record_failure(path, _safe_stat(path), job.error, report=False)
             elif job.result is not None and not job.result.get("success"):
-                _record_failure(path, _safe_stat(path), job.result.get("error"))
+                _record_failure(
+                    path,
+                    _safe_stat(path),
+                    job.result.get("error"),
+                    report=False,
+                )
 
     for path in sorted(rag.indexed_files):
         path = str(path)
