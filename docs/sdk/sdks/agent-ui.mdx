@@ -2453,7 +2453,8 @@ Recurring prompts run on a cron-like interval — see [`gaia schedule`](/referen
   <Accordion title="POST /api/schedules">
     Create a scheduled task from a name, interval, and prompt. An optional
     `timezone` (IANA name, e.g. `America/Los_Angeles`) sets the zone its times
-    are in; it defaults to the server PC's zone. An unknown zone returns 400.
+    are in; it defaults to the server PC's zone. An unknown zone returns 400,
+    and so does a name that contains `/`.
   </Accordion>
 
   <Accordion title="POST /api/schedules/parse">
