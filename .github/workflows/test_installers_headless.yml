@@ -377,6 +377,14 @@ jobs:
           name: setup-screens-${{ matrix.row }}
           path: ${{ runner.temp }}/journey/logs/setup-screens/
           retention-days: 14
+      # The failed setup's screenshot, trace and HTML report.
+      - uses: actions/upload-artifact@v7
+        if: failure() && env.SETUP_PHASE == 'true'
+        with:
+          name: playwright-results-${{ matrix.row }}
+          path: src/gaia/apps/webui/e2e/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Collect logs
         if: failure()
         shell: pwsh
@@ -524,6 +532,14 @@ jobs:
         with:
           name: setup-screens-${{ matrix.row }}
           path: ${{ runner.temp }}/journey/logs/setup-screens/
+          retention-days: 14
+      # The failed setup's screenshot, trace and HTML report.
+      - uses: actions/upload-artifact@v7
+        if: failure() && env.SETUP_PHASE == 'true'
+        with:
+          name: playwright-results-${{ matrix.row }}
+          path: src/gaia/apps/webui/e2e/test-results/
+          if-no-files-found: ignore
           retention-days: 14
       - name: Collect logs
         if: failure()

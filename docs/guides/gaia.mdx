@@ -51,6 +51,8 @@ Inference runs locally by default. The sidecar's `/query` endpoint accepts `prov
 
     This is the shipping entry point: it resolves your platform, fetches and SHA-256-verifies the agent binary and the terminal UI, starts the GAIA daemon plus the agent, and drops you at a chat prompt. A hash mismatch is a hard failure — there is no "continue anyway" path.
 
+    The daemon comes from the `gaia` Python CLI (0.26.0 or newer), which `npx` does not install. Install it first with `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows: `irm https://amd-gaia.ai/install.ps1 | iex`).
+
     The [terminal UI](/guides/tui) (`gaia-tui`) now boots straight into this agent — there is nothing to browse or pick.
   </Tab>
   <Tab title="From source">
@@ -350,7 +352,7 @@ The file resolves outside the allowed paths — by default, outside your home di
 
 The daemon redirects the sidecar's output to `~/.gaia/agents/gaia/logs/sidecar-<port>.log`. Check that file first; a failed start also surfaces the log tail in the error. `gaia daemon agents` shows id, mode, pid, port, and contract version for everything currently running.
 
-## Limitations (v0.1.1)
+## Limitations (v0.3.5)
 
 - **No skill sets declared** — the skill machinery is wired and tested, and `gaia-voice` ships always-on, but no *set* does; see [Skills](#skills).
 - **Narrowing file scope is environment-only for the sidecar** — `GAIA_ALLOWED_PATHS` narrows it; there is no flag, and a running daemon must be restarted to pick up a change.

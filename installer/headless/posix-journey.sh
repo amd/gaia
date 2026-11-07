@@ -518,7 +518,7 @@ uninstall)
     appimage) rm -f "${HOME}/Applications/gaia-agent-ui.AppImage" ;;
     tui-deb|tui-deb-upgrade) sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y gaia ;;
     tui-rpm) docker exec gaia-fedora dnf remove -y gaia ;;
-    install-sh) "${GAIA_HOME}/venv/bin/gaia" uninstall --purge --yes ;;
+    install-sh) "${GAIA_HOME}/bin/gaia" uninstall --purge --yes ;;
     *) die "no uninstall for ${KIND}" ;;
   esac
   ;;
@@ -554,7 +554,7 @@ leftovers)
       done
       ;;
     install-sh)
-      assert_gone "${GAIA_HOME}/venv" "${GAIA_HOME}/bin"
+      assert_gone "${GAIA_HOME}/venv" "${GAIA_HOME}/bin" "${GAIA_HOME}/core"
       for rc in .bashrc .zshrc .profile .bash_profile; do
         if [ -f "${HOME}/${rc}" ] && grep -n "\.gaia" "${HOME}/${rc}"; then
           die "${HOME}/${rc} still puts GAIA on PATH"

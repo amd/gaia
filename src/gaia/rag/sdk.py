@@ -440,6 +440,10 @@ class EmbeddingUnavailableError(RuntimeError):
 
 _CACHE_LOCK_NAME = "rag-cache"
 
+#: A file written this close to when its stat was taken may be rewritten
+#: within the same timestamp tick, so that stat alone is not trusted.
+_RACY_STAT_NS = 2_000_000_000
+
 
 def _cache_lock_target(cache_path: str) -> Path:
     """Every chunk cache in one directory shares one lock (``rag-cache.lock``)."""
@@ -823,6 +827,8 @@ class RAGSDK:
         self.file_index_times = {}  # {file_path: index_time (wall clock for display)}
         # {file_path: _content_key of the bytes that were indexed}
         self.file_content_keys = {}
+        # {file_path: (_stat_key, ns it was taken)} of those same bytes
+        self.file_stat_keys = {}
         self._state_lock = threading.RLock()
 
         # Create cache directory
@@ -1143,6 +1149,35 @@ class RAGSDK:
             return f"{hashlib.sha256(str(path).encode()).hexdigest()}_notfound"
         path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
         return f"{path_hash}_{hasher.hexdigest()[:32]}"
+
+    @staticmethod
+    def _stat_key(file_path: str) -> Tuple[int, ...]:
+        """Size, mtime, inode and (POSIX) ctime: what an edit almost always moves.
+
+        Raises:
+            OSError: When the file cannot be stat'ed.
+        """
+        st = os.stat(file_path)
+        key = (st.st_size, st.st_mtime_ns, st.st_ino)
+        if os.name != "nt":
+            # Windows has no change time; POSIX ctime moves on every write.
+            key += (st.st_ctime_ns,)
+        return key
+
+    def _taken_stat(self, file_path: str) -> Optional[Tuple[Tuple[int, ...], int]]:
+        """``(_stat_key, ns)``, taken before the bytes it vouches for are hashed."""
+        taken_at = time.time_ns()
+        try:
+            return self._stat_key(file_path), taken_at
+        except OSError:
+            return None
+
+    def _record_stat(self, file_path: str, taken) -> None:
+        """Keep *taken* as the indexed bytes' stat. Call with ``_state_lock`` held."""
+        if taken is None:
+            self.file_stat_keys.pop(file_path, None)
+        else:
+            self.file_stat_keys[file_path] = taken
 
     def document_scripts(self, file_path: str) -> List[str]:
         """Writing systems that make up at least 10% of an indexed file's letters.
@@ -3560,6 +3595,7 @@ These positions indicate where to split the text."""
                 if file_path in self.file_index_times:
                     del self.file_index_times[file_path]
                 self.file_content_keys.pop(file_path, None)
+                self.file_stat_keys.pop(file_path, None)
 
                 # Clean up cached per-file indices and embeddings
                 if file_path in self.file_indices:
@@ -3620,6 +3656,7 @@ These positions indicate where to split the text."""
                     "file_access_times",
                     "file_index_times",
                     "file_content_keys",
+                    "file_stat_keys",
                 )
             }
             previous_state.update(
@@ -3676,6 +3713,51 @@ These positions indicate where to split the text."""
         if indexed_key is None:
             return False
         return self._content_key(file_path) == indexed_key
+
+    def freshness(self, file_path: str) -> str:
+        """How *file_path* compares to the bytes it was indexed from; cheap to call.
+
+        Returns ``"current"``, ``"changed"``, ``"missing"``, ``"locked"`` (another
+        program holds it), ``"unreadable"`` or ``"not_indexed"``. Hashes only
+        when the file's size, mtime, inode or (POSIX) ctime moved since it was
+        indexed, or when it was written within 2s of that stat. On Windows, an
+        edit that later restores both size and mtime is caught by
+        :meth:`is_current`, not here.
+        """
+        file_path = str(Path(file_path).absolute())
+        with self._state_lock:
+            if file_path not in self.indexed_files:
+                return "not_indexed"
+            indexed_key = self.file_content_keys.get(file_path)
+            recorded = self.file_stat_keys.get(file_path)
+        taken_at = time.time_ns()
+        try:
+            stat_key = self._stat_key(file_path)
+        except FileNotFoundError:
+            return "missing"
+        except OSError:
+            stat_key = None
+        if (
+            stat_key is not None
+            and recorded is not None
+            and recorded[0] == stat_key
+            and recorded[1] - stat_key[1] >= _RACY_STAT_NS
+        ):
+            return "current"
+        if indexed_key is None:
+            return "changed"
+        try:
+            key = self._content_key(file_path, raise_locked=True)
+        except PermissionError:
+            return "locked"
+        if key.endswith("_notfound"):
+            return "unreadable" if os.path.lexists(file_path) else "missing"
+        if key != indexed_key:
+            return "changed"
+        with self._state_lock:
+            if stat_key is not None and self._indexed_from(file_path, key):
+                self.file_stat_keys[file_path] = (stat_key, taken_at)
+        return "current"
 
     def _indexed_from(self, file_path: str, content_key: str) -> bool:
         """Whether *file_path* is indexed from the bytes *content_key* names.
@@ -3973,6 +4055,7 @@ These positions indicate where to split the text."""
         stats["file_type"] = file_type
         stats["file_name"] = Path(file_path).name
 
+        replacing = False
         with self._state_lock:
             was_indexed = file_path in self.indexed_files
         if was_indexed:
@@ -3981,16 +4064,14 @@ These positions indicate where to split the text."""
             except PermissionError as e:
                 return self._document_locked(stats, file_path, e)
             with self._state_lock:
-                changed = not self._indexed_from(file_path, current_key)
-            if changed:
+                replacing = not self._indexed_from(file_path, current_key)
+            if replacing:
+                # Built without the lock; the old text serves until the swap.
                 self.log.info(f"{file_path} changed since it was indexed; re-indexing")
-                return self.reindex_document(
-                    file_path, progress_callback, wait_callback
-                )
 
         with self._state_lock:
             # Check if already indexed
-            if file_path in self.indexed_files:
+            if file_path in self.indexed_files and not replacing:
                 if self.config.show_stats:
                     print(f"📋 Document already indexed: {Path(file_path).name}")
                 self.log.info(f"Document already indexed: {file_path}")
@@ -4002,7 +4083,7 @@ These positions indicate where to split the text."""
                 return stats
 
             # Pre-flight: check capacity before investing in indexing
-            if not self._has_indexing_capacity():
+            if not replacing and not self._has_indexing_capacity():
                 msg = (
                     f"Memory limit reached: {len(self.indexed_files)} files "
                     f"(max: {self.config.max_indexed_files}), "
@@ -4018,6 +4099,7 @@ These positions indicate where to split the text."""
                 return stats
 
         # Check cache - the cache key is based on file content hash
+        taken = self._taken_stat(file_path)
         try:
             content_key = self._content_key(file_path, raise_locked=True)
         except PermissionError as e:
@@ -4143,6 +4225,7 @@ These positions indicate where to split the text."""
 
                     self.indexed_files.add(file_path)
                     self.file_content_keys[file_path] = content_key
+                    self._record_stat(file_path, taken)
 
                     # Track access time for LRU (was missing — pre-existing bug)
                     current_time = time.time()
@@ -4165,6 +4248,8 @@ These positions indicate where to split the text."""
                 stats["total_indexed_files"] = len(self.indexed_files)
                 stats["total_chunks"] = len(self.chunks)
                 stats["from_cache"] = True
+                if replacing:
+                    stats["reindexed"] = True
                 if evicted:
                     stats["evicted"] = evicted
                 if not limits_ok:
@@ -4338,6 +4423,7 @@ These positions indicate where to split the text."""
 
                 self.indexed_files.add(file_path)
                 self.file_content_keys[file_path] = content_key
+                self._record_stat(file_path, taken)
 
                 # Track index time for LRU
                 current_time = time.time()
@@ -4371,6 +4457,8 @@ These positions indicate where to split the text."""
 
             # Update final stats
             stats["success"] = True
+            if replacing:
+                stats["reindexed"] = True
             stats["num_chunks"] = len(new_chunks)
             stats["total_indexed_files"] = len(self.indexed_files)
             stats["total_chunks"] = len(self.chunks)

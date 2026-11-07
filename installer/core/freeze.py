@@ -9,7 +9,8 @@ backend (FastAPI, RAG indexing, connectors), the daemon and ``gaia init``. It
 leaves out the flagship agent, which runs as its own hub binary, so ``gaia eval
 agent``, which runs that agent in-process, works only from source.
 
-Usage (from a venv with ``.[ui]`` and pyinstaller installed)::
+Usage (from a venv with ``.[ui]`` and pyinstaller installed, after
+``npm ci && npm run build`` in ``src/gaia/apps/webui``)::
 
     python installer/core/freeze.py
 
@@ -53,6 +54,10 @@ NOTICES = [
     (REPO_ROOT / "THIRD_PARTY_NOTICES.md", "."),
     (REPO_ROOT / "licenses", "licenses"),
 ]
+#: The built Agent UI. ``gaia chat --ui`` serves it from beside ``gaia/ui``, for a
+#: browser, a phone over the tunnel, and the installer journeys' Playwright run.
+WEBUI_DIST = SRC / "gaia" / "apps" / "webui" / "dist"
+
 #: Package data a source checkout reads beside the modules. ``version.py`` too:
 #: the daemon records its path, and other clients read the version from it.
 PACKAGE_DATA = [
@@ -60,6 +65,7 @@ PACKAGE_DATA = [
     (SRC / "gaia" / "img", "gaia/img"),
     (SRC / "gaia" / "mcp" / "mcp.json", "gaia/mcp"),
     (SRC / "gaia" / "mcp" / "n8n.json", "gaia/mcp"),
+    (WEBUI_DIST, "gaia/apps/webui/dist"),
 ]
 
 #: Never in the frozen core: the hub agents, which run as their own binaries
@@ -122,6 +128,12 @@ def _verify_freeze_env() -> None:
             f"but are not installed: {', '.join(missing)}.\n"
             'Install the core with its UI extras (uv pip install -e ".[ui]" '
             "pyinstaller) into the freeze environment and re-run."
+        )
+    if not (WEBUI_DIST / "index.html").is_file():
+        raise SystemExit(
+            f"freeze: refusing to build -- no Agent UI build at {WEBUI_DIST}.\n"
+            "Without it `gaia chat --ui` serves only a placeholder page. Build it "
+            "first: cd src/gaia/apps/webui && npm ci && npm run build"
         )
     origin = Path(importlib.util.find_spec("gaia").origin).resolve()
     if SRC.resolve() not in origin.parents:
