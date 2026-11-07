@@ -240,6 +240,16 @@ export interface ConnectorRow {
     } | null;
 }
 
+/** A catalog connector whose live state the backend failed to read; its summary raised. */
+export interface UnavailableConnectorRow {
+    id: string;
+    display_name: string;
+    error: 'unavailable';
+}
+
+/** One entry of GET /api/connectors. */
+export type ConnectorListEntry = ConnectorRow | UnavailableConnectorRow;
+
 /**
  * One field in a connector's first-time setup form. Mirrors
  * ``gaia.connectors.spec.ConfigField`` on the backend.
