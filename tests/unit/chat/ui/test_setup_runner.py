@@ -2271,6 +2271,110 @@ def test_retry_on_a_fine_file_tests_it_again_without_downloading(monkeypatch):
     assert test_row["state"] == "passed"
 
 
+def test_a_second_timeout_on_model_retry_offers_a_redownload(monkeypatch):
+    from gaia.installer import init_command
+
+    runner, _row = _extra_run(monkeypatch, "stuck", "It didn't finish")
+    assert runner._test_failures[VOICE] == 1
+    monkeypatch.setattr(
+        init_command,
+        "retest_model",
+        lambda client, model_id, job=None: (False, "It timed out again", "stuck"),
+    )
+
+    runner.download_model(_NoPullClient(), VOICE)
+
+    assert _wait_until(lambda: _models(runner)[VOICE]["state"] == "failed")
+    row = _models(runner)[VOICE]
+    assert runner._test_failures[VOICE] == 2
+    assert row["error_kind"] == "verify"
+    assert "would not load" in row["error"]
+
+
+def test_a_passing_model_retest_clears_its_timeout_count(monkeypatch):
+    from gaia.installer import init_command
+
+    runner, _row = _extra_run(monkeypatch, "stuck", "It didn't finish")
+    assert runner._test_failures[VOICE] == 1
+    monkeypatch.setattr(
+        init_command,
+        "retest_model",
+        lambda client, model_id, job=None: (True, None, None),
+    )
+
+    runner.download_model(_NoPullClient(), VOICE)
+
+    assert _wait_until(lambda: _models(runner)[VOICE]["state"] == "ready")
+    assert VOICE not in runner._test_failures
+
+
+def _failed_run_waiting_on_one_model_retest(only_test_failure):
+    runner = sr.SetupRunner()
+    runner._run = sr.SetupRun(
+        skip_chat_model=False,
+        state="failed",
+        error=(
+            "The final chat test failed"
+            if not only_test_failure
+            else "Model test failed"
+        ),
+        failed_by_tests=only_test_failure,
+    )
+    runner._models[VOICE] = sr.ModelProgress(
+        id=VOICE,
+        state="failed",
+        error_kind="stuck",
+        test_job="voice",
+    )
+    runner._record_test(
+        runner._run,
+        {
+            "job": "voice",
+            "subject": VOICE,
+            "state": "failed",
+            "error": "It timed out",
+            "kind": "stuck",
+        },
+    )
+    return runner
+
+
+def test_the_last_model_retest_finishes_a_test_only_failed_run(monkeypatch, gaia_home):
+    from gaia.installer import init_command
+
+    runner = _failed_run_waiting_on_one_model_retest(only_test_failure=True)
+    monkeypatch.setattr(
+        init_command,
+        "retest_model",
+        lambda client, model_id, job=None: (True, None, None),
+    )
+
+    runner.download_model(_NoPullClient(), VOICE)
+
+    assert _wait_until(lambda: runner.status()["state"] == "ready")
+    assert runner.status()["error"] is None
+    assert (gaia_home / "chat" / "initialized").exists()
+
+
+def test_a_model_retest_does_not_hide_another_setup_failure(monkeypatch, gaia_home):
+    from gaia.installer import init_command
+
+    runner = _failed_run_waiting_on_one_model_retest(only_test_failure=False)
+    monkeypatch.setattr(
+        init_command,
+        "retest_model",
+        lambda client, model_id, job=None: (True, None, None),
+    )
+
+    runner.download_model(_NoPullClient(), VOICE)
+
+    assert _wait_until(lambda: _models(runner)[VOICE]["state"] == "ready")
+    view = runner.status()
+    assert view["state"] == "failed"
+    assert view["error"] == "The final chat test failed"
+    assert not (gaia_home / "chat" / "initialized").exists()
+
+
 def test_a_retest_that_finds_the_file_broken_then_offers_a_redownload(monkeypatch):
     from gaia.installer import init_command
 

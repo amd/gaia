@@ -1668,9 +1668,7 @@ class SetupRunner:
                         for test in run.tests.values()
                     )
                     and not run.model_failed
-                    and not any(
-                        state == "failed" for state in run.components.values()
-                    )
+                    and not any(state == "failed" for state in run.components.values())
                 )
                 # Downloaded but never checked: not shown as ready.
                 self._settle_models(None, {}, run_failed=True)
