@@ -30,6 +30,7 @@ from typing import Any, Dict, List
 from gaia_agent_email import task_store
 from gaia_agent_email.gmail_backend import decode_message_body
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
+from gaia_agent_email.verbose import log_tool_call
 
 from gaia.agents.base.tools import tool
 from gaia.connectors.errors import ConnectorsError
@@ -76,44 +77,58 @@ class BriefingToolsMixin:
             conclusion that ``data.summary`` / ``data.briefing`` did not
             itself compute.
             """
-            try:
-                from gaia_agent_email.briefing import (
-                    BRIEFING_STALE_AFTER_SECONDS,
-                    briefing_age_seconds,
-                    load_latest_briefing,
-                    persist_briefing,
-                    summarize_briefing,
-                )
+            debug_flag = bool(getattr(agent.config, "debug", False))
+            with log_tool_call(
+                "get_briefing",
+                {"max_messages": max_messages},
+                debug=debug_flag,
+            ) as st:
+                try:
+                    from gaia_agent_email.briefing import (
+                        BRIEFING_STALE_AFTER_SECONDS,
+                        briefing_age_seconds,
+                        load_latest_briefing,
+                        persist_briefing,
+                        summarize_briefing,
+                    )
 
-                record = load_latest_briefing()
-                if record is None:
-                    # Cold path: no scheduled briefing yet — generate one now
-                    # across every connected mailbox (never a silent pick-one).
-                    envelope = agent._pre_scan_all_backends(max_messages=max_messages)
-                    record = {
-                        "generated_at": datetime.now(timezone.utc).isoformat(),
-                        "briefing": envelope,
+                    record = load_latest_briefing()
+                    if record is None:
+                        # Cold path: no scheduled briefing yet — generate one now
+                        # across every connected mailbox (never a silent pick-one).
+                        envelope = agent._pre_scan_all_backends(max_messages=max_messages)
+                        record = {
+                            "generated_at": datetime.now(timezone.utc).isoformat(),
+                            "briefing": envelope,
+                        }
+                        persist_briefing(record)
+                    # Computed fresh on every call (never trust a persisted
+                    # "summary" as current) so a briefing generated before #2525
+                    # still gets the structured breakdown on read.
+                    record = dict(record)
+                    age = briefing_age_seconds(record.get("generated_at"))
+                    stale = age >= BRIEFING_STALE_AFTER_SECONDS
+                    record["cache_age_seconds"] = age
+                    record["stale"] = stale
+                    record["summary"] = summarize_briefing(
+                        record.get("briefing") or {},
+                        cache_age_seconds=age,
+                        stale=stale,
+                    )
+                    st["result_summary"] = {
+                        "stale": stale,
+                        "urgent": record["summary"].get("breakdown", {}).get("urgent", 0),
                     }
-                    persist_briefing(record)
-                # Computed fresh on every call (never trust a persisted
-                # "summary" as current) so a briefing generated before #2525
-                # still gets the structured breakdown on read.
-                record = dict(record)
-                age = briefing_age_seconds(record.get("generated_at"))
-                stale = age >= BRIEFING_STALE_AFTER_SECONDS
-                record["cache_age_seconds"] = age
-                record["stale"] = stale
-                record["summary"] = summarize_briefing(
-                    record.get("briefing") or {},
-                    cache_age_seconds=age,
-                    stale=stale,
-                )
-                return _envelope_ok(record)
-            except ConnectorsError as exc:
-                return _envelope_err(format_connector_error(exc))
-            except Exception as exc:
-                log.exception("get_briefing failed: %s", type(exc).__name__)
-                return _envelope_err(f"{type(exc).__name__}: {exc}")
+                    return _envelope_ok(record)
+                except ConnectorsError as exc:
+                    st["ok"] = False
+                    st["error"] = str(exc)
+                    return _envelope_err(format_connector_error(exc))
+                except Exception as exc:
+                    st["ok"] = False
+                    st["error"] = f"{type(exc).__name__}: {exc}"
+                    log.exception("get_briefing failed: %s", type(exc).__name__)
+                    return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def list_tasks(status: str = "") -> str:
