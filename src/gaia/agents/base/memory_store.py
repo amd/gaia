@@ -287,16 +287,20 @@ _STEM_STOPWORDS = frozenset(
 )
 
 # Signs and language suffixes carry meaning in a memory: ``-5`` is not ``5``,
-# and ``C++`` / ``C#`` are not ``C``.  A hyphen between words remains a word
-# separator, so ordinary prose such as ``mother-in-law`` keeps its old stems.
+# and ``C++`` / ``C#`` are not ``C``.  Separators inside dates, phone numbers,
+# and ranges remain word separators, so their historical format-insensitive
+# matching is preserved (``1990-05-14`` still matches ``1990/05/14``).
 _MEMORY_TOKEN_RE = re.compile(
     r"""
-    (?<![a-z0-9_])[+-][0-9](?:[0-9.,:/-]*[0-9])?(?![a-z0-9_])
-    | (?<![a-z0-9_+-])[0-9](?:[0-9.,:/-]*[0-9])?(?![a-z0-9_])
-    | [a-z][a-z0-9]*(?:[+#]+)(?![a-z0-9_])
+    (?<![a-z0-9_])[+-][0-9]+
+    | [a-z][a-z0-9]*[+#]+(?![a-z0-9_])
     | [a-z0-9']+
     """,
     re.IGNORECASE | re.VERBOSE,
+)
+_MEMORY_SYMBOL_RE = re.compile(
+    r"(?<![a-z0-9_])[+-][0-9]+|[a-z][a-z0-9]*[+#]+(?![a-z0-9_])",
+    re.IGNORECASE,
 )
 
 
@@ -377,9 +381,7 @@ def _word_overlap(text1: str, text2: str) -> float:
 
     A subset of a longer text still counts as a match — appropriate for dedup.
     """
-    if re.search(r"(?<![a-z0-9_])[+-]\d|[a-z][a-z0-9]*[+#]+", text1, re.I) or re.search(
-        r"(?<![a-z0-9_])[+-]\d|[a-z][a-z0-9]*[+#]+", text2, re.I
-    ):
+    if _MEMORY_SYMBOL_RE.search(text1) or _MEMORY_SYMBOL_RE.search(text2):
         words1 = set(_memory_tokens(text1))
         words2 = set(_memory_tokens(text2))
     else:
