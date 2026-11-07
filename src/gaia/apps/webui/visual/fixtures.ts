@@ -396,8 +396,13 @@ const CONNECTORS = [
 ];
 
 /** Settings > Connectors with accounts and servers in each state, or the given rows. */
-export async function withConnectors(page: Page, connectors: unknown[] = CONNECTORS): Promise<void> {
+export async function withConnectors(
+    page: Page,
+    connectors: unknown[] = CONNECTORS,
+    extra: Record<string, unknown> = {},
+): Promise<void> {
     const answers: Record<string, unknown> = {
+        ...extra,
         'GET /connectors': { connectors },
         'GET /connectors/agent-mcps': {
             agent_mcps: [{ agent_id: 'reports', agent_name: 'Reports', server_name: 'warehouse', command: 'uvx', args: ['warehouse-mcp', '--read-only'], disabled: false, config_path: 'C:\\Users\\you\\.gaia\\agents\\reports\\mcp_servers.json' }],

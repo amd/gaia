@@ -83,7 +83,7 @@ gaia connectors grants grant mcp-github builtin:chat \
   --scopes list_issues list_pull_requests
 ```
 
-(In the UI: open the connector tile → **Per-agent grants** section.)
+(In the UI: open the connector tile and turn on the **GAIA can use GitHub in chat** switch.)
 
 ### Activate the tools for the agent
 
@@ -95,7 +95,7 @@ defaults to OFF (least-privilege), so activate it explicitly:
 gaia connectors activations activate mcp-github builtin:chat
 ```
 
-(In the UI: the tile's **Per-agent** toggle flips both at once.) An
+(In the UI: the tile's **GAIA can use GitHub in chat** switch does both at once.) An
 agent that has a grant but no activation still can't see or call the
 tools. See the [connections security model](/security/connections) for
 why visibility and credential access are gated separately.

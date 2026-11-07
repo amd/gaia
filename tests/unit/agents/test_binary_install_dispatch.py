@@ -62,6 +62,11 @@ def test_the_flagship_is_registered_at_all(binary_installed_registry):
     assert binary_installed_registry.get("gaia") is not None
 
 
+def test_the_flagship_can_be_switched_on_for_mcp_connectors(binary_installed_registry):
+    """Without the flag the Slack or GitHub tile shows no switch for it."""
+    assert binary_installed_registry.get("gaia").consumes_mcp_servers is True
+
+
 def test_a_chat_turn_relays_instead_of_instantiating(binary_installed_registry):
     """The regression itself. False here is the RuntimeError the user saw."""
     assert _should_relay_to_sidecar("gaia", binary_installed_registry) is True

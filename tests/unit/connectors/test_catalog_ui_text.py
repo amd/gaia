@@ -34,7 +34,7 @@ def _catalog_text() -> dict[str, str]:
     text = {}
     for spec in REGISTRY.all():
         text[f"connectors.{spec.id}.description"] = spec.description
-        for field in spec.oauth_setup_fields:
+        for field in (*spec.oauth_setup_fields, *spec.config_schema):
             text[f"connectors.{spec.id}.{field.key}.label"] = field.label
             text[f"connectors.{spec.id}.{field.key}.help"] = field.help_md
     return text
