@@ -823,6 +823,10 @@ class RAGSDK:
         self.file_index_times = {}  # {file_path: index_time (wall clock for display)}
         # {file_path: _content_key of the bytes that were indexed}
         self.file_content_keys = {}
+        # {file_path: (st_size, st_mtime_ns) of the indexed bytes} — a cheap
+        # staleness pre-check so queries hash a file only when its stat
+        # changed (#6939).
+        self.file_stat_keys = {}
         self._state_lock = threading.RLock()
 
         # Create cache directory
@@ -3560,6 +3564,7 @@ These positions indicate where to split the text."""
                 if file_path in self.file_index_times:
                     del self.file_index_times[file_path]
                 self.file_content_keys.pop(file_path, None)
+                self.file_stat_keys.pop(file_path, None)
 
                 # Clean up cached per-file indices and embeddings
                 if file_path in self.file_indices:
@@ -4143,6 +4148,14 @@ These positions indicate where to split the text."""
 
                     self.indexed_files.add(file_path)
                     self.file_content_keys[file_path] = content_key
+                    try:
+                        _st = os.stat(file_path)
+                        self.file_stat_keys[file_path] = (
+                            _st.st_size,
+                            _st.st_mtime_ns,
+                        )
+                    except OSError:
+                        self.file_stat_keys.pop(file_path, None)
 
                     # Track access time for LRU (was missing — pre-existing bug)
                     current_time = time.time()
@@ -4338,6 +4351,11 @@ These positions indicate where to split the text."""
 
                 self.indexed_files.add(file_path)
                 self.file_content_keys[file_path] = content_key
+                try:
+                    _st = os.stat(file_path)
+                    self.file_stat_keys[file_path] = (_st.st_size, _st.st_mtime_ns)
+                except OSError:
+                    self.file_stat_keys.pop(file_path, None)
 
                 # Track index time for LRU
                 current_time = time.time()

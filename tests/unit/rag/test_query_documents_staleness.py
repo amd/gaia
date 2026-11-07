@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.tools import rag_tools
 from gaia.agents.tools.rag_tools import RAGToolsMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 
@@ -33,6 +34,23 @@ def _clean_registry():
     yield
     _TOOL_REGISTRY.clear()
     _TOOL_REGISTRY.update(saved)
+
+
+@pytest.fixture(autouse=True)
+def _clean_kick_failures():
+    rag_tools._KICK_FAILURES.clear()
+    yield
+    rag_tools._KICK_FAILURES.clear()
+
+
+def _wait_no_jobs(rag, deadline_s: float = 10.0):
+    """Wait until every background index job for *rag* has finished."""
+    waited = time.monotonic() + deadline_s
+    while time.monotonic() < waited:
+        if not rag_tools.documents_still_indexing(rag):
+            return True
+        time.sleep(0.05)
+    return False
 
 
 class _RagHost(RAGToolsMixin):
@@ -119,10 +137,69 @@ def test_search_indexed_chunks_also_kicks_the_reindex(tmp_path):
     host = _host_for(rag)
 
     result = _call("search_indexed_chunks", pattern="old")
+    assert _wait_no_jobs(rag), "the background re-index never finished"
 
     assert result["status"] == "success", result
     rag.index_document.assert_called_once()
     assert result.get("reindexing_files") == ["doc.txt"]
+
+
+def test_a_failed_reindex_is_reported_without_breaking_the_query(tmp_path):
+    doc = tmp_path / "doc.txt"
+    doc.write_text("old text", encoding="utf-8")
+    rag = MagicMock()
+    rag.index = MagicMock()
+    rag.chunks = ["old text"]
+    rag.indexed_files = {str(doc)}
+    rag.is_current.return_value = False
+    rag.file_metadata = {}
+    rag._retrieve_chunks.return_value = (["old text"], [1.0])
+    rag.chunk_to_file = {0: str(doc)}
+    rag.index_document.side_effect = RuntimeError("file locked")
+    host = _host_for(rag)
+
+    result = _call("query_documents", query="what?")
+    assert _wait_no_jobs(rag), "the background re-index never finished"
+
+    # The job's failure is not the query's: the answer still succeeds (serving
+    # the old generation) and the file is reported as failed, not re-kicked
+    # on every query afterwards.
+    assert result["status"] == "success", result
+    assert result.get("reindex_failed") == ["doc.txt"], result
+
+    again = _call("query_documents", query="what?")
+    assert again["status"] == "success", again
+    assert again.get("reindex_failed") == ["doc.txt"], again
+    assert (
+        rag.index_document.call_count == 1
+    ), "a failed re-index must not be re-kicked until its bytes change again"
+
+
+def test_a_deleted_indexed_file_does_not_break_searches(tmp_path):
+    doc = tmp_path / "doc.txt"
+    doc.write_text("old text", encoding="utf-8")
+    rag = MagicMock()
+    rag.index = MagicMock()
+    rag.chunks = ["old text"]
+    rag.indexed_files = {str(doc)}
+    rag.is_current.return_value = False
+    rag.file_metadata = {}
+    rag._retrieve_chunks.return_value = (["old text"], [1.0])
+    rag.chunk_to_file = {0: str(doc)}
+
+    def index_document(path, **_kwargs):
+        raise FileNotFoundError(str(path))
+
+    rag.index_document.side_effect = index_document
+    host = _host_for(rag)
+
+    first = _call("query_documents", query="what?")
+    assert first["status"] == "success", first
+    assert first.get("reindex_failed") == ["doc.txt"], first
+
+    second = _call("query_documents", query="what?")
+    assert second["status"] == "success", second
+    assert second.get("reindex_failed") == ["doc.txt"], second
 
 
 def _real_sdk(tmp_path):
@@ -146,12 +223,6 @@ def _real_sdk(tmp_path):
     return sdk
 
 
-def _write_keeping_stat(path: Path, text: str):
-    st = path.stat()
-    path.write_text(text, encoding="utf-8")
-    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
-
-
 def _wait_current(sdk, path: str, deadline_s: float = 10.0):
     waited = time.monotonic() + deadline_s
     while time.monotonic() < waited:
@@ -172,7 +243,7 @@ def test_a_real_library_kicks_the_reindex_and_serves_current_text_afterwards(
     sdk = _real_sdk(tmp_path)
     assert sdk.index_document(str(doc))["success"]
 
-    _write_keeping_stat(doc, NEW)
+    doc.write_text(NEW, encoding="utf-8")
     host = _RagHost(sdk)
     host.register_rag_tools()
 

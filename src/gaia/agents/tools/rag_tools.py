@@ -231,29 +231,68 @@ def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
     }
 
 
-def _rag_not_available() -> str:
-    return f"RAG not available. {missing_extra_hint('rag')}"
+#: Files whose last background re-index attempt failed, keyed per RAG
+#: instance by the stat of the bytes that failed. They are reported as
+#: failed instead of being re-kicked on every query, and the entry clears
+#: when the bytes change again or the indexed state is current.
+_KICK_FAILURES: Dict[int, Dict[str, str]] = {}
 
 
-def _kick_stale_reindexes(rag: Any) -> List[str]:
+def _kick_stale_reindexes(rag: Any) -> Tuple[List[str], List[str]]:
     """Start a background re-index for every indexed file whose bytes changed
-    since it was indexed, and return the file names whose *old* generation
-    this query will still serve until those re-indexes finish (#6939).
+    since it was indexed, and return ``(reindexing, failed)`` file names.
 
     The kick is non-blocking: each stale file goes through
     :func:`_index_within_budget` with a zero budget, which starts the job and
     returns at once; the SDK's own changed-file handling re-indexes it with
     the same lock guidance as #6911. Files that are already being indexed
-    rejoin their running job instead of starting a second one.
+    rejoin their running job. Staleness itself is gated on a cheap stat
+    check against the stat recorded at index time — the full content hash
+    in :meth:`is_current` only runs when the stat changed (#6939).
+
+    A file whose last re-index attempt failed is reported under ``failed``
+    and not re-kicked until its bytes change again — a deleted or unreadable
+    file would otherwise fail on every query.
     """
     if rag is None:
-        return []
-    still: List[str] = []
+        return [], []
+    failures = _KICK_FAILURES.setdefault(id(rag), {})
+    stat_keys = getattr(rag, "file_stat_keys", None) or {}
+    reindexing: List[str] = []
+    failed: List[str] = []
     for path in sorted(rag.indexed_files):
-        if not rag.is_current(str(path)):
-            _result, job = _index_within_budget(rag, str(path), budget=0)
-            still.append(Path(job.path).name)
-    return still
+        path = str(path)
+        try:
+            st = os.stat(path)
+        except OSError:
+            failed.append(Path(path).name)
+            continue
+        failed_stat = failures.get(path)
+        if failed_stat is not None:
+            if failed_stat == f"{st.st_size}:{st.st_mtime_ns}":
+                failed.append(Path(path).name)
+                continue
+            del failures[path]
+        recorded = stat_keys.get(path)
+        if recorded is not None and (st.st_size, st.st_mtime_ns) == tuple(recorded):
+            failures.pop(path, None)
+            continue
+        if not rag.is_current(path):
+            try:
+                _result, job = _index_within_budget(rag, path, budget=0)
+            except (
+                Exception
+            ) as e:  # noqa: BLE001 — the job's failure is not the query's
+                failures[path] = f"{st.st_size}:{st.st_mtime_ns}"
+                failed.append(Path(path).name)
+                logger.error(f"Background re-index of {Path(path).name} failed: {e}")
+                continue
+            reindexing.append(Path(path).name)
+        else:
+            failures.pop(path, None)
+            if recorded is None:
+                stat_keys[path] = (st.st_size, st.st_mtime_ns)
+    return reindexing, failed
 
 
 def _rag_not_available() -> str:
@@ -716,7 +755,7 @@ class RAGToolsMixin:
                 # An edited file re-indexes in the background so later queries
                 # serve its current text; this one may still use the old
                 # generation, and the response names those files.
-                reindexing_files = _kick_stale_reindexes(rag)
+                reindexing_files, reindex_failed = _kick_stale_reindexes(rag)
 
                 # Generate multiple search keys for better retrieval
                 search_keys = self._generate_search_keys(query)
@@ -885,6 +924,8 @@ class RAGToolsMixin:
                     }
                     if reindexing_files:
                         result["reindexing_files"] = reindexing_files
+                    if reindex_failed:
+                        result["reindex_failed"] = reindex_failed
                     if debug_info:
                         result["debug_info"] = debug_info
                     return result
@@ -1034,6 +1075,18 @@ class RAGToolsMixin:
                 )
 
                 # Return chunks for agent to use in answer generation
+                note = ""
+                if reindexing_files:
+                    note = (
+                        " Documents edited after indexing are being "
+                        f"re-indexed in the background ({', '.join(reindexing_files)}); "
+                        "this answer may reflect their previous version."
+                    )
+                if reindex_failed:
+                    note += (
+                        " These documents could not be re-indexed: "
+                        f"{', '.join(reindex_failed)}."
+                    )
                 result = {
                     "status": "success",
                     "message": f"Found {len(formatted_chunks)} relevant document chunks",
@@ -1046,10 +1099,12 @@ class RAGToolsMixin:
                         if reindexing_files
                         else {}
                     ),
+                    **({"reindex_failed": reindex_failed} if reindex_failed else {}),
                     "instruction": _documents_instruction(
                         _chunks_have_pages(formatted_chunks),
                         all("page" in chunk for chunk in formatted_chunks),
-                    ),
+                    )
+                    + note,
                 }
 
                 # Add debug info to result if debug mode is enabled
@@ -1579,7 +1634,7 @@ class RAGToolsMixin:
                 # An edited file re-indexes in the background so later searches
                 # serve its current text; this one may still use the old
                 # generation, and the response names those files.
-                reindexing_files = _kick_stale_reindexes(self.rag)
+                reindexing_files, reindex_failed = _kick_stale_reindexes(self.rag)
 
                 # Search through chunks for pattern
                 matching_chunks = []
@@ -1631,6 +1686,8 @@ class RAGToolsMixin:
                     }
                     if reindexing_files:
                         result["reindexing_files"] = reindexing_files
+                    if reindex_failed:
+                        result["reindex_failed"] = reindex_failed
                     if debug_info:
                         result["debug_info"] = debug_info
                     return result
@@ -1638,18 +1695,32 @@ class RAGToolsMixin:
                 # Limit results
                 limited_matches = matching_chunks[:10]
 
+                note = ""
+                if reindexing_files:
+                    note = (
+                        " Documents edited after indexing are being "
+                        f"re-indexed in the background ({', '.join(reindexing_files)}); "
+                        "this answer may reflect their previous version."
+                    )
+                if reindex_failed:
+                    note += (
+                        " These documents could not be re-indexed: "
+                        f"{', '.join(reindex_failed)}."
+                    )
                 result = {
                     "status": "success",
                     "message": f"Found {len(matching_chunks)} matches for '{pattern}'",
                     "matches": limited_matches,
                     "count": len(matching_chunks),
                     "showing": len(limited_matches),
-                    "instruction": "Use these exact matches to answer the user's question.",
+                    "instruction": "Use these exact matches to answer the user's question."
+                    + note,
                     **(
                         {"reindexing_files": reindexing_files}
                         if reindexing_files
                         else {}
                     ),
+                    **({"reindex_failed": reindex_failed} if reindex_failed else {}),
                 }
 
                 # Add debug info to result if debug mode is enabled
