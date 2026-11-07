@@ -224,7 +224,26 @@ async def list_schedules(
     return ScheduleListResponse(schedules=tasks, total=len(tasks))
 
 
-@router.get("/api/schedules/{name}", response_model=ScheduleResponse)
+# Before the bare GET: names arrive with "/" decoded, so it would match first.
+@router.get(
+    "/api/schedules/{name:path}/results", response_model=ScheduleResultsResponse
+)
+async def get_schedule_results(
+    name: str,
+    limit: int = 20,
+    scheduler: Scheduler = Depends(get_scheduler),
+):
+    """Get past execution results for a scheduled task."""
+    task = scheduler.get_task(name)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Schedule '{name}' not found")
+
+    limit = max(1, min(limit, 100))
+    results = scheduler.get_task_results(name, limit=limit)
+    return ScheduleResultsResponse(results=results, total=len(results))
+
+
+@router.get("/api/schedules/{name:path}", response_model=ScheduleResponse)
 async def get_schedule(
     name: str,
     scheduler: Scheduler = Depends(get_scheduler),
@@ -236,7 +255,7 @@ async def get_schedule(
     return task
 
 
-@router.put("/api/schedules/{name}", response_model=ScheduleResponse)
+@router.put("/api/schedules/{name:path}", response_model=ScheduleResponse)
 async def update_schedule(
     name: str,
     request: UpdateScheduleRequest,
@@ -261,7 +280,7 @@ async def update_schedule(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post("/api/schedules/{name}/run", response_model=ScheduleResponse)
+@router.post("/api/schedules/{name:path}/run", response_model=ScheduleResponse)
 async def run_schedule_now(
     name: str,
     scheduler: Scheduler = Depends(get_scheduler),
@@ -275,7 +294,7 @@ async def run_schedule_now(
         raise HTTPException(status_code=409, detail=str(e))
 
 
-@router.delete("/api/schedules/{name}")
+@router.delete("/api/schedules/{name:path}")
 async def delete_schedule(
     name: str,
     scheduler: Scheduler = Depends(get_scheduler),
@@ -286,19 +305,3 @@ async def delete_schedule(
         return {"deleted": True}
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Schedule '{name}' not found")
-
-
-@router.get("/api/schedules/{name}/results", response_model=ScheduleResultsResponse)
-async def get_schedule_results(
-    name: str,
-    limit: int = 20,
-    scheduler: Scheduler = Depends(get_scheduler),
-):
-    """Get past execution results for a scheduled task."""
-    task = scheduler.get_task(name)
-    if not task:
-        raise HTTPException(status_code=404, detail=f"Schedule '{name}' not found")
-
-    limit = max(1, min(limit, 100))
-    results = scheduler.get_task_results(name, limit=limit)
-    return ScheduleResultsResponse(results=results, total=len(results))
