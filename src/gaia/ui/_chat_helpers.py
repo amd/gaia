@@ -1323,6 +1323,43 @@ def _ui_cloud_provider(model_id: str) -> str | None:
     return cloud_model_provider(model_id, metadata)
 
 
+def _runs_on_this_pc(model_id: Optional[str]) -> bool:
+    """True only when *model_id* is known to run locally; for data that stays here.
+
+    Fails closed: an empty id, a cloud id, or a namespaced id Lemonade's catalog
+    doesn't list as local all count as leaving the PC. A namespaced id GAIA
+    doesn't know reads the catalog first, so a cloud model discovered at
+    runtime is recognised even before anything else has listed models.
+
+    Raises:
+        LemonadeClientError: the catalog couldn't be read to tell.
+    """
+    from gaia.llm.lemonade_client import (
+        CLOUD_RECIPE,
+        LemonadeClient,
+        _model_ids_match,
+        may_be_cloud_model,
+    )
+
+    model_id = (model_id or "").strip()
+    if not model_id or model_id.lower().startswith("claude"):
+        return False
+    if _ui_cloud_provider(model_id):
+        return False
+    if not may_be_cloud_model(model_id):
+        return True
+    catalog = LemonadeClient(verbose=False).list_models(show_all=True)
+    if _ui_cloud_provider(model_id):
+        return False
+    return any(
+        isinstance(entry, dict)
+        and _model_ids_match(entry.get("id"), model_id)
+        and entry.get("recipe") != CLOUD_RECIPE
+        and not entry.get("cloud_provider")
+        for entry in catalog.get("data") or []
+    )
+
+
 def session_inference_location(
     session: dict, custom_model: str | None, registry=None
 ) -> InferenceLocation | None:

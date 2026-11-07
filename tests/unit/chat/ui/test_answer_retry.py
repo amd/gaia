@@ -268,6 +268,34 @@ async def test_a_cloud_model_is_refused(db):
     assert exc.value.status_code == 400
 
 
+async def test_a_discovered_cloud_model_is_refused(db):
+    from gaia.llm import lemonade_client as lc
+
+    sid, mid = _chat(db)
+    lc.record_cloud_models({"data": [{"id": "opencode.big-model", "recipe": "cloud"}]})
+    try:
+        with pytest.raises(HTTPException) as exc:
+            await _retry(db, sid, mid, model="opencode.big-model")
+    finally:
+        lc.record_cloud_models({"data": []})
+    assert exc.value.status_code == 400
+
+
+async def test_an_unreadable_catalog_refuses_the_retry(db):
+    from gaia.llm import lemonade_client as lc
+
+    sid, mid = _chat(db)
+    lc.record_cloud_models({"data": []})
+    with patch.object(
+        lc.LemonadeClient,
+        "list_models",
+        side_effect=lc.LemonadeClientError("connection refused"),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await _retry(db, sid, mid, model="opencode.big-model")
+    assert exc.value.status_code == 503
+
+
 async def test_a_turn_too_long_for_the_other_model_says_so(db):
     sid, mid = _chat(db)
     with (

@@ -32,6 +32,7 @@ from gaia.ui._chat_helpers import (
     _find_last_tool_step,
     _managed_documents_dir,
     _resolve_rag_paths,
+    _runs_on_this_pc,
     set_agent_registry,
 )
 
@@ -1429,3 +1430,121 @@ def test_a_recoverable_error_from_a_tool_that_raised_is_not_saved_twice():
     assert not _echoes_failed_tool(
         {"content": "boom", "recoverable": True}, after_thought
     )
+
+
+# ── _runs_on_this_pc ─────────────────────────────────────────────────────
+
+
+class TestRunsOnThisPc:
+    """Data that stays on this PC goes only to a model known to run here."""
+
+    @pytest.fixture(autouse=True)
+    def _empty_catalog(self):
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models({"data": []})
+        yield
+        lc.record_cloud_models({"data": []})
+
+    @staticmethod
+    def _catalog(*entries):
+        """Patch the catalog read so it also records cloud ids, as the real one does."""
+        from gaia.llm import lemonade_client as lc
+
+        payload = {"data": list(entries)}
+
+        def read(self, show_all=False, timeout=None):
+            lc.record_cloud_models(payload)
+            return payload
+
+        return patch.object(
+            lc.LemonadeClient, "list_models", autospec=True, side_effect=read
+        )
+
+    @staticmethod
+    def _no_catalog():
+        from gaia.llm import lemonade_client as lc
+
+        return patch.object(
+            lc.LemonadeClient,
+            "list_models",
+            side_effect=AssertionError("catalog read for a known model"),
+        )
+
+    def test_a_discovered_cloud_model_already_in_the_catalog_is_cloud(self):
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models(
+            {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+        )
+        with self._no_catalog():
+            assert _runs_on_this_pc("opencode.big-model") is False
+
+    def test_a_discovered_cloud_model_on_a_cold_catalog_is_cloud(self):
+        with self._catalog({"id": "opencode.big-model", "recipe": "cloud"}) as read:
+            assert _runs_on_this_pc("opencode.big-model") is False
+        read.assert_called_once()
+
+    def test_a_catalog_entry_naming_a_cloud_provider_is_cloud(self):
+        entry = {"id": "opencode.big-model", "cloud_provider": "opencode"}
+        with self._catalog(entry):
+            assert _runs_on_this_pc("opencode.big-model") is False
+
+    def test_a_known_cloud_prefix_is_cloud_without_a_catalog_read(self):
+        with self._no_catalog():
+            assert _runs_on_this_pc("fireworks.accounts/x/models/y") is False
+            assert _runs_on_this_pc("amd.DeepSeek-V4.1-Flash") is False
+
+    def test_a_local_lemonade_model_is_local_without_a_catalog_read(self):
+        from gaia.llm.lemonade_client import (
+            DEFAULT_MODEL_NAME,
+            LARGE_DEFAULT_MODEL_NAME,
+        )
+
+        with self._no_catalog():
+            assert _runs_on_this_pc(DEFAULT_MODEL_NAME) is True
+            assert _runs_on_this_pc(LARGE_DEFAULT_MODEL_NAME) is True
+            assert _runs_on_this_pc("Some-Local-GGUF") is True
+
+    def test_a_dotted_local_model_the_catalog_lists_is_local(self):
+        from gaia.llm.lemonade_client import may_be_cloud_model
+
+        assert may_be_cloud_model("Qwen3.5-9B-GGUF")
+        entry = {"id": "Qwen3.5-9B-GGUF", "recipe": "llamacpp"}
+        with self._catalog(entry) as read:
+            assert _runs_on_this_pc("Qwen3.5-9B-GGUF") is True
+        read.assert_called_once()
+
+    def test_a_dotted_id_the_catalog_does_not_list_fails_closed(self):
+        with self._catalog({"id": "Other-GGUF", "recipe": "llamacpp"}):
+            assert _runs_on_this_pc("opencode.big-model") is False
+            assert _runs_on_this_pc("user.Unregistered-1.0-GGUF") is False
+
+    def test_a_local_entry_does_not_launder_a_cloud_id(self):
+        # Same id listed as cloud too: cloud wins.
+        entries = (
+            {"id": "opencode.big-model", "recipe": "llamacpp"},
+            {"id": "opencode.big-model", "recipe": "cloud"},
+        )
+        with self._catalog(*entries):
+            assert _runs_on_this_pc("opencode.big-model") is False
+
+    @pytest.mark.parametrize("model", [None, "", "   "])
+    def test_an_empty_model_id_fails_closed(self, model):
+        with self._no_catalog():
+            assert _runs_on_this_pc(model) is False
+
+    def test_a_claude_model_is_cloud(self):
+        with self._no_catalog():
+            assert _runs_on_this_pc("claude-opus-5") is False
+
+    def test_an_unreadable_catalog_raises_rather_than_guessing_local(self):
+        from gaia.llm import lemonade_client as lc
+
+        with patch.object(
+            lc.LemonadeClient,
+            "list_models",
+            side_effect=lc.LemonadeClientError("connection refused"),
+        ):
+            with pytest.raises(lc.LemonadeClientError):
+                _runs_on_this_pc("opencode.big-model")
