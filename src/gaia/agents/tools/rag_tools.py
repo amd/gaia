@@ -1182,6 +1182,25 @@ class RAGToolsMixin:
                     return _ambiguous_file_error(file_path, matching_files)
                 target_file = matching_files[0]
 
+                # Serve the file's current bytes: an edited document re-indexes
+                # here with the same foreground budget the index tool uses, so
+                # the answer is never built from the old generation (#6932).
+                # is_current hashes outside _state_lock, so this does not
+                # contend with indexing.
+                if not rag.is_current(str(target_file)):
+                    result, job = _index_within_budget(rag, str(target_file))
+                    if result is None:
+                        return _indexing_in_progress(job)
+                    if not result.get("success"):
+                        return {
+                            "status": "error",
+                            "error": (
+                                f"Re-indexing {Path(target_file).name} failed: "
+                                f"{result.get('error', 'unknown error')}"
+                            ),
+                            "file_name": Path(target_file).name,
+                        }
+
                 # Generate search keys for better retrieval
                 search_keys = self._generate_search_keys(query)
 
