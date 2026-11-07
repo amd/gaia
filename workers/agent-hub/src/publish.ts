@@ -623,7 +623,24 @@ export async function handlePublish(
           `concurrently. Send channel=${held}, or publish a new version.`
       );
     }
-    if (versionLists(current)) throw alreadyPublishedError();
+    if (versionLists(current)) {
+      // Both racers wrote the same key, so ours may have replaced the winner's bytes.
+      const listed = (channel === "stable" ? current?.versions : current?.next_versions)?.[
+        manifest.version
+      ]?.artifacts?.find((a) => a.filename === filename);
+      if (listed && listed.sha256 !== artifact.sha256) {
+        throw new HttpError(
+          409,
+          "concurrent_publish_conflict",
+          `Another publish of ${filename} under ${manifest.id}@${manifest.version} ` +
+            `committed first with sha256 ${listed.sha256}, while this one uploaded ` +
+            `${artifact.sha256} to the same key. The stored file may no longer match ` +
+            `the listed checksum, so installs of this version can fail. Publish one job ` +
+            `at a time, and release a new version to replace this one.`
+        );
+      }
+      throw alreadyPublishedError();
+    }
     return upsertVersion(current, manifest, versionEntry, channel);
   });
 

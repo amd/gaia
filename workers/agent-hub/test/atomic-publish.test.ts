@@ -185,6 +185,23 @@ describe("catalog writes — concurrent writers don't drop each other", () => {
     expect(manifest!.versions["0.1.0"].artifacts).toHaveLength(1);
   });
 
+  it("a racing publish of the same filename with different bytes fails loudly", async () => {
+    const env = makeEnv();
+    let raced = false;
+    env.bucket.beforePut = async (key) => {
+      if (key !== "agents/chat/manifest.json" || raced) return;
+      raced = true;
+      expect((await publish(env, { ...CHAT, artifact: "other-build" })).status).toBe(201);
+    };
+    const res = await publish(env, CHAT);
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as any;
+    expect(body.error.code).toBe("concurrent_publish_conflict");
+    expect(body.error.message).toMatch(/new version/);
+    const manifest = await readJson<AgentManifest>(env, "agents/chat/manifest.json");
+    expect(manifest!.versions["0.1.0"].artifacts).toHaveLength(1);
+  });
+
   it("the maintainer reindex is conditional too", async () => {
     const env = makeEnv();
     expect((await publish(env, CHAT)).status).toBe(201);
