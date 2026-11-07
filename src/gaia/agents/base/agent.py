@@ -7003,6 +7003,30 @@ Do NOT wrap conversational replies in JSON.
             return None, False
         denial, effect = conflict
         command = render_call(tool_name, tool_args)
+        if denial.refused:
+            # No person said no, so no person is asked to lift it.
+            logger.info(
+                "Refused %s: it %s, refused earlier as %s",
+                tool_name,
+                effect.describe(),
+                denial.rendered,
+            )
+            return (
+                {
+                    **NOT_EXECUTED,
+                    "status": "denied",
+                    "blocked_effect": effect.describe(),
+                    "declined_call": denial.rendered,
+                    "error": (
+                        f"Not run: this {effect.describe()}, and `{denial.rendered}` "
+                        "was refused earlier in this request. No approval can lift "
+                        "that refusal, so do not reach it with another tool, "
+                        "command, or script. Tell the user it was not done and "
+                        "that they can do it themselves."
+                    ),
+                },
+                False,
+            )
         answer = self._ask_to_lift_denial(denial, effect, command)
         if answer is True:
             # Once: the denial stands for any other route this turn.
@@ -7539,6 +7563,10 @@ Do NOT wrap conversational replies in JSON.
                     tool_args,
                     str(refusal.get("error") if isinstance(refusal, dict) else refusal),
                     kinds={NETWORK, PATH},
+                    # Only a refuse-tier no is final; a shape refusal ("use
+                    # write_file") points at a route the user may still allow.
+                    refused=isinstance(refusal, dict)
+                    and refusal.get("tier") == "refuse",
                 )
             return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
 
@@ -13591,7 +13619,8 @@ Do NOT wrap conversational replies in JSON.
 
     _DENIAL_RE = re.compile(
         r"\bwas denied\b|\bdeclined\b|\bdenied by\b|execution denied"
-        r"|with no user response|requires (?:explicit|live) user approval",
+        r"|with no user response|requires (?:explicit|live) user approval"
+        r"|\bneeds your approval\b",
         re.IGNORECASE,
     )
 
