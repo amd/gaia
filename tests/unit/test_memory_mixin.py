@@ -4714,6 +4714,7 @@ class TestRecallSkill:
             name="counted-proc",
             when_to_use="Triage a ticket.",
             markdown_body="1. Triage.",
+            tools_required=["write_file"],
             success_count=9,
             attempt_count=9,
             embedding=_embedding_to_blob_for(mixin_host, "Triage a ticket."),
@@ -4723,7 +4724,7 @@ class TestRecallSkill:
         with patch.object(
             FakeAgent,
             "process_query",
-            lambda agent, *_a, **_k: agent._note_person_decision(False),
+            lambda agent, *_a, **_k: agent._note_person_decision("write_file", False),
         ):
             mixin_host.process_query("triage this ticket")
 

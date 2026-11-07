@@ -3930,12 +3930,14 @@ class MemoryStore:
         success: bool,
         *,
         erase_count: int | None = None,
-    ) -> dict[str, tuple[int, int]]:
+    ) -> dict[str, tuple[int, int, int]]:
         """Count one outcome on each procedure that was in context for it.
 
         Adds one to ``attempt_count``, and to ``success_count`` when *success*,
-        on top of the counts the row was born with.  What makes an outcome is
-        the caller's definition (``ProceduralMemoryMixin._record_procedure_outcome``).
+        on top of the counts the row was born with, and one to
+        ``provenance.outcomes``, the outcomes recorded since it was learned.
+        What makes an outcome is the caller's definition
+        (``ProceduralMemoryMixin._record_procedure_outcome``).
 
         Args:
             skill_ids: procedures recalled into the turn; duplicates count once.
@@ -3944,8 +3946,9 @@ class MemoryStore:
                 was erased since, nothing is written.
 
         Returns:
-            ``{skill_id: (success_count, attempt_count)}`` after the update, for
-            the ids that still exist (one forgotten since recall is skipped).
+            ``{skill_id: (success_count, attempt_count, outcomes)}`` after the
+            update, for the ids that still exist (one forgotten since recall is
+            skipped).
         """
         ids = list(dict.fromkeys(skill_ids))
         if not ids:
@@ -3961,11 +3964,15 @@ class MemoryStore:
             try:
                 self._conn.execute(
                     "UPDATE procedures SET attempt_count = attempt_count + 1, "
-                    f"success_count = success_count + ? WHERE id IN ({placeholders})",
+                    "success_count = success_count + ?, "
+                    "provenance = json_set(COALESCE(provenance, '{}'), '$.outcomes', "
+                    "COALESCE(json_extract(provenance, '$.outcomes'), 0) + 1) "
+                    f"WHERE id IN ({placeholders})",
                     (int(bool(success)), *ids),
                 )
                 rows = self._conn.execute(
-                    "SELECT id, success_count, attempt_count FROM procedures "
+                    "SELECT id, success_count, attempt_count, "
+                    "json_extract(provenance, '$.outcomes') FROM procedures "
                     f"WHERE id IN ({placeholders})",
                     ids,
                 ).fetchall()
@@ -3973,7 +3980,7 @@ class MemoryStore:
             except Exception:
                 self._conn.rollback()
                 raise
-        return {row[0]: (int(row[1]), int(row[2])) for row in rows}
+        return {row[0]: (int(row[1]), int(row[2]), int(row[3])) for row in rows}
 
     def disable_skill(self, skill_id: str) -> bool:
         """Stop recalling ``skill_id`` (``enabled = 0``); the row is kept.

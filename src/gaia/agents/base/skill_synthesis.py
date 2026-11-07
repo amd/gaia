@@ -56,6 +56,9 @@ MIN_OCCURRENCES: int = 3
 #: A cluster must be at least this successful (success_count / attempt_count).
 MIN_SUCCESS_RATE: float = 0.80
 
+#: Outcomes a procedure must record after it is learned before it can be retired.
+MIN_OUTCOMES_TO_RETIRE: int = 3
+
 #: Cosine threshold on goal embeddings, for clustering (and, in Phase 2, recall).
 SIMILARITY_TAU: float = 0.82
 
