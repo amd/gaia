@@ -48,12 +48,15 @@ def calls(monkeypatch):
 
 
 def test_scheduling_sends_the_time_and_says_when_it_will_run(calls):
+    before = time.time()
     out = _Host()._schedule_follow_up("in 2 hours", "Check CI run 4012")
+    after = time.time()
 
     assert out["status"] == "scheduled" and out["id"] == "j1"
     sent = calls[0]["json"]
     assert sent["agent_id"] == "gaia" and sent["task"] == "Check CI run 4012"
-    assert 2 * 3600 - 60 < sent["fire_at"] - time.time() <= 2 * 3600
+    # datetime.timestamp() and time.time() can disagree by a microsecond.
+    assert before + 2 * 3600 - 0.001 <= sent["fire_at"] <= after + 2 * 3600 + 0.001
     assert sent["origin"] == {"session": "s-1"}
     assert sent["model"] == "fireworks.deepseek-v4p1-flash"
     assert "Tell the user when it will run" in out["message"]
