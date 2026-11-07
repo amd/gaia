@@ -35,6 +35,7 @@ from gaia.rag.sdk import (
     text_scripts,
 )
 from gaia.tool_cancellation import raise_if_cancelled
+from gaia.upload_names import display_file_name
 
 logger = get_logger(__name__)
 
@@ -1337,7 +1338,10 @@ class RAGToolsMixin:
                 if not all_chunks:
                     result = {
                         "status": "success",
-                        "message": f"No relevant information found in {Path(target_file).name}",
+                        "message": (
+                            "No relevant information found in "
+                            f"{display_file_name(target_file)}"
+                        ),
                         "chunks": [],
                         "file": str(target_file),
                     }
@@ -1463,13 +1467,16 @@ class RAGToolsMixin:
 
                 result = {
                     "status": "success",
-                    "message": f"Found {len(formatted_chunks)} relevant chunks in {Path(target_file).name}",
+                    "message": (
+                        f"Found {len(formatted_chunks)} relevant chunks in "
+                        f"{display_file_name(target_file)}"
+                    ),
                     "chunks": formatted_chunks,
                     "file": str(target_file),
                     "source_files": [source_path],
                     "auto_indexed": auto_indexed,
                     "instruction": _file_instruction(
-                        Path(target_file).name,
+                        display_file_name(target_file),
                         len(formatted_chunks),
                         _chunks_have_pages(formatted_chunks),
                     ),

@@ -49,6 +49,7 @@ from gaia.ui.event_narration import (
     tool_phrase,
 )
 from gaia.ui.turn_summary import TurnLedger, search_hits
+from gaia.upload_names import display_file_name, upload_original_name
 from gaia.utils.json_string import (
     JsonStringStreamDecoder,
     extract_json_string_field,
@@ -978,7 +979,7 @@ class SSEOutputHandler(OutputHandler):
                             {
                                 "id": c.get("chunk_id", 0),
                                 "source": (
-                                    Path(c["source_file"]).name
+                                    display_file_name(c["source_file"])
                                     if c.get("source_file")
                                     else None
                                 ),
@@ -2749,7 +2750,8 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         if data.get("already_indexed"):
             return f"Already indexed ({chunks} chunks)"
         if filename:
-            return f"Indexed {filename} ({chunks} chunks)"
+            shown = upload_original_name(filename) or filename
+            return f"Indexed {shown} ({chunks} chunks)"
         return f"Indexed document ({chunks} chunks)"
 
     # File read results
