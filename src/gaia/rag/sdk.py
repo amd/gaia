@@ -830,6 +830,8 @@ class RAGSDK:
         self._access_counter = 0
         self.file_access_times = {}  # {file_path: monotonic access counter}
         self.file_index_times = {}  # {file_path: index_time (wall clock for display)}
+        # {file_path: _content_key of the bytes that were indexed}
+        self.file_content_keys = {}
         self._state_lock = threading.RLock()
 
         # Create cache directory
@@ -3559,6 +3561,7 @@ These positions indicate where to split the text."""
                     del self.file_access_times[file_path]
                 if file_path in self.file_index_times:
                     del self.file_index_times[file_path]
+                self.file_content_keys.pop(file_path, None)
 
                 # Clean up cached per-file indices and embeddings
                 if file_path in self.file_indices:
@@ -3587,12 +3590,19 @@ These positions indicate where to split the text."""
                 self.log.error(f"Failed to remove document {file_path}: {e}")
                 return False
 
-    def reindex_document(self, file_path: str) -> Dict[str, Any]:
+    def reindex_document(
+        self,
+        file_path: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        wait_callback: Optional[Callable[[int], None]] = None,
+    ) -> Dict[str, Any]:
         """
         Reindex a document (remove old chunks and add new ones).
 
         Args:
             file_path: Path to document to reindex
+            progress_callback: Passed to :meth:`index_document`.
+            wait_callback: Passed to :meth:`index_document`.
 
         Returns:
             Dict with indexing results and statistics (same as index_document)
@@ -3611,6 +3621,7 @@ These positions indicate where to split the text."""
                     "file_metadata",
                     "file_access_times",
                     "file_index_times",
+                    "file_content_keys",
                 )
             }
             previous_state.update(
@@ -3635,7 +3646,11 @@ These positions indicate where to split the text."""
             succeeded = False
             result = None
             try:
-                result = self.index_document(file_path)
+                result = self.index_document(
+                    file_path,
+                    progress_callback=progress_callback,
+                    wait_callback=wait_callback,
+                )
                 succeeded = bool(result.get("success"))
                 if succeeded:
                     result["reindexed"] = True
@@ -3648,6 +3663,48 @@ These positions indicate where to split the text."""
                     if result is not None:
                         result["total_indexed_files"] = len(self.indexed_files)
                         result["total_chunks"] = len(self.chunks)
+
+    def is_current(self, file_path: str) -> bool:
+        """Whether *file_path* is indexed from the bytes it holds now.
+
+        Hashes the file outside the index lock, so an edit is caught whatever
+        its size or timestamp. An unreadable file is not current.
+        """
+        file_path = str(Path(file_path).absolute())
+        with self._state_lock:
+            if file_path not in self.indexed_files:
+                return False
+            indexed_key = self.file_content_keys.get(file_path)
+        if indexed_key is None:
+            return False
+        return self._content_key(file_path) == indexed_key
+
+    def _indexed_from(self, file_path: str, content_key: str) -> bool:
+        """Whether *file_path* is indexed from the bytes *content_key* names.
+
+        Call with ``_state_lock`` held.
+        """
+        return (
+            file_path in self.indexed_files
+            and self.file_content_keys.get(file_path) == content_key
+        )
+
+    def _drop_other_generation(self, file_path: str, stats: Dict[str, Any]) -> bool:
+        """Remove another writer's index of different bytes before publishing.
+
+        Call with ``_state_lock`` held. Returns False, with ``stats["error"]``
+        set, when that index could not be removed.
+        """
+        if file_path not in self.indexed_files:
+            return True
+        self.log.info(f"Replacing the index of another version of {file_path}")
+        if self.remove_document(file_path):
+            return True
+        stats["error"] = (
+            f"Could not replace the index of another version of "
+            f"{Path(file_path).name}. Remove the document and add it again."
+        )
+        return False
 
     def _evict_lru_document(self) -> Optional[str]:
         """
@@ -3919,6 +3976,21 @@ These positions indicate where to split the text."""
         stats["file_name"] = Path(file_path).name
 
         with self._state_lock:
+            was_indexed = file_path in self.indexed_files
+        if was_indexed:
+            try:
+                current_key = self._content_key(file_path, raise_locked=True)
+            except PermissionError as e:
+                return self._document_locked(stats, file_path, e)
+            with self._state_lock:
+                changed = not self._indexed_from(file_path, current_key)
+            if changed:
+                self.log.info(f"{file_path} changed since it was indexed; re-indexing")
+                return self.reindex_document(
+                    file_path, progress_callback, wait_callback
+                )
+
+        with self._state_lock:
             # Check if already indexed
             if file_path in self.indexed_files:
                 if self.config.show_stats:
@@ -3997,7 +4069,7 @@ These positions indicate where to split the text."""
                 )
 
                 with self._state_lock:
-                    if file_path in self.indexed_files:
+                    if self._indexed_from(file_path, content_key):
                         self.log.info(f"Document already indexed: {file_path}")
                         stats["success"] = True
                         stats["already_indexed"] = True
@@ -4006,6 +4078,8 @@ These positions indicate where to split the text."""
                         )
                         stats["total_indexed_files"] = len(self.indexed_files)
                         stats["total_chunks"] = len(self.chunks)
+                        return stats
+                    if not self._drop_other_generation(file_path, stats):
                         return stats
 
                     # Re-check capacity under the lock because another writer
@@ -4070,6 +4144,7 @@ These positions indicate where to split the text."""
                         }
 
                     self.indexed_files.add(file_path)
+                    self.file_content_keys[file_path] = content_key
 
                     # Track access time for LRU (was missing — pre-existing bug)
                     current_time = time.time()
@@ -4171,7 +4246,7 @@ These positions indicate where to split the text."""
             )
 
             with self._state_lock:
-                if file_path in self.indexed_files:
+                if self._indexed_from(file_path, content_key):
                     if self.config.show_stats:
                         print(f"📋 Document already indexed: {Path(file_path).name}")
                     self.log.info(f"Document already indexed: {file_path}")
@@ -4182,6 +4257,8 @@ These positions indicate where to split the text."""
                     )
                     stats["total_indexed_files"] = len(self.indexed_files)
                     stats["total_chunks"] = len(self.chunks)
+                    return stats
+                if not self._drop_other_generation(file_path, stats):
                     return stats
 
                 # This second capacity check is intentional: the optimistic
@@ -4262,6 +4339,7 @@ These positions indicate where to split the text."""
                 }
 
                 self.indexed_files.add(file_path)
+                self.file_content_keys[file_path] = content_key
 
                 # Track index time for LRU
                 current_time = time.time()
