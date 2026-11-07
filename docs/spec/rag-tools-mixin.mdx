@@ -45,7 +45,7 @@ attribute (see below):
 
 | Attribute | Type | Notes |
 |---|---|---|
-| `self.rag` | `RAGSDK` | The document index and query engine. A stand-in must accept `index_document(path, progress_callback=None)` and `is_current(path)`. |
+| `self.rag` | `RAGSDK` | The document index and query engine. A stand-in must accept `index_document(path, progress_callback=None)`, `is_current(path)` and `freshness(path)`. |
 | `self.indexed_files` | `set` or `list` | Tracks which files are indexed. |
 | `self.max_chunks` | `int` | Default chunk count for retrieval. |
 | `self.current_session` | any, or `None` | `None` is a valid, expected value. |
@@ -107,6 +107,14 @@ analysis.
    - Exact text pattern matching in RAG chunks
    - Case-insensitive search
    - Limited to 100 matches for performance
+
+All three searches check each file they cover with `RAGSDK.freshness` before
+searching, so an edited document is never served from its old text. An edited
+file is re-indexed first, waiting up to `QUERY_REINDEX_BUDGET_S` (30 s) without
+holding the index lock. A file that is still re-indexing, failed to re-index,
+was deleted, or is locked by another program is left out: `query_specific_file`
+returns `in_progress` or `error` for it, and the library-wide searches answer
+from the other files and name it in `files_left_out` and the `instruction`.
 
 4. **Retrieval Evaluation (evaluate_retrieval)**
    - Keyword overlap calculation
@@ -213,9 +221,15 @@ class RAGToolsMixin:
 
         Returns:
             {
-                "status": "success" | "no_documents" | "error",
+                "status": "success" | "no_documents" | "in_progress" | "error",
                 "message": str,
                 "error": str,        # On error: what failed
+                "files_left_out": List[{  # Edited, deleted or locked files
+                    "file": str, "path": str,  # not searched this call
+                    "reason": str,   # "reindexing" | "reindex_failed" |
+                                     # "missing" | "locked" | "unreadable"
+                    "message": str
+                }],
                 "error_type": str,   # "embedding_unavailable" when the
                                      # embedder or Lemonade could not run
                 "next_step": str,    # On embedding_unavailable: how to fix it
@@ -246,7 +260,10 @@ class RAGToolsMixin:
 
         Returns:
             Similar to query_documents, but file-scoped. An embedder that
-            cannot run is an error, never "no relevant information".
+            cannot run is an error, never "no relevant information". A file
+            edited since indexing is re-indexed first; one still re-indexing
+            is "in_progress", and one that failed, was deleted or is locked
+            is an "error" naming why.
         """
         pass
 

@@ -231,6 +231,139 @@ def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
     }
 
 
+#: How long a search waits for edited documents to re-index before answering without them.
+QUERY_REINDEX_BUDGET_S = 30.0
+
+_UNSERVABLE = {
+    "missing": "{name} was indexed from {path}, which no longer exists",
+    "locked": (
+        "{name} may have changed since it was indexed, but another program has it "
+        "open, so it cannot be checked. Ask the user to close it and search again"
+    ),
+    "unreadable": (
+        "{name} may have changed since it was indexed, but it cannot be read "
+        "to check"
+    ),
+}
+
+
+def _left_out(
+    path: str, reason: str, message: str, job: Optional[_IndexJob] = None
+) -> Dict[str, Any]:
+    entry = {
+        "file": Path(path).name,
+        "path": path,
+        "reason": reason,
+        "message": f"{message.rstrip('. ')}. Its old indexed text is not served.",
+    }
+    if job is not None:
+        entry["job"] = job
+    return entry
+
+
+def _bring_current(host: Any, rag: Any, paths) -> Dict[str, Dict[str, Any]]:
+    """Re-index the *paths* edited since indexing; return those that can't be served.
+
+    An unchanged file costs a stat. Edited files re-index in the background,
+    waited on together for at most ``QUERY_REINDEX_BUDGET_S``; the index lock
+    is only taken to swap each one in. Keys of the result are the paths whose
+    indexed text must not be served, with why.
+    """
+    left_out: Dict[str, Dict[str, Any]] = {}
+    edited = []
+    for path in paths:
+        state = rag.freshness(path)
+        if state == "changed":
+            edited.append(path)
+        elif state in _UNSERVABLE:
+            name = Path(path).name
+            left_out[path] = _left_out(
+                path, state, _UNSERVABLE[state].format(name=name, path=path)
+            )
+    if not edited:
+        return left_out
+
+    deadline = time.monotonic() + QUERY_REINDEX_BUDGET_S
+    started = {path: _index_within_budget(rag, path, budget=0) for path in edited}
+    for path in edited:
+        name = Path(path).name
+        try:
+            result, job = started[path]
+            if result is None:
+                result, job = _index_within_budget(
+                    rag, path, max(0.0, deadline - time.monotonic())
+                )
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning(f"Re-indexing edited {path} failed: {e}")
+            left_out[path] = _left_out(
+                path,
+                "reindex_failed",
+                f"{name} changed since it was indexed, and re-indexing it failed "
+                f"({type(e).__name__}: {e})",
+            )
+            continue
+        if result is None:
+            left_out[path] = _left_out(
+                path,
+                "reindexing",
+                f"{name} changed since it was indexed and is still re-indexing "
+                "in the background; search again in a minute",
+                job,
+            )
+        elif not result.get("success"):
+            left_out[path] = _left_out(
+                path,
+                "reindex_failed",
+                f"{name} changed since it was indexed, and re-indexing it failed: "
+                f"{result.get('error', 'unknown error')}",
+            )
+        elif isinstance(getattr(host, "indexed_files", None), set):
+            _forget_evicted(host.indexed_files, result.get("evicted", []))
+    return left_out
+
+
+def _left_out_result(left_out: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """Tool result when nothing a search would cover can be served now."""
+    entries = list(left_out.values())
+    if len(entries) == 1 and entries[0]["reason"] == "reindexing":
+        result = _indexing_in_progress(entries[0]["job"])
+        result["message"] = (
+            f"{entries[0]['file']} changed since it was indexed. {result['message']}"
+        )
+        result["files_left_out"] = _public(entries)
+        return result
+    messages = " ".join(entry["message"] for entry in entries)
+    if all(entry["reason"] == "reindexing" for entry in entries):
+        return {
+            "status": "in_progress",
+            "message": messages,
+            "files_left_out": _public(entries),
+            "hint": "Tell the user the edited documents are re-indexing; search again shortly.",
+        }
+    return {
+        "status": "error",
+        "error": messages,
+        "files_left_out": _public(entries),
+        "instruction": (
+            "Tell the user why. Do not answer from what these documents said "
+            "before, and do not say they hold no relevant information."
+        ),
+    }
+
+
+def _public(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [{k: v for k, v in entry.items() if k != "job"} for entry in entries]
+
+
+def _left_out_note(left_out: Dict[str, Dict[str, Any]]) -> str:
+    """Instruction prefix naming documents a partial search left out."""
+    messages = " ".join(entry["message"] for entry in left_out.values())
+    return (
+        f"Left out of this search: {messages} Tell the user, and do not say the "
+        "documents lack anything those files might hold. "
+    )
+
+
 def _rag_not_available() -> str:
     return f"RAG not available. {missing_extra_hint('rag')}"
 
@@ -688,6 +821,20 @@ class RAGToolsMixin:
                         ),
                     }
 
+                indexed = list(rag.indexed_files)
+                left_out = _bring_current(self, rag, indexed)
+                if left_out and len(left_out) == len(indexed):
+                    return _left_out_result(left_out)
+                stale_texts = set()
+                if left_out:
+                    with rag._state_lock:  # pylint: disable=protected-access
+                        stale_texts = {
+                            rag.chunks[i]
+                            for path in left_out
+                            for i in rag.file_to_chunk_indices.get(path, [])
+                            if i < len(rag.chunks)
+                        }
+
                 # Generate multiple search keys for better retrieval
                 search_keys = self._generate_search_keys(query)
                 logger.info(f"Generated {len(search_keys)} search keys for query")
@@ -790,10 +937,21 @@ class RAGToolsMixin:
                         return _embedding_error(embedding_errors[-1])
                     raise key_failures[-1]
 
+                if stale_texts:
+                    kept_pairs = [
+                        (chunk, score)
+                        for chunk, score in zip(all_chunks, all_scores)
+                        if chunk not in stale_texts
+                    ]
+                    all_chunks = [chunk for chunk, _ in kept_pairs]
+                    all_scores = [score for _, score in kept_pairs]
+
                 # HYBRID SEARCH: add the chunks that best match the query's words
                 keyword_boost_info = []
                 keywords = keyword_index(rag)
                 for chunk_idx, boost_score, matching_terms in keywords.rank(query):
+                    if keywords.texts[chunk_idx] in stale_texts:
+                        continue
                     # Deduplication below keeps a chunk's higher score.
                     all_chunks.append(keywords.texts[chunk_idx])
                     all_scores.append(boost_score)
@@ -853,6 +1011,11 @@ class RAGToolsMixin:
                         "relevance_scores": [],
                         "instruction": "Inform the user that no relevant information was found in the documents for their query.",
                     }
+                    if left_out:
+                        result["files_left_out"] = _public(list(left_out.values()))
+                        result["instruction"] = (
+                            _left_out_note(left_out) + result["instruction"]
+                        )
                     if debug_info:
                         result["debug_info"] = debug_info
                     return result
@@ -912,7 +1075,7 @@ class RAGToolsMixin:
 
                 kept = top_or_whole_index(
                     sorted_items,
-                    rag.chunks,
+                    [chunk for chunk in rag.chunks if chunk not in stale_texts],
                     adaptive_max,
                     _CHUNK_CHARS,
                 )
@@ -1014,6 +1177,11 @@ class RAGToolsMixin:
                         all("page" in chunk for chunk in formatted_chunks),
                     ),
                 }
+                if left_out:
+                    result["files_left_out"] = _public(list(left_out.values()))
+                    result["instruction"] = (
+                        _left_out_note(left_out) + result["instruction"]
+                    )
 
                 # Add debug info to result if debug mode is enabled
                 if debug_info:
@@ -1181,6 +1349,10 @@ class RAGToolsMixin:
                 if len(matching_files) > 1:
                     return _ambiguous_file_error(file_path, matching_files)
                 target_file = matching_files[0]
+                if not auto_indexed:
+                    left_out = _bring_current(self, rag, [str(target_file)])
+                    if left_out:
+                        return _left_out_result(left_out)
 
                 # Generate search keys for better retrieval
                 search_keys = self._generate_search_keys(query)
@@ -1539,17 +1711,30 @@ class RAGToolsMixin:
                 if not self.rag.chunks:
                     return {"status": "error", "error": self._no_documents_message()}
 
+                indexed = list(self.rag.indexed_files)
+                left_out = _bring_current(self, self.rag, indexed)
+                if left_out and len(left_out) == len(indexed):
+                    return _left_out_result(left_out)
+                searched = list(self.rag.chunks)
+                if left_out:
+                    with self.rag._state_lock:  # pylint: disable=protected-access
+                        searched = [
+                            chunk
+                            for i, chunk in enumerate(self.rag.chunks)
+                            if self.rag.chunk_to_file.get(i) not in left_out
+                        ]
+
                 # Search through chunks for pattern
                 matching_chunks = []
                 pattern_lower = pattern.lower()
 
                 if debug_info:
-                    debug_info["total_chunks_searched"] = len(self.rag.chunks)
+                    debug_info["total_chunks_searched"] = len(searched)
                     logger.info(
-                        f"[DEBUG] search_indexed_chunks: Searching for '{pattern}' in {len(self.rag.chunks)} chunks"
+                        f"[DEBUG] search_indexed_chunks: Searching for '{pattern}' in {len(searched)} chunks"
                     )
 
-                for i, chunk in enumerate(self.rag.chunks):
+                for i, chunk in enumerate(searched):
                     if pattern_lower in chunk.lower():
                         matching_chunks.append(chunk)
 
@@ -1587,6 +1772,9 @@ class RAGToolsMixin:
                         "matches": [],
                         "count": 0,
                     }
+                    if left_out:
+                        result["files_left_out"] = _public(list(left_out.values()))
+                        result["instruction"] = _left_out_note(left_out)
                     if debug_info:
                         result["debug_info"] = debug_info
                     return result
@@ -1602,6 +1790,11 @@ class RAGToolsMixin:
                     "showing": len(limited_matches),
                     "instruction": "Use these exact matches to answer the user's question.",
                 }
+                if left_out:
+                    result["files_left_out"] = _public(list(left_out.values()))
+                    result["instruction"] = (
+                        _left_out_note(left_out) + result["instruction"]
+                    )
 
                 # Add debug info to result if debug mode is enabled
                 if debug_info:
