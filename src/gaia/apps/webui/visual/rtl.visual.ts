@@ -1138,6 +1138,50 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
+        test('a connected server that will not start says so, with the reason', async ({ page }) => {
+            const slack = {
+                id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', icon: null, category: 'general', tier: 'core',
+                description: 'Lets GAIA read and post in Slack.', product_url: 'https://example.com', docs_url: null,
+                configured: true, configurable: true, enabled: true, account_id: null, default_scopes: [], available_scopes: [],
+                mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [], supports_device_code: false,
+            };
+            await openConnectors(page, [slack]);
+            await page.route('**/api/connectors/mcp-slack/test', (route) => route.fulfill({
+                json: { ok: false, detail: 'Authentication failed - check your Slack tokens: invalid_auth (token revoked or expired; xoxb token for workspace T0123456789)' },
+            }));
+            await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
+            await page.locator('.connector-detail .configure-actions .btn-secondary').first().click();
+            await expect(page.locator('.connector-check--failed')).toBeVisible();
+            await page.locator('.connector-check--failed summary').click();
+            await expect(page.locator('.connector-check--failed pre')).toBeVisible();
+            await page.locator('.connector-check--failed').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-check-failed`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi, pre, .mcp-key-label')).toEqual([]);
+        });
+
+        test('a server that was only slow to start is not blamed on the token', async ({ page }) => {
+            const slack = {
+                id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', icon: null, category: 'general', tier: 'core',
+                description: 'Lets GAIA read and post in Slack.', product_url: 'https://example.com', docs_url: null,
+                configured: true, configurable: true, enabled: true, account_id: null, default_scopes: [], available_scopes: [],
+                mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [], supports_device_code: false,
+            };
+            await openConnectors(page, [slack]);
+            await page.route('**/api/connectors/mcp-slack/test', (route) => route.fulfill({
+                json: { ok: false, reason: 'timeout', detail: 'did not start within 10 seconds' },
+            }));
+            await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
+            await page.locator('.connector-detail .configure-actions .btn-secondary').first().click();
+            await expect(page.locator('.connector-check--failed')).toBeVisible();
+            await page.locator('.connector-check--failed summary').click();
+            await expect(page.locator('.connector-check--failed pre')).toBeVisible();
+            await page.locator('.connector-check--failed').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-check-slow`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi, pre, .mcp-key-label')).toEqual([]);
+        });
+
         test('phone width: a long account stays on screen', async ({ page }) => {
             await page.setViewportSize({ width: 390, height: 844 });
             await open(page, '', locale, (p) => withConnectors(p));

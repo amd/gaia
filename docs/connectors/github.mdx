@@ -105,7 +105,9 @@ why visibility and credential access are gated separately.
 ### `Bad credentials` from the MCP server
 
 The token in your keyring is wrong, expired, or revoked. Click
-**Disconnect** on the tile and re-paste a fresh token.
+**Disconnect** on the tile and re-paste a fresh token. **Check** on the tile
+won't catch this: the GitHub server only checks the token when a tool runs, so
+it starts fine with a bad one.
 
 ### Private repos are missing, or you hit the anonymous rate limit
 
