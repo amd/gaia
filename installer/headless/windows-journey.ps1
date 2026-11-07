@@ -63,8 +63,24 @@ if ($env:KIND -eq 'install-ps1') {
 }
 $gaiaHome = "$userHome\.gaia"
 
-$tuiDir    = "$env:LOCALAPPDATA\Programs\gaia-tui"
-$tuiArp    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\gaia-tui'
+# Setups since #5204 install the terminal under gaia-tui ids; earlier releases,
+# which the journeys may be testing, used the "Terminal Hub" ones. The release
+# under test is whichever layout its setup recorded; before an install and
+# after an uninstall there is none, so those steps check both.
+$tuiLayouts = @(
+    @{ Dir = "$env:LOCALAPPDATA\Programs\gaia-tui"
+       Arp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\gaia-tui'
+       Key = 'HKCU:\Software\GAIA\gaia-tui' },
+    @{ Dir = "$env:LOCALAPPDATA\Programs\GAIA Terminal Hub"
+       Arp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub'
+       Key = 'HKCU:\Software\GAIA\TerminalHub' }
+)
+$recorded = @($tuiLayouts | Where-Object { Test-Path $_.Key })
+if ($recorded.Count -gt 1) { throw 'the terminal is recorded under both the gaia-tui and the legacy ids' }
+$tuiLayout = if ($recorded.Count -eq 1) { $recorded[0] } else { $tuiLayouts[0] }
+$tuiDir    = $tuiLayout.Dir
+$tuiArp    = $tuiLayout.Arp
+$tuiDirs   = @($tuiLayouts | ForEach-Object { $_.Dir })
 $uiGuid    = '071ff68a-44b8-5d94-b099-f93e99d1c3f3'
 $uiKey     = "HKCU:\Software\$uiGuid"
 $uiArp     = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$uiGuid"
@@ -364,7 +380,7 @@ switch ($Step) {
 
     'install' {
         if ($env:KIND -ne 'install-ps1') {
-            if ((Test-Path $tuiDir) -or (Test-Path $uiKey) -or (Test-Path $gaiaHome)) { Fail 'GAIA is already on this runner: it is not clean' }
+            if (($tuiDirs | Where-Object { Test-Path $_ }) -or (Test-Path $uiKey) -or (Test-Path $gaiaHome)) { Fail 'GAIA is already on this runner: it is not clean' }
         }
         switch ($env:KIND) {
             'win-setup' {
@@ -418,13 +434,20 @@ switch ($Step) {
         }
         if (Wants 'tui') {
             if ($env:KIND -ne 'install-ps1') {
+                # Read after the setup ran: it is what recorded the layout.
+                $recorded = @($tuiLayouts | Where-Object { Test-Path $_.Key })
+                if ($recorded.Count -ne 1) { Fail "the setup recorded the terminal under $($recorded.Count) sets of ids, expected 1" }
+                $tuiDir = $recorded[0].Dir
+                Write-Host "the release under test installed the terminal to $tuiDir"
                 foreach ($f in 'gaia-tui.exe', 'gaia-agent.exe', 'Uninstall.exe') {
                     if (-not (Test-Path "$tuiDir\$f")) { Fail "$f did not land in $tuiDir" }
                 }
                 $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path
                 if ($regPath -notlike "*$tuiDir*") { Fail "the terminal's folder was not added to the user PATH" }
             }
-        } elseif (Test-Path $tuiDir) { Fail "$tuiDir exists though the terminal was not chosen" }
+        } else {
+            foreach ($d in $tuiDirs) { if (Test-Path $d) { Fail "$d exists though the terminal was not chosen" } }
+        }
         if (Wants 'ui') {
             $dir = Ui-Dir
             if (-not $dir -or -not (Test-Path "$dir\gaia-desktop.exe")) { Fail "the desktop app is not installed (InstallLocation: '$dir')" }
@@ -537,12 +560,12 @@ switch ($Step) {
             $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path -ErrorAction SilentlyContinue).Path
             if ($regPath -like "*$gaiaHome*") { $problems += 'the user PATH still names the sandbox .gaia' }
         } else {
-            foreach ($p in $tuiDir, $tuiArp, $uiArp, $uiDefault, "$desktop\GAIA.lnk", "$desktop\GAIA Terminal UI.lnk",
-                           "$startMenu\GAIA.lnk", "$startMenu\GAIA\GAIA Terminal UI.lnk", $fragment) {
+            foreach ($p in @($tuiLayouts | ForEach-Object { $_.Dir; $_.Arp; $_.Key }) + @($uiArp, $uiDefault, "$desktop\GAIA.lnk", "$desktop\GAIA Terminal UI.lnk",
+                           "$startMenu\GAIA.lnk", "$startMenu\GAIA\GAIA Terminal UI.lnk", $fragment)) {
                 if (Test-Path $p) { $problems += "left behind: $p" }
             }
             $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path -ErrorAction SilentlyContinue).Path
-            if ($regPath -like "*$tuiDir*") { $problems += "the terminal's folder is still on the user PATH" }
+            foreach ($d in $tuiDirs) { if ($regPath -like "*$d*") { $problems += "the terminal's folder $d is still on the user PATH" } }
             if (Get-ItemProperty -Path $runKey -Name 'GAIA' -ErrorAction SilentlyContinue) { $problems += 'the desktop app still starts at sign-in (Run key GAIA)' }
             if (Test-Path $uiKey) { Write-Host "::warning::$uiKey survived the uninstall" }
         }

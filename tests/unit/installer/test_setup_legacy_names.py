@@ -53,7 +53,7 @@ def _block(kind: str, name: str) -> str:
 def _install_dir() -> str:
     m = re.search(r'^InstallDir "([^"]+)"', _nsi(), re.M)
     assert m, "gaia-setup.nsi sets no InstallDir"
-    return m.group(1)
+    return m.group(1).replace("${DEFAULT_DIR}", _define("DEFAULT_DIR"))
 
 
 # ── A fresh install uses the current names ─────────────────────────────────
@@ -209,14 +209,34 @@ def test_the_tui_self_updater_reads_the_key_the_setup_writes():
     assert m.group(1) == _define("SETTINGS_KEY")
 
 
-def test_smoke_and_journey_tests_check_the_current_folder_and_entry():
-    for script in (SMOKE, JOURNEY):
-        text = script.read_text(encoding="utf-8")
-        assert r'$tuiDir    = "$env:LOCALAPPDATA\Programs\gaia-tui"' in text, script
-        assert (
-            r"$tuiArp    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion"
-            r"\Uninstall\gaia-tui'" in text
-        ), script
+def test_smoke_test_checks_the_current_folder_and_entry():
+    text = SMOKE.read_text(encoding="utf-8")
+    assert r'$tuiDir    = "$env:LOCALAPPDATA\Programs\gaia-tui"' in text
+    assert (
+        r"$tuiArp    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion"
+        r"\Uninstall\gaia-tui'" in text
+    )
+
+
+def test_journey_accepts_the_layout_the_release_under_test_recorded():
+    """The journeys install a published release, which may predate #5204."""
+    text = JOURNEY.read_text(encoding="utf-8")
+    for dir_, key in (
+        ("gaia-tui", r"Software\GAIA\gaia-tui"),
+        (LEGACY_FOLDER, LEGACY_SETTINGS),
+    ):
+        assert '"$env:LOCALAPPDATA\\Programs\\' + dir_ + '"' in text
+        assert rf"'HKCU:\{key}'" in text
+    # The layout comes from the key the setup wrote, never from a guess.
+    assert "Where-Object { Test-Path $_.Key }" in text
+    assert "foreach ($d in $tuiDirs)" in text
+
+
+def test_an_explicit_install_folder_wins_over_an_old_custom_one():
+    """``/D=`` leaves $INSTDIR off the default; the legacy folder must not undo it."""
+    find = _block("Function", "FindLegacyInstall")
+    assert '${AndIf} $INSTDIR == "${DEFAULT_DIR}"' in find
+    assert find.index("${DEFAULT_DIR}") < find.index('StrCpy $INSTDIR "$R0"')
 
 
 def test_smoke_test_upgrades_a_planted_legacy_install():

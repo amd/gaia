@@ -140,7 +140,8 @@ RequestExecutionLevel user
 ; NOT "...\Programs\gaia": Windows paths ignore case, so that can be the Agent
 ; UI's electron-builder folder (productName "GAIA", perMachine false), and its
 ; uninstaller removes its folder recursively.
-InstallDir "$LOCALAPPDATA\Programs\gaia-tui"
+!define DEFAULT_DIR       "$LOCALAPPDATA\Programs\gaia-tui"
+InstallDir "${DEFAULT_DIR}"
 InstallDirRegKey HKCU "${SETTINGS_KEY}" "InstallDir"
 ShowInstDetails show
 ShowUnInstDetails show
@@ -480,8 +481,8 @@ SectionEnd
 ; ─── Upgrading an install made under the legacy ids ────────────────────────
 
 ; Finds an install an earlier setup made under the legacy ids. Only its default
-; folder moves to the new default; a folder the user chose stays theirs.
-; Clobbers $R0 and $R1.
+; folder moves to the new default; a folder the user chose stays theirs, unless
+; /D= names another. Clobbers $R0 and $R1.
 Function FindLegacyInstall
   StrCpy $LegacyDir ""
   ReadRegStr $R0 HKCU "${LEGACY_SETTINGS_KEY}" "InstallDir"
@@ -492,9 +493,11 @@ Function FindLegacyInstall
     StrCpy $LegacyDir "$R0"
     Return
   ${EndIf}
-  ; A current install already chose its folder through InstallDirRegKey.
+  ; A current install already chose its folder through InstallDirRegKey, and
+  ; /D= leaves $INSTDIR off the default: either one wins over the old folder.
   ReadRegStr $R1 HKCU "${SETTINGS_KEY}" "InstallDir"
   ${If} $R1 == ""
+  ${AndIf} $INSTDIR == "${DEFAULT_DIR}"
     StrCpy $INSTDIR "$R0"
   ${EndIf}
 FunctionEnd
