@@ -478,17 +478,22 @@ def test_step_cap_closing_call_trims_old_results_and_retries_once(agent):
 
 
 def test_step_cap_closing_call_says_plainly_when_it_cannot_fit(agent):
-    # A prompt over the window the backend reported is refused at step 1, and
-    # the turn ends as failed there — the same plain copy, never the body.
-    agent.tool_result = {"status": "success", "body": _BIG_RESULT}
-    _stub_chat(agent, OverflowError(_TOO_LONG))
+    """The step ran; only the wrap-up is refused, and trimming can't free enough."""
+    agent.tool_result = {"status": "success", "body": "short"}
+    chat = _stub_chat(agent, _tool_call(1), OverflowError(_TOO_LONG))
 
     result = agent.process_query("summarize issue 42", max_steps=1)
 
     answer = result["result"]
-    assert "more than fits in the model's context window" in answer
+    assert "I ran out of steps" in answer
+    # Its own paragraph, so it must open as a sentence with its subject.
+    assert (
+        "\n\nThe summary of what I found couldn't be written. "
+        f"{_CONTEXT_STILL_OVERFLOWING_MESSAGE}"
+    ) in answer
     assert "status 400" not in answer
     assert "{" not in answer
+    assert len(_model_calls(agent, chat)) == 2
 
 
 def test_closing_overflow_note_names_the_limit_without_the_backend_body(agent):
@@ -533,6 +538,31 @@ def test_no_tools_closing_retry_recovers_from_an_overflow_too(agent):
     retried = _model_calls(agent, chat)[-1].kwargs
     assert retried["tools"] is None
     assert "no longer available" in retried["messages"][-1]["content"]
+    assert _TRIM_NOTE in str(retried["messages"])
+    assert _BIG_RESULT not in str(retried["messages"])
+
+
+def test_no_tools_retry_reuses_the_trimmed_history(agent):
+    """A tool call on the trimmed retry must not resend, and re-trim, the full history."""
+    agent.tool_result = {"status": "success", "body": _BIG_RESULT}
+    chat = _stub_chat(
+        agent,
+        _tool_call(1),
+        _tool_call(2),
+        OverflowError(_TOO_LONG),
+        _tool_call(3),
+        _answer(_SUMMARY),
+    )
+
+    with patch.object(
+        agent, "_shrink_for_overflow_retry", wraps=agent._shrink_for_overflow_retry
+    ) as shrink:
+        result = agent.process_query("summarize issue 42", max_steps=2)
+
+    assert result["result"].startswith(_SUMMARY)
+    assert shrink.call_count == 1
+    retried = _model_calls(agent, chat)[-1].kwargs
+    assert retried["tools"] is None
     assert _TRIM_NOTE in str(retried["messages"])
     assert _BIG_RESULT not in str(retried["messages"])
 

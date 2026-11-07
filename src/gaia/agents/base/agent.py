@@ -922,6 +922,9 @@ _NO_TOOLS_RETRY_NOTE = (
 class _NotAnAnswer(ValueError):
     """The closing reply came back, but it was a tool call or nothing."""
 
+    #: The trimmed history it was asked with, so the retry doesn't trim again.
+    sent: Optional[List[Dict[str, Any]]] = None
+
 
 class _ClosingOverflow(RuntimeError):
     """The closing call, and its one trimmed retry, were both too long."""
@@ -8009,7 +8012,7 @@ Do NOT wrap conversational replies in JSON.
             )
             try:
                 return self._closing_answer_recovering_overflow(
-                    messages,
+                    first.sent if first.sent is not None else messages,
                     conversation,
                     f"{instruction}\n\n{_NO_TOOLS_RETRY_NOTE}",
                     step,
@@ -8085,7 +8088,8 @@ Do NOT wrap conversational replies in JSON.
                 return self._closing_answer_once(
                     shrunk, conversation, instruction, step, offer_tools
                 )
-            except _NotAnAnswer:
+            except _NotAnAnswer as not_answer:
+                not_answer.sent = shrunk
                 raise
             except Exception as retried:  # noqa: BLE001 - given up outside
                 logger.warning(
