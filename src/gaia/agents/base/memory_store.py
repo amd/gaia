@@ -1023,15 +1023,13 @@ class MemoryStore:
             except sqlite3.OperationalError as e:
                 if "duplicate column" not in str(e).lower():
                     raise
-            self._conn.execute(
-                """
+            self._conn.execute("""
                 UPDATE tool_history
                 SET executed = 0
                 WHERE success = 0 AND executed = 1
                   AND (result_summary LIKE '%"status": "denied%'
                        OR result_summary LIKE '%''status'': ''denied''%')
-                """
-            )
+                """)
             self._conn.execute(
                 "UPDATE schema_version SET version = 8, migrated_at = ?", (_now_iso(),)
             )
@@ -2634,16 +2632,14 @@ class MemoryStore:
             {total_items, with_embedding, without_embedding, coverage_pct}
         """
         with self._locked():
-            row = self._conn.execute(
-                """
+            row = self._conn.execute("""
                 SELECT
                     COUNT(*) AS total_items,
                     SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END) AS with_embedding,
                     SUM(CASE WHEN embedding IS NULL THEN 1 ELSE 0 END) AS without_embedding
                 FROM knowledge
                 WHERE superseded_by IS NULL
-                """
-            ).fetchone()
+                """).fetchone()
         total = row[0] or 0
         with_emb = row[1] or 0
         without_emb = row[2] or 0
@@ -5010,13 +5006,11 @@ class MemoryStore:
     def _rebuild_knowledge_fts_locked(self):
         """Rebuild knowledge FTS5 index. Must hold self._lock."""
         self._conn.execute("DELETE FROM knowledge_fts")
-        self._conn.execute(
-            """
+        self._conn.execute("""
             INSERT INTO knowledge_fts (rowid, content, domain, category)
             SELECT rowid, content, COALESCE(domain, ''), category
             FROM knowledge
-            """
-        )
+            """)
 
     def _rebuild_conversations_fts_locked(self):
         """Rebuild conversations FTS5 index. Must hold self._lock."""
