@@ -5463,7 +5463,6 @@ class MemoryMixin(ProceduralMemoryMixin):
                 category: fact, preference, error, skill, note, or reminder.
                 domain: Sub-type, e.g. 'journal', 'todo', 'work'.
                 due_at: ISO 8601 timestamp; reminders only.
-                context: Scope — 'work', 'personal', or 'global'.
                 sensitive: "true" to mark the entry private.
                 entity: Linked entity, e.g. 'person:Linda' or 'app:slack'.
             """

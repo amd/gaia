@@ -1227,6 +1227,11 @@ gaia talk [OPTIONS]
 
 Speech recognition (Whisper) and voice output (Kokoro) run in the same Lemonade Server as the chat model, at `--base-url`; the first run downloads both models through it. The microphone is muted while GAIA speaks. Say "stop" or press Ctrl+C to end the session; `gaia talk` exits non-zero if the voice loop, the microphone or Lemonade's transcription fails.
 
+Document Q&A requires both extras: `uv pip install "amd-gaia[talk,rag]"`.
+With `--index`, the document must index successfully before voice chat starts.
+Missing RAG dependencies or an indexing failure exit non-zero without starting
+the voice session; fix the reported error and retry.
+
 **Examples:**
 
 <CodeGroup>
