@@ -137,6 +137,34 @@ class TestAForgetTurnDoesNotRelearnIt:
 
         assert _contents(store) == []
 
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Never mind, forget my mango allergy.",
+            "Don't worry about it, just forget that I am allergic to mango.",
+            "Okay, forget that I am allergic to mango.",
+        ],
+    )
+    def test_a_discourse_aside_does_not_negate_the_forget(self, store, message):
+        """The aside's negation negates the aside, not the request (#6914).
+
+        On main the fact was saved again on this turn, because "never" in
+        "Never mind," read as negating the forget request itself.
+        """
+        host = _Host(store, [_add(MANGO, "fact")])
+
+        host.process_query(message)
+
+        assert _contents(store) == []
+
+    def test_a_lone_negation_word_before_a_comma_still_keeps_the_fact(self, store):
+        """ "Never, ever forget" repeats the negation as its own clause."""
+        host = _Host(store, [_add(MANGO, "fact")])
+
+        host.process_query("Never, ever forget that I am allergic to mango.")
+
+        assert _contents(store) == [MANGO]
+
     def test_what_else_the_user_says_on_that_turn_is_still_learned(self, store):
         host = _Host(store, [_add(MANGO, "fact"), _add("Likes kiwi")])
 
@@ -167,6 +195,8 @@ class TestAForgetTurnDoesNotRelearnIt:
             "Please don't ever forget that I'm vegetarian",
             "I don't want you to forget that I'm vegetarian",
             "Never, ever forget I'm vegetarian",
+            "Don't ever, ever forget that I'm vegetarian",
+            "Please don't, under any circumstances, forget that I'm vegetarian",
             "Make sure you never forget I am vegetarian",
             "Did you forget I'm vegetarian?",
             "You forgot I'm vegetarian. Don’t forget again: I'm vegetarian",
