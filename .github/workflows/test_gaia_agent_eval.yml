@@ -62,10 +62,10 @@
 # Self-hosted: needs a running Lemonade Server on AMD hardware + the Agent UI
 # backend, so it runs on the ephemeral devlab-dispatch Strix Halo pool. THIS
 # POOL IS WINDOWS: every inline `run:` is PowerShell 5.1 (see the shell
-# default) — do not reintroduce bash (test_eval_agent_gemma_consolidation.yml
-# documents the scar). Each job gets a fresh machine with its own Lemonade, so
-# it must NOT join the `lemonade-eval` slot: that group serialises by name
-# across machines and belongs to the persistent pool (see eval_flagship.yml).
+# default) — do not reintroduce bash. Each job gets a fresh machine with its
+# own Lemonade, so it must NOT join the `lemonade-eval` slot: that group
+# serialises by name across machines and belongs to the persistent pool (see
+# eval_flagship.yml).
 
 name: GAIA Agent Eval (judged scenarios, report mode)
 
