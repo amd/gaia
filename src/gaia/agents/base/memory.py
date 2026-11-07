@@ -1847,6 +1847,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                     e,
                 )
         try:
+            # Dedup can keep the row's fuller wording; embed what was stored.
+            row = self._memory_store.get_item(knowledge_id)
+            if row is not None:
+                text = row["content"]
             vec = self._embed_text(text)
             self._memory_store.store_embedding(knowledge_id, _embedding_to_blob(vec))
         except Exception as e:  # the row is saved; only its vector is lost

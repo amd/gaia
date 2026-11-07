@@ -6493,3 +6493,25 @@ class TestSideRequestsDropReasoning:
             result = host.reconcile_memory()
 
         assert result["reinforced"] == (0 if shape == "unclosed" else 1)
+
+
+def test_merged_restatement_is_embedded_with_the_stored_text(mixin_with_tools):
+    """A shorter restatement merges into the fuller row; its vector must match the row."""
+    from gaia.agents.base.memory import MemoryMixin
+
+    store = mixin_with_tools.memory_store
+    full = "My sister's name is Ana Lopez"
+    kid = store.store(category="fact", content=full)
+    embedded = []
+
+    def _embed(_self, text):
+        embedded.append(text)
+        return np.ones(768, dtype=np.float32)
+
+    remember = mixin_with_tools._registered_tools["remember"]["function"]
+    with patch.object(MemoryMixin, "_embed_text", _embed):
+        result = remember(fact="My sister's name is Ana", category="fact")
+
+    assert result["knowledge_id"] == kid
+    assert store.get_item(kid)["content"] == full
+    assert embedded == [full]
