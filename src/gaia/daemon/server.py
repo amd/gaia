@@ -406,11 +406,15 @@ def run(host: str = HOST) -> None:
     # Exit once nothing can find this daemon (its home or instance.json is
     # gone), the GAIA_DAEMON_EXIT_WITH_PID process has exited, or, outside the
     # default home, nothing has used it for the idle limit.
+    from gaia import version
+
     lifetime = LifetimeWatch(
         _exit_on_own,
         exit_with_pid=exit_with_pid,
         idle=idle,
         idle_limit=idle_limit,
+        version_file=os.path.abspath(version.__file__),
+        appimage_path=os.environ.get("APPIMAGE") or None,
     )
 
     _register = _build_register(

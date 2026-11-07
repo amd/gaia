@@ -121,6 +121,29 @@ def test_home_is_checked_before_the_tied_pid(daemon_home, dead_pid):
     assert str(daemon_home) in reason
 
 
+def test_reason_when_the_installed_version_file_is_gone(registered, tmp_path):
+    version_file = tmp_path / "GAIA.app" / "version.py"
+    version_file.parent.mkdir()
+    version_file.write_text('__version__ = "test"', encoding="utf-8")
+    assert lifetime.exit_reason(version_file=str(version_file)) is None
+
+    version_file.unlink()
+
+    reason = lifetime.exit_reason(version_file=str(version_file))
+    assert reason is not None and "install" in reason and str(version_file) in reason
+
+
+def test_reason_when_the_outer_appimage_is_gone(registered, tmp_path):
+    appimage = tmp_path / "GAIA.AppImage"
+    appimage.write_bytes(b"appimage")
+    assert lifetime.exit_reason(appimage_path=str(appimage)) is None
+
+    appimage.unlink()
+
+    reason = lifetime.exit_reason(appimage_path=str(appimage))
+    assert reason is not None and "AppImage" in reason and str(appimage) in reason
+
+
 # -- LifetimeWatch ---------------------------------------------------------------
 
 

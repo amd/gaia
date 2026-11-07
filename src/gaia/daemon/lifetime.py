@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import threading
+from pathlib import Path
 from typing import Callable, Optional
 
 from gaia.config import default_gaia_home
@@ -95,12 +96,17 @@ def exit_reason(
     exit_with_pid: Optional[int] = None,
     idle_seconds: Optional[float] = None,
     idle_limit: Optional[float] = None,
+    version_file: Optional[str] = None,
+    appimage_path: Optional[str] = None,
 ) -> Optional[str]:
     """Why this daemon should exit now, or None while it should keep running.
 
     *idle_seconds* is how long nothing has used the daemon (None while
     something does); it counts against *idle_limit* only outside the default
-    home.
+    home. *version_file* identifies the installed copy that owns this daemon;
+    its disappearance means the app was removed. *appimage_path* is watched
+    separately because an AppImage can leave its mounted copy readable after
+    the outer file is deleted.
     """
     home = paths.host_dir()
     if not home.is_dir():
@@ -109,6 +115,10 @@ def exit_reason(
     state = paths.instance_path()
     if not state.is_file():
         return f"its state file {state} no longer exists"
+    if version_file and not Path(version_file).is_file():
+        return f"its install ({version_file}) is gone"
+    if appimage_path and not Path(appimage_path).is_file():
+        return f"its AppImage ({appimage_path}) is gone"
     if exit_with_pid is not None and not pid_alive(exit_with_pid):
         return f"process {exit_with_pid} ({EXIT_WITH_PID_ENV}) has exited"
     if (
@@ -170,6 +180,10 @@ class LifetimeWatch:
         idle: Seconds since anything last used the daemon, or None while
             something does.
         idle_limit: Exit once *idle* reaches this, outside the default home.
+        version_file: Installed GAIA file whose removal means this daemon's app
+            was deleted.
+        appimage_path: Outer AppImage file, when this daemon was launched from
+            one.
         interval: Seconds between checks.
     """
 
@@ -180,6 +194,8 @@ class LifetimeWatch:
         exit_with_pid: Optional[int] = None,
         idle: Optional[Callable[[], Optional[float]]] = None,
         idle_limit: Optional[float] = None,
+        version_file: Optional[str] = None,
+        appimage_path: Optional[str] = None,
         interval: float = CHECK_SECONDS,
     ) -> None:
         if interval <= 0:
@@ -188,6 +204,8 @@ class LifetimeWatch:
         self._exit_with_pid = exit_with_pid
         self._idle = idle
         self._idle_limit = idle_limit
+        self._version_file = version_file
+        self._appimage_path = appimage_path
         self._interval = interval
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -217,7 +235,13 @@ class LifetimeWatch:
                 # A failed probe only delays an idle exit; the home checks must keep running.
                 logger.exception("daemon: idle check failed; will retry")
                 idle = None
-            reason = exit_reason(self._exit_with_pid, idle, self._idle_limit)
+            reason = exit_reason(
+                self._exit_with_pid,
+                idle,
+                self._idle_limit,
+                self._version_file,
+                self._appimage_path,
+            )
             if reason is None:
                 continue
             logger.warning(
