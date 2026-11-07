@@ -376,10 +376,17 @@ const connector = (id: string, display_name: string, type: string, over: Record<
 });
 
 const CONNECTORS = [
-    connector('google', 'Google', 'oauth_pkce', { configured: true, account_id: 'someone.with.a.long.address@example.com' }),
+    connector('google', 'Google', 'oauth_pkce', {
+        configured: true, account_id: 'someone.with.a.long.address@example.com',
+        description: 'Connect GAIA to your Google account for Gmail, Calendar, Drive, and more.',
+    }),
     connector('git', 'Git', 'mcp_server', { configured: true }),
     connector('github-mcp', 'GitHub', 'mcp_server', { configured: true, enabled: false, mcp_env_keys: ['GITHUB_TOKEN'] }),
-    connector('microsoft', 'Microsoft', 'oauth_pkce', { supports_device_code: true }),
+    // The catalog's own description, so the Arabic scenes show its translation.
+    connector('microsoft', 'Microsoft', 'oauth_pkce', {
+        supports_device_code: true,
+        description: 'Connect GAIA to your personal Microsoft account (Outlook.com, Hotmail, or Live) for Outlook mail, calendar, OneDrive, and more via Microsoft Graph. For a Microsoft 365 work or school account, use the Microsoft Work or School connector instead.',
+    }),
     connector('slack', 'Slack', 'oauth_pkce', {
         configurable: false, config_error: 'No client configured',
         oauth_setup_fields: [{ key: 'client_id', label: 'Client ID', kind: 'text', required: true, placeholder: '1234.5678', help_md: 'From your Slack app.' }],

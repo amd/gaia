@@ -25,6 +25,7 @@ import { useConnectorsSSE } from '../hooks/useConnectorsSSE';
 import type { MessageKey } from '../i18n/registry';
 import { useT, type Translate } from '../i18n/useT';
 import type { AgentMcpServer, ConnectorRow } from '../types';
+import { connectorDescription, connectorDescriptionBare, fieldHelp, fieldLabel, missingFieldsMessage } from '../utils/connectorText';
 import { ConnectorTileMenu } from './ConnectorTileMenu';
 import { SettingsDisclosure } from './settings/SettingsDisclosure';
 import './ConnectorsSection.css';
@@ -160,7 +161,9 @@ export function ConnectorsSection() {
 
     const q = query.trim().toLowerCase();
     const shown = connectors.filter(
-        (c) => !q || c.display_name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q),
+        (c) =>
+            !q ||
+            [c.display_name, c.description, connectorDescriptionBare(t, c)].some((s) => s.toLowerCase().includes(q)),
     );
     const connected = shown.filter((c) => c.configured);
     const accounts = shown.filter((c) => !c.configured && c.type === 'oauth_pkce');
@@ -473,11 +476,11 @@ function OAuthConfigureBody({
     // returns {flow_id, authorization_url} once the credentials land
     // and start_authorization succeeds.
     const handleSaveAndConnect = async () => {
-        const missing = (connector.oauth_setup_fields ?? [])
-            .filter((f) => f.required !== false && !setupValues[f.key]?.trim())
-            .map((f) => f.label);
+        const missing = (connector.oauth_setup_fields ?? []).filter(
+            (f) => f.required !== false && !setupValues[f.key]?.trim(),
+        );
         if (missing.length) {
-            setErr(t('settings.connectors.required', { fields: missing.join(', ') }));
+            setErr(missingFieldsMessage(t, connector.id, missing));
             return;
         }
         setBusy(true);
@@ -520,14 +523,14 @@ function OAuthConfigureBody({
     return (
         <div className="configure-body">
             {connector.description && (
-                <p className="connector-desc"><bdi>{connector.description}</bdi></p>
+                <p className="connector-desc"><bdi>{connectorDescription(t, connector)}</bdi></p>
             )}
             {showSetupForm && (
                 <div className="oauth-setup-form">
                     <p className="connector-desc">{t('settings.connectors.firstSetup')}</p>
                     {setupFields.map((field) => (
                         <label key={field.key} className="oauth-setup-field">
-                            <span className="oauth-setup-label">{field.label}</span>
+                            <span className="oauth-setup-label">{fieldLabel(t, connector.id, field)}</span>
                             <input
                                 type={field.kind === 'secret' ? 'password' : 'text'}
                                 className="oauth-setup-input"
@@ -543,7 +546,7 @@ function OAuthConfigureBody({
                                 spellCheck={false}
                             />
                             {field.help_md && (
-                                <span className="oauth-setup-help"><bdi>{field.help_md}</bdi></span>
+                                <span className="oauth-setup-help"><bdi>{fieldHelp(t, connector.id, field)}</bdi></span>
                             )}
                         </label>
                     ))}
@@ -769,7 +772,7 @@ function OAuthClientEditor({
                     <p className="connector-desc">{t('settings.connectors.clientHelp')}</p>
                     {fields.map((field) => (
                         <label key={field.key} className="oauth-setup-field">
-                            <span className="oauth-setup-label">{field.label}</span>
+                            <span className="oauth-setup-label">{fieldLabel(t, connector.id, field)}</span>
                             <input
                                 type={field.kind === 'secret' ? 'password' : 'text'}
                                 className="oauth-setup-input"
@@ -791,7 +794,7 @@ function OAuthClientEditor({
                                 spellCheck={false}
                             />
                             {field.help_md && (
-                                <span className="oauth-setup-help"><bdi>{field.help_md}</bdi></span>
+                                <span className="oauth-setup-help"><bdi>{fieldHelp(t, connector.id, field)}</bdi></span>
                             )}
                         </label>
                     ))}
@@ -907,7 +910,7 @@ function MCPServerConfigureBody({
     return (
         <div className="configure-body">
             {connector.description && (
-                <p className="connector-desc"><bdi>{connector.description}</bdi></p>
+                <p className="connector-desc"><bdi>{connectorDescription(t, connector)}</bdi></p>
             )}
             {err && (
                 <div className="configure-error">
