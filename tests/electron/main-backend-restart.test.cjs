@@ -10,10 +10,10 @@
 const fs = require("fs");
 const path = require("path");
 
-const main = fs.readFileSync(
-  path.join(__dirname, "..", "..", "src", "gaia", "apps", "webui", "main.cjs"),
-  "utf8"
-);
+// The slicing below matches "\n"; a CRLF checkout would never match it.
+const main = fs
+  .readFileSync(path.join(__dirname, "..", "..", "src", "gaia", "apps", "webui", "main.cjs"), "utf8")
+  .replace(/\r\n/g, "\n");
 const preload = fs.readFileSync(
   path.join(__dirname, "..", "..", "src", "gaia", "apps", "webui", "preload.cjs"),
   "utf8"

@@ -10,6 +10,7 @@ events queued for Server-Sent Events delivery to the frontend.
 import queue
 import re
 import time
+from pathlib import Path
 
 import pytest
 
@@ -679,6 +680,14 @@ class TestPrettyPrintJsonToolResults:
         assert len(rd["chunks"]) == 3
         # Each string chunk is wrapped in a structured object with preview/content
         assert "preview" in rd["chunks"][0]
+
+    def test_attachment_chunk_shows_the_name_the_user_knows(self, handler):
+        path = str(Path("home") / "chat" / "uploads" / "0123456789ab_plan.pdf")
+        data = {"chunks": [{"source_file": path, "content": "text"}]}
+        handler.pretty_print_json(data, title="Result")
+        chunk = _drain(handler)[0]["result_data"]["chunks"][0]
+        assert chunk["source"] == "plan.pdf"
+        assert chunk["sourcePath"] == path
 
     def test_chunks_previews_truncated_to_150_chars(self, handler):
         long_chunk = "x" * 300

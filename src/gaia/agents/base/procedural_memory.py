@@ -27,6 +27,7 @@ import numpy as np
 from gaia.agents.base.skill_synthesis import (
     DistilledProcedure,
     GoalCluster,
+    GoalEmbedRejected,
     SynthesisConfig,
     cluster_by_goal,
     distill_cluster,
@@ -38,6 +39,9 @@ from gaia.llm.lemonade_client import SIDE_SLOT, no_thinking_kwargs
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+#: llama-server's reply to an input longer than the embedder's batch.
+_EMBED_TOO_LARGE = "too large to process"
 
 _INCOMPLETE_MARKER = (
     "… INCOMPLETE — the remaining steps were cut to fit; this is not the "
@@ -838,18 +842,22 @@ class ProceduralMemoryMixin:
             store, pending, erase_count
         )
 
-        # CLUSTER — embedder failure RE-RAISES here (fail-loud).
+        # CLUSTER — embedder failure RE-RAISES here (fail-loud), except a goal
+        # the embedder refuses as too long, which only that session pays for.
+        rejected: List[Tuple[Dict, GoalEmbedRejected]] = []
         clusters = (
             cluster_by_goal(
                 pending,
-                self._embed_text,
+                self._embed_goal,
                 similarity_tau=config.similarity_tau,
                 min_occurrences=config.min_occurrences,
                 min_success_rate=config.min_success_rate,
+                on_rejected=lambda session, err: rejected.append((session, err)),
             )
             if pending
             else []
         )
+        consumed_now.update(self._mark_rejected_goals(store, rejected, erase_count))
         result["clusters"] = len(clusters)
 
         calls = 0
@@ -1033,6 +1041,58 @@ class ProceduralMemoryMixin:
         )
         consumed = set(ids)
         return [s for s in pending if s["session_id"] not in consumed], consumed
+
+    def _embed_goal(self, goal: str) -> np.ndarray:
+        """Embed a session goal; raise ``GoalEmbedRejected`` if it is too long.
+
+        Any other failure (Lemonade down, model missing) re-raises unchanged.
+        """
+        try:
+            return self._embed_text(goal)
+        except RuntimeError as e:
+            if _EMBED_TOO_LARGE not in str(e):
+                raise
+            raise GoalEmbedRejected(str(e)) from e
+
+    @staticmethod
+    def _mark_rejected_goals(
+        store,
+        rejected: List[Tuple[Dict, GoalEmbedRejected]],
+        erase_count: Optional[int] = None,
+    ) -> Set[str]:
+        """Consume the episodes whose goal the embedder refused.
+
+        Left pending, each would be re-sent and refused on every session
+        start and would pin the watermark below it.
+
+        Returns:
+            The consumed session ids.
+        """
+        by_goal: Dict[str, Tuple[List[str], GoalEmbedRejected]] = {}
+        for session, err in rejected:
+            by_goal.setdefault(str(session["goal"]), ([], err))[0].append(
+                session["session_id"]
+            )
+        consumed: Set[str] = set()
+        for goal, (ids, err) in by_goal.items():
+            store.mark_sessions_synthesized(
+                ids,
+                "unusable",
+                goal=goal,
+                detail=f"the embedder refused the goal as too long: {str(err)[:300]}",
+                erase_count=erase_count,
+            )
+            consumed.update(ids)
+        if consumed:
+            logger.warning(
+                "[MemoryMixin] skill synthesis: the embedder refused %d goal(s) as "
+                "too long (e.g. %r); %d episode(s) skipped. "
+                "MemoryStore.reset_synthesis_progress() retries them",
+                len(by_goal),
+                next(iter(by_goal))[:80],
+                len(consumed),
+            )
+        return consumed
 
     @staticmethod
     def _mark_cluster_consumed(
