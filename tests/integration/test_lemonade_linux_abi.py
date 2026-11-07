@@ -132,9 +132,10 @@ def _download(name: str, version: str, sha256: str) -> bytes:
         with urllib.request.urlopen(request, timeout=120) as response:
             data = response.read()
     except urllib.error.HTTPError as e:
-        # A missing or renamed release is a broken pin, not a transient network
-        # outage. Keep the bump gate honest even when the API is optional.
-        pytest.fail(f"Could not download {url}: HTTP {e.code} {e.reason}")
+        # 404/410 means the pinned release is missing; other HTTP errors may be transient.
+        if e.code in (404, 410) or os.environ.get("GAIA_REQUIRE_RELEASE_API"):
+            pytest.fail(f"Could not download {url}: HTTP {e.code} {e.reason}")
+        pytest.skip(f"Could not download {url}: HTTP {e.code} {e.reason}")
     except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
         if os.environ.get("GAIA_REQUIRE_RELEASE_API"):
             pytest.fail(f"Could not download {url}: {e}. Re-run the job.")
@@ -156,6 +157,20 @@ def test_a_missing_release_asset_fails_even_when_network_is_optional(monkeypatch
     monkeypatch.setattr(urllib.request, "urlopen", missing)
     with pytest.raises(pytest.fail.Exception, match="HTTP 404 Not Found"):
         _download("missing.tar.gz", "0.0.0", "0" * 64)
+
+
+def test_a_transient_release_http_error_still_skips_when_optional(monkeypatch):
+    """A transient GitHub error is not proof that the pinned release is wrong."""
+
+    def unavailable(*_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            "https://example.invalid/asset", 503, "Service Unavailable", {}, None
+        )
+
+    monkeypatch.delenv("GAIA_REQUIRE_RELEASE_API", raising=False)
+    monkeypatch.setattr(urllib.request, "urlopen", unavailable)
+    with pytest.raises(pytest.skip.Exception, match="HTTP 503 Service Unavailable"):
+        _download("temporarily-unavailable.tar.gz", "0.0.0", "0" * 64)
 
 
 def _binaries(archive: bytes) -> Dict[str, bytes]:
