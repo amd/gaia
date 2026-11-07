@@ -24,8 +24,10 @@ the Electron app's own bundled libraries and ``uv`` all stay at 2.17 or below
 and would run on 22.04 by themselves. Lowering the floor means lowering this
 ceiling only after a pinned engine is measured to fit under it.
 
-Skips when GitHub is unreachable or ``GAIA_SKIP_NETWORK_TESTS`` is set; with
-``GAIA_REQUIRE_RELEASE_API`` set (a Lemonade bump PR) it fails instead.
+The download test skips when GitHub is unreachable or
+``GAIA_SKIP_NETWORK_TESTS`` is set; with ``GAIA_REQUIRE_RELEASE_API`` set (a
+Lemonade bump PR) it fails instead. The fixture tests touch no network, so the
+switch leaves them running.
 """
 
 import hashlib
@@ -71,13 +73,7 @@ _SHT_GNU_VERNEED = 0x6FFFFFFE
 # Elf64_Shdr: name, type, flags, addr, offset, size, link, info, align, entsize.
 _SHDR = struct.Struct("<IIQQQQIIQQ")
 
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.skipif(
-        bool(os.environ.get("GAIA_SKIP_NETWORK_TESTS")),
-        reason="GAIA_SKIP_NETWORK_TESTS is set",
-    ),
-]
+pytestmark = pytest.mark.integration
 
 
 def symbol_version_needs(elf: bytes) -> Dict[str, Set[str]]:
@@ -250,6 +246,10 @@ def _binaries(archive: bytes) -> Dict[str, bytes]:
 @pytest.mark.parametrize(
     "template",
     sorted(t for (system, _), t in _ASSET_TEMPLATES.items() if system == "Linux"),
+)
+@pytest.mark.skipif(
+    bool(os.environ.get("GAIA_SKIP_NETWORK_TESTS")),
+    reason="GAIA_SKIP_NETWORK_TESTS is set",
 )
 def test_pinned_linux_lemonade_runs_on_ubuntu_24_04(template):
     """Every pinned Linux binary needs nothing newer than Ubuntu 24.04 ships."""
