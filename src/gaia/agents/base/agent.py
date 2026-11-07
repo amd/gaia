@@ -7630,10 +7630,22 @@ Do NOT wrap conversational replies in JSON.
                 else:
                     if denied_error == user_denial_message(tool_name):
                         denied["hint"] = DECLINED_HINT
+                        # A person's no: memory counts it against recalled procedures.
+                        note_decision = getattr(self, "_note_person_decision", None)
+                        if callable(note_decision):
+                            note_decision(False)
                     ledger = getattr(self, "_denied_effects", None)
                     if ledger is not None:
                         ledger.record(tool_name, tool_args, denied_error)
                 return denied
+            # Only a person's yes is an outcome; an auto-approving run is not.
+            approves_all = getattr(
+                self.console, "auto_approve_confirmations_enabled", None
+            )
+            if not (callable(approves_all) and approves_all()):
+                note_decision = getattr(self, "_note_person_decision", None)
+                if callable(note_decision):
+                    note_decision(True)
             # A call approved once runs against this record, and only once.
             noted = getattr(self, "note_confirmed_call", None)
             if callable(noted):

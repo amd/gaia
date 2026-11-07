@@ -187,6 +187,12 @@ mechanism** — and the same applies to gap **B2** in the decomposition notes,
 which lists outcome attribution as uncovered. `skill_deltas` carries
 `success_count` / `attempt_count` ready to read it. v1 still gates activation on
 **user consent** rather than counters, so nothing below is load-bearing yet.
+
+**Amended ([#2865](https://github.com/amd/gaia/issues/2865)).** Procedures now
+count outcomes after adoption: a person's answers to confirmation prompts in a turn
+that recalled the procedure. See
+[Track record after adoption](/plans/skill-synthesis#track-record-after-adoption).
+Deltas still have no counter.
 </Note>
 
 The design's central safety claim — promote on measured track record, never on
@@ -1360,7 +1366,7 @@ settled above. What remains:
 | Synthesis intermediate | `Skill` (4 fields) — **being renamed `DistilledProcedure`** | `skill_synthesis.py:159` | **Exists**; rename in flight ([#2671](https://github.com/amd/gaia/issues/2671)) |
 | Thresholds | `SIMILARITY_TAU = 0.82`, `MAX_RECALL_BODY_CHARS = 1500` | `skill_synthesis.py:58`, `:65` | **Exists** |
 | Recall | `recall_skill` + the procedures FAISS index | `procedural_memory.py:181`, `:50` | **Exists** |
-| Counters | `success_count`/`attempt_count` written at insert, **never incremented after** | `memory_store.py:2613` (unreachable from synthesis), `skill_synthesis.py:693-704` | **Gap** — the empirical gate has no counter ([Correction 4](#correction-4-the-empirical-promotion-gate-has-no-counter)) |
+| Counters | `success_count`/`attempt_count` written at insert; for procedures, a recalled turn's confirmation answers add to them (#2865) | `MemoryStore.record_skill_outcome`, `ProceduralMemoryMixin._record_procedure_outcome` | **Procedures: exists** · **Deltas: gap** ([Correction 4](#correction-4-the-empirical-promotion-gate-has-no-counter)) |
 | Success semantics | `success_count` counts tool calls that did not raise, not endorsed outcomes | `memory_store.py:2855-2858` | **Exists** — weaker signal than `MIN_SUCCESS_RATE` implies |
 | Outcome ledger shape | `TrustLedger.record_outcome(action_type, scope, positive)` | `hub/agents/email/python/gaia_agent_email/trust.py:358` | **Exists** — no link from a delta to a scope |
 | Confirmation gate | `TOOLS_REQUIRING_CONFIRMATION` ∪ agent `CONFIRMATION_REQUIRED_TOOLS` | `agent.py:152`, `hub/agents/email/python/gaia_agent_email/agent.py:453` | **Exists** — a learned change deliberately does *not* use it; see the write-path row |

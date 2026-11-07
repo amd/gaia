@@ -3840,6 +3840,74 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
+    def record_skill_outcome(
+        self,
+        skill_ids: List[str],
+        success: bool,
+        *,
+        erase_count: int | None = None,
+    ) -> dict[str, tuple[int, int]]:
+        """Count one outcome on each procedure that was in context for it.
+
+        Adds one to ``attempt_count``, and to ``success_count`` when *success*,
+        on top of the counts the row was born with.  What makes an outcome is
+        the caller's definition (``ProceduralMemoryMixin._record_procedure_outcome``).
+
+        Args:
+            skill_ids: procedures recalled into the turn; duplicates count once.
+            success: whether the turn's outcome was a success.
+            erase_count: :meth:`erase_count` when the turn began; if all memory
+                was erased since, nothing is written.
+
+        Returns:
+            ``{skill_id: (success_count, attempt_count)}`` after the update, for
+            the ids that still exist (one forgotten since recall is skipped).
+        """
+        ids = list(dict.fromkeys(skill_ids))
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        with self._locked():
+            if self._erased_since_for_write_locked(erase_count):
+                logger.info(
+                    "[MemoryStore] procedure outcome not stored: all memory was "
+                    "erased after the turn began"
+                )
+                return {}
+            try:
+                self._conn.execute(
+                    "UPDATE procedures SET attempt_count = attempt_count + 1, "
+                    f"success_count = success_count + ? WHERE id IN ({placeholders})",
+                    (int(bool(success)), *ids),
+                )
+                rows = self._conn.execute(
+                    "SELECT id, success_count, attempt_count FROM procedures "
+                    f"WHERE id IN ({placeholders})",
+                    ids,
+                ).fetchall()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return {row[0]: (int(row[1]), int(row[2])) for row in rows}
+
+    def disable_skill(self, skill_id: str) -> bool:
+        """Stop recalling ``skill_id`` (``enabled = 0``); the row is kept.
+
+        Returns:
+            True if a row was updated, False if ``skill_id`` was not found.
+        """
+        with self._locked():
+            try:
+                rowcount = self._conn.execute(
+                    "UPDATE procedures SET enabled = 0 WHERE id = ?", (skill_id,)
+                ).rowcount
+                self._conn.commit()
+                return rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
     def touch_skills(self, skill_ids: List[str], when: str | None = None) -> int:
         """Stamp ``last_used_at`` on the given procedures (recall telemetry).
 

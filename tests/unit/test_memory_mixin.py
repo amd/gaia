@@ -4638,6 +4638,12 @@ def _seed_procedure(
     return pid
 
 
+def _embedding_to_blob_for(host, text):
+    from gaia.agents.base.memory import _embedding_to_blob
+
+    return _embedding_to_blob(host._embed_text(text))
+
+
 class TestRecallSkill:
     """MemoryMixin.recall_skill — the RECALL half of the procedural loop.
 
@@ -4673,6 +4679,47 @@ class TestRecallSkill:
         assert mixin_host.recall_skill("any goal")  # recalls the seeded procedure
 
         assert store.search_skills(skill_id=pid)[0]["last_used_at"] is not None
+
+    def test_recall_carries_the_row_id(self, mixin_host):
+        """The recalled procedure names its row, so its outcome can be counted."""
+        require_faiss()
+        pid = _seed_procedure(mixin_host, name="counted-proc")
+
+        (skill,) = mixin_host.recall_skill("any goal")
+
+        assert skill.skill_id == pid
+
+    def test_a_declined_turn_counts_against_the_recalled_procedure(self, mixin_host):
+        """A person declining in a recalled turn is a failed attempt (#2865)."""
+        require_faiss()
+        pid = mixin_host._memory_store.put_skill(
+            name="counted-proc",
+            when_to_use="Triage a ticket.",
+            markdown_body="1. Triage.",
+            success_count=9,
+            attempt_count=9,
+            embedding=_embedding_to_blob_for(mixin_host, "Triage a ticket."),
+        )
+        mixin_host._rebuild_proc_faiss_index()
+
+        with patch.object(
+            FakeAgent,
+            "process_query",
+            lambda agent, *_a, **_k: agent._note_person_decision(False),
+        ):
+            mixin_host.process_query("triage this ticket")
+
+        (row,) = mixin_host._memory_store.search_skills(skill_id=pid)
+        assert (row["success_count"], row["attempt_count"]) == (9, 10)
+
+    def test_a_turn_with_no_prompt_leaves_the_record_alone(self, mixin_host):
+        require_faiss()
+        pid = _seed_procedure(mixin_host, name="counted-proc")
+
+        mixin_host.process_query("triage this ticket")
+
+        (row,) = mixin_host._memory_store.search_skills(skill_id=pid)
+        assert (row["success_count"], row["attempt_count"]) == (0, 0)
 
     def test_empty_goal_returns_empty(self, mixin_host):
         """An empty / whitespace goal recalls nothing (never embeds)."""

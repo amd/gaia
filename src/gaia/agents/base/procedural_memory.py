@@ -364,6 +364,7 @@ class ProceduralMemoryMixin:
                     when_to_use=row["when_to_use"],
                     body=row["markdown_body"],
                     tools_required=row.get("tools_required") or [],
+                    skill_id=procedure_id,
                 )
             )
             recalled_ids.append(procedure_id)
@@ -554,6 +555,73 @@ class ProceduralMemoryMixin:
         skills, config = self._recall_skills_for_turn(goal)
         self._recalled_skills = skills
         self._recalled_skill_prompt = self._build_recalled_skills_prompt(skills, config)
+        # A body the prompt dropped was never in context, so its outcome is not its own.
+        self._recalled_skill_ids = [
+            s.skill_id
+            for s in skills
+            if s.skill_id and f"## {s.name}\n" in self._recalled_skill_prompt
+        ]
+
+    def _note_person_decision(self, approved: bool) -> None:
+        """Record a person's answer to a confirmation prompt in this turn.
+
+        Called by the agent loop. Ignored outside a turn (no list to add to).
+        """
+        decisions = getattr(self, "_turn_person_decisions", None)
+        if decisions is not None:
+            decisions.append(bool(approved))
+
+    def _record_procedure_outcome(self) -> None:
+        """Count this turn on every procedure recalled into it (#2865).
+
+        The outcome is a person's answers to this turn's confirmation prompts:
+        any decline makes it a failed attempt, approvals with no decline a
+        successful one. A turn nobody was asked about counts nothing, so a tool
+        call that merely did not raise is never evidence. A failure that leaves
+        a procedure below the success rate it was learned at disables it.
+
+        Consumes the turn's decisions, so a turn is counted once.
+        """
+        decisions = getattr(self, "_turn_person_decisions", None)
+        self._turn_person_decisions = None
+        store = getattr(self, "_memory_store", None)
+        if not decisions or store is None or getattr(self, "_incognito", False):
+            return
+        ids = list(getattr(self, "_recalled_skill_ids", None) or [])
+        if not ids:
+            return
+
+        from gaia.agents.base.memory import (
+            _load_memory_settings,  # deferred (cycle break)
+        )
+
+        success = all(decisions)
+        counts = store.record_skill_outcome(
+            ids, success, erase_count=getattr(self, "_turn_erase_count", None)
+        )
+        logger.info(
+            "[MemoryMixin] procedure outcome: %s for %s (%d prompt answer(s))",
+            "success" if success else "failure",
+            sorted(counts),
+            len(decisions),
+        )
+        if success:
+            return
+        bar = load_synthesis_config(_load_memory_settings()).min_success_rate
+        for skill_id, (successes, attempts) in counts.items():
+            if successes / attempts >= bar:
+                continue
+            if store.disable_skill(skill_id):
+                logger.warning(
+                    "[MemoryMixin] procedure %s disabled: its record fell to "
+                    "%d/%d, below the %.0f%% it was learned at, after people "
+                    "declined its steps. It is no longer recalled; a new run "
+                    "of the same goal can learn a replacement",
+                    skill_id,
+                    successes,
+                    attempts,
+                    bar * 100,
+                )
 
     # ==================================================================
     # Skill Synthesis (procedural memory)

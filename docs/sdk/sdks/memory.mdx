@@ -105,6 +105,8 @@ Skill synthesis is the one step that does **not** run inline: `start_skill_synth
 
 A stored procedure's `success_count` is its **lineage's** track record, not one pass's. Each pass adds only the episodes the matched row was not built from, so a later batch can still supersede a stale procedure, and re-reading history — a forced pass, or the first pass after a reset — counts each session once.
 
+After adoption the record keeps counting. In a turn that recalled a procedure, the person's answers to confirmation prompts are its outcome: any decline adds a failed attempt, approvals with no decline add a successful one (`MemoryStore.record_skill_outcome`). A turn with no prompt answered by a person, and any auto-approved run, counts nothing. A failure that takes the success rate below `min_success_rate` disables the procedure (`MemoryStore.disable_skill`), logged at WARNING.
+
 <Warning>
   Embedding is a hard requirement in v2 — there is no silent degradation to keyword-only search. If the Lemonade embedding service is unreachable at startup, `init_memory()` logs a warning and disables memory for that session (`memory_store` becomes `None`) rather than running with a half-built index. It does **not** raise: an agent must still start on a machine where Lemonade is not installed yet. `GAIA_MEMORY_DISABLED=1` disables memory the same way.
 
