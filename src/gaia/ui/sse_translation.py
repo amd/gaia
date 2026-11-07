@@ -130,8 +130,9 @@ SUMMARY_VIEW_KEYS = (
 MCP_TOOL_FIELDS = ("mcp_server", "mcp_server_label", "mcp_tool")
 
 #: Counts a ``status`` carrying a ``phase`` may report alongside it: reasoning
-#: words so far, or characters of a tool call's arguments so far.
-_PHASE_COUNT_FIELDS = ("words", "chars")
+#: words so far, characters of a tool call's arguments so far, or where a
+#: recording stands (see ``AudioToolsMixin._report_stage``).
+_PHASE_COUNT_FIELDS = ("words", "chars", "stage", "state", "percent", "eta_seconds")
 
 #: What a ``model_queue`` status carries under ``queue``: where a turn waiting
 #: for the model stands (see ``broker_client.queue_status_event``).
@@ -639,6 +640,12 @@ class CanonicalTranslator:
         # retries. Surface as a status line, not an error (spec §6.2).
         return [{"type": "status", "message": str(event.get("message", ""))}]
 
+    def _on_skill_use(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        # A load_skill call already went out as its own tool_call.
+        if event.get("how") == "model" or not event.get("skill"):
+            return []
+        return self._user_status(f"Using skill: {event['skill']}")
+
     def _on_agent_created(self, _event: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Registry-refresh signal with no chat-stream meaning — dropped from the
         # /query stream by contract decision (spec §6.2). It belongs on a host
@@ -690,6 +697,7 @@ class CanonicalTranslator:
         "user_input_request": _on_user_input_request,
         "tool_confirm_denied": _on_tool_confirm_denied,
         "agent_created": _on_agent_created,
+        "skill_use": _on_skill_use,
         # tool_args is handled before dispatch (merges into the pending tool_call).
     }
 

@@ -29,9 +29,11 @@ export interface ApiSchemas {
   ConfigureRequest: ConfigureRequest;
   ConnectRequest: ConnectRequest;
   ContextRequest: ContextRequest;
+  CpuUsage: CpuUsage;
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
   CustomModelRequest: CustomModelRequest;
+  DeviceUsage: DeviceUsage;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
   DocumentListResponse: DocumentListResponse;
@@ -73,11 +75,13 @@ export interface ApiSchemas {
   LoadedModelInfo: LoadedModelInfo;
   McpOutputResponse: McpOutputResponse;
   MemorySettingsBody: MemorySettingsBody;
+  MemoryUsage: MemoryUsage;
   MessageListResponse: MessageListResponse;
   MessageResponse: MessageResponse;
   ModelServerBackendRequest: ModelServerBackendRequest;
   ModelServerInfo: ModelServerInfo;
   ModelStatus: ModelStatus;
+  NetworkUsage: NetworkUsage;
   OpenFileRequest: OpenFileRequest;
   ParseScheduleRequest: ParseScheduleRequest;
   ParseScheduleResponse: ParseScheduleResponse;
@@ -86,6 +90,7 @@ export interface ApiSchemas {
   PullRequestRequest: PullRequestRequest;
   QuickLink: QuickLink;
   RemoveModelRequest: RemoveModelRequest;
+  ResourceUsage: ResourceUsage;
   RestartRequest: RestartRequest;
   RetryChoiceRequest: RetryChoiceRequest;
   RetryWithRequest: RetryWithRequest;
@@ -108,6 +113,10 @@ export interface ApiSchemas {
   SetupRunRequest: SetupRunRequest;
   SkipModelRequest: SkipModelRequest;
   SourceInfo: SourceInfo;
+  SpeakRequest: SpeakRequest;
+  SpeechModel: SpeechModel;
+  SpeechSettings: SpeechSettings;
+  SpeechSettingsUpdate: SpeechSettingsUpdate;
   StartAgentServerRequest: StartAgentServerRequest;
   SystemStatus: SystemStatus;
   TargetRequest: TargetRequest;
@@ -133,6 +142,7 @@ export interface ApiSchemas {
   UserInputRequest: UserInputRequest;
   ValidationError: ValidationError;
   VisionModelRequest: VisionModelRequest;
+  Voice: Voice;
   WarmUpStatus: WarmUpStatus;
   WorkInProgress: WorkInProgress;
   gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
@@ -381,6 +391,17 @@ export interface ContextRequest {
   ctx_size?: number | null;
   model: string;
 }
+export interface CpuUsage {
+  /**
+   * Current clock speed, when the OS reports it.
+   */
+  ghz: number | null;
+  /**
+   * Percent per sample, oldest first, one per interval_ms.
+   */
+  history: number[];
+  percent: number;
+}
 /**
  * Request to create a new scheduled task.
  */
@@ -422,6 +443,23 @@ export interface CreateSessionRequest {
 export interface CustomModelRequest {
   quant?: string | null;
   url: string;
+}
+export interface DeviceUsage {
+  /**
+   * Percent per sample, oldest first, one per interval_ms.
+   */
+  history: number[];
+  id: string;
+  kind: "gpu" | "npu";
+  /**
+   * Dedicated plus shared memory in use, when the OS reports it.
+   */
+  memory_used_bytes: number | null;
+  name: string;
+  /**
+   * Load of the device's busiest engine.
+   */
+  percent: number;
 }
 export interface DiscoveryCommit {
   items: DiscoveryCommitItem[];
@@ -756,6 +794,15 @@ export interface MemorySettingsBody {
   memory_enabled?: boolean | null;
   system_discovery_consent?: boolean | null;
 }
+export interface MemoryUsage {
+  /**
+   * Percent per sample, oldest first, one per interval_ms.
+   */
+  history: number[];
+  percent: number;
+  total_bytes: number;
+  used_bytes: number;
+}
 /**
  * List of messages for a session.
  */
@@ -895,6 +942,34 @@ export interface ModelStatus {
   found?: boolean;
   loaded?: boolean;
 }
+export interface NetworkUsage {
+  /**
+   * The adapter's hardware name.
+   */
+  description: string;
+  id: string;
+  kind: "ethernet" | "wifi" | "network";
+  /**
+   * The connection's name, such as "Ethernet 3".
+   */
+  name: string;
+  /**
+   * Bits per second received.
+   */
+  recv_bps: number;
+  /**
+   * Bits per second, oldest first.
+   */
+  recv_history: number[];
+  /**
+   * Bits per second sent.
+   */
+  send_bps: number;
+  /**
+   * Bits per second, oldest first.
+   */
+  send_history: number[];
+}
 /**
  * Request to open a file or folder in the system file explorer.
  */
@@ -991,6 +1066,25 @@ export interface PullRequestRequest {
 }
 export interface RemoveModelRequest {
   model_id: string;
+}
+export interface ResourceUsage {
+  cpu?: CpuUsage | null;
+  devices?: DeviceUsage[];
+  /**
+   * Why GPUs and NPUs can't be read, when CPU and memory still can.
+   */
+  devices_error?: string | null;
+  interval_ms: number;
+  memory?: MemoryUsage | null;
+  networks?: NetworkUsage[];
+  /**
+   * Why network adapters can't be read, when CPU and memory still can.
+   */
+  networks_error?: string | null;
+  /**
+   * False until the first sample is in.
+   */
+  ready: boolean;
 }
 /**
  * ``confirm`` is required to reload a model on a server GAIA does not run.
@@ -1160,7 +1254,7 @@ export interface SettingsUpdateRequest {
    */
   custom_model?: string | null;
   /**
-   * Beta: enable the semantic dynamic tool loader (#1798), which trims each turn's tool prompt to a matched subset to cut first-turn TTFT. Default off. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.
+   * Dynamic tool loading: send the tool list in short form and full docs only as needed, to cut first-turn TTFT without breaking the prompt cache. Applies to new chats. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.
    */
   dynamic_tools?: boolean | null;
 }
@@ -1187,6 +1281,38 @@ export interface SetupRunRequest {
 export interface SkipModelRequest {
   model_id: string;
   skipped?: boolean;
+}
+export interface SpeakRequest {
+  speed?: number | null;
+  text: string;
+  voice?: string | null;
+}
+/**
+ * Whether the voice model is on this PC, so a first read can say it downloads.
+ */
+export interface SpeechModel {
+  downloaded: boolean;
+  size_gb?: number | null;
+}
+export interface SpeechSettings {
+  auto: boolean;
+  max_speed?: number;
+  min_speed?: number;
+  speed: number;
+  voice: string;
+  voices: Voice[];
+}
+export interface Voice {
+  accent: string;
+  gender: string;
+  id: string;
+  name: string;
+  quality: string;
+}
+export interface SpeechSettingsUpdate {
+  auto?: boolean | null;
+  speed?: number | null;
+  voice?: string | null;
 }
 export interface StartAgentServerRequest {
   backend_url?: string;

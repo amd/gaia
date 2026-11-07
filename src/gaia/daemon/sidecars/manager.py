@@ -53,6 +53,7 @@ from gaia.daemon.constants import (
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars.errors import (
     HealthTimeoutError,
+    SidecarInhibitedError,
     SidecarNotRunningError,
     SidecarSpawnError,
     SidecarUnresponsiveError,
@@ -800,8 +801,32 @@ class AgentSidecarManager:
         each time. A genuine hang (``HealthTimeoutError``) is NOT retried — that
         would just multiply the wait — and surfaces loudly on the first attempt.
         """
-        with self._lock:
-            return self._start_locked(max_attempts)
+        try:
+            with self._lock:
+                return self._start_locked(max_attempts)
+        except SidecarInhibitedError:
+            raise
+        except (SidecarSpawnError, HealthTimeoutError) as e:
+            self._record_start_failure(e)
+            raise
+
+    def _record_start_failure(self, exc: BaseException) -> None:
+        """Save a local fault record for a sidecar that never came up."""
+        from gaia.llm.failure_record import record_local_failure
+
+        record_id = record_local_failure(
+            exc,
+            where="sidecar_start",
+            kind="sidecar_start",
+            agent=self.spec.agent_id,
+            extra={"mode": self.resolved_mode, "sidecar_url": self.base_url},
+        )
+        if record_id:
+            logger.error(
+                "%s sidecar failed to start; problem report saved as %s",
+                self.spec.agent_id,
+                record_id,
+            )
 
     def _start_locked(self, max_attempts: int) -> str:
         if self.is_running:

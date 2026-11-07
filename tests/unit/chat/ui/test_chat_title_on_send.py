@@ -418,7 +418,9 @@ def test_cloud_title_request_is_valid_and_leaves_room_to_reason(lemonade):
     # deepseek-v4p1-flash spent all of 24 tokens reasoning (content null).
     assert body["max_completion_tokens"] >= 256
     # llama.cpp-only fields make a cloud provider answer 400.
-    assert not {"id_slot", "chat_template_kwargs", "repeat_penalty"} & body.keys()
+    assert not {"id_slot", "repeat_penalty"} & body.keys()
+    # DeepSeek is the cloud model that honors the switch.
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
 
 
 def test_a_cloud_reply_cut_short_is_logged_with_its_reason(lemonade, caplog):

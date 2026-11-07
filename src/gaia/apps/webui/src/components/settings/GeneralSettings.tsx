@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useChatStore } from '../../stores/chatStore';
+import { useResourceMonitorStore } from '../../stores/resourceMonitorStore';
 import type { ThemePreference } from '../../utils/theme';
 import { DesktopAppSettings } from './DesktopAppSettings';
 import { SettingsDisclosure } from './SettingsDisclosure';
@@ -50,6 +51,8 @@ export function GeneralSettings() {
     const setPalette = useChatStore((s) => s.setPalette);
     const custom = useChatStore((s) => s.customColors);
     const setCustom = useChatStore((s) => s.setCustomColors);
+    const showResources = useResourceMonitorStore((s) => s.visible);
+    const setShowResources = useResourceMonitorStore((s) => s.setVisible);
     const pick = (key: keyof CustomColors) => (e: React.ChangeEvent<HTMLInputElement>) =>
         setCustom({ ...custom, [key]: e.target.value.toUpperCase() });
 
@@ -88,6 +91,22 @@ export function GeneralSettings() {
                         </button>
                     ))}
                 </div>
+            </div>
+            <div className="settings-field">
+                <label className="setting-row">
+                    <span>{t('resources.settings')}</span>
+                    <span className="toggle-switch">
+                        <input
+                            type="checkbox"
+                            checked={showResources}
+                            onChange={(e) => setShowResources(e.target.checked)}
+                            aria-label={t('resources.settings')}
+                            aria-describedby="resources-hint"
+                        />
+                        <span className="toggle-track" />
+                    </span>
+                </label>
+                <span className="settings-hint" id="resources-hint">{t('resources.settingsHint')}</span>
             </div>
             <SettingsDisclosure title={t('settings.colors')} titleId="palette-label" defaultOpen={palette === 'custom'}>
                 <div className="palette-grid" role="radiogroup" aria-labelledby="palette-label">

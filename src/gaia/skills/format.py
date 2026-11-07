@@ -249,6 +249,9 @@ class GaiaMetadata:
     #: Skills this one combines with on a single request. Names that are not
     #: installed are ignored where the list is used, never an error here.
     pairs_with: list[str] = field(default_factory=list)
+    #: Tools from ``tools_required`` that only this skill drives. Calling one
+    #: means the skill is in use, so the agent loads it if the model did not.
+    loads_with: list[str] = field(default_factory=list)
     #: ``metadata.gaia`` keys GAIA does not model, preserved for round-trip.
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -271,6 +274,8 @@ class GaiaMetadata:
             out["tools_required"] = list(self.tools_required)
         if self.pairs_with:
             out["pairs_with"] = list(self.pairs_with)
+        if self.loads_with:
+            out["loads_with"] = list(self.loads_with)
         out.update(self.extra)
         return out
 
@@ -327,6 +332,22 @@ class GaiaMetadata:
                 f"See {FORMAT_DOCS_URL}#field-reference"
             )
 
+        loads_with = data.get("loads_with") or []
+        if not isinstance(loads_with, list):
+            raise SkillValidationError(
+                f"Skill '{skill_name}': metadata.gaia.loads_with must be a list of "
+                f"tool names from tools_required, got {type(loads_with).__name__}. "
+                f"See {FORMAT_DOCS_URL}#field-reference"
+            )
+        stray = sorted({str(t) for t in loads_with} - {str(t) for t in tools_required})
+        if stray:
+            raise SkillValidationError(
+                f"Skill '{skill_name}': metadata.gaia.loads_with names "
+                f"{', '.join(stray)}, which tools_required does not list. A tool "
+                "that loads the skill must be one its procedure uses; add it to "
+                f"tools_required or drop it. See {FORMAT_DOCS_URL}#field-reference"
+            )
+
         known = {
             "security_tier",
             "permissions",
@@ -334,6 +355,7 @@ class GaiaMetadata:
             "tools",
             "tools_required",
             "pairs_with",
+            "loads_with",
         }
         return cls(
             security_tier=tier,
@@ -344,6 +366,7 @@ class GaiaMetadata:
             tools=[SkillTool.from_dict(t, skill_name=skill_name) for t in tools],
             tools_required=[str(t) for t in tools_required],
             pairs_with=[str(p) for p in pairs_with],
+            loads_with=[str(t) for t in loads_with],
             extra={k: v for k, v in data.items() if k not in known},
         )
 

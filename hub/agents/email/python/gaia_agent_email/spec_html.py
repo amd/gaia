@@ -776,8 +776,9 @@ def render_endpoint_spec_html() -> str:
     )
 
     # Stateful agent surface (/v1/email/agent/*). Hand-authored (not model
-    # tables) because the request/response shapes live in agent_routes.py — not
-    # the frozen contract — and /query returns an SSE stream, not a JSON body.
+    # tables) because its request/response shapes live in agent_routes.py;
+    # the published OpenAPI contract includes the routes, while /query still
+    # returns an SSE stream rather than a JSON body.
     query_block = """
 <div class="endpoint-block">
   <span class="method-badge">POST</span>
