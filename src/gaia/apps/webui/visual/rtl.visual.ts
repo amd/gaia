@@ -70,6 +70,16 @@ const audit = (page: Page): Promise<string[]> =>
 
         if (document.documentElement.scrollWidth > innerWidth) problems.push('the page scrolls sideways');
 
+        // An <option> holds plain text, so the English hint in brackets can't be
+        // styled quietly there and its brackets scramble in rtl; use t.bare.
+        // Language pickers (options tagged with lang) name each language in English on purpose.
+        for (const option of document.querySelectorAll('option:not([lang])')) {
+            const text = option.textContent ?? '';
+            if (arabic.test(text) && /\([^)]*[A-Za-z]{3,}[^)]*\)/.test(text)) {
+                problems.push(`an <option> carries the English hint: "${text.trim().slice(0, 50)}"`);
+            }
+        }
+
         for (const el of document.querySelectorAll('body *')) {
             if (!shown(el)) continue;
             const box = el.getBoundingClientRect();
@@ -685,6 +695,30 @@ test('settings in the dark theme', async ({ page }) => {
     await expect(page.getByRole('dialog')).toBeVisible();
     expect(await audit(page)).toEqual([]);
 });
+
+for (const [locale, theme] of [['ar', 'light'], ['ar', 'dark'], ['en', 'light']] as const) {
+    test(`read-aloud settings (${locale}, ${theme})`, async ({ page }) => {
+        await open(page, '', locale, undefined, theme);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="voice"]').click();
+        await expect(page.locator('#read-aloud-voice')).toHaveValue('bf_emma');
+        await expect(page.locator('#read-aloud-speed')).toHaveValue('125');
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a reply that could not be read aloud (${locale}, ${theme})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route('**/api/speech', (route) =>
+                route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Lemonade Server is not reachable at http://127.0.0.1:13305' }) }),
+            );
+        }, theme);
+        const reply = page.locator('.msg-assistant').last();
+        await reply.hover();
+        await reply.locator('.msg-read-aloud').click();
+        await expect(reply.locator('.msg-read-aloud-error')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+    });
+}
 
 test('the dynamic tools setting', async ({ page }) => {
     await open(page);

@@ -636,8 +636,8 @@ export function DocumentLibrary() {
                                     value={target}
                                     onChange={(e) => { setTarget(e.target.value as 'chat' | 'next'); setNotice(''); }}
                                 >
-                                    <option value="chat">{t('docs.thisChat', { chat: targetChatName })}</option>
-                                    <option value="next">{t('docs.nextChat')}</option>
+                                    <option value="chat">{t.bare('docs.thisChat', { chat: targetChatName })}</option>
+                                    <option value="next">{t.bare('docs.nextChat')}</option>
                                 </select>
                             </label>
                         ) : (

@@ -113,6 +113,10 @@ export interface ApiSchemas {
   SetupRunRequest: SetupRunRequest;
   SkipModelRequest: SkipModelRequest;
   SourceInfo: SourceInfo;
+  SpeakRequest: SpeakRequest;
+  SpeechModel: SpeechModel;
+  SpeechSettings: SpeechSettings;
+  SpeechSettingsUpdate: SpeechSettingsUpdate;
   StartAgentServerRequest: StartAgentServerRequest;
   SystemStatus: SystemStatus;
   TargetRequest: TargetRequest;
@@ -138,6 +142,7 @@ export interface ApiSchemas {
   UserInputRequest: UserInputRequest;
   ValidationError: ValidationError;
   VisionModelRequest: VisionModelRequest;
+  Voice: Voice;
   WarmUpStatus: WarmUpStatus;
   WorkInProgress: WorkInProgress;
   gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
@@ -1276,6 +1281,38 @@ export interface SetupRunRequest {
 export interface SkipModelRequest {
   model_id: string;
   skipped?: boolean;
+}
+export interface SpeakRequest {
+  speed?: number | null;
+  text: string;
+  voice?: string | null;
+}
+/**
+ * Whether the voice model is on this PC, so a first read can say it downloads.
+ */
+export interface SpeechModel {
+  downloaded: boolean;
+  size_gb?: number | null;
+}
+export interface SpeechSettings {
+  auto: boolean;
+  max_speed?: number;
+  min_speed?: number;
+  speed: number;
+  voice: string;
+  voices: Voice[];
+}
+export interface Voice {
+  accent: string;
+  gender: string;
+  id: string;
+  name: string;
+  quality: string;
+}
+export interface SpeechSettingsUpdate {
+  auto?: boolean | null;
+  speed?: number | null;
+  voice?: string | null;
 }
 export interface StartAgentServerRequest {
   backend_url?: string;
