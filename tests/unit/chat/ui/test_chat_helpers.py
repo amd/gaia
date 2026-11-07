@@ -546,6 +546,17 @@ class TestEmptyAnswerBackendProblem:
     def test_cloud_model_skips_the_loaded_check(self):
         assert _probe("fireworks.some-model", _health()) is None
 
+    def test_a_discovered_cloud_model_skips_the_loaded_check(self):
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models(
+            {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+        )
+        try:
+            assert _probe("opencode.big-model", _health()) is None
+        finally:
+            lc.record_cloud_models({"data": []})
+
     def test_eval_on_claude_never_touches_lemonade(self):
         with (
             patch.object(

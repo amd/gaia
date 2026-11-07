@@ -692,13 +692,10 @@ def _title_model_for(session_model: str) -> Optional[str]:
     """
     if not _is_guard_model(session_model):
         return session_model
-    from gaia.llm.lemonade_client import (
-        cloud_model_provider,
-        resolve_default_chat_model,
-    )
+    from gaia.llm.lemonade_client import resolve_default_chat_model
 
     title_model = resolve_default_chat_model()
-    if cloud_model_provider(title_model) and not cloud_model_provider(session_model):
+    if _ui_cloud_provider(title_model) and not _ui_cloud_provider(session_model):
         logger.info(
             "Auto-title: %s is a safety classifier and the default model %s is "
             "a cloud model; keeping the chat's title",
@@ -802,7 +799,6 @@ async def _generate_session_title(
         LemonadeClient,
         LemonadeClientError,
         _model_ids_match,
-        cloud_model_provider,
         find_model_requirement,
         no_thinking_kwargs,
     )
@@ -827,7 +823,7 @@ async def _generate_session_title(
         # A thinking model would spend all 24 tokens reasoning and title nothing.
         kwargs = dict(no_thinking_kwargs(model_id))
         mr = find_model_requirement(model_id)
-        local = not cloud_model_provider(model_id)
+        local = not _ui_cloud_provider(model_id)
         if local and not kwargs and model_id.upper().endswith("GGUF"):
             # Gemma 4 registers no switch, yet reasons on a short question ("hi");
             # llama.cpp ignores the field in a template that has no such switch.
@@ -929,8 +925,6 @@ async def _title_when_model_free(
     base_url: str, model_id: str, user_msg: str, assistant_msg: str, latest_msg: str
 ) -> Optional[str]:
     """:func:`_generate_session_title`, waiting out a model another request holds."""
-    from gaia.llm.lemonade_client import cloud_model_provider
-
     request = dict(
         base_url=base_url,
         model_id=model_id,
@@ -939,7 +933,7 @@ async def _title_when_model_free(
         latest_msg=latest_msg,
     )
     tries = _TITLE_BUSY_TRIES
-    if not cloud_model_provider(model_id) and not await _has_side_slot(
+    if not _ui_cloud_provider(model_id) and not await _has_side_slot(
         base_url, model_id
     ):
         tries = 1
@@ -1039,10 +1033,10 @@ async def _maybe_update_session_title(
     if not title_model:
         return
 
-    from gaia.llm.lemonade_client import cloud_model_provider, resolve_lemonade_base_url
+    from gaia.llm.lemonade_client import resolve_lemonade_base_url
     from gaia.llm.lemonade_manager import LemonadeManager
 
-    if at_turn_start and not cloud_model_provider(title_model):
+    if at_turn_start and not _ui_cloud_provider(title_model):
         return
     # Use the same Lemonade endpoint the chat just used.
     base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
@@ -3149,7 +3143,6 @@ async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str
 
     from gaia.llm.lemonade_client import (
         _model_ids_match,
-        cloud_model_provider,
         lemonade_auth_headers,
         resolve_lemonade_api_key,
         resolve_lemonade_base_url,
@@ -3182,7 +3175,7 @@ async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str
             f"its health check (HTTP {resp.status_code}). "
             f"{server_down_advice(base_url)}"
         )
-    if not model_id or cloud_model_provider(model_id):
+    if not model_id or _ui_cloud_provider(model_id):
         return None
     loaded = health.get("all_models_loaded") or []
     if any(
@@ -3588,7 +3581,6 @@ def _preflight_load(
         from gaia.llm.lemonade_choice import is_users_server
         from gaia.llm.lemonade_client import (
             _model_ids_match,
-            cloud_model_provider,
             lemonade_auth_headers,
             resolve_ctx_size,
             resolve_lemonade_api_key,
@@ -3618,7 +3610,7 @@ def _preflight_load(
             _model_ids_match(m.get("model_name"), model_id)
             and m.get("recipe") == "cloud"
             for m in chat_models
-        ) or cloud_model_provider(model_id, None):
+        ) or _ui_cloud_provider(model_id):
             return
         # The window the agent itself will require; loading smaller makes it reload.
         required_ctx = resolve_ctx_size(model_id)
