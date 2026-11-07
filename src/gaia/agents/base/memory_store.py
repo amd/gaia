@@ -286,16 +286,34 @@ _STEM_STOPWORDS = frozenset(
     "there here also just like user users user's".split()
 )
 
+# Signs and language suffixes carry meaning in a memory: ``-5`` is not ``5``,
+# and ``C++`` / ``C#`` are not ``C``.  A hyphen between words remains a word
+# separator, so ordinary prose such as ``mother-in-law`` keeps its old stems.
+_MEMORY_TOKEN_RE = re.compile(
+    r"""
+    (?<![a-z0-9_])[+-][0-9](?:[0-9.,:/-]*[0-9])?(?![a-z0-9_])
+    | (?<![a-z0-9_+-])[0-9](?:[0-9.,:/-]*[0-9])?(?![a-z0-9_])
+    | [a-z][a-z0-9]*(?:[+#]+)(?![a-z0-9_])
+    | [a-z0-9']+
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _memory_tokens(text: str) -> list[str]:
+    """Tokens for memory identity comparisons, preserving meaningful symbols."""
+    return _MEMORY_TOKEN_RE.findall(text.lower())
+
 
 def content_stems(text: str) -> set:
     """Content words of *text*, cut to a 4-letter stem so "works" meets "working".
 
-    A token with a digit is kept whole, however short: "Ada is 6" and "Ada is
-    7" are different memories.
+    Numeric and symbolic tokens are kept whole, however short: ``-5`` and
+    ``5`` are different memories, as are ``C`` and ``C++``.
     """
     stems = set()
-    for w in re.findall(r"[a-z0-9']+", text.lower()):
-        if any(ch.isdigit() for ch in w):
+    for w in _memory_tokens(text):
+        if any(ch.isdigit() for ch in w) or w.endswith(("+", "#")):
             stems.add(w)
         elif len(w) >= 3 and w not in _STEM_STOPWORDS:
             stems.add(w[:4])
@@ -359,8 +377,14 @@ def _word_overlap(text1: str, text2: str) -> float:
 
     A subset of a longer text still counts as a match — appropriate for dedup.
     """
-    words1 = set(re.sub(r"[^\w\s]", " ", text1.lower()).split())
-    words2 = set(re.sub(r"[^\w\s]", " ", text2.lower()).split())
+    if re.search(r"(?<![a-z0-9_])[+-]\d|[a-z][a-z0-9]*[+#]+", text1, re.I) or re.search(
+        r"(?<![a-z0-9_])[+-]\d|[a-z][a-z0-9]*[+#]+", text2, re.I
+    ):
+        words1 = set(_memory_tokens(text1))
+        words2 = set(_memory_tokens(text2))
+    else:
+        words1 = set(re.sub(r"[^\w\s]", " ", text1.lower()).split())
+        words2 = set(re.sub(r"[^\w\s]", " ", text2.lower()).split())
 
     if not words1 or not words2:
         return 0.0

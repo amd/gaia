@@ -286,6 +286,10 @@ class TestMatching:
             ("User prefers dark mode", "User prefers dark roast coffee", False),
             ("User has a dog", "User's dog Max is allergic to chicken", False),
             ("User's wife works at AMD", "User works at AMD in Markham", False),
+            ("User's setting is -5", "User's setting is 5", False),
+            ("User knows C++", "User knows C", False),
+            ("User knows C#", "User knows C", False),
+            ("User's setting is +1", "User's setting is 1", False),
         ],
     )
     def test_same_memory(self, store, forgotten, new, same):
