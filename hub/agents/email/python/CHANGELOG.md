@@ -9,6 +9,8 @@ contract version is tracked separately as
 
 ### Changed
 
+- **Private and memory-off turns are now safe for the email sidecar (#5482, schema 2.16).** `POST /v1/email/query` accepts `memory: "on" | "private" | "off"`; private and memory-off modes suppress memory reads and writes before the agent loop starts. Older sidecars are refused for those turns instead of silently persisting email-derived memories.
+
 - **Needs Lemonade Server 2026.44.1 or newer.** `GET /v1/email/init` now
   reports `min_version: "2026.44.1"` (was `10.2.0`) and answers not-ready on
   anything older. GAIA updates its own Lemonade Server itself; the `hint` for
