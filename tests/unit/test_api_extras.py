@@ -140,6 +140,20 @@ def test_keyring_guaranteed_for_api_installs_via_core() -> None:
     )
 
 
+def test_eval_extra_covers_the_documented_ui_backend() -> None:
+    """The eval-CI recipe starts ``gaia.ui.server`` after installing [eval]."""
+    eval_reqs = [
+        r.split(">")[0].split("=")[0].split("<")[0].lower()
+        for r in _parse_extra("eval")
+    ]
+    required = {"fastapi", "uvicorn", "python-multipart", "httpx", "psutil"}
+    missing = sorted(required - set(eval_reqs))
+    assert not missing, (
+        "docs/guides/eval-ci.mdx installs [eval] before starting the Agent UI "
+        f"backend; missing runtime dependencies: {missing}"
+    )
+
+
 def test_api_extra_covers_every_daemon_dep() -> None:
     """``pip install 'amd-gaia[api]'`` must be enough to start ``gaia daemon``.
 
