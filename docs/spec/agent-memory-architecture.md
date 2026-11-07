@@ -402,7 +402,7 @@ The `meta` table records the embedder that produced the stored vectors (`MemoryS
 
 ### Dedup
 
-`store()` checks for >80% word overlap (Szymkiewicz-Simpson coefficient) in same category + context. If found, updates existing entry -- replaces content with the newer version (facts change), takes max confidence, updates `updated_at`. Context scoping means "deploy process" in `work` won't collide with `personal`.
+`store()` looks for an entry with >80% word overlap (Szymkiewicz-Simpson coefficient) in the same category + context + entity, then merges only a true duplicate: one fact's words, in order and ignoring filler like "the", "is" and "my", must start the other's. A restatement or a refinement ("... is Elena" -> "... is Elena Petrova") updates the existing entry, keeps the fuller wording and the max confidence, and updates `updated_at`. A swapped, inserted or reordered word ("mother" -> "mother-in-law", "18" -> "19", "is" -> "is not") is a different fact and gets its own entry, so dedup never overwrites one fact with another. Context scoping means "deploy process" in `work` won't collide with `personal`.
 
 ### Fact Conflict & Consolidation
 
@@ -410,12 +410,14 @@ Facts change. "User's project uses React 18" becomes "User's project uses React 
 
 **Level 1: Automatic dedup (storage layer)**
 
-When `store()` finds >80% word overlap in the same category, it **replaces the content with the newer version** (not the longer one). The newer fact is assumed to be more current. `updated_at` is set; `created_at` is preserved.
+`store()` merges only a true duplicate (see [Dedup](#dedup)). A changed value is a new entry, never an in-place overwrite, so the old fact stays on record until Level 2 or 3 supersedes it.
 
 ```
-store(category="fact", content="Project uses React 18")  -> creates entry
-store(category="fact", content="Project uses React 19")  -> 80% overlap -> replaces content
-# Result: one entry, content="Project uses React 19", updated_at=now
+store(category="fact", content="My mother's name is Elena")
+store(category="fact", content="My mother's name is Elena Petrova")  -> refinement, same entry
+store(category="fact", content="Project uses React 18")
+store(category="fact", content="Project uses React 19")  -> different value, new entry
+# Result: "Elena Petrova" (one entry), plus both React entries until one is superseded
 ```
 
 **Level 2: LLM-driven correction (tool layer)**
@@ -1083,7 +1085,7 @@ def remember(fact: str, category: str = "fact", domain: str = "",
              entity: str = "") -> dict:
     """Store a fact, preference, or learning in persistent memory.
     Categories: fact, preference, error, skill, note, reminder
-    If a similar fact already exists (>80% overlap in same context), it will be updated.
+    If the same fact already exists in the same context, it will be updated.
     Use due_at for time-sensitive items (ISO 8601 format).
     Use sensitive="true" for private data (excluded from system prompt).
     Use entity to link to a person/app/service (e.g., "person:sarah_chen").
@@ -2051,7 +2053,7 @@ class MemoryStore:
               context: str = "global",
               sensitive: bool = False,
               entity: str = None) -> str
-        """Store with dedup: >80% word overlap in same category+context -> update existing.
+        """Store with dedup: a restatement in the same category+context updates the existing entry.
         Dedup is scoped to context -- 'work' facts don't collide with 'personal' facts.
         Validates due_at is a valid ISO 8601 string if provided.
         Confidence clamped to [0.0, 1.0].

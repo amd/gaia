@@ -2293,17 +2293,16 @@ class TestSystemPromptSizeCap:
 class TestLLMToolParameterClamping:
     """recall and search_past_conversations clamp limit/days to safe bounds."""
 
-    def test_recall_limit_clamped_to_20(self, mixin_with_tools):
-        """recall() silently clamps limit > 20 to 20."""
+    def test_recall_limit_clamped_to_100(self, mixin_with_tools):
+        """recall() clamps limit > 100 to 100."""
         store = mixin_with_tools.memory_store
-        for i in range(25):
+        for i in range(105):
             store.store(category="fact", content=f"unique fact number {i} stored here")
 
         func = mixin_with_tools._registered_tools["recall"]["function"]
         result = func(category="fact", limit=9999)
         results = result.get("results", result.get("items", []))
-        # Must not return more than 20 regardless of what was requested
-        assert len(results) <= 20
+        assert len(results) == 100
 
     def test_recall_limit_minimum_is_one(self, mixin_with_tools):
         """recall() clamps limit < 1 to 1."""
