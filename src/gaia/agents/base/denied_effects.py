@@ -35,6 +35,9 @@ NETWORK = "network"
 PATH = "path"
 SCRIPT = "script"
 
+#: A file change whose target the code computes: it could be any denied path.
+COMPUTED_PATH = "a path the code works out when it runs"
+
 #: One effect however it is spelled: every runner here executes the test suite.
 TEST_SUITE = "the test suite"
 _TEST_RUNNERS = frozenset(
@@ -303,6 +306,8 @@ class Effect:
                 or self.target.endswith("." + other.target)
             )
         if self.kind == PATH:
+            if COMPUTED_PATH in (self.target, other.target):
+                return True
             return _path_within(self.target, other.target) or _path_within(
                 other.target, self.target
             )
@@ -569,8 +574,139 @@ def _argv_from_node(node: ast.AST) -> Optional[List[str]]:
     return argv or None
 
 
+#: Module functions that delete or move their first argument.
+_FILE_CHANGERS = {
+    "shutil": frozenset({"rmtree", "move"}),
+    "os": frozenset({"remove", "unlink", "rmdir", "removedirs", "rename", "replace"}),
+}
+#: ``pathlib.Path`` methods that delete, move or overwrite the path itself.
+#: ``rename``/``replace`` only on a receiver known to be a Path: ``str.replace``.
+_PATH_CHANGERS = frozenset({"unlink", "rmdir", "write_text", "write_bytes"})
+_PATH_MOVERS = frozenset({"rename", "replace"})
+_PATH_TYPES = frozenset({"Path", "PurePath", "WindowsPath", "PosixPath"})
+
+
+class _PyFiles:
+    """Which paths a snippet deletes, moves or overwrites, as far as it shows.
+
+    Tracks literal strings, names bound to them, ``os.path.join``, ``Path``
+    construction and ``/``. A target it cannot read is :data:`COMPUTED_PATH`.
+    """
+
+    def __init__(self, tree: ast.AST, cwd: str):
+        self.cwd = cwd
+        self.modules: Dict[str, str] = {}
+        self.funcs: Dict[str, Tuple[str, str]] = {}
+        self.values: Dict[str, str] = {}
+        self.paths: Set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    root = alias.name.split(".")[0]
+                    if root in ("os", "shutil", "pathlib"):
+                        self.modules[alias.asname or root] = root
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                root = node.module.split(".")[0]
+                for alias in node.names:
+                    self.funcs[alias.asname or alias.name] = (root, alias.name)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = node.targets[0]
+                if isinstance(target, ast.Name):
+                    value = self.text(node.value)
+                    if value is not None:
+                        self.values[target.id] = value
+                    if self.is_path(node.value):
+                        self.paths.add(target.id)
+            elif isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+                iterated = node.iter
+                if (
+                    isinstance(iterated, ast.Call)
+                    and isinstance(iterated.func, ast.Attribute)
+                    and iterated.func.attr in ("iterdir", "glob", "rglob")
+                ):
+                    self.paths.add(node.target.id)
+
+    def _module_of(self, node: ast.AST) -> Optional[str]:
+        if isinstance(node, ast.Name):
+            return self.modules.get(node.id)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            base = self.modules.get(node.value.id)
+            return f"{base}.{node.attr}" if base else None
+        return None
+
+    def _callee(self, call: ast.Call) -> Tuple[Optional[str], Optional[str]]:
+        func = call.func
+        if isinstance(func, ast.Name):
+            return self.funcs.get(func.id, (None, func.id))
+        if isinstance(func, ast.Attribute):
+            return self._module_of(func.value), func.attr
+        return None, None
+
+    def is_path(self, node: ast.AST) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in self.paths
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            return self.is_path(node.left)
+        if isinstance(node, ast.Call):
+            module, name = self._callee(node)
+            return name in _PATH_TYPES and module in (None, "pathlib")
+        return False
+
+    def text(self, node: ast.AST) -> Optional[str]:
+        """The string *node* evaluates to, when the code spells it out."""
+        literal = _const_str(node)
+        if literal is not None:
+            return literal
+        if isinstance(node, ast.Name):
+            return self.values.get(node.id)
+        if isinstance(node, ast.BinOp):
+            left, right = self.text(node.left), self.text(node.right)
+            if left is None or right is None:
+                return None
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Div):
+                return os.path.join(left, right)
+            return None
+        if isinstance(node, ast.Call):
+            module, name = self._callee(node)
+            if name in _PATH_TYPES or (name == "str" and module is None):
+                return self.text(node.args[0]) if len(node.args) == 1 else None
+            if module == "os.path" and name == "join" and node.args:
+                parts = [self.text(arg) for arg in node.args]
+                if any(part is None for part in parts):
+                    return None
+                return os.path.join(*parts)
+        return None
+
+    def _target(self, node: ast.AST) -> Effect:
+        value = self.text(node)
+        # ``join(folder, name)`` / ``folder / name``: the folder is reached.
+        if value is None and isinstance(node, ast.Call):
+            module, name = self._callee(node)
+            if module == "os.path" and name == "join" and node.args:
+                value = self.text(node.args[0])
+        if value is None and isinstance(node, ast.BinOp):
+            value = self.text(node.left)
+        path = _norm_path(value, self.cwd) if value else None
+        return Effect(PATH, path or COMPUTED_PATH)
+
+    def changed(self, call: ast.Call) -> Set[Effect]:
+        module, name = self._callee(call)
+        if module in _FILE_CHANGERS and name in _FILE_CHANGERS[module]:
+            return {self._target(call.args[0])} if call.args else set()
+        func = call.func
+        if isinstance(func, ast.Attribute) and (
+            func.attr in _PATH_CHANGERS
+            or (func.attr in _PATH_MOVERS and self.is_path(func.value))
+        ):
+            return {self._target(func.value)}
+        return set()
+
+
 def effects_of_python_code(code: str, cwd: str, depth: int = 0) -> Set[Effect]:
-    """What a Python snippet would do: tests, subprocesses, hosts, writes."""
+    """What a Python snippet would do: tests, subprocesses, hosts, file changes."""
     if depth > 3 or not isinstance(code, str):
         return set()
     effects: Set[Effect] = set()
@@ -604,10 +740,12 @@ def effects_of_python_code(code: str, cwd: str, depth: int = 0) -> Set[Effect]:
     # ``from unittest import mock`` runs nothing; importing a runner does.
     if imported & {"pytest", "nose2"}:
         effects.add(Effect(COMMAND, TEST_SUITE))
+    files = _PyFiles(tree, cwd)
     for call in calls:
         effects |= _effects_of_python_call(
             call, subprocess_names, "unittest" in imported, cwd, depth
         )
+        effects |= files.changed(call)
     return effects
 
 
@@ -811,6 +949,8 @@ class Denial:
     rendered: str
     reason: str
     effects: Set[Effect] = field(default_factory=set)
+    #: GAIA's policy said no, not a person, so no person can lift it.
+    refused: bool = False
 
 
 class DeniedEffects:
@@ -829,18 +969,24 @@ class DeniedEffects:
         tool_args: Optional[Dict[str, Any]],
         reason: str,
         kinds: Optional[Set[str]] = None,
+        refused: bool = False,
     ) -> Optional[Denial]:
         """Remember what this declined call would have done.
 
         *kinds* narrows what is kept: a policy refusal of one command shape
         records the host or path it targeted, not the whole command family.
+        *refused* marks a policy refusal rather than a person's no.
         """
-        effects = effects_of_call(tool_name, tool_args, self.cwd)
-        if kinds is not None:
-            effects = {e for e in effects if e.kind in kinds}
+        effects = {
+            e
+            for e in effects_of_call(tool_name, tool_args, self.cwd)
+            if e.target != COMPUTED_PATH and (kinds is None or e.kind in kinds)
+        }
         if not effects:
             return None
-        denial = Denial(tool_name, render_call(tool_name, tool_args), reason, effects)
+        denial = Denial(
+            tool_name, render_call(tool_name, tool_args), reason, effects, refused
+        )
         self.denials.append(denial)
         return denial
 

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import pytest
 import test_prompt_prefix_stability as stability
-from test_prompt_prefix_stability import flagship  # noqa: F401 - fixture
 
 from gaia.agents.base import project_map
 

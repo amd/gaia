@@ -157,7 +157,11 @@ CATEGORY_PERSONAL = "PERSONAL"
 # string is accepted or returned. No existing field or value changed, so
 # 2.13 consumers keep working (additive MINOR) — they simply never see the
 # new value until a work mailbox is connected.
-SCHEMA_VERSION = "2.14"
+# 2.15 is additive over 2.14 (#6043): the published OpenAPI contract now
+# includes the twelve existing stateful ``/v1/email/agent/*`` operations used
+# by the Agent UI (sessions, history, memory, autonomy, confirmations, cancel,
+# and the SSE query stream). No pre-existing request or response shape changed.
+SCHEMA_VERSION = "2.15"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.
