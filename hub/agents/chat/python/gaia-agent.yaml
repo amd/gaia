@@ -11,18 +11,18 @@ icon: message-circle
 # Real registered-tool count for entry_class's default config (prompt_profile
 # defaults to "full") — introspected, drift-guarded by
 # tests/unit/test_chat_fix_contracts.py.
-tools_count: 66
+tools_count: 68
 
 language: python
-min_gaia_version: "0.25.4"
+min_gaia_version: "0.26.0"
 models: []
 
 python:
   entry_module: gaia_agent_chat
   entry_class: ChatAgent
   dependencies:
-    - "amd-gaia>=0.25.4"
-    - "gaia-agent-gaia>=0.3.4"
+    - "amd-gaia>=0.26.0"
+    - "gaia-agent-gaia>=0.3.5"
 
 requirements:
   min_memory_gb: 8

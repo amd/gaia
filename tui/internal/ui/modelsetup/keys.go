@@ -83,7 +83,11 @@ func (m Model) key(msg tea.KeyMsg) (Model, tea.Cmd) {
 		switch k {
 		case "enter":
 			if m.opts.Mode == ModeFirstRun {
-				return m, func() tea.Msg { return FinishedMsg{} }
+				chatModel := ""
+				if !m.opts.Cloud {
+					chatModel = m.sel.chat
+				}
+				return m, func() tea.Msg { return FinishedMsg{ChatModel: chatModel} }
 			}
 			return m.leave()
 		case "m":

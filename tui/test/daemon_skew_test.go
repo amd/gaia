@@ -34,7 +34,7 @@ func TestAMissingDaemonRouteIsNotBlamedOnTheAgentHub(t *testing.T) {
 	// The remedy has to be able to fix the cause. The missing route comes from
 	// the installed core, so a restart relaunches the same one — a core this old
 	// may not even have a `daemon` subcommand to restart with.
-	if !strings.Contains(text, "pip install --upgrade amd-gaia") {
+	if !strings.Contains(text, "https://amd-gaia.ai/#install") {
 		t.Errorf("the error gives no way to fix it:\n%s", text)
 	}
 	if !strings.Contains(text, "brings the same one back") {

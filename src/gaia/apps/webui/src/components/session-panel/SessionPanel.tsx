@@ -26,6 +26,7 @@ import { EnvironmentSection } from './EnvironmentSection';
 import { OutputsSection } from './OutputsSection';
 import { ChangesSection } from './ChangesSection';
 import { AgentInfoSection } from './AgentInfoSection';
+import { SkillsSection } from './SkillsSection';
 import type { ContextUsage, Message } from '../../types';
 import { useT } from '../../i18n/useT';
 import './SessionPanel.css';
@@ -172,6 +173,7 @@ export function SessionPanel({ sessionId, messages, busy, onUsage, onJumpToMessa
                     </PanelSection>
                     <OutputsSection sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />
                     <ChangesSection sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />
+                    <SkillsSection sessionId={sessionId} busy={busy} />
                     <AgentInfoSection sessionId={sessionId} busy={busy} />
                 </div>
             </aside>

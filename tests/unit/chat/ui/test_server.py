@@ -1067,14 +1067,18 @@ class TestSystemStatus:
 
 
 class TestDynamicToolsSetting:
-    """/api/settings round-trip + env lock for the Beta dynamic tool loader (#1798)."""
+    """/api/settings round-trip + env lock for dynamic tool loading."""
 
-    def test_cold_state_defaults_to_off(self, client, monkeypatch):
-        """Fresh DB (no dynamic_tools key) + no env var ⇒ off, unlocked —
-        byte-identical to the pre-#1798 default-off path."""
+    @pytest.fixture(autouse=True)
+    def _private_config(self, monkeypatch, tmp_path):
+        """The setting lives in config.json; one test's PUT must not reach the next."""
+        monkeypatch.setattr("gaia.config.GAIA_CONFIG_FILE", tmp_path / "config.json")
+
+    def test_cold_state_defaults_to_on(self, client, monkeypatch):
+        """No config file + no env var ⇒ on, unlocked."""
         monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
         data = client.get("/api/settings").json()
-        assert data["dynamic_tools"] is False
+        assert data["dynamic_tools"] is True
         assert data["dynamic_tools_locked"] is False
 
     def test_put_true_round_trips(self, client, monkeypatch):
@@ -1122,6 +1126,107 @@ class TestDynamicToolsSetting:
         unlocked = client.get("/api/settings").json()
         assert unlocked["dynamic_tools"] is False
         assert unlocked["dynamic_tools_locked"] is False
+
+
+class TestNetworkPolicySetting:
+    """The Agent UI writes the same Local only policy and cleanup as the CLI."""
+
+    def test_get_reports_the_default_policy(self, client, monkeypatch, tmp_path):
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        assert client.get("/api/settings").json()["network_policy"] == "cloud_allowed"
+
+    def test_unrecognized_stricter_policy_is_reported_as_local_only(
+        self, client, monkeypatch, tmp_path
+    ):
+        policy = tmp_path / "policy.json"
+        policy.write_text('{"network_policy":"offline"}', encoding="utf-8")
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(policy))
+        response = client.get("/api/settings")
+        assert response.status_code == 200
+        assert response.json()["network_policy"] == "local_ai_only"
+
+    def test_local_only_clears_a_cloud_ui_choice_but_keeps_a_local_one(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        monkeypatch.setattr("gaia.llm.cloud_keys.users_lemonade_url", lambda: None)
+        monkeypatch.setattr("gaia.llm.cloud_keys.drop_runtime_keys", lambda: [])
+        monkeypatch.setattr(
+            "gaia.ui.routers.system.security.require_local_pc", lambda _request: None
+        )
+        db.set_setting("custom_model", "fireworks.glm-5p3-flash")
+
+        turned_on = client.put(
+            "/api/settings", json={"network_policy": "local_ai_only"}
+        )
+
+        assert turned_on.status_code == 200
+        assert turned_on.json()["network_policy"] == "local_ai_only"
+        assert turned_on.json()["policy_notices"] == []
+        assert db.get_setting("custom_model") is None
+        db.set_setting("custom_model", "Qwen3.6-35B-A3B-GGUF")
+        assert (
+            client.put(
+                "/api/settings", json={"network_policy": "local_ai_only"}
+            ).status_code
+            == 200
+        )
+        assert db.get_setting("custom_model") == "Qwen3.6-35B-A3B-GGUF"
+
+    def test_policy_cleanup_warnings_are_returned(self, client, monkeypatch, tmp_path):
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        from gaia.llm.cloud_keys import CloudKeyError
+
+        monkeypatch.setattr("gaia.llm.cloud_keys.users_lemonade_url", lambda: None)
+        monkeypatch.setattr(
+            "gaia.ui.routers.system.security.require_local_pc", lambda _request: None
+        )
+        monkeypatch.setattr(
+            "gaia.llm.cloud_keys.drop_runtime_keys",
+            lambda: (_ for _ in ()).throw(CloudKeyError("server refused")),
+        )
+        response = client.put("/api/settings", json={"network_policy": "local_ai_only"})
+        assert response.status_code == 200
+        assert "server refused" in response.json()["policy_warnings"][0]
+        assert response.json()["policy_notices"] == [
+            {
+                "code": "runtime_keys_not_dropped",
+                "severity": "warning",
+                "url": None,
+                "reason": "server refused",
+            }
+        ]
+
+    def test_user_server_notice_is_structured_for_translation(
+        self, client, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        monkeypatch.setattr(
+            "gaia.llm.cloud_keys.users_lemonade_url", lambda: "http://127.0.0.1:1234"
+        )
+        monkeypatch.setattr(
+            "gaia.ui.routers.system.security.require_local_pc", lambda _request: None
+        )
+        response = client.put("/api/settings", json={"network_policy": "local_ai_only"})
+        assert response.status_code == 200
+        assert response.json()["policy_warnings"] == []
+        assert response.json()["policy_notices"] == [
+            {
+                "code": "users_server_keeps_keys",
+                "severity": "info",
+                "url": "http://127.0.0.1:1234",
+                "reason": None,
+            }
+        ]
+
+    def test_policy_changes_are_local_pc_only(self, client):
+        response = client.put(
+            "/api/settings",
+            json={"network_policy": "cloud_allowed"},
+            headers={"X-Forwarded-For": "203.0.113.7"},
+        )
+        assert response.status_code == 403
+        assert "PC running GAIA" in response.json()["detail"]
 
 
 class TestAgentModeSetting:

@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 import wave
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import BinaryIO, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import requests
@@ -163,6 +163,28 @@ KOKORO_VOICES = {
         "duration": "H",
     },
 }
+
+_ACCENTS = {"a": "american", "b": "british"}
+_GENDERS = {"f": "female", "m": "male"}
+
+
+def voice_catalog() -> List[Dict[str, str]]:
+    """Every Kokoro voice as ``id``, ``name``, ``accent``, ``gender`` and ``quality``.
+
+    ``accent`` and ``gender`` come from the voice id (``af_bella`` is an
+    American female voice), so a picker can group them without parsing names.
+    """
+    return [
+        {
+            "id": voice,
+            "name": meta["name"].rsplit(" - ", 1)[-1],
+            "accent": _ACCENTS[voice[0]],
+            "gender": _GENDERS[voice[1]],
+            "quality": meta["quality"],
+        }
+        for voice, meta in KOKORO_VOICES.items()
+    ]
+
 
 _L16_RE = re.compile(r"^audio/l16\b", re.IGNORECASE)
 _RATE_RE = re.compile(r"\brate=(\d+)", re.IGNORECASE)
@@ -385,10 +407,11 @@ class LemonadeTTSClient(LemonadeAudioService):
         return len(samples) / rate
 
 
-def write_wav(path: str | Path, samples: np.ndarray, rate: int) -> None:
-    """Write float samples in -1..1 as a 16-bit mono WAV."""
+def write_wav(path: str | Path | BinaryIO, samples: np.ndarray, rate: int) -> None:
+    """Write float samples in -1..1 as a 16-bit mono WAV, to a path or open file."""
     pcm = np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0)
-    with wave.Wave_write(str(path)) as handle:
+    target = path if hasattr(path, "write") else str(path)
+    with wave.Wave_write(target) as handle:
         handle.setnchannels(1)
         handle.setsampwidth(2)
         handle.setframerate(rate)

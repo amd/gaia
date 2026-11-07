@@ -1176,6 +1176,54 @@ class ChatDatabase:
             )
         return out
 
+    def answer_costs(
+        self, session_id: Optional[str] = None, since_day: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Each answer's saved cost, oldest first, for one chat or from *since_day* on.
+
+        *since_day* is a ``YYYY-MM-DD`` prefix compared as text, so it must sit at
+        or before the day wanted; callers trim the rows to the exact instant.
+        """
+        where = ["role = 'assistant'", "turn_summary IS NOT NULL"]
+        args: List[Any] = []
+        if session_id is not None:
+            where.append("session_id = ?")
+            args.append(session_id)
+        if since_day is not None:
+            where.append("created_at >= ?")
+            args.append(since_day)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, session_id, created_at, turn_summary FROM messages "
+                f"WHERE {' AND '.join(where)} ORDER BY created_at ASC, id ASC",
+                args,
+            ).fetchall()
+        out = []
+        for row in rows:
+            try:
+                summary = json.loads(row["turn_summary"])
+            except ValueError as e:
+                raise RuntimeError(
+                    f"Message {row['id']} in chat {row['session_id']} has an "
+                    f"unreadable turn summary ({e}); inspect the messages table "
+                    "in the chat database."
+                ) from e
+            cost = summary.get("cost") if isinstance(summary, dict) else None
+            model = summary.get("model") if isinstance(summary, dict) else None
+            out.append(
+                {
+                    "message_id": row["id"],
+                    "session_id": row["session_id"],
+                    "created_at": row["created_at"],
+                    "cost": cost if isinstance(cost, dict) else {"kind": "unknown"},
+                    "model": model.get("name") if isinstance(model, dict) else None,
+                    "remote": (
+                        bool(model.get("remote")) if isinstance(model, dict) else None
+                    ),
+                }
+            )
+        return out
+
     def get_message_times(self, session_id: str) -> Dict[int, str]:
         """Message id -> when it was written, for every message in the chat."""
         with self._lock:
