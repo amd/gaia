@@ -10,6 +10,7 @@ front end opens with what came back.
 
 from datetime import datetime
 from typing import Any, Dict
+from urllib.parse import quote
 
 from gaia.logger import get_logger
 
@@ -130,13 +131,22 @@ class FollowUpToolsMixin:
         return {"status": "found", "pending": pending, "results": results}
 
     def _cancel_follow_up(self, follow_up_id: str) -> Dict[str, Any]:
-        from gaia.daemon import client
+        from gaia.daemon import client, followups
         from gaia.daemon.errors import DaemonError
 
+        if not followups.is_job_id(follow_up_id):
+            return {
+                "status": "error",
+                "error": (
+                    f"{follow_up_id!r} is not a follow-up id. Use an id exactly "
+                    "as schedule_follow_up or list_follow_ups returned it (32 "
+                    "lowercase hex characters); call list_follow_ups to see them."
+                ),
+            }
         try:
             client.followups_request(
                 "POST",
-                f"/{follow_up_id}/cancel",
+                f"/{quote(follow_up_id, safe='')}/cancel",
                 params={"agent_id": self.FOLLOW_UP_AGENT_ID},
             )
         except DaemonError as e:

@@ -196,3 +196,41 @@ def test_no_running_daemon_leaves_the_turn_without_the_line(monkeypatch):
     host = _Host()
     host._follow_ups_enabled = True
     assert host.follow_up_context() == ""
+
+
+def test_cancel_sends_a_well_formed_id(calls):
+    job_id = "0123456789abcdef0123456789abcdef"
+
+    out = _Host()._cancel_follow_up(job_id)
+
+    assert out == {"status": "cancelled", "id": job_id}
+    assert [c["path"] for c in calls] == [f"/{job_id}/cancel"]
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "",
+        "j1",
+        "0123456789ABCDEF0123456789ABCDEF",
+        "0123456789abcdef0123456789abcde",
+        "0123456789abcdef0123456789abcdef0",
+        "0123456789abcdef/123456789abcdef",
+        "..",
+        "../seen",
+        "0123456789abcdef0123456789abcdef?x=1",
+        "0123456789abcdef0123456789abcdef#x",
+        "%2e%2e",
+        "0123456789abcdef0123456789abcdef\n",
+        " 0123456789abcdef0123456789abcdef",
+        "0123456789abcdef 0123456789abcdef",
+        None,
+        42,
+    ],
+)
+def test_cancel_rejects_malformed_ids(calls, bad_id):
+    out = _Host()._cancel_follow_up(bad_id)
+
+    assert out["status"] == "error"
+    assert "list_follow_ups" in out["error"]
+    assert calls == []

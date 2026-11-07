@@ -60,6 +60,15 @@ class FollowUpError(ValueError):
     """A follow-up that cannot be scheduled as asked, with what to do instead."""
 
 
+#: A follow-up id as :func:`gaia.daemon.scheduler.store.register_job` mints it.
+_JOB_ID = re.compile(r"\A[0-9a-f]{32}\Z")
+
+
+def is_job_id(value: Any) -> bool:
+    """True when *value* has the shape of a follow-up id (``uuid4().hex``)."""
+    return isinstance(value, str) and _JOB_ID.match(value) is not None
+
+
 def init_schema(db) -> None:
     store.init_schema(db)
     db.execute(RESULTS_DDL)
