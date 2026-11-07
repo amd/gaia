@@ -51,6 +51,7 @@ from gaia.agents.install_hints import (
     gaia_extra_requirements,
     resolve_pip_frontend,
 )
+from gaia.frozen import is_frozen
 from gaia.installer import model_choice
 from gaia.installer._stdin import stdin_is_tty
 from gaia.llm.model_fit import MachineCapacity, format_gb
@@ -556,11 +557,17 @@ def _snapshot_bytes(snapshot: Path) -> Optional[int]:
 def bytes_already_on_disk(client, model_ids, store_path: Optional[str]) -> dict:
     """Bytes of each model Lemonade's store already holds: finished files and
     the ``.partial`` ones an interrupted pull left. None for a model GAIA
-    cannot look up: a store not on this PC, or no known checkpoint."""
+    cannot look up: a store not on this PC, one this user cannot read, or no
+    known checkpoint."""
     from gaia.llm.lemonade_client import _model_ids_match
 
     store = Path(store_path) if store_path else None
-    if store is None or not store.is_dir():
+    try:
+        readable = store is not None and store.is_dir()
+    except OSError as e:
+        log.warning("Cannot read Lemonade's model store %s: %s", store, e)
+        readable = False
+    if not readable:
         return {m: None for m in model_ids}
     catalog = client.list_models(show_all=True).get("data", [])
     found = {}
@@ -574,11 +581,16 @@ def bytes_already_on_disk(client, model_ids, store_path: Optional[str]) -> dict:
             continue
         repo = checkpoint.split(":", 1)[0]
         snapshots = store / ("models--" + repo.replace("/", "--")) / "snapshots"
-        counted = (
-            [_snapshot_bytes(s) for s in snapshots.iterdir() if s.is_dir()]
-            if snapshots.is_dir()
-            else []
-        )
+        try:
+            counted = (
+                [_snapshot_bytes(s) for s in snapshots.iterdir() if s.is_dir()]
+                if snapshots.is_dir()
+                else []
+            )
+        except OSError as e:
+            log.warning("Cannot read Lemonade's model store %s: %s", snapshots, e)
+            found[model_id] = None
+            continue
         found[model_id] = None if None in counted else sum(counted)
     return found
 
@@ -1467,7 +1479,8 @@ class InitCommand:
         self._setup_verified = True
         self.skip_models = skip_models
         self.skip_webui_build = skip_webui_build
-        self.skip_pip_extras = skip_pip_extras
+        # The frozen app bundles its packages and has no pip to add more.
+        self.skip_pip_extras = skip_pip_extras or is_frozen()
         self.force_reinstall = force_reinstall
         self.force_models = force_models
         self.yes = yes

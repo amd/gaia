@@ -99,20 +99,33 @@ describe('DesktopAppSettings', () => {
     });
 
     it.each([
-        ['no-host', /doesn't show tray icons, so closing the window quits GAIA.*AppIndicator/i],
+        ['no-host', /doesn't show tray icons, so GAIA always opens with its window showing/i],
         ['check-failed', /couldn't check whether your desktop shows tray icons/i],
-    ] as const)('with no tray (%s), the tray toggles are off and say why', async (reason, why) => {
+    ] as const)('with no tray (%s), start-in-the-tray is off and says why', async (reason, why) => {
         host = { available: false, reason };
         saved = { ...DEFAULTS, startMinimized: true };
         render(<DesktopAppSettings />);
         await waitFor(() => expect(toggle(/sign in/i)).toBeEnabled());
-        for (const name of [/keep running when the window closes/i, /start in the tray/i]) {
-            expect(toggle(name)).toBeDisabled();
-            expect(toggle(name)).not.toBeChecked();
-            expect(toggle(name)).toHaveAccessibleDescription(why);
-        }
+        expect(toggle(/start in the tray/i)).toBeDisabled();
+        expect(toggle(/start in the tray/i)).not.toBeChecked();
+        expect(toggle(/start in the tray/i)).toHaveAccessibleDescription(why);
         expect(toggle(/sign in/i)).toHaveAccessibleDescription(/first chat of the day/i);
+        expect(screen.queryByText(/AppIndicator/i)).toBeNull();
     });
+
+    it.each([['no-host'], ['check-failed']] as const)(
+        'with no tray (%s), keep-running still works and points at the dock',
+        async (reason) => {
+            host = { available: false, reason };
+            render(<DesktopAppSettings />);
+            const keep = /keep running when the window closes/i;
+            await waitFor(() => expect(toggle(keep)).toBeEnabled());
+            expect(toggle(keep)).toBeChecked();
+            expect(toggle(keep)).toHaveAccessibleDescription(/minimizes GAIA.*right-click it there and choose Quit/i);
+            await userEvent.click(toggle(keep));
+            expect(setConfig).toHaveBeenCalledExactlyOnceWith({ tray: { minimizeToTray: false } });
+        },
+    );
 
     it('while the tray check is still running, the toggles work as usual', async () => {
         host = { available: false, reason: 'checking' };

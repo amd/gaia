@@ -38,6 +38,7 @@ from gaia.agents.tools.file_edit import (
     file_read_record,
     read_first_preflight,
     stamp_of,
+    turn_of,
 )
 from gaia.agents.tools.path_access import (
     missing_file_error,
@@ -1097,9 +1098,8 @@ class FileSearchToolsMixin:
                     "operation": "search_directory",
                 }
 
-        @tool(
-            atomic=True,
-        )
+        # Shares its name with the FileSystemToolsMixin and FileIOToolsMixin read_file.
+        @tool(atomic=True, override=True)
         def read_file(
             file_path: str, offset: int = 0, limit: Optional[int] = None
         ) -> Dict[str, Any]:
@@ -1914,7 +1914,8 @@ class FileSearchToolsMixin:
             old_content must match exactly one location. Zero or several matches
             are errors that carry the file's current content, so a retry does not
             need a separate read. new_content replaces old_content only; to
-            rewrite the whole file, use write_file.
+            rewrite the whole file, use write_file. Repeating an edit already
+            applied this turn is refused.
 
             Security checks performed:
             1. Path allowlist validation (PathValidator)
@@ -1976,7 +1977,9 @@ class FileSearchToolsMixin:
                     }
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(resolved_path)
+                refusal = reads.refusal(resolved_path) or reads.repeat_refusal(
+                    resolved_path, old_content, new_content, turn_of(self)
+                )
                 if refusal is not None:
                     return {**refusal, "operation": "edit_file"}
 
@@ -2042,6 +2045,7 @@ class FileSearchToolsMixin:
                 # Write updated content
                 _write_exact(resolved_path, updated_content)
                 reads.note(resolved_path)
+                reads.note_edit(resolved_path, old_content, new_content, turn_of(self))
 
                 # Audit the edit
                 edit_size = len(updated_content.encode("utf-8"))
@@ -2096,9 +2100,8 @@ class FileSearchToolsMixin:
                     "operation": "edit_file",
                 }
 
-        @tool(
-            atomic=True,
-        )
+        # Shares its name with FileSystemToolsMixin.browse_directory.
+        @tool(atomic=True, override=True)
         def browse_directory(
             directory_path: str = None, show_hidden: bool = False, sort_by: str = "name"
         ) -> Dict[str, Any]:

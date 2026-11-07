@@ -111,6 +111,14 @@ function Ui-Dir {
     return (Get-ItemProperty -Path $uiKey -Name InstallLocation -ErrorAction SilentlyContinue).InstallLocation
 }
 
+# The `gaia` the app runs: the one it ships, or, for a release from before it
+# shipped one (the upgrade row's first install), the venv it built.
+function Backend-Gaia {
+    $dir = Ui-Dir
+    if ($dir -and (Test-Path "$dir\resources\core\gaia.exe")) { return "$dir\resources\core\gaia.exe" }
+    return "$gaiaHome\venv\Scripts\gaia.exe"
+}
+
 function Wants([string]$Component) {
     switch ($env:KIND) {
         'win-setup' { return ($env:COMPONENTS -split ',') -contains $Component }
@@ -167,8 +175,8 @@ function Start-AgentUi {
     Write-Host "launched pid $($p.Id)"
 }
 
-# First launch installs the Python backend from PyPI before it can serve, so
-# the bound is generous; the threshold file is what flags it getting slower.
+# A release from before the app shipped its backend installs it from PyPI on
+# first launch, so the bound is generous; the threshold file flags it slowing.
 function Wait-AgentUiHealth {
     $pid0 = [int](Get-Content "$work\app.pid")
     $deadline = (Get-Date).AddMinutes(25)
@@ -193,9 +201,9 @@ function Wait-AgentUiHealth {
         Fail 'the backend did not answer /api/health within 25 min'
     }
     Write-Host "GET /api/health on $port -> ok (service gaia-agent-ui)"
-    $got = & "$gaiaHome\venv\Scripts\gaia.exe" --version 2>&1 | Out-String
+    $got = & (Backend-Gaia) --version 2>&1 | Out-String
     Write-Host "backend gaia --version -> $got"
-    if ($got -notmatch [regex]::Escape($pep440)) { Fail "the backend the app installed is '$got', expected $pep440" }
+    if ($got -notmatch [regex]::Escape($pep440)) { Fail "the backend the app runs is '$got', expected $pep440" }
 }
 
 # First-run setup through the installed app's own UI, which has been talking to
@@ -231,13 +239,13 @@ function Stop-AgentUi {
 # The daemon the backend started outlives the app by design, and keeps the
 # agent sidecar it supervises running, so stop it the way a user would.
 function Stop-Daemon {
-    $gaia = "$gaiaHome\venv\Scripts\gaia.exe"
+    $gaia = Backend-Gaia
     if (-not (Test-Path $gaia)) { Write-Host "no ${gaia}: no backend was installed, so no daemon"; return }
     & $gaia daemon stop
     if ($LASTEXITCODE -ne 0) { Fail "``gaia daemon stop`` exited $LASTEXITCODE" }
 }
 
-# The daemon's Python is the base interpreter, not a path under ~\.gaia.
+# A venv daemon's Python is the base interpreter, not a path under ~\.gaia.
 function Daemon-Processes {
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match '-m gaia\.daemon' }
 }
@@ -397,12 +405,13 @@ switch ($Step) {
                 $env:HOME = $userHome
                 & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -Raw '$script' | Invoke-Expression"
                 if ($LASTEXITCODE -ne 0) { Fail "install.ps1 failed (exit $LASTEXITCODE)" }
-                foreach ($f in "$gaiaHome\venv\Scripts\gaia.exe", "$gaiaHome\bin\gaia.exe", "$gaiaHome\bin\gaia-cli.exe", "$gaiaHome\bin\gaia-mcp.exe", "$gaiaHome\bin\gaia-tui.exe", "$gaiaHome\bin\gaia-agent.exe") {
+                foreach ($f in "$gaiaHome\bin\_internal", "$gaiaHome\bin\gaia.exe", "$gaiaHome\bin\gaia-cli.exe", "$gaiaHome\bin\gaia-mcp.exe", "$gaiaHome\bin\gaia-tui.exe", "$gaiaHome\bin\gaia-agent.exe") {
                     if (-not (Test-Path $f)) { Fail "install.ps1 finished but $f is not there" }
                 }
                 # The venv's python.exe must not reach the user's PATH.
                 $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path
                 $entries = @($regPath -split ';' | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') })
+                if (Test-Path "$gaiaHome\venv") { Fail "install.ps1 built $gaiaHome\venv; it installs the frozen gaia" }
                 if ($entries -contains "$gaiaHome\venv\Scripts") { Fail "install.ps1 put $gaiaHome\venv\Scripts on the user PATH" }
                 if ($entries -notcontains "$gaiaHome\bin") { Fail "install.ps1 did not put $gaiaHome\bin on the user PATH" }
             }
@@ -446,7 +455,7 @@ switch ($Step) {
                 if ($LASTEXITCODE -ne 0) { Fail "$gaiaHome\bin\gaia.exe --version exited $LASTEXITCODE" }
                 if (Select-String -Path "$repo\installer\scripts\install.ps1" -Pattern 'GAIA_RELEASE_TAG' -Quiet) {
                     Check-TuiVersion @($tuiVersion, $version)
-                    $got = & "$gaiaHome\venv\Scripts\gaia.exe" --version 2>&1 | Out-String
+                    $got = & "$gaiaHome\bin\gaia.exe" --version 2>&1 | Out-String
                     if ($got -notmatch [regex]::Escape($pep440)) { Fail "install.ps1 was asked for $($rel.tag) but installed $got" }
                 }
             }
@@ -482,7 +491,7 @@ switch ($Step) {
         Stop-AgentUi
         Stop-Daemon
         $left = Get-Process -ErrorAction SilentlyContinue | Where-Object {
-            $_.ProcessName -eq 'gaia-desktop' -or ($_.Path -and $_.Path -like "$gaiaHome\venv\*")
+            $_.ProcessName -eq 'gaia-desktop' -or ($_.Path -and ($_.Path -like "$gaiaHome\venv\*" -or $_.Path -like "*\resources\core\*"))
         }
         if ($left) { Fail "still running after the app was stopped: $(($left | ForEach-Object { "$($_.Id) $($_.Path)" }) -join '; ')" }
     }

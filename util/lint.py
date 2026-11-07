@@ -56,7 +56,7 @@ FORMAT_DIRS = LINT_DIRS + HUB_DIRS
 # Hub packages predate this gate and carry a small, documented legacy style
 # backlog. Keep checking them for every other Flake8 error without turning this
 # coverage fix into a mass rewrite of published agent tests.
-HUB_FLAKE8_IGNORES = "F401,F811,E201,E202,E731"
+HUB_FLAKE8_IGNORES = "F401,E201,E202,E731"
 
 
 def run_command(cmd: list[str], check: bool = False) -> tuple[int, str]:

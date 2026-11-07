@@ -41,7 +41,7 @@ def _make_mock_agent_and_tools():
 
     registered_tools = {}
 
-    def mock_tool(atomic=True):
+    def mock_tool(atomic=True, **_kwargs):
         def decorator(func):
             registered_tools[func.__name__] = func
             return func
@@ -1443,7 +1443,7 @@ class TestParseSizeRangeDirect:
                 self._tools = {}
                 self._bookmarks = {}
 
-        def mock_tool(atomic=True):
+        def mock_tool(atomic=True, **_kwargs):
             def decorator(func):
                 return func
 

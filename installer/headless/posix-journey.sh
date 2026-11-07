@@ -228,8 +228,14 @@ wait_for_main_log() {
   done
 }
 
-# First launch installs the Python backend from PyPI before it can serve, so
-# the bound is generous; the threshold file is what flags it getting slower.
+# The `gaia` the app runs, from the backend start it logged: the one it ships
+# (an AppImage's copy under ~/.gaia), or an older release's venv.
+backend_gaia() {
+  grep -oE 'Starting backend: .+ chat --ui' "${GAIA_HOME}/electron-main.log" 2>/dev/null | tail -n1 | sed -E 's/^Starting backend: //; s/ chat --ui$//'
+}
+
+# A release from before the app shipped its backend installs it from PyPI on
+# first launch, so the bound is generous; the threshold file flags it slowing.
 wait_agent_ui_health() {
   local port="" body="" deadline=$(( $(date +%s) + 1500 ))
   while [ "$(date +%s)" -lt "${deadline}" ]; do
@@ -246,9 +252,12 @@ wait_agent_ui_health() {
     *) tail -n 80 "${GAIA_HOME}/electron-main.log" || true; die "the backend did not answer /api/health within 25 min" ;;
   esac
   local got
-  got="$("${GAIA_HOME}/venv/bin/gaia" --version 2>&1 || true)"
-  echo "backend gaia --version -> ${got}"
-  case "${got}" in *"${PEP440}"*) ;; *) die "the backend the app installed is '${got}', expected ${PEP440}" ;; esac
+  local gaia
+  gaia="$(backend_gaia)"
+  [ -n "${gaia}" ] || die "no backend start in ${GAIA_HOME}/electron-main.log"
+  got="$("${gaia}" --version 2>&1 || true)"
+  echo "backend ${gaia} --version -> ${got}"
+  case "${got}" in *"${PEP440}"*) ;; *) die "the backend the app runs is '${got}', expected ${PEP440}" ;; esac
 }
 
 # First-run setup through the installed app's own UI, which has been talking to
@@ -327,8 +336,9 @@ stop_agent_ui() {
 # The daemon the backend started outlives the app by design, and keeps the
 # agent sidecar it supervises running, so stop it the way a user would.
 stop_daemon() {
-  local gaia="${GAIA_HOME}/venv/bin/gaia"
-  if [ ! -x "${gaia}" ]; then echo "no ${gaia}: the app installed no backend, so no daemon"; return 0; fi
+  local gaia
+  gaia="$(backend_gaia)"
+  if [ -z "${gaia}" ] || [ ! -x "${gaia}" ]; then echo "no backend gaia ('${gaia}'): the app started no backend, so no daemon"; return 0; fi
   local rc=0
   "${gaia}" daemon stop || rc=$?
   [ "${rc}" -eq 0 ] || die "\`gaia daemon stop\` exited ${rc}"
@@ -338,7 +348,7 @@ assert_gone() { for p in "$@"; do [ ! -e "${p}" ] || die "left behind: ${p}"; do
 
 no_gaia_processes() {
   local left
-  left="$(pgrep -fl 'gaia-desktop|gaia-tui|gaia-agent|\.gaia/venv/bin/|-m gaia\.daemon' || true)"
+  left="$(pgrep -fl 'gaia-desktop|gaia-tui|gaia-agent|\.gaia/venv/bin/|\.gaia/core/|\.gaia/app-core/|resources/core/gaia|-m gaia\.daemon' || true)"
   [ -z "${left}" ] || die "still running after uninstall: ${left}"
 }
 
@@ -439,13 +449,11 @@ install)
       fi
       # Exactly the documented `curl ... | sh`, with the script from this checkout.
       sh <"${REPO}/installer/scripts/install.sh"
-      for f in "${GAIA_HOME}/venv/bin/gaia" "${GAIA_HOME}/bin/gaia" "${GAIA_HOME}/bin/gaia-mcp" "${GAIA_HOME}/bin/gaia-tui" "${GAIA_HOME}/bin/gaia-agent"; do
+      for f in "${GAIA_HOME}/core/gaia" "${GAIA_HOME}/bin/gaia" "${GAIA_HOME}/bin/gaia-mcp" "${GAIA_HOME}/bin/gaia-tui" "${GAIA_HOME}/bin/gaia-agent"; do
         [ -x "${f}" ] || die "install.sh finished but ${f} is not there"
       done
-      # #6603: the venv's python3 must not reach the user's PATH.
-      if grep -Fs "${GAIA_HOME}/venv/bin" "${HOME}/.bashrc" "${HOME}/.bash_profile" "${HOME}/.profile" "${HOME}/.zshrc"; then
-        die "install.sh put ${GAIA_HOME}/venv/bin on PATH in a shell startup file"
-      fi
+      # It installs the frozen gaia: no venv, so no Python of GAIA's on any PATH.
+      [ ! -e "${GAIA_HOME}/venv" ] || die "install.sh built ${GAIA_HOME}/venv; it installs the frozen gaia"
       ;;
     *) die "no install for ${KIND}" ;;
   esac
@@ -465,11 +473,11 @@ launch)
     agent-ui-dmg|agent-ui-deb|appimage) launch_agent_ui ;;
     install-sh)
       check_tui_version ""
-      "${GAIA_HOME}/venv/bin/gaia" --version
+      "${GAIA_HOME}/bin/gaia" --version
       if script_pins_release; then
         check_tui_version "${TUI_VERSION}" "${VERSION}"
-        "${GAIA_HOME}/venv/bin/gaia" --version 2>&1 | grep -q "${PEP440}" \
-          || die "install.sh was asked for $(rel "d['tag']") but installed $("${GAIA_HOME}/venv/bin/gaia" --version 2>&1)"
+        "${GAIA_HOME}/bin/gaia" --version 2>&1 | grep -q "${PEP440}" \
+          || die "install.sh was asked for $(rel "d['tag']") but installed $("${GAIA_HOME}/bin/gaia" --version 2>&1)"
       fi
       ;;
     *) check_tui_version "${TUI_VERSION}" "${VERSION}" ;;

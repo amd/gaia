@@ -144,6 +144,9 @@ class RAGSDK:
                 "error_type": str (some failures, see below)
             }
 
+        Indexing a path again returns "already_indexed": True when its bytes
+        are unchanged, and re-indexes it ("reindexed": True) when they changed.
+
         error_type, when set, names a failure a caller can act on:
             "file_locked": Windows refused the read; another program holds
                 the document exclusively or has locked part of it (or the user
@@ -161,8 +164,17 @@ class RAGSDK:
         """Remove a document from the index."""
         ...
 
-    def reindex_document(self, file_path: str) -> Dict[str, Any]:
+    def reindex_document(
+        self,
+        file_path: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        wait_callback: Optional[Callable[[int], None]] = None,
+    ) -> Dict[str, Any]:
         """Reindex a document (remove old chunks and add new ones)."""
+        ...
+
+    def is_current(self, file_path: str) -> bool:
+        """Whether the document is indexed from the bytes it holds now."""
         ...
 
     def query(self, question: str, include_metadata: bool = True) -> RAGResponse:
