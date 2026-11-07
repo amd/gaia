@@ -160,3 +160,52 @@ class TestAForgetTurnDoesNotRelearnIt:
         host.process_query(message)
 
         assert _contents(store) == [MANGO]
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Please don't ever forget that I'm vegetarian",
+            "I don't want you to forget that I'm vegetarian",
+            "Never, ever forget I'm vegetarian",
+            "Make sure you never forget I am vegetarian",
+            "Did you forget I'm vegetarian?",
+            "You forgot I'm vegetarian. Don’t forget again: I'm vegetarian",
+        ],
+    )
+    def test_asking_to_keep_a_fact_saves_it(self, store, message):
+        host = _Host(store, [_add("User is vegetarian", "fact")])
+
+        host.process_query(message)
+
+        assert _contents(store) == ["User is vegetarian"]
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "remove the peanut butter cookies from the list since I'm allergic "
+            "to peanuts",
+            "Remove the peanut butter cookies because I'm allergic to peanuts",
+            "Delete the peanut cookies as I'm allergic to peanuts",
+        ],
+    )
+    def test_the_reason_for_a_removal_is_still_saved(self, store, message):
+        host = _Host(store, [_add("User is allergic to peanuts", "fact")])
+
+        host.process_query(message)
+
+        assert _contents(store) == ["User is allergic to peanuts"]
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Can you forget that I'm vegetarian?",
+            "Could you please forget I am vegetarian?",
+            "I'm not sure why you kept it, but forget that I'm vegetarian.",
+        ],
+    )
+    def test_a_polite_or_hedged_forget_is_still_a_forget(self, store, message):
+        host = _Host(store, [_add("User is vegetarian", "fact")])
+
+        host.process_query(message)
+
+        assert _contents(store) == []

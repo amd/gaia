@@ -573,6 +573,11 @@ def test_an_ambiguous_result_lists_ids_and_contents_in_the_message(store):
     [
         ("cookies", "User likes to cook pasta"),
         ("party", "User is part of the chess club"),
+        ("history", "User studies historic buildings"),
+        ("academy", "User is an academic"),
+        ("economy", "User is an economic advisor"),
+        ("technology", "User likes technological gadgets"),
+        ("historic", "User studies history"),
     ],
 )
 def test_a_word_is_kin_only_to_a_word_that_also_lost_an_ending(store, words, content):
@@ -581,3 +586,19 @@ def test_a_word_is_kin_only_to_a_word_that_also_lost_an_ending(store, words, con
 
     assert result["status"] == "error"
     assert kept == ids
+
+
+@pytest.mark.parametrize(
+    "words, content",
+    [
+        ("diabetic", "User has diabetes"),
+        ("diabetes", "User is diabetic"),
+        ("asthma", "User is asthmatic"),
+        ("pharmacies", "User works at a pharmacy"),
+    ],
+)
+def test_a_listed_adjective_or_a_plural_names_its_noun(store, words, content):
+    result, ids, kept = _forget(store, [content, TEA], words)
+
+    assert result["status"] == "removed"
+    assert kept == ids[1:]

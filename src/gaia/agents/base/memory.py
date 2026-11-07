@@ -390,8 +390,18 @@ def _forget_words(text: str) -> set:
     return words
 
 
-#: Endings that make kin of one word: allergy, allergic, allergies.
-_FORGET_ENDINGS = ("ical", "ic", "ie", "y")
+#: Plural endings: allergy and allergies are one word.
+_FORGET_ENDINGS = ("ie", "y")
+
+#: Adjectives that name the same thing as their noun. Listed, not derived:
+#: "historic" is not "history" the way "allergic" is "allergy".
+_FORGET_ADJECTIVE_NOUNS = {
+    "allergic": "allergy",
+    "anemic": "anemia",
+    "asthmatic": "asthma",
+    "diabetic": "diabete",
+    "epileptic": "epilepsy",
+}
 
 
 def _forget_root(word: str) -> str:
@@ -401,18 +411,29 @@ def _forget_root(word: str) -> str:
     return word
 
 
+def _forget_kin(word: str) -> Optional[str]:
+    """What *word* shares with its kin, or ``None`` when it has none."""
+    noun = _FORGET_ADJECTIVE_NOUNS.get(word, word)
+    root = _forget_root(noun)
+    if root != noun:
+        return root
+    return noun if noun in _FORGET_ADJECTIVE_NOUNS.values() else None
+
+
 def _forget_shared(words: set, content: str) -> set:
     """The *words* that *content* holds, as written or as a kin word.
 
-    Two words are kin only when both lost an ending: "allergy" meets
-    "allergic", but "cookies" doesn't meet "cook" and "allerg" meets nothing.
+    Two words are kin when both lost a plural ending ("allergy" meets
+    "allergies") or one is a listed adjective of the other ("allergic").
+    "cookies" doesn't meet "cook", "historic" doesn't meet "history", and
+    "allerg" meets nothing.
     """
     held = _forget_words(content)
-    roots = {_forget_root(w) for w in held if _forget_root(w) != w}
+    held_kin = {k for k in map(_forget_kin, held) if k is not None}
     return {
         w
         for w in words
-        if w in held or (_forget_root(w) != w and _forget_root(w) in roots)
+        if w in held or (_forget_kin(w) is not None and _forget_kin(w) in held_kin)
     }
 
 
@@ -421,14 +442,42 @@ def _forget_text(item: Dict) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", str(item.get("content", "")).lower()))
 
 
-#: "forget X": what the user asked to drop, to the end of its clause. "Don't
-#: forget X" asks the opposite, so it is not one.
-_FORGET_REQUEST = re.compile(
-    r"(?<!don't )(?<!dont )(?<!do not )(?<!never )"
-    r"\b(?:forget|erase|delete|remove)\b"
-    r"(?P<what>[^.;,!?\n]*?)(?=\s+(?:and|but|then)\b|[.;,!?\n]|$)",
+_FORGET_SENTENCE = re.compile(r"[^.!?\n]+[.!?]*")
+_FORGET_VERB = re.compile(r"\b(?:forget|erase|delete|remove)\b", re.IGNORECASE)
+#: "Could you forget X?" asks for it; "Did you forget X?" doesn't.
+_FORGET_POLITE_ASK = re.compile(
+    r"^\s*(?:please\s+)?(?:can|could|would|will)\s+you\b", re.IGNORECASE
+)
+_FORGET_LEAD_BOUNDARY = re.compile(
+    r";|\b(?:and|but|then|so|since|because)\b", re.IGNORECASE
+)
+#: "Never, ever forget X" and "I don't want you to forget X" ask to keep X.
+_FORGET_NEGATION = re.compile(
+    r"n't\b|\b(?:not|never|dont|didnt|doesnt|wont|cant)\b", re.IGNORECASE
+)
+#: The end of what was asked: "remove the cookies since I'm allergic" asks
+#: to drop the cookies, not the allergy.
+_FORGET_WHAT_END = re.compile(
+    r"[;,:]|\b(?:and|but|then|since|because)\b"
+    r"|\bas\s+(?:i|i'm|im|we|you|it|my|they|he|she)\b",
     re.IGNORECASE,
 )
+
+
+def _forget_requests(user_input: str) -> List[str]:
+    """What *user_input* asks to forget, one entry per request."""
+    text = user_input.replace("\u2019", "'")
+    asked = []
+    for sentence in _FORGET_SENTENCE.findall(text):
+        sentence = sentence.strip()
+        if sentence.endswith("?") and not _FORGET_POLITE_ASK.match(sentence):
+            continue
+        for verb in _FORGET_VERB.finditer(sentence):
+            lead = _FORGET_LEAD_BOUNDARY.split(sentence[: verb.start()])[-1]
+            if _FORGET_NEGATION.search(lead):
+                continue
+            asked.append(_FORGET_WHAT_END.split(sentence[verb.end() :], 1)[0])
+    return asked
 
 
 def _restates_forget(content: str, user_input: str) -> bool:
@@ -436,10 +485,7 @@ def _restates_forget(content: str, user_input: str) -> bool:
     stems = content_stems(content)
     if not stems:
         return False
-    text = user_input.replace("\u2019", "'")
-    return any(
-        stems <= content_stems(m.group("what")) for m in _FORGET_REQUEST.finditer(text)
-    )
+    return any(stems <= content_stems(what) for what in _forget_requests(user_input))
 
 
 def _is_lesson(item: Dict) -> bool:
