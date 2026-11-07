@@ -632,6 +632,8 @@ _OLD_FILES_PLAN = (
         "I'll wait for your confirmation before running anything.",
         "Approve this and I'll run it.",
         "I'll proceed when you're ready.",
+        "Ready when you are.",
+        "Just say go.",
     ],
 )
 def test_a_plan_waiting_for_the_go_ahead_is_not_narration(closing):

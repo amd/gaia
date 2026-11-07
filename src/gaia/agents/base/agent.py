@@ -1644,6 +1644,7 @@ _PLAN_ITEM_PATTERN = re.compile(r"^\s*(?:[-*+•]|\**\d+[.)]\**)\s+(?P<item>.+)$
 _ASKS_GO_AHEAD_PATTERN = re.compile(
     r"\?\s*$|\b(?:let me know|tell me|say the word|want me to|would you like"
     r"|shall i|should i|do you want|your (?:go-ahead|ok(?:ay)?)"
+    r"|ready when you are|just say go"
     r"|confirm\w*|proceed\w*|approv\w*|once you"
     r"|nothing(?:'s| has| was| is)(?: been)? changed yet"
     r"|reply\s+(?:with\s+)?(?:[\"'“‘][^\"'”’\n]+[\"'”’]|\w+)\s+to)\b",

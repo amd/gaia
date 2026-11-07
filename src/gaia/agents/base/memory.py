@@ -476,10 +476,30 @@ def _forget_requests(user_input: str) -> List[str]:
             continue
         for verb in _FORGET_VERB.finditer(sentence):
             lead = _FORGET_LEAD_BOUNDARY.split(sentence[: verb.start()])[-1]
-            if _FORGET_NEGATION.search(lead):
-                continue
-            asked.append(_FORGET_WHAT_END.split(sentence[verb.end() :], 1)[0])
+            if not _lead_negates_forget(lead):
+                asked.append(_FORGET_WHAT_END.split(sentence[verb.end() :], 1)[0])
     return asked
+
+
+def _lead_negates_forget(lead: str) -> bool:
+    """Whether the words before a forget verb negate the request.
+
+    A negation in the verb's own comma-clause binds ("don't ever forget"),
+    and so does a lone negation word right before the comma ("Never, ever
+    forget"). A negation belonging to a discourse aside does not: in "Never
+    mind, forget my mango allergy" the "never" negates the mind, not the
+    request, and the fact must not be saved again (#6914).
+    """
+    if not _FORGET_NEGATION.search(lead):
+        return False
+    clauses = [clause.strip() for clause in lead.split(",")]
+    if _FORGET_NEGATION.search(clauses[-1]):
+        return True
+    return (
+        len(clauses) >= 2
+        and len(clauses[-2].split()) == 1
+        and bool(_FORGET_NEGATION.search(clauses[-2]))
+    )
 
 
 def _restates_forget(content: str, user_input: str) -> bool:
