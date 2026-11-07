@@ -438,7 +438,7 @@ class TestFTS5Search:
 
 
 class TestDeduplication:
-    """>80% word overlap in same category+context → updates existing."""
+    """A restatement in the same category+context updates the existing entry."""
 
     def test_dedup_high_overlap_same_category_context(self, store):
         """High overlap in same category+context deduplicates."""
@@ -454,22 +454,21 @@ class TestDeduplication:
         assert id2 == id1
 
     def test_dedup_replaces_with_newer_content(self, store):
-        """Dedup replaces content with the newer version (not longer)."""
+        """A refinement replaces content with the newer, fuller version."""
         id1 = store.store(
             category="fact",
             content="Project uses React 18 with webpack bundler",
         )
         id2 = store.store(
             category="fact",
-            content="Project uses React 19 with webpack bundler",
+            content="Project uses React 18 with webpack bundler and Babel",
         )
         assert id2 == id1
 
-        # Newer content should be stored
         results = store.search("React webpack bundler")
         match = next((r for r in results if r["id"] == id1), None)
         assert match is not None
-        assert "React 19" in match["content"]
+        assert match["content"].endswith("and Babel")
 
     def test_dedup_takes_max_confidence(self, store):
         """Dedup takes the maximum confidence of old and new."""
@@ -507,7 +506,7 @@ class TestDeduplication:
 
         id2 = store.store(
             category="fact",
-            content="GAIA supports NPU acceleration on AMD chips",
+            content="GAIA supports NPU acceleration on AMD hardware today",
         )
         assert id2 == id1
 
@@ -1409,7 +1408,7 @@ class TestSensitivity:
         # Store a highly overlapping entry WITHOUT sensitive=True (e.g., heuristic extraction)
         dedup_id = store.store(
             category="fact",
-            content="Sarah email is sarah@company.com company data",
+            content="Sarah email is sarah@company.com sensitive data!",
             sensitive=False,  # No sensitive flag — default
         )
 
@@ -4130,7 +4129,7 @@ class TestStoreEmbedding:
         # Store a high-overlap entry — should dedup and clear embedding
         store.store(
             category="fact",
-            content="The deployment pipeline uses Kubernetes containers",
+            content="The deployment pipeline uses Docker containers on Linux",
         )
 
         with store._lock:

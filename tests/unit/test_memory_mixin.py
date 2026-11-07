@@ -2294,17 +2294,16 @@ class TestSystemPromptSizeCap:
 class TestLLMToolParameterClamping:
     """recall and search_past_conversations clamp limit/days to safe bounds."""
 
-    def test_recall_limit_clamped_to_20(self, mixin_with_tools):
-        """recall() silently clamps limit > 20 to 20."""
+    def test_recall_limit_clamped_to_100(self, mixin_with_tools):
+        """recall() clamps limit > 100 to 100."""
         store = mixin_with_tools.memory_store
-        for i in range(25):
+        for i in range(105):
             store.store(category="fact", content=f"unique fact number {i} stored here")
 
         func = mixin_with_tools._registered_tools["recall"]["function"]
         result = func(category="fact", limit=9999)
         results = result.get("results", result.get("items", []))
-        # Must not return more than 20 regardless of what was requested
-        assert len(results) <= 20
+        assert len(results) == 100
 
     def test_recall_limit_minimum_is_one(self, mixin_with_tools):
         """recall() clamps limit < 1 to 1."""
@@ -6494,3 +6493,25 @@ class TestSideRequestsDropReasoning:
             result = host.reconcile_memory()
 
         assert result["reinforced"] == (0 if shape == "unclosed" else 1)
+
+
+def test_merged_restatement_is_embedded_with_the_stored_text(mixin_with_tools):
+    """A shorter restatement merges into the fuller row; its vector must match the row."""
+    from gaia.agents.base.memory import MemoryMixin
+
+    store = mixin_with_tools.memory_store
+    full = "My sister's name is Ana Lopez"
+    kid = store.store(category="fact", content=full)
+    embedded = []
+
+    def _embed(_self, text):
+        embedded.append(text)
+        return np.ones(768, dtype=np.float32)
+
+    remember = mixin_with_tools._registered_tools["remember"]["function"]
+    with patch.object(MemoryMixin, "_embed_text", _embed):
+        result = remember(fact="My sister's name is Ana", category="fact")
+
+    assert result["knowledge_id"] == kid
+    assert store.get_item(kid)["content"] == full
+    assert embedded == [full]
