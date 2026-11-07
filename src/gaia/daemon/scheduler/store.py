@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional
 
 from gaia.daemon.scheduler.models import (
     KIND_RECURRING,
+    STATUS_CANCELLED,
     STATUS_FAILED,
     STATUS_FIRED,
     STATUS_FIRING,
@@ -290,6 +291,17 @@ def mark_fired(db, *, job_id: str, claim_id: str) -> bool:
             "failed": STATUS_FAILED,
             "pending": STATUS_PENDING,
         },
+    )
+    return affected == 1
+
+
+def cancel_job(db, *, job_id: str) -> bool:
+    """Cancel a job still waiting to fire. False if it is not pending."""
+    affected = db.update(
+        "daemon_jobs",
+        {"status": STATUS_CANCELLED},
+        "job_id = :id AND status = :pending",
+        {"id": job_id, "pending": STATUS_PENDING},
     )
     return affected == 1
 

@@ -289,6 +289,8 @@ last-reply-time tracker.
 
 ### Self-Scheduling Constraints
 
+> **Built (user-requested case).** `schedule_follow_up`, `list_follow_ups` and `cancel_follow_up` (`src/gaia/agents/tools/follow_up_tools.py`) register `agent_follow_up` one-shots on the daemon clock, whose first executor runs them (`src/gaia/daemon/followups.py`). It differs from the list below in one place: the window is 7 days, not 24 hours, so "check on it Monday" fits; one-shot only and 10 pending still hold. The Tier 0/1 gate and the agent-initiated case (stall time, #3969) are not built.
+
 - Maximum 24-hour delay (longer recurrence belongs in `heartbeat.yaml`).
 - Maximum 10 pending follow-ups at any time (prevents runaway scheduling).
 - Each follow-up runs at most once (one-shot, not recurring) — an agent that wants to

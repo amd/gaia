@@ -109,6 +109,10 @@ class DaemonClock:
 
     # -- Store bootstrap ------------------------------------------------
 
+    def open_db(self) -> _ClockDB:
+        """A connection to the clock's store, schema ready; the caller closes it."""
+        return self._open_db()
+
     def _open_db(self) -> _ClockDB:
         db = _ClockDB()
         # quiet=True: a genuinely fresh connection opens on EVERY pass by
