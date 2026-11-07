@@ -149,6 +149,26 @@ jobs:
           [ -n "${TAG}" ] || TAG="v${VERSION/-rc./-rc}"
           python util/release_tag.py stamp "${TAG}"
 
+      # freeze.py bundles the built UI so `gaia chat --ui` serves it, and refuses
+      # to build without it. After the stamp: the bundle reads its version from version.py.
+      - name: Set up Node.js
+        if: steps.want.outputs.build == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Build the Agent UI
+        if: steps.want.outputs.build == 'true'
+        working-directory: src/gaia/apps/webui
+        shell: bash
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          test -f dist/index.html
+
       # The same packages `pip install amd-gaia[ui]` gives an Agent UI user today.
       - name: Install the core + PyInstaller (frozen-build env)
         if: steps.want.outputs.build == 'true'

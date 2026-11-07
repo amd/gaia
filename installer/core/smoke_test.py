@@ -50,6 +50,11 @@ NOT_BUNDLED = ["gaia_agent", "gaia_agent_email", "torch", "PyInstaller"]
 HEALTH_TIMEOUT_S = 90
 
 
+def serves_app(html: str) -> bool:
+    """True when *html* is the built Agent UI, not the backend's placeholder page."""
+    return '<div id="root">' in html and 'type="module"' in html
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -221,6 +226,7 @@ class Smoke:
         )
         log.close()
         healthy = False
+        page = ""
         deadline = time.monotonic() + HEALTH_TIMEOUT_S
         try:
             while time.monotonic() < deadline and proc.poll() is None:
@@ -234,6 +240,14 @@ class Smoke:
                 if healthy:
                     break
                 time.sleep(0.5)
+            if healthy:
+                try:
+                    with urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}/", timeout=10
+                    ) as r:
+                        page = r.read().decode("utf-8", errors="replace")
+                except (urllib.error.URLError, OSError) as e:
+                    page = f"GET / failed: {e}"
         finally:
             proc.terminate()
             try:
@@ -244,6 +258,11 @@ class Smoke:
             encoding="utf-8", errors="replace"
         )[-1500:]
         self.check("gaia chat --ui answers /api/health", healthy, tail)
+        self.check(
+            "gaia chat --ui serves the Agent UI at /",
+            serves_app(page),
+            f"GET / returned:\n{page[:600]}",
+        )
 
 
 def main(argv=None) -> int:

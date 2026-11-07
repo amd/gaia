@@ -117,6 +117,7 @@ A packaged app runs only the `gaia` it ships, so freeze the core and stage it
 first; without it the app says it is missing its backend:
 
 ```bash
+(cd src/gaia/apps/webui && npm ci && npm run build)    # the core serves this UI
 uv venv .venv-freeze --python 3.12
 uv pip install --python .venv-freeze -e ".[ui]" pyinstaller
 .venv-freeze/Scripts/python installer/core/freeze.py      # bin/python off Windows
