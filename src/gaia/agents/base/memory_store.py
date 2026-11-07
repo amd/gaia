@@ -13,7 +13,8 @@ Single database (``~/.gaia/memory.db`` by default; ``GAIA_MEMORY_DB`` or
 
 Features:
 - FTS5 search with AND default, OR fallback, BM25 ranking
-- Knowledge deduplication (>80% word overlap in same category+context)
+- Knowledge deduplication (restatements and refinements only; a changed
+  value is a new row that consolidation retires)
 - Confidence scoring with decay (0.9x after 30 days of no access)
 - Context scoping (work, personal, global, project-specific)
 - Sensitivity classification (excluded from default search)
@@ -40,6 +41,7 @@ from typing import (
     List,
     Optional,
     Sequence,
+    Tuple,
     Union,
     cast,
 )
@@ -257,6 +259,10 @@ MAX_FTS_QUERY_LENGTH: int = 500
 #: duplicates in the same category+context+entity scope.
 DEDUP_OVERLAP_THRESHOLD: float = 0.8
 
+#: Categories the extractor files one statement under interchangeably, so the
+#: same words in either are one memory.
+INTERCHANGEABLE_CATEGORIES: frozenset = frozenset({"fact", "preference"})
+
 #: Share of the *larger* word set two memories must share to be the same
 #: memory, so "prefers dark roast coffee" is not "prefers dark mode".
 FORGOTTEN_OVERLAP_THRESHOLD: float = 0.7
@@ -400,6 +406,11 @@ CONFIDENCE_BUMP_PER_RECALL: float = 0.02
 LOW_CONFIDENCE_PRUNE_THRESHOLD: float = 0.1
 
 
+def _same_words(text: str) -> str:
+    """*text*'s words in order, ignoring case and punctuation."""
+    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
+
+
 def _word_overlap(text1: str, text2: str) -> float:
     """Calculate word overlap ratio using Szymkiewicz-Simpson coefficient.
 
@@ -421,6 +432,41 @@ def _word_overlap(text1: str, text2: str) -> float:
     min_size = min(len(words1), len(words2))
 
     return len(intersection) / min_size if min_size > 0 else 0.0
+
+
+#: Words that never change what a memory says, so two memories that differ only
+#: in these are the same memory. Negations and pronouns are deliberately absent.
+_DEDUP_FILLER_WORDS = frozenset(
+    "a an the is are was were am be been s my i me user users".split()
+)
+
+
+def _dedup_tokens(text: str) -> List[str]:
+    """Words of *text* in order, lowercased, without punctuation or filler.
+
+    A number keeps its inner punctuation, so "10" is not a prefix of "10:30".
+    """
+    words = re.findall(r"\d[\d.,:/-]*\d|\w+", text.lower())
+    return [w for w in words if w not in _DEDUP_FILLER_WORDS]
+
+
+def _merged_duplicate(new: str, existing: str) -> Optional[str]:
+    """The content to keep if *new* repeats *existing*, else None.
+
+    Two memories are the same only when one's words, in order, start the
+    other's: a restatement, or a refinement that adds to the end ("... is
+    Elena" -> "... is Elena Petrova"). The fuller one is kept. A swapped,
+    inserted or reordered word ("mother" -> "mother-in-law", "18" -> "19",
+    "is" -> "is not") makes a different fact, which must not overwrite this one.
+    """
+    new_tokens, old_tokens = _dedup_tokens(new), _dedup_tokens(existing)
+    if not new_tokens or not old_tokens:
+        return None
+    if new_tokens[: len(old_tokens)] == old_tokens:
+        return new
+    if old_tokens[: len(new_tokens)] == new_tokens:
+        return existing
+    return None
 
 
 # ============================================================================
@@ -1374,7 +1420,9 @@ class MemoryStore:
     ) -> str:
         """Store a knowledge entry with deduplication.
 
-        >80% word overlap in same category+context → replaces with newer content.
+        Restating an entry in the same category+context+entity merges into it
+        and keeps the fuller wording; a different fact that shares most of its
+        words is stored as a new entry (see ``_merged_duplicate``).
         Validates due_at is a valid ISO 8601 string if provided.
 
         Args:
@@ -1448,15 +1496,14 @@ class MemoryStore:
                     self._unforget_locked(content)
 
                 # Check for dedup match (scoped to category + context + entity)
-                existing_id = self._find_similar_locked(
-                    content, category, context, entity
-                )
+                match = self._find_similar_locked(content, category, context, entity)
             except BaseException:
                 self._conn.rollback()
                 raise
 
-            if existing_id:
-                # Update existing: replace content with newer, take max confidence.
+            if match:
+                existing_id, content = match
+                # Update existing with the fuller wording, take max confidence.
                 # Set embedding = NULL because the old embedding is now stale
                 # (it was computed for the previous content).  This forces the
                 # item into get_items_without_embeddings() for re-embedding.
@@ -1552,8 +1599,13 @@ class MemoryStore:
 
     def _find_similar_locked(
         self, content: str, category: str, context: str, entity: str | None = None
-    ) -> Optional[str]:
-        """Find existing knowledge with >80% word overlap in same category+context+entity.
+    ) -> Optional[Tuple[str, str]]:
+        """Find an active entry that *content* duplicates in the same scope.
+
+        Returns ``(id, content_to_keep)`` or None. A candidate in the same
+        category needs ``DEDUP_OVERLAP_THRESHOLD`` word overlap and must pass
+        ``_merged_duplicate``; across ``INTERCHANGEABLE_CATEGORIES`` only the
+        same words match.
 
         Must be called with self._lock held and SQLite's write lock taken
         (``BEGIN IMMEDIATE``): self._lock only covers this one connection, so
@@ -1596,13 +1648,45 @@ class MemoryStore:
             for row in cursor.fetchall():
                 existing_id, existing_content = row[0], row[1]
                 overlap = _word_overlap(content, existing_content)
-                if overlap >= DEDUP_OVERLAP_THRESHOLD:
+                if overlap < DEDUP_OVERLAP_THRESHOLD:
+                    continue
+                kept = _merged_duplicate(content, existing_content)
+                if kept is None:
                     logger.debug(
-                        "[MemoryStore] dedup match: overlap=%.2f id=%s",
+                        "[MemoryStore] near match kept apart: overlap=%.2f id=%s",
                         overlap,
                         existing_id,
                     )
-                    return cast(str, existing_id)
+                    continue
+                logger.debug(
+                    "[MemoryStore] dedup match: overlap=%.2f id=%s",
+                    overlap,
+                    existing_id,
+                )
+                return cast(str, existing_id), kept
+            if category in INTERCHANGEABLE_CATEGORIES:
+                kinds = sorted(INTERCHANGEABLE_CATEGORIES)
+                cursor = self._conn.execute(
+                    f"""
+                    SELECT k.id, k.content
+                    FROM knowledge k
+                    JOIN knowledge_fts f ON k.rowid = f.rowid
+                    WHERE knowledge_fts MATCH ? AND k.context = ?
+                          AND k.entity IS ? AND k.superseded_by IS NULL
+                          AND k.category IN ({",".join("?" * len(kinds))})
+                    ORDER BY rank
+                    LIMIT 25
+                    """,
+                    (safe_query, context, entity, *kinds),
+                )
+                words = _same_words(content)
+                for existing_id, existing_content in cursor.fetchall():
+                    if _same_words(existing_content) == words:
+                        logger.debug(
+                            "[MemoryStore] dedup match across categories: id=%s",
+                            existing_id,
+                        )
+                        return cast(str, existing_id), content
         except sqlite3.OperationalError as e:
             # A failed dedup search means store() falls through to inserting a
             # duplicate -- debug level hid exactly that for as long as this
@@ -3885,6 +3969,81 @@ class MemoryStore:
                 rowcount = self._conn.execute(
                     "UPDATE procedures SET superseded_by = ? WHERE id = ?",
                     (superseded_by, skill_id),
+                ).rowcount
+                self._conn.commit()
+                return rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def record_skill_outcome(
+        self,
+        skill_ids: List[str],
+        success: bool,
+        *,
+        erase_count: int | None = None,
+    ) -> dict[str, tuple[int, int, int]]:
+        """Count one outcome on each procedure that was in context for it.
+
+        Adds one to ``attempt_count``, and to ``success_count`` when *success*,
+        on top of the counts the row was born with, and one to
+        ``provenance.outcomes``, the outcomes recorded since it was learned.
+        What makes an outcome is the caller's definition
+        (``ProceduralMemoryMixin._record_procedure_outcome``).
+
+        Args:
+            skill_ids: procedures recalled into the turn; duplicates count once.
+            success: whether the turn's outcome was a success.
+            erase_count: :meth:`erase_count` when the turn began; if all memory
+                was erased since, nothing is written.
+
+        Returns:
+            ``{skill_id: (success_count, attempt_count, outcomes)}`` after the
+            update, for the ids that still exist (one forgotten since recall is
+            skipped).
+        """
+        ids = list(dict.fromkeys(skill_ids))
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        with self._locked():
+            if self._erased_since_for_write_locked(erase_count):
+                logger.info(
+                    "[MemoryStore] procedure outcome not stored: all memory was "
+                    "erased after the turn began"
+                )
+                return {}
+            try:
+                self._conn.execute(
+                    "UPDATE procedures SET attempt_count = attempt_count + 1, "
+                    "success_count = success_count + ?, "
+                    "provenance = json_set(COALESCE(provenance, '{}'), '$.outcomes', "
+                    "COALESCE(json_extract(provenance, '$.outcomes'), 0) + 1) "
+                    f"WHERE id IN ({placeholders})",
+                    (int(bool(success)), *ids),
+                )
+                rows = self._conn.execute(
+                    "SELECT id, success_count, attempt_count, "
+                    "json_extract(provenance, '$.outcomes') FROM procedures "
+                    f"WHERE id IN ({placeholders})",
+                    ids,
+                ).fetchall()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return {row[0]: (int(row[1]), int(row[2]), int(row[3])) for row in rows}
+
+    def disable_skill(self, skill_id: str) -> bool:
+        """Stop recalling ``skill_id`` (``enabled = 0``); the row is kept.
+
+        Returns:
+            True if a row was updated, False if ``skill_id`` was not found.
+        """
+        with self._locked():
+            try:
+                rowcount = self._conn.execute(
+                    "UPDATE procedures SET enabled = 0 WHERE id = ?", (skill_id,)
                 ).rowcount
                 self._conn.commit()
                 return rowcount > 0

@@ -55,6 +55,8 @@ const audit = (page: Page): Promise<string[]> =>
         const label = (el: Element) =>
             `<${el.tagName.toLowerCase()} class="${String(el.className).slice(0, 40)}"> "${(el.textContent ?? '').trim().slice(0, 40)}"`;
         const shown = (el: Element) => {
+            // Announced-only setup guidance is intentionally clipped from the visual layout.
+            if (el.closest('.setup-a11y-alert')) return false;
             const box = el.getBoundingClientRect();
             return box.width > 0 && box.height > 0 && el.checkVisibility();
         };
@@ -951,10 +953,11 @@ interface ModelPageOptions {
     status?: unknown;
     theme?: 'light' | 'dark';
     fireworks?: Record<string, unknown>;
+    localOnly?: boolean;
 }
 
-async function openModelPage(page: Page, locale: string, { models = MODEL_LIST, status, theme = 'light', fireworks }: ModelPageOptions = {}): Promise<void> {
-    await open(page, '', locale, (p) => withModelPage(p, models, SETUP_PLAN, status, fireworks), theme);
+async function openModelPage(page: Page, locale: string, { models = MODEL_LIST, status, theme = 'light', fireworks, localOnly = false }: ModelPageOptions = {}): Promise<void> {
+    await open(page, '', locale, (p) => withModelPage(p, models, SETUP_PLAN, status, fireworks, localOnly), theme);
     const sidebar = page.getByRole('button', { name: /Open sidebar/ });
     if (await sidebar.isVisible()) await sidebar.click();
     await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -1080,6 +1083,32 @@ for (const locale of ['ar', 'en']) {
 }
 
 for (const locale of ['ar', 'en']) {
+    test(`Local only privacy control (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withSettingsPanes(p, {
+            networkPolicy: 'cloud_allowed',
+            policyNotices: [{ code: 'users_server_keeps_keys', severity: 'info', url: 'http://127.0.0.1:13305' }],
+        }));
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const dialog = page.getByRole('dialog');
+        await dialog.locator('[data-section="privacy"]').click();
+        const toggle = page.getByRole('switch');
+        await expect(toggle).toHaveAttribute('aria-checked', 'false');
+        await shot(page, `privacy-local-only-${locale}-off`);
+        await toggle.click();
+        await expect(toggle).toHaveAttribute('aria-checked', 'true');
+        await expect(page.locator('.settings-ok[role="status"]')).toBeVisible();
+        await shot(page, `privacy-local-only-${locale}-on-notice`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`Local only blocks cloud model picker (${locale})`, async ({ page }) => {
+        await openModelPage(page, locale, { localOnly: true });
+        const cloud = page.getByRole('radio', { name: /Fireworks AI/ });
+        await expect(cloud).toBeDisabled();
+        await shot(page, `model-${locale}-local-only-blocked`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
         test(`settings ${section} pane (${locale})`, async ({ page }) => {
             await open(page, '', locale, withSettingsPanes);
@@ -1100,8 +1129,8 @@ for (const locale of ['ar', 'en']) {
 
 for (const locale of ['ar', 'en']) {
     test.describe(`settings connectors (${locale})`, () => {
-        const openConnectors = async (page: Page, rows?: unknown[]) => {
-            await open(page, '', locale, (p) => withConnectors(p, rows));
+        const openConnectors = async (page: Page, rows?: unknown[], extra?: Record<string, unknown>) => {
+            await open(page, '', locale, (p) => withConnectors(p, rows, extra));
             await page.getByRole('button', { name: /Settings/ }).first().click();
             await page.getByRole('dialog').locator('[data-section="connectors"]').click();
             await expect(page.locator('.settings-pane-title')).toBeVisible();
@@ -1114,6 +1143,24 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('details[open] .connector-tile')).toHaveCount(3);
             await shot(page, `connectors-${locale}-top`);
             expect(await audit(page)).toEqual([]);
+        });
+
+        test('a connector GAIA could not read shows as unavailable, and search keeps working', async ({ page }) => {
+            const server = (name: string) => ({
+                id: name.toLowerCase(), display_name: name, type: 'mcp_server', description: `${name} tools`,
+                configured: false, configurable: true, enabled: true, mcp_env_keys: [], oauth_setup_fields: [],
+            });
+            await openConnectors(page, [
+                { id: 'microsoft', display_name: 'Microsoft', error: 'unavailable' },
+                ...['Git', 'Notion', 'Postgres', 'Memory', 'Filesystem', 'Fetch'].map(server),
+            ]);
+            const broken = page.locator('details[open] .connector-tile', { hasText: 'Microsoft' });
+            await expect(broken).toBeVisible();
+            await shot(page, `connectors-${locale}-unavailable`);
+            expect(await audit(page)).toEqual([]);
+            await page.locator('.connectors-section input[type=search]').fill('o');
+            await expect(page.locator('.connector-tile', { hasText: 'Notion' })).toBeVisible();
+            await expect(broken).toBeVisible();
         });
 
         test('every group and a tile open, with no button inside a button', async ({ page }) => {
@@ -1131,11 +1178,97 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
+        test('a keyed server shows its label, help and setup link', async ({ page }) => {
+            await openConnectors(page, [{
+                id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', description: 'Read channels, threads, and DMs in your Slack workspace.',
+                configured: false, configurable: true, enabled: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [],
+                setup_url: 'https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D',
+                config_fields: [{
+                    key: 'SLACK_MCP_XOXB_TOKEN', label: 'Slack bot token', kind: 'secret', required: true, placeholder: 'xoxb-…',
+                    help_md: 'Click **Create Slack app**, pick your workspace, then **Install to Workspace**. Then type `/invite @GAIA` in each channel GAIA should read.',
+                }],
+            }]);
+            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
+            await expect(page.locator('.connector-setup-link')).toBeVisible();
+            await expect(page.locator('.mcp-key-help code')).toBeVisible();
+            await expect(page.locator('.mcp-key-input')).toHaveAttribute('dir', 'ltr');
+            await expect(page.locator('.mcp-key-help')).toHaveAttribute('dir', 'auto');
+            await page.locator('.mcp-key-help').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-mcp-setup`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('with only GAIA, a connected server has one switch that names the service', async ({ page }) => {
+            await openConnectors(page, [{
+                id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', description: 'Read channels, threads, and DMs in your Slack workspace.',
+                configured: true, configurable: true, enabled: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [],
+            }], {
+                'GET /agents': { agents: [{ id: 'gaia', name: 'GAIA', namespaced_agent_id: 'installed:gaia', consumes_mcp_servers: true }] },
+                'GET /connectors/mcp-slack/activations': { activations: { 'installed:gaia': true } },
+            });
+            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
+            const tile = page.locator('.connector-tile', { hasText: 'Slack' });
+            const row = tile.locator('.connection-grants .connector-toggle-row');
+            await expect(row).toContainText('GAIA');
+            await expect(row).toContainText('Slack');
+            await expect(tile.locator('input[type=checkbox]')).toHaveCount(1);
+            await expect(tile.locator('.grant-agent-card, .grants-empty')).toHaveCount(0);
+            await row.scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-mcp-switch`);
+            expect(await audit(page)).toEqual([]);
+        });
+
         test('nothing connected: accounts start open', async ({ page }) => {
             await openConnectors(page, [{ id: 'microsoft', display_name: 'Microsoft', type: 'oauth_pkce', description: 'Mail', configured: false, configurable: true, mcp_env_keys: [], oauth_setup_fields: [] }]);
             await expect(page.locator('.connector-tile')).toBeVisible();
             await shot(page, `connectors-${locale}-none`);
             expect(await audit(page)).toEqual([]);
+        });
+
+        test('a connected server that will not start says so, with the reason', async ({ page }) => {
+            const slack = {
+                id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', icon: null, category: 'general', tier: 'core',
+                description: 'Lets GAIA read and post in Slack.', product_url: 'https://example.com', docs_url: null,
+                configured: true, configurable: true, enabled: true, account_id: null, default_scopes: [], available_scopes: [],
+                mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [], supports_device_code: false,
+            };
+            await openConnectors(page, [slack]);
+            await page.route('**/api/connectors/mcp-slack/test', (route) => route.fulfill({
+                json: { ok: false, detail: 'Authentication failed - check your Slack tokens: invalid_auth (token revoked or expired; xoxb token for workspace T0123456789)' },
+            }));
+            await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
+            await page.locator('.connector-detail .configure-actions .btn-secondary').first().click();
+            await expect(page.locator('.connector-check--failed')).toBeVisible();
+            await page.locator('.connector-check--failed summary').click();
+            await expect(page.locator('.connector-check--failed pre')).toBeVisible();
+            await page.locator('.connector-check--failed').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-check-failed`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi, pre, .mcp-key-label')).toEqual([]);
+        });
+
+        test('a server that was only slow to start is not blamed on the token', async ({ page }) => {
+            const slack = {
+                id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', icon: null, category: 'general', tier: 'core',
+                description: 'Lets GAIA read and post in Slack.', product_url: 'https://example.com', docs_url: null,
+                configured: true, configurable: true, enabled: true, account_id: null, default_scopes: [], available_scopes: [],
+                mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [], supports_device_code: false,
+            };
+            await openConnectors(page, [slack]);
+            await page.route('**/api/connectors/mcp-slack/test', (route) => route.fulfill({
+                json: { ok: false, reason: 'timeout', detail: 'did not start within 10 seconds' },
+            }));
+            await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
+            await page.locator('.connector-detail .configure-actions .btn-secondary').first().click();
+            await expect(page.locator('.connector-check--failed')).toBeVisible();
+            await page.locator('.connector-check--failed summary').click();
+            await expect(page.locator('.connector-check--failed pre')).toBeVisible();
+            await page.locator('.connector-check--failed').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-check-slow`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi, pre, .mcp-key-label')).toEqual([]);
         });
 
         test('phone width: a long account stays on screen', async ({ page }) => {

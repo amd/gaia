@@ -9,6 +9,8 @@ contract version is tracked separately as
 
 ### Changed
 
+- **Private and memory-off turns are now safe for the email sidecar (#5482, schema 2.16).** `POST /v1/email/query` accepts `memory: "on" | "private" | "off"`; private and memory-off modes suppress memory reads and writes before the agent loop starts. Older sidecars are refused for those turns instead of silently persisting email-derived memories.
+
 - **Needs Lemonade Server 2026.44.1 or newer.** `GET /v1/email/init` now
   reports `min_version: "2026.44.1"` (was `10.2.0`) and answers not-ready on
   anything older. GAIA updates its own Lemonade Server itself; the `hint` for
@@ -23,6 +25,12 @@ contract version is tracked separately as
   clients can now discover and negotiate the complete supported surface.
 
 ### Fixed
+
+- **The OpenAPI contract lists the errors the `/query` routes return (#4429).**
+  `POST /v1/email/query` documents 400, 409, 500 and 502, `/query/{run_id}/cancel`
+  documents 404, and `/query/{run_id}/respond` documents 404 and 409. The routes
+  already returned them, but `openapi.email.json` listed only 200 and 422, so
+  generated clients never saw them. No request or response shape changed.
 
 - **A sidecar left running for days keeps working.** The one-file binary
   unpacks its files into the OS temp folder, and macOS deletes files there

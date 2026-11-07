@@ -56,6 +56,9 @@ MIN_OCCURRENCES: int = 3
 #: A cluster must be at least this successful (success_count / attempt_count).
 MIN_SUCCESS_RATE: float = 0.80
 
+#: Outcomes a procedure must record after it is learned before it can be retired.
+MIN_OUTCOMES_TO_RETIRE: int = 3
+
 #: Cosine threshold on goal embeddings, for clustering (and, in Phase 2, recall).
 SIMILARITY_TAU: float = 0.82
 
@@ -181,12 +184,15 @@ class DistilledProcedure:
         body: the full Markdown procedure, including a ``## Edge cases`` section.
         tools_required: registry tool names the procedure consumes (recipe
             contract; maps to ``metadata.gaia.tools_required``).
+        skill_id: the ``procedures`` row a recalled procedure came from; None
+            for a freshly distilled one.
     """
 
     name: str
     when_to_use: str
     body: str
     tools_required: List[str] = field(default_factory=list)
+    skill_id: Optional[str] = field(default=None, compare=False)
 
     @classmethod
     def parse(cls, intermediate_md: str) -> Optional["DistilledProcedure"]:
@@ -449,12 +455,17 @@ def extract_sequences(
     return store.iter_sessions(since=since, min_steps=min_steps)
 
 
+class GoalEmbedRejected(ValueError):
+    """The embedder refused one goal's text; other goals can still be embedded."""
+
+
 def cluster_by_goal(
     sequences: List[Dict],
     embed_fn: Callable[[str], np.ndarray],
     similarity_tau: float = SIMILARITY_TAU,
     min_occurrences: int = MIN_OCCURRENCES,
     min_success_rate: float = MIN_SUCCESS_RATE,
+    on_rejected: Optional[Callable[[Dict, GoalEmbedRejected], None]] = None,
 ) -> List[GoalCluster]:
     """CLUSTER — group sessions whose goals embed within ``similarity_tau``.
 
@@ -474,7 +485,9 @@ def cluster_by_goal(
     aggregate success rate are returned.
 
     Fail-loud: ``embed_fn`` failures propagate (re-raise) — synthesis cannot
-    proceed without embeddings.
+    proceed without embeddings.  The one exception is ``GoalEmbedRejected``
+    when ``on_rejected`` is given: that session is handed to it and left out,
+    so one unembeddable goal cannot block every other session.
 
     Args:
         sequences: Per-session dicts from ``extract_sequences``.
@@ -482,11 +495,14 @@ def cluster_by_goal(
         similarity_tau: Cosine threshold for two goals to share a cluster.
         min_occurrences: Minimum sessions for a cluster to qualify.
         min_success_rate: Minimum aggregate success rate for a cluster to qualify.
+        on_rejected: Called with each session whose goal ``embed_fn`` refused
+            with ``GoalEmbedRejected``.  None re-raises it.
 
     Returns:
         Qualifying ``GoalCluster`` objects.
     """
     embedded: List[tuple] = []
+    rejected: Dict[str, GoalEmbedRejected] = {}
     # Memoize by goal text within the pass: identical goals embed to the identical
     # vector, so the same recurring task (the procedural case — one goal succeeding
     # many times) costs one embedder round-trip instead of one per session. Bounds
@@ -501,9 +517,18 @@ def cluster_by_goal(
             )
             continue
         vec = embed_cache.get(goal)
-        if vec is None:
-            vec = np.asarray(embed_fn(goal), dtype=np.float32)  # failure RE-RAISES
-            embed_cache[goal] = vec
+        if vec is None and goal not in rejected:
+            try:
+                vec = np.asarray(embed_fn(goal), dtype=np.float32)
+            except GoalEmbedRejected as e:
+                if on_rejected is None:
+                    raise
+                rejected[goal] = e
+            else:
+                embed_cache[goal] = vec
+        if goal in rejected:
+            on_rejected(session, rejected[goal])
+            continue
         embedded.append((session, vec))
 
     # Deterministic, content-derived seed order (goal text, then session id) so

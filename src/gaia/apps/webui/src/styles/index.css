@@ -599,6 +599,31 @@ textarea:focus-visible {
     pointer-events: none;
 }
 
+/* An error someone has to read and act on: it stays until they dismiss it, up
+   top so it never covers the chat box its message can point to. */
+.toast-dismissible {
+    top: 16px;
+    bottom: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: min(560px, calc(100vw - 32px));
+    width: max-content;
+    pointer-events: all;
+    animation: toastIn var(--duration-spring) var(--ease-spring);
+}
+
+.toast-dismiss {
+    display: inline-flex;
+    flex: none;
+    padding: 4px;
+    background: none;
+    border: 0;
+    border-radius: var(--radius-sm);
+    color: inherit;
+    cursor: pointer;
+}
+
 /* ── Animations ──────────────────────────────────────────────────── */
 
 @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }

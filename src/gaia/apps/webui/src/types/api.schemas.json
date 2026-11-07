@@ -3207,6 +3207,51 @@
     "title": "PermissionModeRequest",
     "type": "object"
   },
+  "PolicyNotice": {
+    "description": "Structured Local only notice translated by the Agent UI.",
+    "properties": {
+      "code": {
+        "title": "Code",
+        "type": "string"
+      },
+      "reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Reason"
+      },
+      "severity": {
+        "enum": [
+          "info",
+          "warning"
+        ],
+        "title": "Severity",
+        "type": "string"
+      },
+      "url": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Url"
+      }
+    },
+    "required": [
+      "code",
+      "severity"
+    ],
+    "title": "PolicyNotice",
+    "type": "object"
+  },
   "PreflightReport": {
     "description": "Result of the first-run hardware scan.",
     "properties": {
@@ -4244,6 +4289,29 @@
             "type": "null"
           }
         ]
+      },
+      "network_policy": {
+        "default": "cloud_allowed",
+        "enum": [
+          "cloud_allowed",
+          "local_ai_only"
+        ],
+        "title": "Network Policy",
+        "type": "string"
+      },
+      "policy_notices": {
+        "items": {
+          "$ref": "#/components/schemas/PolicyNotice"
+        },
+        "title": "Policy Notices",
+        "type": "array"
+      },
+      "policy_warnings": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Policy Warnings",
+        "type": "array"
       }
     },
     "title": "SettingsResponse",
@@ -4300,6 +4368,22 @@
         ],
         "description": "Dynamic tool loading: send the tool list in short form and full docs only as needed, to cut first-turn TTFT without breaking the prompt cache. Applies to new chats. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.",
         "title": "Dynamic Tools"
+      },
+      "network_policy": {
+        "anyOf": [
+          {
+            "enum": [
+              "cloud_allowed",
+              "local_ai_only"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Whether GAIA may use cloud AI models. Setting local_ai_only blocks cloud models, clears saved cloud model choices, and removes cloud keys from GAIA's running Lemonade server. Omit to leave the policy unchanged.",
+        "title": "Network Policy"
       }
     },
     "title": "SettingsUpdateRequest",

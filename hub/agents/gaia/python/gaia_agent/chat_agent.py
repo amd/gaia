@@ -3496,7 +3496,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         if has_perplexity:
             from gaia.mcp.external_services import get_perplexity_service
 
-            @tool
+            # Replaces BrowserToolsMixin.search_web while a Perplexity key is set.
+            @tool(override=True)
             def search_web(query: str) -> dict:
                 """Search the web for current information using Perplexity AI.
 

@@ -221,6 +221,10 @@ export interface ConnectorRow {
      * provider credentials.
      */
     oauth_setup_fields: ConnectorConfigField[];
+    /** Label, example and help for each ``mcp_env_keys`` entry. */
+    config_fields?: ConnectorConfigField[];
+    /** The service's page that creates what the user pastes back (a pre-filled Slack app). */
+    setup_url?: string | null;
     /**
      * Which OAuth *client* (app credentials) the provider resolves (#2104).
      * ``source`` is ``'keyring'`` for credentials saved via Settings /
@@ -236,6 +240,16 @@ export interface ConnectorRow {
     } | null;
 }
 
+/** A catalog connector whose live state the backend failed to read; its summary raised. */
+export interface UnavailableConnectorRow {
+    id: string;
+    display_name: string;
+    error: 'unavailable';
+}
+
+/** One entry of GET /api/connectors. */
+export type ConnectorListEntry = ConnectorRow | UnavailableConnectorRow;
+
 /**
  * One field in a connector's first-time setup form. Mirrors
  * ``gaia.connectors.spec.ConfigField`` on the backend.
@@ -247,6 +261,8 @@ export interface ConnectorConfigField {
     required: boolean;
     placeholder: string;
     help_md: string;
+    /** The value must start with this, e.g. `xoxb-` for a Slack bot token. */
+    prefix?: string;
 }
 
 /**
@@ -521,6 +537,10 @@ export interface Settings {
     dynamic_tools_locked: boolean;
     /** Background agent behaviour; a legacy stored "autonomous" is reported as "goal_driven". */
     agent_mode: 'manual' | 'goal_driven';
+    /** Shared network policy controlling cloud AI use. */
+    network_policy: 'cloud_allowed' | 'local_ai_only';
+    policy_warnings?: string[];
+    policy_notices?: Array<{ code: string; severity: 'info' | 'warning'; url?: string; reason?: string }>;
 }
 
 /**
@@ -901,6 +921,9 @@ export interface ProviderInfo {
     error?: string;
     /** AMD gateway only: whether its host answers from this network. */
     network?: ProviderNetwork;
+    /** Local only blocks cloud providers without hiding the policy state. */
+    blocked?: boolean;
+    blocked_reason?: string | null;
 }
 
 export interface ProviderNetwork {
@@ -1023,6 +1046,8 @@ export interface ModelPlacement {
 export interface ProviderModelsResponse {
     provider: string;
     models: ProviderModel[];
+    blocked?: boolean;
+    blocked_reason?: string | null;
     memory_gb?: number | null;
     memory_source?: string | null;
     capacity_error?: string | null;

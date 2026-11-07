@@ -69,10 +69,13 @@
  * Schema 2.15 (additive over 2.14, #6043): the published OpenAPI document
  * now lists the stateful `/v1/email/agent/*` routes the sidecar already
  * served. No request or response shape changed (additive).
+ * Schema 2.16 (additive over 2.15, #5482): `EmailQueryRequest` gains an
+ * optional `memory` mode so private and memory-off turns do not write to the
+ * email agent's memory store.
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
-export const SCHEMA_VERSION = "2.15" as const;
+export const SCHEMA_VERSION = "2.16" as const;
 
 /**
  * The five-bucket triage taxonomy (schema 2.0 — contract.py: EmailCategory).
@@ -992,6 +995,11 @@ export interface EmailQueryRequest {
    * keys a real, stateful agent off it, so the caller controls
    * conversation boundaries, not the server.
    */
+  /**
+   * Memory mode (schema 2.16, #5482). `private` and `off` suppress memory
+   * reads and writes; omit to keep the retained session's current mode.
+   */
+  memory?: "on" | "private" | "off";
   session_id?: string;
 }
 

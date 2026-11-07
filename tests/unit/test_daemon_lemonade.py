@@ -313,13 +313,19 @@ class TestBackgroundAndStop:
         monkeypatch.setattr(owner_mod, "STOP_LOCK_TIMEOUT", 0.05)
         embedded = _embedded(_running())
         owner = _owner(embedded)
+        result = []
+        stopper = threading.Thread(target=lambda: result.append(owner.stop()))
         owner._lock.acquire()  # a start holding the lock
         try:
-            started = time.monotonic()
-            assert owner.stop() is False
-            assert time.monotonic() - started < 1.0
+            stopper.start()
+            # Generous join: a stop that waits out the start never returns here.
+            stopper.join(timeout=30)
+            returned_while_start_held = not stopper.is_alive()
         finally:
             owner._lock.release()
+            stopper.join()
+        assert returned_while_start_held, "stop() waited for the start to finish"
+        assert result == [False]
         embedded.stop.assert_not_called()
 
     def test_stop_with_nothing_running_stops_nothing(self):
