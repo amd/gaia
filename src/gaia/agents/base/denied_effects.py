@@ -20,10 +20,12 @@ declining ``cd repo && pytest | tail`` blocks the test run and nothing else.
 from __future__ import annotations
 
 import ast
+import functools
 import logging
 import os
 import re
 import shlex
+import socket
 import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
@@ -238,8 +240,15 @@ _PATH_MUTATORS = frozenset(
         "cpi",
         "tee",
         "tee-object",
+        "add-content",
+        "ac",
+        "xcopy",
+        "robocopy",
     }
 )
+#: cmd programs whose ``/X`` arguments are switches, not paths.
+_SLASH_SWITCH_PROGRAMS = frozenset({"xcopy", "robocopy", "copy", "move", "del", "rd"})
+_SLASH_SWITCH_RE = re.compile(r"^/[A-Za-z]{1,8}(?::\S*)?$")
 
 #: Running or importing a test module is running (part of) the suite.
 _TEST_MODULE_RE = re.compile(r"^(?:test_\w*|\w+_tests?)$")
@@ -321,7 +330,52 @@ def _path_within(child: str, parent: str) -> bool:
     return child.startswith(parent + os.sep) or child.startswith(parent + "/")
 
 
-def _norm_path(raw: str, cwd: str) -> Optional[str]:
+_UNC_DRIVE_RE = re.compile(r"^\\\\([^\\]+)\\([A-Za-z])\$(\\.*)?$")
+
+
+@functools.lru_cache(maxsize=1)
+def _local_hosts() -> frozenset:
+    r"""Host names an administrative share (``\\host\c$``) means this PC by."""
+    return frozenset({"localhost", "127.0.0.1", "::1", socket.gethostname().lower()})
+
+
+def _windows_spelling(path: str) -> str:
+    r"""One spelling for the many Windows has for a file.
+
+    ``\\?\C:\x``, ``\\localhost\c$\x``, ``C:\x::$DATA``, ``C:\x:stream`` and
+    ``C:\x.`` all open ``C:\x``.
+    """
+    path = path.replace("/", "\\")
+    lowered = path.lower()
+    if lowered.startswith("\\\\?\\unc\\"):
+        path = "\\\\" + path[8:]
+    elif lowered.startswith(("\\\\?\\", "\\\\.\\")):
+        path = path[4:]
+    share = _UNC_DRIVE_RE.match(path)
+    if share and share.group(1).lower() in _local_hosts():
+        path = f"{share.group(2)}:{share.group(3) or chr(92)}"
+    drive, rest = os.path.splitdrive(path)
+    parts = [
+        part if part in (".", "..") else part.split(":", 1)[0].rstrip(" .")
+        for part in rest.split("\\")
+    ]
+    return drive + "\\".join(parts)
+
+
+def _canonical(path: str) -> str:
+    """The form every target is compared in, wherever it was spelled."""
+    if os.name == "nt":
+        path = _windows_spelling(path)
+    try:
+        # Expands 8.3 short names and follows links, as opening the file would.
+        path = os.path.realpath(path)
+    except (OSError, ValueError) as e:
+        logger.debug("compared %s as written; could not resolve it: %s", path, e)
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _lexical_path(raw: str, cwd: str) -> Optional[str]:
+    """*raw* made absolute against *cwd*, without touching the filesystem."""
     raw = raw.strip().strip("'\"")
     if not raw or "\x00" in raw or raw.startswith("-") or "://" in raw:
         return None
@@ -332,11 +386,16 @@ def _norm_path(raw: str, cwd: str) -> Optional[str]:
         return None
 
 
+def _norm_path(raw: str, cwd: str) -> Optional[str]:
+    lexical = _lexical_path(raw, cwd)
+    return _canonical(lexical) if lexical else None
+
+
 def _norm_path_abs(raw: str) -> Optional[str]:
     """An already-resolved absolute path, normalised like every other target."""
-    if not isinstance(raw, str) or not os.path.isabs(raw):
+    if not isinstance(raw, str) or "\x00" in raw or not os.path.isabs(raw):
         return None
-    return os.path.normcase(os.path.abspath(raw))
+    return _canonical(raw)
 
 
 def _hosts(text: str) -> Set[Effect]:
@@ -387,14 +446,106 @@ def _split_segments(command: str) -> List[str]:
     return [s.strip() for s in segments if s.strip()]
 
 
-def _tokens(segment: str) -> List[str]:
+def _quoted_tokens(segment: str) -> List[Tuple[str, bool]]:
+    """Each word, unquoted, and whether it was one quoted string."""
     try:
         parts = shlex.split(segment, posix=False)
     except ValueError:
         parts = segment.split()
-    return [
-        p[1:-1] if len(p) >= 2 and p[0] == p[-1] and p[0] in "'\"" else p for p in parts
-    ]
+    tokens = []
+    for p in parts:
+        quoted = len(p) >= 2 and p[0] == p[-1] and p[0] in "'\""
+        tokens.append((p[1:-1] if quoted else p, quoted))
+    return tokens
+
+
+def _tokens(segment: str) -> List[str]:
+    return [token for token, _ in _quoted_tokens(segment)]
+
+
+#: ``>f``, ``>>f``, ``2>f``, ``x>f``: a redirect, with or without spaces.
+_REDIRECT_RE = re.compile(r"^(?P<arg>[^>]*?)(?:\d|\*)?>>?(?P<target>[^>]*)$")
+
+#: ``[IO.File]::WriteAllText(path, …)`` and friends in PowerShell.
+_DOTNET_IO_RE = re.compile(
+    r"\[(?:System\.)?IO\.(?P<type>File|Directory)\]::(?P<method>\w+)\s*\((?P<args>[^)]*)\)",
+    re.IGNORECASE,
+)
+#: Which arguments of a .NET file method name a path it changes.
+_DOTNET_WRITE_ARGS = {
+    "copy": (1,),
+    "move": (0, 1),
+    "replace": (0, 1),
+}
+_DOTNET_WRITERS = re.compile(
+    r"^(?:write|append|create|openwrite|delete|move|replace|copy|set|encrypt|decrypt)",
+    re.IGNORECASE,
+)
+
+
+def _dotnet_args(text: str) -> List[str]:
+    """Top-level comma-separated arguments, quotes kept."""
+    args, buf, quote = [], [], None
+    for ch in text:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+            buf.append(ch)
+        elif ch == ",":
+            args.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+    args.append("".join(buf).strip())
+    return args
+
+
+def _dotnet_file_writes(segment: str, cwd: str) -> Set[Effect]:
+    effects: Set[Effect] = set()
+    for m in _DOTNET_IO_RE.finditer(segment):
+        method = m.group("method").lower()
+        if not _DOTNET_WRITERS.match(method):
+            continue
+        args = _dotnet_args(m.group("args"))
+        for index in _DOTNET_WRITE_ARGS.get(method, (0,)):
+            if index >= len(args):
+                continue
+            arg = args[index]
+            literal = len(arg) >= 2 and arg[0] == arg[-1] and arg[0] in "'\""
+            path = _norm_path(arg[1:-1], cwd) if literal else None
+            effects.add(Effect(PATH, path or COMPUTED_PATH))
+    return effects
+
+
+def _sed_in_place_files(rest: Sequence[str]) -> List[str]:
+    """The files ``sed -i`` rewrites; none without ``-i``."""
+    in_place = any(
+        a.startswith("-i") or a.startswith("--in-place") for a in rest
+    ) or any(
+        a.startswith("-") and not a.startswith("--") and "i" in a[1:] for a in rest
+    )
+    if not in_place:
+        return []
+    files: List[str] = []
+    script_given = False
+    skip = False
+    for arg in rest:
+        if skip:
+            skip = False
+        elif arg in ("-e", "-f", "--expression", "--file"):
+            script_given, skip = True, True
+        elif arg.startswith(("--expression=", "--file=")):
+            script_given = True
+        elif arg.startswith("-"):
+            continue
+        elif not script_given:
+            script_given = True
+        else:
+            files.append(arg)
+    return files
 
 
 def _program(token: str) -> str:
@@ -463,22 +614,31 @@ def effects_of_shell_command(command: str, cwd: str, depth: int = 0) -> Set[Effe
             continue
         redirect_targets: List[str] = []
         kept: List[str] = []
-        for idx, tok in enumerate(tokens):
-            if tok in (">", ">>", "1>", "2>", "*>") and idx + 1 < len(tokens):
-                redirect_targets.append(tokens[idx + 1])
-            elif re.match(r"^\d?>>?[^>&]", tok):
-                redirect_targets.append(re.sub(r"^\d?>>?", "", tok))
-            elif (idx > 0 and tokens[idx - 1] in (">", ">>", "1>", "2>", "*>")) or (
-                ">" in tok
-            ):
+        pending = False
+        # A quoted word is an argument (``cmd /c "echo x > f"``): the shell it
+        # is handed to reads its redirects.
+        for tok, quoted in _quoted_tokens(segment):
+            if pending:
+                redirect_targets.append(tok)
+                pending = False
                 continue
-            else:
+            redirect = None if quoted else _REDIRECT_RE.match(tok)
+            if redirect is None:
                 kept.append(tok)
+                continue
+            if redirect.group("arg"):
+                kept.append(redirect.group("arg"))
+            target = redirect.group("target").strip("'\"")
+            if not target:
+                pending = True
+            elif not target.startswith("&"):
+                redirect_targets.append(target)
         for target in redirect_targets:
             if target.lower() not in ("/dev/null", "nul", "$null"):
                 path = _norm_path(target, cwd)
                 if path:
                     effects.add(Effect(PATH, path))
+        effects |= _dotnet_file_writes(segment, cwd)
         effects |= _effects_of_argv(kept, cwd, depth)
     return effects
 
@@ -535,11 +695,22 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
     family = _canonical_family(program, rest)
     if family:
         effects.add(Effect(COMMAND, family))
+    changed: List[str] = []
     if program in _PATH_MUTATORS:
-        for arg in rest:
-            path = _norm_path(arg, cwd)
-            if path:
-                effects.add(Effect(PATH, path))
+        changed = [
+            arg
+            for arg in rest
+            # ``xcopy a b /Y``: a cmd switch, not a folder at the drive root.
+            if not (program in _SLASH_SWITCH_PROGRAMS and _SLASH_SWITCH_RE.match(arg))
+        ]
+    elif program == "dd":
+        changed = [arg[3:] for arg in rest if arg.startswith("of=")]
+    elif program == "sed":
+        changed = _sed_in_place_files(rest)
+    for arg in changed:
+        path = _norm_path(arg, cwd)
+        if path:
+            effects.add(Effect(PATH, path))
     return effects
 
 
@@ -562,23 +733,6 @@ def _const_str(node: ast.AST) -> Optional[str]:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     return None
-
-
-def _argv_from_node(node: ast.AST) -> Optional[List[str]]:
-    """A literal ``["pytest", "-q"]`` (``sys.executable`` reads as python)."""
-    if not isinstance(node, (ast.List, ast.Tuple)):
-        return None
-    argv: List[str] = []
-    for elt in node.elts:
-        text = _const_str(elt)
-        if text is None and isinstance(elt, ast.Attribute) and elt.attr == "executable":
-            text = "python"
-        if text is None:
-            if not argv:
-                return None
-            continue
-        argv.append(text)
-    return argv or None
 
 
 #: Module functions that change a path, and the arguments naming it: each is
@@ -609,7 +763,10 @@ _FILE_CHANGERS: Dict[str, Dict[str, Tuple[Tuple[int, str], ...]]] = {
 }
 #: Modules whose ``open(file, mode)`` writes when the mode says so.
 _OPENERS = frozenset({"io", "codecs", "builtins", "gzip", "bz2", "lzma"})
-_TRACKED_MODULES = frozenset({"os", "shutil", "pathlib", "tempfile"}) | _OPENERS
+_TRACKED_MODULES = (
+    frozenset({"os", "shutil", "pathlib", "tempfile", "subprocess", "importlib"})
+    | _OPENERS
+)
 #: ``os.open`` flags that write; a flag it can't name is read as a write.
 _WRITE_FLAGS = frozenset({"O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND"})
 #: ``pathlib.Path`` methods that delete or overwrite the path, on any receiver.
@@ -655,6 +812,7 @@ class _PyFiles:
         self.modules: Dict[str, str] = {}
         self.funcs: Dict[str, Tuple[str, str]] = {}
         self.values: Dict[str, str] = {}
+        self.lists: Dict[str, ast.AST] = {}
         self.paths: Set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -697,6 +855,62 @@ class _PyFiles:
             self.values[target.id] = text
         if self.is_path(value):
             self.paths.add(target.id)
+        if isinstance(value, (ast.List, ast.Tuple)):
+            self.lists[target.id] = value
+
+    def argv(self, node: ast.AST) -> Tuple[List[str], bool]:
+        """A command list as far as the code spells it, and whether all of it is.
+
+        ``sys.executable`` reads as python.
+        """
+        if isinstance(node, ast.Name) and node.id in self.lists:
+            node = self.lists[node.id]
+        if not isinstance(node, (ast.List, ast.Tuple)):
+            return [], False
+        argv: List[str] = []
+        complete = True
+        for elt in node.elts:
+            text = self.text(elt)
+            if (
+                text is None
+                and isinstance(elt, ast.Attribute)
+                and elt.attr == "executable"
+            ):
+                text = "python"
+            if text is None:
+                complete = False
+                continue
+            argv.append(text)
+        return argv, complete
+
+    def dynamic(self, call: ast.Call, depth: int) -> Set[Effect]:
+        """Code that picks what it calls at run time: it could reach any path."""
+        func = call.func
+        module, name = self._callee(call)
+        if isinstance(func, ast.Name):
+            builtin = func.id not in self.funcs or module == "builtins"
+        else:
+            builtin = module == "builtins"
+        computed = {Effect(PATH, COMPUTED_PATH)}
+        if builtin and name in ("exec", "eval"):
+            source = _arg(call, 0, "source")
+            text = self.text(source) if source is not None else None
+            if text is None:
+                return computed
+            return effects_of_python_code(text, self.cwd, depth + 1)
+        if builtin and name == "__import__":
+            return computed
+        if module == "importlib" and name == "import_module":
+            return computed
+        if builtin and name == "getattr" and call.args:
+            owner = call.args[0]
+            if (isinstance(owner, ast.Name) and owner.id in self.modules) or (
+                isinstance(owner, ast.Call)
+                and isinstance(owner.func, ast.Name)
+                and owner.func.id == "__import__"
+            ):
+                return computed
+        return set()
 
     def _module_of(self, node: ast.AST) -> Optional[str]:
         if isinstance(node, ast.Name):
@@ -952,9 +1166,10 @@ def effects_of_python_code(code: str, cwd: str, depth: int = 0) -> Set[Effect]:
     files = _PyFiles(tree, cwd)
     for call in calls:
         effects |= _effects_of_python_call(
-            call, subprocess_names, "unittest" in imported, cwd, depth
+            call, subprocess_names, "unittest" in imported, files, depth
         )
         effects |= files.changed(call)
+        effects |= files.dynamic(call, depth)
     return effects
 
 
@@ -962,9 +1177,10 @@ def _effects_of_python_call(
     node: ast.Call,
     subprocess_names: Set[str],
     uses_unittest: bool,
-    cwd: str,
+    files: "_PyFiles",
     depth: int,
 ) -> Set[Effect]:
+    cwd = files.cwd
     func = node.func
     owner = (
         func.value.id
@@ -986,19 +1202,29 @@ def _effects_of_python_call(
             family = _canonical_family(target.split(".")[0].lower(), [])
             return {Effect(COMMAND, family)} if family else set()
         return effects_of_script(target, cwd, depth + 1) if target else set()
-    is_subprocess = (owner == "subprocess" and name in _SUBPROCESS_FUNCS) or (
+    module = files._module_of(func.value) if isinstance(func, ast.Attribute) else None
+    is_subprocess = ("subprocess" in (owner, module) and name in _SUBPROCESS_FUNCS) or (
         owner is None and name in subprocess_names
     )
-    is_os_shell = owner == "os" and name in ("system", "popen")
-    if (is_subprocess or is_os_shell) and node.args:
-        first = node.args[0]
-        text = _const_str(first)
+    is_os = "os" in (owner, module)
+    if is_os and name.startswith(("exec", "spawn")):
+        return {Effect(PATH, COMPUTED_PATH)}
+    if is_subprocess or (is_os and name in ("system", "popen")):
+        keyword = (
+            "args" if is_subprocess else ("command" if name == "system" else "cmd")
+        )
+        first = _arg(node, 0, keyword)
+        if first is None:
+            return {Effect(PATH, COMPUTED_PATH)} if _spreads(node) else set()
+        text = files.text(first)
         if text is not None:
             return effects_of_shell_command(text, cwd, depth + 1)
-        argv = _argv_from_node(first)
-        if argv:
-            return _effects_of_argv(argv, cwd, depth + 1)
-        return set()
+        argv, complete = files.argv(first)
+        effects = _effects_of_argv(argv, cwd, depth + 1) if argv else set()
+        # A command the code builds at run time could name any path.
+        if not complete:
+            effects.add(Effect(PATH, COMPUTED_PATH))
+        return effects
     return set()
 
 
@@ -1007,7 +1233,8 @@ def effects_of_script(script: str, cwd: str, depth: int = 0) -> Set[Effect]:
     path = _norm_path(script, cwd)
     if not path:
         return set()
-    effects = {Effect(SCRIPT, path)}
+    # Named as written: the file changes it makes are compared canonically.
+    effects = {Effect(SCRIPT, _lexical_path(script, cwd) or path)}
     stem, ext = os.path.splitext(os.path.basename(path))
     if ext in (".py", ".pyw") and _TEST_SCRIPT_RE.match(stem):
         effects.add(Effect(COMMAND, TEST_SUITE))

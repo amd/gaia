@@ -10,6 +10,7 @@ that path in the same turn is the same effect, and is refused without an
 
 from __future__ import annotations
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -390,3 +391,151 @@ def test_a_read_first_refusal_inside_scope_records_nothing(layout):
 
     assert refused["status"] == "error", refused
     assert not agent._denied_effects
+
+
+# ---------------------------------------------------------------------------
+# Commands, dynamic code and path spellings the static reading can't follow
+# ---------------------------------------------------------------------------
+
+
+def test_a_command_the_code_computes_is_treated_as_overlapping(outside):
+    """A subprocess or os.system command built at run time could name the path."""
+    ledger = _refused_write(outside["file"], outside["root"])
+    for code in [
+        "import subprocess\ncmd = input()\nsubprocess.run(cmd, shell=True)",
+        "import subprocess\nsubprocess.run(args=input(), shell=True)",
+        "import os\nos.system(f'copy a.txt {input()}')",
+        "import os\nos.popen('copy a.txt ' + input())",
+        "import subprocess, sys\nsubprocess.run(['cp', 'a.txt', sys.argv[1]])",
+        "from subprocess import check_call as cc\nimport sys\ncc(sys.argv[1:])",
+    ]:
+        assert ledger.conflict("run_python", {"code": code}) is not None, code
+
+
+def test_a_command_built_from_the_refused_path_is_read_through(outside):
+    ledger = _refused_write(outside["file"], outside["root"])
+    t = repr(str(outside["file"]))
+    for code in [
+        f"import os\np = {t}\nos.system(f'echo x > \"{{p}}\"')",
+        f"import subprocess\np = {t}\nsubprocess.run(['cp', 'a.txt', p])",
+        f"import subprocess\ndst = {t}\nargs = ['cp', 'a.txt', dst]\n"
+        "subprocess.run(args)",
+    ]:
+        assert ledger.conflict("run_python", {"code": code}) is not None, code
+
+
+def test_dynamic_code_is_treated_as_overlapping(outside):
+    """exec, eval, __import__ and getattr on a file module hide the call."""
+    ledger = _refused_write(outside["file"], outside["root"])
+    t = repr(str(outside["file"]))
+    for code in [
+        "exec(open('step.py').read())",
+        "src = input()\neval(compile(src, 'x', 'exec'))",
+        f"__import__('shutil').copy('a.txt', {t})",
+        f"import os\ngetattr(os, 'rename')('a.txt', {t})",
+        f"import shutil\ngetattr(shutil, 'co' + 'py')('a.txt', {t})",
+        "import importlib\nm = importlib.import_module(input())",
+    ]:
+        assert ledger.conflict("run_python", {"code": code}) is not None, code
+
+
+def test_ordinary_commands_and_attribute_lookups_are_not_swept_up(outside):
+    ledger = _refused_write(outside["file"], outside["root"])
+    for code in [
+        "import subprocess\nsubprocess.run(['git', 'status'])",
+        "import subprocess\ncmd = ['git', 'status']\nsubprocess.run(cmd)",
+        "import subprocess\nsubprocess.run('git status', shell=True)",
+        "import subprocess, sys\nsubprocess.run([sys.executable, '-m', 'pip', 'list'])",
+        "import pandas as pd\ndf = pd.DataFrame({'a': [1]})\nprint(df.eval('a + 1'))",
+        "class A:\n    x = 1\nprint(getattr(A, 'x', None))",
+    ]:
+        assert ledger.conflict("run_python", {"code": code}) is None, code
+
+
+windows_only = pytest.mark.skipif(os.name != "nt", reason="Windows path spellings")
+
+
+def _short_name(path) -> str:
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(32768)
+    ctypes.windll.kernel32.GetShortPathNameW(str(path), buf, len(buf))
+    return buf.value
+
+
+@windows_only
+def test_other_spellings_of_the_refused_path_are_the_same_path(outside):
+    folder = outside["dir"]
+    folder.mkdir(parents=True)
+    target = outside["file"]
+    ledger = _refused_write(target, outside["root"])
+    drive, rest = os.path.splitdrive(str(target))
+    spellings = [
+        "\\\\?\\" + str(target),
+        f"\\\\localhost\\{drive[0]}$" + rest,
+        f"\\\\127.0.0.1\\{drive[0]}$" + rest,
+        str(target) + "::$DATA",
+        str(target) + ":notes",
+        str(target) + ".",
+        str(target).upper(),
+    ]
+    short = _short_name(folder)
+    if short and short.lower() != str(folder).lower():
+        spellings.append(os.path.join(short, "report.md"))
+    for spelling in spellings:
+        code = f"open({spelling!r}, 'w').write('x')"
+        assert ledger.conflict("run_python", {"code": code}) is not None, spelling
+
+
+@windows_only
+def test_a_refusal_recorded_under_another_spelling_still_matches(outside):
+    outside["dir"].mkdir(parents=True)
+    ledger = _refused_write("\\\\?\\" + str(outside["file"]), outside["root"])
+    code = f"open({str(outside['file'])!r}, 'w').write('x')"
+    assert ledger.conflict("run_python", {"code": code}) is not None
+
+
+def test_more_shell_writes_to_a_refused_path_are_the_same_effect(outside):
+    ledger = _refused_write(outside["file"], outside["root"])
+    t, d = str(outside["file"]), str(outside["dir"])
+    for command in [
+        f"echo x>{t}",
+        f'echo x>"{t}"',
+        f"echo x 1>>{t}",
+        f'cmd /c "echo x > {t}"',
+        f'cmd /c "echo x>{t}"',
+        f"bash -c 'echo x > {t}'",
+        f'Add-Content -Path "{t}" -Value x',
+        f'ac "{t}" x',
+        f'xcopy draft.md "{t}" /Y',
+        f'robocopy drafts "{d}" report.md',
+        f"powershell -Command \"[IO.File]::WriteAllText('{t}', 'x')\"",
+        f"[System.IO.File]::AppendAllText(\"{t}\", 'x')",
+        f"[IO.File]::Copy('draft.md', '{t}')",
+        "[IO.File]::WriteAllText($target, 'x')",
+        f"dd if=/dev/zero of={t} bs=1 count=1",
+        f"sed -i 's/a/b/' {t}",
+        f"sed -i.bak -e 's/a/b/' {t}",
+    ]:
+        assert (
+            ledger.conflict("run_shell_command", {"command": command}) is not None
+        ), command
+
+
+def test_shell_reads_and_writes_elsewhere_are_not_swept_up(outside):
+    ledger = _refused_write(outside["file"], outside["root"])
+    t, other = str(outside["file"]), str(outside["root"] / "inside" / "draft.md")
+    for command in [
+        f'type "{t}"',
+        f'findstr x "{t}"',
+        f'Get-Content "{t}"',
+        f"sed 's/a/b/' {t}",
+        f"dd if={t} of={other}",
+        f"echo x>{other}",
+        "pytest -q 2>&1",
+        f"[IO.File]::ReadAllText('{t}')",
+        f'cmd /c "echo x > {other}"',
+    ]:
+        assert (
+            ledger.conflict("run_shell_command", {"command": command}) is None
+        ), command
