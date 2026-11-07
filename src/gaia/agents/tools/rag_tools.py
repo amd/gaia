@@ -260,12 +260,37 @@ def _kick_stale_reindexes(rag: Any) -> Tuple[List[str], List[str]]:
     stat_keys = getattr(rag, "file_stat_keys", None) or {}
     reindexing: List[str] = []
     failed: List[str] = []
+
+    def _record_failure(path: str, st, error: object) -> None:
+        if st is not None:
+            failures[path] = f"{st.st_size}:{st.st_mtime_ns}"
+        else:
+            failures[path] = "deleted"
+        failed.append(Path(path).name)
+        logger.error(f"Background re-index of {Path(path).name} failed: {error}")
+
+    # Reap finished jobs before the loop, so a re-index started by the
+    # previous query has its outcome seen on this one.
+    with _INDEX_JOBS_LOCK:
+        jobs = _INDEX_JOBS.get(rag) or {}
+        for path, job in list(jobs.items()):
+            if not job.done.is_set():
+                continue
+            del jobs[path]
+            path = str(path)
+            if job.error is not None:
+                _record_failure(path, _safe_stat(path), job.error)
+            elif job.result is not None and not job.result.get("success"):
+                _record_failure(path, _safe_stat(path), job.result.get("error"))
+
     for path in sorted(rag.indexed_files):
         path = str(path)
-        try:
-            st = os.stat(path)
-        except OSError:
-            failed.append(Path(path).name)
+        st = _safe_stat(path)
+        if st is None:
+            if path not in failures:
+                _record_failure(path, None, "the file is gone or unreadable")
+            else:
+                failed.append(Path(path).name)
             continue
         failed_stat = failures.get(path)
         if failed_stat is not None:
@@ -283,9 +308,10 @@ def _kick_stale_reindexes(rag: Any) -> Tuple[List[str], List[str]]:
             except (
                 Exception
             ) as e:  # noqa: BLE001 — the job's failure is not the query's
-                failures[path] = f"{st.st_size}:{st.st_mtime_ns}"
-                failed.append(Path(path).name)
-                logger.error(f"Background re-index of {Path(path).name} failed: {e}")
+                _record_failure(path, st, e)
+                continue
+            if _result is not None and not _result.get("success"):
+                _record_failure(path, st, _result.get("error", "unknown error"))
                 continue
             reindexing.append(Path(path).name)
         else:
@@ -293,6 +319,13 @@ def _kick_stale_reindexes(rag: Any) -> Tuple[List[str], List[str]]:
             if recorded is None:
                 stat_keys[path] = (st.st_size, st.st_mtime_ns)
     return reindexing, failed
+
+
+def _safe_stat(path: str):
+    try:
+        return os.stat(path)
+    except OSError:
+        return None
 
 
 def _rag_not_available() -> str:

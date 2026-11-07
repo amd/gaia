@@ -158,18 +158,26 @@ def test_a_failed_reindex_is_reported_without_breaking_the_query(tmp_path):
     rag.index_document.side_effect = RuntimeError("file locked")
     host = _host_for(rag)
 
-    result = _call("query_documents", query="what?")
+    # The first query starts the background re-index. Whether the job fails
+    # before or after the call checks on it is a scheduling race, so the
+    # first call may report it as re-indexing or as failed.
+    first = _call("query_documents", query="what?")
+    assert first["status"] == "success", first
+    assert first.get("reindexing_files") == ["doc.txt"] or first.get(
+        "reindex_failed"
+    ) == ["doc.txt"], first
     assert _wait_no_jobs(rag), "the background re-index never finished"
 
-    # The job's failure is not the query's: the answer still succeeds (serving
+    # The next query reaps the failed job: the answer still succeeds (serving
     # the old generation) and the file is reported as failed, not re-kicked
     # on every query afterwards.
-    assert result["status"] == "success", result
-    assert result.get("reindex_failed") == ["doc.txt"], result
+    second = _call("query_documents", query="what?")
+    assert second["status"] == "success", second
+    assert second.get("reindex_failed") == ["doc.txt"], second
 
-    again = _call("query_documents", query="what?")
-    assert again["status"] == "success", again
-    assert again.get("reindex_failed") == ["doc.txt"], again
+    third = _call("query_documents", query="what?")
+    assert third["status"] == "success", third
+    assert third.get("reindex_failed") == ["doc.txt"], third
     assert (
         rag.index_document.call_count == 1
     ), "a failed re-index must not be re-kicked until its bytes change again"
@@ -186,20 +194,21 @@ def test_a_deleted_indexed_file_does_not_break_searches(tmp_path):
     rag.file_metadata = {}
     rag._retrieve_chunks.return_value = (["old text"], [1.0])
     rag.chunk_to_file = {0: str(doc)}
-
-    def index_document(path, **_kwargs):
-        raise FileNotFoundError(str(path))
-
-    rag.index_document.side_effect = index_document
     host = _host_for(rag)
+    os.remove(doc)
 
+    # A deleted file fails its stat check on the foreground thread, so the
+    # failure is deterministic: no kick is started, and the file is reported
+    # as failed on every query without breaking the search.
     first = _call("query_documents", query="what?")
     assert first["status"] == "success", first
     assert first.get("reindex_failed") == ["doc.txt"], first
+    assert rag.index_document.call_count == 0, first
 
     second = _call("query_documents", query="what?")
     assert second["status"] == "success", second
     assert second.get("reindex_failed") == ["doc.txt"], second
+    assert rag.index_document.call_count == 0, second
 
 
 def _real_sdk(tmp_path):
