@@ -7866,8 +7866,8 @@ Do NOT wrap conversational replies in JSON.
                     exc,
                 )
                 raise
-            shrunk = self._shrink_messages_for_overflow(messages)
-            if not self._closing_retry_frees_room(messages, shrunk, str(exc)):
+            shrunk, report = self._shrink_for_overflow_retry(messages, str(exc))
+            if not report["fits"]:
                 raise _ClosingOverflow() from exc
             logger.warning(
                 "Context overflow at the closing call: putting older results "
@@ -7893,31 +7893,6 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     raise
                 raise _ClosingOverflow() from retried
-
-    def _closing_retry_frees_room(
-        self,
-        messages: List[Dict[str, Any]],
-        shrunk: List[Dict[str, Any]],
-        error_text: str,
-    ) -> bool:
-        """Whether the trimmed request can fit, by the loop's own rule.
-
-        A retry is worth it only when the shrink freed more than the request
-        was over by, or, with no numbers in the error, a tenth of the prompt.
-        """
-        system_prompt, tools = self.system_prompt, self._openai_tools
-        before = request_tokens(messages, system_prompt, tools)
-        after = request_tokens(shrunk, system_prompt, tools)
-        freed = max(0, before - after)
-        numbers = overflow_numbers(error_text)
-        if numbers is not None:
-            requested, available = numbers
-            # Freed is in our tokens; the backend counted in its own.
-            projected = (
-                requested - int(freed * requested / before) if before else requested
-            )
-            return projected <= int(available * 0.95)
-        return before > 0 and freed >= before * 0.1
 
     def _closing_answer_once(
         self,
@@ -13642,8 +13617,8 @@ Do NOT wrap conversational replies in JSON.
             classified, LemonadeContextOverflowError
         ):
             return (
-                "there wasn't enough room left in the model's context window to "
-                f"write it. {_CONTEXT_STILL_OVERFLOWING_MESSAGE}"
+                f"{subject} couldn't be written. "
+                f"{_CONTEXT_STILL_OVERFLOWING_MESSAGE}"
             )
         reason = self._extract_lemonade_user_message(exc)
         if reason:

@@ -495,7 +495,10 @@ def test_closing_overflow_note_names_the_limit_without_the_backend_body(agent):
     note = agent._closing_failure_note(
         RuntimeError(_TOO_LONG), "The summary of what I did"
     )
-    assert "context window" in note
+    # Appended after a blank line, so the paragraph must open with its subject
+    # rather than a dangling "there wasn't enough room ... to write it".
+    assert note.startswith("The summary of what I did couldn't be written. ")
+    assert _CONTEXT_STILL_OVERFLOWING_MESSAGE in note
     assert "status 400" not in note
     assert "{" not in note
 
@@ -560,6 +563,31 @@ def test_closing_overflow_not_retried_when_the_trim_cannot_fit(agent):
     assert str(caught.value) == _CONTEXT_STILL_OVERFLOWING_MESSAGE
     # Only the first closing request was sent.
     assert len(_model_calls(agent, chat)) == 1
+
+
+def test_closing_overflow_that_cannot_fit_archives_nothing(agent):
+    """A retry that won't run must not leave the results archived for real."""
+    messages = [
+        {"role": "user", "content": "summarize issue 42"},
+        {
+            "role": "tool",
+            "name": _TOOL,
+            "tool_call_id": "call_1",
+            "content": _BIG_RESULT,
+        },
+    ]
+    _stub_chat(agent, OverflowError(_TOO_LONG))
+
+    with patch(
+        "gaia.agents.base.agent.request_tokens",
+        side_effect=[900, 800],
+    ):
+        with pytest.raises(_ClosingOverflow):
+            agent._closing_answer(messages, [], "wrap up", 1)
+
+    # Sized in a throwaway store, so the real one never saw the trim.
+    assert agent._output_artifacts._items == {}
+    assert messages[1]["content"] == _BIG_RESULT
 
 
 def test_latest_findings_prefers_the_newest_prose(agent):
