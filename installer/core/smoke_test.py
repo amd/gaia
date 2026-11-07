@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -53,6 +54,14 @@ HEALTH_TIMEOUT_S = 90
 def serves_app(html: str) -> bool:
     """True when *html* is the built Agent UI, not the backend's placeholder page."""
     return '<div id="root">' in html and 'type="module"' in html
+
+
+def entry_script(html: str) -> str | None:
+    """The server path of the page's module entry script, e.g. ``/assets/index-x.js``."""
+    match = re.search(r'<script\b[^>]*type="module"[^>]*\bsrc="([^"]+)"', html)
+    if not match:
+        return None
+    return "/" + match.group(1).removeprefix("./").lstrip("/")
 
 
 def free_port() -> int:
@@ -227,6 +236,8 @@ class Smoke:
         log.close()
         healthy = False
         page = ""
+        script_ok = False
+        script_detail = "no module entry script in the page"
         deadline = time.monotonic() + HEALTH_TIMEOUT_S
         try:
             while time.monotonic() < deadline and proc.poll() is None:
@@ -248,6 +259,21 @@ class Smoke:
                         page = r.read().decode("utf-8", errors="replace")
                 except (urllib.error.URLError, OSError) as e:
                     page = f"GET / failed: {e}"
+            script = entry_script(page)
+            if script:
+                try:
+                    with urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}{script}", timeout=10
+                    ) as r:
+                        script_ok = r.status == 200 and "javascript" in (
+                            r.headers.get("Content-Type", "")
+                        )
+                        script_detail = (
+                            f"GET {script} -> {r.status} "
+                            f"{r.headers.get('Content-Type', '')}"
+                        )
+                except (urllib.error.URLError, OSError) as e:
+                    script_detail = f"GET {script} failed: {e}"
         finally:
             proc.terminate()
             try:
@@ -263,6 +289,7 @@ class Smoke:
             serves_app(page),
             f"GET / returned:\n{page[:600]}",
         )
+        self.check("the Agent UI's entry script loads", script_ok, script_detail)
 
 
 def main(argv=None) -> int:

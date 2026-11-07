@@ -104,6 +104,28 @@ def test_smoke_tells_the_app_from_the_placeholder(html, is_app):
     assert smoke.serves_app(html) is is_app
 
 
+@pytest.mark.parametrize(
+    "html, path",
+    [
+        # Vite's output with base './'.
+        (
+            '<script type="module" crossorigin src="./assets/index-KksilCm8.js">'
+            '</script><link rel="modulepreload" href="./assets/api-c2.js">',
+            "/assets/index-KksilCm8.js",
+        ),
+        (
+            '<script type="module" src="/assets/main-1.js"></script>',
+            "/assets/main-1.js",
+        ),
+        ('<script src="./assets/legacy.js"></script>', None),
+        ("<h1>This is the GAIA backend API</h1>", None),
+        ("", None),
+    ],
+)
+def test_smoke_finds_the_entry_script(html, path):
+    assert smoke.entry_script(html) == path
+
+
 def test_smoke_placeholder_is_the_servers_fallback():
     text = SERVER.read_text(encoding="utf-8")
     start = text.index('_FALLBACK_HTML = """') + len('_FALLBACK_HTML = """')
