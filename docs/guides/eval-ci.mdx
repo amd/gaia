@@ -276,7 +276,7 @@ jobs:
       - name: Install
         run: |
           pip install uv
-          uv pip install -e ".[eval,ui]" -e hub/agents/gaia/python --system
+          uv pip install -e ".[eval]" --system
       - name: Architecture Audit
         run: gaia eval agent --audit-only
 
