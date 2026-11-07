@@ -2319,6 +2319,7 @@ def _failed_run_waiting_on_one_model_retest(only_test_failure):
             else "Model test failed"
         ),
         failed_by_tests=only_test_failure,
+        chat_model_for=lambda _run: VOICE,
     )
     runner._models[VOICE] = sr.ModelProgress(
         id=VOICE,
@@ -2339,7 +2340,9 @@ def _failed_run_waiting_on_one_model_retest(only_test_failure):
     return runner
 
 
-def test_the_last_model_retest_finishes_a_test_only_failed_run(monkeypatch, gaia_home):
+def test_the_last_model_retest_rechecks_setup_before_marking_ready(
+    monkeypatch, gaia_home
+):
     from gaia.installer import init_command
 
     runner = _failed_run_waiting_on_one_model_retest(only_test_failure=True)
@@ -2348,12 +2351,51 @@ def test_the_last_model_retest_finishes_a_test_only_failed_run(monkeypatch, gaia
         "retest_model",
         lambda client, model_id, job=None: (True, None, None),
     )
+    checks, turns = [], []
+
+    def check(*_args, **_kwargs):
+        checks.append(1)
+        return {"ready": True, "models": [{"id": VOICE, "loaded": True}]}
+
+    monkeypatch.setattr(sr, "check", check)
+    monkeypatch.setattr(
+        sr, "_agent_turn_problem", lambda model_id: turns.append(model_id)
+    )
 
     runner.download_model(_NoPullClient(), VOICE)
 
     assert _wait_until(lambda: runner.status()["state"] == "ready")
+    assert checks == [1] and turns == [VOICE]
     assert runner.status()["error"] is None
     assert (gaia_home / "chat" / "initialized").exists()
+
+
+def test_a_retest_keeps_setup_failed_when_final_verification_fails(
+    monkeypatch, gaia_home
+):
+    from gaia.installer import init_command
+
+    runner = _failed_run_waiting_on_one_model_retest(only_test_failure=True)
+    monkeypatch.setattr(
+        init_command,
+        "retest_model",
+        lambda client, model_id, job=None: (True, None, None),
+    )
+    monkeypatch.setattr(
+        sr,
+        "check",
+        lambda *_args, **_kwargs: {
+            "ready": True,
+            "models": [{"id": VOICE, "loaded": True}],
+        },
+    )
+    monkeypatch.setattr(sr, "_agent_turn_problem", lambda _model_id: "no answer")
+
+    runner.download_model(_NoPullClient(), VOICE)
+
+    assert _wait_until(lambda: runner.status()["state"] == "failed")
+    assert "got no answer" in runner.status()["error"]
+    assert not (gaia_home / "chat" / "initialized").exists()
 
 
 def test_a_model_retest_does_not_hide_another_setup_failure(monkeypatch, gaia_home):

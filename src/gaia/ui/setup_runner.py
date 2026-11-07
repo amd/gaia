@@ -1239,6 +1239,14 @@ class SetupRunner:
         ).start()
         return self.status() or {"state": "idle"}
 
+    def _test_failure_kind(self, model_id: str, kind: Optional[str]) -> Optional[str]:
+        """Count stuck tests once, so setup and Retry use the same escalation."""
+        if kind != "stuck":
+            return kind
+        attempts = self._test_failures.get(model_id, 0) + 1
+        self._test_failures[model_id] = attempts
+        return "broken" if attempts >= 2 else kind
+
     def _retest_one(self, client, model_id: str, stop: threading.Event) -> None:
         from gaia.installer.init_command import LOAD_CHECK_JOB, retest_model
 
@@ -1258,6 +1266,7 @@ class SetupRunner:
                 f"GAIA couldn't test {model_id} again ({error}). Its server log "
                 "has the details; press Retry to test it again."
             )
+        verify_run = None
         with self._lock:
             self._pulls.pop(model_id, None)
             entry = self._models.setdefault(model_id, ModelProgress(id=model_id))
@@ -1275,11 +1284,7 @@ class SetupRunner:
                 self._test_failures.pop(model_id, None)
                 entry.add_log("Test passed")
             else:
-                if kind == "stuck":
-                    attempts = self._test_failures.get(model_id, 0) + 1
-                    self._test_failures[model_id] = attempts
-                    if attempts >= 2:
-                        reported_kind = "broken"
+                reported_kind = self._test_failure_kind(model_id, kind)
                 entry.state = "failed"
                 entry.error_kind, entry.error = _test_failure(
                     model_id, reported_kind, error
@@ -1302,9 +1307,8 @@ class SetupRunner:
                         "seconds": round(time.monotonic() - started, 1),
                     },
                 )
-            # A failed run caused only by a model test can finish immediately
-            # after that model passes its retest. Previously the row turned
-            # green but the run remained failed until a full setup rerun.
+            # A passing retest only makes the prior failure eligible for the
+            # normal load and real-agent verification; it does not prove setup.
             if passed and self._run is not None and self._run.state == "failed":
                 tests_failed = any(
                     test.get("state") == "failed" for test in self._run.tests.values()
@@ -1313,11 +1317,14 @@ class SetupRunner:
                     model.state == "failed" for model in self._models.values()
                 )
                 if self._run.failed_by_tests and not tests_failed and not models_failed:
-                    self._run.state = "ready"
-                    self._run.error = None
-                    self._run.text = "GAIA is ready"
-                    self._run.note("Setup became ready after a successful retest")
-                    mark_initialized()
+                    verify_run = self._run
+                    verify_run.state = "verifying"
+                    verify_run.phase = PHASE_FINISH
+                    verify_run.text = "Checking that the models load"
+                    verify_run.error = None
+                    verify_run.note("Rechecking setup after a successful retest")
+        if verify_run is not None:
+            self._verify(verify_run)
 
     def _pull_one(
         self, client, model_id: str, keep_trying: bool, stop: threading.Event
@@ -1427,14 +1434,9 @@ class SetupRunner:
                     test_event = dict(event)
                     subject = test_event.get("subject")
                     if test_event.get("state") == "failed" and subject:
-                        if test_event.get("kind") == "stuck":
-                            attempts = self._test_failures.get(subject, 0) + 1
-                            self._test_failures[subject] = attempts
-                            # A second timeout is actionable as a damaged/
-                            # unusable install: expose the existing redownload
-                            # flow rather than asking the user to retry forever.
-                            if attempts >= 2:
-                                test_event["kind"] = "broken"
+                        test_event["kind"] = self._test_failure_kind(
+                            subject, test_event.get("kind")
+                        )
                     elif test_event.get("state") == "passed" and subject:
                         self._test_failures.pop(subject, None)
                     self._record_test(self._run, test_event)
@@ -1659,19 +1661,36 @@ class SetupRunner:
                 return
             if code != 0:
                 run.state = "failed"
+                failed_tests = {
+                    test["subject"]: test
+                    for test in run.tests.values()
+                    if test.get("state") == "failed" and test.get("subject")
+                }
                 # A model-test-only failure can become ready after its last
                 # failed row passes. Download/component failures and every
                 # other exit still require a full setup retry.
                 run.failed_by_tests = (
-                    any(
-                        test.get("state") == "failed" and test.get("subject")
-                        for test in run.tests.values()
-                    )
+                    bool(failed_tests)
                     and not run.model_failed
                     and not any(state == "failed" for state in run.components.values())
                 )
-                # Downloaded but never checked: not shown as ready.
-                self._settle_models(None, {}, run_failed=True)
+                failed_models: Dict[str, str] = {}
+                failed_kinds: Dict[str, str] = {}
+                for model_id, test in failed_tests.items():
+                    if model_id not in self._models:
+                        continue
+                    kind = test.get("kind")
+                    if kind == "stuck" and self._test_failures.get(model_id, 0) >= 2:
+                        kind = "broken"
+                    failed_kinds[model_id], failed_models[model_id] = _test_failure(
+                        model_id, kind, test.get("error")
+                    )
+                    self._models[model_id].test_job = test.get("job")
+                # Downloaded but untested models stay unchecked; failed tests
+                # remain retryable so a successful retest can re-verify setup.
+                self._settle_models(
+                    None, failed_models, run_failed=True, kinds=failed_kinds
+                )
                 self._end_rows(run)
                 if problem is not None:
                     # The raw exception stays in the log, behind "Details".
