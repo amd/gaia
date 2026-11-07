@@ -16,9 +16,10 @@ desktop app by running the unmodified electron-builder
 `gaia-agent-ui-<version>-x64-setup.exe` it embeds. That setup stays the app's
 owner (files, Installed-apps entry, shortcuts, uninstaller) because
 electron-updater re-runs exactly that file. The terminal shows as
-`GAIA Terminal UI` but keeps the folder and registry ids of the terminal-only
-setup (`GAIA Terminal Hub`, `GAIATerminalHub`), so either earlier installer is
-upgraded in place and its old-named shortcuts are removed. Silent installs take `/S /COMPONENTS=ui,tui`; the
+`GAIA Terminal UI` and installs to `%LOCALAPPDATA%\Programs\gaia-tui` under
+`gaia-tui` registry ids. Upgrading an install an earlier setup made under the
+legacy `GAIA Terminal Hub` folder and `TerminalHub` ids moves it there and
+removes the old folder, keys, PATH entry and shortcuts. Silent installs take `/S /COMPONENTS=ui,tui`; the
 exit codes are listed in `gaia-setup.nsi` and [Install GAIA](../../docs/guides/install.mdx).
 
 | Platform | Builder | Artifact |
