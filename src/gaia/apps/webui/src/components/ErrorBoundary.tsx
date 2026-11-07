@@ -8,6 +8,8 @@ import { useT } from '../i18n/useT';
 interface ErrorBoundaryProps {
     /** Names the screen in the console log, e.g. "sidebar" or "settings.connectors". */
     area: string;
+    /** A change clears a shown error without remounting healthy children. */
+    resetKey?: string;
     children: ReactNode;
 }
 
@@ -24,6 +26,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
     static getDerivedStateFromError(): ErrorBoundaryState {
         return { hasError: true };
+    }
+
+    componentDidUpdate(prevProps: ErrorBoundaryProps): void {
+        if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
+            this.setState({ hasError: false });
+        }
     }
 
     componentDidCatch(error: unknown, info: ErrorInfo): void {

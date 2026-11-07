@@ -794,8 +794,13 @@ function App() {
                         </button>
                     </div>
                 )}
-                {/* Keyed so opening another chat clears a crashed one. */}
-                <ErrorBoundary key={currentSessionId ?? 'new'} area="main">{main}</ErrorBoundary>
+                {/* Leaving the crashed area, or New chat again, clears the crash. */}
+                <ErrorBoundary
+                    resetKey={showMemoryDashboard ? 'memory' : (currentSessionId ?? `new-${newChatFocus}`)}
+                    area="main"
+                >
+                    {main}
+                </ErrorBoundary>
             </div>
 
             {showSchedules && <Suspense fallback={null}><ScheduleManager /></Suspense>}
