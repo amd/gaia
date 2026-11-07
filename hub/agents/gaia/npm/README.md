@@ -8,7 +8,9 @@ npx @amd-gaia/gaia
 
 That fetches the two binaries GAIA needs — the agent sidecar and the terminal UI —
 verifies both against a checksum manifest that ships inside this package, and drops
-you into the terminal UI. No Python to install, no repo to clone, no build step.
+you into the terminal UI. No repo to clone and no build step. The terminal UI does
+start the GAIA daemon from the `gaia` Python CLI, so install that first (see
+[Requirements](#requirements)).
 Local inference is the default. The TUI can explicitly select Fireworks AI or AMD
 LLM Gateway through Lemonade; remote chat sends conversation history to that provider. The
 terminal UI's *launch* flag `--use-claude`, which would pin the Anthropic API for
