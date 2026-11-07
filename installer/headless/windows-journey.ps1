@@ -63,8 +63,8 @@ if ($env:KIND -eq 'install-ps1') {
 }
 $gaiaHome = "$userHome\.gaia"
 
-$tuiDir    = "$env:LOCALAPPDATA\Programs\GAIA Terminal Hub"
-$tuiArp    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub'
+$tuiDir    = "$env:LOCALAPPDATA\Programs\gaia-tui"
+$tuiArp    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\gaia-tui'
 $uiGuid    = '071ff68a-44b8-5d94-b099-f93e99d1c3f3'
 $uiKey     = "HKCU:\Software\$uiGuid"
 $uiArp     = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$uiGuid"
@@ -542,7 +542,7 @@ switch ($Step) {
                 if (Test-Path $p) { $problems += "left behind: $p" }
             }
             $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path -ErrorAction SilentlyContinue).Path
-            if ($regPath -like '*Programs\GAIA Terminal Hub*') { $problems += "the terminal's folder is still on the user PATH" }
+            if ($regPath -like "*$tuiDir*") { $problems += "the terminal's folder is still on the user PATH" }
             if (Get-ItemProperty -Path $runKey -Name 'GAIA' -ErrorAction SilentlyContinue) { $problems += 'the desktop app still starts at sign-in (Run key GAIA)' }
             if (Test-Path $uiKey) { Write-Host "::warning::$uiKey survived the uninstall" }
         }

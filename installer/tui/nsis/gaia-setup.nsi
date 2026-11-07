@@ -11,9 +11,9 @@
 ;                re-runs exactly that file to update the app. A second owner here
 ;                would be duplicated by the first auto-update.
 ;   Terminal     gaia-tui + gaia-agent, PATH, Windows Terminal profile, shortcuts,
-;                shown as "GAIA Terminal UI". Its registry keys and folder keep
-;                the TUI-only setup's "Terminal Hub" ids, so upgrading from it
-;                replaces it in place.
+;                shown as "GAIA Terminal UI", installed under gaia-tui ids. An
+;                install an earlier setup made under the "Terminal Hub" ids is
+;                moved onto them on upgrade (MigrateLegacyInstall).
 ;
 ; No suite-level Installed-apps entry is written: each component is removed from
 ; its own entry, so nothing here can be left orphaned.
@@ -78,13 +78,22 @@ Unicode true
 !define SETUP_NAME        "GAIA"
 ; The terminal component's display name -- its Installed-apps entry and shortcuts.
 !define PRODUCT_NAME      "GAIA Terminal UI"
-; The display name earlier setups used; its shortcuts are removed on upgrade.
-!define LEGACY_PRODUCT_NAME "GAIA Terminal Hub"
 !define PRODUCT_PUBLISHER "Advanced Micro Devices, Inc."
 !define PRODUCT_URL       "https://amd-gaia.ai"
 !define DOCS_URL          "https://amd-gaia.ai/docs"
-; Kept from the TUI-only setup so an upgrade lands on the same Installed-apps entry.
-!define UNINST_KEY        "Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub"
+!define UNINST_KEY        "Software\Microsoft\Windows\CurrentVersion\Uninstall\gaia-tui"
+; Where the terminal is installed and which fonts are ours; read by gaia-tui's
+; self-updater (tui/internal/update/setupdir_windows.go).
+!define SETTINGS_KEY      "Software\GAIA\gaia-tui"
+
+; The ids earlier setups used. Read only, to move an install made under them
+; onto the ids above on upgrade, and to clean up after it on uninstall.
+!define LEGACY_PRODUCT_NAME "GAIA Terminal Hub"
+!define LEGACY_SETTINGS_KEY "Software\GAIA\TerminalHub"
+!define LEGACY_UNINST_KEY   "Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub"
+!define LEGACY_FONTS_KEY    "${LEGACY_SETTINGS_KEY}\Fonts"
+!define LEGACY_DEFAULT_DIR  "$LOCALAPPDATA\Programs\GAIA Terminal Hub"
+
 !define TUI_EXE           "gaia-tui.exe"
 !define AGENT_EXE         "gaia-agent.exe"
 ; The frozen gaia core; its _internal folder sits beside it.
@@ -119,7 +128,7 @@ Unicode true
 !define USER_FONTS_DIR    "$LOCALAPPDATA\Microsoft\Windows\Fonts"
 !define FONTS_REG         "Software\Microsoft\Windows NT\CurrentVersion\Fonts"
 ; Which faces THIS setup installed, so uninstall never removes a copy the user had.
-!define GAIA_FONTS_KEY    "Software\GAIA\TerminalHub\Fonts"
+!define GAIA_FONTS_KEY    "${SETTINGS_KEY}\Fonts"
 !define FONT_LICENSE      "IBM-Plex-Mono-OFL.txt"
 
 Name "${SETUP_NAME} ${VERSION}"
@@ -128,12 +137,11 @@ OutFile "${OUTFILE}"
 ; the user's own profile. A machine-wide install would need elevation for a
 ; tool one user runs in their own terminal.
 RequestExecutionLevel user
-; NOT "...\Programs\GAIA": that is byte-for-byte where the Agent UI's
-; electron-builder setup lands (productName "GAIA", perMachine false), and its
-; uninstaller removes $INSTDIR recursively. The legacy folder and registry
-; names are kept until an upgrade can migrate them (#5204).
-InstallDir "$LOCALAPPDATA\Programs\GAIA Terminal Hub"
-InstallDirRegKey HKCU "Software\GAIA\TerminalHub" "InstallDir"
+; NOT "...\Programs\gaia": Windows paths ignore case, so that can be the Agent
+; UI's electron-builder folder (productName "GAIA", perMachine false), and its
+; uninstaller removes its folder recursively.
+InstallDir "$LOCALAPPDATA\Programs\gaia-tui"
+InstallDirRegKey HKCU "${SETTINGS_KEY}" "InstallDir"
 ShowInstDetails show
 ShowUnInstDetails show
 SetCompressor /SOLID lzma
@@ -166,6 +174,9 @@ Var LaunchArgs
 Var UiDir
 ; 1 once a chosen component failed, so the exit code says so after the rest ran.
 Var Failed
+; The folder an earlier setup installed the terminal to under the legacy ids,
+; emptied on upgrade; "" when there is none to move.
+Var LegacyDir
 
 !define MUI_ICON   "${ICON}"
 !define MUI_UNICON "${ICON}"
@@ -253,8 +264,8 @@ Function ${UN}PathSegmentPresent
   ; in : $R1 = the full PATH, $R2 = the directory to look for
   ; out: $R0 = 1 when present, 0 when not
   ;
-  ; Matched as ";<dir>;" inside ";<PATH>;" so ...\GAIA Terminal Hub-old never
-  ; counts as ...\GAIA Terminal Hub.
+  ; Matched as ";<dir>;" inside ";<PATH>;" so ...\gaia-tui-old never counts
+  ; as ...\gaia-tui.
   Push $R3
   Push $R4
   Push $R5
@@ -286,9 +297,9 @@ FunctionEnd
 !insertmacro PathSegmentPresent ""
 !insertmacro PathSegmentPresent "un."
 
-; Only the uninstaller drops a segment, so this one is not generated for the
-; installer -- an unused copy there is dead code makensis warns about.
-Function un.PathWithoutSegment
+; The installer drops the legacy folder on upgrade; the uninstaller drops $INSTDIR.
+!macro PathWithoutSegment UN
+Function ${UN}PathWithoutSegment
   ; in : $R1 = the full PATH, $R2 = the directory to drop
   ; out: $R0 = the PATH with every occurrence of $R2 removed
   ;
@@ -333,6 +344,9 @@ Function un.PathWithoutSegment
   Pop $R4
   Pop $R3
 FunctionEnd
+!macroend
+!insertmacro PathWithoutSegment ""
+!insertmacro PathWithoutSegment "un."
 
 ; Tell every running process the environment changed, so a NEW cmd.exe or
 ; PowerShell picks the PATH up without a sign-out. Already-open shells keep the
@@ -440,8 +454,10 @@ Section "GAIA Terminal UI (terminal)" SecMain
   File "/oname=gaia.ico" "${ICON}"
   File "${FONTS_DIR}\${FONT_LICENSE}"
 
-  WriteRegStr HKCU "Software\GAIA\TerminalHub" "InstallDir" "$INSTDIR"
-  WriteRegStr HKCU "Software\GAIA\TerminalHub" "Version"    "${VERSION}"
+  ; After the new files land, so a failed extraction leaves the old install.
+  Call MigrateLegacyInstall
+  WriteRegStr HKCU "${SETTINGS_KEY}" "InstallDir" "$INSTDIR"
+  WriteRegStr HKCU "${SETTINGS_KEY}" "Version"    "${VERSION}"
 
   ; ── Add/Remove Programs ──
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -460,6 +476,91 @@ Section "GAIA Terminal UI (terminal)" SecMain
 
   Call AddToUserPath
 SectionEnd
+
+; ─── Upgrading an install made under the legacy ids ────────────────────────
+
+; Finds an install an earlier setup made under the legacy ids. Only its default
+; folder moves to the new default; a folder the user chose stays theirs.
+; Clobbers $R0 and $R1.
+Function FindLegacyInstall
+  StrCpy $LegacyDir ""
+  ReadRegStr $R0 HKCU "${LEGACY_SETTINGS_KEY}" "InstallDir"
+  ${If} $R0 == ""
+    Return
+  ${EndIf}
+  ${If} $R0 == "${LEGACY_DEFAULT_DIR}"
+    StrCpy $LegacyDir "$R0"
+    Return
+  ${EndIf}
+  ; A current install already chose its folder through InstallDirRegKey.
+  ReadRegStr $R1 HKCU "${SETTINGS_KEY}" "InstallDir"
+  ${If} $R1 == ""
+    StrCpy $INSTDIR "$R0"
+  ${EndIf}
+FunctionEnd
+
+!macro MoveFontRecord FILE
+  ClearErrors
+  ReadRegStr $R0 HKCU "${LEGACY_FONTS_KEY}" "${FILE}"
+  ${IfNot} ${Errors}
+    WriteRegStr HKCU "${GAIA_FONTS_KEY}" "${FILE}" "$R0"
+  ${EndIf}
+!macroend
+
+; Moves an install made under the legacy ids onto the current ones: the record
+; of which fonts are ours, then its files, PATH entry, Installed-apps entry and
+; keys. Its own uninstaller is not run -- it would edit PATH while this does.
+Function MigrateLegacyInstall
+  !insertmacro MoveFontRecord "IBMPlexMono-Regular.ttf"
+  !insertmacro MoveFontRecord "IBMPlexMono-Bold.ttf"
+  !insertmacro MoveFontRecord "IBMPlexMono-Italic.ttf"
+  !insertmacro MoveFontRecord "IBMPlexMono-BoldItalic.ttf"
+  ${If} $LegacyDir != ""
+  ${AndIf} $LegacyDir != $INSTDIR
+    DetailPrint "Moving GAIA Terminal UI from $LegacyDir to $INSTDIR."
+    Delete "$LegacyDir\${TUI_EXE}"
+    Delete "$LegacyDir\${AGENT_EXE}"
+    Delete "$LegacyDir\${CORE_EXE}"
+    RMDir /r "$LegacyDir\_internal"
+    Delete "$LegacyDir\LICENSE.md"
+    Delete "$LegacyDir\gaia.ico"
+    Delete "$LegacyDir\${FONT_LICENSE}"
+    Delete "$LegacyDir\Uninstall.exe"
+    ; Without /r: anything the user put there stays, and so does the folder.
+    RMDir "$LegacyDir"
+    ${If} ${FileExists} "$LegacyDir\*.*"
+      DetailPrint "Left $LegacyDir in place: it still holds files. Delete it by hand once you no longer need them."
+    ${EndIf}
+    Call RemoveLegacyFromUserPath
+  ${EndIf}
+  DeleteRegKey HKCU "${LEGACY_UNINST_KEY}"
+  DeleteRegKey HKCU "${LEGACY_SETTINGS_KEY}"
+FunctionEnd
+
+Function RemoveLegacyFromUserPath
+  Call ReadUserPath
+  ; A PATH too long to read whole is one a rewrite would destroy.
+  ${If} $R0 == 1
+    DetailPrint "Your user PATH is longer than Setup can hold - leaving it untouched. Remove $LegacyDir from it by hand."
+    MessageBox MB_OK|MB_ICONEXCLAMATION \
+      "GAIA Terminal UI moved to $INSTDIR, but your PATH still lists its old folder:$\r$\n$\r$\n$LegacyDir$\r$\n$\r$\nIt is too long for Setup to edit without losing entries, so remove that one line by hand." \
+      /SD IDOK
+    Return
+  ${EndIf}
+  StrCpy $R2 "$LegacyDir"
+  Call PathSegmentPresent
+  ${If} $R0 != 1
+    Return
+  ${EndIf}
+  Call PathWithoutSegment
+  ${If} $R0 == ""
+    DeleteRegValue HKCU "Environment" "Path"
+  ${Else}
+    WriteRegExpandStr HKCU "Environment" "Path" "$R0"
+  ${EndIf}
+  !insertmacro BroadcastEnvChange
+  DetailPrint "Removed $LegacyDir from your PATH."
+FunctionEnd
 
 ; ─── Terminal profile: font, Windows Terminal fragment, shortcuts ──────────
 
@@ -823,6 +924,7 @@ Function .onInit
   ${EndIf}
   StrCpy $Failed 0
   StrCpy $UiDir ""
+  Call FindLegacyInstall
 
   ; Its files, not just its keys: a folder deleted by hand leaves keys behind
   ; and an uninstaller that cannot run, which must not block Setup forever.
@@ -843,7 +945,10 @@ Function .onInit
   ; Start from what is installed, so re-running Setup -- or a silent upgrade --
   ; updates what the user has rather than adding what they did not choose. A
   ; fresh machine gets both. An all-users desktop app is not ours to update.
-  ReadRegStr $R2 HKCU "Software\GAIA\TerminalHub" "InstallDir"
+  ReadRegStr $R2 HKCU "${SETTINGS_KEY}" "InstallDir"
+  ${If} $R2 == ""
+    ReadRegStr $R2 HKCU "${LEGACY_SETTINGS_KEY}" "InstallDir"
+  ${EndIf}
   ReadRegStr $R3 HKCU "${UI_INSTALL_KEY}" "InstallLocation"
   StrCpy $R0 0
   StrCpy $R1 0
@@ -961,18 +1066,30 @@ Function Preflight
     Call AbortIfRunning
     StrCpy $R8 "${CORE_EXE}"
     Call AbortIfRunning
+    ; An upgrade empties the legacy folder too, so what runs from there counts.
+    ${If} $LegacyDir != ""
+    ${AndIf} $LegacyDir != $INSTDIR
+      Call StopLegacyDaemon
+      StrCpy $R7 "$LegacyDir"
+      StrCpy $R8 "${TUI_EXE}"
+      Call AbortIfRunning
+      StrCpy $R8 "${AGENT_EXE}"
+      Call AbortIfRunning
+      StrCpy $R8 "${CORE_EXE}"
+      Call AbortIfRunning
+    ${EndIf}
   ${EndIf}
 FunctionEnd
 
-; Stops the GAIA daemon (and the agents it runs) through the gaia.exe in
-; $INSTDIR, which it runs from. A failure is logged; AbortIfRunning then says
-; the file is still in use.
-!macro STOP_DAEMON_BODY
-  ${If} ${FileExists} "$INSTDIR\${CORE_EXE}"
+; Stops the GAIA daemon (and the agents it runs) through the gaia.exe in DIR,
+; which it runs from. A failure is logged; AbortIfRunning then says the file is
+; still in use.
+!macro STOP_DAEMON_BODY DIR
+  ${If} ${FileExists} "${DIR}\${CORE_EXE}"
     DetailPrint "Stopping the GAIA daemon and its agents"
     ; gaia prints emoji, which the captured pipe's code page can't encode.
     System::Call 'Kernel32::SetEnvironmentVariable(t "PYTHONIOENCODING", t "utf-8")i'
-    nsExec::ExecToLog /TIMEOUT=120000 '"$INSTDIR\${CORE_EXE}" daemon stop'
+    nsExec::ExecToLog /TIMEOUT=120000 '"${DIR}\${CORE_EXE}" daemon stop'
     Pop $0
     ; 3: the daemon stopped; only GAIA's Lemonade Server did not.
     ${If} $0 == 3
@@ -985,22 +1102,33 @@ FunctionEnd
 
 Function StopDaemon
   Push $0
-  !insertmacro STOP_DAEMON_BODY
+  !insertmacro STOP_DAEMON_BODY "$INSTDIR"
+  Pop $0
+FunctionEnd
+
+Function StopLegacyDaemon
+  Push $0
+  !insertmacro STOP_DAEMON_BODY "$LegacyDir"
   Pop $0
 FunctionEnd
 
 Function un.StopDaemon
   Push $0
-  !insertmacro STOP_DAEMON_BODY
+  !insertmacro STOP_DAEMON_BODY "$INSTDIR"
   Pop $0
 FunctionEnd
 
 ; ─── Uninstall ─────────────────────────────────────────────────────────────
 
-; Removes a face only when this setup recorded installing it.
+; Removes a face only when this setup, or one under the legacy ids, recorded
+; installing it.
 !macro UninstallFontFace FILE FULL_NAME
   ClearErrors
   ReadRegStr $R0 HKCU "${GAIA_FONTS_KEY}" "${FILE}"
+  ${If} ${Errors}
+    ClearErrors
+    ReadRegStr $R0 HKCU "${LEGACY_FONTS_KEY}" "${FILE}"
+  ${EndIf}
   ${IfNot} ${Errors}
     System::Call 'gdi32::RemoveFontResourceW(w "${USER_FONTS_DIR}\${FILE}") i .r0'
     Delete "${USER_FONTS_DIR}\${FILE}"
@@ -1066,7 +1194,11 @@ Section "Uninstall"
   Delete "$DESKTOP\${LEGACY_PRODUCT_NAME}.lnk"
 
   DeleteRegKey HKCU "${UNINST_KEY}"
-  DeleteRegKey HKCU "Software\GAIA\TerminalHub"
+  DeleteRegKey HKCU "${SETTINGS_KEY}"
+  ; Whatever an install under the legacy ids left; harmless when absent.
+  DeleteRegKey HKCU "${LEGACY_UNINST_KEY}"
+  DeleteRegKey HKCU "${LEGACY_SETTINGS_KEY}"
+  DeleteRegKey /ifempty HKCU "Software\GAIA"
 
   Call un.RemoveFromUserPath
 
