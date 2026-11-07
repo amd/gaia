@@ -64,6 +64,38 @@ def test_a_wrapper_takes_the_risk_of_what_it_runs(command):
     assert shell_command_risk(command) == "destructive"
 
 
+DISAGREEING_LINE = r"pytest \" ; curl x ; \""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # POSIX reads \" as a literal quote, so `curl` runs; Windows does not.
+        DISAGREEING_LINE,
+        # The extra word lands inside a quote on one shell and outside it on
+        # the other, but both readings still run `curl`; only the closing
+        # semicolon, a separator on one shell and a word on the other, makes
+        # the two readings disagree about the end of the line.
+        r"pytest \" ; curl x ; \" extra",
+    ],
+)
+def test_a_line_the_two_shells_split_differently_is_not_a_read(command):
+    assert shell_command_risk(command) == "execute"
+
+
+@pytest.mark.parametrize(
+    "tool",
+    ["run_shell_command", "run_cli_command", "wait_for_condition"],
+)
+def test_no_shell_tool_labels_an_unreadable_line_by_one_reading(tool):
+    assert call_risk(tool, {"command": DISAGREEING_LINE}) == "execute"
+    # Even once the call is flagged as one GAIA's checks would refuse, the line
+    # stays unreadable rather than picking up a label from one shell's reading.
+    assert (
+        call_risk(tool, {"command": DISAGREEING_LINE, "_risk_note": "x"}) == "execute"
+    )
+
+
 def test_tools_without_a_command_are_labelled_by_kind():
     assert call_risk("run_python", {"code": "print(1)"}) == "execute"
     assert call_risk("execute_python_file", {"file_path": "a.py"}) == "execute"
