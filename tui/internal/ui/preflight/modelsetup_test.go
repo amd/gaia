@@ -4,6 +4,8 @@
 package preflight
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -185,6 +187,37 @@ func TestFinishingSetupRechecks(t *testing.T) {
 	}
 	if m.fixApplied {
 		t.Error("the ready summary was the review; the re-check must not hold for enter")
+	}
+}
+
+func TestFinishingSetupPersistsSelectedChatModelBeforeRecheck(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv(configFileEnv, path)
+	if err := os.WriteFile(path, []byte(`{"last_provider":"local","last_model":"model-A"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newWith(localRunner{opts: LocalOptions{Binary: "gaia-agent", Model: "model-A"}},
+		Config{AgentID: "gaia", AgentName: "GAIA"}, Options{})
+	m.setup = &modelsetup.Model{}
+	updated, cmd := m.Update(modelsetup.FinishedMsg{ChatModel: "model-B"})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("finishing setup must schedule the re-check")
+	}
+	local, ok := m.r.(localRunner)
+	if !ok {
+		t.Fatalf("runner type = %T, want localRunner", m.r)
+	}
+	if local.opts.Model != "model-B" || local.opts.ChatProvider != "local" {
+		t.Fatalf("re-check still uses the old model: %+v", local.opts)
+	}
+	got, err := readLastModel(probeWith(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Provider != "local" || got.Model != "model-B" {
+		t.Fatalf("saved choice = %+v, want local/model-B", got)
 	}
 }
 

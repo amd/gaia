@@ -378,7 +378,7 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Thirteen of the agent's 102 tools mutate the machine and need explicit approval
+Thirteen of the agent's 105 tools mutate the machine and need explicit approval
 before they run. (Gemma 4 E4B, on the GPU or the NPU, gets fewer: it is not
 offered the scratchpad, email, image-generation or skill-hub tools, so
 `install_skill` and `remove_skill` never reach it.) Ten sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
@@ -707,7 +707,7 @@ There is no silent null.
   temp dir) is dropped, and a **shared** bin directory is moved to the end
   instead of removed, so the `python3` / `lemonade-server` / real `gaia` beside
   it stay reachable. If the Python CLI isn't installed anywhere, the daemon never
-  comes up. It must also be **0.25.4+**: an older core's daemon starts fine but
+  comes up. It must also be **0.26.0+**: an older core's daemon starts fine but
   cannot run this agent, which reads as a UI with a dead agent rather than as
   a version problem.
 - **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact

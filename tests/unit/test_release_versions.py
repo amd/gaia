@@ -161,7 +161,10 @@ def test_a_floor_that_is_not_core_fails(tree, floor):
 
 
 def test_a_core_bump_moves_every_floor_and_component_but_no_agent_version(tree):
-    _set_source(tree, rv.CORE_PY, rv._PY_VERSION, "0.26.0")
+    # Bump past whatever this tree declares; a fixed target goes stale at release.
+    major, minor = rv.read_sources(tree).core_base.split(".")[:2]
+    bumped = f"{major}.{int(minor) + 1}.0"
+    _set_source(tree, rv.CORE_PY, rv._PY_VERSION, bumped)
     report = rv.run(tree, stamp=False)
     drifted = {line.split(":")[0] for line in report.drift}
     core_fields = {
@@ -175,7 +178,9 @@ def test_a_core_bump_moves_every_floor_and_component_but_no_agent_version(tree):
     assert rv.run(tree, stamp=False).drift == []
     flagship = rv.read_sources(tree).flagship
     assert flagship == rv.read_sources(REPO_ROOT).flagship
-    assert '"amd-gaia>=0.26.0"' in _raw(tree / "hub/agents/gaia/python/pyproject.toml")
+    assert f'"amd-gaia>={bumped}"' in _raw(
+        tree / "hub/agents/gaia/python/pyproject.toml"
+    )
 
 
 # -- Agent versions ------------------------------------------------------------

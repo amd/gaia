@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import (
@@ -240,23 +241,41 @@ def _cli_wording(e: BaseException) -> str:
     return surface_wording(str(e), "cli")
 
 
-def _cli_error_text(e: BaseException) -> str:
-    """An LLM failure as the CLI shows it: the typed remedy, in CLI terms."""
+def _cli_error_text(
+    e: BaseException, local: bool = True, base_url: Optional[str] = None
+) -> str:
+    """An LLM failure as the CLI shows it: the typed remedy, in CLI terms.
+
+    A failed call to Lemonade (*local*, at *base_url* or the configured one)
+    also saves a fault record, which the text names.
+    """
+    from gaia.llm.failure_record import (
+        is_model_call_failure,
+        record_local_failure,
+        record_note,
+    )
     from gaia.llm.providers.lemonade import classify_lemonade_exception
     from gaia.llm.surface_hints import surface_wording
 
     raw = surface_wording(str(e), "cli")
     classified = classify_lemonade_exception(e)
+    note = ""
+    if local and (classified or is_model_call_failure(e)):
+        note = record_note(record_local_failure(e, where="cli", base_url=base_url))
+    note = f"\n   {note}" if note else ""
     if not classified:
-        return f"❌ Error: {raw}"
+        return f"❌ Error: {raw}{note}"
     message = surface_wording(classified.user_message, "cli")
     # An auth error's remedy is the raw text itself; don't print it twice.
     detail = "" if raw.endswith(message) else f"\n   Details: {raw}"
-    return f"❌ Error: {message}{detail}"
+    return f"❌ Error: {message}{detail}{note}"
 
 
 class GaiaCliClient:
     log = get_logger(__name__)
+    # Where a failure record looks: Lemonade, unless this client talks to Claude.
+    calls_lemonade = True
+    lemonade_url: Optional[str] = None
 
     def __init__(
         self,
@@ -276,6 +295,8 @@ class GaiaCliClient:
         self.max_tokens = max_tokens
         self.cli_mode = True  # Set this to True for CLI mode
         self.show_stats = show_stats
+        self.calls_lemonade = not use_claude
+        self.lemonade_url = base_url
 
         if use_claude:
             # Like `gaia chat`: --model is the local model, --claude-model the Claude one.
@@ -304,7 +325,7 @@ class GaiaCliClient:
         except Exception as e:
             # A backend string like "Max length reached!" tells the user
             # nothing — hand back the typed remediation when we recognise it.
-            error_message = _cli_error_text(e)
+            error_message = _cli_error_text(e, self.calls_lemonade, self.lemonade_url)
             self.log.error(error_message)
             print(error_message)
             yield error_message
@@ -370,7 +391,7 @@ class GaiaCliClient:
             # A backend string like "Max length reached!" tells the user
             # nothing — hand back the typed remediation when we recognise it.
             self.log.error(f"Error in chat: {str(e)}")
-            print(_cli_error_text(e))
+            print(_cli_error_text(e, self.calls_lemonade, self.lemonade_url))
             sys.exit(1)
 
 
@@ -9194,6 +9215,9 @@ def handle_diagnostics_command(args):
       (``gaia.log.1`` ...); a file over 50 MB contributes only its last 50 MB,
       as ``<name>.tail``
     - ``~/.gaia/electron-install-state.json`` and ``setup-report.json``
+    - the last few model-failure records (``failures/GF-*.json``), each
+      written redacted at the moment a model call failed (omitted with
+      ``--no-logs``: they hold a Lemonade log tail)
     - OS version (``uname``/``lsb_release`` on Linux, ``sw_vers`` on macOS,
       ``ver`` on Windows)
     - ``env`` entries matching ``gaia|lemonade|xdg|wayland|display`` (case-insensitive)
@@ -9236,6 +9260,9 @@ def handle_diagnostics_command(args):
         # First-run setup's record: its run, plan and every stage's log.
         gaia_home() / "setup-report.json",
     ]
+    from gaia.llm.failure_record import recent_records
+
+    failure_records = recent_records()
 
     # System info snapshot
     sysinfo_parts = _diag_os_info(sys.platform)
@@ -9283,9 +9310,12 @@ def handle_diagnostics_command(args):
                         filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
                     )
 
-            # Log files gated by --no-logs. Rotated backups (gaia.log.1, ...)
-            # ride along; a log from before the size cap keeps only its tail.
+            # Log files gated by --no-logs, and failure records with them since
+            # each holds a log tail. Rotated backups (gaia.log.1, ...) ride
+            # along; a log from before the size cap keeps only its tail.
             if not args.no_logs:
+                for entry in failure_records:
+                    tar.add(str(entry), arcname=f"failures/{entry.name}")
                 family = (
                     (arcdir, f) for base, arcdir in log_files for f in log_family(base)
                 )

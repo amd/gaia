@@ -273,15 +273,19 @@ _HANDED_ENV_KEYS: Dict[str, str] = {}
 
 
 def _usable_key(provider: str) -> Optional[str]:
-    """The key to hand Lemonade: the one the user saved in GAIA, else the environment's."""
-    stored = _bounded_recall(provider)
-    if stored:
-        return stored
+    """Return a saved key first, otherwise use GAIA's environment key.
+
+    A key entered in Settings must continue to win after Lemonade restarts;
+    the environment key is only the fallback when no saved key exists.
+    """
+    saved = _bounded_recall(provider)
+    if saved:
+        return saved
     env = _env_key(provider)
-    if not env:
-        return None
-    _HANDED_ENV_KEYS[provider] = env[1]
-    return env[1]
+    if env:
+        _HANDED_ENV_KEYS[provider] = env[1]
+        return env[1]
+    return None
 
 
 def _known_models_active(provider: str) -> bool:
@@ -304,15 +308,21 @@ def _known_models_active(provider: str) -> bool:
 def _key_source(
     entry: Optional[Dict[str, Any]], provider: str, known_models: bool = False
 ) -> Optional[str]:
-    # The start environment carries GAIA's stored key here, not one the user set.
+    # Known-model mode uses the same precedence as normal reconnect: a saved
+    # key wins after a restart, and GAIA's environment key is only a fallback.
+    env = _env_key(provider)
     if known_models:
-        return "stored"
+        return (
+            "stored" if _bounded_recall(provider) else ("environment" if env else None)
+        )
     if entry and entry.get("env_var_set"):
         return "environment"
-    env = _env_key(provider)
     if entry and entry.get("runtime_key_set"):
+        # Distinguish a process key GAIA replayed from a key the user entered
+        # explicitly. The latter may intentionally override the environment for
+        # this Lemonade session and must not be relabelled as environment-owned.
         handed = bool(env) and _HANDED_ENV_KEYS.get(provider) == env[1]
-        return "environment" if handed and not _bounded_recall(provider) else "lemonade"
+        return "environment" if handed else "lemonade"
     if _bounded_recall(provider):
         return "stored"
     return "environment" if env else None
@@ -858,7 +868,13 @@ def _needs_key(
     if entry is None:
         # Only Fireworks has a fixed address GAIA can register on its own.
         return provider == FIREWORKS and not cloud_blocked()
-    return not (entry.get("env_var_set") or entry.get("runtime_key_set"))
+    if entry.get("env_var_set"):
+        # Lemonade's own environment is authoritative for that server.
+        return False
+    if entry.get("runtime_key_set"):
+        env = _env_key(provider)
+        return bool(env) and _HANDED_ENV_KEYS.get(provider) != env[1]
+    return True
 
 
 def _no_models_message(provider: str, view: Dict[str, Any]) -> str:
@@ -1018,7 +1034,12 @@ def connect_provider(
                 except CredentialStoreWaiting as e:
                     raise ProviderError(str(e), 409) from e
                 if stored:
-                    _use_known_models(provider, stored)
+                    env = _env_key(provider)
+                    # Do not copy a GAIA environment key into the credential
+                    # store, but keep a user-saved key durable when it is the
+                    # one being replayed.
+                    persist_key = not (env and stored == env[1])
+                    _use_known_models(provider, stored, persist_key=persist_key)
                 del stored
         del key
         entry = _cloud_entry(provider)
@@ -1036,13 +1057,9 @@ def connect_provider(
     return {**view, "remembered": remembered, "remember_error": remember_error}
 
 
-def _use_known_models(provider: str, key: str) -> None:
+def _use_known_models(provider: str, key: str, *, persist_key: bool = True) -> None:
     """After no models came back: serve known ones, or say what actually failed."""
-    from gaia.llm.cloud_keys import (
-        CloudKeyError,
-        ensure_authenticated,
-        remember_key,
-    )
+    from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated, remember_key
     from gaia.llm.fireworks_known_models import KnownModelsError, use_known_models
     from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
     from gaia.llm.lemonade_launcher import gaia_runs_lemonade
@@ -1060,17 +1077,25 @@ def _use_known_models(provider: str, key: str) -> None:
         f"{name} could not list its models ({check.detail}). It did not reject "
         "your key, so there is no need to replace it."
     )
-    try:
-        remember_key(provider, key)
-    except CloudKeyError as e:
-        raise ProviderError(f"{outage} GAIA could not keep it: {e}", 503) from e
-    if not gaia_runs_lemonade(_base_url()):
-        raise ProviderError(
-            f"{outage} GAIA kept it. Connect again when {name} recovers.", 503
+    if persist_key:
+        try:
+            remember_key(provider, key)
+        except CloudKeyError as e:
+            raise ProviderError(f"{outage} GAIA could not keep it: {e}", 503) from e
+    kept = (
+        "GAIA kept it."
+        if persist_key
+        else (
+            f"It remains available from {_env_key(provider)[0]}."
+            if _env_key(provider)
+            else "It was not copied into GAIA's credential store."
         )
+    )
+    if not gaia_runs_lemonade(_base_url()):
+        raise ProviderError(f"{outage} {kept} Connect again when {name} recovers.", 503)
     try:
         use_known_models(EmbeddedLemonade())
-        ensure_authenticated(provider)
+        ensure_authenticated(provider, recall=lambda: key)
     except (
         CloudKeyError,
         EmbeddedLemonadeError,
@@ -1078,8 +1103,8 @@ def _use_known_models(provider: str, key: str) -> None:
         requests.RequestException,
     ) as e:
         raise ProviderError(
-            f"{outage} GAIA kept it, but could not switch to the models it "
-            f"already knows: {e}",
+            f"{outage} {kept[:-1] if kept.endswith('.') else kept}, but could not "
+            f"switch to the models it already knows: {e}",
             503,
         ) from e
 

@@ -9,7 +9,7 @@ The three desktop-installer downloads in ``github-release`` were
 out green with whatever happened to be on disk. Its notes still named the
 Windows setup, the macOS DMG and the Linux DEB/AppImage, which became dead
 download links. The downloads are now strict, and a step asserts every promised
-desktop file is attached before either "Create GitHub ..." step runs.
+desktop file is attached before the GitHub release is created.
 
 The behaviour tests run that step's real ``run:`` script under bash against a
 temporary ``release-assets`` directory.
@@ -28,6 +28,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish.yml"
 CHECK_STEP = "Check every desktop installer is attached"
+RELEASE_MARKER = "util/github_release_retry.py"
 DESKTOP_DOWNLOADS = (
     "Download Desktop Installer (Windows NSIS)",
     "Download Desktop Installer (macOS DMG)",
@@ -66,6 +67,22 @@ def _index(steps: list[dict], name: str) -> int:
     return names.index(name)
 
 
+def _release_steps(steps: list[dict]) -> list[int]:
+    """Every step that creates the GitHub release, by its stable marker."""
+    found = [
+        i
+        for i, s in enumerate(steps)
+        if RELEASE_MARKER in str(s.get("run", ""))
+        or str(s.get("uses", "")).startswith("softprops/action-gh-release")
+    ]
+    assert found, (
+        f"github-release has no release-creating step (no {RELEASE_MARKER!r} "
+        "run and no softprops/action-gh-release), so the ordering checks "
+        "below would check nothing"
+    )
+    return found
+
+
 def test_no_release_step_tolerates_failure(steps, workflow):
     tolerant = [
         s.get("name") or s.get("uses") for s in steps if s.get("continue-on-error")
@@ -81,9 +98,8 @@ def test_asset_check_runs_after_every_download_and_before_release(steps):
     check = _index(steps, CHECK_STEP)
     for name in DESKTOP_DOWNLOADS:
         assert _index(steps, name) < check, f"{name!r} must run before the check"
-    for i, step in enumerate(steps):
-        if str(step.get("uses", "")).startswith("softprops/action-gh-release"):
-            assert i > check, f"{step.get('name')!r} runs before the asset check"
+    for i in _release_steps(steps):
+        assert i > check, f"{steps[i].get('name')!r} runs before the asset check"
 
 
 def test_asset_check_is_unconditional(steps):
@@ -101,9 +117,8 @@ def test_manifest_check_runs_before_release(steps):
     check = names.index(step["name"])
     assert "if" not in step
     assert check > _index(steps, CHECK_STEP)
-    for i, s in enumerate(steps):
-        if str(s.get("uses", "")).startswith("softprops/action-gh-release"):
-            assert i > check, f"{s.get('name')!r} runs before the manifest check"
+    for i in _release_steps(steps):
+        assert i > check, f"{steps[i].get('name')!r} runs before the manifest check"
 
 
 def test_build_tui_legs_all_report(workflow):

@@ -2,7 +2,7 @@
 
 Detailed reference for `@amd-gaia/agent-email`. For a quick start, see
 [`README.md`](./README.md); for an AI-assisted integration walkthrough, see
-[`SKILL.md`](./SKILL.md). This client pins `SCHEMA_VERSION` **2.14**, matching
+[`SKILL.md`](./SKILL.md). This client pins `SCHEMA_VERSION` **2.15**, matching
 the sidecar's current contract — every schema bump since 2.4 has been additive
 (see `contract.py`'s own per-version changelog for the full log), so nothing
 here is a breaking upgrade for an existing integration.
@@ -287,7 +287,8 @@ let a scope cross the bar through earned trust is not yet wired. See
 `archive` and `quarantine` mutate the live mailbox, so each is gated on a single-use
 token exactly like `send` — but minted by `confirmAction` (not `draft`), bound to the
 `(action, message_id)`. A token for one action/message cannot authorize a different
-one. Both are reversible inside the 30s undo window:
+one. Both are reversible inside the undo window (120 s by default; set
+`GAIA_EMAIL_UNDO_WINDOW_SECONDS` to change it):
 
 ```ts
 // Archive (gated) → undo within the window (ungated):
@@ -547,7 +548,7 @@ exported individually:
 - `resolveBinaryPath({ resourcesDir })` → locate a fetched binary (throws `BinaryNotFoundError` if absent).
 - `spawnSidecar({ binaryPath, host?, port?, extraArgs? })` → spawn with `--host 127.0.0.1 --port <p>` (default port **8131**).
 - `waitForHealth(baseUrl, { timeoutMs, signal })` → poll `/health`; throws `HealthTimeoutError` on timeout or when `signal` aborts (never assumes ready).
-- `checkVersion(client, { expectedApiVersion })` → throws `VersionMismatchError` if the sidecar's apiVersion **MAJOR** differs (a higher MINOR is accepted).
+- `checkVersion(client, { expectedApiVersion })` → throws `VersionMismatchError` if the sidecar's apiVersion **MAJOR** differs (a higher MINOR is accepted, but MINOR bumps can be breaking; see [CONTRACT.md's version history](https://github.com/amd/gaia/blob/main/hub/agents/email/python/CONTRACT.md#version-history)).
 - `verifySha256(buf, expected, label)` → throws `IntegrityError` on mismatch.
 - `shutdown(sidecar, timeoutMs = 5000)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group `SIGTERM`, escalating to `SIGKILL` after `timeoutMs`, on POSIX). The default auto-reaper does the same on process exit/crash/signal, so only a hard `SIGKILL` of the host can still orphan the child. Resolves once the process exits. If it is still alive `timeoutMs` after the forced kill, rejects with an `Error` naming the pid, the manual kill command, and the still-bound port; the sidecar stays registered with the auto-reaper so process exit still gets a last try.
 - `connectSidecar({ baseUrl, authToken?, timeoutMs?, healthTimeoutMs?, verifyVersion?, expectedApiVersion?, signal? })` → **attach mode**: `waitForHealth` + (default) `checkVersion` against a server this package did **not** spawn, returning an `AttachedSidecar` (`{ host, port, baseUrl, client, authToken? }` — no `child`). Spawns nothing and owns no lifecycle, so there is nothing to `shutdown()`. Pass an `AbortSignal` as `signal` to cancel the health wait early (e.g. the server process you're waiting on died). This is the client half of the fast dev loop — pair it with the Python source server (`gaia-agent-email serve --reload`), which serves an identical contract to the frozen binary. See [Fast local iteration](#fast-local-iteration-dev-mode).
@@ -905,10 +906,11 @@ on the new model rather than ignoring it, #2834),
 `EmailPreScanResult.suspicious`/`suspicious_total`: the phishing/spam-flagged
 subset of `actionable`, captured before its own cap so a flagged message
 ranked past it is never silently dropped from the count (2.13, #2900), and —
-current, `SCHEMA_VERSION = "2.14"` — a third mailbox provider value,
-`microsoft_work` (work Microsoft 365 / Entra, distinct from the personal
-`microsoft` Outlook.com connector), now valid wherever a provider string is
-accepted or returned (#2629).
+a third mailbox provider value, `microsoft_work` (work Microsoft 365 / Entra,
+distinct from the personal `microsoft` Outlook.com connector), now valid
+wherever a provider string is accepted or returned (2.14, #2629), and —
+current, `SCHEMA_VERSION = "2.15"` — the stateful `/v1/email/agent/*` routes
+listed in the published OpenAPI document; no shape changed (#6043).
 
 They are hand-written (vs. generated from `/openapi.json`) because the contract is
 small and version-gated, keeping the published package free of a typegen build
