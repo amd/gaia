@@ -2147,7 +2147,7 @@ class MemoryStore:
 
 ### Key Behaviors
 
-- **Deduplication:** `store()` checks for >80% word overlap (Szymkiewicz-Simpson coefficient) in same category + context. If found, updates existing entry -- replaces content with the newer version, takes max confidence, updates `updated_at`.
+- **Deduplication:** `store()` merges only a restatement or a refinement of an entry in the same category + context + entity (see [Dedup](#dedup)), keeping the fuller wording and max confidence and updating `updated_at`. A changed value is a new entry that consolidation retires via `superseded_by`; it never overwrites the old one.
 - **Hybrid search:** Vector (FAISS cosine) + BM25 (FTS5) fused via RRF. Both components always run — no degradation to keyword-only. Active items only (`superseded_by IS NULL`). FTS5 uses AND semantics with OR expansion on zero results. Query sanitized; input capped at 500 chars.
 - **Confidence:** 0.0-1.0 scale. +0.02 on recall with use_count increment (atomic SQL-side arithmetic), decays x0.9 for items unused >30 days. Clamped to [0.0, 1.0] on storage.
 - **Thread safety:** All DB operations protected by `threading.Lock`.

@@ -13,7 +13,8 @@ Single database (``~/.gaia/memory.db`` by default; ``GAIA_MEMORY_DB`` or
 
 Features:
 - FTS5 search with AND default, OR fallback, BM25 ranking
-- Knowledge deduplication (>80% word overlap in same category+context)
+- Knowledge deduplication (restatements and refinements only; a changed
+  value is a new row that consolidation retires)
 - Confidence scoring with decay (0.9x after 30 days of no access)
 - Context scoping (work, personal, global, project-specific)
 - Sensitivity classification (excluded from default search)
