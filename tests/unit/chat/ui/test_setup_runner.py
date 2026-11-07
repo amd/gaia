@@ -2617,3 +2617,92 @@ def test_report_says_when_the_problem_report_is_still_saving(monkeypatch):
         assert "still being saved" in runner.report()["problem_report"]
     finally:
         release.set()
+
+
+def test_failed_model_test_from_init_sets_failed_by_tests(monkeypatch):
+    """The retry eligibility flag must come from real init progress, not fixtures."""
+    output = "\n".join(
+        [
+            json.dumps(
+                {
+                    "event": "plan",
+                    "models": [{"id": VOICE, "bytes_total": 10, "downloaded": True}],
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "test",
+                    "job": "voice",
+                    "subject": VOICE,
+                    "state": "failed",
+                    "error": "It did not finish",
+                    "kind": "stuck",
+                }
+            ),
+            "",
+        ]
+    ).encode()
+    _popen(monkeypatch, _FakeProc(io.BytesIO(output), returncode=1))
+    monkeypatch.setattr(sr, "_record_setup_failure", lambda *_args: None)
+
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, chat_model_for=_local_chat)
+    view = _wait_done(runner)
+
+    assert view["state"] == "failed"
+    assert view["model_failed"] is False
+    assert view["tests"][0]["state"] == "failed"
+    assert view["tests"][0]["subject"] == VOICE
+    row = _models(runner)[VOICE]
+    assert row["state"] == "failed"
+    assert row["error_kind"] == "stuck"
+    assert (
+        view["failed_by_tests"]
+        if "failed_by_tests" in view
+        else runner._run.failed_by_tests
+    )
+
+
+def test_failed_model_test_does_not_hide_a_failed_component(monkeypatch):
+    """A component failure keeps setup failed even when a model test also failed."""
+    output = "\n".join(
+        [
+            json.dumps(
+                {
+                    "event": "plan",
+                    "models": [{"id": VOICE, "bytes_total": 10, "downloaded": True}],
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "component",
+                    "component": "server",
+                    "state": "failed",
+                    "kind": "other",
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "test",
+                    "job": "voice",
+                    "subject": VOICE,
+                    "state": "failed",
+                    "error": "It did not finish",
+                    "kind": "stuck",
+                }
+            ),
+            "",
+        ]
+    ).encode()
+    _popen(monkeypatch, _FakeProc(io.BytesIO(output), returncode=1))
+    monkeypatch.setattr(sr, "_record_setup_failure", lambda *_args: None)
+
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, chat_model_for=_local_chat)
+    view = _wait_done(runner)
+
+    assert view["state"] == "failed"
+    assert view["model_failed"] is False
+    assert runner._run.failed_by_tests is False
+    assert view["components"] == {"server": "failed"}
+    assert _models(runner)[VOICE]["state"] == "failed"
