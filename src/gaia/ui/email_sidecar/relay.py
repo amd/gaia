@@ -99,6 +99,24 @@ _CONNECTION_SHAPED_RE = re.compile(
 )
 
 
+def _loop_state_directive(args: Dict[str, Any]) -> Dict[str, Any]:
+    """A relayed set_loop_state call as the agent loop reads it, checked as the tool checks it."""
+    state = str(args.get("state") or "")
+    if state not in ("idle", "scheduled", "paused"):
+        state = "idle"
+    try:
+        wake = int(args.get("wake_in_seconds") or 0)
+    except (TypeError, ValueError):
+        wake = 0
+    if state == "scheduled":
+        wake = max(30, min(86400, wake))
+    return {
+        "directive": state,
+        "reason": str(args.get("reason") or ""),
+        "wake_in_seconds": wake,
+    }
+
+
 #: Wording of a message that already tells the user what to do next.
 _ALREADY_ADVISED_RE = re.compile(
     r"send (?:the|your) message again|run setup again", re.IGNORECASE
@@ -310,6 +328,9 @@ def _dispatch_one(
         handler.record_tool_started(tool)
         if isinstance(args, dict):
             handler.record_tool_args(args)
+            if tool == "set_loop_state" and hasattr(handler, "loop_state_directive"):
+                # The tool sets this on the console in-process; relayed, here.
+                handler.loop_state_directive = _loop_state_directive(args)
         # The call in plain words; a sidecar older than the field gets it derived here.
         narration = str(
             event.get("narration")

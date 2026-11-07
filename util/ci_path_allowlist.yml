@@ -31,6 +31,19 @@ dependencies:
     docs/guides/index.mdx: >-
       Same file, same reason: a path inside synthetic audit-key markers.
 
+  build_tui.yml:
+    setup.py: >-
+      The installer jobs freeze the gaia core from the package build_core.yml
+      installs. A dependency change is frozen and smoke-tested by
+      build-installers.yml, which triggers on setup.py and pyproject.toml.
+    pyproject.toml: >-
+      Same reason as setup.py.
+    src/gaia/apps/webui/package.json: >-
+      Read only by util/release_tag.py's RC stamp in build_core.yml, which
+      build-installers.yml triggers on.
+    src/gaia/apps/webui/package-lock.json: >-
+      Same reason as package.json.
+
   build-installers.yml:
     src/gaia/apps/webui/**: >-
       The installer build compiles the Agent UI, but its source is already

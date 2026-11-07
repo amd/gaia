@@ -299,11 +299,10 @@ Pick the install path that fits you best:
     </Note>
 
     <Note>
-      If you see a missing dependencies error, run the install command it prints — it targets the Python that GAIA runs in. For the one-line installer's environment (which has no `pip` and is not activated) that is:
+      The `gaia` from the apps and the one-line installer already includes the Agent UI. If you installed GAIA with `pip` yourself and see a missing dependencies error, run the install command it prints — it targets the Python that GAIA runs in. In an activated environment of your own that is:
 
       ```bash
-      uv pip install --python ~/.gaia/venv/bin/python "amd-gaia[ui]"
-      # Windows: uv pip install --python "$env:USERPROFILE\.gaia\venv\Scripts\python.exe" "amd-gaia[ui]"
+      uv pip install "amd-gaia[ui]"
       ```
     </Note>
 
@@ -969,10 +968,10 @@ Everything lives in **Settings → General → Updates** (desktop installer only
 
 An update downloads in the background, usually only the parts that changed, and
 installs with no setup wizard. Once it is ready, the corner chip offers the restart,
-whenever suits you; quitting GAIA also installs it. Before offering the restart, GAIA
-also fetches the new version's Python backend, so the first launch afterwards doesn't
-depend on the package server. A restart that would leave no working app, such as one
-with no disk space, is refused with the reason.
+whenever suits you; quitting GAIA also installs it. The update carries the new
+version's backend, so the first launch afterwards downloads nothing for it. A restart
+that would leave no working app, such as one with no disk space, is refused with the
+reason.
 
 **Pinning:** after installing a specific version, GAIA stays on it and offers no
 updates. The Updates section shows "Pinned to vX.Y.Z"; click **Unpin** to resume.

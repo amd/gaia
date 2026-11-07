@@ -156,9 +156,17 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The frozen gaia the terminal component ships beside gaia-tui.exe.
+  core:
+    uses: ./.github/workflows/build_core.yml
+    with:
+      platforms: 'win32-x64'
+      version: ${{ inputs.version }}
+      artifact_prefix: ${{ inputs.artifact_prefix }}winsetup-
+
   build:
     name: Build the Windows setup
-    needs: agent-ui-setup
+    needs: [agent-ui-setup, core]
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
@@ -187,13 +195,20 @@ jobs:
           name: gaia-agent-win32-x64
           path: flagship
 
-      # What build-setup.sh consumes: gaia-tui.exe, gaia-agent.exe, LICENSE.md.
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact_prefix }}winsetup-gaia-core-win32-x64
+          path: core-download
+
+      # What build-setup.sh consumes: gaia-tui.exe, gaia-agent.exe, LICENSE.md, core/.
       - name: Stage the terminal payload
         env:
           SIDECAR: ${{ inputs.sidecar }}
         run: |
           set -euo pipefail
-          mkdir -p stage/win-x64
+          mkdir -p stage/win-x64/core
+          # Relative paths: Git Bash's tar reads the `D:` of an absolute path as a host.
+          tar -xzf core-download/gaia-core-win32-x64.tar.gz -C stage/win-x64/core
           cp bin/gaia-win-x64.exe stage/win-x64/gaia-tui.exe
           cp LICENSE.md stage/win-x64/LICENSE.md
           case "${SIDECAR}" in
