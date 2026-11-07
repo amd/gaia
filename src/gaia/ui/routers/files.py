@@ -238,7 +238,7 @@ async def upload_file(file: UploadFile = File(...)):
     upload_root = uploads_dir()
     upload_root.mkdir(parents=True, exist_ok=True)
 
-    # Generate unique filename preserving original extension
+    # Unique copy name: random ID, sanitized original name, original extension
     unique_name = upload_copy_name(original_name, ext)
     dest_path = upload_root / unique_name
 
