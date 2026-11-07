@@ -13,6 +13,7 @@ when the published Full Changelog count disagrees with git.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -30,7 +31,12 @@ CLAUDE_YML = REPO_ROOT / ".github" / "workflows" / "claude.yml"
 
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
     ).stdout.strip()
 
 
@@ -221,6 +227,39 @@ def test_the_job_runs_the_checker_against_the_published_body(job):
         report["with"]["key"]
         == "release-notes/${{ github.event.workflow_run.head_branch }}"
     )
+
+
+def test_a_failing_check_cannot_pass_through_its_pipe(job):
+    # The checker's exit code reaches `if !` through `| tee`. Without pipefail,
+    # which only an explicit `shell: bash` sets, tee's 0 wins: the job goes green
+    # and closes the tag's issue.
+    for step in job["steps"]:
+        run = step.get("run", "")
+        if re.search(r"\|\s*tee\b", run):
+            assert step.get("shell") == "bash", f"{step['name']} pipes without pipefail"
+    (check_step,) = [
+        s for s in job["steps"] if "check_published_release_notes" in s.get("run", "")
+    ]
+    assert check_step["shell"] == "bash"
+
+
+def test_the_pipe_really_needs_pipefail():
+    # Windows may resolve `bash` to the WSL launcher; the runner is Linux anyway.
+    bash = shutil.which("bash")
+    if sys.platform == "win32" or bash is None:
+        pytest.skip("needs a POSIX bash")
+    snippet = "if ! false | tee /dev/null; then echo caught; fi"
+    without = subprocess.run(
+        [bash, "-e", "-c", snippet], capture_output=True, text=True, timeout=30
+    )
+    with_pf = subprocess.run(
+        [bash, "--noprofile", "--norc", "-eo", "pipefail", "-c", snippet],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert without.stdout.strip() == ""
+    assert with_pf.stdout.strip() == "caught"
 
 
 def test_no_claude_yml_step_pushes_to_main_or_edits_a_release(workflow):

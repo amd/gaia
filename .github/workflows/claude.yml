@@ -1754,6 +1754,8 @@ jobs:
           persist-credentials: false
 
       - name: Check the published notes against the tag
+        # Explicit bash adds pipefail; the default shell would let `checker | tee` pass on a failure.
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ github.event.workflow_run.head_branch }}

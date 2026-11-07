@@ -35,7 +35,12 @@ LISTED_RE = re.compile(r"^- `[0-9a-f]{7,40}`")
 
 def _git(cwd: Path | None, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8"
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
     )
 
 
