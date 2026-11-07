@@ -326,6 +326,46 @@ def _index_cache_error(stats: Dict[str, Any], file_path: str) -> Dict[str, Any]:
     }
 
 
+def _stale_files(rag: Any, paths) -> List[str]:
+    """The indexed files among *paths* whose bytes changed since indexing."""
+    return [path for path in dict.fromkeys(paths) if path and not rag.is_current(path)]
+
+
+def _reindex_stale(
+    indexed_files: set, rag: Any, stale: List[str], deadline: float
+) -> Optional[Dict[str, Any]]:
+    """Re-index *stale* against one shared *deadline*.
+
+    Returns the tool result to send instead of search results — still
+    indexing, or a failed re-index — else ``None`` once every file is current,
+    so old and new text are never served side by side.
+    """
+    for path in stale:
+        budget = max(0.0, deadline - time.monotonic())
+        result, job = _index_within_budget(rag, path, budget)
+        if result is None:
+            return _indexing_in_progress(job)
+        if not result.get("success"):
+            if result.get("error_type") == "embedding_unavailable":
+                return _index_embedding_error(result)
+            if result.get("error_type") in _CACHE_LOCK_HINTS:
+                return _index_cache_error(result, path)
+            return {
+                "status": "error",
+                "error": (
+                    f"{Path(path).name} changed since it was indexed, and "
+                    f"re-indexing it failed: {result.get('error', 'unknown error')}"
+                ),
+                "file_name": Path(path).name,
+                "instruction": (
+                    "Tell the user the document could not be searched and why. "
+                    "Do not answer from its old text."
+                ),
+            }
+        _forget_evicted(indexed_files, result.get("evicted", []))
+    return None
+
+
 def _require_rag(host: Any) -> Any:
     """Read ``host.rag``, raising loudly if never bound.
 
@@ -649,21 +689,9 @@ class RAGToolsMixin:
         """Register RAG-related tools."""
         from gaia.agents.base.tools import tool
 
-        @tool(
-            atomic=True,
-        )
-        @_answers_in_question_language(self)
-        @_asks_once_for_another_search(self)
-        def query_documents(
-            query: str, debug: bool = False  # pylint: disable=unused-argument
+        def _search_documents(
+            query: str, debug: bool  # pylint: disable=unused-argument
         ) -> Dict[str, Any]:
-            """
-            Query indexed documents with improved search key generation.
-
-            Returns chunks for the agent to use in formulating an answer,
-            rather than generating the answer directly. This maintains proper
-            integration with the agent's conversation flow.
-            """
             rag = _require_rag(self)
             try:
                 # None with no startup error means RAG is off. A recorded failure is an error.
@@ -1036,6 +1064,55 @@ class RAGToolsMixin:
                         "no relevant information."
                     ),
                 }
+
+        @tool(
+            atomic=True,
+        )
+        @_answers_in_question_language(self)
+        @_asks_once_for_another_search(self)
+        def query_documents(query: str, debug: bool = False) -> Dict[str, Any]:
+            """
+            Query indexed documents with improved search key generation.
+
+            Returns chunks for the agent to use in formulating an answer,
+            rather than generating the answer directly. This maintains proper
+            integration with the agent's conversation flow.
+            """
+            rag = _require_rag(self)
+            deadline = time.monotonic() + INDEX_FOREGROUND_BUDGET_S
+            refreshed: set = set()
+            while True:
+                result = _search_documents(query, debug)
+                # Only files whose chunks matched: the check hashes each file.
+                matched = (
+                    rag.chunk_to_file.get(chunk.get("_debug_chunk_index", -1))
+                    for chunk in result.get("chunks") or []
+                )
+                try:
+                    stale = [
+                        p for p in _stale_files(rag, matched) if p not in refreshed
+                    ]
+                    if not stale:
+                        return result
+                    blocked = _reindex_stale(self.indexed_files, rag, stale, deadline)
+                except EmbeddingUnavailableError as e:
+                    return _embedding_error(e)
+                except Exception as e:
+                    logger.error(f"Re-indexing an edited document failed: {e}")
+                    return {
+                        "status": "error",
+                        "error": (
+                            "Re-indexing an edited document failed: "
+                            f"{type(e).__name__}: {e}"
+                        ),
+                        "instruction": (
+                            "Tell the user document search failed and why. Do "
+                            "not answer from the document's old text."
+                        ),
+                    }
+                if blocked is not None:
+                    return blocked
+                refreshed.update(stale)
 
         @tool(
             atomic=True,
@@ -1542,6 +1619,25 @@ class RAGToolsMixin:
                 # Search through chunks for pattern
                 matching_chunks = []
                 pattern_lower = pattern.lower()
+
+                # Re-index a matched file edited since indexing, then scan its new text.
+                stale = _stale_files(
+                    self.rag,
+                    (
+                        self.rag.chunk_to_file.get(i)
+                        for i, chunk in enumerate(self.rag.chunks)
+                        if pattern_lower in chunk.lower()
+                    ),
+                )
+                if stale:
+                    blocked = _reindex_stale(
+                        self.indexed_files,
+                        self.rag,
+                        stale,
+                        time.monotonic() + INDEX_FOREGROUND_BUDGET_S,
+                    )
+                    if blocked is not None:
+                        return blocked
 
                 if debug_info:
                     debug_info["total_chunks_searched"] = len(self.rag.chunks)
