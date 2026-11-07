@@ -783,3 +783,96 @@ def test_state_database_uses_shared_wal_retry_helper(tmp_path):
             assert agent._db.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
         finally:
             agent.close_db()
+
+
+class TestQueryRouteMemoryMode:
+    """#5482: ``POST /v1/email/query``'s ``memory`` mode on a real EmailTriageAgent.
+
+    The route tests use fake agents; this drives the real route into a real
+    agent and memory store, stubbing only the LLM loop.
+    """
+
+    _INTERACTION_ENTITY = "email:interaction:alice@example.com"
+    _MARKER = "PINEAPPLE_PREF_MARKER_5482"
+
+    @pytest.fixture()
+    def route(self, tmp_path, monkeypatch):
+        from fastapi.testclient import TestClient
+        from gaia_agent_email import agent_routes, export_openapi
+
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        monkeypatch.setattr(
+            LemonadeManager, "ensure_ready", MagicMock(return_value=True)
+        )
+        registry = agent_routes._SessionRegistry()
+        monkeypatch.setattr(agent_routes, "registry", registry, raising=True)
+        built: list = []
+        turns: list = []
+
+        def _factory(**kwargs):
+            agent = _build_agent(
+                tmp_path, memory_enabled=kwargs.get("memory_enabled", True)
+            )
+            agent._memory_store.store(
+                category="preference", content=self._MARKER, context="email"
+            )
+
+            def _process_query(query, max_steps=None):
+                turns.append(
+                    {
+                        "memory": agent.memory_status()["enabled"],
+                        "marker_in_prompt": self._MARKER in agent.system_prompt,
+                    }
+                )
+                agent._record_interaction("alice@example.com", "URGENT")
+                agent.console.print_final_answer("Done.", streaming=False)
+                return {"answer": "Done."}
+
+            agent.process_query = _process_query
+            built.append(agent)
+            return agent
+
+        monkeypatch.setattr(agent_routes, "build_session_agent", _factory)
+        client = TestClient(export_openapi.build_app())
+        yield client, built, turns
+        for agent in built:
+            agent.close_db()
+
+    def _post(self, client, query, **extra):
+        import uuid
+
+        body = {"query": query, "run_id": str(uuid.uuid4()), "context": []}
+        body.update(extra)
+        resp = client.post("/v1/email/query", json=body)
+        assert resp.status_code == 200, resp.text
+        assert '"Done."' in resp.text
+        return resp
+
+    def test_private_session_writes_nothing_until_memory_is_turned_on(self, route):
+        client, built, turns = route
+
+        self._post(client, "one", session_id="s1", memory="private")
+        self._post(client, "two", session_id="s1")
+        assert len(built) == 1
+        agent = built[0]
+        assert turns == [{"memory": False, "marker_in_prompt": False}] * 2
+        assert agent._memory_store.get_by_entity(self._INTERACTION_ENTITY) == []
+
+        self._post(client, "three", session_id="s1", memory="on")
+        assert turns[-1] == {"memory": True, "marker_in_prompt": True}
+        assert agent._memory_store.get_by_entity(self._INTERACTION_ENTITY)
+
+    def test_off_on_a_memory_on_session_scrubs_the_prompt_and_skips_writes(self, route):
+        client, built, turns = route
+
+        self._post(client, "one", session_id="s2", memory="on")
+        agent = built[0]
+        assert turns[0] == {"memory": True, "marker_in_prompt": True}
+        written = agent._memory_store.get_by_entity(self._INTERACTION_ENTITY)
+        assert written
+
+        self._post(client, "two", session_id="s2", memory="off")
+        assert turns[-1] == {"memory": False, "marker_in_prompt": False}
+        after = agent._memory_store.get_by_entity(self._INTERACTION_ENTITY)
+        assert len(after) == len(written)
