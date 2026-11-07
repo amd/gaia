@@ -1599,6 +1599,8 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     last_line = re.sub(r"[*_`#>]", "", paragraphs[-1].splitlines()[-1]).strip()
     if last_line.endswith(":") and not _EMOJI_SHORTCODE_END_PATTERN.search(last_line):
         return "narration"
+    if not _DRAFT_PATTERN.search(text) and _tool_plan_step(paragraphs):
+        return "narration"
 
     sentences = re.split(r"(?<=[.!?])\s+", last_line)
     plain_paragraph = re.sub(r"[*_`#>]", "", paragraphs[-1])
@@ -1630,13 +1632,86 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     return None
 
 
+# A plan step the agent could have run itself: it uses, calls or runs a tool
+# ("use the `run_python` tool", "call `query_data`"), not just a code name.
+_TOOL_NAMING_PATTERN = re.compile(
+    r"\b(?:use|using|call|calling|run|running|invoke|invoking)\s+(?:the\s+)?"
+    r"(?:`[\w-]+`\s+tool\b|[\w-]+\s+tool\b|`[a-z][a-z0-9]*_[a-z0-9_]+`)",
+    re.IGNORECASE,
+)
+_PLAN_ITEM_PATTERN = re.compile(r"^\s*(?:[-*+•]|\**\d+[.)]\**)\s+(?P<item>.+)$")
+# A plan that waits for the user's go-ahead is the answer they asked for.
+_ASKS_GO_AHEAD_PATTERN = re.compile(
+    r"\?\s*$|\b(?:let me know|tell me|say the word|want me to|would you like"
+    r"|shall i|should i|do you want|your (?:go-ahead|ok(?:ay)?)"
+    r"|confirm\w*|proceed\w*|approv\w*|once you"
+    r"|nothing(?:'s| has| was| is)(?: been)? changed yet"
+    r"|reply\s+(?:with\s+)?(?:[\"'“‘][^\"'”’\n]+[\"'”’]|\w+)\s+to)\b",
+    re.IGNORECASE,
+)
+_CLOSING_LINE_MAX_CHARS = 300
+
+
+def _tool_plan_step(paragraphs: List[str]) -> Optional[Tuple[str, str]]:
+    """The plan paragraph and its first tool step, when a tool plan ends the answer.
+
+    The plan lists two or more first-person future steps, one using a tool, and
+    at most one short closing line follows it: no figures, so no result, and no
+    question or request for the go-ahead.
+    """
+    for plan_at in (-1, -2):
+        if len(paragraphs) < -plan_at:
+            return None
+        lines = paragraphs[plan_at].splitlines()
+        last_item = max(
+            (i for i, line in enumerate(lines) if _PLAN_ITEM_PATTERN.match(line)),
+            default=-1,
+        )
+        if last_item < 0:
+            continue
+        # A closing line can sit right under the list, with no blank line.
+        tail = "\n".join(
+            line for line in lines[last_item + 1 :] if not line[:1].isspace()
+        ).strip()
+        closing = [c for c in [tail, *paragraphs[plan_at + 1 :]] if c]
+        if any(
+            len(c) > _CLOSING_LINE_MAX_CHARS
+            or re.search(r"\d", c)
+            or _ASKS_GO_AHEAD_PATTERN.search(c.replace("\u2019", "'"))
+            for c in closing
+        ):
+            return None
+        items = [
+            m.group("item").strip()
+            for m in map(_PLAN_ITEM_PATTERN.match, paragraphs[plan_at].splitlines())
+            if m
+        ]
+        future = [
+            item
+            for item in items
+            if _FUTURE_ACTION_PATTERN.match(
+                re.sub(r"[*_`]", "", item).replace("\u2019", "'")
+            )
+        ]
+        tool_steps = [item for item in future if _TOOL_NAMING_PATTERN.search(item)]
+        if len(future) >= 2 and tool_steps:
+            return paragraphs[plan_at], tool_steps[0]
+    return None
+
+
 def _split_announced_step(answer: str) -> Tuple[str, Optional[str]]:
     """Split a narrated answer into (what came before, the announced step).
 
-    The step is the last sentence when it announces an action or ends in a
-    colon; otherwise (a plan) it is ``None`` and the whole text is kept.
+    The step is a tool plan's first tool step, else the last sentence when it
+    announces an action or ends in a colon; otherwise (a plan) it is ``None``
+    and the whole text is kept.
     """
     text = (answer or "").strip()
+    prose = _FENCED_BLOCK_PATTERN.sub("", text)
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", prose) if p.strip()]
+    plan = _tool_plan_step(paragraphs)
+    if plan:
+        return text[: text.rfind(plan[0])].rstrip(), plan[1]
     last_line = text.splitlines()[-1] if text else ""
     sentence = re.split(r"(?<=[.!?])\s+", last_line.strip())[-1]
     plain = re.sub(r"[*_`#>]", "", sentence).replace("’", "'").strip()
