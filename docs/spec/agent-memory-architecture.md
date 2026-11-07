@@ -410,7 +410,7 @@ Facts change. "User's project uses React 18" becomes "User's project uses React 
 
 **Level 1: Automatic dedup (storage layer)**
 
-`store()` merges only a true duplicate (see [Dedup](#dedup)). A changed value is a new entry, never an in-place overwrite, so the old fact stays on record until Level 2 or 3 supersedes it.
+`store()` merges only a true duplicate (see [Dedup](#dedup)). The same words filed as a `fact` and as a `preference` are one memory as well, since the extractor uses the two interchangeably. A changed value is a new entry, never an in-place overwrite, so the old fact stays on record until Level 2 or 3 supersedes it.
 
 ```
 store(category="fact", content="My mother's name is Elena")

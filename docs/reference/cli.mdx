@@ -1722,7 +1722,7 @@ gaia connectors <subcommand> [OPTIONS]
 | `list` (alias `status`) | List connectors in the catalog with their status (`--json` for machine-readable output) |
 | `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes, `--grant-agent <agent-id>` to also grant the connector to that agent (e.g. `installed:email`) in the same flow, `--device` for the device-code flow. The browser sign-in link works for 15 minutes |
 | `configure <id>` | Configure a connector — `--set KEY=VALUE` (repeatable) or `--json '<object>'` (e.g. MCP API keys), or `--client-id` / `--client-secret` to store an OAuth connector's client credentials (the secret is required for Google only; cannot be combined with `--set`/`--json`) |
-| `test <id>` | Run a health check for a configured connector |
+| `test <id>` | Check a configured connector. An OAuth account refreshes its sign-in. An MCP server is started once, and the check reports whether it started (with its tool count) or why it didn't. Some servers, like GitHub and Tavily, only check their key when a tool runs, so they pass with a bad key |
 | `disconnect <id>` | Remove local credentials and reset a connector's state. Also attempts a provider-side revoke when the connector supports one and owns the token — Microsoft has no revoke endpoint, and a forwarded connection's token belongs to the host app, so neither is revoked remotely; the command reports which happened. |
 | `grants {list\|grant\|revoke}` | Manage per-agent scope grants (credential access) |
 | `activations {list\|activate\|deactivate}` | Manage per-agent MCP tool visibility (`mcp_server` connectors only) |
@@ -3747,7 +3747,10 @@ gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 
 A daemon also shuts down on its own, logging why, within a few seconds of its
 home folder or `instance.json` being deleted, since no GAIA command can reach it
-after that. A daemon for any home other than `~/.gaia` (a scratch `GAIA_HOME`,
+after that. A daemon the desktop app started does the same once the app is
+deleted: the app passes its own path in `GAIA_APP_PATH` (on Linux, the
+`.AppImage` file), so moving it to the Trash or deleting the image stops the
+daemon and its agents. A daemon for any home other than `~/.gaia` (a scratch `GAIA_HOME`,
 say) also shuts down after 120 minutes with no client connected, no sidecar busy
 and no scheduled job pending, and the next GAIA command starts a fresh one. Set
 `GAIA_DAEMON_IDLE_EXIT_MINUTES` to change that limit, or `0` to keep it running.

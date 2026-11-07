@@ -259,6 +259,10 @@ MAX_FTS_QUERY_LENGTH: int = 500
 #: duplicates in the same category+context+entity scope.
 DEDUP_OVERLAP_THRESHOLD: float = 0.8
 
+#: Categories the extractor files one statement under interchangeably, so the
+#: same words in either are one memory.
+INTERCHANGEABLE_CATEGORIES: frozenset = frozenset({"fact", "preference"})
+
 #: Share of the *larger* word set two memories must share to be the same
 #: memory, so "prefers dark roast coffee" is not "prefers dark mode".
 FORGOTTEN_OVERLAP_THRESHOLD: float = 0.7
@@ -352,6 +356,11 @@ CONFIDENCE_BUMP_PER_RECALL: float = 0.02
 
 #: Entries below this confidence are eligible for pruning.
 LOW_CONFIDENCE_PRUNE_THRESHOLD: float = 0.1
+
+
+def _same_words(text: str) -> str:
+    """*text*'s words in order, ignoring case and punctuation."""
+    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
 
 
 def _word_overlap(text1: str, text2: str) -> float:
@@ -1541,9 +1550,10 @@ class MemoryStore:
     ) -> Optional[Tuple[str, str]]:
         """Find an active entry that *content* duplicates in the same scope.
 
-        Returns ``(id, content_to_keep)`` or None. A candidate needs
-        ``DEDUP_OVERLAP_THRESHOLD`` word overlap and must pass
-        ``_merged_duplicate``.
+        Returns ``(id, content_to_keep)`` or None. A candidate in the same
+        category needs ``DEDUP_OVERLAP_THRESHOLD`` word overlap and must pass
+        ``_merged_duplicate``; across ``INTERCHANGEABLE_CATEGORIES`` only the
+        same words match.
 
         Must be called with self._lock held and SQLite's write lock taken
         (``BEGIN IMMEDIATE``): self._lock only covers this one connection, so
@@ -1602,6 +1612,29 @@ class MemoryStore:
                     existing_id,
                 )
                 return cast(str, existing_id), kept
+            if category in INTERCHANGEABLE_CATEGORIES:
+                kinds = sorted(INTERCHANGEABLE_CATEGORIES)
+                cursor = self._conn.execute(
+                    f"""
+                    SELECT k.id, k.content
+                    FROM knowledge k
+                    JOIN knowledge_fts f ON k.rowid = f.rowid
+                    WHERE knowledge_fts MATCH ? AND k.context = ?
+                          AND k.entity IS ? AND k.superseded_by IS NULL
+                          AND k.category IN ({",".join("?" * len(kinds))})
+                    ORDER BY rank
+                    LIMIT 25
+                    """,
+                    (safe_query, context, entity, *kinds),
+                )
+                words = _same_words(content)
+                for existing_id, existing_content in cursor.fetchall():
+                    if _same_words(existing_content) == words:
+                        logger.debug(
+                            "[MemoryStore] dedup match across categories: id=%s",
+                            existing_id,
+                        )
+                        return cast(str, existing_id), content
         except sqlite3.OperationalError as e:
             # A failed dedup search means store() falls through to inserting a
             # duplicate -- debug level hid exactly that for as long as this

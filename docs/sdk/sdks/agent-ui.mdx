@@ -2320,7 +2320,10 @@ OAuth and MCP-server connections for the Settings page and per-agent grants
   </Accordion>
 
   <Accordion title="POST /api/connectors/{connector_id}/test">
-    Run the connector's health check.
+    Run the connector's health check and return `{"ok": bool, "detail": str}`.
+    An OAuth connector refreshes its token. An `mcp_server` connector starts
+    the server once and reports whether it started; a server that only checks
+    its key on a tool call still passes with a bad key.
   </Accordion>
 
   <Accordion title="DELETE /api/connectors/{connector_id}">

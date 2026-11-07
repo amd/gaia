@@ -762,3 +762,30 @@
     font-size: 12px;
     color: var(--text-muted);
 }
+
+.connector-check {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-block-start: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+p.connector-check { flex-direction: row; align-items: center; gap: 6px; }
+.connector-check p { margin: 0; }
+.connector-check--ok { color: var(--accent-green); }
+.connector-check--failed { color: var(--danger); }
+.connector-check summary { cursor: pointer; color: var(--text-secondary); }
+.connector-check pre {
+    margin-block: 4px 0;
+    padding: 6px 8px;
+    max-block-size: 160px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    text-align: start;
+    font-size: 11px;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border-radius: 4px;
+}
