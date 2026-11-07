@@ -350,7 +350,7 @@ The file resolves outside the allowed paths — by default, outside your home di
 
 The daemon redirects the sidecar's output to `~/.gaia/agents/gaia/logs/sidecar-<port>.log`. Check that file first; a failed start also surfaces the log tail in the error. `gaia daemon agents` shows id, mode, pid, port, and contract version for everything currently running.
 
-## Limitations (v0.1.1)
+## Limitations (v0.3.5)
 
 - **No skill sets declared** — the skill machinery is wired and tested, and `gaia-voice` ships always-on, but no *set* does; see [Skills](#skills).
 - **Narrowing file scope is environment-only for the sidecar** — `GAIA_ALLOWED_PATHS` narrows it; there is no flag, and a running daemon must be restarted to pick up a change.

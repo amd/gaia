@@ -93,10 +93,10 @@ env var, or option that relaxes it.
 - Bytes are hashed **in memory and compared before anything is written** to the
   cache path. A mismatch raises `IntegrityError` naming expected vs actual and
   leaves nothing on disk.
-- A **placeholder hash blocks the fetch before any network call** — between
-  releases every `sha256` in the lock is `PENDING-replace-with-real-sha256`, and
-  a value that is all zeros or contains `PENDING` (case-insensitive) is treated
-  as a placeholder. You get a `PlatformError`, not a download.
+- A **placeholder hash blocks the fetch before any network call** — a value
+  that is all zeros or contains `PENDING` (case-insensitive) is treated as a
+  placeholder. A published package always carries real hashes, so you only meet
+  this with a hand-edited lock. You get a `PlatformError`, not a download.
 - A cache hit **re-hashes the on-disk file**. A cached binary whose bytes drifted
   is re-downloaded, not reused.
 
@@ -688,8 +688,9 @@ There is no silent null.
   The nine gated tools are unreachable **over `/query`** — the agent itself can
   run them on a transport that can prompt (SPEC §5.5).
 - **A placeholder hash in `binaries.lock.json` blocks the fetch before any
-  network call.** Between releases that is the *expected* state — it is not a
-  broken install, and there is no override.
+  network call.** Neither a published package nor the lock on `main` carries
+  one, so it means the lock was edited by hand — it is not a broken download,
+  and there is no override.
 - **No `linux-arm64` / `win32-arm64` sidecar.** The TUI has both. A `PlatformError`
   on those hosts is the design, not a missing artifact.
 - **A `401` from `/v1/gaia/*` is the caller-auth token, not a bug.** The sidecar
