@@ -2806,3 +2806,61 @@ for (const locale of ['ar', 'en']) {
         });
     }
 }
+
+/** Text where an object arrives crashes the screen that renders it, so each placement's fallback shows. */
+const BROKEN = { not: 'text' };
+const CRASHES: Record<'main' | 'sidebar' | 'window', { hash: string; before: (page: Page) => Promise<void> }> = {
+    main: {
+        hash: `#${ANSWER_SESSION}`,
+        before: (page) => page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+            route.fulfill({ json: { messages: [{ id: 1, session_id: ANSWER_SESSION, role: 'user', content: BROKEN, created_at: NOW.toISOString(), rag_sources: null }] } })),
+    },
+    sidebar: {
+        hash: '',
+        before: (page) => page.route((url) => url.pathname === '/api/sessions', (route) =>
+            route.fulfill({ json: { sessions: [{ ...SESSIONS[0], title: BROKEN }], total: 1 } })),
+    },
+    window: {
+        hash: '',
+        before: (page) => page.route((url) => url.pathname === '/api/providers/active', (route) =>
+            route.fulfill({ json: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true, restore: { status: 'failed', message: BROKEN } } })),
+    },
+};
+
+for (const locale of ['ar', 'en']) {
+    for (const [placement, crash] of Object.entries(CRASHES)) {
+        test(`a crashed ${placement} shows its own fallback (${locale})`, async ({ page }, info) => {
+            const errors: string[] = [];
+            page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+            await open(page, crash.hash, locale, crash.before);
+            const fallback = page.getByRole('alert').filter({ has: page.locator('.error-boundary-title') });
+            await expect(fallback).toBeVisible();
+            await expect(fallback).toHaveCount(1);
+            expect(errors.some((e) => e.includes(`[ErrorBoundary] ${placement === 'window' ? 'app' : placement} failed to render`))).toBe(true);
+
+            const box = (await fallback.boundingBox())!;
+            const title = (await fallback.locator('.error-boundary-title').boundingBox())!;
+            if (placement === 'window') {
+                await expect(fallback).toHaveText(locale === 'ar' ? /أعد التحميل للمتابعة/ : /Reload to continue/);
+                expect(box.width).toBe(1400);
+                expect(box.height).toBe(900);
+                expect(Math.abs(title.y + title.height / 2 - 450)).toBeLessThan(80);
+            } else {
+                await expect(fallback).toHaveText(locale === 'ar' ? /بقية التطبيق لا تزال تعمل/ : /The rest of the app still works/);
+            }
+            if (placement === 'sidebar') {
+                expect(box.width).toBeLessThanOrEqual(261);
+                expect((await page.locator('.main-content').boundingBox())!.width).toBeGreaterThan(1100);
+                await expect(page.getByLabel(locale === 'ar' ? /رسالة/ : 'Message').first()).toBeVisible();
+            }
+            if (placement === 'main') {
+                await expect(page.locator('aside.sb')).toBeVisible();
+                const main = (await page.locator('.main-content').boundingBox())!;
+                expect(box.x).toBeGreaterThanOrEqual(main.x);
+                expect(box.x + box.width).toBeLessThanOrEqual(main.x + main.width + 1);
+            }
+            expect(await audit(page)).toEqual([]);
+            await page.screenshot({ path: info.outputPath(`crashed-${placement}-${locale}.png`) });
+        });
+    }
+}
