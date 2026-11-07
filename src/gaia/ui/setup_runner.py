@@ -848,6 +848,9 @@ class SetupRun:
     extra_models: List[str] = field(default_factory=list)
     #: A model's download failed in this run: its row already says why.
     model_failed: bool = False
+    #: The only unresolved failure is a model test, so a later successful retest
+    #: may finish setup. Any other failed stage keeps the run failed.
+    failed_by_tests: bool = False
     #: The model the app's first chat after this run opens on; see :func:`agent_ui_chat_model`.
     chat_model_for: Optional[Callable[["SetupRun"], str]] = None
     #: Each piece besides the models, by id: ``active``, ``done``, ``failed``.
@@ -1266,13 +1269,21 @@ class SetupRunner:
                 if self._run is not None and entry.test_job != LOAD_CHECK_JOB:
                     self._record_test(self._run, {**row, "state": "skipped"})
                 return
+            reported_kind = kind
             if passed:
                 entry.state, entry.error, entry.error_kind = "ready", None, None
                 self._test_failures.pop(model_id, None)
                 entry.add_log("Test passed")
             else:
+                if kind == "stuck":
+                    attempts = self._test_failures.get(model_id, 0) + 1
+                    self._test_failures[model_id] = attempts
+                    if attempts >= 2:
+                        reported_kind = "broken"
                 entry.state = "failed"
-                entry.error_kind, entry.error = _test_failure(model_id, kind, error)
+                entry.error_kind, entry.error = _test_failure(
+                    model_id, reported_kind, error
+                )
                 entry.error = crashed or entry.error
                 said = (
                     "Failed to load"
@@ -1287,7 +1298,7 @@ class SetupRunner:
                         **row,
                         "state": "passed" if passed else "failed",
                         "error": None if passed else error,
-                        "kind": None if passed else kind,
+                        "kind": None if passed else reported_kind,
                         "seconds": round(time.monotonic() - started, 1),
                     },
                 )
@@ -1301,7 +1312,7 @@ class SetupRunner:
                 models_failed = any(
                     model.state == "failed" for model in self._models.values()
                 )
-                if not tests_failed and not models_failed:
+                if self._run.failed_by_tests and not tests_failed and not models_failed:
                     self._run.state = "ready"
                     self._run.error = None
                     self._run.text = "GAIA is ready"
@@ -1648,6 +1659,19 @@ class SetupRunner:
                 return
             if code != 0:
                 run.state = "failed"
+                # A model-test-only failure can become ready after its last
+                # failed row passes. Download/component failures and every
+                # other exit still require a full setup retry.
+                run.failed_by_tests = (
+                    any(
+                        test.get("state") == "failed" and test.get("subject")
+                        for test in run.tests.values()
+                    )
+                    and not run.model_failed
+                    and not any(
+                        state == "failed" for state in run.components.values()
+                    )
+                )
                 # Downloaded but never checked: not shown as ready.
                 self._settle_models(None, {}, run_failed=True)
                 self._end_rows(run)
@@ -1760,6 +1784,9 @@ class SetupRunner:
             ready = bool(status.get("ready"))
             if not ready:
                 run.state = "failed"
+                run.failed_by_tests = bool(tested_failed) and not (
+                    status.get("reasons") or failed
+                )
                 run.error = "; ".join(status.get("reasons") or []) or (
                     "Setup finished but GAIA is still not ready."
                 )
@@ -1779,7 +1806,7 @@ class SetupRunner:
             if run.state == "cancelled":
                 return
             if problem:
-                run.state, run.error = "failed", problem
+                run.state, run.error, run.failed_by_tests = "failed", problem, False
             else:
                 run.state, run.text = "ready", "GAIA is ready"
                 mark_initialized()
