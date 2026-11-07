@@ -330,7 +330,8 @@ class FileSystemToolsMixin:
 
         mixin = self  # Capture self for nested functions
 
-        @tool(atomic=True)
+        # Shares its name with FileSearchToolsMixin.browse_directory.
+        @tool(atomic=True, override=True)
         def browse_directory(
             path: str = ".",
             show_hidden: bool = False,
@@ -1118,7 +1119,8 @@ class FileSystemToolsMixin:
                 logger.error(f"Error searching files: {e}")
                 return f"Error searching files: {e}"
 
-        @tool(atomic=True)
+        # Shares its name with the FileSearchToolsMixin and FileIOToolsMixin read_file.
+        @tool(atomic=True, override=True)
         def read_file(
             file_path: str,
             lines: int = 100,
