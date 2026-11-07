@@ -757,7 +757,7 @@ function App() {
                 aria-hidden="true"
             />
 
-            <ErrorBoundary area="sidebar">
+            <ErrorBoundary area="sidebar" variant="compact">
                 <Sidebar
                     onNewChat={newChat}
                     onMobileAccess={isMobile ? undefined : () => void openMobileAccess()}

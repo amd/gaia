@@ -52,6 +52,27 @@ describe('ErrorBoundary', () => {
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
+    it('says the whole app needs a reload when it replaces the window', () => {
+        render(<ErrorBoundary area="app" variant="window"><Flaky /></ErrorBoundary>);
+        const alert = screen.getByRole('alert');
+        expect(alert).toHaveClass('error-boundary-window');
+        expect(alert).toHaveTextContent('GAIA hit an error. Reload to continue.');
+        expect(alert).not.toHaveTextContent('The rest of the app still works');
+    });
+
+    it('says the whole app needs a reload in Arabic too', () => {
+        useChatStore.setState({ locale: 'ar' });
+        render(<ErrorBoundary area="app" variant="window"><Flaky /></ErrorBoundary>);
+        expect(screen.getByRole('alert')).toHaveTextContent('واجه GAIA خطأً. أعد التحميل للمتابعة.');
+    });
+
+    it('stays compact in the sidebar and keeps the rest-of-app wording', () => {
+        render(<ErrorBoundary area="sidebar" variant="compact"><Flaky /></ErrorBoundary>);
+        const alert = screen.getByRole('alert');
+        expect(alert).toHaveClass('error-boundary-compact');
+        expect(alert).toHaveTextContent('The rest of the app still works');
+    });
+
     it('shows the fallback in Arabic', () => {
         useChatStore.setState({ locale: 'ar' });
         render(<ErrorBoundary area="main"><Flaky /></ErrorBoundary>);

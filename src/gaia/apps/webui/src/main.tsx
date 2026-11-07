@@ -37,7 +37,7 @@ watchTitleBarScrim();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
-        <ErrorBoundary area="app">
+        <ErrorBoundary area="app" variant="window">
             {isInstallScreen() ? <EngineInstallScreen /> : <App />}
         </ErrorBoundary>
     </React.StrictMode>,

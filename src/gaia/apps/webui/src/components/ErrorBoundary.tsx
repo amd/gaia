@@ -10,6 +10,8 @@ interface ErrorBoundaryProps {
     area: string;
     /** A change clears a shown error without remounting healthy children. */
     resetKey?: string;
+    /** `compact` keeps a sidebar's width; `window` replaces the whole app. */
+    variant?: 'fill' | 'compact' | 'window';
     children: ReactNode;
 }
 
@@ -40,18 +42,18 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
     render(): ReactNode {
         if (this.state.hasError) {
-            return <ErrorFallback onRetry={() => this.setState({ hasError: false })} />;
+            return <ErrorFallback variant={this.props.variant ?? 'fill'} onRetry={() => this.setState({ hasError: false })} />;
         }
         return this.props.children;
     }
 }
 
-function ErrorFallback({ onRetry }: { onRetry: () => void }) {
+function ErrorFallback({ onRetry, variant }: { onRetry: () => void; variant: 'fill' | 'compact' | 'window' }) {
     const t = useT();
     return (
-        <div role="alert" className="error-boundary">
+        <div role="alert" className={`error-boundary error-boundary-${variant}`}>
             <p className="error-boundary-title">{t('errorBoundary.title')}</p>
-            <p className="error-boundary-body">{t('errorBoundary.body')}</p>
+            <p className="error-boundary-body">{t(variant === 'window' ? 'errorBoundary.bodyWindow' : 'errorBoundary.body')}</p>
             <div className="error-boundary-actions">
                 <button type="button" className="btn-primary" onClick={onRetry}>{t('errorBoundary.retry')}</button>
                 <button type="button" className="btn-secondary" onClick={() => window.location.reload()}>{t('errorBoundary.reload')}</button>

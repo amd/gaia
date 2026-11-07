@@ -2657,6 +2657,7 @@ const messages: Messages = {
     'resources.settingsHint': 'حمل المعالج والذاكرة وGPU وNPU والشبكة على هذا الجهاز، يُحدَّث كل ثانية.',
     'errorBoundary.title': 'حدث خطأ ما',
     'errorBoundary.body': 'واجه هذا الجزء من GAIA خطأً. بقية التطبيق لا تزال تعمل.',
+    'errorBoundary.bodyWindow': 'واجه GAIA خطأً. أعد التحميل للمتابعة.',
     'errorBoundary.retry': 'إعادة المحاولة',
     'errorBoundary.reload': 'إعادة التحميل',
 };
