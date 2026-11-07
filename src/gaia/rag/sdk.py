@@ -48,6 +48,7 @@ from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MODEL_NAME,
+    EMBED_MAX_CHARS,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
     resident_vision_model,
@@ -498,16 +499,6 @@ _CACHE_OWNED_FILE = re.compile(
     r"\.json(?:\.sig)?$"
     r"|_extracted\.md$"
     r"|^vectors_[0-9a-f]{24}\.npy$"
-)
-
-
-#: Headroom for the BOS/EOS tokens the server adds to every input.
-_EMBED_RESERVED_TOKENS = 48
-#: Worst realistic ratio: Gemma's tokenizer gives every digit its own token.
-_EMBED_MIN_CHARS_PER_TOKEN = 1.0
-#: Longest text that embeds whole. No chunk is cut longer than this.
-EMBED_MAX_CHARS = int(
-    (EMBEDDER_UBATCH_TOKENS - _EMBED_RESERVED_TOKENS) * _EMBED_MIN_CHARS_PER_TOKEN
 )
 
 
