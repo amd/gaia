@@ -754,7 +754,7 @@ def check_setup_status(
         older = (
             status.version
             if status.running and status.version != embedded.version
-            else None if status.installed else embedded.older_installed_version()
+            else None if status.installed else embedded.other_installed_version()
         )
         if older:
             return SetupStatus(
