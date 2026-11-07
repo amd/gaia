@@ -285,6 +285,7 @@ def watch_stream(
     drain_guard = threading.Lock()
     drain_ends: list = []
     worker_done = False
+    cut_off_timer: Optional[threading.Timer] = None
 
     def run() -> None:
         nonlocal worker_done
@@ -302,7 +303,10 @@ def watch_stream(
         finally:
             with drain_guard:
                 worker_done = True
+                timer = cut_off_timer
                 ends = list(drain_ends)
+            if timer is not None:
+                timer.cancel()
             for end in ends:
                 end()
 
@@ -359,18 +363,23 @@ def watch_stream(
                 )
                 if on_drain is not None:
                     end = on_drain()
-                    with drain_guard:
-                        ended = worker_done
-                        if not ended:
+                else:
+                    end = None
+                with drain_guard:
+                    ended = worker_done
+                    if not ended:
+                        if end is not None:
                             drain_ends.append(end)
-                    if ended:
-                        end()
-                _cut_off_after(DRAIN_LIMIT_S, worker, activity)
+                        cut_off_timer = _cut_off_after(DRAIN_LIMIT_S, worker, activity)
+                if ended and end is not None:
+                    end()
             else:
                 activity.abort()
 
 
-def _cut_off_after(seconds: float, worker: threading.Thread, activity: ByteActivity):
+def _cut_off_after(
+    seconds: float, worker: threading.Thread, activity: ByteActivity
+) -> threading.Timer:
     """Abort *activity* if *worker* is still reading it *seconds* from now."""
 
     def cut_off() -> None:
@@ -384,3 +393,4 @@ def _cut_off_after(seconds: float, worker: threading.Thread, activity: ByteActiv
     timer = threading.Timer(seconds, cut_off)
     timer.daemon = True
     timer.start()
+    return timer

@@ -5549,7 +5549,7 @@ Let me know your answer!
                 # Check if Lemonade server is running
                 if not check_lemonade_health(args.host, port):
                     LemonadeManager.print_server_error()
-                    return
+                    sys.exit(1)
 
                 model_ids = client.get_required_models("all")
                 if not model_ids:
@@ -5655,7 +5655,7 @@ Let me know your answer!
             # Check if Lemonade server is running
             if not check_lemonade_health(args.host, port):
                 LemonadeManager.print_server_error()
-                return
+                sys.exit(1)
 
             agent_name = args.agent.lower()
             model_ids = client.get_required_models(agent_name)

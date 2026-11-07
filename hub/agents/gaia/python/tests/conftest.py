@@ -73,6 +73,7 @@ def flagship(monkeypatch, tmp_path):
     class ScriptedModel:
         def __init__(self):
             self.requests = []
+            self.slots = []
             self.script = []
 
         def chat(self, messages, model=None, stream=False, **kwargs):
@@ -83,6 +84,7 @@ def flagship(monkeypatch, tmp_path):
                 self.requests.append(
                     (json.loads(json.dumps(messages)), json.loads(json.dumps(tools)))
                 )
+                self.slots.append(kwargs.get("id_slot"))
                 step = self.script.pop(0)
                 if isinstance(step, dict):
                     reply = json.dumps(
@@ -106,6 +108,8 @@ def flagship(monkeypatch, tmp_path):
             return iter([reply]) if stream else reply
 
     monkeypatch.setenv("GAIA_HOME", str(tmp_path / "home"))
+    # Outranks GAIA_HOME, and the root conftest points it at one file per session.
+    monkeypatch.setenv("GAIA_MEMORY_DB", str(tmp_path / "home" / "memory.db"))
     monkeypatch.setenv("GAIA_DAEMON_HOME", str(tmp_path / "daemon"))
     monkeypatch.setenv("GAIA_PROJECT_MAP_AUTO_INDEX", "0")
     # Unroutable: nothing here may reach a developer's running server.
@@ -186,6 +190,9 @@ def flagship(monkeypatch, tmp_path):
                 agent.chat.llm_client, name, lambda *a, _v=value, **k: _v
             )
         monkeypatch.setattr(agent.chat, "get_stats", lambda: {})
+        monkeypatch.setattr(
+            agent.chat.llm_client._backend, "slot_count", lambda _model: 3
+        )
         try:
             yield agent, model, doc
         finally:

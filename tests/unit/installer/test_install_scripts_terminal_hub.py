@@ -149,8 +149,16 @@ def test_publish_checksums_exactly_the_six_binaries_it_builds():
     assert set(listed.group(1).split()) == _publish_tui_assets()
     assert 'sha256sum "${expected[@]}" > gaia-tui-SHA256SUMS.txt' in step["run"]
     assert "exit 1" in step["run"]
-    # The final and the RC release steps both attach release-assets/*.
-    assert PUBLISH_YML.read_text(encoding="utf-8").count("release-assets/*") >= 2
+    # The final and RC release steps now pass every discovered asset to the
+    # resumable helper rather than relying on a shell wildcard.
+    release_step = next(
+        s
+        for s in job["steps"]
+        if s.get("name") == "Create GitHub Release with bounded rate-limit retry"
+    )
+    assert "find release-assets dist -type f -print0" in release_step["run"]
+    assert 'assets+=(--asset "$asset")' in release_step["run"]
+    assert "release-assets/*" not in PUBLISH_YML.read_text(encoding="utf-8")
 
 
 def test_publish_windows_binaries_carry_icon_and_unprefixed_version():

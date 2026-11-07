@@ -39,6 +39,7 @@ Design commitments
 from __future__ import annotations
 
 import re
+from pathlib import PureWindowsPath
 from typing import Any, Mapping, Optional
 
 #: ``channel`` value marking an event as harness bookkeeping rather than a
@@ -176,12 +177,26 @@ _NARRATION_OVERRIDES = {
     "search_indexed_chunks": "Searching your documents",
     "web_search": "Searching the web",
     "get_file_preview": "Previewing file",
+    "transcribe_media": "Transcribing recording",
+    "refine_transcript": "Preparing transcript",
+    "analyze_transcript": "Analyzing transcript",
+    "export_transcript": "Exporting transcript",
 }
 
 #: Substrings marking a tool that shells out. The narration for these MUST
 #: carry the actual command — "Running a shell command" tells a user nothing
 #: about whether the agent is about to ``ls`` or ``rm -rf``.
 _SHELL_TOOL_MARKERS = ("shell", "bash", "terminal", "subprocess", "run_command")
+
+#: Tools whose argument is a long path where only the file's name says anything.
+_FILE_NAME_TOOLS = frozenset(
+    {
+        "transcribe_media",
+        "refine_transcript",
+        "analyze_transcript",
+        "export_transcript",
+    }
+)
 
 _WHITESPACE_RUN = re.compile(r"\s+")
 
@@ -264,6 +279,8 @@ def derive_narration(tool: str, args: Optional[Mapping[str, Any]] = None) -> str
         args = {}
 
     detail = _salient_arg(args)
+    if detail and name in _FILE_NAME_TOOLS and "://" not in detail:
+        detail = PureWindowsPath(detail).name or detail
 
     # A shell tool without its command is worse than useless — it hides the one
     # thing the user needs to see. Say so rather than narrating a bare verb.
