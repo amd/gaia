@@ -9,6 +9,7 @@
  * shows an OAuth or MCP-key configure form plus per-agent grants.
  */
 
+import ReactMarkdown from 'react-markdown';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
     CheckCircle2,
@@ -20,14 +21,16 @@ import {
 } from 'lucide-react';
 
 import * as api from '../services/api';
+import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import { useChatStore } from '../stores/chatStore';
 import { useConnectorsSSE } from '../hooks/useConnectorsSSE';
 import type { MessageKey } from '../i18n/registry';
-import { useT, type Translate } from '../i18n/useT';
+import { translator, useT, type Translate } from '../i18n/useT';
 import type { AgentMcpServer, ConnectorRow } from '../types';
 import { connectorDescription, connectorDescriptionBare, fieldHelp, fieldLabel, missingFieldsMessage } from '../utils/connectorText';
 import { ConnectorTileMenu } from './ConnectorTileMenu';
 import { SettingsDisclosure } from './settings/SettingsDisclosure';
+import { ltrIn } from './setup/format';
 import './ConnectorsSection.css';
 
 // Human-readable labels for well-known OAuth scope URIs.
@@ -310,6 +313,8 @@ function ConnectorTile({
     onClearCheck: () => void;
 }) {
     const t = useT();
+    const { agents } = useChatStore();
+    const soleAgent = connector.type === 'mcp_server' ? soleMcpAgent(agents, connector.id) : null;
     // Status for the tile header (#1004): an unconfigured connector's group already says so,
     // so it only flags one that needs setup first.
     const renderStatus = () => {
@@ -358,6 +363,7 @@ function ConnectorTile({
                         <MCPServerConfigureBody
                             connector={connector}
                             onChanged={onChanged}
+                            showEnabledToggle={!soleAgent}
                             check={check}
                             onRunCheck={onRunCheck}
                             onClearCheck={onClearCheck}
@@ -366,7 +372,12 @@ function ConnectorTile({
                     {connector.configured && (
                         <ConnectorAgentGrants
                             connectorId={connector.id}
+                            connectorName={connector.display_name}
                             connectorType={connector.type}
+                            connectorEnabled={connector.enabled !== false}
+                            soleAgent={soleAgent}
+                            onConnectorChanged={onChanged}
+                            onClearCheck={onClearCheck}
                         />
                     )}
                 </div>
@@ -880,9 +891,11 @@ function MCPServerConfigureBody({
     check,
     onRunCheck,
     onClearCheck,
+    showEnabledToggle = true,
 }: {
     connector: ConnectorRow;
     onChanged: () => void;
+    showEnabledToggle?: boolean;
     check: McpCheck | null;
     onRunCheck: () => void;
     onClearCheck: () => void;
@@ -906,9 +919,25 @@ function MCPServerConfigureBody({
 
     const handleSave = async () => {
         const filled = Object.fromEntries(
-            Object.entries(values).filter(([, v]) => v.trim() !== ''),
+            Object.entries(values)
+                .map(([k, v]) => [k, v.trim()])
+                .filter(([, v]) => v !== ''),
         );
         if (!keyless && Object.keys(filled).length === 0) return;
+        const wrong = connector.config_fields?.find(
+            (f) => f.prefix && f.key in filled && !filled[f.key].startsWith(f.prefix),
+        );
+        if (wrong) {
+            setErr(
+                t.compose((say, code) =>
+                    say('settings.connectors.wrongPrefix', {
+                        label: fieldLabel(translator(code), connector.id, wrong, true),
+                        prefix: ltrIn(code, wrong.prefix ?? ''),
+                    }),
+                ),
+            );
+            return;
+        }
         setBusy(true);
         setErr(null);
         setSaved(false);
@@ -975,7 +1004,7 @@ function MCPServerConfigureBody({
                     <AlertCircle size={12} /> {err}
                 </div>
             )}
-            {connector.configured && (
+            {connector.configured && showEnabledToggle && (
                 <div className="connector-toggle-row">
                     <span className="connector-toggle-label">{t('settings.connectors.active')}</span>
                     <span className="toggle-switch">
@@ -994,25 +1023,64 @@ function MCPServerConfigureBody({
                     </span>
                 </div>
             )}
-            {connector.configured && connector.enabled === false && (
+            {connector.configured && showEnabledToggle && connector.enabled === false && (
                 <p className="connector-toggle-help">{t('settings.connectors.disabledHelp')}</p>
             )}
-            {connector.mcp_env_keys.map((key) => (
-                <div key={key} className="mcp-key-row">
-                    <label className="mcp-key-label">{key}</label>
-                    <input
-                        type="password"
-                        className="mcp-key-input"
-                        placeholder={connector.configured ? '••••••••' : t.bare('settings.connectors.enterValue')}
-                        value={values[key] ?? ''}
-                        onChange={(e) =>
-                            setValues((prev) => ({ ...prev, [key]: e.target.value }))
-                        }
-                        spellCheck={false}
-                        autoComplete="off"
-                    />
-                </div>
-            ))}
+            {connector.setup_url && !connector.configured && (
+                <a
+                    href={safeUrlTransform(connector.setup_url) || undefined}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn-secondary connector-setup-link"
+                >
+                    {t('settings.connectors.createApp', { name: connector.display_name })}
+                    <ExternalLink size={12} />
+                </a>
+            )}
+            {connector.mcp_env_keys.map((key) => {
+                const field = connector.config_fields?.find((f) => f.key === key);
+                return (
+                    <div key={key} className="mcp-key-row">
+                        <label className="mcp-key-label" htmlFor={`mcp-key-${connector.id}-${key}`}>
+                            <bdi>{field ? fieldLabel(t, connector.id, field) : key}</bdi>
+                        </label>
+                        <input
+                            id={`mcp-key-${connector.id}-${key}`}
+                            type="password"
+                            dir="ltr"
+                            className="mcp-key-input"
+                            placeholder={
+                                connector.configured
+                                    ? '••••••••'
+                                    : field?.placeholder || t.bare('settings.connectors.enterValue')
+                            }
+                            value={values[key] ?? ''}
+                            onChange={(e) =>
+                                setValues((prev) => ({ ...prev, [key]: e.target.value }))
+                            }
+                            spellCheck={false}
+                            autoComplete="off"
+                        />
+                        {field?.help_md && !connector.configured && (
+                            <div className="mcp-key-help" dir="auto">
+                                <ReactMarkdown
+                                    disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}
+                                    urlTransform={safeUrlTransform}
+                                    components={{
+                                        a: ({ href, children }) => (
+                                            <a href={href} target="_blank" rel="noopener noreferrer">
+                                                {children}
+                                            </a>
+                                        ),
+                                    }}
+                                >
+                                    {fieldHelp(t, connector.id, field)}
+                                </ReactMarkdown>
+                            </div>
+                        )}
+                    </div>
+                );
+            })}
             <div className="configure-actions">
                 {!(keyless && connector.configured) && (
                     <button
@@ -1260,10 +1328,20 @@ function AgentMcpTile({
 
 function ConnectorAgentGrants({
     connectorId,
+    connectorName,
     connectorType,
+    connectorEnabled,
+    soleAgent,
+    onConnectorChanged,
+    onClearCheck,
 }: {
     connectorId: string;
+    connectorName: string;
     connectorType: string;
+    connectorEnabled: boolean;
+    soleAgent: SoleAgent | null;
+    onConnectorChanged: () => void;
+    onClearCheck: () => void;
 }) {
     const t = useT();
     const { agents } = useChatStore();
@@ -1309,6 +1387,26 @@ function ConnectorAgentGrants({
 
     if (loading) return null;
 
+    if (soleAgent) {
+        return (
+            <div className="connection-grants">
+                <SoleAgentSwitch
+                    agent={soleAgent}
+                    connectorId={connectorId}
+                    connectorName={connectorName}
+                    connectorEnabled={connectorEnabled}
+                    active={Boolean(activations[soleAgent.namespaced_agent_id])}
+                    hasGrant={(grants[soleAgent.namespaced_agent_id] ?? []).length > 0}
+                    onToggle={onClearCheck}
+                    onChanged={() => {
+                        onConnectorChanged();
+                        void load();
+                    }}
+                />
+            </div>
+        );
+    }
+
     // Every agent that declares a requirement for this connector — granted or not.
     // Drives the per-agent (credential) grants section below.
     const relevantAgents = agents.filter(
@@ -1330,10 +1428,17 @@ function ConnectorAgentGrants({
               )
             : [];
 
+    // "No agents require access" above a switch that grants access reads as a
+    // contradiction, so the grants block appears only when it has a row or
+    // nothing else does.
+    const showGrants = relevantAgents.length > 0 || activatableAgents.length === 0;
+
     return (
         <div className="connection-grants">
-            <div className="grants-header">{t('settings.connectors.grants')}</div>
-            {relevantAgents.length === 0 ? (
+            {showGrants && (
+                <div className="grants-header">{t('settings.connectors.grants')}</div>
+            )}
+            {!showGrants ? null : relevantAgents.length === 0 ? (
                 <div className="grants-empty">{t('settings.connectors.noGrants')}</div>
             ) : (
                 relevantAgents.map((agent) => (
@@ -1356,12 +1461,12 @@ function ConnectorAgentGrants({
                     <div className="grants-header grants-header--activations">
                         {t('settings.connectors.activeFor')}
                     </div>
-                    <div className="grants-help">{t('settings.connectors.activationHelp')}</div>
                     {activatableAgents.map((agent) => (
                         <AgentActivationCard
                             key={`activation-${agent.namespaced_agent_id}`}
                             agent={agent}
                             connectorId={connectorId}
+                            connectorName={connectorName}
                             active={Boolean(activations[agent.namespaced_agent_id!])}
                             grantedScopes={grants[agent.namespaced_agent_id!] ?? []}
                             onChanged={() => void load()}
@@ -1370,6 +1475,100 @@ function ConnectorAgentGrants({
                 </>
             )}
         </div>
+    );
+}
+
+// ── SoleAgentSwitch ──────────────────────────────────────────────────────────
+
+type SoleAgent = { name: string; namespaced_agent_id: string };
+
+/**
+ * The one assistant that can use this MCP server, when GAIA is the only one.
+ * Most people have no other assistant, and two switches (server on, GAIA may
+ * use it) that must both be on read as the same thing twice.
+ */
+function soleMcpAgent(
+    agents: ReturnType<typeof useChatStore.getState>['agents'],
+    connectorId: string,
+): SoleAgent | null {
+    const usable = agents.filter(
+        (a) =>
+            a.namespaced_agent_id &&
+            (a.consumes_mcp_servers || a.required_connections?.some((rc) => rc.connector_id === connectorId)),
+    );
+    const needsGrant = agents.some((a) => a.required_connections?.some((rc) => rc.connector_id === connectorId));
+    if (usable.length !== 1 || usable[0].id !== 'gaia' || needsGrant) return null;
+    return { name: usable[0].name, namespaced_agent_id: usable[0].namespaced_agent_id! };
+}
+
+/** On means the server runs and GAIA sees its tools; off hides them from GAIA. */
+function SoleAgentSwitch({
+    agent,
+    connectorId,
+    connectorName,
+    connectorEnabled,
+    active,
+    hasGrant,
+    onToggle,
+    onChanged,
+}: {
+    agent: SoleAgent;
+    connectorId: string;
+    connectorName: string;
+    connectorEnabled: boolean;
+    active: boolean;
+    hasGrant: boolean;
+    onToggle: () => void;
+    onChanged: () => void;
+}) {
+    const t = useT();
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState<string | null>(null);
+    const on = connectorEnabled && active;
+
+    const toggle = async () => {
+        if (busy) return;
+        setBusy(true);
+        setErr(null);
+        onToggle();
+        try {
+            if (on) {
+                await api.deactivateConnectorAgent(connectorId, agent.namespaced_agent_id);
+            } else {
+                if (!connectorEnabled) await api.enableConnector(connectorId);
+                if (!active) {
+                    await api.activateConnectorAgent(
+                        connectorId,
+                        agent.namespaced_agent_id,
+                        hasGrant ? undefined : [...MCP_DEFAULT_GRANT_SCOPES],
+                    );
+                }
+            }
+            onChanged();
+        } catch (e) {
+            setErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <>
+            <label className="connector-toggle-row">
+                <span className="connector-toggle-label">
+                    {t('settings.connectors.agentCanUse', { agent: agent.name, name: connectorName })}
+                </span>
+                <span className="toggle-switch">
+                    <input type="checkbox" checked={on} onChange={() => void toggle()} disabled={busy} />
+                    <span className="toggle-track" />
+                </span>
+            </label>
+            {err && (
+                <div className="grant-scope-warning grant-scope-warning--error">
+                    <AlertCircle size={11} /> {err}
+                </div>
+            )}
+        </>
     );
 }
 
@@ -1392,6 +1591,7 @@ function ConnectorAgentGrants({
 function AgentActivationCard({
     agent,
     connectorId,
+    connectorName,
     active,
     grantedScopes,
     onChanged,
@@ -1402,6 +1602,7 @@ function AgentActivationCard({
         required_connections?: Array<{ connector_id: string; scopes: string[]; reason: string }>;
     };
     connectorId: string;
+    connectorName: string;
     active: boolean;
     grantedScopes: string[];
     onChanged: () => void;
@@ -1458,7 +1659,7 @@ function AgentActivationCard({
             <div className="grant-scope-list">
                 <label className="grant-scope-item">
                     <span className="grant-scope-label">
-                        {localActive ? t('settings.connectors.toolsVisible') : t('settings.connectors.toolsHidden')}
+                        {t(localActive ? 'settings.connectors.toolsVisible' : 'settings.connectors.toolsHidden', { name: connectorName })}
                     </span>
                     <span className="toggle-switch">
                         <input

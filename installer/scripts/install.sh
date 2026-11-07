@@ -9,12 +9,15 @@ set -eu
 
 # Configuration
 GAIA_HOME="$HOME/.gaia"
+# Where installers before the frozen core built GAIA; only its PATH lines are
+# still migrated (migrate_rc_path_line).
 GAIA_VENV="$GAIA_HOME/venv"
 GAIA_BIN="$GAIA_HOME/bin"
-# GAIA's console scripts, linked into $GAIA_BIN. Only $GAIA_BIN goes on PATH:
-# the venv's bin also holds python3 and pip, which would shadow the system's.
+# The frozen gaia and its _internal folder, from the release (install_core).
+GAIA_CORE="$GAIA_HOME/core"
+# GAIA's commands, linked into $GAIA_BIN to the one frozen gaia: it runs as
+# gaia-mcp when called by that name.
 GAIA_COMMANDS="gaia gaia-cli gaia-mcp"
-PYTHON_VERSION="3.12"
 
 # The GAIA Terminal UI binary comes from the GitHub release: publish.yml
 # attaches all six builds and gaia-tui-SHA256SUMS.txt to every release.
@@ -23,13 +26,13 @@ GAIA_RELEASES_URL="${GAIA_RELEASES_URL%/}"
 # Empty means the latest stable release. A tag pins the whole install to that
 # release (resolve_pin): v0.25.0 or a candidate such as v0.25.1-rc2.
 GAIA_RELEASE_TAG="${GAIA_RELEASE_TAG:-}"
-# 1 installs only the Python CLI: a package (.pkg, .deb, .rpm) owns gaia-tui and
-# gaia-agent, and the terminal runs this at first setup to add the rest.
+# 1 installs only the gaia command: a package (.pkg, .deb, .rpm) owns gaia-tui
+# and gaia-agent.
 GAIA_CLI_ONLY="${GAIA_CLI_ONLY:-}"
-# Set by resolve_pin: the core package spec, and "", "final" or "rc".
-GAIA_PACKAGE_SPEC="amd-gaia[api]"
+# Set by resolve_pin: "", "final" or "rc".
 PIN_KIND=""
 TUI_SUMS_FILE="gaia-tui-SHA256SUMS.txt"
+CORE_SUMS_FILE="gaia-core-SHA256SUMS.txt"
 
 # The flagship agent ships on its own cadence through the Agent Hub, the same
 # place `gaia init` and `gaia hub install` take it from.
@@ -157,101 +160,68 @@ fetch_file() {
     fi
 }
 
-# Install uv package manager
-install_uv() {
-    print_step "Checking for uv package manager..."
+# The frozen gaia core (installer/core/freeze.py) from the GitHub release:
+# publish.yml attaches gaia-core-<platform>.tar.gz and gaia-core-SHA256SUMS.txt
+# to every release, so nothing here installs Python or a PyPI package.
+install_core() {
+    print_step "Installing GAIA"
 
-    if command -v uv > /dev/null 2>&1; then
-        print_success "uv is already installed"
-        return 0
+    platform=""
+    if ! platform="$(hub_platform)"; then
+        print_error "No GAIA build for $(uname -s)/$(uname -m)."
+        echo "  Published builds: Linux and macOS on x86_64 and arm64, and Windows."
+        echo "  See $GAIA_RELEASES_URL/latest"
+        exit 1
     fi
+    filename="gaia-core-${platform}.tar.gz"
+    release_url="$GAIA_RELEASES_URL/download/$RELEASE_TAG"
 
-    print_step "Installing uv package manager..."
-
-    # Staged, not piped: POSIX sh has no pipefail, so `fetch | sh` would report
-    # the shell's status and execute a truncated download.
-    scratch_dir uv
-    uv_tmp="$SCRATCH"
-
-    if ! fetch_file https://astral.sh/uv/install.sh "$uv_tmp/uv-install.sh"; then
-        print_error "Could not download the uv installer."
-        echo "  URL:  https://astral.sh/uv/install.sh"
-        echo "  Fix:  check your network, or install uv manually from"
-        echo "        https://docs.astral.sh/uv/getting-started/installation/"
+    scratch_dir core
+    tmp="$SCRATCH"
+    if ! fetch_file "$release_url/$CORE_SUMS_FILE" "$tmp/$CORE_SUMS_FILE"; then
+        print_error "Could not fetch the GAIA checksums for $RELEASE_TAG."
+        echo "  URL:  $release_url/$CORE_SUMS_FILE"
+        echo "  Fix:  check your network and retry. A release from before GAIA shipped"
+        echo "        as a binary has no such file: pick a newer one from"
+        echo "        $GAIA_RELEASES_URL"
+        exit 1
+    fi
+    want="$(awk -v f="$filename" '$2 == f || $2 == "*" f { print $1 }' "$tmp/$CORE_SUMS_FILE")"
+    case "$want" in
+        *[!0-9a-f]*|"") want="" ;;
+    esac
+    if [ "${#want}" -ne 64 ]; then
+        print_error "$RELEASE_TAG publishes no GAIA build for $platform ($filename)."
+        echo "  Look: $GAIA_RELEASES_URL/tag/$RELEASE_TAG lists the release's files."
         exit 1
     fi
 
-    if ! sh "$uv_tmp/uv-install.sh"; then
-        print_error "The uv installer failed."
-        echo "  Fix:  install uv manually from"
-        echo "        https://docs.astral.sh/uv/getting-started/installation/"
-        echo "        then re-run this installer."
+    print_step "Downloading GAIA $RELEASE_TAG ($filename)"
+    if ! download_and_verify "$release_url/$filename" "$tmp/$filename.part" "$want" \
+            "$tmp/$filename" "GAIA"; then
         exit 1
     fi
 
-    # uv installs to ~/.local/bin (older releases used ~/.cargo/bin).
-    PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-    export PATH
+    # The running daemon reads its files as it runs, so it stops before they change.
+    if [ -x "$GAIA_BIN/gaia" ]; then
+        _stop=0
+        "$GAIA_BIN/gaia" daemon stop > /dev/null 2>&1 || _stop=$?
+        case "$_stop" in
+            0|3) ;;
+            *) print_warning "Could not stop the running GAIA daemon (exit $_stop); it keeps the old version until it restarts." ;;
+        esac
+    fi
 
-    if ! command -v uv > /dev/null 2>&1; then
-        print_error "uv installed but is not on PATH"
-        echo "Looked in \$HOME/.local/bin and \$HOME/.cargo/bin."
-        echo "Add uv's install directory to PATH and re-run this installer."
+    rm -rf "$GAIA_CORE.new"
+    if ! mkdir -p "$GAIA_CORE.new" || ! tar -xzf "$tmp/$filename" -C "$GAIA_CORE.new"; then
+        rm -rf "$GAIA_CORE.new"
+        print_error "Could not unpack GAIA into $GAIA_CORE.new."
+        echo "  Fix:  check you own $GAIA_HOME and that the disk is not full, then retry."
         exit 1
     fi
-
-    print_success "uv installed successfully"
-}
-
-# Create virtual environment and install GAIA
-install_gaia() {
-    # Check if GAIA is already installed
-    if [ -f "$GAIA_VENV/bin/gaia" ]; then
-        print_warning "GAIA is already installed at $GAIA_HOME"
-        print_step "Checking for updates..."
-
-        # --upgrade exits 0 when there is nothing to do, so non-zero is a real
-        # failure, not "already current".
-        if ! uv pip install --compile-bytecode --python "$GAIA_VENV/bin/python" --upgrade "$GAIA_PACKAGE_SPEC" --quiet; then
-            print_error "Failed to update the GAIA package in $GAIA_VENV."
-            echo "  Fix:  re-run this installer, or delete $GAIA_HOME to start clean."
-            exit 1
-        fi
-        print_success "GAIA is up to date"
-        return 0
-    fi
-
-    print_step "Creating GAIA environment at $GAIA_HOME..."
-
-    # Create GAIA home directory
-    if [ ! -d "$GAIA_HOME" ]; then
-        mkdir -p "$GAIA_HOME"
-        print_success "Created directory: $GAIA_HOME"
-    else
-        print_warning "Directory already exists: $GAIA_HOME"
-    fi
-
-    # Create virtual environment with Python 3.12 (uv will download if needed)
-    print_step "Creating virtual environment with Python $PYTHON_VERSION..."
-    print_warning "  (uv will automatically download Python $PYTHON_VERSION if not installed)"
-    if ! uv venv "$GAIA_VENV" --python "$PYTHON_VERSION"; then
-        print_error "Failed to create virtual environment"
-        exit 1
-    fi
-    print_success "Virtual environment created"
-
-    print_step "Installing GAIA package..."
-
-    # Target the venv python rather than sourcing bin/activate: that script is
-    # not `set -u` clean (it reads $OSTYPE, unset in dash) and noisily half-fails
-    # under the documented `curl … | sh`. --compile-bytecode: uv skips it by
-    # default, which leaves the first daemon start compiling all of GAIA.
-    if ! uv pip install --compile-bytecode --python "$GAIA_VENV/bin/python" "$GAIA_PACKAGE_SPEC"; then
-        print_error "Failed to install GAIA package"
-        exit 1
-    fi
-
-    print_success "GAIA package installed successfully"
+    rm -rf "$GAIA_CORE"
+    mv "$GAIA_CORE.new" "$GAIA_CORE"
+    print_success "GAIA $RELEASE_TAG installed to $GAIA_CORE"
 }
 
 # ---------------------------------------------------------------------------
@@ -296,16 +266,15 @@ tui_asset_name() {
     printf 'gaia-%s-%s\n' "$_os" "$_arch"
 }
 
-# Turn GAIA_RELEASE_TAG into one coherent release: the core package, the
-# terminal binary and the agent all from it. Sets GAIA_PACKAGE_SPEC and
-# PIN_KIND; refuses anything but vX.Y.Z or vX.Y.Z-rcN before anything installs.
+# Turn GAIA_RELEASE_TAG into one coherent release: gaia, the terminal binary
+# and the agent all from it. Sets PIN_KIND; refuses anything but vX.Y.Z or
+# vX.Y.Z-rcN before anything installs.
 #   (unset)       latest everything
-#   v0.25.0       amd-gaia==0.25.0; the agent from the Agent Hub, as that
-#                 release's `gaia init` takes it
-#   v0.25.1-rc2   amd-gaia==0.25.1rc2; the agent frozen on that pre-release,
-#                 as an RC core takes it (gaia-agent-release.json)
+#   v0.25.0       that release; the agent from the Agent Hub, as that release's
+#                 `gaia init` takes it
+#   v0.25.1-rc2   that pre-release; the agent frozen on it, as an RC core takes
+#                 it (gaia-agent-release.json)
 resolve_pin() {
-    GAIA_PACKAGE_SPEC="amd-gaia[api]"
     PIN_KIND=""
     _tag="$GAIA_RELEASE_TAG"
     [ -n "$_tag" ] || return 0
@@ -319,10 +288,8 @@ resolve_pin() {
     esac
     if [ -n "$_v" ] && printf '%s\n' "$_v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
         PIN_KIND="final"
-        GAIA_PACKAGE_SPEC="amd-gaia[api]==$_v"
     elif [ -n "$_v" ] && printf '%s\n' "$_v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-rc[1-9][0-9]*$'; then
         PIN_KIND="rc"
-        GAIA_PACKAGE_SPEC="amd-gaia[api]==${_v%-rc*}rc${_v##*-rc}"
     else
         print_error "GAIA_RELEASE_TAG='$_tag' is not a GAIA release tag."
         echo "  Expected vX.Y.Z (e.g. v0.25.0) or a candidate vX.Y.Z-rcN (e.g. v0.25.1-rc2)."
@@ -330,7 +297,7 @@ resolve_pin() {
         echo "        $GAIA_RELEASES_URL"
         exit 1
     fi
-    print_step "Installing GAIA release $_tag ($GAIA_PACKAGE_SPEC)"
+    print_step "Installing GAIA release $_tag"
     return 0
 }
 
@@ -364,13 +331,11 @@ resolve_release_tag() {
     return 0
 }
 
-# Resolve the Python interpreter used to read the hub manifest. install_gaia has
-# already created the venv by the time this runs.
+# The interpreter that reads the hub manifest: the gaia install_core put in
+# place, which runs `-c` code as python would, so no Python is needed.
 hub_python() {
-    if [ -x "$GAIA_VENV/bin/python" ]; then
-        printf '%s\n' "$GAIA_VENV/bin/python"
-    elif command -v python3 > /dev/null 2>&1; then
-        command -v python3
+    if [ -x "$GAIA_CORE/gaia" ]; then
+        printf '%s\n' "$GAIA_CORE/gaia"
     else
         return 1
     fi
@@ -382,7 +347,7 @@ hub_python() {
 #
 # Args: python, manifest path, filename. Echoes "<version> <sha256>".
 read_hub_manifest() {
-    "$1" - "$2" "$3" <<'MANIFEST_PY'
+    _code="$(cat <<'MANIFEST_PY'
 import json
 import sys
 
@@ -417,6 +382,8 @@ if not digest:
 
 print("%s %s" % (version, digest))
 MANIFEST_PY
+)"
+    "$1" -c "$_code" "$2" "$3"
 }
 
 # Read one platform's agent version and SHA-256 out of a release candidate's
@@ -425,7 +392,7 @@ MANIFEST_PY
 #
 # Args: python, manifest path, platform key, filename. Echoes "<version> <sha256>".
 read_release_manifest() {
-    "$1" - "$2" "$3" "$4" <<'RELEASE_PY'
+    _code="$(cat <<'RELEASE_PY'
 import json
 import re
 import sys
@@ -454,6 +421,8 @@ if not re.fullmatch(r"[0-9a-f]{64}", digest):
 
 print("%s %s" % (version, digest))
 RELEASE_PY
+)"
+    "$1" -c "$_code" "$2" "$3" "$4"
 }
 
 # Download one hub artifact and refuse to install it unless its SHA-256 matches
@@ -525,8 +494,7 @@ install_tui() {
         exit 1
     fi
 
-    RELEASE_TAG=""
-    if ! resolve_release_tag; then
+    if [ -z "${RELEASE_TAG:-}" ] && ! resolve_release_tag; then
         print_error "Could not find the GAIA release to install the Terminal UI from."
         if [ -n "$GAIA_RELEASE_TAG" ]; then
             echo "  GAIA_RELEASE_TAG='$GAIA_RELEASE_TAG' is not a release tag (expected e.g. v0.25.0)."
@@ -600,7 +568,7 @@ install_flagship_agent() {
 
     py=""
     if ! py="$(hub_python)"; then
-        print_warning "No Python interpreter available to read the agent manifest — skipping."
+        print_warning "No gaia at $GAIA_CORE/gaia to read the agent manifest with — skipping."
         return 0
     fi
 
@@ -664,7 +632,7 @@ install_flagship_agent() {
     print_success "GAIA agent $version installed to $GAIA_BIN/gaia-agent"
 }
 
-# Link GAIA's own commands from the venv into $GAIA_BIN, the one directory on PATH
+# Link GAIA's own commands to the frozen gaia from $GAIA_BIN, the one directory on PATH
 link_gaia_commands() {
     print_step "Linking GAIA commands into $GAIA_BIN..."
     if ! mkdir -p "$GAIA_BIN"; then
@@ -672,15 +640,15 @@ link_gaia_commands() {
         exit 1
     fi
     for name in $GAIA_COMMANDS; do
-        target="$GAIA_VENV/bin/$name"
+        target="$GAIA_CORE/gaia"
         link="$GAIA_BIN/$name"
         if [ ! -x "$target" ]; then
-            print_error "$target is missing after the GAIA package installed."
-            echo "  Fix:  delete $GAIA_VENV and re-run this installer."
+            print_error "$target is missing after GAIA installed."
+            echo "  Fix:  delete $GAIA_CORE and re-run this installer."
             exit 1
         fi
         if [ -e "$link" ] && [ ! -L "$link" ]; then
-            print_error "$link exists and is not a link to GAIA's venv; leaving it alone."
+            print_error "$link exists and is not a link GAIA made; leaving it alone."
             echo "  Fix:  move $link out of the way and re-run this installer."
             exit 1
         fi
@@ -903,18 +871,30 @@ main() {
     # Before anything installs: a bad tag must not leave a half-pinned machine.
     resolve_pin
 
-    # Install uv
-    install_uv
+    # Asked once, so gaia, the terminal binary and their checksums all come from
+    # the same release even if a new one is published mid-install.
+    RELEASE_TAG=""
+    if ! resolve_release_tag; then
+        print_error "Could not find the GAIA release to install."
+        if [ -n "$GAIA_RELEASE_TAG" ]; then
+            echo "  GAIA_RELEASE_TAG='$GAIA_RELEASE_TAG' is not a release tag (expected e.g. v0.25.0)."
+            echo "  Fix:  unset it to install the latest release, or name one from"
+            echo "        $GAIA_RELEASES_URL"
+        else
+            echo "  URL:  $GAIA_RELEASES_URL/latest"
+            echo "  Fix:  check your network (github.com must be reachable), then retry."
+        fi
+        exit 1
+    fi
 
-    # Install GAIA
-    install_gaia
+    install_core
 
     # After every install and upgrade, so an install from before the links
     # existed gets them too.
     link_gaia_commands
 
-    # Before the terminal hub, so a hard failure there still leaves the Python
-    # CLI reachable.
+    # Before the terminal hub, so a hard failure there still leaves the gaia
+    # command reachable.
     add_to_path
 
     if [ "$GAIA_CLI_ONLY" = "1" ]; then

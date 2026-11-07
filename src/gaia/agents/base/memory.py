@@ -42,6 +42,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import sys
 import threading
 import time
@@ -91,6 +92,7 @@ from gaia.agents.base.verification import check_was_executed
 from gaia.chat.sdk import AgentSDK, LLMCallCancelled
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
+    EMBED_MAX_CHARS,
     ModelDownloadCancelledError,
     _endpoint_label,
     backend_crash_remedy,
@@ -1828,12 +1830,22 @@ class MemoryMixin(ProceduralMemoryMixin):
         Identical text is served from a content-keyed cache, so repeated
         query embeds (same recall query across turns) skip the Lemonade call.
 
+        Text past ``EMBED_MAX_CHARS`` is cut there: the embedder rejects an
+        input longer than its batch, and the opening is what a match needs.
+
         Args:
             text: Text to embed.
 
         Returns:
             L2-normalized float32 numpy array of shape ``(self._embedding_dim,)``.
         """
+        if len(text) > EMBED_MAX_CHARS:
+            logger.debug(
+                "[MemoryMixin] embedding the first %d of %d chars",
+                EMBED_MAX_CHARS,
+                len(text),
+            )
+            text = text[:EMBED_MAX_CHARS]
         # Key the cache by the ACTIVE embedder (not the module default) so a
         # non-default embedder (e.g. the NPU FLM one) never serves vectors from
         # a different model's space.
@@ -1945,6 +1957,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                     e,
                 )
         try:
+            # Dedup can keep the row's fuller wording; embed what was stored.
+            row = self._memory_store.get_item(knowledge_id)
+            if row is not None:
+                text = row["content"]
             vec = self._embed_text(text)
             self._memory_store.store_embedding(knowledge_id, _embedding_to_blob(vec))
         except Exception as e:  # the row is saved; only its vector is lost
@@ -4134,6 +4150,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._turn_tool_record = []
             self._turn_forgot = False
             self._memory_turn_query = user_input
+            self._turn_person_decisions = []
 
             # Recall procedures for this goal (RECALL) from the clean goal,
             # not the augmented message; the dynamic context below carries it.
@@ -4146,7 +4163,16 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             return super().process_query(augmented, **kwargs)
         finally:
-            self._note_user_turn_finished()
+            try:
+                self._record_procedure_outcome()
+            except sqlite3.Error as e:
+                logger.warning(
+                    "[MemoryMixin] could not count this turn on its recalled "
+                    "procedure(s); their track record misses it: %s",
+                    e,
+                )
+            finally:
+                self._note_user_turn_finished()
 
     # ------------------------------------------------------------------
     # Hook 3: _execute_tool Override (auto-logging)

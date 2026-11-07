@@ -37,7 +37,7 @@
 ; Build:
 ;   makensis -DVERSION=<x.y.z, or x.y.z-rc.N for a release candidate> \
 ;            -DVERSION_QUAD=<x.y.z.0, VERSION's four-integer form> \
-;            -DPAYLOAD_DIR=<dir with gaia-tui.exe, gaia-agent.exe, LICENSE.md> \
+;            -DPAYLOAD_DIR=<dir with gaia-tui.exe, gaia-agent.exe, LICENSE.md, core\> \
 ;            -DICON=<path to gaia.ico> \
 ;            -DFONTS_DIR=<dir staged by installer/tui/fetch_fonts.py> \
 ;            -DAGENT_UI_SETUP=<path to gaia-agent-ui-<v>-x64-setup.exe> \
@@ -57,7 +57,7 @@ Unicode true
   !error "VERSION_QUAD is required: -DVERSION_QUAD=<x.y.z.0>, the four integers Windows stores the version as"
 !endif
 !ifndef PAYLOAD_DIR
-  !error "PAYLOAD_DIR is required: the directory holding gaia-tui.exe, gaia-agent.exe and LICENSE.md"
+  !error "PAYLOAD_DIR is required: the directory holding gaia-tui.exe, gaia-agent.exe, LICENSE.md and core\ (the frozen gaia)"
 !endif
 !ifndef ICON
   !error "ICON is required: -DICON=src/gaia/img/gaia.ico"
@@ -87,6 +87,8 @@ Unicode true
 !define UNINST_KEY        "Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub"
 !define TUI_EXE           "gaia-tui.exe"
 !define AGENT_EXE         "gaia-agent.exe"
+; The frozen gaia core; its _internal folder sits beside it.
+!define CORE_EXE          "gaia.exe"
 
 ; The desktop app's registry identity, as electron-builder derives it:
 ; UUIDv5(appId "ai.amd.gaia", electron-builder's namespace). Pinned by
@@ -431,6 +433,10 @@ Section "GAIA Terminal UI (terminal)" SecMain
   File "${PAYLOAD_DIR}\${TUI_EXE}"
   File "${PAYLOAD_DIR}\${AGENT_EXE}"
   File "${PAYLOAD_DIR}\LICENSE.md"
+  ; The frozen gaia core: gaia.exe and its _internal folder, beside gaia-tui so
+  ; the terminal UI and PATH both find it. An update's files replace all of it.
+  RMDir /r "$INSTDIR\_internal"
+  File /r "${PAYLOAD_DIR}\core\*.*"
   File "/oname=gaia.ico" "${ICON}"
   File "${FONTS_DIR}\${FONT_LICENSE}"
 
@@ -946,12 +952,47 @@ Function Preflight
     ${EndIf}
   ${EndIf}
   ${If} ${SectionIsSelected} ${SecMain}
+    ; The daemon runs this gaia.exe and has no window to close, so stop it here.
+    Call StopDaemon
     StrCpy $R7 "$INSTDIR"
     StrCpy $R8 "${TUI_EXE}"
     Call AbortIfRunning
     StrCpy $R8 "${AGENT_EXE}"
     Call AbortIfRunning
+    StrCpy $R8 "${CORE_EXE}"
+    Call AbortIfRunning
   ${EndIf}
+FunctionEnd
+
+; Stops the GAIA daemon (and the agents it runs) through the gaia.exe in
+; $INSTDIR, which it runs from. A failure is logged; AbortIfRunning then says
+; the file is still in use.
+!macro STOP_DAEMON_BODY
+  ${If} ${FileExists} "$INSTDIR\${CORE_EXE}"
+    DetailPrint "Stopping the GAIA daemon and its agents"
+    ; gaia prints emoji, which the captured pipe's code page can't encode.
+    System::Call 'Kernel32::SetEnvironmentVariable(t "PYTHONIOENCODING", t "utf-8")i'
+    nsExec::ExecToLog /TIMEOUT=120000 '"$INSTDIR\${CORE_EXE}" daemon stop'
+    Pop $0
+    ; 3: the daemon stopped; only GAIA's Lemonade Server did not.
+    ${If} $0 == 3
+      DetailPrint "The GAIA daemon stopped, but GAIA's Lemonade Server did not."
+    ${ElseIf} $0 != 0
+      DetailPrint "Could not stop the GAIA daemon (gaia daemon stop returned $0)."
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+Function StopDaemon
+  Push $0
+  !insertmacro STOP_DAEMON_BODY
+  Pop $0
+FunctionEnd
+
+Function un.StopDaemon
+  Push $0
+  !insertmacro STOP_DAEMON_BODY
+  Pop $0
 FunctionEnd
 
 ; ─── Uninstall ─────────────────────────────────────────────────────────────
@@ -975,8 +1016,11 @@ FunctionEnd
 !macroend
 
 Section "Uninstall"
+  Call un.StopDaemon
   Delete "$INSTDIR\${TUI_EXE}"
   Delete "$INSTDIR\${AGENT_EXE}"
+  Delete "$INSTDIR\${CORE_EXE}"
+  RMDir /r "$INSTDIR\_internal"
   Delete "$INSTDIR\LICENSE.md"
   Delete "$INSTDIR\gaia.ico"
   Delete "$INSTDIR\${FONT_LICENSE}"

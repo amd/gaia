@@ -2,7 +2,7 @@
 
 Detailed reference for `@amd-gaia/agent-email`. For a quick start, see
 [`README.md`](./README.md); for an AI-assisted integration walkthrough, see
-[`SKILL.md`](./SKILL.md). This client pins `SCHEMA_VERSION` **2.15**, matching
+[`SKILL.md`](./SKILL.md). This client pins `SCHEMA_VERSION` **2.16**, matching
 the sidecar's current contract — every schema bump since 2.4 has been additive
 (see `contract.py`'s own per-version changelog for the full log), so nothing
 here is a breaking upgrade for an existing integration.
@@ -909,8 +909,10 @@ ranked past it is never silently dropped from the count (2.13, #2900), and —
 a third mailbox provider value, `microsoft_work` (work Microsoft 365 / Entra,
 distinct from the personal `microsoft` Outlook.com connector), now valid
 wherever a provider string is accepted or returned (2.14, #2629), and —
-current, `SCHEMA_VERSION = "2.15"` — the stateful `/v1/email/agent/*` routes
-listed in the published OpenAPI document; no shape changed (#6043).
+`SCHEMA_VERSION = "2.16"` adds `EmailQueryRequest.memory` (`on`, `private`, or
+`off`) so a host can keep private and memory-off email chats out of the agent's
+memory store (#5482). The preceding 2.15 bump published the stateful
+`/v1/email/agent/*` routes without changing their shapes (#6043).
 
 They are hand-written (vs. generated from `/openapi.json`) because the contract is
 small and version-gated, keeping the published package free of a typegen build

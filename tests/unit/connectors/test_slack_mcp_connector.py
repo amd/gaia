@@ -11,13 +11,20 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import keyring
 import pytest
 
 import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
 from gaia.connectors.activations import activate_agent, list_agent_activations
-from gaia.connectors.catalog.mcp_servers import _SLACK
+from gaia.connectors.catalog.mcp_servers import (
+    _SLACK,
+    SLACK_BOT_SCOPES,
+    SLACK_READ_TOOLS,
+)
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.grants import grant_agent, list_agent_grants
 from gaia.connectors.mcp_server import McpServerHandler, _read_mcp_servers_json
@@ -80,6 +87,15 @@ def test_launch_is_pinned_and_speaks_stdio():
     args = list(_SLACK.mcp_args)
     # The server picks its transport from argv; without it, it won't speak stdio.
     assert args[args.index("--transport") + 1] == "stdio"
+
+
+def test_only_read_tools_are_offered():
+    """Join, leave and mark-read need scopes the app doesn't have; offered,
+    the model asks to join channels instead of telling the user to invite it."""
+    args = list(_SLACK.mcp_args)
+    assert args[args.index("--enabled-tools") + 1].split(",") == list(SLACK_READ_TOOLS)
+    for tool in SLACK_READ_TOOLS:
+        assert not re.search(r"join|leave|mark|create|update|add|reaction", tool)
 
 
 def test_deprecated_reference_package_is_not_used():
@@ -147,6 +163,46 @@ async def test_awkward_token_round_trips_without_touching_disk(fake_home, token)
             raw = path.read_text("utf-8", errors="ignore")
             assert token not in raw
             assert json.dumps(token)[1:-1] not in raw
+
+
+@pytest.mark.asyncio
+async def test_pasted_token_is_saved_without_surrounding_spaces(fake_home):
+    # Slack rejects a padded token, so the server would fail to start.
+    await McpServerHandler().configure(_SLACK, {TOKEN_VAR: f"  {TOKEN}\n"})
+
+    assert keyring.get_password(SERVICE_NAME, SLOT) == TOKEN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "token",
+    ["xapp-1-A0-signing", "8f14e45fceea167a5a36dedd4bea2543", "   "],
+    ids=["app-level-token", "signing-secret", "only-spaces"],
+)
+async def test_a_value_that_is_not_a_bot_token_is_refused(fake_home, token):
+    with pytest.raises(ConnectorsError, match="xoxb-"):
+        await McpServerHandler().configure(_SLACK, {TOKEN_VAR: token})
+
+    assert keyring.get_password(SERVICE_NAME, SLOT) is None
+    assert _SLACK.id not in _read_mcp_servers_json()
+
+
+def test_the_tile_refuses_a_wrong_token_with_a_clear_message(ui_api_client):
+    resp = ui_api_client.post(
+        "/api/connectors/mcp-slack/configure",
+        json={"config": {TOKEN_VAR: "xapp-1-A0-signing"}},
+        headers={"X-Gaia-UI": "1"},
+    )
+    assert resp.status_code == 400
+    assert "xoxb-" in resp.json()["detail"]
+    tile = ui_api_client.get("/api/connectors/mcp-slack").json()
+    assert tile["configured"] is False
+
+
+def test_the_tile_learns_the_token_prefix(ui_api_client):
+    tile = ui_api_client.get("/api/connectors/mcp-slack").json()
+    (field,) = tile["config_fields"]
+    assert field["prefix"] == "xoxb-"
 
 
 @pytest.mark.asyncio
@@ -223,3 +279,38 @@ def test_api_lifecycle_never_echoes_token(ui_api_client, monkeypatch, caplog):
     assert TOKEN not in json.dumps(events)
     assert TOKEN not in caplog.text
     assert keyring.get_password(SERVICE_NAME, SLOT) is None
+
+
+def _manifest_from_setup_url():
+    url = urlparse(_SLACK.setup_url)
+    assert (url.scheme, url.netloc, url.path) == ("https", "api.slack.com", "/apps")
+    query = parse_qs(url.query)
+    assert query["new_app"] == ["1"]
+    return json.loads(query["manifest_json"][0])
+
+
+def test_setup_link_creates_a_read_only_app_with_the_bot_scopes():
+    manifest = _manifest_from_setup_url()
+    assert manifest["oauth_config"]["scopes"]["bot"] == list(SLACK_BOT_SCOPES)
+    assert manifest["features"]["bot_user"]["display_name"] == "GAIA"
+    assert not any(":write" in s or s.startswith("chat:") for s in SLACK_BOT_SCOPES)
+
+
+def test_setup_guide_lists_the_same_scopes_as_the_setup_link():
+    guide = (Path(__file__).parents[3] / "docs" / "connectors" / "slack.mdx").read_text(
+        encoding="utf-8"
+    )
+    listed = set(re.findall(r"`([a-z]+:(?:history|read))`", guide))
+    assert listed == set(SLACK_BOT_SCOPES)
+
+
+def test_tile_gets_the_setup_link_and_a_plain_field_label(ui_api_client):
+    listing = ui_api_client.get("/api/connectors")
+    tile = next(c for c in listing.json()["connectors"] if c["id"] == "mcp-slack")
+    assert tile["setup_url"] == _SLACK.setup_url
+    (field,) = tile["config_fields"]
+    assert field["key"] == TOKEN_VAR
+    assert field["label"] == "Slack bot token"
+    assert field["placeholder"].startswith("xoxb-")
+    assert "Create Slack app" in field["help_md"]
+    assert "/invite @GAIA" in field["help_md"]

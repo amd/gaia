@@ -98,6 +98,12 @@ answer, so it can be piped or captured; progress, warnings and logs go to
 stderr. GAIA starts Lemonade Server through the daemon if it is not running, so
 there is nothing to launch first.
 
+Where the agent ships as its own program, as in the desktop app, the terminal
+installers and the one-line installer, `gaia -p` and `gaia chat` run it through
+GAIA's background service in the current folder. Confirmation-gated tools are
+refused there, so `--dangerously-skip-permissions`, `--full-access` and
+`--base-url` work only with the agent package installed, as in a source checkout.
+
 ```bash
 gaia -p "Summarize README.md in three bullets"
 gaia -p "Reply with exactly: pong" --model amd.DeepSeek-V4.1-Flash
@@ -714,7 +720,8 @@ is removed only when it is the app's exact wrapper around this GAIA home's venv;
 `--purge` also undoes what the one-line installer set up. It stops a running GAIA daemon,
 and any agent sidecar it left running, before deleting its state, removes `~/.gaia/bin`
 (`gaia-tui`, `gaia-agent`, the `gaia` command links the Linux and macOS installer puts
-there, and on Windows the `gaia` launchers the installer copies there), and
+there, and on Windows the frozen `gaia` the installer puts there), `~/.gaia/core` and an
+AppImage's `~/.gaia/app-core`, and
 removes the installer's PATH entries: the `# Added by GAIA installer` block in
 `~/.zshrc`, `~/.bashrc`, `~/.bash_profile` or `~/.profile`, or the `~\.gaia\bin` entry
 on the Windows user PATH (and `~\.gaia\venv\Scripts`, which earlier installers added). The rest of each file and every
@@ -2528,7 +2535,7 @@ Scores RAG retrieval (recall@k, MRR) separately from answer accuracy, on real do
 ```bash
 gaia eval retrieval --suite pr                     # Offline, retrieval only: the PR gate
 gaia eval retrieval --suite pr --gate tests/fixtures/eval_baselines/rag-retrieval/pr.json
-gaia eval retrieval --suite full --judge           # FinanceBench, AMD docs, XQuAD, scale tiers, answers
+gaia eval retrieval --suite full --judge           # AMD docs, XQuAD, scale tiers, answers
 gaia eval retrieval --fetch-only                   # Download and verify the corpora
 ```
 
@@ -2537,14 +2544,13 @@ gaia eval retrieval --fetch-only                   # Download and verify the cor
 | `--component` | `rag` | `rag` (document Q&A) or `code` (code search, [its own options](#evaluation-commands)) |
 | `--suite` | `pr` | `pr` (offline, deterministic) or `full` |
 | `--repo-root` | the current directory | gaia checkout holding `eval/retrieval/` and the committed documents; needed when gaia is installed as a wheel and you run from elsewhere |
-| `--datasets` | the suite's | Subset of `repo_docs`, `technical_docs`, `financebench`, `xquad` |
+| `--datasets` | the suite's | Subset of `repo_docs`, `technical_docs`, `xquad` |
 | `--retrieval-only` | off | Skip answer generation |
 | `--judge` / `--judge-model` | off | Grade free-form answers with Claude; otherwise they are unscored |
 | `--model` | RAG default | Chat model that answers |
 | `--scale-tiers` / `--no-scale` | `10,100,1000` (full) | Corpus sizes for the scale phase |
 | `--no-hard-cases` | off | Skip the hard cases |
 | `--xquad-languages` / `--xquad-per-language` | `en,de,es,ru,zh,ar,hi` / `40` | Multilingual slice |
-| `--financebench-docs` | all | Keep the questions over the first N filings |
 | `--no-vlm` | off | Do not read PDF images with the VLM (`pr` never does); otherwise the VLM must read a test image before the run starts |
 | `--offline` | off | Never download; fail if a file is not cached |
 | `--fetch-only` | off | Download and verify every corpus file, then stop |

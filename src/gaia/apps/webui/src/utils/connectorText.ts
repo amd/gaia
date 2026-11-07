@@ -28,8 +28,8 @@ export function connectorDescriptionBare(t: Translate, connector: { id: string; 
     return catalogText(t, `connectors.${connector.id}.description`, connector.description, true);
 }
 
-export function fieldLabel(t: Translate, connectorId: string, field: Field): string {
-    return catalogText(t, `connectors.${connectorId}.${field.key}.label`, field.label);
+export function fieldLabel(t: Translate, connectorId: string, field: Field, bare = false): string {
+    return catalogText(t, `connectors.${connectorId}.${field.key}.label`, field.label, bare);
 }
 
 export function fieldHelp(t: Translate, connectorId: string, field: Field): string {

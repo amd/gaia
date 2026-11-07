@@ -332,7 +332,7 @@ def test_result_summary_required():
 
 
 def test_schema_version_unchanged_by_multi_inbox():
-    """Schema 2.15 is the current frozen contract version.
+    """Schema 2.16 is the current frozen contract version.
 
     2.1 was additive over the 2.0 5-bucket taxonomy (no triage shape change):
     it added inbox search (#1781), mailbox actions (#1779), the calendar
@@ -380,10 +380,12 @@ def test_schema_version_unchanged_by_multi_inbox():
     provider string is accepted or returned — no existing field or value
     changed. 2.15 is additive over 2.14 (#6043): the published OpenAPI
     document lists the stateful /v1/email/agent/* routes — no shape changed.
+    2.16 is additive over 2.15 (#5482): `POST /v1/email/query` accepts a
+    memory mode so private and memory-off turns do not read or write memory.
     If this fails, someone changed the version unexpectedly; that requires an
     explicit version negotiation, not a drive-by edit.
     """
-    assert SCHEMA_VERSION == "2.15"
+    assert SCHEMA_VERSION == "2.16"
 
 
 def test_triage_result_gained_no_new_required_field():

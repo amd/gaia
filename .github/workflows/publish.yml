@@ -1071,6 +1071,35 @@ jobs:
           sha256sum "${expected[@]}" > gaia-tui-SHA256SUMS.txt
           cat gaia-tui-SHA256SUMS.txt
 
+      # The frozen gaia install.sh and install.ps1 fetch, so the one-line install
+      # needs no Python or PyPI either. This run froze it for the desktop
+      # installers (gaia-core-*) and the terminal packages (tui-gaia-core-*,
+      # which alone has the best-effort Intel Mac and Linux Arm builds).
+      - name: Download the gaia core builds
+        uses: actions/download-artifact@v8
+        with:
+          pattern: '*gaia-core-*'
+          path: core-builds
+
+      - name: Attach and checksum the gaia core
+        run: |
+          set -euo pipefail
+          attached=()
+          for p in win32-x64 darwin-arm64 linux-x64 darwin-x64 linux-arm64; do
+            f="$(find core-builds -name "gaia-core-${p}.tar.gz" | head -n1)"
+            if [ -z "${f}" ]; then
+              if [ "${p}" = darwin-x64 ] || [ "${p}" = linux-arm64 ]; then
+                echo "::warning::no ${p} gaia core this release (a best-effort build): install.sh there has nothing to fetch."
+                continue
+              fi
+              echo "::error::the release is missing the ${p} gaia core. install.sh / install.ps1 fetch it from the release, so it must not ship without it."
+              exit 1
+            fi
+            cp "${f}" "release-assets/gaia-core-${p}.tar.gz"
+            attached+=("gaia-core-${p}.tar.gz")
+          done
+          (cd release-assets && sha256sum "${attached[@]}" > gaia-core-SHA256SUMS.txt && cat gaia-core-SHA256SUMS.txt)
+
       # After the checksum step, which covers the terminal binaries only.
       - name: Download the combined Windows setup
         if: needs.windows-setup.outputs.ok == 'true'

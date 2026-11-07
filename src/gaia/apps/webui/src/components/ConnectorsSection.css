@@ -327,6 +327,28 @@
     transition: border-color var(--duration) var(--ease);
 }
 .mcp-key-input:focus { border-color: var(--accent); }
+.mcp-key-help {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+}
+.mcp-key-help p { margin: 0; }
+.mcp-key-help a { color: var(--accent); }
+.mcp-key-help code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: var(--bg-tertiary);
+}
+.connector-setup-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    margin-bottom: 10px;
+    text-decoration: none;
+}
 
 /* ── Agent grants ─────────────────────────────────────────────── */
 

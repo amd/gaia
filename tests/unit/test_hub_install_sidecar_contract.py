@@ -17,6 +17,7 @@ asserting the two modules agree on the contract. No network, no real binary.
 """
 
 import hashlib
+import sys
 
 import pytest
 
@@ -167,3 +168,40 @@ def test_wheel_kind_install_is_not_accepted_as_a_sidecar_binary(tmp_path):
             platform_key=_PLATFORM_KEY,
             lock_path=tmp_path / "absent.lock.json",
         )
+
+
+def test_the_frozen_app_refuses_a_wheel_agent_before_downloading_it(
+    tmp_path, monkeypatch
+):
+    """The desktop app's frozen gaia has no pip, so a wheel agent fails up front."""
+    wheel_path = (
+        f"agents/{_AGENT_ID}/{_VERSION}/{_AGENT_ID}-{_VERSION}-py3-none-any.whl"
+    )
+    manifest = _manifest()
+    manifest["versions"][_VERSION]["artifacts"] = [
+        {
+            "filename": f"{_AGENT_ID}-{_VERSION}-py3-none-any.whl",
+            "path": wheel_path,
+            "sha256": "0" * 64,
+            "size_bytes": 1,
+        }
+    ]
+
+    def _no_fetch(url: str, timeout: float = 120) -> bytes:
+        raise AssertionError(f"downloaded {url} it could never install")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    with pytest.raises(installer.InstallError, match="can't install packages"):
+        installer.install(
+            _AGENT_ID,
+            version=_VERSION,
+            manifest=manifest,
+            trusted=True,
+            base_url=_BASE_URL,
+            fetcher=_no_fetch,
+            run_pip=pytest.fail,
+            install_root=tmp_path,
+            skip_compatibility_check=True,
+            platform_key=_PLATFORM_KEY,
+        )
+    assert installer.read_sentinel(_AGENT_ID, tmp_path) is None

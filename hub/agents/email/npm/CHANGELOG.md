@@ -6,6 +6,7 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **Private and memory-off email chats stay out of memory (#5482, schema 2.16).** `EmailQueryRequest` now accepts `memory: "on" | "private" | "off"`; private and memory-off turns stop the agent from reading or writing memory.
 - **The drafting eval's judge prefers your Claude Code login.** It now uses
   the subscription before `ANTHROPIC_API_KEY`, and prints which credential
   it uses. Only the eval changes; the agent itself does not call Claude.
@@ -27,7 +28,7 @@ behind any entry — API shapes, endpoints, and version semantics — see
   session, memory, autonomy, confirmation, cancel and streaming-query routes
   under `/v1/email/agent/*` were always served but missing from
   `openapi.email.json`, so generated clients can now discover them. The client
-  pins schema 2.15 to match (#6043).
+  pinned schema 2.15 when it shipped (#6043).
 - **No stray "unmapped agent event" line.** A sentence the model wrote before
   checking your mail showed up in the Agent UI as
   `[unmapped agent event: commentary]`. It no longer does.
