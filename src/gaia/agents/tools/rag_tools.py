@@ -1182,16 +1182,16 @@ class RAGToolsMixin:
                     return _ambiguous_file_error(file_path, matching_files)
                 target_file = matching_files[0]
 
-                # Serve the file's current bytes: an edited document re-indexes
-                # here with the same foreground budget the index tool uses, so
-                # the answer is never built from the old generation (#6932).
-                # is_current hashes outside _state_lock, so this does not
-                # contend with indexing.
+                # An edited file re-indexes first so the answer never uses old text.
                 if not rag.is_current(str(target_file)):
                     result, job = _index_within_budget(rag, str(target_file))
                     if result is None:
                         return _indexing_in_progress(job)
                     if not result.get("success"):
+                        if result.get("error_type") == "embedding_unavailable":
+                            return _index_embedding_error(result)
+                        if result.get("error_type") in _CACHE_LOCK_HINTS:
+                            return _index_cache_error(result, str(target_file))
                         return {
                             "status": "error",
                             "error": (
@@ -1200,6 +1200,9 @@ class RAGToolsMixin:
                             ),
                             "file_name": Path(target_file).name,
                         }
+                    _forget_evicted(
+                        self.indexed_files, result.get("evicted", [])
+                    )
 
                 # Generate search keys for better retrieval
                 search_keys = self._generate_search_keys(query)

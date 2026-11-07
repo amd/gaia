@@ -123,6 +123,58 @@ def test_a_slow_reindex_reports_in_progress(tmp_path):
     release.set()
 
 
+def test_a_failed_reindex_keeps_the_actionable_error_types(tmp_path):
+    """A locked file and an unavailable embedder keep their specific advice
+    when the re-index happens inside a scoped query (#6937 review)."""
+    doc = tmp_path / "report.docx"
+    doc.write_text("old text", encoding="utf-8")
+    rag = MagicMock()
+    rag.indexed_files = {str(doc)}
+    rag.is_current.return_value = False
+    rag._generate_search_keys.return_value = ["q"]
+    rag.index_document.return_value = {
+        "success": False,
+        "error": "cache lock",
+        "error_type": "cache_locked",
+    }
+    host = _host_for(rag)
+
+    with patch.object(rag_tools, "_CACHE_LOCK_HINTS", {"cache_locked": "close it"}):
+        result = _call(
+            "query_specific_file", file_path=str(doc), query="what?"
+        )
+
+    assert result["status"] == "error", result
+    assert result.get("hint") == "close it"
+
+
+def test_a_successful_reindex_forgets_evicted_documents(tmp_path):
+    doc = tmp_path / "doc.txt"
+    doc.write_text("old text", encoding="utf-8")
+    other = tmp_path / "evicted.txt"
+    other.write_text("victim " * 40, encoding="utf-8")
+    rag = MagicMock()
+    rag.indexed_files = {str(doc), str(other)}
+    rag.is_current.return_value = False
+    rag._generate_search_keys.return_value = ["q"]
+    rag._retrieve_chunks_from_file.return_value = (["current text"], [1.0])
+    rag.chunks = ["current text"]
+    rag.chunk_to_file = {0: str(doc)}
+    rag.index_document.return_value = {
+        "success": True,
+        "file_name": "doc.txt",
+        "evicted": [str(other)],
+    }
+    host = _host_for(rag)
+
+    result = _call(
+        "query_specific_file", file_path=str(doc), query="what?"
+    )
+
+    assert result["status"] == "success", result
+    assert str(other) not in host.indexed_files
+
+
 def test_a_failed_reindex_reports_the_error(tmp_path):
     doc = tmp_path / "doc.txt"
     doc.write_text("old text", encoding="utf-8")
