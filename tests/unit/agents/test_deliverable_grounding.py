@@ -245,6 +245,393 @@ def test_an_input_the_script_read_counts_even_if_nothing_printed_it(tmp_path):
     assert _check(blocks, records, name="out.csv") != []
 
 
+ORDERS_CSV = (
+    "order_id,region,product,units,unit_price,returned\n"
+    + "".join(f"{i},North,Widget,{i % 9 + 1},{i % 7 + 3}.50,no\n" for i in range(1, 60))
+    + "251,East,Doohickey,39,35.25,no\n389,West,Widget,39,35.25,no\n"
+    "492,South,Doohickey,40,35.25,no\n"
+)
+TOP_ORDERS_QUERY = (
+    "Create report.md with a markdown table of the 3 largest orders in orders.csv "
+    "(order_id, region, product, revenue), then read it back to confirm."
+)
+TOP_ORDERS_CODE = (
+    "import csv\nfrom decimal import Decimal\n"
+    "rows = list(csv.DictReader(open('orders.csv')))\n"
+    "for r in rows: r['rev'] = Decimal(r['units']) * Decimal(r['unit_price'])\n"
+    "rows.sort(key=lambda r: r['rev'], reverse=True)\n"
+    "for r in rows[:3]: print(r['order_id'], r['region'], r['product'], r['rev'])\n"
+)
+
+
+def _top_orders_turn(stdout, table):
+    return [
+        _read("orders.csv", ORDERS_CSV),
+        _run_python(TOP_ORDERS_CODE, stdout),
+        _rec("write_file", {"file_path": "report.md", "content": table}, {"ok": 1}),
+        _read("report.md", table),
+    ]
+
+
+def _top_orders_table(*rows):
+    return "| order_id | region | product | revenue |\n| --- | --- | --- | --- |\n" + (
+        "".join(f"| {r} |\n" for r in rows)
+    )
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "492 South Doohickey 1410.00\n251 East Doohickey 1374.75\n"
+        "389 West Widget 1374.75\n",
+        "492 South Doohickey 1410.0\n251 East Doohickey 1374.75\n"
+        "389 West Widget 1374.75\n",
+        "[('492', Decimal('1410.00')), ('251', Decimal('1374.75'))]\n",
+    ],
+)
+def test_revenue_a_script_computed_this_turn_is_sourced(stdout):
+    table = _top_orders_table(
+        "492 | South | Doohickey | 1410.00",
+        "251 | East | Doohickey | 1374.75",
+        "389 | West | Widget | 1374.75",
+    )
+
+    findings = _check(
+        _md(table), _top_orders_turn(stdout, table), TOP_ORDERS_QUERY, "report.md"
+    )
+
+    assert findings == []
+
+
+def test_revenue_no_tool_produced_is_still_flagged():
+    stdout = "492 South Doohickey 1410.00\n251 East Doohickey 1374.75\n"
+    table = _top_orders_table(
+        "492 | South | Doohickey | 1410.00",
+        "251 | East | Doohickey | 1374.75",
+        "389 | West | Widget | 1299.40",
+    )
+
+    findings = _check(
+        _md(table), _top_orders_turn(stdout, table), TOP_ORDERS_QUERY, "report.md"
+    )
+
+    assert [f.gate for f in findings] == [FILE]
+    assert "1299.40 (revenue)" in findings[0].note
+    assert "1410.00" not in findings[0].note
+    assert "1374.75" not in findings[0].note
+
+
+def test_a_unit_a_script_printed_is_still_not_a_price():
+    records = [_run_python("print(open('cm5.txt').read())", "Dual 4Kp60 HDMI 60 Hz\n")]
+    table = "| Item | Unit price |\n|---|---|\n| CM5 | 60 |\n"
+
+    assert _check(_md(table), records)
+
+
+ECHOED_SHEET = "CM5 datasheet\nRefresh rate up to 60\nPSU rated 27 watts peak\n"
+ECHOED_TABLE = "| Item | Unit price |\n|---|---|\n| CM5 | 60 |\n| PSU | 27 |\n"
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        _run_python("print(open('cm5-datasheet.txt').read())", ECHOED_SHEET),
+        _rec(
+            "run_shell_command",
+            {"command": "cat cm5.txt"},
+            {"status": "success", "stdout": ECHOED_SHEET},
+        ),
+        _rec(
+            "query_data",
+            {"query": "SELECT * FROM specs"},
+            {"status": "success", "result": ECHOED_SHEET},
+        ),
+    ],
+    ids=["python-print", "shell-cat", "select-star"],
+)
+def test_a_file_a_tool_echoed_is_not_a_price(record):
+    assert _check(_md(ECHOED_TABLE), [record])
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "for i, l in enumerate(open('cm5.txt')): print(i+1, l)",
+        "s = open('cm5.txt').read(); print(s); print(len(s)-1)",
+        "print(open('cm5.txt').read())  # re-print sheet",
+        "p = 'cm5-sheet.txt'\nprint(f'{open(p).read()}')",
+    ],
+    ids=["line-counter", "len-minus-one", "hyphen-in-comment", "hyphen-in-name"],
+)
+def test_a_script_that_opens_and_echoes_a_file_is_not_a_price(code):
+    assert _check(_md(ECHOED_TABLE), [_run_python(code, ECHOED_SHEET)])
+
+
+def _bom_script(code, stdout):
+    # The script opens a file the turn read, so only its typed figures fail it.
+    code = "sheet = open('cm5-datasheet.pdf').read()\n" + code
+    return _check(
+        _md(INVENTED_BOM),
+        [_read("cm5-datasheet.pdf", DATASHEET), _run_python(code, stdout)],
+    )
+
+
+@pytest.mark.parametrize(
+    "code,stdout",
+    [
+        (
+            "prices = {'CM5108032': 95, 'CM5 IO Board': 60, '27W PSU': 12}\n"
+            "for k, v in prices.items(): print(k, v, v*40)\n"
+            "print(sum(v*40 for v in prices.values()))",
+            "CM5108032 95 3800\nCM5 IO Board 60 2400\n27W PSU 12 480\n6680\n",
+        ),
+        ("print(95*40, 60*40, 12*40, 95*40 + 60*40 + 12*40)", "3800 2400 480 6680\n"),
+        ("print(3900 - 100, 2500 - 100, 580 - 100)", "3800 2400 480\n"),
+        (
+            "from decimal import Decimal\n"
+            "for p in ('95.00', '60.00', '12.00'): print(Decimal(p) * len('x' * 40))",
+            "3800.00\n2400.00\n480.00\n",
+        ),
+        ("print(eval('95*40'), eval('60*40'), eval('12*40'))", "3800 2400 480\n"),
+    ],
+    ids=["line-items", "inline-math", "subtraction", "price-as-string", "eval"],
+)
+def test_prices_the_model_typed_into_a_script_are_still_flagged(code, stdout):
+    findings = _bom_script(code, stdout)
+
+    assert [f.gate for f in findings] == [FILE]
+    assert "$95.00" in findings[0].correction
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import glob\nfor f in glob.glob('*.txt'): print(open(f).read(), 2*3)",
+        "import requests\nprint(requests.get('https://x.test/cm5').text, 2*3)",
+        "import os\nprint(open(os.path.join('d', 'cm5.txt')).read(), 2*3)",
+        "print(open('cm5.pdf', 'rb').read(), 2*3)",
+        "for i, l in enumerate(open('cm5.txt')): print(i*1, l)",
+        "s = open('cm5.txt').read(); n = len(s); print(s[:n-5], 2+2)",
+    ],
+    ids=["glob", "requests", "path-join", "unread-pdf", "i-times-1", "slice"],
+)
+def test_a_script_reading_data_the_turn_never_saw_sources_nothing(code):
+    assert _check(_md(ECHOED_TABLE), [_run_python(code, ECHOED_SHEET)])
+
+
+def test_a_script_echoing_a_file_the_turn_read_does_not_source_its_numbers():
+    code = "for i, l in enumerate(open('cm5.txt')): print(i+1, l, 2*3)"
+    records = [_read("cm5.txt", ECHOED_SHEET), _run_python(code, ECHOED_SHEET)]
+
+    assert _check(_md(ECHOED_TABLE), records)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import csv\nfor r in csv.DictReader(open('orders.csv')):\n"
+        "    print(f\"{r['region']} {float(r['units'])*float(r['unit_price']):,.2f}\")",
+        "import pandas as pd\ndf = pd.read_csv('orders.csv')\n"
+        "df['rev'] = df.units * df.unit_price\nprint(df.nlargest(3, 'rev'))",
+    ],
+    ids=["csv-fstring", "pandas"],
+)
+def test_a_script_computing_from_a_file_the_turn_read_sources_its_result(code):
+    table = "| Region | Revenue |\n|---|---|\n| South | 1410.00 |\n"
+    records = [_read("orders.csv", ORDERS_CSV), _run_python(code, "South 1,410.00\n")]
+
+    assert _check(_md(table), records, name="r.md") == []
+
+
+GM15_TABLE = (
+    "| Order ID | Region | Product | Revenue |\n|---|---|---|---|\n"
+    "| 492 | South | Doohickey | 1410.00 |\n| 251 | East | Doohickey | 1374.75 |\n"
+    "| 389 | West | Widget | 1374.75 |\n"
+)
+GM15_CODE = (
+    "import csv\n"
+    'csv_path = r"C:\\gtest\\fx\\orders.csv"\n'
+    'report_path = r"C:\\gtest\\fx\\work\\report_gm15.md"\n'
+    "with open(csv_path, newline='') as f:\n"
+    "    rows = list(csv.DictReader(f))\n"
+    "for r in rows:\n"
+    "    r['revenue'] = int(r['units']) * float(r['unit_price'])\n"
+    "top = sorted(rows, key=lambda r: r['revenue'], reverse=True)[:3]\n"
+    "with open(report_path, 'w') as out:\n"
+    "    out.write('| Order ID | Region | Product | Revenue |\\n|---|---|---|---|\\n')\n"
+    "    for r in top:\n"
+    "        out.write(f\"| {r['order_id']} | {r['region']} | {r['product']} "
+    "| {r['revenue']:.2f} |\\n\")\n"
+)
+
+
+def _gm15_turn(code=GM15_CODE, table=GM15_TABLE):
+    report = r"C:\gtest\fx\work\report_gm15.md"
+    failed = _run_python("import pandas as pd", "")
+    failed["failed"] = True
+    return report, [
+        _rec(
+            "analyze_data_file",
+            {"file_path": r"C:\gtest\fx\orders.csv"},
+            {"status": "success", "summary": "500 rows; columns order_id, units"},
+        ),
+        failed,
+        _run_python(code, ""),
+        _read(report, table),
+    ]
+
+
+def test_figures_a_script_computed_into_the_report_itself_are_sourced():
+    report, records = _gm15_turn()
+
+    findings = file_findings({report: _md(GM15_TABLE)}, records, query=TOP_ORDERS_QUERY)
+
+    assert findings == []
+
+
+def test_prices_typed_into_a_script_that_writes_the_report_are_still_flagged():
+    code = GM15_CODE.replace(
+        "    rows = list(csv.DictReader(f))\n",
+        "    rows = list(csv.DictReader(f))\n"
+        "rows = [{'order_id': '492', 'region': 'South', 'product': 'Doohickey',"
+        " 'units': '1', 'unit_price': '1410.00'}]\n",
+    )
+    report, records = _gm15_turn(code)
+
+    findings = file_findings({report: _md(GM15_TABLE)}, records, query=TOP_ORDERS_QUERY)
+
+    assert [f.gate for f in findings] == [FILE]
+    assert "1410.00 (Revenue)" in findings[0].note
+
+
+@pytest.mark.parametrize(
+    "report_open",
+    [
+        "rep = open('bom.md').read()",
+        "open('bom.md', 'a').write('checked')",
+        "rep = open('bom.md').read()\n"
+        "open('bom.md', 'w').write(rep.replace('Total', 'Total (' + str(2) + ')'))",
+        "from pathlib import Path\n"
+        "Path('bom.md').write_text(Path('bom.md').read_text().replace('TBD', '1'))",
+        "import pandas as pd\n"
+        "df = pd.read_csv('bom.md')\ndf.loc[0, 'Qty'] = 4\ndf.to_csv('bom.md')",
+    ],
+    ids=["read-back", "append", "patch-open", "patch-path", "patch-pandas"],
+)
+def test_a_script_that_did_not_write_the_report_does_not_source_it(report_open):
+    records = [
+        _read("cm5-datasheet.pdf", DATASHEET),
+        _rec("write_file", {"file_path": "bom.md", "content": INVENTED_BOM}, {"ok": 1}),
+        _run_python(
+            f"sheet = open('cm5-datasheet.pdf').read()\n{report_open}\n"
+            "print('Compute' in sheet)",
+            "True\n",
+        ),
+    ]
+
+    findings = _check(_md(INVENTED_BOM), records)
+
+    assert [f.gate for f in findings] == [FILE]
+    assert "$95.00" in findings[0].correction
+
+
+@pytest.mark.parametrize(
+    "write",
+    [
+        "Path(report_path).write_text(table)",
+        "pd.DataFrame(top).to_markdown(report_path)",
+        "open(report_path, mode='x').write(table)",
+    ],
+    ids=["write-text", "to-markdown", "exclusive-create"],
+)
+def test_a_report_the_script_wrote_another_way_is_its_output(write):
+    code = (
+        "import csv\nfrom pathlib import Path\nimport pandas as pd\n"
+        'csv_path = r"C:\\gtest\\fx\\orders.csv"\n'
+        'report_path = r"C:\\gtest\\fx\\work\\report_gm15.md"\n'
+        "rows = list(csv.DictReader(open(csv_path)))\n"
+        "top = [float(r['units']) * float(r['unit_price']) for r in rows]\n"
+        f"table = str(top)\n{write}\n"
+    )
+    report, records = _gm15_turn(code)
+
+    assert (
+        file_findings({report: _md(GM15_TABLE)}, records, query=TOP_ORDERS_QUERY) == []
+    )
+
+
+@pytest.mark.parametrize("tool", ["write_file", "run_python"])
+def test_a_report_rewritten_after_the_computing_script_is_checked_again(tool):
+    report, records = _gm15_turn()
+    args = (
+        {"file_path": report, "content": GM15_TABLE}
+        if tool == "write_file"
+        else {"code": f"open(r'{report}', 'w').write('| 492 | 1410.00 |')"}
+    )
+    records.insert(3, _rec(tool, args, {"status": "success"}))
+
+    assert file_findings({report: _md(GM15_TABLE)}, records, query=TOP_ORDERS_QUERY)
+
+
+def test_a_script_writing_the_report_from_unread_data_sources_nothing():
+    code = GM15_CODE.replace(
+        'csv_path = r"C:\\gtest\\fx\\orders.csv"',
+        'csv_path = r"C:\\gtest\\fx\\other.csv"',
+    )
+    report, records = _gm15_turn(code)
+
+    assert file_findings({report: _md(GM15_TABLE)}, records, query=TOP_ORDERS_QUERY)
+
+
+def test_a_file_only_the_script_opened_counts_once_the_check_has_read_it():
+    code = "import pandas as pd\nprint(pd.read_csv('orders.csv').units.mul(2).sum())"
+    table = "| Region | Revenue |\n|---|---|\n| South | 1410.00 |\n"
+    records = [_run_python(code, "1410.00\n")]
+
+    assert _check(_md(table), records, name="r.md") != []
+    assert (
+        _check(
+            _md(table),
+            records,
+            name="r.md",
+            inputs=[ORDERS_CSV],
+            input_names=["C:/data/orders.csv"],
+        )
+        == []
+    )
+
+
+def test_a_computing_script_that_also_echoes_a_read_file_does_not_source_it():
+    code = "print(open('cm5.txt').read())\nprint(4 * len(rows))"
+    records = [_read("cm5.txt", ECHOED_SHEET), _run_python(code, ECHOED_SHEET)]
+
+    assert _check(_md(ECHOED_TABLE), records)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT region, SUM(units*unit_price) FROM orders GROUP BY 1",
+        "SELECT * FROM orders WHERE units*unit_price > 1000",
+    ],
+    ids=["aggregate", "arithmetic-in-where"],
+)
+def test_a_scratchpad_query_is_not_a_source_for_an_amount(query):
+    # The scratchpad holds rows the model inserted, not data it read.
+    records = [
+        _rec(
+            "query_data",
+            {"query": query},
+            {"status": "success", "result": "East 41572.25\nNorth 45043.62\n"},
+        )
+    ]
+    table = (
+        "| Region | Revenue |\n|---|---|\n| East | 41572.25 |\n| North | 45043.62 |\n"
+    )
+
+    assert _check(_md(table), records, name="regions.md")
+
+
 def test_dates_ids_and_quantities_the_user_stated_are_not_figures():
     report = (
         "Order PO-2026-0412 placed 2026-10-14 for 40 units (SKU 1572864), "

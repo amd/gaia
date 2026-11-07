@@ -643,8 +643,281 @@ def _basename(path: str) -> str:
     return re.split(r"[\\/]", path.rstrip("\\/"))[-1].lower()
 
 
-def _evidence_texts(records: Sequence[Dict[str, Any]], written: Set[str]) -> List[str]:
-    """What this turn's tools returned that can source a figure in *written*.
+#: Calls that bring a file into a script; each must name it as a literal.
+_PY_READERS = {
+    "open",
+    "read_csv",
+    "read_excel",
+    "read_json",
+    "read_table",
+    "read_parquet",
+    "load_workbook",
+    "Path",
+    "PdfReader",
+    "Document",
+    "Presentation",
+    "loadtxt",
+    "genfromtxt",
+}
+#: Ways a script reaches data without naming a file the turn read.
+_PY_UNSEEN = {
+    "glob",
+    "iglob",
+    "rglob",
+    "listdir",
+    "scandir",
+    "walk",
+    "iterdir",
+    "requests",
+    "urllib",
+    "urlopen",
+    "httpx",
+    "subprocess",
+    "system",
+    "popen",
+    "environ",
+    "getenv",
+    "input",
+    "stdin",
+    "sqlite3",
+    "eval",
+    "exec",
+    "compile",
+}
+#: The largest figure a script may type itself: a count, an index, a rounding.
+_SMALL_INT = 10
+_NUMERIC_STRING = re.compile(r"\s*[-+]?\d[\d,]*(?:\.\d+)?\s*")
+
+
+def _string_names(tree: ast.AST) -> Dict[str, str]:
+    """Names bound once, to a string literal: ``csv_path = r"...orders.csv"``."""
+    stores: Dict[str, int] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            stores[node.id] = stores.get(node.id, 0) + 1
+    return {
+        node.targets[0].id: node.value.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and stores.get(node.targets[0].id) == 1
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    }
+
+
+def _computed(
+    record: Dict[str, Any], read_names: Set[str], written: Set[str] = frozenset()
+) -> bool:
+    """*record* is a script whose output can only come from files read this turn.
+
+    Every file it opens other than one the turn wrote was read this turn.
+    """
+    opened = _script_opens(record)
+    read = [name for name in opened or () if name not in written]
+    return bool(read) and all(name in read_names for name in read)
+
+
+def _script_opens(record: Dict[str, Any]) -> Optional[List[str]]:
+    """The files a ``run_python`` script opens, or ``None`` when its figures
+    may not come from them."""
+    io = _script_io(record)
+    return None if io is None else io[0]
+
+
+def _script_wrote(record: Dict[str, Any]) -> Set[str]:
+    """The files a computing script created or overwrote, not just read or
+    appended to."""
+    io = _script_io(record)
+    return set() if io is None else io[1]
+
+
+#: Methods that replace the file their path names: ``df.to_csv(path)``.
+_PY_SAVERS = {
+    "to_csv",
+    "to_excel",
+    "to_markdown",
+    "to_json",
+    "to_html",
+    "to_parquet",
+    "save",
+}
+
+
+def _literal_path(node: Any, named: Dict[str, str]) -> Optional[str]:
+    if isinstance(node, ast.Name) and node.id in named:
+        return named[node.id]
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _call_arg(call: ast.Call, index: int, keyword: str) -> Any:
+    if len(call.args) > index:
+        return call.args[index]
+    return next((k.value for k in call.keywords if k.arg == keyword), None)
+
+
+def _truncates(call: ast.Call, named: Dict[str, str]) -> Optional[str]:
+    """The path *call* replaces: ``open(p, 'w')``, ``Path(p).write_text``,
+    ``df.to_csv(p)``. Not a read, and not an append."""
+    func = call.func
+    ident = getattr(func, "id", getattr(func, "attr", None))
+    if ident == "open" and isinstance(func, ast.Name):
+        mode = _call_arg(call, 1, "mode")
+        if isinstance(mode, ast.Constant) and isinstance(mode.value, str):
+            if set(mode.value) & {"w", "x"}:
+                return _literal_path(_call_arg(call, 0, "file"), named)
+        return None
+    if ident in ("write_text", "write_bytes") and isinstance(func, ast.Attribute):
+        receiver = func.value
+        if isinstance(receiver, ast.Call) and receiver.args:
+            return _literal_path(receiver.args[0], named)
+        return None
+    if ident in _PY_SAVERS:
+        mode = next((k.value for k in call.keywords if k.arg == "mode"), None)
+        if isinstance(mode, ast.Constant) and "a" in str(mode.value):
+            return None
+        target = (call.args or [k.value for k in call.keywords] or [None])[0]
+        return _literal_path(target, named)
+    return None
+
+
+def _reads(call: ast.Call, named: Dict[str, str]) -> Optional[str]:
+    """The path *call* reads: ``open(p)``, ``Path(p).read_text()``,
+    ``pd.read_csv(p)``."""
+    func = call.func
+    ident = getattr(func, "id", getattr(func, "attr", None))
+    if ident == "open" and isinstance(func, ast.Name):
+        return _literal_path(_call_arg(call, 0, "file"), named)
+    if ident in ("read_text", "read_bytes") and isinstance(func, ast.Attribute):
+        receiver = func.value
+        if isinstance(receiver, ast.Call) and receiver.args:
+            return _literal_path(receiver.args[0], named)
+        return None
+    if ident in _PY_READERS - {"open", "Path"}:
+        target = (call.args or [k.value for k in call.keywords] or [None])[0]
+        return _literal_path(target, named)
+    return None
+
+
+def _script_io(record: Dict[str, Any]) -> Optional[Tuple[List[str], Set[str]]]:
+    """``(files opened, files replaced)`` by a ``run_python`` script, or
+    ``None`` when its figures may not come from those files.
+
+    A file the script read and then saved back is not one it replaced: what
+    it patched in place, another tool wrote.
+
+    Each file it opens is named, as a literal or a name bound once to one; it
+    reaches no other data; and it types no figure beyond a small count —
+    ``v*40`` or ``1500 - 90`` invents its result rather than computing it.
+    """
+    if _name(record) != "run_python":
+        return None
+    code = (record.get("args") or {}).get("code")
+    if not isinstance(code, str):
+        return None
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+    opened: List[str] = []
+    replaced: Set[str] = set()
+    read_from: Set[str] = set()
+    named = _string_names(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant):
+            value = node.value
+            if isinstance(value, str) and value.lower().startswith(("http:", "https:")):
+                return None
+            # Decimal('95.00') types a price as surely as 95 does.
+            if isinstance(value, str) and _NUMERIC_STRING.fullmatch(value):
+                if abs(_number(value)) > _SMALL_INT:
+                    return None
+            if isinstance(value, (int, float, complex)) and not isinstance(value, bool):
+                if not isinstance(value, int) or abs(value) > _SMALL_INT:
+                    return None
+        elif isinstance(node, (ast.Name, ast.Attribute)):
+            if (node.id if isinstance(node, ast.Name) else node.attr) in _PY_UNSEEN:
+                return None
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            modules = [a.name for a in node.names] + [
+                getattr(node, "module", None) or ""
+            ]
+            if any(m.split(".")[0] in _PY_UNSEEN for m in modules):
+                return None
+        if isinstance(node, ast.Call):
+            wrote = _truncates(node, named)
+            if wrote is not None:
+                replaced.add(_basename(wrote))
+            else:
+                source = _reads(node, named)
+                if source is not None:
+                    read_from.add(_basename(source))
+            func = node.func
+            if getattr(func, "id", getattr(func, "attr", None)) not in _PY_READERS:
+                continue
+            target = (node.args or [k.value for k in node.keywords] or [None])[0]
+            path = _literal_path(target, named)
+            if path is None:
+                return None
+            opened.append(_basename(path))
+    return opened, replaced - read_from
+
+
+def _script_written(
+    files: Mapping[str, Sequence[Block]],
+    records: Sequence[Dict[str, Any]],
+    read_names: Set[str],
+    written: Set[str],
+) -> List[str]:
+    """What a computing script wrote straight into a file in *files*, minus
+    its own literals — the file was its output, as stdout would have been.
+
+    Only when the script created or overwrote that file and nothing wrote it
+    after: a script that read or appended to it did not write what is there.
+    """
+    texts = []
+    for path, blocks in files.items():
+        name = _basename(path)
+        last = None
+        for record in records:
+            if not _ran(record) or record.get("failed"):
+                continue
+            if _computed(record, read_names, written) and name in _script_wrote(record):
+                last = record
+            elif _has(_name(record), _WRITE_WORDS + _EXEC_WORDS) and (
+                name in _args_text(record)
+            ):
+                last = None
+        if last is not None:
+            output = {**last, "observed": blocks_text(blocks)}
+            texts.append(_spelled_out(evidence_text(output, code_literals=True)))
+    return texts
+
+
+def _read_names(records: Sequence[Dict[str, Any]], written: Set[str]) -> Set[str]:
+    """Names of the files a read tool returned this turn, other than *written*."""
+    names = set()
+    for record in records:
+        name = _name(record)
+        if not _ran(record) or record.get("failed"):
+            continue
+        if _has(name, _WRITE_WORDS + _EXEC_WORDS):
+            continue
+        args = record.get("args") or {}
+        for key in _PATH_ARGS:
+            if isinstance(args, dict) and isinstance(args.get(key), str):
+                names.add(_basename(args[key]))
+    return names - written
+
+
+def _evidence_texts(
+    records: Sequence[Dict[str, Any]], written: Set[str], read_names: Set[str]
+) -> List[Tuple[str, bool]]:
+    """``(text, computed)`` per tool result this turn that can source a figure
+    in *written*; *computed* marks a script that computed from *read_names*.
 
     Not a write tool's reply, not a failed call, and not a read of a written
     file once it was written — a read-back shows the file, not its source.
@@ -675,7 +948,12 @@ def _evidence_texts(records: Sequence[Dict[str, Any]], written: Set[str]) -> Lis
             for name_ in written
         ):
             continue
-        texts.append(evidence_text(record, code_literals=True))
+        texts.append(
+            (
+                evidence_text(record, code_literals=True),
+                _computed(record, read_names, written),
+            )
+        )
     return texts
 
 
@@ -906,25 +1184,50 @@ def file_findings(
     query: str = "",
     context: str = "",
     inputs: Sequence[str] = (),
+    input_names: Sequence[str] = (),
     answer: str = "",
 ) -> List[Finding]:
     """Figures in *files* (path → blocks) that nothing this turn supports.
 
     Evidence is the tool results in *records*, the text of *inputs* (files
     the tools were pointed at), the request (*query*) and earlier turns
-    (*context*). An answer that says its figures are unverified and names a
+    (*context*). A script's output sources an amount only when it computed
+    from files read this turn (*input_names* are the files *inputs* hold).
+    An answer that says its figures are unverified and names a
     value has already told the user about it.
     """
     if not files:
         return []
     written = {_basename(path) for path in files}
-    texts = [_spelled_out(t) for t in _evidence_texts(records, written) + list(inputs)]
+    read_names = _read_names(records, written) | (
+        {_basename(n) for n in input_names} - written
+    )
+    found = [
+        (_spelled_out(t), c) for t, c in _evidence_texts(records, written, read_names)
+    ]
+    input_texts = [_spelled_out(t) for t in inputs]
+    texts = [t for t, _ in found] + input_texts
     query = _spelled_out(query or "")
     context = _spelled_out(context or "")
     # "27W", "8GB": a unit glued to its number still shows the number.
     general = _Corpus(_GLUED_UNIT.sub(r"\1 \2", "\n".join([context, query] + texts)))
+    # An amount a script computed from this turn's files sources a money
+    # figure; one it echoed from them, or a "60 Hz", still doesn't.
+    seen = {
+        _number(n)
+        for t in [context] + [t for t, c in found if not c] + input_texts
+        for n in _ANY_NUMBER.findall(t)
+    }
+    computed = [
+        _ANY_NUMBER.sub(
+            lambda m: " " if _number(m.group(0)) in seen else m.group(0),
+            _UNIT.sub(" ", t),
+        )
+        for t in [t for t, c in found if c]
+        + _script_written(files, records, read_names, written)
+    ]
     money = _Corpus(
-        "\n".join([query] + [_money_evidence(t) for t in [context] + texts])
+        "\n".join([query] + [_money_evidence(t) for t in [context] + texts] + computed)
     )
     request_numbers = [
         _number(n) for n in _ANY_NUMBER.findall(_TIMESTAMP.sub(" ", query or ""))
