@@ -33,7 +33,7 @@
 
 "use strict";
 
-const { spawn, spawnSync, execSync } = require("child_process");
+const { spawn, spawnSync, execFileSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
@@ -440,13 +440,11 @@ function makeProgressReporter(onProgress) {
  * Check if a command exists on PATH.
  */
 function commandExists(cmd) {
-  try {
-    const check = IS_WINDOWS ? `where ${cmd}` : `command -v ${cmd}`;
-    execSync(check, { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+  const result = spawnSync(IS_WINDOWS ? "where" : "which", [cmd], {
+    stdio: "ignore",
+    shell: false,
+  });
+  return result.status === 0;
 }
 
 /**
@@ -842,14 +840,15 @@ function checkDiskSpace() {
     logError(`statfsSync failed: ${err.message}`);
   }
 
-  // Fallback: platform-specific shell commands. Non-fatal if unavailable.
+  // Fallback: platform-specific tools. Non-fatal if unavailable.
   try {
     if (IS_WINDOWS) {
-      // Use PowerShell to read free space on the drive containing parent.
-      const drive = path.parse(parent).root.replace(/\\$/, "");
-      const out = execSync(
-        `powershell -NoProfile -Command "(Get-PSDrive -Name '${drive.replace(":", "")}').Free"`,
-        { encoding: "utf8", timeout: 5000 }
+      // The drive letter reaches PowerShell through the environment, not the script text.
+      const drive = path.parse(parent).root.replace(/[:\\]+$/, "");
+      const out = execFileSync(
+        "powershell",
+        ["-NoProfile", "-Command", "(Get-PSDrive -Name $env:GAIA_DISK_DRIVE).Free"],
+        { encoding: "utf8", timeout: 5000, env: { ...process.env, GAIA_DISK_DRIVE: drive } }
       ).trim();
       const freeBytes = parseInt(out, 10);
       if (!Number.isNaN(freeBytes)) {
@@ -861,7 +860,7 @@ function checkDiskSpace() {
       }
     } else {
       // `df -k <parent>` — second line, 4th column is available 1K blocks.
-      const out = execSync(`df -k "${parent}"`, { encoding: "utf8", timeout: 5000 });
+      const out = execFileSync("df", ["-k", parent], { encoding: "utf8", timeout: 5000 });
       const lines = out.trim().split("\n");
       if (lines.length >= 2) {
         const cols = lines[lines.length - 1].trim().split(/\s+/);
