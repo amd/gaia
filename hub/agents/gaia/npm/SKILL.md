@@ -29,7 +29,7 @@ Two ways in:
 ## 1. Install
 
 ```bash
-npx @amd-gaia/gaia          # no install step; fetches what it needs on first run
+npx @amd-gaia/gaia          # no npm install step; needs the gaia Python CLI (see §5)
 npm install @amd-gaia/gaia  # when you want the programmatic exports
 ```
 
@@ -127,7 +127,14 @@ platform and the supported set. It is not silently skipped, and the TUI is never
 launched with no agent behind it. `npx @amd-gaia/gaia version` prints the matrix
 for the version you have.
 
-## 5. Prerequisite — a local Lemonade server
+## 5. Prerequisites — the `gaia` CLI and a local Lemonade server
+
+The terminal UI starts the GAIA daemon from the **Python `gaia` CLI**, which this
+package does not install. It must be on `PATH` and be **0.26.0 or newer**: without
+it the daemon never comes up, and an older one starts but cannot run this agent
+(see [Gotchas](#gotchas--read-before-debugging)). Install it with
+`curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
+`irm https://amd-gaia.ai/install.ps1 | iex`).
 
 The agent thinks with a model hosted by **Lemonade Server**, which this package
 does not install. Required before any query succeeds:
