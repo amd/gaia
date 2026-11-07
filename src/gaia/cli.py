@@ -458,6 +458,37 @@ async def async_main(action, **kwargs):
         "stats": "minimal",
     }
 
+    # `gaia prompt --device npu` must run the NPU twin, not the GPU default
+    # (#3827): map an explicit --device to its device config's model the same
+    # way `gaia chat` does. An explicit --device fails loudly when the
+    # hardware isn't available, per the NPU guide's fallback behaviour; an
+    # explicit --model always wins.
+    if (
+        action == "prompt"
+        and kwargs.get("device") is not None
+        and kwargs.get("model") is None
+    ):
+        from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
+
+        try:
+            _prompt_devices = (
+                LemonadeClient(verbose=False).get_system_info().get("devices", {})
+            )
+            kwargs["device"] = resolve_effective_device(
+                kwargs["device"], True, _prompt_devices
+            )
+        except LemonadeClientError as _prompt_probe_err:
+            # Unreachable server: the init flow below surfaces that; leave
+            # the device unvalidated rather than failing twice.
+            log.debug(
+                "Device probe skipped (Lemonade not reachable yet): %s",
+                _prompt_probe_err,
+            )
+        for _dc in DEFAULT_DEVICE_CONFIGS:
+            if _dc.device == kwargs["device"]:
+                kwargs["model"] = _dc.model
+                break
+
     # Initialize Lemonade with agent-specific profile
     lemonade_base_url = kwargs.get("base_url")  # May be None if not specified
     if action in action_to_agent and not kwargs.get("no_lemonade_check", False):
