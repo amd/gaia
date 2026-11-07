@@ -209,6 +209,9 @@ class _RagHost(RAGToolsMixin):
         self.max_chunks = 5
         self.rebuild_system_prompt = MagicMock()
 
+    def _generate_search_keys(self, query):
+        return [query]
+
 
 def test_tool_reindexes_an_edited_document(tmp_path, doc, _clean_registry):
     sdk = _make(tmp_path)
@@ -228,3 +231,38 @@ def test_tool_reindexes_an_edited_document(tmp_path, doc, _clean_registry):
     assert edited["reindexed"] is True
     assert "Oslo" in _served(sdk)
     assert "Lisbon" not in _served(sdk)
+
+
+def test_file_scoped_query_reindexes_an_edited_document(tmp_path, doc, _clean_registry):
+    """#6932: a query scoped to one file never answered from an edit before."""
+    sdk = _make(tmp_path)
+    _RagHost(sdk).register_rag_tools()
+    index = _TOOL_REGISTRY["index_document"]["function"]
+    query = _TOOL_REGISTRY["query_specific_file"]["function"]
+    assert index(file_path=str(doc))["status"] == "success"
+
+    same_size = OLD.replace("Lisbon", "Madrid")
+    _write_keeping_stat(doc, same_size)
+    result = query(file_path=str(doc), query="Where is the launch?")
+
+    assert result["status"] == "success", result
+    served = " ".join(chunk["content"] for chunk in result["chunks"])
+    assert "Madrid" in served
+    assert "Lisbon" not in served
+    assert sdk.is_current(str(doc)) is True
+    assert len(sdk.indexed_files) == 1
+
+
+def test_file_scoped_query_of_unchanged_document_does_not_reindex(
+    tmp_path, doc, _clean_registry
+):
+    sdk = _make(tmp_path)
+    _RagHost(sdk).register_rag_tools()
+    _TOOL_REGISTRY["index_document"]["function"](file_path=str(doc))
+    query = _TOOL_REGISTRY["query_specific_file"]["function"]
+
+    with patch.object(sdk, "index_document", wraps=sdk.index_document) as spy:
+        result = query(file_path=str(doc), query="Where is the launch?")
+
+    assert result["status"] == "success", result
+    spy.assert_not_called()
