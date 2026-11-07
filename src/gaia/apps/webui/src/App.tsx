@@ -21,6 +21,7 @@ import { useNotificationStore } from './stores/notificationStore';
 import { useScheduleStore } from './stores/scheduleStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
+import { useMediaQuery } from './hooks/useMediaQuery';
 import { startActiveRunsPoll } from './services/activeRuns';
 import { startQueueDispatcher } from './services/queueDispatch';
 import * as api from './services/api';
@@ -684,7 +685,7 @@ function App() {
     useMobileAccessRequests((on) => { void (on ? openMobileAccess() : stopMobileAccess()); });
     useEffect(() => { announceMobileAccess(tunnelActive); }, [tunnelActive]);
 
-    const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
+    const isMobile = useMediaQuery('(max-width: 768px)');
 
     // A transient status loss must not replace a UI that was already shown.
     const showStartup = shouldShowStartupScreen(
@@ -817,7 +818,19 @@ function App() {
             {settingsSection && <SettingsDialog onUseSkill={useSkill} />}
             <ModelNeededDialog />
             <UpdateIndicator />
-            {createError && <div className="toast" role="alert">{createError}</div>}
+            {createError && (
+                <div className="toast toast-dismissible" role="alert">
+                    <span>{createError}</span>
+                    <button
+                        type="button"
+                        className="toast-dismiss"
+                        onClick={() => setCreateError(null)}
+                        aria-label={t('banner.dismiss')}
+                    >
+                        <X size={14} aria-hidden="true" />
+                    </button>
+                </div>
+            )}
         </div>
     );
 }
