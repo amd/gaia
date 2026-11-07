@@ -1182,6 +1182,32 @@ class RAGToolsMixin:
                     return _ambiguous_file_error(file_path, matching_files)
                 target_file = matching_files[0]
 
+                # An edit since indexing would otherwise be answered from the old text.
+                if os.path.exists(str(target_file)) and not rag.is_current(
+                    str(target_file)
+                ):
+                    logger.info(
+                        f"[query_specific_file] '{target_file}' changed since it "
+                        "was indexed — re-indexing before querying"
+                    )
+                    idx_result, job = _index_within_budget(rag, str(target_file))
+                    if idx_result is None:
+                        return _indexing_in_progress(job)
+                    if not idx_result.get("success"):
+                        if idx_result.get("error_type") == "embedding_unavailable":
+                            return _index_embedding_error(idx_result)
+                        if idx_result.get("error_type") in _CACHE_LOCK_HINTS:
+                            return _index_cache_error(idx_result, file_path)
+                        return {
+                            "status": "error",
+                            "error": (
+                                f"File '{file_path}' changed since it was indexed "
+                                "and re-indexing it failed: "
+                                f"{idx_result.get('error', 'unknown error')}"
+                            ),
+                        }
+                    _forget_evicted(self.indexed_files, idx_result.get("evicted", []))
+
                 # Generate search keys for better retrieval
                 search_keys = self._generate_search_keys(query)
 
