@@ -60,13 +60,22 @@
       "GAIA Agent UI"
 
   ; The daemon and its agents have no window, so they outlive the app unless
-  ; stopped here. A failure is logged, not fatal: the uninstall still finishes.
+  ; stopped here; an update runs this too, and can't replace the gaia.exe a
+  ; running daemon holds. The app ships that gaia.exe; one from before it
+  ; did lives in ~/.gaia/venv. A failure is logged, not fatal.
   Push $0
-  ${If} ${FileExists} "$PROFILE\.gaia\venv\Scripts\gaia.exe"
+  Push $1
+  StrCpy $1 ""
+  ${If} ${FileExists} "$INSTDIR\resources\core\gaia.exe"
+    StrCpy $1 "$INSTDIR\resources\core\gaia.exe"
+  ${ElseIf} ${FileExists} "$PROFILE\.gaia\venv\Scripts\gaia.exe"
+    StrCpy $1 "$PROFILE\.gaia\venv\Scripts\gaia.exe"
+  ${EndIf}
+  ${If} $1 != ""
     DetailPrint "Stopping the GAIA daemon and its agents"
     ; gaia prints emoji, which the captured pipe's code page can't encode.
     System::Call 'Kernel32::SetEnvironmentVariable(t "PYTHONIOENCODING", t "utf-8")i'
-    nsExec::ExecToLog /TIMEOUT=120000 '"$PROFILE\.gaia\venv\Scripts\gaia.exe" daemon stop'
+    nsExec::ExecToLog /TIMEOUT=120000 '"$1" daemon stop'
     Pop $0
     ; 3: the daemon stopped; only GAIA's Lemonade Server did not.
     ${If} $0 == 3
@@ -75,8 +84,9 @@
       DetailPrint "Could not stop the GAIA daemon (gaia daemon stop returned $0). It keeps running until you restart your PC."
     ${EndIf}
   ${Else}
-    DetailPrint "No GAIA backend at $PROFILE\.gaia\venv, so no GAIA daemon to stop"
+    DetailPrint "No GAIA backend found, so no GAIA daemon to stop"
   ${EndIf}
+  Pop $1
   Pop $0
 
   ; Optional cleanup deletes the entire shared GAIA home, including other

@@ -161,7 +161,10 @@ CATEGORY_PERSONAL = "PERSONAL"
 # includes the twelve existing stateful ``/v1/email/agent/*`` operations used
 # by the Agent UI (sessions, history, memory, autonomy, confirmations, cancel,
 # and the SSE query stream). No pre-existing request or response shape changed.
-SCHEMA_VERSION = "2.15"
+# 2.16 is additive over 2.15 (#5482): ``POST /v1/email/query`` gains an
+# optional ``memory`` mode (``on`` / ``private`` / ``off``), so the host can
+# keep private and memory-off email turns out of the sidecar's memory store.
+SCHEMA_VERSION = "2.16"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.

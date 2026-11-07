@@ -66,7 +66,7 @@ import re
 import threading
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -230,6 +230,17 @@ class QueryRequest(_Strict):
             "the run until the question times out, which reads as a hang. When "
             "false, a step that would ask instead fails immediately with what "
             "the user should do on this surface."
+        ),
+    )
+    memory: Optional[Literal["on", "private", "off"]] = Field(
+        default=None,
+        description=(
+            "Whether this turn may use or save memory (contract >= 2.16): 'on', "
+            "'private' (a private chat), or 'off' (memory turned off in the "
+            "host's settings). 'private' and 'off' suppress memory reads and "
+            "writes, including automatic personalization and lessons. Send it "
+            "every turn: a retained session keeps the last value. Omit it to "
+            "leave the session's current setting unchanged."
         ),
     )
     session_id: Optional[str] = Field(
@@ -566,6 +577,18 @@ def _carry_runtime_settings(previous: Any, rebuilt: Any) -> None:
         rebuilt.set_autonomy_level(previous_level)
 
 
+def _apply_memory_mode(agent: Any, mode: Optional[str]) -> None:
+    """Apply the host's per-turn memory mode before the email loop runs.
+
+    ``private`` and ``off`` must suppress both memory reads and writes. ``on``
+    only re-enables a store that was initialized; it never turns on memory that
+    failed to initialize or was disabled by configuration.
+    """
+    if mode is None:
+        return
+    agent.set_memory_enabled(mode == "on")
+
+
 @router.post("/query", responses=_QUERY_SSE_RESPONSES)
 async def query(request: QueryRequest) -> StreamingResponse:
     """Run the email agent loop for one request and stream canonical SSE events.
@@ -596,6 +619,10 @@ async def query(request: QueryRequest) -> StreamingResponse:
     config_kwargs: Dict[str, Any] = {}
     if request.model:
         config_kwargs["model_id"] = request.model
+    if request.memory in {"private", "off"}:
+        # A throwaway /query agent still has to honor the host's privacy mode
+        # from its very first turn, before any memory context is composed.
+        config_kwargs["memory_enabled"] = False
 
     # session_id resolves through the SAME session-scoped registry the
     # stateful /v1/email/agent/* surface uses (#2829), so the agent — and
@@ -702,6 +729,9 @@ async def query(request: QueryRequest) -> StreamingResponse:
             {"role": item.role, "content": item.content} for item in request.context
         ]
         agent.console = handler
+        # Apply the host's per-turn privacy mode after session/model resolution
+        # and before the worker composes memory context or writes a turn.
+        _apply_memory_mode(agent, request.memory)
         # Streamed calls put `token` events on this wire and let Stop cut a call short.
         agent.streaming = True
         # Read by ``question.ask``: a caller that cannot answer must be

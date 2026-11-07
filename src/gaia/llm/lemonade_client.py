@@ -638,6 +638,14 @@ EMBEDDER_MODELS = frozenset(
 #: than its ubatch (default 512), so every embedder load carries this one.
 EMBEDDER_UBATCH_TOKENS = 2048
 EMBEDDER_LLAMACPP_ARGS = f"--ubatch-size {EMBEDDER_UBATCH_TOKENS}"
+#: Headroom for the BOS/EOS tokens the server adds to every input.
+_EMBED_RESERVED_TOKENS = 48
+#: Worst realistic ratio: Gemma's tokenizer gives every digit its own token.
+_EMBED_MIN_CHARS_PER_TOKEN = 1.0
+#: Longest text that embeds whole. No chunk is cut longer than this.
+EMBED_MAX_CHARS = int(
+    (EMBEDDER_UBATCH_TOKENS - _EMBED_RESERVED_TOKENS) * _EMBED_MIN_CHARS_PER_TOKEN
+)
 
 
 def preferred_llamacpp_backend() -> Optional[str]:

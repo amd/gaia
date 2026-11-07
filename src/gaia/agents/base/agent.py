@@ -148,6 +148,7 @@ from gaia.agents.base.tools import (
     _TOOL_REGISTRY,
     bare_tool_name,
     describe_registry,
+    tool_build,
     tool_call_progress_message,
 )
 from gaia.agents.base.turn_scope import (
@@ -2344,6 +2345,48 @@ def _with_resolved_target(prompt_args: Any, preflight: Any) -> Any:
     return {**prompt_args, "file_path": target}
 
 
+def _record_refused_write(
+    agent: Any, tool_name: str, tool_args: Any, result: Any
+) -> None:
+    """Put a write the path sandbox refused on this turn's ledger as final.
+
+    Code run through ``run_python`` or the shell isn't confined by the
+    sandbox, so the ledger is what keeps it off a path a write tool was just
+    refused. getattr throughout: test stubs copy ``_execute_tool``.
+    """
+    ledger = getattr(agent, "_denied_effects", None)
+    if ledger is None or not isinstance(result, dict):
+        return
+    if result.get("status") != "error" or not isinstance(tool_args, dict):
+        return
+    registry = getattr(agent, "_tools_registry", None) or {}
+    preflight = (registry.get(tool_name) or {}).get("preflight")
+    target_of = getattr(preflight, "target_of", None)
+    read_validator = getattr(agent, "_read_validator", None)
+    validator = read_validator() if callable(read_validator) else None
+    if validator is None or not callable(target_of):
+        return
+    try:
+        target = os.path.abspath(str(target_of(tool_args)))
+        real = os.path.realpath(target)
+    except (KeyError, TypeError, ValueError, OSError) as e:
+        logger.debug("could not resolve the refused write's target: %s", e)
+        return
+    # A "read it first" or a size limit is a step to take, not a refusal.
+    if validator.is_path_allowed(real, prompt_user=False) and not (
+        validator.is_write_blocked(real)[0]
+    ):
+        return
+    ledger.record(
+        tool_name,
+        tool_args,
+        str(result.get("error") or "refused by the path sandbox"),
+        kinds={PATH},
+        refused=True,
+        paths=[target, real],
+    )
+
+
 def _scratch_reached_by(agent: Any, tool_name: str, prompt_args: Any) -> str:
     """The scratch folder when this call runs code that may sit in it, else "".
 
@@ -2428,6 +2471,10 @@ class Agent(abc.ABC):
     # Per-instance tool snapshot.  ``None`` → fall back to global
     # ``_TOOL_REGISTRY`` (backward compat for agents that don't snapshot).
     _instance_tools: Optional[Dict[str, Any]] = None
+
+    # Optional fixed execution boundary. ``None`` preserves the historical
+    # unrestricted behavior; an empty set deliberately permits no tools.
+    _tool_scope: Optional[FrozenSet[str]] = None
 
     # Class-level so a subclass that never runs ``__init__`` still increments.
     _turn_seq: int = 0
@@ -2721,6 +2768,7 @@ Do NOT wrap conversational replies in JSON.
         context_eviction_threshold_tokens: int = DEFAULT_EVICT_THRESHOLD_TOKENS,
         context_eviction_keep_steps: int = DEFAULT_EVICT_KEEP_STEPS,
         context_eviction_min_batch_tokens: int = DEFAULT_EVICT_MIN_BATCH_TOKENS,
+        tool_scope: Optional[Sequence[str]] = None,
     ):
         """
         Initialize the Agent with LLM client.
@@ -2765,6 +2813,10 @@ Do NOT wrap conversational replies in JSON.
                           ``conversation_history`` from earlier user requests
                           is sent back to the model. Within one request it is
                           always sent back (default: False).
+            tool_scope: Optional fixed set of tool names allowed to execute.
+                          ``None`` preserves unrestricted execution; an empty
+                          sequence permits no tools. Name resolution and
+                          "did you mean" candidates are restricted as well.
             max_output_tokens: Output-token cap for each LLM reply, thinking
                           included. None (default) picks per model:
                           CLOUD_MAX_OUTPUT_TOKENS for a Lemonade cloud model,
@@ -2801,6 +2853,14 @@ Do NOT wrap conversational replies in JSON.
             )
         self.max_output_tokens = max_output_tokens
         self.device = device
+        if tool_scope is None:
+            self._tool_scope = None
+        else:
+            if isinstance(tool_scope, (str, bytes)):
+                raise TypeError(
+                    "tool_scope must be a sequence of tool names, not a string"
+                )
+            self._tool_scope = frozenset(str(name) for name in tool_scope)
         self.resend_reasoning_across_requests = resend_reasoning_across_requests
         # Stored before _register_tools so an agent's selector hook and the
         # post-registration skill-set load both see the explicit request.
@@ -3001,7 +3061,8 @@ Do NOT wrap conversational replies in JSON.
 
         # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
         # _response_format_template must be set above before this call).
-        self._register_tools()
+        with tool_build():
+            self._register_tools()
         self._install_path_access_prompt()
         from gaia.agents.base.artifacts import ArtifactStore
 
@@ -3935,7 +3996,8 @@ Do NOT wrap conversational replies in JSON.
                     "status": "error",
                     "error": "Extract every source successfully before saving the inventory",
                 }
-            writer = self._tools_registry.get("write_file")
+            registry = self._execution_tool_registry()
+            writer = registry.get("write_file")
             if writer is None:
                 return {
                     "status": "error",
@@ -4037,6 +4099,20 @@ Do NOT wrap conversational replies in JSON.
             }
         self.model_features = features
 
+    def _execution_tool_registry(self) -> MutableMapping[str, Any]:
+        """Return the registry this agent is permitted to execute.
+
+        Lightweight Agent test doubles and older subclasses may not initialize
+        the optional scope field.  Treat a missing field like the constructor's
+        legacy ``None`` default so adding tool scopes does not break those
+        callers.
+        """
+        registry = self._tools_registry
+        scope = getattr(self, "_tool_scope", None)
+        if scope is None:
+            return registry
+        return {name: entry for name, entry in registry.items() if name in scope}
+
     def _format_tools_for_prompt(self, filter_to: Optional[List[str]] = None) -> str:
         """Format the registered tools into a string for the prompt.
 
@@ -4053,6 +4129,9 @@ Do NOT wrap conversational replies in JSON.
         else:
             registry = self._tools_registry
             items = [(n, registry[n]) for n in filter_to if n in registry]
+        scope = getattr(self, "_tool_scope", None)
+        if scope is not None:
+            items = [(n, info) for n, info in items if n in scope]
 
         for name, tool_info in items:
             params_str = ", ".join(
@@ -5357,12 +5436,19 @@ Do NOT wrap conversational replies in JSON.
         return None
 
     def get_tools_info(self) -> Dict[str, Any]:
-        """Get information about all registered tools."""
-        return self._tools_registry
+        """Get information about tools available to this agent."""
+        scope = getattr(self, "_tool_scope", None)
+        if scope is None:
+            return self._tools_registry
+        return {
+            name: self._tools_registry[name]
+            for name in scope
+            if name in self._tools_registry
+        }
 
     def get_tools(self) -> List[Dict[str, Any]]:
-        """Get a list of registered tools for the agent."""
-        return list(self._tools_registry.values())
+        """Get a list of tools available to this agent."""
+        return list(self.get_tools_info().values())
 
     def describe_tools(self) -> List[Dict[str, str]]:
         """The tools this agent can call, for showing them to a user.
@@ -6185,6 +6271,9 @@ Do NOT wrap conversational replies in JSON.
         else:
             registry = self._tools_registry
             items = [(n, registry[n]) for n in filter_to if n in registry]
+        scope = getattr(self, "_tool_scope", None)
+        if scope is not None:
+            items = [(n, info) for n, info in items if n in scope]
 
         schemas = []
         for name, tool_info in items:
@@ -6845,7 +6934,7 @@ Do NOT wrap conversational replies in JSON.
         """
         lower = tool_name.lower()
         suffix = f"_{lower}"
-        registry = self._tools_registry
+        registry = self._execution_tool_registry()
         matches = [n for n in registry if n.lower().endswith(suffix)]
         if len(matches) == 1:
             return matches[0]
@@ -7542,15 +7631,29 @@ Do NOT wrap conversational replies in JSON.
         # Exact name first — skill tools register with a literal hyphen
         # (``rss-digest/fetch_rss``); the normalization below is only a typo rescue.
         tool_name = tool_name.strip().removesuffix("()").strip()
-        if tool_name not in self._tools_registry:
+        execution_registry = self._execution_tool_registry()
+        # Dynamic tool loading records recency; it never widens this agent's
+        # execution registry. Scope checks therefore remain authoritative even
+        # when a tool name was registered globally but not shown here.
+        if tool_name not in execution_registry:
             tool_name = tool_name.replace("-", "_")
+        if (
+            getattr(self, "_tool_scope", None) is not None
+            and tool_name in self._tools_registry
+            and tool_name not in execution_registry
+        ):
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error": "Tool is not available to this agent. Use only the tools you were given.",
+            }
 
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
 
         if not tool_name:
             return {**NOT_EXECUTED, "status": "error", "error": "No tool name provided"}
 
-        if tool_name not in self._tools_registry:
+        if tool_name not in execution_registry:
             # Try to resolve unprefixed MCP tool names (e.g. "get_current_time"
             # when registry has "mcp_time_get_current_time"). Local LLMs often
             # strip the mcp_<server>_ prefix.
@@ -7565,7 +7668,7 @@ Do NOT wrap conversational replies in JSON.
                 # the bare server prefix some local models produce.
                 lower = tool_name.lower()
                 candidates = sorted(
-                    n for n in self._tools_registry if n.lower().startswith(lower + "_")
+                    n for n in execution_registry if n.lower().startswith(lower + "_")
                 )[:10]
                 # Bare-prefix detection: EVERY candidate begins with the
                 # requested name + "_". Tells us the model emitted a strict
@@ -7655,6 +7758,7 @@ Do NOT wrap conversational replies in JSON.
                     refused=isinstance(refusal, dict)
                     and refusal.get("tier") == "refuse",
                 )
+            _record_refused_write(self, tool_name, tool_args, refusal)
             return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
 
         # A "no" covers the effect, not the tool: another route to it is asked
@@ -7691,6 +7795,7 @@ Do NOT wrap conversational replies in JSON.
         # prompt says so, and a person's yes to it grants that one file.
         outside = self._write_target_outside_scope(tool_name, prompt_args)
         if isinstance(outside, dict):
+            _record_refused_write(self, tool_name, tool_args, outside)
             return outside
         auto_approves = None
         if outside is not None:
@@ -7740,6 +7845,15 @@ Do NOT wrap conversational replies in JSON.
                 self._confirmation_wait_s = (
                     getattr(self, "_confirmation_wait_s", 0.0) or 0.0
                 ) + (time.perf_counter() - _confirm_started)
+            # Only a prompt a person answered is an outcome for memory.
+            prompt_answered = getattr(self.console, "take_prompt_answered", None)
+            note_decision = getattr(self, "_note_person_decision", None)
+            if (
+                callable(prompt_answered)
+                and prompt_answered(tool_name)
+                and callable(note_decision)
+            ):
+                note_decision(tool_name, bool(approved))
             if not approved:
                 denied_error = self._confirmation_denied_error(tool_name)
                 denied = {"status": "denied", "error": denied_error}
@@ -7770,7 +7884,7 @@ Do NOT wrap conversational replies in JSON.
         if note_skill is not None:
             note_skill(tool_name)
 
-        tool = self._tools_registry[tool_name]["function"]
+        tool = execution_registry[tool_name]["function"]
         sig = inspect.signature(tool)
 
         # Get required parameters (those without defaults)
@@ -7877,6 +7991,7 @@ Do NOT wrap conversational replies in JSON.
                 body = skill_call.wrap(tool) if skill_call is not None else tool
                 result = self._call_tool_bounded(body, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
+            _record_refused_write(self, tool_name, tool_args, result)
             self._fold_tool_usage(tool_name, result)
             return result
         except ToolExecutionTimeout as e:

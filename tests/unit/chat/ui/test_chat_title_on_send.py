@@ -373,6 +373,24 @@ def test_a_local_guard_chat_is_not_titled_by_a_cloud_default():
     gen.assert_not_awaited()
 
 
+def test_a_local_guard_chat_is_not_titled_by_a_discovered_cloud_default():
+    """A cloud provider known only from the catalog is still a cloud model."""
+    from gaia.llm import lemonade_client as lc
+
+    lc.record_cloud_models({"data": [{"id": "opencode.big-model", "recipe": "cloud"}]})
+    db = ChatDatabase(":memory:")
+    sid = db.create_session(title="New Task")["id"]
+    try:
+        with patch(
+            "gaia.llm.lemonade_client.resolve_default_chat_model",
+            return_value="opencode.big-model",
+        ):
+            gen = _retitle(db, sid, "Llama-Guard-3-8B-GGUF")
+    finally:
+        lc.record_cloud_models({"data": []})
+    gen.assert_not_awaited()
+
+
 # ── The cloud title request ──────────────────────────────────────────────
 
 

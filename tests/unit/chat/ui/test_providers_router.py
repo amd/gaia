@@ -2167,6 +2167,38 @@ def test_connect_is_refused_under_local_only_before_any_lemonade_call(
     assert KEY not in resp.text
 
 
+def test_cloud_provider_views_are_marked_and_do_not_list_models_under_local_only(
+    client, lemonade, keys, local_only_on
+):
+    body = client.get("/api/providers").json()
+    fireworks = next(p for p in body["providers"] if p["id"] == "fireworks")
+    assert fireworks["blocked"] is True
+    assert "Local only" in fireworks["blocked_reason"]
+    models = client.get("/api/providers/fireworks/models").json()
+    assert models == {
+        "provider": "fireworks",
+        "models": [],
+        "blocked": True,
+        "blocked_reason": "Local only is on; turn it off in Settings to use cloud models.",
+    }
+    assert lemonade.paths("GET") == ["system-info", "system-info"]
+    assert keys["ensure"] == []
+
+
+def test_local_only_provider_list_never_replays_a_saved_key(
+    client, lemonade, keys, local_only_on
+):
+    keys["stored"]["fireworks"] = KEY
+
+    body = client.get("/api/providers").json()
+
+    fireworks = next(p for p in body["providers"] if p["id"] == "fireworks")
+    assert fireworks["blocked"] is True
+    assert keys["ensure"] == []
+    assert "install" not in lemonade.paths("POST")
+    assert "cloud/auth" not in lemonade.paths("POST")
+
+
 def test_selecting_a_cloud_model_is_refused_under_local_only(
     client, lemonade, keys, db, local_only_on
 ):

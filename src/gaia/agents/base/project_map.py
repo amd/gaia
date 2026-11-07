@@ -1006,6 +1006,11 @@ class ProjectMapMixin:
         return "run_shell_command" in offered
 
     def _tool_names(self) -> Dict[str, Any]:
+        # A fixed Agent tool scope must also constrain helper calls made by
+        # this mixin, not only names emitted directly by the model.
+        execution_registry = getattr(self, "_execution_tool_registry", None)
+        if callable(execution_registry):
+            return execution_registry()
         return getattr(self, "_tools_registry", {}) or {}
 
     # ── code index ────────────────────────────────────────────────────────

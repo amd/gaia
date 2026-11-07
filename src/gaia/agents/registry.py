@@ -468,6 +468,12 @@ def build_model_tiers(full_label: str) -> List[ModelTier]:
     ]
 
 
+def _distribution_version(entry_point: Any) -> Optional[str]:
+    """The version of the installed package *entry_point* comes from, if known."""
+    dist = getattr(entry_point, "dist", None)
+    return dist.version if dist is not None else None
+
+
 @dataclass
 class AgentRegistration:
     """Metadata and factory for a registered agent."""
@@ -514,6 +520,9 @@ class AgentRegistration:
     #: this is how a caller tells "instantiate it here" from "relay to the
     #: daemon" without keeping a second list of agent ids (#4161).
     is_sidecar: bool = False
+    #: The installed package's version for an agent found through an entry
+    #: point (a ``pip install``), so ``gaia agent status`` can show it.
+    version: Optional[str] = None
     category: str = "general"
     tags: List[str] = field(default_factory=list)
     icon: str = ""  # lucide icon name (e.g. "message-circle", "zap")
@@ -845,6 +854,7 @@ class AgentRegistry:
             registration,
             namespaced_agent_id=namespaced_id,
             source="installed",
+            version=registration.version or _distribution_version(entry_point),
             factory=_wrap_factory_with_namespaced_id(
                 registration.factory, namespaced_id
             ),
@@ -1234,6 +1244,7 @@ class AgentRegistry:
         category: str = "",
         tags: Optional[List[str]] = None,
         icon: str = "",
+        consumes_mcp_servers: bool = False,
     ) -> None:
         """Register a daemon-supervised sidecar agent (e.g. email) (#2408).
 
@@ -1251,6 +1262,8 @@ class AgentRegistry:
         the package's own registration. Without them the UI renders a
         generated "<Name> agent" line and falls back to its generic starter
         prompts — what a hub-installed flagship showed before #4161.
+        *consumes_mcp_servers* likewise comes from the spec; without it the
+        UI shows no switch to let the agent use an MCP connector.
 
         Idempotent: a no-op if *agent_id* (the BARE id, not the namespaced
         one) is already registered — protects a real wheel/custom-agent
@@ -1285,6 +1298,7 @@ class AgentRegistry:
                 category=category or "general",
                 tags=list(tags or []),
                 icon=icon,
+                consumes_mcp_servers=consumes_mcp_servers,
             )
         )
         logger.info(

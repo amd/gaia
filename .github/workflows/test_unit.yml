@@ -76,6 +76,7 @@ on:
       - 'docs/releases/**'
       # Doc pages unit tests check against the code (drift and runnable-command tests).
       - 'docs/connectors/google.mdx'
+      - 'docs/connectors/slack.mdx'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/chat.mdx'
       - 'docs/guides/gaia.mdx'
@@ -83,6 +84,7 @@ on:
       - 'docs/guides/npu.mdx'
       - 'docs/guides/starter-skills.mdx'
       - 'docs/guides/talk.mdx'
+      - 'docs/guides/tui.mdx'
       - 'docs/plans/desktop-installer.mdx'
       - 'docs/reference/cli.mdx'
       - 'docs/runbooks/google-oauth-client.md'
@@ -147,6 +149,7 @@ on:
       - 'docs/releases/**'
       # Doc pages unit tests check against the code (drift and runnable-command tests).
       - 'docs/connectors/google.mdx'
+      - 'docs/connectors/slack.mdx'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/chat.mdx'
       - 'docs/guides/gaia.mdx'
@@ -154,6 +157,7 @@ on:
       - 'docs/guides/npu.mdx'
       - 'docs/guides/starter-skills.mdx'
       - 'docs/guides/talk.mdx'
+      - 'docs/guides/tui.mdx'
       - 'docs/plans/desktop-installer.mdx'
       - 'docs/reference/cli.mdx'
       - 'docs/runbooks/google-oauth-client.md'

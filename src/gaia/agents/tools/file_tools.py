@@ -1098,9 +1098,8 @@ class FileSearchToolsMixin:
                     "operation": "search_directory",
                 }
 
-        @tool(
-            atomic=True,
-        )
+        # Shares its name with the FileSystemToolsMixin and FileIOToolsMixin read_file.
+        @tool(atomic=True, override=True)
         def read_file(
             file_path: str, offset: int = 0, limit: Optional[int] = None
         ) -> Dict[str, Any]:
@@ -2101,9 +2100,8 @@ class FileSearchToolsMixin:
                     "operation": "edit_file",
                 }
 
-        @tool(
-            atomic=True,
-        )
+        # Shares its name with FileSystemToolsMixin.browse_directory.
+        @tool(atomic=True, override=True)
         def browse_directory(
             directory_path: str = None, show_hidden: bool = False, sort_by: str = "name"
         ) -> Dict[str, Any]:

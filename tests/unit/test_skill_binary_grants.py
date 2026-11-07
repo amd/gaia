@@ -1065,6 +1065,7 @@ class _ExecutingAgent(_Gated):
     _coerce_scalar = _Base._coerce_scalar
     _COERCIBLE = _Base._COERCIBLE
     _resolve_tool_name = _Base._resolve_tool_name
+    _execution_tool_registry = _Base._execution_tool_registry
     _fold_tool_usage = _Base._fold_tool_usage
     current_plan = None
     current_step = 0

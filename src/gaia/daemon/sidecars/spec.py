@@ -114,6 +114,9 @@ class AgentSidecarSpec:
     category: str = ""
     tags: Tuple[str, ...] = field(default_factory=tuple)
     icon: str = ""
+    #: The agent class's ``CONSUMES_MCP_SERVERS``. The UI offers a per-agent
+    #: switch on each MCP connector only for agents that set it.
+    consumes_mcp_servers: bool = False
 
 
 # The email agent's caller-auth token channel (#1706). MUST equal
@@ -582,5 +585,6 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             category="general",
             tags=("general", "chat", "rag", "memory", "skills"),
             icon="sparkles",
+            consumes_mcp_servers=True,
         ),
     }
