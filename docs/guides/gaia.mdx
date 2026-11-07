@@ -90,7 +90,7 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-On a larger model the default construction registers **105 tools** — the 69 of the Chat agent's `full` profile, `search_tools`, plus 8 skill-library tools, 8 live-browser tools, 8 read-only email tools, 4 code-search tools, 3 image-generation tools, 3 audio-generation tools, and `remember_skill_lesson`. Some register conditionally: `search_documentation` needs `npx` on your PATH, and the browser tools need the `browser` extra (`pip install "amd-gaia[browser]"`). Grouped by what they're for:
+On a larger model the default construction registers **112 tools** — the 69 of the Chat agent's `full` profile, `search_tools`, plus 8 skill-library tools, 8 live-browser tools, 8 read-only email tools, 5 guide-card tools, 4 code-search tools, 3 image-generation tools, 3 audio-generation tools, 2 calculator-card tools, and `remember_skill_lesson`. Some register conditionally: `search_documentation` needs `npx` on your PATH, and the browser tools need the `browser` extra (`pip install "amd-gaia[browser]"`). Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
@@ -107,6 +107,8 @@ On a larger model the default construction registers **105 tools** — the 69 of
 | CLI setup | `check_cli_setup`, `install_cli`, `sign_in_cli` |
 | Skills | `list_skills`, `search_skill_hub`, `install_skill`, `capture_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status`, `remember_skill_lesson` |
 | Code search | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
+| Guide cards | `show_recipe`, `show_workout`, `show_how_to`, `show_checklist`, `show_itinerary` — the answer appears as a card in the Agent UI, and the reply adds a tip or two |
+| Calculators | `show_tip_calculator`, `show_loan_calculator` — a card that works out tips, bill splits and loan payments as you change the numbers, so the model never does the arithmetic |
 | Run control | `request_user_input`, `set_loop_state`, `sleep`, `read_tool_output` |
 
 Every one of them is available to the agent. A local model starts on the 26 most-used, in short form (name, one sentence, parameters), and moves to the full list at most once, when a turn needs a tool outside them or `search_tools` finds one. That keeps the first reply fast and the prompt cache warm. See [Dynamic Tool Loading](/guides/chat#dynamic-tool-loading).
