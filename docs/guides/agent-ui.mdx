@@ -102,6 +102,28 @@ tool calls, model loads, model memory and cost. Hover a number for the exact
 value. Anything that was not measured says "unknown". The panel reads nothing
 until you open it.
 
+### Watch Your PC's Resources
+
+A strip under the chat's title shows this PC's CPU, memory, GPU, NPU and
+network use, each with a graph of the last minute, so you can see the model
+working while it answers. The numbers match Windows Task Manager: CPU with its
+clock speed, memory in use out of the total, for a GPU or NPU the load of its
+busiest engine and the memory it holds, and for each connected network adapter
+what it sends (S, the dashed line) and receives (R). A PC with several GPUs
+numbers them from 0. Virtual adapters, such as Hyper-V, WSL and VPN ones, are
+left out, as Task Manager leaves them out.
+
+The strip is on in every chat. Close it with **✕**, and bring it back with the
+pulse button in the chat's header or **Settings › General › Show resource
+usage in chats**. GAIA remembers the choice. While the strip is closed or the
+window is hidden, GAIA stops measuring about 15 seconds later.
+
+On Linux the GPU tile appears for AMD GPUs, and macOS shows CPU, memory and
+network only. When usage can't be read, the strip says so and dims the last readings
+until it can read them again. If only the GPU or network can't be read, as in
+a virtual machine or over Remote Desktop, CPU and memory keep showing and that
+tile says **Unavailable**, with the reason when you point at it.
+
 ### Type While GAIA Works
 
 You can keep typing while a reply runs. Press Enter and the message waits in a
@@ -527,10 +549,11 @@ as you flip it:
   from the next launch. On Windows a launch at sign-in always starts in the
   tray.
 
-On a Linux desktop that shows no tray icons (stock GNOME, before the
-AppIndicator extension is turned on), the two tray switches are off and say
-why: closing the window quits GAIA, and every launch opens the window. Turn on
-the extension and restart GAIA to get them back.
+On a Linux desktop that shows no tray icons, such as stock GNOME, closing the
+window minimizes GAIA instead, with your model still loaded. Click GAIA in the
+dock to bring it back. To quit, right-click it there and choose Quit. **Start in
+the tray** stays off there, because there's no tray to open the window from.
+No extension is needed.
 
 ## Models and where they run
 
@@ -542,10 +565,11 @@ Open **Settings → Model** (or the model chip in the message box):
 | **Fireworks AI** | An API key | Sent to Fireworks AI (usage may be charged) |
 | **AMD LLM Gateway** | A gateway key (and URL, if not the default) | Sent to your gateway |
 
-- With [Local only](/reference/cli#local-only) on (`gaia config set network_policy local_ai_only`),
-  connecting Fireworks AI or the gateway and selecting a cloud model are refused
-  with a message saying so, and a saved cloud model isn't restored. Settings has no
-  switch for it yet; use the command.
+- With [Local only](/reference/cli#local-only) on, connecting Fireworks AI or the gateway
+  and selecting a cloud model are refused, with the providers shown as blocked. Turn it
+  on or off in **Settings → Privacy → Local only**; the CLI equivalent is
+  `gaia config set network_policy local_ai_only` (or `cloud_allowed`). A saved cloud
+  model isn't restored.
 - Keys are masked, go only to GAIA's local model server and your OS credential
   store, and are refused over mobile access. A saved key shows as a read-only row with
   its last four characters and whether it's connected. **Replace** swaps it, and
@@ -633,8 +657,8 @@ The same setting from a terminal:
 gaia config set llamacpp_backend vulkan   # vulkan | auto
 ```
 
-**Change model** opens Settings → Model. To use a different server, set
-`LEMONADE_BASE_URL`.
+**Change model** opens Settings → Model. To use a different server, enter its
+address under **Settings → Advanced → Model server** (see [Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run)).
 
 ## Permissions
 
@@ -816,7 +840,7 @@ much they use now.
 One window with General (language; appearance: Light, Dark, Match system; colors; the
 [desktop app's tray switches](#the-tray-icon); shortcuts),
 Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, the `.claude/skills` folder of the project GAIA is working in, or your other Claude Code skill folders, with **Use** to try one),
-Connectors, Memory, Notifications, Privacy and Advanced (model server and
+Connectors, Memory, Notifications, Read aloud, Privacy and Advanced (model server and
 llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
 back).
 
@@ -862,6 +886,18 @@ notification panel is open, and never for the chat you're looking at. In the
 desktop app it also keeps the PC from idle-sleeping while a chat is working; on
 battery it lets the PC sleep below the level you choose (20% by default).
 
+**Read aloud.** The speaker button on a reply reads it in a voice that runs on
+this PC through Lemonade; press it again to stop. Code blocks and links are
+skipped, so you hear the words. **Settings → Read aloud** picks the voice
+(American or British English, female or male, with **Preview**), the speed
+(0.5× to 2×), and whether every reply is read when it finishes. The voices
+speak English, so a reply in another language is read with an English accent.
+The first reading after a restart takes longer while Lemonade loads the voice.
+On a PC without the voice model, the first press downloads it once (~350 MB)
+and says so under the reply; reading starts when it finishes. (The agent's own
+`text_to_speech` tool never downloads it in the middle of a chat.)
+The [terminal app](/guides/tui) uses the same voice and speed, and so does GAIA when you ask it to save speech to a file.
+
 **One chat at a time on the model.** A second chat sent while another is
 working waits its turn and says so ("Waiting for the GPU — 1st in line", also
 on its row in the sidebar), then runs when the first finishes. **Stop** takes a
@@ -892,6 +928,17 @@ cloud and tells you how to go on: raise the limit, allow more for this month,
 or use a model on this PC. The total is an estimate at list price: it leaves
 out cache discounts, and turns that fail or are stopped before a reply, so
 your provider's bill is the final word.
+
+While a chat runs on a priced cloud model, the composer shows what it has cost
+so far and what all your chats have cost today, such as "$0.04 · today $0.31".
+Click it for each answer's cost, newest first, and a link to this month's total
+and limit. The amounts add up the cost each answer's details show, cache
+discounts included, so they can sit a little below the monthly total. "Today"
+is your own calendar day and counts the chats you still have. A stopped answer
+sends no token count, so its cost is unknown: it shows "Not reported", the
+total it belongs to reads as a floor, such as "≥ $0.04", and the breakdown says
+how many were left out, since the provider may still bill them. On a model on
+this PC, or a cloud model with no known price, nothing is shown.
 
 **Settings → Advanced → Model server** switches between GAIA's own Lemonade
 Server and one you already run: enter its address (and its API key, if it needs
@@ -1000,7 +1047,7 @@ Chats, documents and schedules are saved on disk as you go. What happens to work
 | What happened | A reply being written | A document being indexed |
 |---------------|-----------------------|--------------------------|
 | You switch chats, open Memory or Scheduled tasks, or close the browser tab | Keeps going; reopen the chat to watch it finish | Keeps going |
-| You close the desktop window | Keeps going: the window hides to the tray and GAIA keeps running. With that turned off, or on a desktop with no tray, closing quits (next row) | Keeps going |
+| You close the desktop window | Keeps going: the window hides to the tray (or, on a desktop with no tray, minimizes to the dock) and GAIA keeps running. With that turned off, closing quits (next row) | Keeps going |
 | You quit GAIA, it crashes, or the PC shuts down | Stops. On the next start the reply shows what it had written so far, which tools it had started, then "This answer was interrupted when GAIA closed. Send again to retry." A scheduled run cut short shows the same in its chat. | Stops. On the next start it shows as **Failed** with **Retry**, and "Indexing was interrupted when GAIA closed" under the document |
 
 GAIA never re-runs an interrupted reply by itself: it may already have run tools, and running them twice is not safe. Send the message again to retry.

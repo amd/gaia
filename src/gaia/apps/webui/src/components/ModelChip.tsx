@@ -6,6 +6,7 @@ import { AlertCircle, Check, ChevronDown, Cloud, Cpu, Download, HelpCircle, KeyR
 import { Popover } from './Popover';
 import './ModelPicker.css';
 import * as api from '../services/api';
+import { requestErrorText } from '../utils/requestErrors';
 import { useChatStore } from '../stores/chatStore';
 import {
     useModelStore, useInferencePlace, selectChipModel, displayModelName, distinctModelLabels, sameModelId, UNKNOWN_PLACE_TITLE,
@@ -13,6 +14,7 @@ import {
 import { STATE_LABELS, isDownloading, modelState, placementText } from './modelMeta';
 import { InfoBubble } from './InfoBubble';
 import { formatPrice } from './settings/cloudPrice';
+import { useT } from '../i18n/useT';
 import type { ProviderInfo, ProviderModel } from '../types';
 
 interface ProviderModels {
@@ -74,6 +76,7 @@ function StateMark({ m, onDownload, busy }: { m: ProviderModel; onDownload: () =
 
 /** The model the open chat runs on, where it runs, and a picker to change it. */
 export function ModelChip() {
+    const t = useT();
     const active = useModelStore((s) => s.active);
     const select = useModelStore((s) => s.select);
     const queued = useModelStore((s) => s.queued);
@@ -126,11 +129,13 @@ export function ModelChip() {
             // Fireworks is always offered (with "Add your key"); the gateway once registered.
             const shown = providers.filter((p) => !p.remote || p.models_discovered || p.id === 'fireworks' || p.registered);
             const lists = await Promise.all(shown.map(async (provider) => {
+                if (provider.blocked) return { provider, models: [], error: t('settings.privacy.localOnlyBlocked') };
                 if (provider.remote && !provider.models_discovered) return { provider, models: [] };
                 try {
-                    return { provider, models: (await api.listProviderModels(provider.id)).models };
+                    const response = await api.listProviderModels(provider.id);
+                    return { provider, models: response.models, error: response.blocked ? t('settings.privacy.localOnlyBlocked') : undefined };
                 } catch (err) {
-                    return { provider, models: [], error: err instanceof Error ? err.message : String(err) };
+                    return { provider, models: [], error: requestErrorText(err) };
                 }
             }));
             rememberNames(lists.flatMap((g) => g.models));
@@ -138,9 +143,9 @@ export function ModelChip() {
             if (!quiet) focusOnLoad.current = true;
             setGroups(lists.map((g) => ({ ...g, models: g.models.filter((m) => m.available !== false) })));
         } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
+            setError(requestErrorText(err));
         }
-    }, [rememberNames]);
+    }, [rememberNames, t]);
 
     useEffect(() => {
         if (open) {
@@ -212,7 +217,7 @@ export function ModelChip() {
             await load(true);
         } catch (err) {
             setPickAfterDownload((p) => (p?.model === model ? null : p));
-            setError(err instanceof Error ? err.message : String(err));
+            setError(requestErrorText(err));
         } finally {
             setDownloading(null);
             setRequestsPending((n) => n - 1);
@@ -240,7 +245,7 @@ export function ModelChip() {
             setOpen(false);
             return null;
         } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
+            const message = requestErrorText(err);
             setError(message);
             return message;
         } finally {

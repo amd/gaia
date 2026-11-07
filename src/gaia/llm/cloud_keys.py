@@ -20,6 +20,7 @@ reused here so both providers answer to one implementation.
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import Any, Callable, Dict, List, Optional
 
@@ -189,6 +190,83 @@ def ensure_authenticated(
     return True
 
 
+def env_key(provider: str) -> Optional[str]:
+    """A key for *provider* set in GAIA's own environment, else None."""
+    _check(provider)
+    if provider != "fireworks":
+        return None
+    from gaia.llm.providers.fireworks import API_KEY_ENV_VARS
+
+    for name in API_KEY_ENV_VARS:
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def provider_lost(provider: str, client: Optional[LemonadeClient] = None) -> bool:
+    """Whether the Lemonade *client* uses has *provider* unregistered or keyless,
+    as a restarted Lemonade does. A held key that finds no models is not lost."""
+    _check(provider)
+    client = client or LemonadeClient(verbose=False)
+    try:
+        base_url = client.credential_base_url()
+    except LemonadeClientError as e:
+        raise CloudKeyError(str(e)) from e
+    entry = _provider_entry(base_url, provider)
+    return not (entry and (entry.get("env_var_set") or entry.get("runtime_key_set")))
+
+
+def reconnect_provider(provider: str, client: Optional[LemonadeClient] = None) -> bool:
+    """Bring *provider* back on a Lemonade that restarted: register it, then key it.
+
+    A restarted Lemonade forgets its cloud providers as well as their keys, and
+    :func:`ensure_authenticated` keys only a provider that is still registered.
+    Fireworks is registered again, only on a Lemonade GAIA runs itself and only
+    when GAIA holds a key for it (saved, else in GAIA's environment); the
+    gateway's address is the user's, so it is not.
+    True when the provider is usable afterwards.
+    """
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+
+    _check(provider)
+    if cloud_blocked():
+        raise CloudKeyBlockedError(local_only_key_message(provider))
+    if provider != "fireworks":
+        return (
+            ensure_authenticated(provider, client=client)
+            if client
+            else ensure_authenticated(provider)
+        )
+    client = client or LemonadeClient(verbose=False)
+
+    def key() -> Optional[str]:
+        return recall_key(provider) or env_key(provider)
+
+    try:
+        base_url = client.credential_base_url()
+    except LemonadeClientError as e:
+        raise CloudKeyError(str(e)) from e
+    if gaia_runs_lemonade(base_url) and _provider_entry(base_url, provider) is None:
+        if not key():
+            return False
+        _request(base_url, "POST", "install", _fireworks_registration())
+    return ensure_authenticated(provider, client=client, recall=key)
+
+
+def _fireworks_registration() -> Dict[str, Any]:
+    from gaia.llm.providers.fireworks import FIREWORKS_BASE_URL
+
+    return {
+        "backend": "cloud",
+        "provider": "fireworks",
+        "wire_format": "openai",
+        "base_url": FIREWORKS_BASE_URL,
+        "auth_header_name": "Authorization",
+        "auth_header_prefix": "Bearer ",
+    }
+
+
 def users_lemonade_url() -> Optional[str]:
     """The Lemonade the user chose — ``LEMONADE_BASE_URL`` or the saved one — else None.
 
@@ -325,9 +403,12 @@ __all__ = [
     "CloudKeyError",
     "PROVIDERS",
     "ensure_authenticated",
+    "env_key",
     "env_var_for",
     "forget_key",
+    "provider_lost",
     "recall_key",
+    "reconnect_provider",
     "remember_key",
     "users_lemonade_url",
 ]

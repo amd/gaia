@@ -1615,6 +1615,7 @@ def register_installed_sidecars(registry: Any) -> None:
             category=spec.category,
             tags=list(spec.tags),
             icon=spec.icon,
+            consumes_mcp_servers=spec.consumes_mcp_servers,
         )
 
 

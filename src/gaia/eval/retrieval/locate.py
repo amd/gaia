@@ -92,7 +92,7 @@ class Evidence:
     """Where an answer lives: a page, a quote, or both.
 
     ``span`` is resolved against the indexed text by :func:`resolve_evidence`;
-    page-only evidence (FinanceBench) is matched by page.
+    page-only evidence is matched by page.
     """
 
     path: str

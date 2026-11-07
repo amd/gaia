@@ -48,6 +48,7 @@ FORBIDDEN = [
     r"twine\s+upload",
     r"gh-action-pypi-publish",
     r"action-gh-release",
+    r"github_release_retry",
     r"\bgh\s+release\b",
     r"\bgh\s+workflow\s+run\b",
     r"\bgh\s+api\b",

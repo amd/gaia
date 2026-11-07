@@ -394,7 +394,7 @@ def test_failed_repeats_on_the_legacy_path_keep_the_research():
     [
         (
             ConnectionError("Lemonade Server not reachable at http://localhost:8000"),
-            "Lemonade Server not reachable at http://localhost:8000",
+            "Couldn't reach the local LLM",
         ),
         ("", "empty reply"),
         (
@@ -419,10 +419,30 @@ def test_failed_closing_call_returns_the_notice_and_why(agent, caplog, reply, re
     assert len(failure_lines) == 1
     assert "couldn't" in failure_lines[0]
     assert len(_scope_lines(answer)) == 1
+    # The log keeps the exception itself, whatever words the answer uses.
     assert any(
-        r.levelno == logging.WARNING and reason in r.getMessage()
+        r.levelno == logging.WARNING and "Could not write" in r.getMessage()
         for r in caplog.records
     )
+
+
+def test_closing_overflow_note_opens_its_own_paragraph(agent):
+    """The summary can't fit even trimmed: the note names what wasn't written."""
+    too_long = (
+        "Error in chat completions (status 400): "
+        '{"error":{"message":"the request (500 tokens) exceeds the available '
+        'context size (300 tokens)."}}'
+    )
+    _stub_chat(agent, *_repeat_then(OverflowError(too_long)))
+
+    answer = agent.process_query("fix the loader and run the tests")["result"]
+
+    assert _CANNED in answer
+    assert (
+        "\n\nThe summary of what I did couldn't be written. "
+        f"{agent_module._CONTEXT_STILL_OVERFLOWING_MESSAGE}"
+    ) in answer
+    assert "status 400" not in answer
 
 
 @pytest.mark.parametrize(
@@ -550,8 +570,8 @@ def test_stop_during_the_closing_retry_reports_the_cancel():
     agent._cancel_event = threading.Event()
     tries = []
 
-    def _once(*_args, **kwargs):
-        tries.append(kwargs.get("offer_tools", True))
+    def _once(*args, **kwargs):
+        tries.append(args[4] if len(args) > 4 else kwargs.get("offer_tools", True))
         if len(tries) == 1:
             agent._cancel_event.set()
             raise agent_module._NotAnAnswer("the model asked to run x")

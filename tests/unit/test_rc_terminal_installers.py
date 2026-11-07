@@ -174,7 +174,7 @@ def test_the_final_release_job_steps(publish):
         "Check every desktop installer is attached",
         "actions/setup-python@v7",
         "Check the update manifests name only attached files",
-        "Create GitHub Release",
+        "Create GitHub Release with bounded rate-limit retry",
     ]
 
 

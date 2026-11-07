@@ -51,6 +51,8 @@ icon: "circle-question"
 
     The only network traffic is downloads during setup: the models you pick, Lemonade Server and the GAIA agent. Once installed, GAIA can run fully offline with the default Lemonade Server backend. This is a deliberate design choice — see §2 of the [desktop installer plan](/plans/desktop-installer) for the rationale.
 
+    When a model call fails, GAIA saves a problem report in `~/.gaia/failures/` on your PC, with keys and your home folder taken out. It stays there unless you choose to share it; see [problem reports](/reference/troubleshooting#a-model-call-failed-the-problem-report-it-names).
+
     **Caveat:** If you explicitly configure an external LLM provider (Claude API or OpenAI) via the provider settings, prompts and responses for those sessions are sent to the provider you selected. Local-first is the default; cloud is opt-in.
   </Accordion>
 

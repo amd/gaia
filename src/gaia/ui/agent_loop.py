@@ -545,12 +545,6 @@ class AgentLoop:
                         db, session.get("document_ids", [])
                     )
                     allowed = _helpers._compute_allowed_paths(rag_paths + lib_paths)
-                    # Beta dynamic tool loader (#1798). Inert here: autonomous
-                    # ticks use the default "full" prompt profile and the loader
-                    # only activates on the "doc" profile — wired for future-
-                    # proofing so this path stays in lock-step with server.py's
-                    # scheduled-prompt build if that ever changes.
-                    dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
                     config = GaiaAgentConfig(
                         model_id=model_id,
                         streaming=False,
@@ -560,7 +554,6 @@ class AgentLoop:
                         min_context_size=device_ctx,
                         allowed_paths=allowed,
                         ui_session_id=session_id,
-                        dynamic_tools=dynamic_tools,
                         memory_incognito=_helpers._memory_off(session, db),
                         surface="agent_ui",
                     )

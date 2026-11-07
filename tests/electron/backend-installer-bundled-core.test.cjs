@@ -70,7 +70,7 @@ function load({ shipsCore = true, flagship = false, env = {}, files: given = {} 
       if (n === "path") return path.posix;
       if (n === "os") return { ...require("os"), homedir: () => "/fixture" };
       if (n === "https" || n === "http") return { request: network, get: network };
-      if (n === "child_process") return { spawn, execSync: jest.fn(), spawnSync };
+      if (n === "child_process") return { spawn, execFileSync: jest.fn(), spawnSync };
       return require(n);
     },
   };

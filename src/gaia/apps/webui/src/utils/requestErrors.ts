@@ -15,7 +15,13 @@ export function isNetworkError(err: unknown): boolean {
 /** Why a request failed, as an `{error}` param: never the browser's raw "Failed to fetch". */
 export function requestErrorParam(err: unknown): Param {
     if (isNetworkError(err)) return ref('request.gaiaUnreachable');
-    if (err instanceof ApiError) return err.detail || err.message;
+    if (err instanceof ApiError) {
+        // The shared backend also serves the CLI and TUI, where its command
+        // remedy is correct. The Agent UI has its own Local only switch, so do
+        // not reflect that CLI-only instruction back into this surface.
+        if (/\blocal only is on\b/i.test(err.detail)) return ref('settings.privacy.localOnlyBlocked');
+        return err.detail || err.message;
+    }
     return err instanceof Error ? err.message : String(err);
 }
 

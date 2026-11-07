@@ -114,7 +114,8 @@ icon: "bug"
 
   <Accordion title="A cloud model or provider is refused: 'Local only is on'" icon="lock">
     `network_policy` is set to `local_ai_only`, so GAIA refuses every cloud AI model
-    and won't hand Lemonade a cloud key. Check it with `gaia config get
+    and won't hand Lemonade a cloud key. In the Agent UI, check or change it with
+    **Settings → Privacy → Local only**. From the terminal, check it with `gaia config get
     network_policy`, and allow cloud models again with `gaia config set
     network_policy cloud_allowed`. If you never set it, look at `~/.gaia/policy.json`:
     a file GAIA can't read counts as Local only. See [Local only](/reference/cli#local-only).
@@ -171,7 +172,7 @@ icon: "bug"
       keeps happening, the release asset changed and GAIA needs an update.
     - **`not published for <OS>/<arch>`** — there is no Lemonade build for this machine
       (for example, Intel Macs). Run Lemonade Server on another machine and point GAIA at
-      it with `LEMONADE_BASE_URL`.
+      it (see [A Lemonade on another computer](/guides/install#a-lemonade-on-another-computer)).
     - **`exited immediately` / `did not answer`** — the server started but failed. Its own
       error is in `~/.gaia/lemonade/lemond.log`.
     - **`could not bind port …: it was taken by another program first`** — another
@@ -747,6 +748,22 @@ error. To run the chat model in the cloud instead, see
     reach safe mode.
   </Accordion>
 
+  <Accordion title="GAIA's assistant stopped and is restarting" icon="rotate">
+    The desktop app restarts its assistant when it stops on its own. The banner
+    shows how long it has been restarting, and your chats are saved. GAIA tries
+    up to three times in ten minutes, waiting longer before each try. If they all
+    fail, a dialog offers to restart GAIA, save diagnostics, or quit, and the
+    banner offers **Restart GAIA**, which starts the assistant again without
+    closing the app.
+
+    To report it, choose **Save diagnostics** and attach the bundle. It holds
+    these files from `~/.gaia/`:
+
+    - `electron-main.log`: the exit code and the assistant's last output.
+    - `logs/backend-faults.log`: the stack of every thread, when the assistant
+      died in a hard crash that skipped normal logging.
+  </Accordion>
+
   <Accordion title="Cannot find module 'electron'" icon="window-restore">
     **Cause**: Import path is incorrect
 
@@ -892,6 +909,42 @@ error. To run the chat model in the cloud instead, see
       chat content). State and system info are still included.
 
     Attach the resulting `.tgz` to your GitHub issue.
+  </Accordion>
+
+  <Accordion title="A model call failed: the problem report it names" icon="file-medical">
+    When a call to a local model fails (GAIA couldn't reach the model
+    server, a model wouldn't load, the server stopped mid-answer or timed
+    out, setup failed, or an agent didn't start), GAIA saves what it saw at
+    that moment and the failed answer names it, for example
+    `GF-20261104-192233-3f2a`. Nothing is sent anywhere.
+
+    Each report is a JSON file in `~/.gaia/failures/` holding:
+    - GAIA, Python and Lemonade versions, the OS and kernel
+    - the CPU, GPU and NPU and each backend's state and version (llama.cpp,
+      FastFlowLM), as Lemonade reports them
+    - the model, the address the agent called and the one Lemonade listens
+      on (GAIA's own, one you installed, or a remote one), and whether an
+      API key was sent; never the key
+    - what GAIA last asked for: each load request (model, recipe options,
+      context window) and how the window was chosen, the free-memory check,
+      and each chat request's size (estimated prompt tokens, number of tools
+      and their schema size, `max_tokens`, streaming), with start and end
+      times, the HTTP status and body or the connection error. Never the
+      words of your messages
+    - the models Lemonade had loaded, whether `lemond`, `llama-server` and
+      `flm` were running and for how long, how GAIA's own `lemond` exited if
+      it stopped, and whether Lemonade restarted since the last report
+    - the error and the last 200 lines of GAIA's Lemonade log, where
+      llama.cpp and FastFlowLM print their own errors and exit codes
+
+    Keys, tokens and your home folder are taken out before the file is
+    written. GAIA keeps the last 10 reports, each at most 256 KB. It reads
+    only a Lemonade on this PC; a remote server is named but not contacted.
+
+    To share one, select **Save a troubleshooting report** under the failed
+    answer, or in **Settings → Privacy**. The bundle holds these reports,
+    GAIA's logs and this PC's details. Look it over, then attach it to your
+    GitHub issue along with the report name from the answer.
   </Accordion>
 </AccordionGroup>
 
