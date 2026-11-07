@@ -115,6 +115,9 @@ holding the index lock. A file that is still re-indexing, failed to re-index,
 was deleted, or is locked by another program is left out: `query_specific_file`
 returns `in_progress` or `error` for it, and the library-wide searches answer
 from the other files and name it in `files_left_out` and the `instruction`.
+A re-index that fails because the embedder is unavailable or the document
+cache is locked keeps the `index_document` tool's `error_type` and its
+`next_step` or `hint`.
 
 4. **Retrieval Evaluation (evaluate_retrieval)**
    - Keyword overlap calculation
@@ -228,7 +231,8 @@ class RAGToolsMixin:
                     "file": str, "path": str,  # not searched this call
                     "reason": str,   # "reindexing" | "reindex_failed" |
                                      # "missing" | "locked" | "unreadable"
-                    "message": str
+                    "error_type": str,  # A failed re-index's, when set
+                    "message": str   # Includes its next step
                 }],
                 "error_type": str,   # "embedding_unavailable" when the
                                      # embedder or Lemonade could not run

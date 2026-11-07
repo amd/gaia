@@ -311,20 +311,43 @@ def _bring_current(host: Any, rag: Any, paths) -> Dict[str, Dict[str, Any]]:
                 job,
             )
         elif not result.get("success"):
-            left_out[path] = _left_out(
-                path,
-                "reindex_failed",
-                f"{name} changed since it was indexed, and re-indexing it failed: "
-                f"{result.get('error', 'unknown error')}",
-            )
+            left_out[path] = _reindex_failure(path, result)
         elif isinstance(getattr(host, "indexed_files", None), set):
             _forget_evicted(host.indexed_files, result.get("evicted", []))
     return left_out
 
 
+def _reindex_failure(path: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Left-out entry for a failed re-index, keeping the index tool's advice."""
+    error_type = result.get("error_type")
+    if error_type == "embedding_unavailable":
+        advice = _index_embedding_error(result)
+    elif error_type in _CACHE_LOCK_HINTS:
+        advice = _index_cache_error(result, path)
+    else:
+        advice = None
+    entry = _left_out(
+        path,
+        "reindex_failed",
+        f"{Path(path).name} changed since it was indexed, and re-indexing it "
+        f"failed: {result.get('error', 'unknown error')}",
+    )
+    if error_type:
+        entry["error_type"] = error_type
+    if advice is not None:
+        entry["advice"] = advice
+        entry["message"] += " " + (advice.get("next_step") or advice["hint"])
+    return entry
+
+
 def _left_out_result(left_out: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """Tool result when nothing a search would cover can be served now."""
     entries = list(left_out.values())
+    if len(entries) == 1 and "advice" in entries[0]:
+        result = dict(entries[0]["advice"])
+        result["file_name"] = entries[0]["file"]
+        result["files_left_out"] = _public(entries)
+        return result
     if len(entries) == 1 and entries[0]["reason"] == "reindexing":
         result = _indexing_in_progress(entries[0]["job"])
         result["message"] = (
@@ -352,7 +375,49 @@ def _left_out_result(left_out: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _public(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return [{k: v for k, v in entry.items() if k != "job"} for entry in entries]
+    return [
+        {k: v for k, v in entry.items() if k not in ("job", "advice")}
+        for entry in entries
+    ]
+
+
+def _search_without(rag: Any, query: str, left_out) -> Tuple[List[str], List[float]]:
+    """``rag._retrieve_chunks`` minus the chunks the *left_out* files own."""
+    # pylint: disable=protected-access
+    snapshot = rag._search_chunks(query)
+    owner = snapshot["chunk_to_file"]
+    kept = [
+        (chunk, score)
+        for idx, chunk, score in zip(
+            snapshot["retrieved_indices"],
+            snapshot["retrieved_chunks"],
+            snapshot["scores"],
+        )
+        if owner.get(idx) not in left_out
+    ]
+    return [chunk for chunk, _ in kept], [score for _, score in kept]
+
+
+def _served_chunks(rag: Any, left_out) -> List[str]:
+    """Every chunk not owned by a *left_out* file."""
+    if not left_out:
+        return rag.chunks
+    with rag._state_lock:  # pylint: disable=protected-access
+        return [
+            chunk
+            for i, chunk in enumerate(rag.chunks)
+            if rag.chunk_to_file.get(i) not in left_out
+        ]
+
+
+def _served_positions(rag: Any, left_out) -> Dict[str, int]:
+    """First index of each chunk text owned by a file that is not left out."""
+    with rag._state_lock:  # pylint: disable=protected-access
+        positions: Dict[str, int] = {}
+        for i, chunk in enumerate(rag.chunks):
+            if rag.chunk_to_file.get(i) not in left_out:
+                positions.setdefault(chunk, i)
+        return positions
 
 
 def _left_out_note(left_out: Dict[str, Dict[str, Any]]) -> str:
@@ -825,15 +890,6 @@ class RAGToolsMixin:
                 left_out = _bring_current(self, rag, indexed)
                 if left_out and len(left_out) == len(indexed):
                     return _left_out_result(left_out)
-                stale_texts = set()
-                if left_out:
-                    with rag._state_lock:  # pylint: disable=protected-access
-                        stale_texts = {
-                            rag.chunks[i]
-                            for path in left_out
-                            for i in rag.file_to_chunk_indices.get(path, [])
-                            if i < len(rag.chunks)
-                        }
 
                 # Generate multiple search keys for better retrieval
                 search_keys = self._generate_search_keys(query)
@@ -863,7 +919,10 @@ class RAGToolsMixin:
                     try:
                         # Use RAG to retrieve chunks
                         # pylint: disable=protected-access
-                        chunks, scores = rag._retrieve_chunks(search_key)
+                        if left_out:
+                            chunks, scores = _search_without(rag, search_key, left_out)
+                        else:
+                            chunks, scores = rag._retrieve_chunks(search_key)
                         if chunks:
                             all_chunks.extend(chunks)
                             all_scores.extend(scores)
@@ -937,20 +996,12 @@ class RAGToolsMixin:
                         return _embedding_error(embedding_errors[-1])
                     raise key_failures[-1]
 
-                if stale_texts:
-                    kept_pairs = [
-                        (chunk, score)
-                        for chunk, score in zip(all_chunks, all_scores)
-                        if chunk not in stale_texts
-                    ]
-                    all_chunks = [chunk for chunk, _ in kept_pairs]
-                    all_scores = [score for _, score in kept_pairs]
-
                 # HYBRID SEARCH: add the chunks that best match the query's words
                 keyword_boost_info = []
                 keywords = keyword_index(rag)
+                owners = dict(rag.chunk_to_file) if left_out else {}
                 for chunk_idx, boost_score, matching_terms in keywords.rank(query):
-                    if keywords.texts[chunk_idx] in stale_texts:
+                    if owners.get(chunk_idx) in left_out:
                         continue
                     # Deduplication below keeps a chunk's higher score.
                     all_chunks.append(keywords.texts[chunk_idx])
@@ -1075,7 +1126,7 @@ class RAGToolsMixin:
 
                 kept = top_or_whole_index(
                     sorted_items,
-                    [chunk for chunk in rag.chunks if chunk not in stale_texts],
+                    _served_chunks(rag, left_out),
                     adaptive_max,
                     _CHUNK_CHARS,
                 )
@@ -1084,7 +1135,12 @@ class RAGToolsMixin:
 
                 # Find the actual chunk indices from the RAG system
                 chunk_indices = []
+                served_at = _served_positions(rag, left_out) if left_out else None
                 for chunk in top_chunks:
+                    if served_at is not None:
+                        # A twin chunk in a left-out file must not be cited.
+                        chunk_indices.append(served_at.get(chunk, -1))
+                        continue
                     # Find this chunk's index in the global chunks list
                     try:
                         idx = rag.chunks.index(chunk)
@@ -1715,14 +1771,7 @@ class RAGToolsMixin:
                 left_out = _bring_current(self, self.rag, indexed)
                 if left_out and len(left_out) == len(indexed):
                     return _left_out_result(left_out)
-                searched = list(self.rag.chunks)
-                if left_out:
-                    with self.rag._state_lock:  # pylint: disable=protected-access
-                        searched = [
-                            chunk
-                            for i, chunk in enumerate(self.rag.chunks)
-                            if self.rag.chunk_to_file.get(i) not in left_out
-                        ]
+                searched = list(_served_chunks(self.rag, left_out))
 
                 # Search through chunks for pattern
                 matching_chunks = []

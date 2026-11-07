@@ -360,3 +360,108 @@ def test_reindexing_an_edit_keeps_the_old_text_searchable_until_the_swap(tmp_pat
     assert result["success"] and result.get("reindexed") is True, result
     assert seen == [True]
     assert "Lisbon" not in " ".join(sdk.chunks)
+
+
+# --- a left-out file never takes an unchanged file's chunks with it ----------
+
+
+def test_identical_chunk_in_an_unchanged_file_is_still_served(tmp_path):
+    _, (doc, copy) = _setup(tmp_path, ("plan.txt", OLD, True), ("copy.txt", OLD, True))
+    doc.unlink()
+
+    library = _library()
+    assert library["status"] == "success", library
+    assert "Lisbon" in _served(library)
+    sources = {c["source_file"] for c in library["chunks"]}
+    assert sources == {str(copy.resolve())}
+    assert [f["file"] for f in library["files_left_out"]] == ["plan.txt"]
+
+    exact = _tool("search_indexed_chunks")(pattern="Lisbon")
+    assert exact["count"] > 0
+    assert [f["file"] for f in exact["files_left_out"]] == ["plan.txt"]
+
+
+# --- a failed re-index keeps the index tool's specific advice ----------------
+
+
+def _failing_reindex(sdk, stats):
+    real = sdk.index_document
+
+    def _index(path, *args, **kwargs):
+        if Path(path).name == "plan.txt":
+            return {"success": False, "file_name": "plan.txt", **stats}
+        return real(path, *args, **kwargs)
+
+    sdk.index_document = _index
+
+
+def test_reindex_with_the_embedder_down_keeps_its_next_step(tmp_path):
+    sdk, (doc, _) = _setup(
+        tmp_path, ("plan.txt", OLD, True), ("budget.txt", OTHER, True)
+    )
+    doc.write_text(NEW, encoding="utf-8")
+    _failing_reindex(
+        sdk,
+        {"error": "Embedding model unavailable", "error_type": "embedding_unavailable"},
+    )
+
+    scoped = _one_file(doc)
+    assert scoped["status"] == "error", scoped
+    assert scoped["error_type"] == "embedding_unavailable"
+    assert "gaia init --profile rag" in scoped["next_step"]
+    assert "Lisbon" not in str(scoped)
+
+    library = _library()
+    assert library["status"] == "success", library
+    (entry,) = library["files_left_out"]
+    assert entry["error_type"] == "embedding_unavailable"
+    assert "gaia init --profile rag" in entry["message"]
+    assert "Lisbon" not in str(library)
+
+
+def test_reindex_with_the_cache_busy_keeps_its_hint(tmp_path):
+    sdk, (doc,) = _setup(tmp_path, ("plan.txt", OLD, True))
+    doc.write_text(NEW, encoding="utf-8")
+    _failing_reindex(
+        sdk,
+        {
+            "error": "Document cache is busy",
+            "error_type": "cache_busy",
+            "cache_dir": str(tmp_path / "cache"),
+        },
+    )
+
+    scoped = _one_file(doc)
+
+    assert scoped["status"] == "error", scoped
+    assert scoped["error_type"] == "cache_busy"
+    assert "Another process is using the document cache" in scoped["hint"]
+    assert "Lisbon" not in str(scoped)
+
+
+# --- end to end ---------------------------------------------------------------
+
+
+def _call_within(name, deadline_s=5.0, **kwargs):
+    holder = {}
+    worker = threading.Thread(
+        target=lambda: holder.update(result=_tool(name)(**kwargs)), daemon=True
+    )
+    worker.start()
+    worker.join(deadline_s)
+    assert not worker.is_alive(), f"{name} blocked on a re-index"
+    return holder["result"]
+
+
+def test_a_real_sdk_serves_the_current_text_after_a_same_size_edit(tmp_path):
+    """A same-size edit with the mtime restored still reaches a scoped query."""
+    _, (doc,) = _setup(tmp_path, ("plan.txt", OLD, False))
+    _write_keeping_stat(doc, NEW)
+
+    result = _call_within(
+        "query_specific_file", file_path=str(doc), query="launch location"
+    )
+
+    assert result["status"] == "success", result
+    assert "Oslo" in _served(result)
+    assert "Lisbon" not in _served(result)
