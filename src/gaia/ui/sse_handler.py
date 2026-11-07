@@ -20,7 +20,6 @@ import time
 import uuid
 from collections import deque
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterator, List, Optional
 
 from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, call_risk
