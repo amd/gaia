@@ -2839,6 +2839,24 @@ class TestEmbeddingPipeline:
         with pytest.raises(RuntimeError, match="Embedding failed"):
             host._embed_text("Should fail with broken embedder")
 
+    def test_embed_text_caps_input_at_the_embedders_window(self, embed_host):
+        """A 4,000-char turn is cut to what the embedder takes whole (#4729)."""
+        from gaia.llm.lemonade_client import EMBED_MAX_CHARS
+
+        embed_host._embed_text("9" * 4000)
+
+        (texts,) = embed_host._embedder.embed.call_args.args
+        assert texts == ["9" * EMBED_MAX_CHARS]
+
+    def test_embed_text_sends_text_at_the_cap_unchanged(self, embed_host):
+        from gaia.llm.lemonade_client import EMBED_MAX_CHARS
+
+        text = "a" * EMBED_MAX_CHARS
+        embed_host._embed_text(text)
+
+        (texts,) = embed_host._embedder.embed.call_args.args
+        assert texts == [text]
+
     def test_embed_text_caches_embedder(self, embed_host):
         """_get_embedder() returns the same cached instance on repeated calls."""
         embedder1 = embed_host._get_embedder()
