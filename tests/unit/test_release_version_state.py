@@ -95,3 +95,13 @@ def test_the_cli_reads_this_checkouts_tags(tmp_path):
 
     assert run("0.26.0") == "next-line"
     assert run("0.27.0") == "mismatch"
+
+
+def test_a_hung_git_fails_loudly(monkeypatch):
+    def hang(cmd, **kwargs):
+        assert kwargs["timeout"] == state.GIT_TIMEOUT_SECONDS
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(state.subprocess, "run", hang)
+    with pytest.raises(RuntimeError, match="did not finish within 60s"):
+        state.main(["v0.25.4", "0.26.0"])

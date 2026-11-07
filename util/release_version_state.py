@@ -28,6 +28,8 @@ from typing import Iterable
 
 _FINAL = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
+GIT_TIMEOUT_SECONDS = 60
+
 
 def _parse(version: str) -> tuple[int, int, int] | None:
     match = _FINAL.match(version)
@@ -60,12 +62,20 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 2
-    tags = subprocess.run(
-        ["git", "tag", "--list", "v*"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.split()
+    try:
+        tags = subprocess.run(
+            ["git", "tag", "--list", "v*"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT_SECONDS,
+        ).stdout.split()
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"`git tag --list` did not finish within {GIT_TIMEOUT_SECONDS}s. "
+            "Run this script from a git checkout with its tags fetched "
+            "(actions/checkout with fetch-depth: 0)."
+        ) from e
     print(classify(argv[0], argv[1], tags))
     return 0
 
