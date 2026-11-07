@@ -10,6 +10,7 @@ import { ModelNeededDialog } from './components/ModelNeededDialog';
 import { SetupScreen } from './components/SetupScreen';
 import { ensureModel } from './stores/modelNeededStore';
 import { SettingsDialog } from './components/settings/SettingsDialog';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { DownloadChip } from './components/setup/DownloadChip';
@@ -756,11 +757,13 @@ function App() {
                 aria-hidden="true"
             />
 
-            <Sidebar
-                onNewChat={newChat}
-                onMobileAccess={isMobile ? undefined : () => void openMobileAccess()}
-                tunnelActive={tunnelActive}
-            />
+            <ErrorBoundary area="sidebar">
+                <Sidebar
+                    onNewChat={newChat}
+                    onMobileAccess={isMobile ? undefined : () => void openMobileAccess()}
+                    tunnelActive={tunnelActive}
+                />
+            </ErrorBoundary>
 
             <div className="main-content">
                 {setup.state === 'ready' && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
@@ -791,7 +794,8 @@ function App() {
                         </button>
                     </div>
                 )}
-                {main}
+                {/* Keyed so opening another chat clears a crashed one. */}
+                <ErrorBoundary key={currentSessionId ?? 'new'} area="main">{main}</ErrorBoundary>
             </div>
 
             {showSchedules && <Suspense fallback={null}><ScheduleManager /></Suspense>}

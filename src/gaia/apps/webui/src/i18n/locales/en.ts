@@ -2655,6 +2655,10 @@ export const enMessages = {
     'resources.error': "Can't read this PC's usage. Trying again…",
     'resources.settings': 'Show resource usage in chats',
     'resources.settingsHint': 'CPU, memory, GPU, NPU and network use on this PC, updated every second.',
+    'errorBoundary.title': 'Something went wrong',
+    'errorBoundary.body': 'This part of GAIA hit an error. The rest of the app still works.',
+    'errorBoundary.retry': 'Try again',
+    'errorBoundary.reload': 'Reload',
 } as const;
 
 export const en: Locale = {

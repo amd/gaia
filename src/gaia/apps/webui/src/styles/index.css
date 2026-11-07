@@ -713,6 +713,22 @@ textarea:focus-visible {
     color: var(--text-primary);
 }
 
+/* Shown in place of a screen that failed to render (ErrorBoundary.tsx). */
+.error-boundary {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 24px;
+    text-align: center;
+    color: var(--text-primary);
+}
+.error-boundary-title { font-size: 15px; font-weight: 600; }
+.error-boundary-body { color: var(--text-secondary); font-size: var(--fs-ui); }
+.error-boundary-actions { display: flex; gap: 8px; margin-top: 4px; }
+
 /* ── Responsive: Mobile (<= 768px) ─────────────────────────────── */
 @media (max-width: 768px) {
     .sidebar-toggle { display: flex; }
