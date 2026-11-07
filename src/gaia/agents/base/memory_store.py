@@ -406,9 +406,12 @@ CONFIDENCE_BUMP_PER_RECALL: float = 0.02
 LOW_CONFIDENCE_PRUNE_THRESHOLD: float = 0.1
 
 
+_SAME_WORDS_RE = re.compile(_MEMORY_SYMBOL_RE.pattern + r"|[a-z0-9]+", re.IGNORECASE)
+
+
 def _same_words(text: str) -> str:
-    """*text*'s words in order, ignoring case and punctuation."""
-    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
+    """*text*'s words in order, ignoring case and punctuation but not signs."""
+    return " ".join(_SAME_WORDS_RE.findall(text.lower()))
 
 
 def _word_overlap(text1: str, text2: str) -> float:
