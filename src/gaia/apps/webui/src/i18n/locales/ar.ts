@@ -1765,6 +1765,33 @@ const messages: Messages = {
     'settings.connectors.actions': 'إجراءات الموصل',
     'settings.connectors.disable': 'تعطيل',
     'settings.connectors.enable': 'تفعيل',
+    'settings.connectors.fieldsJoin': '، ',
+
+    // Settings > Connectors: the built-in catalog's text. Names the user must find on
+    // another site (portal pages, account types) stay in English, as that site shows them.
+    'connectors.google.description': 'اربط GAIA بحسابك في Google لاستخدام Gmail والتقويم وDrive وغيرها.',
+    'connectors.google.client_id.label': 'معرّف عميل OAuth',
+    'connectors.google.client_id.help': 'من Google Cloud Console، افتح APIs & Services ثم Credentials ثم عميل OAuth 2.0 الخاص بك من نوع Desktop app. يبدأ بأرقام وينتهي بـ apps.googleusercontent.com',
+    'connectors.google.client_secret.label': 'سر عميل OAuth',
+    'connectors.google.client_secret.help': 'من عميل OAuth نفسه من نوع Desktop app. تشترطه Google حتى في تدفقات PKCE. يُخزَّن مشفرًا في سلسلة مفاتيح النظام.',
+    'connectors.microsoft.description': 'اربط GAIA بحساب Microsoft الشخصي (Outlook.com أو Hotmail أو Live) للوصول إلى بريد Outlook والتقويم وOneDrive وغيرها عبر Microsoft Graph. لحساب عمل أو مؤسسة تعليمية في Microsoft 365، استخدم موصل Microsoft Work or School بدلًا منه.',
+    'connectors.microsoft.client_id.label': 'معرّف التطبيق (العميل)',
+    'connectors.microsoft.client_id.help': 'من مدخل Azure، افتح App registrations ثم تطبيقك ثم Overview. سجّل التطبيق بنوع الحسابات «Personal Microsoft accounts only» (أو النوع المشترك «any organizational directory and personal Microsoft accounts»، الذي يعمل أيضًا مع جهة المصادقة consumers)، وأضف عنوان إعادة توجيه http://localhost من نوع «Mobile and desktop applications». القيمة بصيغة GUID، مثل 11112222-bbbb-3333-cccc-4444dddd5555.',
+    'connectors.microsoft.client_secret.label': 'سر العميل (للتطبيقات السرية فقط)',
+    'connectors.microsoft.client_secret.help': 'اتركه فارغًا في التدفق القياسي للعميل العام (تطبيقات سطح المكتب)، إذ لا تسمح Microsoft بسر فيه. لا تملأه إلا إذا سجّلت تطبيق ويب سريًا. يُخزَّن مشفرًا في سلسلة مفاتيح النظام.',
+    'connectors.microsoft_work.description': 'اربط GAIA بحساب العمل أو المؤسسة التعليمية في Microsoft 365 (Entra ID) للوصول إلى بريد Outlook والتقويم وOneDrive وغيرها عبر Microsoft Graph. لحساب شخصي على Outlook.com أو Hotmail أو Live، استخدم موصل Microsoft Personal بدلًا منه.',
+    'connectors.microsoft_work.client_id.label': 'معرّف التطبيق (العميل)',
+    'connectors.microsoft_work.client_id.help': 'من مدخل Azure، افتح App registrations ثم تطبيقك ثم Overview. سجّل التطبيق بنوع حسابات دليل مؤسسي («Accounts in this organizational directory only» لمستأجر واحد، أو «Accounts in any organizational directory» لعدة مستأجرين)، وأضف عنوان إعادة توجيه http://localhost من نوع «Mobile and desktop applications». القيمة بصيغة GUID، مثل 11112222-bbbb-3333-cccc-4444dddd5555.',
+    'connectors.microsoft_work.client_secret.label': 'سر العميل (للتطبيقات السرية فقط)',
+    'connectors.microsoft_work.client_secret.help': 'اتركه فارغًا في التدفق القياسي للعميل العام (تطبيقات سطح المكتب)، إذ لا تسمح Microsoft بسر فيه. لا تملأه إلا إذا سجّلت تطبيق ويب سريًا. يُخزَّن مشفرًا في سلسلة مفاتيح النظام.',
+    'connectors.microsoft_work.tenant_id.label': 'معرّف الدليل (المستأجر)',
+    'connectors.microsoft_work.tenant_id.help': 'اختياري. اتركه فارغًا لاستخدام جهة المصادقة organizations متعددة المستأجرين (أي حساب عمل أو مؤسسة تعليمية). إذا كان تسجيل تطبيقك لمستأجر واحد، فأدخل هنا معرّف الدليل (المستأجر) من Azure AD / Entra ID بصيغة GUID، وهو مطلوب كي تجدّد خدمة GAIA الخلفية تسجيل الدخول دون ضبط متغيرات البيئة (#2616). تعرض صفحة Overview ثلاث قيم GUID؛ انسخ القيمة المعنونة «Directory (tenant) ID»، لا «Application (client) ID» ولا «Object ID». لا يُتحقق من القيمة هنا، لكن القيمة الخاطئة تُظهر خطأً واضحًا في صفحة تسجيل الدخول لدى Microsoft ولا تمر بصمت.',
+    'connectors.mcp-github.description': 'المستودعات وطلبات الدمج والمشكلات وسير العمل — وصول كامل إلى GitHub.',
+    'connectors.mcp-tavily.description': 'البحث في الويب واستخراج المحتوى للوكلاء عبر واجهة Tavily البرمجية.',
+    'connectors.mcp-memory.description': 'ذاكرة دائمة للوكلاء قائمة على رسم بياني معرفي.',
+    'connectors.mcp-git.description': 'أدوات لمستودعات Git: status وdiff وlog وshow وbranch وcommit.',
+    'connectors.mcp-slack.description': 'قراءة القنوات وسلاسل الرسائل والرسائل المباشرة في مساحة عمل Slack الخاصة بك.',
+    'connectors.mcp-discord.description': 'قراءة الرسائل وإرسالها في خوادم Discord التي انضم إليها البوت الخاص بك.',
 
     // The connection banner
     'banner.serverStopped': 'خادم النماذج لا يعمل.',
