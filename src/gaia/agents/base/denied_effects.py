@@ -332,6 +332,13 @@ def _norm_path(raw: str, cwd: str) -> Optional[str]:
         return None
 
 
+def _norm_path_abs(raw: str) -> Optional[str]:
+    """An already-resolved absolute path, normalised like every other target."""
+    if not isinstance(raw, str) or not os.path.isabs(raw):
+        return None
+    return os.path.normcase(os.path.abspath(raw))
+
+
 def _hosts(text: str) -> Set[Effect]:
     return {
         Effect(NETWORK, m.group(1).lower().strip("[]").rstrip("."))
@@ -574,23 +581,73 @@ def _argv_from_node(node: ast.AST) -> Optional[List[str]]:
     return argv or None
 
 
-#: Module functions that delete or move their first argument.
-_FILE_CHANGERS = {
-    "shutil": frozenset({"rmtree", "move"}),
-    "os": frozenset({"remove", "unlink", "rmdir", "removedirs", "rename", "replace"}),
+#: Module functions that change a path, and the arguments naming it: each is
+#: ``(position, keyword)``. A copy changes only its destination.
+_FILE_CHANGERS: Dict[str, Dict[str, Tuple[Tuple[int, str], ...]]] = {
+    "shutil": {
+        "rmtree": ((0, "path"),),
+        "move": ((0, "src"), (1, "dst")),
+        "copy": ((1, "dst"),),
+        "copy2": ((1, "dst"),),
+        "copyfile": ((1, "dst"),),
+        "copytree": ((1, "dst"),),
+    },
+    "os": {
+        "remove": ((0, "path"),),
+        "unlink": ((0, "path"),),
+        "rmdir": ((0, "path"),),
+        "removedirs": ((0, "name"),),
+        "rename": ((0, "src"), (1, "dst")),
+        "replace": ((0, "src"), (1, "dst")),
+        "renames": ((0, "old"), (1, "new")),
+        "makedirs": ((0, "name"),),
+        "mkdir": ((0, "path"),),
+        "truncate": ((0, "path"),),
+        "symlink": ((1, "dst"),),
+        "link": ((1, "dst"),),
+    },
 }
-#: ``pathlib.Path`` methods that delete, move or overwrite the path itself.
-#: ``rename``/``replace`` only on a receiver known to be a Path: ``str.replace``.
+#: Modules whose ``open(file, mode)`` writes when the mode says so.
+_OPENERS = frozenset({"io", "codecs", "builtins", "gzip", "bz2", "lzma"})
+_TRACKED_MODULES = frozenset({"os", "shutil", "pathlib", "tempfile"}) | _OPENERS
+#: ``os.open`` flags that write; a flag it can't name is read as a write.
+_WRITE_FLAGS = frozenset({"O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND"})
+#: ``pathlib.Path`` methods that delete or overwrite the path, on any receiver.
 _PATH_CHANGERS = frozenset({"unlink", "rmdir", "write_text", "write_bytes"})
+#: Only on a receiver known to be a Path: ``str.replace``, ``tarfile.open``.
+_PATH_ONLY_CHANGERS = frozenset({"mkdir", "touch", "symlink_to", "hardlink_to"})
 _PATH_MOVERS = frozenset({"rename", "replace"})
 _PATH_TYPES = frozenset({"Path", "PurePath", "WindowsPath", "PosixPath"})
+#: Path methods returning a path derived from the receiver.
+_PATH_DERIVERS = frozenset(
+    {"joinpath", "with_name", "with_suffix", "resolve", "absolute", "expanduser"}
+)
+#: ``os.path`` functions that return their argument's path, reshaped.
+_SAME_PATH_FUNCS = frozenset({"abspath", "normpath", "realpath", "expanduser"})
+
+
+def _arg(call: ast.Call, position: int, keyword: str) -> Optional[ast.AST]:
+    """The argument at *position*, or passed as *keyword*; None if unseen."""
+    if any(isinstance(arg, ast.Starred) for arg in call.args[: position + 1]):
+        return None
+    if len(call.args) > position:
+        return call.args[position]
+    return next((k.value for k in call.keywords if k.arg == keyword), None)
+
+
+def _spreads(call: ast.Call) -> bool:
+    """``f(*paths)`` / ``f(**kw)``: an argument may be there unseen."""
+    return any(isinstance(a, ast.Starred) for a in call.args) or any(
+        k.arg is None for k in call.keywords
+    )
 
 
 class _PyFiles:
-    """Which paths a snippet deletes, moves or overwrites, as far as it shows.
+    """Which paths a snippet deletes, moves, writes or creates, as far as it shows.
 
-    Tracks literal strings, names bound to them, ``os.path.join``, ``Path``
-    construction and ``/``. A target it cannot read is :data:`COMPUTED_PATH`.
+    Tracks literal strings, names bound to them, f-strings, ``os.path.join``,
+    ``Path`` construction, ``/`` and ``.parent``. A target it cannot read is
+    :data:`COMPUTED_PATH`.
     """
 
     def __init__(self, tree: ast.AST, cwd: str):
@@ -603,21 +660,18 @@ class _PyFiles:
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     root = alias.name.split(".")[0]
-                    if root in ("os", "shutil", "pathlib"):
-                        self.modules[alias.asname or root] = root
+                    if root in _TRACKED_MODULES:
+                        # ``import os.path as osp`` binds os.path, not os.
+                        bound = alias.name if alias.asname else root
+                        self.modules[alias.asname or root] = bound
             elif isinstance(node, ast.ImportFrom) and node.module:
-                root = node.module.split(".")[0]
                 for alias in node.names:
-                    self.funcs[alias.asname or alias.name] = (root, alias.name)
+                    self.funcs[alias.asname or alias.name] = (node.module, alias.name)
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign) and len(node.targets) == 1:
-                target = node.targets[0]
-                if isinstance(target, ast.Name):
-                    value = self.text(node.value)
-                    if value is not None:
-                        self.values[target.id] = value
-                    if self.is_path(node.value):
-                        self.paths.add(target.id)
+                self._bind(node.targets[0], node.value)
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                self._bind(node.target, node.value)
             elif isinstance(node, ast.For) and isinstance(node.target, ast.Name):
                 iterated = node.iter
                 if (
@@ -626,6 +680,23 @@ class _PyFiles:
                     and iterated.func.attr in ("iterdir", "glob", "rglob")
                 ):
                     self.paths.add(node.target.id)
+
+    def _bind(self, target: ast.AST, value: ast.AST) -> None:
+        if (
+            isinstance(target, ast.Tuple)
+            and isinstance(value, ast.Tuple)
+            and len(target.elts) == len(value.elts)
+        ):
+            for name, item in zip(target.elts, value.elts):
+                self._bind(name, item)
+            return
+        if not isinstance(target, ast.Name):
+            return
+        text = self.text(value)
+        if text is not None:
+            self.values[target.id] = text
+        if self.is_path(value):
+            self.paths.add(target.id)
 
     def _module_of(self, node: ast.AST) -> Optional[str]:
         if isinstance(node, ast.Name):
@@ -643,12 +714,29 @@ class _PyFiles:
             return self._module_of(func.value), func.attr
         return None, None
 
+    def _is_path_type(self, node: ast.AST) -> bool:
+        """``Path`` / ``pathlib.Path`` / an alias of it, uncalled."""
+        if isinstance(node, ast.Name):
+            module, name = self.funcs.get(node.id, (None, node.id))
+            return name in _PATH_TYPES and module in (None, "pathlib")
+        if isinstance(node, ast.Attribute):
+            return node.attr in _PATH_TYPES and self._module_of(node.value) == "pathlib"
+        return False
+
     def is_path(self, node: ast.AST) -> bool:
         if isinstance(node, ast.Name):
             return node.id in self.paths
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
             return self.is_path(node.left)
+        if isinstance(node, ast.Attribute) and node.attr == "parent":
+            return self.is_path(node.value)
         if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute):
+                if func.attr in _PATH_DERIVERS and self.is_path(func.value):
+                    return True
+                if func.attr in ("home", "cwd") and self._is_path_type(func.value):
+                    return True
             module, name = self._callee(node)
             return name in _PATH_TYPES and module in (None, "pathlib")
         return False
@@ -660,6 +748,9 @@ class _PyFiles:
             return literal
         if isinstance(node, ast.Name):
             return self.values.get(node.id)
+        if isinstance(node, ast.JoinedStr):
+            parts = [self._fstring_part(value) for value in node.values]
+            return None if any(p is None for p in parts) else "".join(parts)
         if isinstance(node, ast.BinOp):
             left, right = self.text(node.left), self.text(node.right)
             if left is None or right is None:
@@ -669,39 +760,157 @@ class _PyFiles:
             if isinstance(node.op, ast.Div):
                 return os.path.join(left, right)
             return None
+        if isinstance(node, ast.Attribute) and node.attr == "parent":
+            inner = self.text(node.value)
+            return os.path.dirname(inner.rstrip("\\/")) if inner else None
         if isinstance(node, ast.Call):
-            module, name = self._callee(node)
-            if name in _PATH_TYPES or (name == "str" and module is None):
-                return self.text(node.args[0]) if len(node.args) == 1 else None
-            if module == "os.path" and name == "join" and node.args:
+            return self._call_text(node)
+        return None
+
+    def _fstring_part(self, node: ast.AST) -> Optional[str]:
+        literal = _const_str(node)
+        if literal is not None:
+            return literal
+        if (
+            isinstance(node, ast.FormattedValue)
+            and node.format_spec is None
+            and node.conversion in (-1, ord("s"))
+        ):
+            return self.text(node.value)
+        return None
+
+    def _call_text(self, node: ast.Call) -> Optional[str]:
+        func = node.func
+        if isinstance(func, ast.Attribute) and self.is_path(func.value):
+            base = self.text(func.value)
+            if func.attr in ("resolve", "absolute", "expanduser"):
+                return base
+            args = [self.text(arg) for arg in node.args]
+            if base is None or any(arg is None for arg in args):
+                return None
+            if func.attr == "joinpath":
+                return os.path.join(base, *args)
+            if func.attr == "with_name" and len(args) == 1:
+                return os.path.join(os.path.dirname(base), args[0])
+            if func.attr == "with_suffix" and len(args) == 1:
+                return os.path.splitext(base)[0] + args[0]
+            return None
+        if isinstance(func, ast.Attribute) and self._is_path_type(func.value):
+            return {"home": "~", "cwd": self.cwd}.get(func.attr)
+        module, name = self._callee(node)
+        # Where a snippet writes when it is steered somewhere allowed instead.
+        if (module, name) == ("os", "getcwd"):
+            return self.cwd
+        if (module, name) == ("tempfile", "gettempdir"):
+            return tempfile.gettempdir()
+        if name in _PATH_TYPES or (name == "str" and module is None):
+            return self.text(node.args[0]) if len(node.args) == 1 else None
+        if module == "os.path" and len(node.args) >= 1:
+            if name == "join":
                 parts = [self.text(arg) for arg in node.args]
                 if any(part is None for part in parts):
                     return None
                 return os.path.join(*parts)
+            if name in _SAME_PATH_FUNCS and len(node.args) == 1:
+                return self.text(node.args[0])
+            if name == "dirname" and len(node.args) == 1:
+                inner = self.text(node.args[0])
+                return os.path.dirname(inner) if inner is not None else None
+        return None
+
+    def _known_prefix(self, node: ast.AST) -> Optional[str]:
+        """The folder a partly computed path is known to be under."""
+        if isinstance(node, ast.Call):
+            module, name = self._callee(node)
+            if module == "os.path" and name == "join" and node.args:
+                return self.text(node.args[0])
+            func = node.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "joinpath"
+                and self.is_path(func.value)
+            ):
+                return self.text(func.value)
+        if isinstance(node, ast.BinOp):
+            return self.text(node.left)
+        if isinstance(node, ast.JoinedStr):
+            known = ""
+            for value in node.values:
+                part = self._fstring_part(value)
+                if part is None:
+                    break
+                known += part
+            cut = max(known.rfind("/"), known.rfind("\\"))
+            return known[:cut] if cut > 0 else None
         return None
 
     def _target(self, node: ast.AST) -> Effect:
-        value = self.text(node)
         # ``join(folder, name)`` / ``folder / name``: the folder is reached.
-        if value is None and isinstance(node, ast.Call):
-            module, name = self._callee(node)
-            if module == "os.path" and name == "join" and node.args:
-                value = self.text(node.args[0])
-        if value is None and isinstance(node, ast.BinOp):
-            value = self.text(node.left)
+        value = self.text(node) or self._known_prefix(node)
         path = _norm_path(value, self.cwd) if value else None
         return Effect(PATH, path or COMPUTED_PATH)
 
+    def _targets(self, call: ast.Call, spec: Sequence[Tuple[int, str]]) -> Set[Effect]:
+        found = {
+            self._target(node)
+            for node in (_arg(call, pos, kw) for pos, kw in spec)
+            if node is not None
+        }
+        if len(found) < len(spec) and _spreads(call):
+            found.add(Effect(PATH, COMPUTED_PATH))
+        return found
+
+    def _writes(self, mode: Optional[ast.AST]) -> bool:
+        """An ``open`` mode that writes; a mode the code computes may."""
+        if mode is None:
+            return False
+        text = self.text(mode)
+        return text is None or any(flag in text for flag in "wax+")
+
+    def _os_open_writes(self, flags: Optional[ast.AST]) -> bool:
+        if flags is None:
+            return False
+        if isinstance(flags, ast.Constant):
+            return flags.value != 0
+        names = {
+            n.attr if isinstance(n, ast.Attribute) else n.id
+            for n in ast.walk(flags)
+            if isinstance(n, (ast.Attribute, ast.Name))
+        } - set(self.modules)
+        return bool(names & _WRITE_FLAGS) or any(
+            not name.startswith("O_") for name in names
+        )
+
     def changed(self, call: ast.Call) -> Set[Effect]:
         module, name = self._callee(call)
-        if module in _FILE_CHANGERS and name in _FILE_CHANGERS[module]:
-            return {self._target(call.args[0])} if call.args else set()
-        func = call.func
-        if isinstance(func, ast.Attribute) and (
-            func.attr in _PATH_CHANGERS
-            or (func.attr in _PATH_MOVERS and self.is_path(func.value))
+        spec = _FILE_CHANGERS.get(module or "", {}).get(name or "")
+        if spec:
+            return self._targets(call, spec)
+        if module == "os" and name == "open":
+            if self._os_open_writes(_arg(call, 1, "flags")):
+                return self._targets(call, ((0, "path"),))
+            return set()
+        if name == "open" and (
+            module in _OPENERS or (module is None and isinstance(call.func, ast.Name))
         ):
+            if self._writes(_arg(call, 1, "mode")):
+                return self._targets(call, ((0, "file"),))
+            return set()
+        func = call.func
+        if not isinstance(func, ast.Attribute):
+            return set()
+        if func.attr in _PATH_CHANGERS:
             return {self._target(func.value)}
+        if not self.is_path(func.value):
+            return set()
+        if func.attr in _PATH_ONLY_CHANGERS:
+            return {self._target(func.value)}
+        if func.attr == "open":
+            if self._writes(_arg(call, 0, "mode")):
+                return {self._target(func.value)}
+            return set()
+        if func.attr in _PATH_MOVERS:
+            return {self._target(func.value)} | self._targets(call, ((0, "target"),))
         return set()
 
 
@@ -790,12 +999,6 @@ def _effects_of_python_call(
         if argv:
             return _effects_of_argv(argv, cwd, depth + 1)
         return set()
-    if name == "open" and owner is None and len(node.args) >= 2:
-        mode = _const_str(node.args[1]) or ""
-        target = _const_str(node.args[0])
-        if target and any(flag in mode for flag in "wax+"):
-            path = _norm_path(target, cwd)
-            return {Effect(PATH, path)} if path else set()
     return set()
 
 
@@ -970,16 +1173,23 @@ class DeniedEffects:
         reason: str,
         kinds: Optional[Set[str]] = None,
         refused: bool = False,
+        paths: Optional[Sequence[str]] = None,
     ) -> Optional[Denial]:
         """Remember what this declined call would have done.
 
         *kinds* narrows what is kept: a policy refusal of one command shape
         records the host or path it targeted, not the whole command family.
-        *refused* marks a policy refusal rather than a person's no.
+        *refused* marks a policy refusal rather than a person's no. *paths*,
+        when given, are the call's targets as the tool itself resolved them,
+        recorded instead of reading them off the arguments.
         """
+        if paths is not None:
+            found = {Effect(PATH, p) for p in map(_norm_path_abs, paths) if p}
+        else:
+            found = effects_of_call(tool_name, tool_args, self.cwd)
         effects = {
             e
-            for e in effects_of_call(tool_name, tool_args, self.cwd)
+            for e in found
             if e.target != COMPUTED_PATH and (kinds is None or e.kind in kinds)
         }
         if not effects:
