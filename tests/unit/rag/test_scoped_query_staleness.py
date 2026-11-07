@@ -140,9 +140,7 @@ def test_a_failed_reindex_keeps_the_actionable_error_types(tmp_path):
     host = _host_for(rag)
 
     with patch.object(rag_tools, "_CACHE_LOCK_HINTS", {"cache_locked": "close it"}):
-        result = _call(
-            "query_specific_file", file_path=str(doc), query="what?"
-        )
+        result = _call("query_specific_file", file_path=str(doc), query="what?")
 
     assert result["status"] == "error", result
     assert result.get("hint") == "close it"
@@ -167,9 +165,7 @@ def test_a_successful_reindex_forgets_evicted_documents(tmp_path):
     }
     host = _host_for(rag)
 
-    result = _call(
-        "query_specific_file", file_path=str(doc), query="what?"
-    )
+    result = _call("query_specific_file", file_path=str(doc), query="what?")
 
     assert result["status"] == "success", result
     assert str(other) not in host.indexed_files

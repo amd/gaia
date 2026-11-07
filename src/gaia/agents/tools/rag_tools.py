@@ -1200,9 +1200,7 @@ class RAGToolsMixin:
                             ),
                             "file_name": Path(target_file).name,
                         }
-                    _forget_evicted(
-                        self.indexed_files, result.get("evicted", [])
-                    )
+                    _forget_evicted(self.indexed_files, result.get("evicted", []))
 
                 # Generate search keys for better retrieval
                 search_keys = self._generate_search_keys(query)
