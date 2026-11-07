@@ -959,10 +959,11 @@ class TestRememberTool:
         upcoming = mixin_with_tools.memory_store.get_upcoming(within_days=7)
         assert any("course" in r["content"].lower() for r in upcoming)
 
-    def test_remember_does_not_take_a_context(self, mixin_with_tools):
-        """The model can't file a memory under a label no session reads."""
+    def test_remember_does_not_advertise_or_take_a_context(self, mixin_with_tools):
+        """The model cannot pass an argument the tool does not accept."""
         func = mixin_with_tools._registered_tools["remember"]["function"]
         assert "context" not in inspect.signature(func).parameters
+        assert "context:" not in inspect.getdoc(func)
         update = mixin_with_tools._registered_tools["update_memory"]["function"]
         assert "context" not in inspect.signature(update).parameters
 

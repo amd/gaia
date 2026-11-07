@@ -12,6 +12,7 @@ import ast
 import contextlib
 import contextvars
 import datetime
+import hashlib
 import inspect
 import json
 import math
@@ -213,6 +214,9 @@ if TYPE_CHECKING:
 # Set up logging via the project logger; importing this module must not
 # reconfigure the root logger.
 logger = get_logger(__name__)
+
+#: A message this long is also saved to a file the model can read with tools.
+LONG_MESSAGE_CHARS = 20_000
 
 
 def _skill_validation_error(message: str) -> Exception:
@@ -6999,6 +7003,30 @@ Do NOT wrap conversational replies in JSON.
             return None, False
         denial, effect = conflict
         command = render_call(tool_name, tool_args)
+        if denial.refused:
+            # No person said no, so no person is asked to lift it.
+            logger.info(
+                "Refused %s: it %s, refused earlier as %s",
+                tool_name,
+                effect.describe(),
+                denial.rendered,
+            )
+            return (
+                {
+                    **NOT_EXECUTED,
+                    "status": "denied",
+                    "blocked_effect": effect.describe(),
+                    "declined_call": denial.rendered,
+                    "error": (
+                        f"Not run: this {effect.describe()}, and `{denial.rendered}` "
+                        "was refused earlier in this request. No approval can lift "
+                        "that refusal, so do not reach it with another tool, "
+                        "command, or script. Tell the user it was not done and "
+                        "that they can do it themselves."
+                    ),
+                },
+                False,
+            )
         answer = self._ask_to_lift_denial(denial, effect, command)
         if answer is True:
             # Once: the denial stands for any other route this turn.
@@ -7535,6 +7563,10 @@ Do NOT wrap conversational replies in JSON.
                     tool_args,
                     str(refusal.get("error") if isinstance(refusal, dict) else refusal),
                     kinds={NETWORK, PATH},
+                    # Only a refuse-tier no is final; a shape refusal ("use
+                    # write_file") points at a route the user may still allow.
+                    refused=isinstance(refusal, dict)
+                    and refusal.get("tier") == "refuse",
                 )
             return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
 
@@ -10408,7 +10440,12 @@ Do NOT wrap conversational replies in JSON.
             framed = self.FOLLOWUP_PREAMBLE + text
             # Two dicts, not one shared object: every other append in this loop
             # builds its own, and downstream code edits entries in place.
-            messages.append({"role": "user", "content": framed})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": self._with_long_message_file(framed, raw=text),
+                }
+            )
             conversation.append({"role": "user", "content": framed})
             taken += 1
             # The user is owed visible proof their message landed — silence here
@@ -10416,6 +10453,44 @@ Do NOT wrap conversational replies in JSON.
             self.console.print_info(f"Picked up your follow-up: {text}")
             logger.info("Folded a mid-turn follow-up into the running turn")
         return taken
+
+    def _with_long_message_file(
+        self, user_input: str, raw: Optional[str] = None
+    ) -> str:
+        """*user_input*, led by where its full text is saved when it is huge.
+
+        A model asked to count or search a long paste otherwise tries to copy
+        it into a tool call, which no output budget fits. *raw* is the user's
+        own words when *user_input* is framed; it defaults to this turn's query.
+        """
+        if raw is None:
+            raw = getattr(self, "_original_user_input", None) or user_input
+        if not isinstance(raw, str) or len(raw) < LONG_MESSAGE_CHARS:
+            return user_input
+        scratch = getattr(self._read_validator(), "scratch_dir", None)
+        if not scratch:
+            logger.warning(
+                "A %d-character message was not saved to a file: this agent "
+                "has no scratch folder",
+                len(raw),
+            )
+            return user_input
+        digest = hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:12]
+        path = Path(scratch) / f"message-{digest}.txt"
+        try:
+            from gaia.security import ensure_scratch_dir
+
+            ensure_scratch_dir(path.parent)
+            path.write_text(raw, encoding="utf-8")
+        except OSError as e:
+            logger.warning("Could not save a long message to %s: %s", path, e)
+            return user_input
+        note = (
+            f"[GAIA: the user's message is {len(raw):,} characters long. Its full "
+            f"text is saved at {path}. To count, search or process it, read that "
+            "file with a tool; never copy the message into a tool call.]"
+        )
+        return f"{note}\n\n{user_input}"
 
     def _process_query_impl(
         self,
@@ -10635,7 +10710,9 @@ Do NOT wrap conversational replies in JSON.
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
         messages.recorded.clear()
-        messages.append({"role": "user", "content": user_input})
+        messages.append(
+            {"role": "user", "content": self._with_long_message_file(user_input)}
+        )
 
         # Use provided max_steps or fall back to class default
         steps_limit = max_steps if max_steps is not None else self.max_steps
@@ -13542,7 +13619,8 @@ Do NOT wrap conversational replies in JSON.
 
     _DENIAL_RE = re.compile(
         r"\bwas denied\b|\bdeclined\b|\bdenied by\b|execution denied"
-        r"|with no user response|requires (?:explicit|live) user approval",
+        r"|with no user response|requires (?:explicit|live) user approval"
+        r"|\bneeds your approval\b",
         re.IGNORECASE,
     )
 
