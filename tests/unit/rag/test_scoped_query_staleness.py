@@ -237,13 +237,9 @@ def test_a_real_sdk_serves_the_current_text_after_a_same_size_edit(tmp_path):
     host = _RagHost(sdk)
     host.register_rag_tools()
 
-    result = _call(
-        "query_specific_file", file_path=str(doc), query="launch location"
-    )
+    result = _call("query_specific_file", file_path=str(doc), query="launch location")
 
     assert result["status"] == "success", result
-    served = " ".join(
-        chunk.get("content", "") for chunk in result.get("chunks", [])
-    )
+    served = " ".join(chunk.get("content", "") for chunk in result.get("chunks", []))
     assert "Oslo" in served
     assert "Lisbon" not in served
