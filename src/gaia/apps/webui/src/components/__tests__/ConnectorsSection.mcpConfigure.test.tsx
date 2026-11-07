@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { ConnectorRow } from '../../types';
 
 vi.mock('../../services/api', () => ({
@@ -149,6 +149,41 @@ describe('MCP connector configure panel', () => {
                 SLACK_MCP_XOXB_TOKEN: 'xoxb-good',
             }),
         );
+    });
+
+    it('keeps the token prefix left-to-right inside an Arabic wrong-prefix message', async () => {
+        act(() => useChatStore.getState().setLocale('ar'));
+        try {
+            const row = mcpRow({
+                id: 'mcp-slack',
+                display_name: 'Slack',
+                mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'],
+                config_fields: [
+                    {
+                        key: 'SLACK_MCP_XOXB_TOKEN',
+                        label: 'Slack bot token',
+                        kind: 'secret',
+                        required: true,
+                        placeholder: 'xoxb-…',
+                        help_md: '',
+                        prefix: 'xoxb-',
+                    },
+                ],
+            });
+            await openTile(row);
+            fireEvent.change(screen.getByPlaceholderText('xoxb-…'), { target: { value: 'xapp-1' } });
+            fireEvent.click(document.querySelector('.configure-actions .btn-model-save')!);
+            const error = await waitFor(() => {
+                const el = document.querySelector('.configure-error');
+                expect(el).not.toBeNull();
+                return el!.textContent ?? '';
+            });
+            expect(error).toContain('يجب أن يبدأ');
+            // LRI ... PDI: the hyphen stays after "xoxb" instead of jumping to its start.
+            expect(error).toContain('⁦xoxb-⁩');
+        } finally {
+            act(() => useChatStore.getState().setLocale('en'));
+        }
     });
 
     it('shows the field label, help and setup link from the catalog', async () => {
