@@ -33,11 +33,12 @@ MACOS = "Unit Tests (macOS, py3.12)"
 UNIT_RC = next(c for c in crc.RC_REPORTED if c.workflow == "test_unit.yml")
 
 
-def run(conclusion, status="completed", minutes=0, run_id=1):
+def run(conclusion, status="completed", minutes=0, run_id=1, event="workflow_dispatch"):
     return {
         "id": run_id,
         "status": status,
         "conclusion": conclusion,
+        "event": event,
         "html_url": f"https://example/run/{run_id}",
         "created_at": (T0 + timedelta(minutes=minutes))
         .isoformat()
@@ -86,7 +87,7 @@ def _job_names(name: str) -> dict[str, str]:
     return {j.get("name", jid): jid for jid, j in _workflow(name)["jobs"].items()}
 
 
-ALL_SETS = crc.RC_REPORTED + crc.FINAL_REQUIRED
+ALL_SETS = crc.RC_REPORTED + crc.FINAL_REQUIRED + crc.FINAL_ADVISORY
 
 
 # ── The lists match the workflows they name ─────────────────────────────
@@ -119,38 +120,61 @@ def test_the_rc_report_lists_the_linux_suite_first_and_on_its_own():
         ),
         ("test_gaia_cli_linux.yml", ()),
         ("release_train_dryrun.yml", ()),
-        ("test_npu_agent_chat.yml", NPU_ROWS),
+        ("test_npu_agent_chat.yml", (NPU_ROWS[0],)),
+        ("test_npu_agent_chat.yml", (NPU_ROWS[1],)),
     ]
 
 
-@pytest.mark.parametrize("checks", [crc.RC_REPORTED, crc.FINAL_REQUIRED])
-def test_a_push_run_with_only_the_windows_npu_row_does_not_pass(checks):
+def test_the_final_requires_windows_npu_and_only_reports_linux():
+    # #6764: the Linux runners cannot lock enough memory for the NPU model.
+    required = [c.jobs for c in crc.FINAL_REQUIRED if c.workflow.startswith("test_npu")]
+    advisory = [(c.workflow, c.jobs) for c in crc.FINAL_ADVISORY]
+    assert required == [(NPU_ROWS[0],)]
+    assert advisory == [("test_npu_agent_chat.yml", (NPU_ROWS[1],))]
+
+
+def test_a_push_run_that_skipped_the_linux_npu_row_does_not_pass_as_it():
     # A main push starts only the Windows row; the Linux row is skipped.
-    (npu,) = [c for c in checks if c.workflow == "test_npu_agent_chat.yml"]
-    assert npu.jobs == NPU_ROWS
+    (linux,) = crc.FINAL_ADVISORY
     jobs = {1: [job(NPU_ROWS[0]), job(NPU_ROWS[1], "skipped")]}
-    v = crc.judge(npu, [run("success")], "amd/gaia", "v1.0.0", _jobs_for(jobs))
+    v = crc.judge(linux, [run("success")], "amd/gaia", "v1.0.0", _jobs_for(jobs))
     assert v.state == "failed"
-    jobs = {1: [job(n) for n in NPU_ROWS]}
-    v = crc.judge(npu, [run("success")], "amd/gaia", "v1.0.0", _jobs_for(jobs))
+    (windows,) = [c for c in crc.FINAL_REQUIRED if c.workflow.startswith("test_npu")]
+    v = crc.judge(windows, [run("success")], "amd/gaia", "v1.0.0", _jobs_for(jobs))
     assert v.state == "success"
 
 
-def test_a_final_requires_everything_an_rc_sees():
-    final = {c.workflow: c for c in crc.FINAL_REQUIRED}
+def test_a_final_requires_or_reports_everything_an_rc_sees():
+    final = {}
+    for c in crc.FINAL_REQUIRED + crc.FINAL_ADVISORY:
+        final.setdefault(c.workflow, []).append(c)
     for c in crc.RC_REPORTED:
         assert c.workflow in final, c.label
         # The whole run, or at least the same jobs.
-        assert not final[c.workflow].jobs or set(c.jobs) <= set(final[c.workflow].jobs)
+        assert any(
+            not f.jobs or set(c.jobs) <= set(f.jobs) for f in final[c.workflow]
+        ), c.label
+
+
+def test_an_advisory_check_is_never_also_required():
+    required = {(c.workflow, c.jobs) for c in crc.FINAL_REQUIRED}
+    for c in crc.FINAL_ADVISORY:
+        assert (c.workflow, c.jobs) not in required, c.label
+        assert (c.workflow, ()) not in required, c.label
 
 
 def test_every_test_unit_job_is_reported_on_an_rc():
     # A new job must show up in the RC summary, not be silently dropped.
     # "Select unit tests" only feeds the Linux job: if it fails, that job is
-    # skipped, and the report says so.
+    # skipped, and the report says so. The result gate and the nightly alert
+    # run no tests of their own.
     rows = [c.jobs for c in crc.RC_REPORTED if c.workflow == "test_unit.yml"]
     named = [n for jobs in rows for n in jobs]
-    assert set(_job_names("test_unit.yml")) - set(named) == {"Select unit tests"}
+    assert set(_job_names("test_unit.yml")) - set(named) == {
+        "Select unit tests",
+        "Unit Tests Result",
+        "Report the nightly result",
+    }
     assert len(named) == len(set(named)), "a job is reported twice"
 
 
@@ -622,25 +646,72 @@ def test_main_refuses_a_tag_that_is_not_a_release(monkeypatch, capsys):
     assert "not a release tag" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("state, code", [("success", 0), ("failed", 1), ("pending", 1)])
-def test_a_final_still_waits_on_and_is_held_by_everything(
-    monkeypatch, capsys, state, code
-):
+def _final_main(monkeypatch, required_state, advisory_state):
     monkeypatch.setenv("GITHUB_TOKEN", "tok")
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     seen = {}
 
     def fake_check(repo, t, checks, get_runs, start_run, wait_minutes, **k):
         seen.update(checks=checks, wait=wait_minutes)
-        return [crc.Verdict(c, state, "u", "r") for c in checks]
+        return [crc.Verdict(c, required_state, "u", "r") for c in checks]
+
+    def fake_snapshot(repo, t, checks, get_runs, get_jobs=None):
+        seen["advisory"] = checks
+        return [crc.Verdict(c, advisory_state, "u", "r") for c in checks]
 
     monkeypatch.setattr(crc, "check", fake_check)
-    assert crc.main(["--repo", "amd/gaia", "--sha", "abc", "--tag", "v1.0.0"]) == code
+    monkeypatch.setattr(crc, "snapshot", fake_snapshot)
+    monkeypatch.setattr(crc, "dispatch", lambda *a: pytest.fail("advisory dispatch"))
+    code = crc.main(["--repo", "amd/gaia", "--sha", "abc", "--tag", "v1.0.0"])
+    return code, seen
+
+
+@pytest.mark.parametrize("state, code", [("success", 0), ("failed", 1), ("pending", 1)])
+def test_a_final_still_waits_on_and_is_held_by_everything(
+    monkeypatch, capsys, state, code
+):
+    got, seen = _final_main(monkeypatch, state, "success")
+    assert got == code
     assert seen["checks"] is crc.FINAL_REQUIRED
+    assert seen["advisory"] is crc.FINAL_ADVISORY
     assert seen["wait"] == 80
     out = capsys.readouterr().out
     assert ("::error::" in out) == (code == 1)
     assert "::warning::" not in out
+
+
+@pytest.mark.parametrize("state", ["failed", "pending", "missing"])
+def test_a_red_advisory_check_warns_but_never_holds_a_final(monkeypatch, capsys, state):
+    code, _ = _final_main(monkeypatch, "success", state)
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "::error::" not in out
+    assert out.count("::warning::") == len(crc.FINAL_ADVISORY)
+    assert "NPU agent chat (Linux, cold)" in out
+    assert "does not hold the release" in out
+    assert "| advisory |" in out
+
+
+def test_the_final_report_shows_advisory_rows_without_blocking():
+    req = [crc.Verdict(C("lint.yml"), "success", "u")]
+    adv = [crc.Verdict(crc.FINAL_ADVISORY[0], "failed", "u2", "r")]
+    ok, text = crc.report(req, "abc123", adv)
+    assert ok
+    assert "| `lint.yml` | required | success |" in text
+    assert f"| `{crc.FINAL_ADVISORY[0].label}` | advisory | failed |" in text
+    assert "Nothing was published" not in text
+
+
+def test_an_rc_says_the_linux_npu_row_is_advisory_on_the_final():
+    verdicts = [
+        crc.Verdict(c, "failed", "u", "r")
+        for c in crc.RC_REPORTED
+        if c.workflow == "test_npu_agent_chat.yml"
+    ]
+    _, warnings = crc.report_rc(verdicts, "abc123", "v1.0.0-rc1")
+    windows, linux = warnings
+    assert NPU_ROWS[0] in windows and "the final requires it" in windows
+    assert NPU_ROWS[1] in linux and "the final reports it as advisory" in linux
 
 
 @pytest.mark.parametrize("code, hinted", [(403, True), (404, False), (502, False)])
@@ -656,3 +727,59 @@ def test_only_a_403_blames_permissions(monkeypatch, code, hinted):
         crc.fetch_runs("amd/gaia", "lint.yml", "abc", "tok")
     assert f"HTTP {code}" in str(exc.value)
     assert ("actions: write" in str(exc.value)) is hinted
+
+
+# ── Only a full-suite run of test_unit.yml passes a final ───────────────
+
+
+FINAL_UNIT = next(c for c in crc.FINAL_REQUIRED if c.workflow == "test_unit.yml")
+
+
+@pytest.mark.parametrize("event", ["push", "merge_group", "pull_request"])
+def test_a_run_that_may_have_selected_tests_does_not_pass_a_final(event):
+    # Pushes select on Windows and macOS; the queue and PRs select everywhere.
+    v = crc.judge(FINAL_UNIT, [run("success", event=event)], "amd/gaia", "v1.0.0")
+    assert v.state == "missing"
+    assert "gh workflow run test_unit.yml" in v.remedy
+
+
+@pytest.mark.parametrize("event", ["workflow_dispatch", "schedule"])
+def test_a_dispatched_or_nightly_run_passes_a_final(event):
+    v = crc.judge(FINAL_UNIT, [run("success", event=event)], "amd/gaia", "v1.0.0")
+    assert v.state == "success"
+
+
+def test_a_final_dispatches_the_full_suite_when_only_a_push_run_passed():
+    started: list = []
+    clock = Clock()
+    crc.check(
+        "amd/gaia",
+        "v1.0.0",
+        (FINAL_UNIT,),
+        lambda w: [run("success", event="push")],
+        started.append,
+        wait_minutes=0,
+        sleep=clock.sleep,
+        now=clock.now,
+    )
+    assert started == [FINAL_UNIT]
+
+
+def test_a_merge_queue_run_is_never_the_rc_linux_row():
+    # A queue run selects tests even on Linux; the row claims the full suite.
+    green = {1: unit_jobs()}
+    v = crc.judge(
+        UNIT_RC,
+        [run("success", event="merge_group")],
+        "amd/gaia",
+        "v1.0.0-rc1",
+        _jobs_for(green),
+    )
+    assert v.state == "missing"
+
+
+def test_a_check_without_events_reads_every_run():
+    v = crc.judge(
+        C("lint.yml"), [run("success", event="merge_group")], "amd/gaia", "v1.0.0"
+    )
+    assert v.state == "success"

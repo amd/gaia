@@ -19,6 +19,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 from urllib.parse import urlparse
 
 from gaia.agents.base.verification import EXECUTED_KEY
+from gaia.agents.tools.browser_tools import PRIMARY_SOURCE_MARKER
 from gaia.llm.inference_location import InferenceLocation
 from gaia.logger import get_logger
 
@@ -109,7 +110,10 @@ def is_openable(path: str) -> bool:
 def search_hits(text: str) -> List[Dict[str, str]]:
     """The ``title``/``url`` of each hit in a ``search_web`` text result."""
     return [
-        {"title": m.group("title").strip(), "url": m.group("url")}
+        {
+            "title": m.group("title").strip().removesuffix(PRIMARY_SOURCE_MARKER),
+            "url": m.group("url"),
+        }
         for m in _SEARCH_HIT_RE.finditer(text)
     ]
 
@@ -463,7 +467,7 @@ def _cost(
 def upload_display_names(message: str) -> Dict[str, str]:
     """Upload copy file name -> the name the user attached it as (#5183).
 
-    The composer links each attachment as ``[original.pdf](<uploads>/<uuid>.pdf)``,
+    The composer links each attachment as ``[original.pdf](<uploads>/<copy>.pdf)``,
     so the link label is the only place the original name survives.
     """
     from gaia.ui.utils import uploads_dir

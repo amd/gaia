@@ -138,6 +138,15 @@ const RUN_ROW_FAILED = {
     ],
     overall: { bytes_done: 9.93e9, bytes_total: 29.6e9, speed_bps: 0, eta_s: null, percent: 33, failed: 1 },
 };
+// The models came down, then reading the candidate's own agent build timed out.
+const RUN_AGENT_COMPONENT_FAILED = {
+    ...RUN, state: 'failed',
+    components: { server: 'done', backend: 'done', agent: 'failed' },
+    component_kinds: { agent: 'transient' },
+    error: "`gaia init --profile gaia` failed (exit 1): GAIA 0.25.4rc11 is release candidate v0.25.4-rc11, which installs the GAIA agent built from its own commit. Could not read https://github.com/amd/gaia/releases/download/v0.25.4-rc11/gaia-agent-release.json (tried 3 times): HTTPSConnectionPool(host='github.com', port=443): Read timed out. (read timeout=30)",
+    models: [row(EMBED_ID, ['embedding'], 'ready', 330e6, 330e6), row(GEMMA_ID, ['chat', 'vision'], 'ready', 5.97e9, 5.97e9)],
+    overall: { bytes_done: 6.3e9, bytes_total: 6.3e9, speed_bps: 0, eta_s: null, percent: 100, failed: 0 },
+};
 const RUN_LONG = {
     ...RUN,
     models: [row(QWEN_ID, ['chat', 'vision'], 'downloading', 7.6e9, 23.3e9)],
@@ -194,10 +203,13 @@ const SERVER_FAILED = {
 const HARDWARE = { compatible: true, blockers: [], warnings: [], ram_gb: 128, gpu_name: 'AMD Radeon 8060S', npu_detected: true, disk_free_gb: 25, lemonade_running: true };
 const HARDWARE_BLOCKED = { ...HARDWARE, compatible: false, blockers: ['Needs 30 GB of disk; 4 GB free.'], warnings: ['Low memory: close other apps before you start.'] };
 
-const providers = (gatewayReachable: boolean) => ({
+const providers = (gatewayReachable: boolean, envKey: boolean) => ({
     providers: [
         { id: 'local', name: 'Local', remote: false, privacy_notice: '' },
-        { id: 'fireworks', name: 'Fireworks AI', remote: true, privacy_notice: '' },
+        {
+            id: 'fireworks', name: 'Fireworks AI', remote: true, privacy_notice: '',
+            ...(envKey ? { key_source: 'environment', key_hint: '0000', env_var: 'FIREWORKS_API_KEY' } : {}),
+        },
         { id: 'amd', name: 'AMD LLM Gateway', remote: true, privacy_notice: '', network: { reachable: gatewayReachable, detail: gatewayReachable ? null : "Can't reach llm-api.amd.com." } },
     ],
     active: { provider: 'local', model: GEMMA_ID, label: 'Gemma', remote: false, is_default: true },
@@ -210,6 +222,8 @@ interface SetupAnswers {
     gpu?: object;
     hardware?: object;
     gatewayReachable?: boolean;
+    /** A Fireworks key in the environment, which the Connect step names. */
+    envKey?: boolean;
     /** A Lemonade the user already runs, which Check this PC offers. */
     theirs?: boolean;
 }
@@ -221,7 +235,7 @@ const THEIRS_TARGET = {
 const THEIRS_FOUND = { found: { url: 'http://localhost:13305/api/v1', version: '2026.44.1', status: 'ok', message: null }, unchecked: [] };
 
 /** First-run setup, every call the screens make answered from the backend's shapes. */
-export async function withSetup(page: Page, { status = { state: 'idle' }, plan = PLAN, gpu = NO_GPU, hardware = HARDWARE, gatewayReachable = true, theirs = false }: SetupAnswers = {}): Promise<void> {
+export async function withSetup(page: Page, { status = { state: 'idle' }, plan = PLAN, gpu = NO_GPU, hardware = HARDWARE, gatewayReachable = true, envKey = false, theirs = false }: SetupAnswers = {}): Promise<void> {
     const prices = { provider: 'fireworks', models: [{ model: 'qwen', name: 'Qwen3.6', rank: 1, note: null, price: { input_per_million: 0.5, cached_input_per_million: 0.1, output_per_million: 3, source: 'list price' } }], source: 'Fireworks list price', note: null };
     const answers: Record<string, unknown> = {
         'GET /setup/check': { ready: false, stage: 'setup', reasons: [], steps: [{ key: 'server', label: 'Install the local model server', detail: 'about 1 minute' }] },
@@ -235,7 +249,7 @@ export async function withSetup(page: Page, { status = { state: 'idle' }, plan =
         },
         'GET /lemonade/target': theirs ? THEIRS_TARGET : { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: null, saved_base_url: null, api_key_stored: false, offer: false, what_gaia_does: '' },
         'GET /lemonade/detect': theirs ? THEIRS_FOUND : { found: null, unchecked: [] },
-        'GET /providers': providers(gatewayReachable),
+        'GET /providers': providers(gatewayReachable, envKey),
         'GET /spending/prices/fireworks': prices,
         'GET /spending/prices/amd': { provider: 'amd', models: [], source: null, note: 'Prices are set by the organization that runs the gateway.' },
         'GET /memory/settings': { enabled: true },
@@ -440,6 +454,14 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
+        name: 'key-env',
+        answers: { envKey: true },
+        reach: async (page) => {
+            await toKey(page);
+            await expect(page.locator('#setup-key-form .setup-hint[role="status"]')).toBeVisible();
+        },
+    },
+    {
         name: 'key-gateway-off',
         answers: { gatewayReachable: false },
         reach: async (page) => {
@@ -462,6 +484,11 @@ export const SETUP_SCENES: SetupScene[] = [
         name: 'download-failed',
         answers: { status: RUN_ROW_FAILED },
         reach: (page) => expect(page.locator('.dl-row.is-failed')).toBeVisible(),
+    },
+    {
+        name: 'download-agent-failed',
+        answers: { status: RUN_AGENT_COMPONENT_FAILED },
+        reach: (page) => expect(page.locator('.setup-content.is-failed .setup-content-failure button')).toBeVisible(),
     },
     {
         name: 'download-long',
@@ -508,7 +535,7 @@ export const SETUP_SCENES: SetupScene[] = [
 ];
 
 /** The screens whose rows wrap: each must hold together in a narrow window too. */
-export const NARROW_SCENES = ['plan', 'check-details', 'models', 'models-npu-not-ready', 'models-long', 'key', 'download-running', 'download-failed', 'test-long', 'ready'];
+export const NARROW_SCENES = ['plan', 'check-details', 'models', 'models-npu-not-ready', 'models-long', 'key', 'download-running', 'download-failed', 'download-agent-failed', 'test-long', 'ready'];
 
 export const scene = (name: string): SetupScene => {
     const found = SETUP_SCENES.find((s) => s.name === name);

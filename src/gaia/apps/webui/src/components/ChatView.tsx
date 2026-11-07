@@ -2,20 +2,26 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Clock } from 'lucide-react';
-import { MessageBubble, isErrorContent, turnEnding } from './MessageBubble';
+import { Activity, Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Clock } from 'lucide-react';
+import { MessageBubble, cleanToolCallContent, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep } from '../utils/streamSteps';
 import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
+import { useReadAloudStore } from '../stores/readAloudStore';
+import { readsAloudWhenDone } from '../utils/autoReadAloud';
+import { useReadAloudSettings } from '../hooks/useReadAloudSettings';
+import { RecordingProgress } from './RecordingProgress';
 import { ensureModel, modelKnownReady } from '../stores/modelNeededStore';
 import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
+import { isStarting } from '../services/statusPoll';
 import { refreshActiveRuns } from '../services/activeRuns';
 import { claimView, dispatchNext, idleByPoll, isBusyError, markActivity, requeueRefused, type QueuedSend, type SendOutcome } from '../services/queueDispatch';
 import { log } from '../utils/logger';
+import { isMediaFile } from '../utils/mediaFiles';
 import { bugReportUrl } from './UnsupportedFeature';
 import { classifyChatError, isStreamInterrupted, mayStillFinish, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
 import { isAuthRequiredMessage } from './email/EmailConnectCta';
@@ -30,15 +36,18 @@ import { PermissionModeChip } from './PermissionModeChip';
 import { PermissionPrompt } from './PermissionPrompt';
 import { QueuedMessages } from './QueuedMessages';
 import { ContextMeter, ContextWarning } from './ContextMeter';
+import { SpendMeter } from './SpendMeter';
 import { RetryWithMenu } from './RetryWithMenu';
 import { AnswerComparison } from './AnswerComparison';
 import * as messageQueue from '../utils/messageQueue';
 import type { QueuedMessage } from '../utils/messageQueue';
 import { SessionPanel, SessionPanelToggle } from './session-panel/SessionPanel';
 import { PrivateChatButton } from './PrivateChatButton';
+import { ResourceMonitor } from './ResourceMonitor';
 import { OfflineNotice } from './session-panel/OfflineNotice';
 import { ExportErrorBar } from './ExportErrorBar';
 import { useSessionPanelStore } from '../stores/sessionPanelStore';
+import { useResourceMonitorStore } from '../stores/resourceMonitorStore';
 import { useAttachments } from '../hooks/useAttachments';
 import { useAnswerComparison } from '../hooks/useAnswerComparison';
 import { useContextUsage } from '../hooks/useContextUsage';
@@ -152,6 +161,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     useEffect(() => {
         if (cards.length > 0) lastCardsRef.current = [...cards];
     }, [cards]);
+    // Auto-read needs the saved choice before the first reply finishes.
+    useReadAloudSettings();
     useEffect(() => {
         if (!isStreaming && prevStreamingRef.current) {
             setStreamEnding(true);
@@ -315,7 +326,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const mountedRef = useRef(true);
     // Left pendingPrompt, not yet sent.
     const openingRef = useRef(false);
-    const initializing = systemStatus?.init_state === 'initializing';
+    const initializing = isStarting(systemStatus);
     useEffect(() => {
         mountedRef.current = true;
         return () => { mountedRef.current = false; };
@@ -421,6 +432,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const panelWidth = useSessionPanelStore((s) => s.width);
     const revealPanelSection = useSessionPanelStore((s) => s.reveal);
+    const showResources = useResourceMonitorStore((s) => s.visible);
+    const setShowResources = useResourceMonitorStore((s) => s.setVisible);
+    const resourcesToggleRef = useRef<HTMLButtonElement>(null);
+    const closeResources = useCallback(() => {
+        setShowResources(false);
+        // The close button unmounts with the strip; keep keyboard focus nearby.
+        resourcesToggleRef.current?.focus();
+    }, [setShowResources]);
 
     const jumpToMessage = useJumpToMessage(messagesScrollRef, isNearBottomRef);
 
@@ -492,7 +511,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // new message and streaming response are visible.
         isNearBottomRef.current = true;
 
-        const isInitializing = systemStatus?.init_state === 'initializing';
+        const isInitializing = isStarting(systemStatus);
         const notTaken = (outcome: SendOutcome) => { if (fromQueue) options?.onQueuedOutcome?.(outcome); };
         if (!reattach && retiredAgent) {
             log.chat.warn(`Send blocked: chat ${sessionId} belongs to the retired "${retiredAgent}" agent`);
@@ -969,6 +988,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
+                // A load_skill call is already its own row; other pickups get one.
+                if (event.type === 'skill_use') {
+                    useChatStore.getState().addSkillStep(
+                        event.how === 'model' ? null : agentEventToStep(event, stepIdRef),
+                    );
+                    return;
+                }
+
                 // The text streamed so far narrated the call that follows: it leaves the answer for the timeline.
                 if (event.type === 'commentary') {
                     fullContent = '';
@@ -1098,6 +1125,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     };
                     if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
                     addMessage(assistantMsg);
+                    const readAloud = useReadAloudStore.getState();
+                    if (readAloud.settings?.auto && readsAloudWhenDone(assistantMsg)) {
+                        void readAloud.read(`${sessionId}:${assistantMsg.id}`, cleanToolCallContent(content));
+                    }
                 }
 
                 setStreaming(false);
@@ -1427,11 +1458,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
             return;
         }
         // The opening message goes first.
-        if (queue.length === 0 || queueHold || isLoadingMessages || pendingPrompt || openingRef.current || retiredAgent || systemStatus?.init_state === 'initializing') return;
+        if (queue.length === 0 || queueHold || isLoadingMessages || pendingPrompt || openingRef.current || retiredAgent || initializing) return;
         // Only once this chat's turn is over: seen ending here, or reported idle by a poll since.
         if (isStale() || (!observedEndRef.current && !idleHere)) return;
         void dispatchNext(sessionId, sendQueued, () => mountedRef.current && !isStale() && !useChatStore.getState().isStreaming && !comparingRef.current);
-    }, [busy, queue, queueHold, idleHere, isLoadingMessages, pendingPrompt, retiredAgent, systemStatus?.init_state, sessionId, sendQueued, isStale]);
+    }, [busy, queue, queueHold, idleHere, isLoadingMessages, pendingPrompt, retiredAgent, initializing, sessionId, sendQueued, isStale]);
 
     // The meter shows what the next message will carry, so re-measure after each reply.
     const wasBusyRef = useRef(false);
@@ -1533,9 +1564,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setIsDragOver(false);
         if (e.dataTransfer.files.length === 0) return;
 
+        const dropped = Array.from(e.dataTransfer.files);
+        // A recording is transcribed by the agent, not indexed as a document.
+        const recordings = dropped.filter((file) => isMediaFile(file.name));
+        if (recordings.length > 0) attach.addFiles(recordings);
+        const documents = dropped.filter((file) => !isMediaFile(file.name));
+        if (documents.length === 0) return;
+
         if (!(await ensureModel('embedding'))) return;
-        await addDroppedFiles(sessionId, Array.from(e.dataTransfer.files));
-    }, [sessionId]);
+        await addDroppedFiles(sessionId, documents);
+    }, [sessionId, attach]);
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
@@ -1567,7 +1605,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const composerBlocked = retiredAgent
         ? `This chat used the retired "${retiredAgent}" agent and is read-only. Start a new chat.`
-        : systemStatus?.init_state === 'initializing'
+        : isStarting(systemStatus)
             ? STARTING_REASON
             : null;
 
@@ -1606,6 +1644,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     )}
                 </div>
                 <div className="task-header-right">
+                    <button
+                        ref={resourcesToggleRef}
+                        className="btn-icon-sm task-header-resources"
+                        onClick={() => setShowResources(!showResources)}
+                        aria-pressed={showResources}
+                        aria-label={t('resources.toggle')}
+                        title={t(showResources ? 'resources.hide' : 'resources.show')}
+                    >
+                        <Activity size={15} aria-hidden="true" />
+                    </button>
                     <PrivateChatButton isPrivate={!!session?.private} onToggle={handleTogglePrivate} />
                     <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files on this PC" aria-label="Browse files on this PC">
                         <FolderSearch size={15} />
@@ -1616,6 +1664,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <SessionPanelToggle messages={messages} busy={isStreaming} />
                 </div>
             </header>
+
+            {showResources && <ResourceMonitor onClose={closeResources} />}
 
             {sessionDocs.length > 0 && (() => {
                 const sorted = [...sessionDocs].sort((a, b) => {
@@ -1736,6 +1786,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     })}
 
                     {(isStreaming || streamEnding) && liveHistoryNotice && <HistoryNotice text={liveHistoryNotice} />}
+                    {isStreaming && <RecordingProgress />}
                     {(isStreaming || streamEnding) && (
                         <div className={`streaming-bubble ${streamEnding ? 'stream-ending' : 'stream-active'}`}>
                             <MessageBubble
@@ -1856,6 +1907,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     onUsage={showContextUsage}
                                     onDetails={() => revealPanelSection('context')}
                                 />
+                                <SpendMeter sessionId={sessionId} busy={busy} />
                                 <SessionFolderChip sessionId={sessionId} onOpen={() => revealPanelSection('environment')} />
                                 <ModelChip />
                             </>

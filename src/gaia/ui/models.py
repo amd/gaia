@@ -275,8 +275,8 @@ class SettingsResponse(BaseModel):
     # "manual" | "goal_driven". "autonomous" is unshipped (#2005) and rejected
     # on write; legacy-stored values are reported as "goal_driven".
     agent_mode: str = "goal_driven"
-    # Beta dynamic tool loader (#1798). Effective value: env override
-    # (GAIA_DYNAMIC_TOOLS) wins when set, else the persisted setting.
+    # Dynamic tool loading. Effective value: env override
+    # (GAIA_DYNAMIC_TOOLS) wins when set, else ~/.gaia/config.json.
     dynamic_tools: bool = False
     # True when GAIA_DYNAMIC_TOOLS is set ⇒ the env wins ⇒ the UI toggle
     # reflects the effective value and disables (no silent no-op).
@@ -315,10 +315,11 @@ class SettingsUpdateRequest(BaseModel):
     dynamic_tools: Optional[bool] = Field(
         None,
         description=(
-            "Beta: enable the semantic dynamic tool loader (#1798), which trims "
-            "each turn's tool prompt to a matched subset to cut first-turn TTFT. "
-            "Default off. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. "
-            "Omit the field to leave the persisted value unchanged."
+            "Dynamic tool loading: send the tool list in short form and full "
+            "docs only as needed, to cut first-turn TTFT without breaking the "
+            "prompt cache. Applies to new chats. GAIA_DYNAMIC_TOOLS overrides "
+            "this at runtime when set. Omit the field to leave the persisted "
+            "value unchanged."
         ),
     )
 

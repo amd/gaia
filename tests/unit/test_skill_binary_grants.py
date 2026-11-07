@@ -17,7 +17,9 @@ Five properties, in order of how badly a regression would hurt:
 from __future__ import annotations
 
 import os
+import re
 import shlex
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +27,7 @@ from gaia.agents.tools.shell_tools import (
     ALLOWED_COMMANDS,
     TIER_CONFIRM,
     TIER_CONFIRM_ONCE,
+    TIER_REFUSE,
     ShellToolsMixin,
     skill_granted_binaries,
 )
@@ -413,8 +416,40 @@ def test_a_value_flag_cannot_smuggle_a_subcommand_in_front():
     assert check("gh --repo x issue list") is not None
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh issue close 1",
+        "gh issue CLOSE 1",
+        "gh pr merge 1 --squash",
+        "gh pr close 1",
+        # A flag refusal may be offered once, so these must not reach one.
+        "gh pr merge 1 --body-file notes.md",
+        "gh issue --repo acme/x close 1",
+    ],
+)
+def test_an_action_that_ends_someone_elses_work_is_never_offered(command):
+    decision = classify_invocation(GH, shlex.split(command))
+    assert decision.outcome == REFUSE
+    assert decision.never_offered
+    assert "not permitted" in decision.message
+
+
+@pytest.mark.parametrize(
+    "command", ["gh issue reopen 1", "gh issue list --search close", "gh auth token"]
+)
+def test_an_ordinary_refusal_may_still_be_offered_once(command):
+    decision = classify_invocation(GH, shlex.split(command))
+    assert not decision.never_offered
+
+
+def test_an_action_cannot_be_both_offered_and_never_offered():
+    with pytest.raises(ValueError, match="never_offered"):
+        Subcommand(actions=frozenset({"close"}), never_offered_actions={"close": "x"})
+
+
 def test_the_error_names_what_is_allowed():
-    error = check("gh issue close 2975")
+    error = check("gh issue reopen 2975")
     assert "list" in error and "view" in error
 
 
@@ -931,7 +966,7 @@ def _refusal(host, command: str):
     "command",
     [
         "gh auth token",
-        "gh issue close 2975",
+        "gh issue reopen 2975",
         "gh api -X POST repos/amd/gaia/issues",
         "gh alias set x",
         # A segment outside the policy anywhere on the line makes the whole
@@ -1031,7 +1066,6 @@ class _ExecutingAgent(_Gated):
     _COERCIBLE = _Base._COERCIBLE
     _resolve_tool_name = _Base._resolve_tool_name
     _execution_tool_registry = _Base._execution_tool_registry
-    _on_tool_invoked = _Base._on_tool_invoked
     _fold_tool_usage = _Base._fold_tool_usage
     current_plan = None
     current_step = 0
@@ -2417,3 +2451,87 @@ def test_an_inline_env_assignment_is_named_as_one():
     assert error is not None
     assert "environment variable" in error["error"], error
     assert "'pythonpath=.'" not in error["error"]
+
+
+# ---------------------------------------------------------------------------
+# github-triage's SKILL.md describes these tiers to the model
+# ---------------------------------------------------------------------------
+
+_TRIAGE_SKILL = (
+    Path(__file__).resolve().parents[2]
+    / "hub"
+    / "skills"
+    / "github-triage"
+    / "SKILL.md"
+)
+
+_REFUSED_LEAD = "**Refused — nothing can approve these.**"
+
+#: Each SKILL.md paragraph that lists gh commands, and the tier it promises.
+_TRIAGE_TIERS = {
+    "**Reads — run with no prompt.**": ALLOW,
+    "**Writes — the user approves each one.**": TIER_CONFIRM,
+    _REFUSED_LEAD: TIER_REFUSE,
+    "**Outside this skill's grant — approved one run at a time.**": TIER_CONFIRM_ONCE,
+}
+
+
+def _triage_paragraph(lead: str) -> str:
+    """The SKILL.md paragraph that opens with *lead*, up to the next blank line."""
+    text = _TRIAGE_SKILL.read_text(encoding="utf-8")
+    start = text.index(lead)
+    end = text.find("\n\n", start)
+    return text[start : end if end != -1 else len(text)]
+
+
+def _named_gh_commands(paragraph: str) -> list[str]:
+    """Every `gh ...` span in *paragraph*, `a|b` expanded, plus a sample operand."""
+    commands = []
+    for span in re.findall(r"`(gh [^`]+)`", paragraph):
+        words = span.split()
+        for last in words[-1].split("|"):
+            commands.append(" ".join([*words[:-1], last, "1"]))
+    return commands
+
+
+def _triage_tier(command: str) -> str:
+    """The tier github-triage's grant really gives *command*: allow, or a block's."""
+    host = _Shell()
+    host._granted_binaries = BinaryGrants()
+    host._granted_binaries.grant("gh", skill_name="github-triage")
+    error, _ = host._validate_shell_command(command)
+    if error is not None:
+        return error.get("tier")
+    # Past the text gate, a call the grant does not cover gets the normal prompt.
+    covered = host.skill_grant_covers_call("run_shell_command", {"command": command})
+    return ALLOW if covered else TIER_CONFIRM
+
+
+@pytest.mark.parametrize("lead", list(_TRIAGE_TIERS))
+def test_github_triage_lists_each_command_under_the_tier_gaia_gives_it(lead):
+    """The skill said `gh issue close` could be approved once, so the agent
+    offered the user an approval that was never coming. Every command a
+    paragraph names must get that paragraph's tier from the real gate."""
+    commands = _named_gh_commands(_triage_paragraph(lead))
+    assert commands, f"no gh commands found under {lead}"
+    tiers = {command: _triage_tier(command) for command in commands}
+    wrong = {c: t for c, t in tiers.items() if t != _TRIAGE_TIERS[lead]}
+    assert not wrong, f"{lead} names commands GAIA tiers differently: {wrong}"
+
+
+def test_github_triage_offers_no_approval_path_for_a_refused_command():
+    refused = _triage_paragraph(_REFUSED_LEAD)
+    for command in (
+        "gh issue close",
+        "gh pr merge",
+        "gh label delete",
+        "gh repo delete",
+    ):
+        assert f"`{command}`" in refused, command
+    skill = _TRIAGE_SKILL.read_text(encoding="utf-8")
+    assert "approve it once; anything that deletes is refused" not in skill
+    for sentence in re.split(r"(?<=[.!?])\s+", refused):
+        if "approv" in sentence.lower():
+            assert re.search(
+                r"\b(?:nothing|no|never|cannot)\b", sentence, re.I
+            ), sentence

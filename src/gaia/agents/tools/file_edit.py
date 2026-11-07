@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 """Shared rules for GAIA's file-changing tools.
 
-Both rules live here so the separate implementations in ``file_io_tools`` and
+The rules live here so the separate implementations in ``file_io_tools`` and
 ``file_tools`` cannot drift apart.
 
 **Read before edit.** :class:`FileReadRecord` is one agent's record of the
@@ -12,6 +12,11 @@ file isn't in the record, or when its mtime or size moved since the read.
 Creating a file needs no read, and what the agent wrote or edited itself stays
 unlocked.
 
+**No repeat within a turn.** An edit identical to one already applied to the
+same file this turn — same ``old_content``, same ``new_content`` — is refused.
+When ``old_content`` sits inside ``new_content`` a repeat still matches, and
+"milk" -> "oat milk" twice leaves "oat oat milk".
+
 **Match and replace.** Every ``edit_*`` tool routes through
 :func:`apply_unique_replacement`:
 
@@ -19,9 +24,10 @@ unlocked.
   the count and the line of each, not a first-match replacement — the model
   cannot tell a wrong-region edit from the one it asked for, and neither can
   the human reading the diff.
-- ``new_content`` must not repeat the lines just outside ``old_content``.
-  That is a whole-file rewrite squeezed into one span, and splicing it in
-  would leave those lines twice.
+- ``new_content`` must not repeat the lines just outside ``old_content``,
+  above, below, or one from each side at its edges. That is a whole-file
+  rewrite squeezed into one span, and splicing it in would leave those lines
+  twice.
 - A rejected edit carries the file's current content around the region the
   caller was aiming at, so the retry lands without a separate re-read.
 """
@@ -31,7 +37,7 @@ import os
 import re
 import stat
 import threading
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.logger import get_logger
@@ -51,10 +57,10 @@ MAX_REPORTED_MATCHES = 5
 MAX_EXCERPT_CHARS = 4000
 
 # Neighbouring lines on each side checked for a repeat inside new_content.
-NEIGHBOUR_LINES = 3
+NEIGHBOUR_LINES = 50
 
-# A repeated neighbour run must be at least this many lines and characters,
-# so closing braces and separators can recur legitimately.
+# The repeats from both sides together must reach this many lines and
+# characters, so a single echoed line or a run of braces can recur legitimately.
 MIN_REPEATED_LINES = 2
 MIN_REPEATED_CHARS = 8
 
@@ -63,6 +69,9 @@ AFTER_RADIUS = 2
 
 # Similarity a line needs against the probe line to anchor a not-found excerpt.
 _ANCHOR_THRESHOLD = 0.6
+
+# Longest before/after text quoted in a repeated-edit refusal.
+MAX_REPEAT_EXAMPLE_CHARS = 200
 
 #: A regular file's ``(st_mtime_ns, st_size)``.
 Stamp = Tuple[int, int]
@@ -82,6 +91,21 @@ def stamp_of(file_path: Any) -> Optional[Stamp]:
     if not stat.S_ISREG(st.st_mode):
         return None
     return st.st_mtime_ns, st.st_size
+
+
+def turn_of(host: Any) -> Any:
+    """``host``'s turn counter; a host with no turns is one long turn."""
+    return getattr(host, "_turn_seq", None)
+
+
+def _repeat_outcome(old_content: str, new_content: str) -> str:
+    """What reapplying the edit would do to the text it wrote, or ""."""
+    if new_content.count(old_content) != 1:
+        return ""
+    again = new_content.replace(old_content, new_content, 1)
+    if len(again) > MAX_REPEAT_EXAMPLE_CHARS:
+        return ""
+    return f"; applying it again would change {new_content!r} to {again!r}"
 
 
 def _read_required(message: str, file_path: Any, error_type: str) -> Dict[str, Any]:
@@ -109,11 +133,44 @@ class FileReadRecord:
 
     One per agent instance (see :func:`file_read_record`), for the agent's
     lifetime: another agent's reads say nothing about what this one has seen.
+
+    It also holds the edits applied this turn, so an identical one can be
+    refused (:meth:`repeat_refusal`). That part resets when the turn moves on.
     """
 
     def __init__(self) -> None:
         self._seen: Dict[str, Stamp] = {}
+        self._edits: Set[Tuple[str, str, str]] = set()
+        self._edits_turn: Any = None
         self._lock = threading.Lock()
+
+    def note_edit(
+        self, file_path: Any, old_content: str, new_content: str, turn: Any
+    ) -> None:
+        """Record an edit written to ``file_path`` in ``turn``."""
+        with self._lock:
+            if turn != self._edits_turn:
+                self._edits = set()
+                self._edits_turn = turn
+            self._edits.add((_key(file_path), old_content, new_content))
+
+    def repeat_refusal(
+        self, file_path: Any, old_content: str, new_content: str, turn: Any
+    ) -> Optional[Dict[str, Any]]:
+        """Why this edit must not run again, or ``None`` when it wasn't applied yet."""
+        with self._lock:
+            applied = turn == self._edits_turn and (
+                (_key(file_path), old_content, new_content) in self._edits
+            )
+        if not applied:
+            return None
+        return _read_required(
+            f"This exact edit was already applied to {file_path} this turn"
+            f"{_repeat_outcome(old_content, new_content)}. Nothing was written. "
+            "Read the file with read_file to see its current content.",
+            file_path,
+            "already_applied",
+        )
 
     def note(self, file_path: Any, stamp: Optional[Stamp] = None) -> None:
         """Record ``file_path`` as seen in state ``stamp`` (default: as it is now).
@@ -182,7 +239,7 @@ def read_first_preflight(
     target_of: Callable[[Dict[str, Any]], Any],
     verb: str = "editing",
 ) -> Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    """A ``@tool(preflight=...)`` check: refuse a blind change before the prompt.
+    """A ``@tool(preflight=...)`` check: refuse a blind or repeat edit before the prompt.
 
     ``target_of`` maps the call's arguments to the path the tool would change,
     resolved the way the tool resolves it. The tool body repeats the check,
@@ -209,7 +266,12 @@ def read_first_preflight(
             # doesn't reveal whether a file exists there.
             if validator is not None and validator.is_write_blocked(str(target))[0]:
                 return None
-            return file_read_record(host).refusal(target, verb)
+            reads = file_read_record(host)
+            refusal = reads.refusal(target, verb)
+            old, new = tool_args.get("old_content"), tool_args.get("new_content")
+            if refusal is None and isinstance(old, str) and isinstance(new, str):
+                refusal = reads.repeat_refusal(target, old, new, turn_of(host))
+            return refusal
         except (KeyError, TypeError, ValueError, OSError) as e:
             # Malformed arguments or an unstat-able path: the tool body reports it.
             logger.debug("read-first preflight deferred to the tool: %s", e)
@@ -351,22 +413,49 @@ def _contains_run(lines: List[str], run: List[str]) -> bool:
     return any(lines[i : i + width] == run for i in range(len(lines) - width + 1))
 
 
+def _nearest_run(new_lines: List[str], neighbours: List[str], above: bool) -> List[str]:
+    """The longest run of ``neighbours`` next to the match that ``new_lines`` has."""
+    best: List[str] = []
+    for width in range(1, min(len(neighbours), len(new_lines)) + 1):
+        run = neighbours[-width:] if above else neighbours[:width]
+        if not _contains_run(new_lines, run):
+            break
+        best = run
+    # A lone echoed line counts only where a paste puts it: at the edge.
+    if len(best) == 1 and new_lines[0 if above else -1] != best[0]:
+        return []
+    return best
+
+
 def _repeated_neighbours(
     current_content: str, offset: int, old_content: str, new_content: str
 ) -> List[str]:
-    """Lines just outside the matched span that ``new_content`` repeats."""
+    """Lines just outside the matched span that ``new_content`` repeats.
+
+    Each side counts its longest run that starts next to the match, so one
+    line echoed from above plus one from below is caught as well as a run.
+    """
     new_lines = _nonblank(new_content)
-    old_lines = _nonblank(old_content)
-    before = _nonblank(current_content[:offset])[-NEIGHBOUR_LINES:]
-    after = _nonblank(current_content[offset + len(old_content) :])[:NEIGHBOUR_LINES]
-    repeated: List[str] = []
-    for run in (before, after):
-        if len(run) < MIN_REPEATED_LINES:
-            continue
-        if sum(len(line) for line in run) < MIN_REPEATED_CHARS:
-            continue
-        if _contains_run(new_lines, run) and not _contains_run(old_lines, run):
-            repeated.extend(run)
+    old_lines = set(_nonblank(old_content))
+    # Whole lines only: the rest of a line the match starts or ends inside is
+    # part of the match's own line, not a neighbour.
+    head, _, _ = current_content[:offset].rpartition("\n")
+    rest = current_content[offset + len(old_content) :]
+    tail = rest if old_content.endswith("\n") else rest.partition("\n")[2]
+    runs = (
+        _nearest_run(new_lines, _nonblank(head)[-NEIGHBOUR_LINES:], above=True),
+        _nearest_run(new_lines, _nonblank(tail)[:NEIGHBOUR_LINES], above=False),
+    )
+    repeated = [
+        line
+        for run in runs
+        for line in run
+        if line not in old_lines and any(ch.isalnum() for ch in line)
+    ]
+    if len(repeated) < MIN_REPEATED_LINES:
+        return []
+    if sum(len(line) for line in repeated) < MIN_REPEATED_CHARS:
+        return []
     return repeated
 
 
@@ -502,8 +591,9 @@ def apply_unique_replacement(
             f"new_content repeats lines that sit outside old_content in "
             f"{file_path} (listed in `repeated_lines`) — nothing was written, "
             "because the file would end up with those lines twice. Pass only "
-            "the text that replaces old_content, or use write_file to replace "
-            "the whole file.",
+            "the text that replaces old_content. If those lines belong in "
+            "new_content, add them to old_content too, so they are replaced "
+            "instead of copied. To replace the whole file, use write_file.",
             file_path,
             1,
             {"repeated_lines": repeated, **_excerpt(current_content, old_content)},

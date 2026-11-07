@@ -220,6 +220,11 @@ class EmbeddedLemonadeOwner:
                 )
             embedded = self._factory()
             if not embedded.is_installed() and not embedded.replaces_older_install():
+                if embedded.is_incomplete():
+                    raise EmbeddedLemonadeError(
+                        f"GAIA's Lemonade Server install is incomplete: "
+                        f"{embedded.daemon_path} is missing"
+                    )
                 raise LemonadeNotManaged(
                     "GAIA's Lemonade Server is not installed. Run `gaia init` to "
                     "install it."

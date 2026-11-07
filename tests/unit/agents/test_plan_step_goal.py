@@ -10,13 +10,13 @@ import pytest
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.history import frame_user_message
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
 _ASK = "list the work folder and read notes.txt"
-_AUGMENTED = (
-    "[GAIA Memory Context]\nCurrent time: 2026-10-07T17:13:33-0700 (Wednesday)"
-    f"\n\n{_ASK}"
+_AUGMENTED = frame_user_message(
+    "[GAIA Memory Context]\nCurrent time: 2026-10-07T17:13:33-0700 (Wednesday)", _ASK
 )
 
 

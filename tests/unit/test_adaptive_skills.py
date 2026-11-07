@@ -1565,7 +1565,6 @@ class _TaintProbeAgent:
     # staying bound to Agent.
     confirmation_hooks = Agent.__dict__["confirmation_hooks"]
     _call_is_pre_authorized = Agent._call_is_pre_authorized
-    _on_tool_invoked = Agent._on_tool_invoked
     _coerce_tool_args = Agent._coerce_tool_args
     _call_tool_bounded = Agent._call_tool_bounded
     _fold_tool_usage = Agent._fold_tool_usage

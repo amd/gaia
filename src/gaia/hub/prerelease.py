@@ -17,16 +17,26 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
+from gaia.logger import get_logger
 from gaia.version import __version__ as CORE_VERSION
+
+logger = get_logger(__name__)
 
 FLAGSHIP_AGENT_ID = "gaia"
 RELEASES_DOWNLOAD_URL = "https://github.com/amd/gaia/releases/download"
 RELEASE_MANIFEST_NAME = "gaia-agent-release.json"
 AGENT_YAML_ASSET_NAME = "gaia-agent.yaml"
 SCHEMA_VERSION = 1
+
+#: GitHub's release CDN sometimes stalls one request; the next one answers.
+MANIFEST_READ_ATTEMPTS = 3
+MANIFEST_READ_BACKOFF_SECONDS = 2.0
+#: Read timeout for the release file, longer than the hub's 10 s default.
+MANIFEST_READ_TIMEOUT_SECONDS = 30
 
 # What util/release_tag.py stamps into an RC wheel: 0.25.0rc3 for v0.25.0-rc3.
 _PEP440_RC_RE = re.compile(r"^(?P<base>\d+\.\d+\.\d+)rc(?P<rc>[1-9]\d*)$")
@@ -73,11 +83,15 @@ def flagship_source(
     *,
     fetcher: Callable[[str], bytes],
     core_version: Optional[str] = None,
+    attempts: int = MANIFEST_READ_ATTEMPTS,
+    backoff_seconds: float = MANIFEST_READ_BACKOFF_SECONDS,
 ) -> Optional[FlagshipSource]:
     """The RC's own flagship, or ``None`` when the hub is the right source.
 
     ``None`` for any agent but the flagship and for a core that is not a
-    release candidate.
+    release candidate. A timeout, dropped connection or 5xx reading the
+    release file is tried up to *attempts* times, waiting *backoff_seconds*,
+    then twice that, between tries; any other failure is not retried.
 
     Raises:
         PrereleaseFlagshipError: this is a release candidate, and its
@@ -93,13 +107,18 @@ def flagship_source(
     base_url = f"{RELEASES_DOWNLOAD_URL}/{tag}"
     url = f"{base_url}/{RELEASE_MANIFEST_NAME}"
     page = f"https://github.com/amd/gaia/releases/tag/{tag}"
+    if attempts < 1:
+        raise ValueError(f"attempts must be at least 1, got {attempts}")
     try:
-        raw = fetcher(url)
+        raw = _fetch_with_retry(fetcher, url, attempts, backoff_seconds)
     except Exception as exc:  # boundary: any fetch failure is re-raised below
+        tries = (
+            f" (tried {attempts} times)" if attempts > 1 and _is_transient(exc) else ""
+        )
         raise PrereleaseFlagshipError(
             f"GAIA {core_version} is release candidate {tag}, which installs the "
             f"GAIA agent built from its own commit, not the Agent Hub's. Could not "
-            f"read {url}: {exc}. Check your network; if {page} has no "
+            f"read {url}{tries}: {exc}. Check your network; if {page} has no "
             f"{RELEASE_MANIFEST_NAME}, the pre-release is incomplete -- report it "
             f"at https://github.com/amd/gaia/issues. The hub's agent is not used "
             f"instead because it may predate this candidate."
@@ -117,6 +136,53 @@ def flagship_source(
         manifest=_hub_manifest(release, tag, url),
         agent_yaml_url=f"{base_url}/{AGENT_YAML_ASSET_NAME}",
     )
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """A timeout, dropped connection or server-side error: worth another try."""
+    import requests
+
+    if isinstance(exc, requests.HTTPError):
+        status = exc.response.status_code if exc.response is not None else None
+        return status is not None and status >= 500
+    return isinstance(exc, (requests.ConnectionError, requests.Timeout))
+
+
+def is_transient_failure(exc: BaseException) -> bool:
+    """Whether *exc*, or an exception it was raised from, may pass on a retry.
+
+    A 404 on an incomplete pre-release is not: setup run again gets the same 404.
+    """
+    seen = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        if _is_transient(current):
+            return True
+        seen.add(id(current))
+        current = current.__cause__
+    return False
+
+
+def _fetch_with_retry(
+    fetcher: Callable[[str], bytes], url: str, attempts: int, backoff_seconds: float
+) -> bytes:
+    for attempt in range(1, attempts + 1):
+        try:
+            return fetcher(url)
+        except Exception as exc:  # re-raised unless transient with tries left
+            if attempt == attempts or not _is_transient(exc):
+                raise
+            wait = backoff_seconds * 2 ** (attempt - 1)
+            logger.warning(
+                "Reading %s failed (attempt %d of %d): %s; retrying in %.0f s",
+                url,
+                attempt,
+                attempts,
+                exc,
+                wait,
+            )
+            time.sleep(wait)
+    raise AssertionError("unreachable")
 
 
 def _hub_manifest(release: Any, tag: str, url: str) -> Dict[str, Any]:

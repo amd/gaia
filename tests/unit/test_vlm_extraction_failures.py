@@ -24,6 +24,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.llm.lemonade_client import LemonadeClientError
+from gaia.llm.surface_hints import VISION_DOWNLOAD_HINT
 from gaia.llm.vlm_client import VLMClient, VLMExtractionError
 
 
@@ -354,14 +355,13 @@ class TestMissingVisionModelPreflight:
 
         message = str(excinfo.value)
         assert "5.56 GB" in message
-        assert "Settings → Model" in message
-        assert "`gaia download --agent vlm`" in message
-        assert "gaia init" not in message
+        assert VISION_DOWNLOAD_HINT in message
+        assert "`" not in message and "gaia " not in message
         assert (excinfo.value.page_num, excinfo.value.image_num) == (3, 2)
         vlm.client.list_models.assert_called_once_with(show_all=True)
         vlm.client.chat_completions.assert_not_called()
 
-    def test_the_cli_hint_is_only_offered_for_a_model_it_downloads(self, vlm):
+    def test_a_model_with_no_size_names_none(self, vlm):
         vlm.vlm_model = "Qwen3-VL-4B-Instruct-GGUF"
         vlm.client.list_models.return_value = _catalog(
             {"id": "Qwen3-VL-4B-Instruct-GGUF", "downloaded": False}
@@ -370,7 +370,7 @@ class TestMissingVisionModelPreflight:
         with pytest.raises(VLMExtractionError) as excinfo:
             vlm.extract_from_image(b"fake-png")
 
-        assert "gaia download" not in str(excinfo.value)
+        assert VISION_DOWNLOAD_HINT in str(excinfo.value)
         assert "GB)" not in str(excinfo.value)
         vlm.client.chat_completions.assert_not_called()
 

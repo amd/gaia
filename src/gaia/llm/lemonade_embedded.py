@@ -96,10 +96,10 @@ _MACHINE_ALIASES = {
 # install() fail loudly; tests/integration/test_lemonade_embeddable_assets.py
 # checks them against the live release so CI catches the omission first.
 EMBEDDABLE_SHA256: Dict[str, str] = {
-    "lemonade-embeddable-2026.45.3-windows-x64.zip": "27bedfb6bbc521e17910b76e4067a54622843bd68e5b2995bdb2e3954cf8b192",
-    "lemonade-embeddable-2026.45.3-ubuntu-x64.tar.gz": "fa780b91fd76cf1ef8fb2fd9a6d77506470b45dae162b6a1e46882fe2c056783",
-    "lemonade-embeddable-2026.45.3-ubuntu-arm64.tar.gz": "0f243b02c989200e399f398593896f05d5964b4b5cd5d900dabd3b0238bc0b0a",
-    "lemonade-embeddable-2026.45.3-macos-arm64.tar.gz": "ad2f418ce800a030ddd67efb675eaf4acce41e341d2879a465d32e6068bfb1da",
+    "lemonade-embeddable-2026.44.1-windows-x64.zip": "7ff6c5d6ab612c33690411a7e53d6d0dd62eb515a073375c35015b0778a5a344",
+    "lemonade-embeddable-2026.44.1-ubuntu-x64.tar.gz": "16f156a7f44a32b20936e76019b24dbccc7b82e60a3acea12e8614da8bca8e90",
+    "lemonade-embeddable-2026.44.1-ubuntu-arm64.tar.gz": "b458a1cfbcfa3f382c5cacc90486c216a5f100f56d5266912eaea141aa9be7ae",
+    "lemonade-embeddable-2026.44.1-macos-arm64.tar.gz": "204e436477c6391f503baf245828251eb0007e91a204e7196fd87887df385017",
 }
 
 # lemond reads these from <config_dir>/config.json.
@@ -873,6 +873,14 @@ class EmbeddedLemonade:
             True if :attr:`daemon_path` exists.
         """
         return self.daemon_path.is_file()
+
+    def is_incomplete(self) -> bool:
+        """Whether this version was unpacked but its ``lemond`` is gone.
+
+        Still GAIA's server to start: setup repairs it, and a system install
+        on the default port is not the one this machine was set up with.
+        """
+        return self.dist_dir.is_dir() and not self.daemon_path.is_file()
 
     def replaces_older_install(self) -> bool:
         """Whether an older version is unpacked, which this one upgrades.

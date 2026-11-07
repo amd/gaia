@@ -48,6 +48,7 @@ def _embedded(status, installed=True, older_install=False):
     embedded.version = VERSION
     embedded.is_installed.return_value = installed
     embedded.replaces_older_install.return_value = older_install
+    embedded.is_incomplete.return_value = False
     embedded.is_older.side_effect = lambda v: parse_version(v) < parse_version(VERSION)
     embedded.status.return_value = status
     embedded.start.return_value = _running(port=60000)
@@ -445,6 +446,7 @@ class TestManagerHook:
         embedded.version = VERSION
         embedded.is_installed.return_value = installed
         embedded.replaces_older_install.return_value = False
+        embedded.is_incomplete.return_value = False
         embedded.is_older.side_effect = lambda found: (
             parse_version(found) < parse_version(VERSION)
         )

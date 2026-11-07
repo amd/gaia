@@ -474,7 +474,8 @@ jobs:
           set -euo pipefail
           python -m pytest -v --tb=short \
             tests/unit/test_lemonade_download_urls.py::TestEveryReleaseIsPinned \
-            tests/integration/test_lemonade_embeddable_assets.py
+            tests/integration/test_lemonade_embeddable_assets.py \
+            tests/integration/test_lemonade_linux_abi.py
           python util/check_doc_versions.py
 
       - name: Open the bump PR

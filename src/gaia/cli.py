@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import (
@@ -240,23 +241,41 @@ def _cli_wording(e: BaseException) -> str:
     return surface_wording(str(e), "cli")
 
 
-def _cli_error_text(e: BaseException) -> str:
-    """An LLM failure as the CLI shows it: the typed remedy, in CLI terms."""
+def _cli_error_text(
+    e: BaseException, local: bool = True, base_url: Optional[str] = None
+) -> str:
+    """An LLM failure as the CLI shows it: the typed remedy, in CLI terms.
+
+    A failed call to Lemonade (*local*, at *base_url* or the configured one)
+    also saves a fault record, which the text names.
+    """
+    from gaia.llm.failure_record import (
+        is_model_call_failure,
+        record_local_failure,
+        record_note,
+    )
     from gaia.llm.providers.lemonade import classify_lemonade_exception
     from gaia.llm.surface_hints import surface_wording
 
     raw = surface_wording(str(e), "cli")
     classified = classify_lemonade_exception(e)
+    note = ""
+    if local and (classified or is_model_call_failure(e)):
+        note = record_note(record_local_failure(e, where="cli", base_url=base_url))
+    note = f"\n   {note}" if note else ""
     if not classified:
-        return f"❌ Error: {raw}"
+        return f"❌ Error: {raw}{note}"
     message = surface_wording(classified.user_message, "cli")
     # An auth error's remedy is the raw text itself; don't print it twice.
     detail = "" if raw.endswith(message) else f"\n   Details: {raw}"
-    return f"❌ Error: {message}{detail}"
+    return f"❌ Error: {message}{detail}{note}"
 
 
 class GaiaCliClient:
     log = get_logger(__name__)
+    # Where a failure record looks: Lemonade, unless this client talks to Claude.
+    calls_lemonade = True
+    lemonade_url: Optional[str] = None
 
     def __init__(
         self,
@@ -276,6 +295,8 @@ class GaiaCliClient:
         self.max_tokens = max_tokens
         self.cli_mode = True  # Set this to True for CLI mode
         self.show_stats = show_stats
+        self.calls_lemonade = not use_claude
+        self.lemonade_url = base_url
 
         if use_claude:
             # Like `gaia chat`: --model is the local model, --claude-model the Claude one.
@@ -304,7 +325,7 @@ class GaiaCliClient:
         except Exception as e:
             # A backend string like "Max length reached!" tells the user
             # nothing — hand back the typed remediation when we recognise it.
-            error_message = _cli_error_text(e)
+            error_message = _cli_error_text(e, self.calls_lemonade, self.lemonade_url)
             self.log.error(error_message)
             print(error_message)
             yield error_message
@@ -370,8 +391,23 @@ class GaiaCliClient:
             # A backend string like "Max length reached!" tells the user
             # nothing — hand back the typed remediation when we recognise it.
             self.log.error(f"Error in chat: {str(e)}")
-            print(_cli_error_text(e))
+            print(_cli_error_text(e, self.calls_lemonade, self.lemonade_url))
             sys.exit(1)
+
+
+def _probe_error_is_unreachable(err: LemonadeClientError) -> bool:
+    """True when a device probe failed only because Lemonade isn't reachable
+    yet (connection refused / timeout), not because the server errored."""
+    import requests
+
+    # Prefer the requests exception in the cause chain over message matching.
+    cause = err.__cause__ or err.__context__
+    if isinstance(
+        cause, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)
+    ):
+        return True
+    # Fallback for wrappers that don't preserve __cause__.
+    return str(err).startswith("Request failed:") and "with status" not in str(err)
 
 
 def resolve_effective_device(
@@ -457,6 +493,39 @@ async def async_main(action, **kwargs):
         "talk": "talk",
         "stats": "minimal",
     }
+
+    # `gaia prompt --device npu` must run the NPU twin, not the GPU default
+    # (#3827): map an explicit --device to its device config's model the same
+    # way `gaia chat` does. An explicit --device fails loudly when the
+    # hardware isn't available, per the NPU guide's fallback behaviour; an
+    # explicit --model always wins.
+    if (
+        action == "prompt"
+        and kwargs.get("device") is not None
+        and kwargs.get("model") is None
+    ):
+        from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
+
+        try:
+            _prompt_devices = (
+                LemonadeClient(verbose=False).get_system_info().get("devices", {})
+            )
+            kwargs["device"] = resolve_effective_device(
+                kwargs["device"], True, _prompt_devices
+            )
+        except LemonadeClientError as _prompt_probe_err:
+            # Only an unreachable server skips the check; init below surfaces
+            # it. Any other server error is real and must not be hidden.
+            if not _probe_error_is_unreachable(_prompt_probe_err):
+                raise
+            log.debug(
+                "Device probe skipped (Lemonade not reachable yet): %s",
+                _prompt_probe_err,
+            )
+        for _dc in DEFAULT_DEVICE_CONFIGS:
+            if _dc.device == kwargs["device"]:
+                kwargs["model"] = _dc.model
+                break
 
     # Initialize Lemonade with agent-specific profile
     lemonade_base_url = kwargs.get("base_url")  # May be None if not specified
@@ -559,32 +628,9 @@ async def async_main(action, **kwargs):
                         effective_device, device_was_explicit, _devices
                     )
                 except LemonadeClientError as _probe_err:
-                    # Only treat "server not reachable yet" (connection refused /
-                    # timeout) as a soft pass. A reachable but broken server
-                    # (HTTP 4xx/5xx, 401 auth) must NOT silently let an explicit
-                    # --device proceed; surface it so the user sees the real
-                    # failure. The agent runtime re-validates the device
-                    # regardless (LemonadeManager.ensure_ready).
-                    #
-                    # Prefer the original requests exception preserved in the
-                    # cause chain over message-string matching — the client
-                    # wraps RequestException without an HTTP status, but the
-                    # exact wrapper text can change independently of this guard.
-                    import requests
-
-                    _cause = _probe_err.__cause__ or _probe_err.__context__
-                    _unreachable = isinstance(
-                        _cause,
-                        (
-                            requests.exceptions.ConnectionError,
-                            requests.exceptions.Timeout,
-                        ),
-                    ) or (
-                        # Fallback for wrappers that don't preserve __cause__.
-                        str(_probe_err).startswith("Request failed:")
-                        and "with status" not in str(_probe_err)
-                    )
-                    if not _unreachable:
+                    # A reachable but broken server (4xx/5xx, 401) must not let
+                    # an explicit --device through unchecked.
+                    if not _probe_error_is_unreachable(_probe_err):
                         raise
                     log.debug(
                         "Device probe: Lemonade not reachable yet (%s)", _probe_err
@@ -898,6 +944,24 @@ def _ensure_webui_built(log=None):
     )
 
 
+def _enable_backend_fault_log(log):
+    """Point fatal-crash stacks at the fault log; the backend still runs without it."""
+    from gaia.ui.fault_log import enable_fault_log
+
+    try:
+        fault_log = enable_fault_log()
+    except OSError as e:
+        log.warning(
+            f"Backend fault log unavailable, so a hard crash leaves no stack: {e}"
+        )
+        return
+    # The desktop app logs the launcher's pid; the parent here ties the two together.
+    log.info(
+        f"Agent UI backend pid {os.getpid()} (parent {os.getppid()}); "
+        f"a hard crash writes its stack to {fault_log}"
+    )
+
+
 def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist=None):
     """Launch the Agent UI server (FastAPI + uvicorn).
 
@@ -932,7 +996,9 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         print()
         import uvicorn
 
+        # create_app() refuses an unsafe GAIA_HOME, so nothing is written there first.
         app = create_app(webui_dist=webui_dist)
+        _enable_backend_fault_log(log)
         if not base_url and not lemonade_is_remote():
             # First run is set up in the app; the daemon owns the model server.
             start_model_server_owner()
@@ -943,6 +1009,16 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
             log_level="debug" if debug else "info",
             access_log=debug,
         )
+        log.warning(
+            "Agent UI server stopped: uvicorn returned after a shutdown signal "
+            "(Ctrl+C or Ctrl+Break reached this process)"
+        )
+    except KeyboardInterrupt:
+        log.warning("Agent UI server interrupted by KeyboardInterrupt")
+        raise
+    except SystemExit as e:
+        log.error(f"Agent UI server exiting with code {e.code}", exc_info=True)
+        raise
     except UnsafeGaiaHomeError as e:
         # The user's misconfiguration to fix: print the remedy, not a traceback.
         # 64 is EX_USAGE, matching gaia uninstall's exit code for the same fault.
@@ -972,7 +1048,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
             print(f"Error: {e}")
         sys.exit(1)
     except Exception as e:
-        log.error(f"Error starting Agent UI: {e}")
+        log.exception(f"Agent UI server failed: {e}")
         print(f"Error: {e}")
         sys.exit(1)
 
@@ -5018,8 +5094,8 @@ def main():
 
     # Apply the persistent default_model (issue #98) for model-bearing commands.
     # Precedence: explicit --model flag > config default_model > built-in default.
-    # An explicit `chat --device` requests a device-specific model, so it keeps
-    # precedence over the config default there.
+    # An explicit `chat --device` / `prompt --device` requests a device-specific
+    # model, so it keeps precedence over the config default there.
     if (
         args.action in ("prompt", "chat", "llm")
         and getattr(args, "model", None) is None
@@ -5034,13 +5110,13 @@ def main():
         # builtin_default=None: leave args.model unset when no config default so
         # each command keeps applying its own built-in default downstream.
         # A non-flagship agent keeps its own model default, as in the Agent UI.
-        if not (
-            args.action == "chat"
-            and (
-                getattr(args, "device", None)
-                or getattr(args, "agent", None) not in (None, "gaia")
-            )
-        ):
+        _device_picks_model = args.action in ("chat", "prompt") and getattr(
+            args, "device", None
+        )
+        _agent_keeps_own = args.action == "chat" and getattr(
+            args, "agent", None
+        ) not in (None, "gaia")
+        if not (_device_picks_model or _agent_keeps_own):
             resolved = _cfg.resolve_model(args.model, None)
             if resolved:
                 args.model = resolved
@@ -5498,7 +5574,7 @@ Let me know your answer!
                 # Check if Lemonade server is running
                 if not check_lemonade_health(args.host, port):
                     LemonadeManager.print_server_error()
-                    return
+                    sys.exit(1)
 
                 model_ids = client.get_required_models("all")
                 if not model_ids:
@@ -5604,7 +5680,7 @@ Let me know your answer!
             # Check if Lemonade server is running
             if not check_lemonade_health(args.host, port):
                 LemonadeManager.print_server_error()
-                return
+                sys.exit(1)
 
             agent_name = args.agent.lower()
             model_ids = client.get_required_models(agent_name)
@@ -9133,6 +9209,9 @@ def handle_diagnostics_command(args):
       (``gaia.log.1`` ...); a file over 50 MB contributes only its last 50 MB,
       as ``<name>.tail``
     - ``~/.gaia/electron-install-state.json`` and ``setup-report.json``
+    - the last few model-failure records (``failures/GF-*.json``), each
+      written redacted at the moment a model call failed (omitted with
+      ``--no-logs``: they hold a Lemonade log tail)
     - OS version (``uname``/``lsb_release`` on Linux, ``sw_vers`` on macOS,
       ``ver`` on Windows)
     - ``env`` entries matching ``gaia|lemonade|xdg|wayland|display`` (case-insensitive)
@@ -9175,6 +9254,9 @@ def handle_diagnostics_command(args):
         # First-run setup's record: its run, plan and every stage's log.
         gaia_home() / "setup-report.json",
     ]
+    from gaia.llm.failure_record import recent_records
+
+    failure_records = recent_records()
 
     # System info snapshot
     sysinfo_parts = _diag_os_info(sys.platform)
@@ -9222,9 +9304,12 @@ def handle_diagnostics_command(args):
                         filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
                     )
 
-            # Log files gated by --no-logs. Rotated backups (gaia.log.1, ...)
-            # ride along; a log from before the size cap keeps only its tail.
+            # Log files gated by --no-logs, and failure records with them since
+            # each holds a log tail. Rotated backups (gaia.log.1, ...) ride
+            # along; a log from before the size cap keeps only its tail.
             if not args.no_logs:
+                for entry in failure_records:
+                    tar.add(str(entry), arcname=f"failures/{entry.name}")
                 family = (
                     (arcdir, f) for base, arcdir in log_files for f in log_family(base)
                 )

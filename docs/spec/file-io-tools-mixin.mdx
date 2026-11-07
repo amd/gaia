@@ -323,6 +323,12 @@ blind; this makes the agent look at what it is about to change.
 - **Creating a file needs no read.**
 - **The record belongs to one agent instance** and lasts as long as it does.
   Another agent's reads unlock nothing.
+- **An edit already applied this turn is refused.** The same `old_content` and
+  `new_content` on the same file a second time in one turn never runs: when
+  `old_content` sits inside `new_content`, the repeat still matches, and
+  "milk" → "oat milk" twice leaves "oat oat milk". The error says what the
+  repeat would have done. A different edit, another file, or the next turn runs
+  as usual.
 
 The refusal happens before anything is written, and before the confirmation
 prompt, so nobody is asked to approve an edit that is already going to be
@@ -336,7 +342,7 @@ there.
 {
     "status": "error",
     "error": str,           # names the file and says to read it
-    "error_type": "not_read" | "changed_since_read",
+    "error_type": "not_read" | "changed_since_read" | "already_applied",
     "file_path": str,
     "executed": False       # stopped before it ran
 }
@@ -354,11 +360,14 @@ never named while reporting success, and the resulting diff looks plausible.
 Extend `old_content` with surrounding lines until it is unique.
 
 **`new_content` must not repeat the lines around `old_content`.** When it
-contains the two or three lines just above or below the matched text, the
-caller has put the whole intended file into one span, and splicing it in would
-leave those lines twice. The edit is refused and the repeats are listed in
-`repeated_lines`; pass only the replacement text, or use `write_file`. Short
-runs such as closing braces may repeat freely.
+contains two or more of the lines just outside the matched text — a run above,
+a run below, or the line above as its first line and the line below as its
+last — the caller has put the whole intended file into one span, and splicing
+it in would leave those lines twice.
+The edit is refused and the repeats are listed in `repeated_lines`. Pass only
+the replacement text; if those lines belong in `new_content`, include them in
+`old_content` too; to rewrite the whole file, use `write_file`. A single echoed
+line and lines of punctuation such as closing braces may repeat freely.
 
 **A rejection carries the file's current content**, so the retry does not need
 a separate read.

@@ -84,7 +84,9 @@ gaia knowledge usage          # show credits spent
 ### `Unauthorized` / `401` from the MCP server
 
 The key in your keyring is wrong or revoked. Click **Disconnect** on the tile
-(or `gaia connectors disconnect mcp-tavily`) and re-add a fresh key.
+(or `gaia connectors disconnect mcp-tavily`) and re-add a fresh key. **Check**
+on the tile won't catch this: the Tavily server only checks the key when a
+search runs, so it starts fine with a bad one.
 
 ### `npx: command not found`
 
