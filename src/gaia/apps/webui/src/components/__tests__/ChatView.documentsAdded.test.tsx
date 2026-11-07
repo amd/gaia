@@ -135,6 +135,8 @@ it('keeps library notices on the finished turn', async () => {
     await answerWith({ library_notices: [notice] });
 
     expect(await screen.findByRole('note')).toHaveTextContent(notice);
+    // English notices keep their own direction inside an RTL chat.
+    expect(screen.getByText(notice)).toHaveAttribute('dir', 'auto');
     expect(useChatStore.getState().messages.slice(-1)[0]?.libraryNotices).toEqual([notice]);
 });
 
