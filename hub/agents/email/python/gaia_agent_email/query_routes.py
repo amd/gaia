@@ -512,7 +512,43 @@ _QUERY_SSE_RESPONSES = {
                 }
             }
         },
+    },
+    400: {
+        "description": (
+            "`provider` is set to something other than `lemonade`: the email "
+            "agent runs local inference only."
+        )
+    },
+    409: {
+        "description": (
+            "The session already has a turn in progress, or `run_id` is already "
+            "in flight."
+        )
+    },
+    500: {"description": "The run failed to start after the agent was built."},
+    502: {
+        "description": (
+            "The email agent could not be built, or could not be switched to the "
+            "requested `model`."
+        )
+    },
+}
+_RUN_NOT_IN_FLIGHT = {
+    404: {
+        "description": (
+            "No run with this `run_id` is in flight: it finished, was cancelled, "
+            "or the id is wrong."
+        )
     }
+}
+_RESPOND_RESPONSES = {
+    **_RUN_NOT_IN_FLIGHT,
+    409: {
+        "description": (
+            "The run is not waiting on this `request_id`: the question was "
+            "already answered, timed out, or belongs to another run."
+        )
+    },
 }
 
 
@@ -821,7 +857,11 @@ async def query(request: QueryRequest) -> StreamingResponse:
     )
 
 
-@router.post("/query/{run_id}/cancel", response_model=QueryCancelResponse)
+@router.post(
+    "/query/{run_id}/cancel",
+    response_model=QueryCancelResponse,
+    responses=_RUN_NOT_IN_FLIGHT,
+)
 async def cancel_query(run_id: str) -> QueryCancelResponse:
     """Cancel an in-flight ``/query`` run — stops tool execution between steps.
 
@@ -840,7 +880,11 @@ async def cancel_query(run_id: str) -> QueryCancelResponse:
     return QueryCancelResponse(run_id=run_id, cancelled=True)
 
 
-@router.post("/query/{run_id}/respond", response_model=QueryRespondResponse)
+@router.post(
+    "/query/{run_id}/respond",
+    response_model=QueryRespondResponse,
+    responses=_RESPOND_RESPONSES,
+)
 async def respond_query(run_id: str, body: QueryRespondRequest) -> QueryRespondResponse:
     """Answer a ``needs_input`` question and let the paused run continue.
 
