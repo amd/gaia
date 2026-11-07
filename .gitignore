@@ -300,6 +300,8 @@ tests/unit/eval/test_mcp_tool_reliability_scenarios.py
 # signed with an ephemeral key that must never be committed)
 # (plus its .lock and the .build-*/.old-* folders a run swaps in and out)
 tests/fixtures/gaia/fixture_hub/_prepared*
+# util/run_eval_lane.py's default --out: logs, staged fixtures, its signed hub
+/eval-out/
 eval/results/gaia-local-tui-validation/tui-home/
 
 # Eval RUN OUTPUTS are reproducible artifacts, never PR content: the corpus,
