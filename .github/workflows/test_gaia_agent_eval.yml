@@ -62,10 +62,10 @@
 # Self-hosted: needs a running Lemonade Server on AMD hardware + the Agent UI
 # backend, so it runs on the ephemeral devlab-dispatch Strix Halo pool. THIS
 # POOL IS WINDOWS: every inline `run:` is PowerShell 5.1 (see the shell
-# default) — do not reintroduce bash (test_eval_agent_gemma_consolidation.yml
-# documents the scar). Each job gets a fresh machine with its own Lemonade, so
-# it must NOT join the `lemonade-eval` slot: that group serialises by name
-# across machines and belongs to the persistent pool (see eval_flagship.yml).
+# default) — do not reintroduce bash. Each job gets a fresh machine with its
+# own Lemonade, so it must NOT join the `lemonade-eval` slot: that group
+# serialises by name across machines and belongs to the persistent pool (see
+# eval_flagship.yml).
 
 name: GAIA Agent Eval (judged scenarios, report mode)
 
@@ -361,7 +361,7 @@ jobs:
       # repairs the one failure CI can repair (a stale registration), and the
       # --llamacpp-args flag loads it exactly the way gaia.rag.sdk does. On
       # failure, fail in seconds with a pointer — the deeper backend-cache
-      # recovery lives in test_eval_agent_gemma_consolidation.yml; run it (or
+      # recovery lives in eval_flagship.yml (agent-eval preflight); run it (or
       # its documented wipe) on the box rather than duplicating it here.
       - name: Preflight — embedder serves embeddings (memory-on run)
         run: |
@@ -379,7 +379,7 @@ jobs:
           $embedCode = $LASTEXITCODE
           $embedOut | ForEach-Object { Write-Host "$_" }
           if ($embedCode -ne 0 -or -not ($embedOut -match '\[ci\] embeddings OK \(dim=')) {
-            Write-Host "::error::The embedder $($probe[-3]) cannot serve embeddings on this runner. This eval runs MEMORY-ON, so gaia_memory / gaia_rag / gaia_code would silently collapse into non-answers - refusing to spend the slot measuring nothing. Recovery: the backend-cache wipe documented in test_eval_agent_gemma_consolidation.yml (its embeddings preflight); run it on the box, then re-run this workflow."
+            Write-Host "::error::The embedder $($probe[-3]) cannot serve embeddings on this runner. This eval runs MEMORY-ON, so gaia_memory / gaia_rag / gaia_code would silently collapse into non-answers - refusing to spend the slot measuring nothing. Recovery: the backend-cache wipe documented in eval_flagship.yml (its agent-eval embeddings preflight); run it on the box, then re-run this workflow."
             exit 1
           }
 
