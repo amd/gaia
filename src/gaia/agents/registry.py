@@ -1233,6 +1233,7 @@ class AgentRegistry:
         category: str = "",
         tags: Optional[List[str]] = None,
         icon: str = "",
+        consumes_mcp_servers: bool = False,
     ) -> None:
         """Register a daemon-supervised sidecar agent (e.g. email) (#2408).
 
@@ -1250,6 +1251,8 @@ class AgentRegistry:
         the package's own registration. Without them the UI renders a
         generated "<Name> agent" line and falls back to its generic starter
         prompts — what a hub-installed flagship showed before #4161.
+        *consumes_mcp_servers* likewise comes from the spec; without it the
+        UI shows no switch to let the agent use an MCP connector.
 
         Idempotent: a no-op if *agent_id* (the BARE id, not the namespaced
         one) is already registered — protects a real wheel/custom-agent
@@ -1284,6 +1287,7 @@ class AgentRegistry:
                 category=category or "general",
                 tags=list(tags or []),
                 icon=icon,
+                consumes_mcp_servers=consumes_mcp_servers,
             )
         )
         logger.info(

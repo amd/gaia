@@ -413,6 +413,7 @@ surface.
 | **Lemonade down** during the distillation call | Failure | **Skip the whole synthesis pass**, log loudly. **No** silent downgrade to a smaller model. |
 | **Malformed `agentskills.io` output** from the LLM | Failure | Skip **that cluster**, log, and mark its episodes `unusable` so the same call is not repeated on every session start. A response truncated at the model's output cap lands here too. `_synthesize_skills(force=True)` / `MemoryStore.reset_synthesis_progress()` re-opens them. |
 | **Embedder fails** | Failure | **Re-raise** — synthesis cannot proceed without embeddings (matches memory v2's embed-failure posture). |
+| **Embedder refuses one goal as too long** (llama-server `too large to process`) | Failure | Skip **that session**, log, and mark it `unusable` so it does not abort every later pass. Goals are cut to `EMBED_MAX_CHARS` before embedding, so this fires only on an embedder loaded with a smaller batch. `_synthesize_skills(force=True)` / `MemoryStore.reset_synthesis_progress()` re-opens it. |
 | **No matching procedure at recall** | Normal | `recall_skill` returns `[]`; the planner prompt is unchanged; the loader falls through to CORE + semantic. |
 
 This collapses the three *user-chosen* off-states (memory off, synthesis off, a

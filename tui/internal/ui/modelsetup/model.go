@@ -69,8 +69,9 @@ var screenNames = map[screen]string{
 // Messages the screens send their host.
 type (
 	// FinishedMsg: first-run setup is done and the user pressed enter on the
-	// ready summary. The host re-checks and starts the agent.
-	FinishedMsg struct{}
+	// ready summary. ChatModel is the selected local chat model; hosts persist
+	// it before re-checking and use it to switch an already-open chat.
+	FinishedMsg struct{ ChatModel string }
 	// BackMsg: esc on the first screen of first-run setup. Choices are what
 	// the user had ticked, for the host to pass back as Options.Keep.
 	BackMsg struct{ Choices *Choices }

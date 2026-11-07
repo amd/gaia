@@ -203,18 +203,23 @@ const SERVER_FAILED = {
 const HARDWARE = { compatible: true, blockers: [], warnings: [], ram_gb: 128, gpu_name: 'AMD Radeon 8060S', npu_detected: true, disk_free_gb: 25, lemonade_running: true };
 const HARDWARE_BLOCKED = { ...HARDWARE, compatible: false, blockers: ['Needs 30 GB of disk; 4 GB free.'], warnings: ['Low memory: close other apps before you start.'] };
 
-const providers = (gatewayReachable: boolean, envKey: boolean) => ({
-    providers: [
-        { id: 'local', name: 'Local', remote: false, privacy_notice: '' },
-        {
-            id: 'fireworks', name: 'Fireworks AI', remote: true, privacy_notice: '',
-            ...(envKey ? { key_source: 'environment', key_hint: '0000', env_var: 'FIREWORKS_API_KEY' } : {}),
-        },
-        { id: 'amd', name: 'AMD LLM Gateway', remote: true, privacy_notice: '', network: { reachable: gatewayReachable, detail: gatewayReachable ? null : "Can't reach llm-api.amd.com." } },
-    ],
-    active: { provider: 'local', model: GEMMA_ID, label: 'Gemma', remote: false, is_default: true },
-    lemonade_error: null,
-});
+const providers = (gatewayReachable: boolean, envKey: boolean, localOnly = false) => {
+    const blocked = localOnly
+        ? { blocked: true, blocked_reason: 'Local only is on; turn it off in Settings to use cloud models.' }
+        : {};
+    return {
+        providers: [
+            { id: 'local', name: 'Local', remote: false, privacy_notice: '' },
+            {
+                id: 'fireworks', name: 'Fireworks AI', remote: true, privacy_notice: '', ...blocked,
+                ...(envKey ? { key_source: 'environment', key_hint: '0000', env_var: 'FIREWORKS_API_KEY' } : {}),
+            },
+            { id: 'amd', name: 'AMD LLM Gateway', remote: true, privacy_notice: '', ...blocked, network: { reachable: gatewayReachable, detail: gatewayReachable ? null : "Can't reach llm-api.amd.com." } },
+        ],
+        active: { provider: 'local', model: GEMMA_ID, label: 'Gemma', remote: false, is_default: true },
+        lemonade_error: null,
+    };
+};
 
 interface SetupAnswers {
     status?: object;
@@ -224,6 +229,8 @@ interface SetupAnswers {
     gatewayReachable?: boolean;
     /** A Fireworks key in the environment, which the Connect step names. */
     envKey?: boolean;
+    /** Local only blocks cloud choices while leaving their explanation visible. */
+    localOnly?: boolean;
     /** A Lemonade the user already runs, which Check this PC offers. */
     theirs?: boolean;
 }
@@ -235,7 +242,7 @@ const THEIRS_TARGET = {
 const THEIRS_FOUND = { found: { url: 'http://localhost:13305/api/v1', version: '2026.44.1', status: 'ok', message: null }, unchecked: [] };
 
 /** First-run setup, every call the screens make answered from the backend's shapes. */
-export async function withSetup(page: Page, { status = { state: 'idle' }, plan = PLAN, gpu = NO_GPU, hardware = HARDWARE, gatewayReachable = true, envKey = false, theirs = false }: SetupAnswers = {}): Promise<void> {
+export async function withSetup(page: Page, { status = { state: 'idle' }, plan = PLAN, gpu = NO_GPU, hardware = HARDWARE, gatewayReachable = true, envKey = false, localOnly = false, theirs = false }: SetupAnswers = {}): Promise<void> {
     const prices = { provider: 'fireworks', models: [{ model: 'qwen', name: 'Qwen3.6', rank: 1, note: null, price: { input_per_million: 0.5, cached_input_per_million: 0.1, output_per_million: 3, source: 'list price' } }], source: 'Fireworks list price', note: null };
     const answers: Record<string, unknown> = {
         'GET /setup/check': { ready: false, stage: 'setup', reasons: [], steps: [{ key: 'server', label: 'Install the local model server', detail: 'about 1 minute' }] },
@@ -249,7 +256,7 @@ export async function withSetup(page: Page, { status = { state: 'idle' }, plan =
         },
         'GET /lemonade/target': theirs ? THEIRS_TARGET : { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: null, saved_base_url: null, api_key_stored: false, offer: false, what_gaia_does: '' },
         'GET /lemonade/detect': theirs ? THEIRS_FOUND : { found: null, unchecked: [] },
-        'GET /providers': providers(gatewayReachable, envKey),
+        'GET /providers': providers(gatewayReachable, envKey, localOnly),
         'GET /spending/prices/fireworks': prices,
         'GET /spending/prices/amd': { provider: 'amd', models: [], source: null, note: 'Prices are set by the organization that runs the gateway.' },
         'GET /memory/settings': { enabled: true },
@@ -470,6 +477,17 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
+        name: 'key-local-only',
+        answers: { localOnly: true },
+        reach: async (page) => {
+            await toKey(page);
+            await expect(page.locator('.setup-choice.is-disabled').first()).toBeVisible();
+            await expect(page.locator('.setup-choice.is-disabled').first()).toHaveText(/\S/);
+            await expect(page.locator('.setup-key-steps')).toHaveCount(0);
+            await expect(page.locator('.setup-error')).toHaveCount(0);
+        },
+    },
+    {
         name: 'download-running',
         answers: { status: RUN },
         reach: async (page) => {
@@ -535,7 +553,7 @@ export const SETUP_SCENES: SetupScene[] = [
 ];
 
 /** The screens whose rows wrap: each must hold together in a narrow window too. */
-export const NARROW_SCENES = ['plan', 'check-details', 'models', 'models-npu-not-ready', 'models-long', 'key', 'download-running', 'download-failed', 'download-agent-failed', 'test-long', 'ready'];
+export const NARROW_SCENES = ['plan', 'check-details', 'models', 'models-npu-not-ready', 'models-long', 'key', 'key-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-long', 'ready'];
 
 export const scene = (name: string): SetupScene => {
     const found = SETUP_SCENES.find((s) => s.name === name);

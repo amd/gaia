@@ -61,10 +61,23 @@ class _HappyFakeAgent:
         self.console = None
         self.streaming = False  # GaiaAgentConfig's default; the route turns it on
         self._cancel_event = None
+        self._memory_store = object()
+        self._incognito = False
+        self.memory_enabled_during_query = None
         self.seen_query = None
         self.seen_history = None
 
+    def memory_status(self):
+        return {
+            "available": self._memory_store is not None,
+            "enabled": not self._incognito,
+        }
+
+    def set_memory_enabled(self, enabled):
+        self._incognito = not enabled
+
     def process_query(self, query, max_steps=None):
+        self.memory_enabled_during_query = not self._incognito
         self.seen_query = query
         self.seen_history = list(self.conversation_history)
         self.console.print_processing_start(query, 20, "fake-model")
@@ -623,6 +636,39 @@ def test_unknown_field_is_rejected(app_client):
     body["bogus"] = 1
     resp = app_client.post("/v1/email/query", json=body)
     assert resp.status_code == 422
+
+
+def test_memory_mode_is_optional_and_enum_validated(app_client, monkeypatch):
+    fake = _HappyFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+
+    request = query_routes.QueryRequest(
+        query="hi", run_id=str(uuid.uuid4()), context=[], memory="private"
+    )
+    assert request.memory == "private"
+    assert (
+        app_client.post("/v1/email/query", json=_req(memory="private")).status_code
+        == 200
+    )
+    assert (
+        app_client.post("/v1/email/query", json=_req(memory="sometimes")).status_code
+        == 422
+    )
+
+
+def test_private_mode_disables_memory_before_the_turn(app_client, monkeypatch):
+    fake = _HappyFakeAgent()
+    built_with = {}
+
+    def build(**kwargs):
+        built_with.update(kwargs)
+        return fake
+
+    monkeypatch.setattr(query_routes, "build_query_agent", build)
+    response = app_client.post("/v1/email/query", json=_req(memory="private"))
+    assert response.status_code == 200
+    assert built_with["memory_enabled"] is False
+    assert fake.memory_enabled_during_query is False
 
 
 def test_non_lemonade_provider_is_400(app_client, monkeypatch):
@@ -1199,6 +1245,30 @@ def stateful_registry(monkeypatch):
     monkeypatch.setattr(agent_routes, "_close_agent", closed.append, raising=True)
     fresh.closed = closed
     return fresh, built
+
+
+def test_session_memory_mode_is_kept_when_omitted_on_a_follow_up(
+    app_client, stateful_registry
+):
+    registry, built = stateful_registry
+    app_client.post(
+        "/v1/email/query", json=_req("one", session_id="s1", memory="private")
+    )
+    app_client.post("/v1/email/query", json=_req("two", session_id="s1"))
+    assert len(built) == 1
+    assert built[0].memory_status()["enabled"] is False
+
+
+def test_session_memory_mode_can_be_reenabled_on_a_follow_up(
+    app_client, stateful_registry
+):
+    registry, built = stateful_registry
+    app_client.post(
+        "/v1/email/query", json=_req("one", session_id="s1", memory="private")
+    )
+    app_client.post("/v1/email/query", json=_req("two", session_id="s1", memory="on"))
+    assert len(built) == 1
+    assert built[0].memory_status()["enabled"] is True
 
 
 def test_a_model_switch_keeps_memory_off(app_client, stateful_registry):

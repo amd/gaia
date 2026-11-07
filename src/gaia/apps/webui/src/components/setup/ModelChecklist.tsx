@@ -322,7 +322,7 @@ export function ModelChecklist({ plan, selection, onToggle, onDefaultChat, label
                         disabled={disabled || candidates.length === 0}
                         onChange={(ev) => onDefaultChat(ev.target.value)}
                     >
-                        {candidates.length === 0 && <option value="">{t('setup.models.noChat')}</option>}
+                        {candidates.length === 0 && <option value="">{t.bare('setup.models.noChat')}</option>}
                         {candidates.map((e) => (
                             <option key={e.id} value={e.id}>
                                 {e.name}{isNpu(e) ? ` (${t('setup.models.npu')})` : ''}

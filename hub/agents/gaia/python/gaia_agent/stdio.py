@@ -1752,6 +1752,9 @@ def dispatch_query(
             agent._engineering_reported_setup_status = setup_status
     if query == CLEAR_CONVERSATION_QUERY:
         agent.conversation_history.clear()
+        loader = getattr(agent, "tool_loader", None)
+        if loader is not None:
+            loader.reset_session()
         _write({"type": "final", "answer": "conversation_cleared"}, out)
         return
     if query == MEMORY_DUMP_QUERY:

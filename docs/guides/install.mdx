@@ -241,6 +241,24 @@ Switching back needs GAIA's own server installed, and waits until it answers: if
 isn't installed or won't start, the switch is refused or undone and nothing changes. Run `gaia init --gaia-lemonade` to install it and switch in one
 step.
 
+### A Lemonade on another computer
+
+GAIA can use a Lemonade Server on another computer on your network, such as a
+desktop with a bigger GPU. Lemonade only answers its own computer at first, so set
+up that computer before you connect:
+
+1. **Let other computers reach it.** On the server computer, run
+   `lemonade config set host=0.0.0.0`. The setting is saved and applies right away.
+2. **Lock it with a key.** Set `LEMONADE_API_KEY` in the server's environment.
+   Without a key, anyone on your network can use the server and change its models.
+3. **Open the port.** Allow incoming connections to port 13305, Lemonade's default,
+   in the server computer's firewall.
+
+Then, on the GAIA computer, open **Settings → Advanced → Model server**, enter the
+server's address (for example `http://192.168.1.100:13305`) and its key, and choose
+**Use this server**. GAIA checks that the server answers before it saves the address.
+If it doesn't answer, check the three steps above.
+
 ## Updating GAIA
 
 GAIA checks for new releases and tells you when one is out, then waits for you to
@@ -321,7 +339,7 @@ To turn update checks off entirely, set `GAIA_DISABLE_UPDATE=1` before launching
 
 GAIA follows the platform convention: removing the app leaves your user data (chats, documents, downloaded models) behind by default. To remove the data too, run the `gaia uninstall` CLI from a terminal — it has tiered flags so you can decide exactly what to keep.
 
-The Windows uninstaller and `apt remove` also stop GAIA's background service (the GAIA daemon) and the agents it runs. macOS and AppImage have no uninstall step, so after you delete the app they keep running until you restart.
+The Windows uninstaller and `apt remove` also stop GAIA's background service (the GAIA daemon) and the agents it runs. macOS and AppImage have no uninstall step, so the daemon watches for it instead: within a few seconds of the app going to the Trash or the `.AppImage` being deleted, it shuts down and stops its agents. A daemon you started from a terminal is not tied to the app and keeps running; stop it with `gaia daemon stop`.
 
 ### Windows
 

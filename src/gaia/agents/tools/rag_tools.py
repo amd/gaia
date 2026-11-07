@@ -35,6 +35,7 @@ from gaia.rag.sdk import (
     text_scripts,
 )
 from gaia.tool_cancellation import raise_if_cancelled
+from gaia.upload_names import display_file_name
 
 logger = get_logger(__name__)
 
@@ -52,6 +53,19 @@ SUMMARY_MAX_TOKENS = 8192
 
 # Cap on skipped files listed in an index_directory result, to bound the reply.
 _MAX_SKIPPED_REPORTED = 50
+
+
+def _split_oversized_page(page: str, max_words: int) -> List[str]:
+    """Cut text with no page markers, such as a transcript, into section-sized parts.
+
+    Parts stay well under ``max_words`` because each section re-reads the
+    previous part as overlap.
+    """
+    words = page.split()
+    if len(words) <= max_words:
+        return [page]
+    size = max(max_words // 4, 1)
+    return [" ".join(words[i : i + size]) for i in range(0, len(words), size)]
 
 
 def _summary_text(chat: Any, prompt: str) -> str:
@@ -1324,7 +1338,10 @@ class RAGToolsMixin:
                 if not all_chunks:
                     result = {
                         "status": "success",
-                        "message": f"No relevant information found in {Path(target_file).name}",
+                        "message": (
+                            "No relevant information found in "
+                            f"{display_file_name(target_file)}"
+                        ),
                         "chunks": [],
                         "file": str(target_file),
                     }
@@ -1450,13 +1467,16 @@ class RAGToolsMixin:
 
                 result = {
                     "status": "success",
-                    "message": f"Found {len(formatted_chunks)} relevant chunks in {Path(target_file).name}",
+                    "message": (
+                        f"Found {len(formatted_chunks)} relevant chunks in "
+                        f"{display_file_name(target_file)}"
+                    ),
                     "chunks": formatted_chunks,
                     "file": str(target_file),
                     "source_files": [source_path],
                     "auto_indexed": auto_indexed,
                     "instruction": _file_instruction(
-                        Path(target_file).name,
+                        display_file_name(target_file),
                         len(formatted_chunks),
                         _chunks_have_pages(formatted_chunks),
                     ),
@@ -1689,10 +1709,11 @@ class RAGToolsMixin:
                 # docs) and after each successful index_document call.  This prevents
                 # the LLM from calling the tool redundantly within a single request.
                 # The hash-based RAG cache prevents re-processing across requests.
+                # A file edited since it was indexed falls through and re-indexes.
                 if (
                     file_path in self.indexed_files
                     or real_file_path in self.indexed_files
-                ):
+                ) and self.rag.is_current(real_file_path):
                     logger.debug(
                         "Skipping re-index for already-indexed file: %s", file_path
                     )
@@ -1969,7 +1990,8 @@ class RAGToolsMixin:
                         "'Overall' or 'In summary'."
                     ),
                     "detailed": (
-                        "Write a comprehensive summary of at least 250 words covering "
+                        "Write a comprehensive summary of at least 250 words and at "
+                        "most 1,000 words covering "
                         "every major topic, key point, and important detail in full "
                         "paragraphs. Keep every number, percentage, dollar amount, "
                         "date, and metric. Do not use bullets."
@@ -2049,6 +2071,12 @@ class RAGToolsMixin:
                 # Add last page
                 if current_page.strip():
                     pages.append(current_page.strip())
+
+                pages = [
+                    piece
+                    for page in pages
+                    for piece in _split_oversized_page(page, max_words_per_section)
+                ]
 
                 # Group pages into sections that fit within max_words_per_section
                 # Include overlap: last page of previous section is included in next section

@@ -12,7 +12,6 @@ from __future__ import annotations
 import os
 
 import test_prompt_prefix_stability as stability
-from test_prompt_prefix_stability import flagship  # noqa: F401 - fixture
 
 
 def test_working_directory_line_stays_fixed_across_turns(flagship):
