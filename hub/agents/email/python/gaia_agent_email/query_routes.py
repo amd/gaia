@@ -550,15 +550,7 @@ def _apply_memory_mode(agent: Any, mode: Optional[str]) -> None:
     """
     if mode is None:
         return
-    setter = getattr(agent, "set_memory_enabled", None)
-    if callable(setter):
-        setter(mode == "on")
-        return
-    if hasattr(agent, "_incognito"):
-        agent._incognito = mode != "on"
-        agent._incognito_reason = (
-            None if mode == "on" else ("private" if mode == "private" else "memory_off")
-        )
+    agent.set_memory_enabled(mode == "on")
 
 
 @router.post("/query", responses=_QUERY_SSE_RESPONSES)

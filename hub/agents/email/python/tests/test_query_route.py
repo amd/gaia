@@ -1259,6 +1259,18 @@ def test_session_memory_mode_is_kept_when_omitted_on_a_follow_up(
     assert built[0].memory_status()["enabled"] is False
 
 
+def test_session_memory_mode_can_be_reenabled_on_a_follow_up(
+    app_client, stateful_registry
+):
+    registry, built = stateful_registry
+    app_client.post(
+        "/v1/email/query", json=_req("one", session_id="s1", memory="private")
+    )
+    app_client.post("/v1/email/query", json=_req("two", session_id="s1", memory="on"))
+    assert len(built) == 1
+    assert built[0].memory_status()["enabled"] is True
+
+
 def test_a_model_switch_keeps_memory_off(app_client, stateful_registry):
     registry, built = stateful_registry
     app_client.post("/v1/email/query", json=_req("one", session_id="s1", model="m-a"))
