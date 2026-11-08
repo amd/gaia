@@ -109,7 +109,7 @@ def test_coding_skill_discloses_the_full_supported_git_surface():
     surface = _section(
         text,
         "The supported Git surface is reads (",
-        "\n\nPrompt-sensitive Git guidance",
+        "\n\n## Keep the diff to the change",
     )
     documented = _backticked_commands(surface)
 

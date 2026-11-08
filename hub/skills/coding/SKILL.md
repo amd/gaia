@@ -171,9 +171,6 @@ The supported Git surface is reads (`status`, `diff`, `log`, `show`, `branch`,
 `commit`), approval-gated branch/file operations (`checkout`, `switch`,
 `restore`, `stash`), and the read-only `remote` view. Anything else is refused.
 
-Prompt-sensitive Git guidance is covered by the `gaia_git` and `gaia_code`
-categories in the next release-candidate evaluation.
-
 ## Keep the diff to the change
 
 - Fix the bug you were asked about. Do not reformat, rename, reorder imports, or
