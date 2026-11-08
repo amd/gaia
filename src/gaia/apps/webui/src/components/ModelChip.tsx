@@ -455,7 +455,7 @@ export function ModelChip() {
                                                 {switching === m.id ? <Loader2 size={13} className="spin" /> : current ? <Check size={13} /> : null}
                                             </span>
                                             <span className="popover-item-body">
-                                                <span className="popover-item-title">{modelName}</span>
+                                                <span className="popover-item-title is-model">{modelName}</span>
                                             </span>
                                         </button>
                                         <InfoBubble
