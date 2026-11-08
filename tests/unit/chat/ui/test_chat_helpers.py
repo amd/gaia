@@ -1495,16 +1495,107 @@ class TestRunsOnThisPc:
             assert _runs_on_this_pc("fireworks.accounts/x/models/y") is False
             assert _runs_on_this_pc("amd.DeepSeek-V4.1-Flash") is False
 
-    def test_a_local_lemonade_model_is_local_without_a_catalog_read(self):
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "Gemma-4-E4B-it-GGUF",
+            "Qwen3.6-35B-A3B-GGUF",
+            "user.Qwen3.8-Flash-Next-GGUF",
+            "gemma4-it-e2b-FLM",
+        ],
+    )
+    def test_a_known_local_default_is_local_without_a_catalog_read(self, model):
+        from gaia.llm import lemonade_client as lc
+
+        with patch.object(lc.LemonadeClient, "list_models") as read:
+            assert _runs_on_this_pc(model) is True
+        read.assert_not_called()
+
+    def test_the_known_defaults_are_the_ones_gaia_ships(self):
         from gaia.llm.lemonade_client import (
             DEFAULT_MODEL_NAME,
+            FLASH_OPTION_MODEL_NAME,
             LARGE_DEFAULT_MODEL_NAME,
         )
 
         with self._no_catalog():
-            assert _runs_on_this_pc(DEFAULT_MODEL_NAME) is True
-            assert _runs_on_this_pc(LARGE_DEFAULT_MODEL_NAME) is True
+            for model in (
+                DEFAULT_MODEL_NAME,
+                LARGE_DEFAULT_MODEL_NAME,
+                FLASH_OPTION_MODEL_NAME,
+            ):
+                assert _runs_on_this_pc(model) is True
+
+    def test_an_undotted_unknown_id_reads_the_catalog(self):
+        entry = {"id": "Some-Local-GGUF", "recipe": "llamacpp"}
+        with self._catalog(entry) as read:
             assert _runs_on_this_pc("Some-Local-GGUF") is True
+        read.assert_called_once()
+
+    def test_an_undotted_router_alias_is_not_local(self):
+        entry = {"id": "smart-router", "recipe": "collection.router"}
+        with self._catalog(entry) as read:
+            assert _runs_on_this_pc("smart-router") is False
+        read.assert_called_once()
+
+    def test_an_undotted_id_the_catalog_does_not_list_fails_closed(self):
+        with self._catalog({"id": "Other-GGUF", "recipe": "llamacpp"}):
+            assert _runs_on_this_pc("smart-router") is False
+
+    def test_a_user_id_with_a_collection_recipe_is_not_local(self):
+        entry = {"id": "twin-model", "recipe": "collection.router"}
+        with self._catalog(entry):
+            assert _runs_on_this_pc("user.twin-model") is False
+
+    def test_an_unknown_dotted_id_with_no_entry_fails_closed(self):
+        with self._catalog():
+            assert _runs_on_this_pc("mystery.model") is False
+
+    def test_an_entry_without_a_recipe_is_not_local(self):
+        with self._catalog({"id": "mystery.model"}):
+            assert _runs_on_this_pc("mystery.model") is False
+
+    def test_an_unknown_recipe_is_not_local(self):
+        with self._catalog({"id": "mystery.model", "recipe": "remote-thing"}):
+            assert _runs_on_this_pc("mystery.model") is False
+
+    def test_a_local_and_a_cloud_entry_for_one_id_is_not_local(self):
+        # Lenient matching joins user.X and X; one cloud entry is enough to refuse.
+        entries = (
+            {"id": "user.Twin-GGUF", "recipe": "llamacpp"},
+            {"id": "twin-gguf", "recipe": "cloud"},
+        )
+        with self._catalog(*entries):
+            assert _runs_on_this_pc("Twin-GGUF") is False
+
+    def test_a_local_entry_alongside_a_router_entry_is_not_local(self):
+        entries = (
+            {"id": "user.Twin-GGUF", "recipe": "llamacpp"},
+            {"id": "Twin-GGUF-x", "recipe": "llamacpp"},
+            {"id": "twin-gguf", "recipe": "collection.omni"},
+        )
+        with self._catalog(*entries):
+            assert _runs_on_this_pc("Twin-GGUF") is False
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            [],
+            ["Some-Local-GGUF"],
+            "not json",
+            None,
+            {"data": None},
+            {"data": {"id": "Some-Local-GGUF", "recipe": "llamacpp"}},
+            {"data": ["Some-Local-GGUF"]},
+            {"models": [{"id": "Some-Local-GGUF", "recipe": "llamacpp"}]},
+        ],
+    )
+    def test_a_malformed_catalog_raises_the_unreadable_catalog_error(self, payload):
+        from gaia.llm import lemonade_client as lc
+
+        with patch.object(lc.LemonadeClient, "list_models", return_value=payload):
+            with pytest.raises(lc.LemonadeClientError, match="unexpected shape"):
+                _runs_on_this_pc("Some-Local-GGUF")
 
     def test_a_dotted_local_model_the_catalog_lists_is_local(self):
         from gaia.llm.lemonade_client import may_be_cloud_model
