@@ -2,7 +2,7 @@
 name: coding
 description: Work on a codebase — read, search, edit and verify source files. Use when the user asks to fix a bug, add a feature, refactor, explain code, make a test pass, or change anything in a repository. Covers finding the right file, editing safely, and proving the change works before reporting it.
 license: MIT
-version: 0.2.1
+version: 0.2.2
 metadata:
   gaia:
     security_tier: community
@@ -141,18 +141,20 @@ You have `git`. Reads — `status`, `diff`, `log`, `show`, `branch` — run stra
 through, and you should use them constantly: `git diff` before you report a
 change is the cheapest possible check that the diff is only what you meant.
 
-`add`, `commit`, `checkout`, `switch`, `restore` and `stash` each stop and show
-the user the exact command before running. That is not a formality to click
-past — write the commit message as if it is the only thing the reviewer reads,
-because for a squashed PR it is.
+`add`, `commit`, `checkout`, `switch`, and `restore` each stop and show the user
+the exact command before running. That is not a formality to click past — write
+the commit message as if it is the only thing the reviewer reads, because for a
+squashed PR it is.
 
-The direct Git policy refuses `push`, `reset --hard`, `clean`, `rebase`,
-`commit --amend`, and `config`. It also refuses the other remote, history-
-rewriting, and destructive subcommands: `clone`, `fetch`, `pull`, `merge`,
-`cherry-pick`, `revert`, `bisect`, `tag`, `rm`, `mv`, `reset`, `apply`,
-`format-patch`, and `gc`. `config` is also refused even though it is not
-listed in the binary policy's runnable subcommands. These are not alternate
-spellings to try:
+`stash list` and `stash show` are reads. `stash push`, `stash save`, `stash
+apply`, and `stash pop` require approval; bare `stash`, `stash drop`, and
+`stash clear` are refused.
+
+The direct Git policy refuses these commands entirely: `push`, `fetch`, `pull`,
+`clone`, `merge`, `cherry-pick`, `revert`, `bisect`, `rebase`, `rm`, `mv`,
+`reset`, `clean`, `gc`, `tag`, `apply`, `format-patch`, and `config`. It also
+refuses `commit --amend` and `reset --hard`. These are not alternate spellings
+to try:
 
 - For `push`, `fetch`, `pull`, `clone`, and `config`, tell the user the exact
   command and let them run it themselves.
@@ -161,9 +163,8 @@ spellings to try:
   do not improvise with another history-changing command. A user may run
   `merge --continue`, `rebase --continue`, or the corresponding abort command
   after resolving it themselves.
-- For `rm`, `mv`, `reset`, `clean`, `gc`, and destructive `tag` operations, use
-  the read-only equivalent or ask the user to perform the exact change. Never
-  substitute a shell command or a different Git spelling.
+- For `rm`, `mv`, `reset`, `clean`, `gc`, and `tag`, ask the user to perform the
+  exact change. Never substitute a shell command or a different Git spelling.
 
 Publishing and history-rewriting are the user's to run, and destroying
 uncommitted work has no undo anywhere. When the work is committed and wants
@@ -175,9 +176,11 @@ The supported Git surface is deliberately smaller: reads (`status`, `diff`,
 `log`, `show`, `branch`, `blame`, `describe`, `rev-parse`, `merge-base`,
 `ls-files`, `ls-tree`, `cat-file`, `grep`, `shortlog`, `help`), local staging and
 commits (`add`, `commit`), branch/file operations that still require approval
-(`checkout`, `switch`, `restore`, `stash`), and the read-only `remote` and
-`branch` views. Anything outside that surface is refused; do not hunt for a
-new spelling.
+(`checkout`, `switch`, `restore`, `stash`), and the read-only `remote` view.
+Anything outside that surface is refused; do not hunt for a new spelling.
+
+Prompt-sensitive Git guidance is covered by the `gaia_git` and `gaia_code`
+categories in the next release-candidate evaluation.
 
 ## Keep the diff to the change
 
