@@ -109,9 +109,9 @@ describe('ModelChip', () => {
 
         expect(within(dialog).getByRole('option', { name: /recommended/ })).toBeInTheDocument();
         expect(within(dialog).queryByRole('option', { name: /fireworks\.auto/ })).not.toBeInTheDocument();
-        expect(within(dialog).getByRole('button', { name: 'Show all models' })).toBeInTheDocument();
+        expect(within(dialog).getByRole('option', { name: 'Show all models' })).toBeInTheDocument();
 
-        fireEvent.click(within(dialog).getByRole('button', { name: 'Show all models' }));
+        fireEvent.click(within(dialog).getByRole('option', { name: 'Show all models' }));
         expect(await within(dialog).findByRole('option', { name: /^auto$/ })).toBeInTheDocument();
         expect(within(dialog).getByRole('option', { name: /^spot$/ })).toBeInTheDocument();
     });
@@ -517,6 +517,13 @@ describe('ModelChip keyboard', () => {
         await within(dialog).findByRole('option', { name: /^kimi-k2/ });
         return dialog;
     }
+    async function openLocalWithKeyboard(user: ReturnType<typeof userEvent.setup>) {
+        screen.getByRole('button', { name: /Gemma|kimi|Model/ }).focus();
+        await user.keyboard('{Enter}');
+        const dialog = await screen.findByRole('dialog', { name: 'Choose a model' });
+        await within(dialog).findByRole('option', { name: /^Gemma-4-E4B-it-GGUF/ });
+        return dialog;
+    }
     const option = (dialog: HTMLElement, name: RegExp) => within(dialog).getByRole('option', { name });
 
     it('opens on the current model, scrolled into view, as the only Tab stop', async () => {
@@ -557,6 +564,26 @@ describe('ModelChip keyboard', () => {
         expect(option(dialog, /^kimi-k2/)).toHaveFocus();
         expect(option(dialog, /^kimi-k2/).tabIndex).toBe(0);
         expect(option(dialog, /^Gemma-4-E4B-it-GGUF/).tabIndex).toBe(-1);
+    });
+
+    it('makes the expanded Fireworks list keyboard-reachable and focuses its first new row', async () => {
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id,
+            models: id === 'local'
+                ? [model('Gemma-4-E4B-it-GGUF')]
+                : [model('fireworks.recommended', { rank: 1 }), model('fireworks.auto')],
+        }));
+        const user = userEvent.setup();
+        render(<ModelChip />);
+        const dialog = await openLocalWithKeyboard(user);
+        await waitFor(() => expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus());
+
+        await user.keyboard('{ArrowDown}');
+        expect(option(dialog, /^recommended$/)).toHaveFocus();
+        await user.keyboard('{ArrowDown}');
+        expect(option(dialog, /^Show all models$/)).toHaveFocus();
+        await user.keyboard('{Enter}');
+        await waitFor(() => expect(option(dialog, /^auto$/)).toHaveFocus());
     });
 
     it('picks the focused row on Enter', async () => {
