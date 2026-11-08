@@ -83,7 +83,7 @@ def test_coding_skill_documents_every_refused_git_command():
     refusal = _section(
         text,
         "The direct Git policy refuses these commands entirely:",
-        "\n\nPublishing and history-rewriting",
+        "\n\nPublishing, history rewriting",
     )
     documented = _backticked_commands(refusal)
     expected = REFUSED_GIT_SUBCOMMANDS | {
@@ -108,7 +108,7 @@ def test_coding_skill_discloses_the_full_supported_git_surface():
     text = SKILL.read_text(encoding="utf-8")
     surface = _section(
         text,
-        "The supported Git surface is deliberately smaller:",
+        "The supported Git surface is reads (",
         "\n\nPrompt-sensitive Git guidance",
     )
     documented = _backticked_commands(surface)
