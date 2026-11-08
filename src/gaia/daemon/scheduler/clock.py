@@ -164,11 +164,13 @@ class DaemonClock:
                     job["job_id"],
                 )
             elif outcome == "failed":
+                error = str(job.get("error") or "job stopped renewing its lease while firing")
                 log.error(
                     "daemon clock: one-shot job %s stopped renewing its lease "
                     "while firing; marked it failed instead of running it twice",
                     job["job_id"],
                 )
+                self._notify_failed(job, error)
                 failed.append(job["job_id"])
         return failed
 
@@ -193,6 +195,26 @@ class DaemonClock:
                 outcome,
             )
 
+    @staticmethod
+    def _notify_failed(job: Dict[str, Any], error: str) -> None:
+        """Best-effort host notification after a durable daemon failure."""
+        try:
+            from gaia.schedule import sinks
+
+            payload = job.get("payload") or {}
+            detail = str(payload.get("subject") or job.get("kind") or "scheduled job")
+            sinks.dispatch(
+                "notification",
+                {"title": "Scheduled task failed"},
+                f"GAIA could not complete {detail}. {error}",
+            )
+        except Exception as exc:  # notification must not mask scheduler state
+            log.warning(
+                "daemon clock: could not notify user about failed job %s: %s",
+                job.get("job_id", "unknown"),
+                exc,
+            )
+
     def _fire_due_on(self, db, *, now: Optional[float]) -> Dict[str, List[str]]:
         fired: List[str] = []
         failed = self._recover_abandoned(db, now if now is not None else time.time())
@@ -208,8 +230,10 @@ class DaemonClock:
                     f"(source {job['source']!r}) — the job cannot fire in the "
                     "daemon process"
                 )
-                store.mark_failed(db, job_id=job_id, claim_id=claim_id, error=msg)
+                recorded = store.mark_failed(db, job_id=job_id, claim_id=claim_id, error=msg)
                 log.error("daemon clock: job %s failed: %s", job_id, msg)
+                if recorded:
+                    self._notify_failed(job, msg)
                 failed.append(job_id)
                 continue
             try:
@@ -221,11 +245,10 @@ class DaemonClock:
                     executor(job, db)
             except Exception as exc:
                 emsg = f"{type(exc).__name__}: {exc}"
-                self._record(
-                    store.mark_failed(db, job_id=job_id, claim_id=claim_id, error=emsg),
-                    job,
-                    "failed",
+                recorded = store.mark_failed(
+                    db, job_id=job_id, claim_id=claim_id, error=emsg
                 )
+                self._record(recorded, job, "failed")
                 log.exception(
                     "daemon clock: %s job %s (source %s) failed to fire: %s",
                     job["kind"],
@@ -233,6 +256,8 @@ class DaemonClock:
                     job["source"],
                     emsg,
                 )
+                if recorded:
+                    self._notify_failed(job, emsg)
                 failed.append(job_id)
                 continue
             self._record(

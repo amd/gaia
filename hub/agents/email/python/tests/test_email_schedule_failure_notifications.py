@@ -1,0 +1,79 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Regression tests for unattended scheduled-email failure notices (#5411)."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+pytest.importorskip("gaia_agent_email")
+
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from gaia_agent_email import schedule_store  # noqa: E402
+from gaia_agent_email.failure_notify import notify_scheduled_failure  # noqa: E402
+from gaia_agent_email.scheduler import EmailJobScheduler  # noqa: E402
+from gaia.database.mixin import DatabaseMixin  # noqa: E402
+
+
+class _DB(DatabaseMixin):
+    pass
+
+
+def _db(tmp_path: Path) -> _DB:
+    db = _DB()
+    db.init_db(str(tmp_path / "state.db"))
+    schedule_store.init_schema(db)
+    return db
+
+
+def test_failure_notice_uses_existing_notification_sink():
+    job = {"job_id": "j1", "kind": "scheduled_send", "payload": {"subject": "Q3"}}
+    with patch("gaia.schedule.sinks.dispatch") as dispatch:
+        notify_scheduled_failure(job, "RuntimeError: provider down", source="test")
+    dispatch.assert_called_once_with(
+        "notification",
+        {"title": "Scheduled email failed"},
+        "GAIA could not complete scheduled_send failed (Q3). RuntimeError: provider down",
+    )
+
+
+def test_notification_failure_never_escapes():
+    job = {"job_id": "j1", "kind": "scheduled_send", "payload": {}}
+    with patch("gaia.schedule.sinks.dispatch", side_effect=RuntimeError("no desktop")):
+        notify_scheduled_failure(job, "provider down", source="test")
+
+
+def test_executor_failure_persists_then_notifies(tmp_path):
+    db = _db(tmp_path)
+    job_id = schedule_store.create_job(
+        db, kind="scheduled_send", due_at=1.0, payload={"subject": "Q3"}
+    )
+    scheduler = EmailJobScheduler(
+        str(tmp_path / "state.db"),
+        executors={"scheduled_send": lambda _job, _db: (_ for _ in ()).throw(RuntimeError("boom"))},
+    )
+    with patch("gaia_agent_email.scheduler.notify_scheduled_failure") as notify:
+        assert scheduler.fire_due_jobs(now=2.0) == {"fired": [], "failed": [job_id]}
+    notify.assert_called_once()
+    assert "RuntimeError: boom" in notify.call_args.args[1]
+    assert schedule_store.get_job(db, job_id=job_id)["status"] == "failed"
+
+
+def test_missing_executor_persists_then_notifies(tmp_path):
+    db = _db(tmp_path)
+    job_id = schedule_store.create_job(
+        db, kind="scheduled_send", due_at=1.0, payload={"subject": "Q3"}
+    )
+    scheduler = EmailJobScheduler(str(tmp_path / "state.db"), executors={})
+    with patch("gaia_agent_email.scheduler.notify_scheduled_failure") as notify:
+        assert scheduler.fire_due_jobs(now=2.0) == {"fired": [], "failed": [job_id]}
+    notify.assert_called_once()
+    assert "no executor" in notify.call_args.args[1]
+    assert schedule_store.get_job(db, job_id=job_id)["status"] == "failed"
