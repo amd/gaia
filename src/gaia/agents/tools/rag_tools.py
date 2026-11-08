@@ -1804,7 +1804,7 @@ class RAGToolsMixin:
                             ]
                             debug_info["chunks_with_matches"].append(
                                 {
-                                    "chunk_index": i,
+                                    "chunk_index": index,
                                     "chunk_preview": (
                                         chunk[:100] + "..."
                                         if len(chunk) > 100
