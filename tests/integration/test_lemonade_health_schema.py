@@ -78,3 +78,14 @@ def test_loaded_model_entry_carries_the_fields_callers_read(require_lemonade):
         f"{CTX_PATH} is {ctx!r}, expected a positive int. The UI reports this as "
         f"the context size and the preflight gates on it."
     )
+
+    launch = [str(flag) for flag in (entry.get("launch_command") or [])]
+    args = (entry["recipe_options"].get("llamacpp_args") or "").split()
+    assert "--parallel" in launch or "-np" in launch or "--parallel" in args or "-np" in args, (
+        "The loaded chat model does not expose a multi-slot launch setting; "
+        f"side requests would silently fall back to one slot. Got: {entry}"
+    )
+    assert client.slot_count(DEFAULT_MODEL_NAME) >= 2, (
+        "The live loaded chat model reports fewer than two slots; side requests "
+        "would contend with the conversation slot."
+    )
