@@ -19,7 +19,7 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 
 FILE_IO = "gaia.agents.tools.file_io_tools.FileIOToolsMixin"
 FILE_SEARCH = "gaia.agents.tools.file_tools.FileSearchToolsMixin"
-FILE_SYSTEM = "gaia.agents.tools.filesystem_tools.FileSystemToolsMixin"
+
 BROWSER = "gaia.agents.tools.browser_tools.BrowserToolsMixin"
 PERPLEXITY = "gaia_agent.chat_agent.ChatAgent._register_external_tools_conditional"
 
@@ -45,9 +45,9 @@ OWNERS = {
     },
     "browse_directory": {
         "doc": FILE_SEARCH,
-        "file": FILE_SYSTEM,
+        "file": FILE_SEARCH,
         "data": FILE_SEARCH,
-        "full": FILE_SYSTEM,
+        "full": FILE_SEARCH,
     },
 }
 

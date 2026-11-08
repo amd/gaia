@@ -77,7 +77,14 @@ def _canonical_tool_already_registered(tool_name: str, module_name: str) -> bool
     overlapping generic tools; checking the registry before defining another
     closure makes the result independent of registrar order.
     """
-    from gaia.agents.base.tools import _TOOL_REGISTRY
+    from gaia.agents.base.tools import _BUILD_NAMES, _TOOL_REGISTRY
+
+    # The process-wide registry outlives an Agent.  Only reuse a canonical
+    # implementation that was registered earlier in this same build; an entry
+    # left by a different Agent belongs to that Agent's workspace and policy.
+    build = _BUILD_NAMES.get()
+    if build is None or tool_name not in build:
+        return False
 
     entry = _TOOL_REGISTRY.get(tool_name)
     function = entry.get("function") if entry else None
@@ -2130,12 +2137,10 @@ class FileSearchToolsMixin:
                     "operation": "edit_file",
                 }
 
-        # FileSystemToolsMixin is canonical whenever filesystem navigation is
-        # composed. Doc-only profiles still use this implementation.
-        @_tool_or_reuse(
-            "browse_directory", "gaia.agents.tools.filesystem_tools",
-            atomic=True, override=True
-        )
+        # Shares its name with FileSystemToolsMixin.browse_directory. Keep the
+        # historical FileSearch schema here; changing the owner changes the
+        # model-facing arguments and needs a separate eval-backed change.
+        @tool(atomic=True, override=True)
         def browse_directory(
             directory_path: str = None, show_hidden: bool = False, sort_by: str = "name"
         ) -> Dict[str, Any]:

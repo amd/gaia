@@ -32,8 +32,7 @@ from typing import Dict, FrozenSet, Tuple
 
 # Named tool-registration groups. Each maps to the exact ordered sequence of
 # mixin registrar method names ``_register_tools()`` used to call inline for
-# that combination. Overlapping generic file tools reuse their canonical
-# implementation when a composing mixin has already registered it.
+# that combination — preserved verbatim, including explicit override points.
 TOOL_GROUP_REGISTRARS: Dict[str, Tuple[str, ...]] = {
     "doc_rag": (
         "register_rag_tools",
