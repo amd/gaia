@@ -105,6 +105,26 @@ class TestSystemStatus:
         assert data["default_model_name"] == "amd.DeepSeek-V4.1-Flash"
         assert data["default_model_is_cloud"] is True
 
+    @patch("httpx.AsyncClient")
+    def test_system_status_flags_a_discovered_cloud_model(
+        self, mock_httpx_cls, client, db
+    ):
+        """A cloud provider known only from the catalog is still cloud."""
+        import httpx
+
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models(
+            {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+        )
+        db.set_setting("custom_model", "opencode.big-model")
+        mock_httpx_cls.side_effect = httpx.ConnectError("down")
+        try:
+            data = client.get("/api/system/status").json()
+        finally:
+            lc.record_cloud_models({"data": []})
+        assert data["default_model_is_cloud"] is True
+
     def test_system_status_returns_200(self, client):
         resp = client.get("/api/system/status")
         assert resp.status_code == 200

@@ -625,9 +625,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     # Always named, not only once a model is loaded: the UI's load and download
     # actions target this. None only when an unreadable config hides it.
     status.default_model_name = db.get_setting("custom_model") or default_model
-    status.default_model_is_cloud = bool(
-        cloud_model_provider(status.default_model_name)
-    )
+    from .._chat_helpers import _ui_cloud_provider
+
+    status.default_model_is_cloud = bool(_ui_cloud_provider(status.default_model_name))
 
     # Check Lemonade Server. Each call has a generous timeout (the health
     # check 10 s: a busy LLM answers it slowly); _STATUS_PROBE_BUDGET_S
