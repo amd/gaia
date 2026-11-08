@@ -7614,7 +7614,20 @@ class LemonadeClient:
         if show_all:
             url += "?show_all=true"
         catalog = self._send_request("get", url, timeout=timeout)
-        for entry in catalog.get("data", []):
+        if not isinstance(catalog, dict):
+            raise LemonadeClientError(
+                f"Unexpected model list{self._from_server()}: expected a JSON "
+                f"object, got {type(catalog).__name__}: {repr(catalog)[:200]}"
+            )
+        entries = catalog.get("data", [])
+        if not isinstance(entries, list) or not all(
+            isinstance(entry, dict) for entry in entries
+        ):
+            raise LemonadeClientError(
+                f"Unexpected model list{self._from_server()}: expected 'data' "
+                f"to be a list of objects, got {repr(entries)[:200]}"
+            )
+        for entry in entries:
             if entry.get("id"):
                 self._model_metadata.setdefault(entry["id"], {}).update(entry)
         record_cloud_models(catalog)

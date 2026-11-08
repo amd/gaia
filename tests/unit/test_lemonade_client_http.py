@@ -389,6 +389,24 @@ class TestLemonadeClientMock(unittest.TestCase):
         self.assertEqual(result, models_response)
 
     @responses.activate
+    def test_list_models_rejects_malformed_catalog(self):
+        """A model list of the wrong shape raises a LemonadeClientError naming it."""
+        for payload, shown in (
+            ([{"id": TEST_MODEL}], "list"),
+            ({"data": "x"}, "'x'"),
+            ({"data": [1]}, "[1]"),
+        ):
+            with self.subTest(payload=payload):
+                responses.reset()
+                responses.add(
+                    responses.GET, f"{API_BASE}/models", json=payload, status=200
+                )
+                with self.assertRaises(LemonadeClientError) as ctx:
+                    self.client.list_models(show_all=True)
+                self.assertIn("Unexpected model list", str(ctx.exception))
+                self.assertIn(shown, str(ctx.exception))
+
+    @responses.activate
     def test_chat_completions(self):
         """Test chat completions API."""
         # Mock response
