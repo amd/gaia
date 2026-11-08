@@ -131,7 +131,7 @@ describe('raw requests', () => {
         const found: Record<string, { fetch: number; xhr: number }> = {};
         for (const [path, source] of Object.entries(SOURCES)) {
             const code = withoutComments(source);
-            const fetches = code.match(/(^|[^\w.$])fetch\(/gm)?.length ?? 0;
+            const fetches = code.match(/(^|[^\w$])fetch\(/gm)?.length ?? 0;
             const xhrs = code.match(/new XMLHttpRequest\b/g)?.length ?? 0;
             if (fetches || xhrs) found[path] = { fetch: fetches, xhr: xhrs };
         }
