@@ -48,6 +48,7 @@ from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MODEL_NAME,
+    EMBED_MAX_CHARS,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
     resident_vision_model,
@@ -439,6 +440,10 @@ class EmbeddingUnavailableError(RuntimeError):
 
 _CACHE_LOCK_NAME = "rag-cache"
 
+#: A file written this close to when its stat was taken may be rewritten
+#: within the same timestamp tick, so that stat alone is not trusted.
+_RACY_STAT_NS = 2_000_000_000
+
 
 def _cache_lock_target(cache_path: str) -> Path:
     """Every chunk cache in one directory shares one lock (``rag-cache.lock``)."""
@@ -498,16 +503,6 @@ _CACHE_OWNED_FILE = re.compile(
     r"\.json(?:\.sig)?$"
     r"|_extracted\.md$"
     r"|^vectors_[0-9a-f]{24}\.npy$"
-)
-
-
-#: Headroom for the BOS/EOS tokens the server adds to every input.
-_EMBED_RESERVED_TOKENS = 48
-#: Worst realistic ratio: Gemma's tokenizer gives every digit its own token.
-_EMBED_MIN_CHARS_PER_TOKEN = 1.0
-#: Longest text that embeds whole. No chunk is cut longer than this.
-EMBED_MAX_CHARS = int(
-    (EMBEDDER_UBATCH_TOKENS - _EMBED_RESERVED_TOKENS) * _EMBED_MIN_CHARS_PER_TOKEN
 )
 
 
@@ -832,6 +827,8 @@ class RAGSDK:
         self.file_index_times = {}  # {file_path: index_time (wall clock for display)}
         # {file_path: _content_key of the bytes that were indexed}
         self.file_content_keys = {}
+        # {file_path: (_stat_key, ns it was taken)} of those same bytes
+        self.file_stat_keys = {}
         self._state_lock = threading.RLock()
 
         # Create cache directory
@@ -947,7 +944,13 @@ class RAGSDK:
         """
         # Security check: Validate path against allowed directories
         # Use prompt_user=False to prevent blocking on input() in server contexts
-        if not self.path_validator.is_path_allowed(file_path, prompt_user=False):
+        read_only = "r" in mode and "+" not in mode
+        allowed = (
+            self.path_validator.validate_read(file_path, prompt_user=False)[0]
+            if read_only
+            else self.path_validator.is_path_allowed(file_path, prompt_user=False)
+        )
+        if not allowed:
             raise PermissionError(f"Access denied: {file_path} is not in allowed paths")
 
         import stat
@@ -1146,6 +1149,35 @@ class RAGSDK:
             return f"{hashlib.sha256(str(path).encode()).hexdigest()}_notfound"
         path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
         return f"{path_hash}_{hasher.hexdigest()[:32]}"
+
+    @staticmethod
+    def _stat_key(file_path: str) -> Tuple[int, ...]:
+        """Size, mtime, inode and (POSIX) ctime: what an edit almost always moves.
+
+        Raises:
+            OSError: When the file cannot be stat'ed.
+        """
+        st = os.stat(file_path)
+        key = (st.st_size, st.st_mtime_ns, st.st_ino)
+        if os.name != "nt":
+            # Windows has no change time; POSIX ctime moves on every write.
+            key += (st.st_ctime_ns,)
+        return key
+
+    def _taken_stat(self, file_path: str) -> Optional[Tuple[Tuple[int, ...], int]]:
+        """``(_stat_key, ns)``, taken before the bytes it vouches for are hashed."""
+        taken_at = time.time_ns()
+        try:
+            return self._stat_key(file_path), taken_at
+        except OSError:
+            return None
+
+    def _record_stat(self, file_path: str, taken) -> None:
+        """Keep *taken* as the indexed bytes' stat. Call with ``_state_lock`` held."""
+        if taken is None:
+            self.file_stat_keys.pop(file_path, None)
+        else:
+            self.file_stat_keys[file_path] = taken
 
     def document_scripts(self, file_path: str) -> List[str]:
         """Writing systems that make up at least 10% of an indexed file's letters.
@@ -2848,6 +2880,7 @@ These positions indicate where to split the text."""
                 f"({vlm.server_url}).\n"
                 "  2. Index the image again."
             )
+        model = vlm.vlm_model
 
         if self.config.show_stats:
             print(f"  🖼️  Reading image text with {model} ({len(pages)} page(s))...")
@@ -3562,6 +3595,7 @@ These positions indicate where to split the text."""
                 if file_path in self.file_index_times:
                     del self.file_index_times[file_path]
                 self.file_content_keys.pop(file_path, None)
+                self.file_stat_keys.pop(file_path, None)
 
                 # Clean up cached per-file indices and embeddings
                 if file_path in self.file_indices:
@@ -3599,17 +3633,6 @@ These positions indicate where to split the text."""
         """
         Reindex a document (remove old chunks and add new ones).
 
-        The new chunks and embeddings are built without the index lock:
-        extraction and embedding are the minutes-long part of re-indexing a
-        large document, and holding the lock across them stalled every other
-        document query (#6911). The old version stays searchable while the
-        new one builds; the publish step inside :meth:`index_document` swaps
-        the generations atomically. On failure this file's index is cleaned
-        up if a partial one was published; nothing else is touched — a
-        snapshot restore would also revert documents another writer indexed
-        meanwhile, and the shared vector index grows in place, so rolling it
-        back can desync it from the restored chunk lists.
-
         Args:
             file_path: Path to document to reindex
             progress_callback: Passed to :meth:`index_document`.
@@ -3620,37 +3643,61 @@ These positions indicate where to split the text."""
         """
         file_path = str(Path(file_path).absolute())
         with self._state_lock:
-            previous_key = self.file_content_keys.get(file_path)
-
-        # Build the new chunks and embeddings without the lock. The publish
-        # step drops this file's old generation and appends the new one under
-        # the lock, so readers never observe a gap where the document
-        # disappeared between generations.
-        succeeded = False
-        result = None
-        try:
-            result = self.index_document(
-                file_path,
-                progress_callback=progress_callback,
-                wait_callback=wait_callback,
-                force_reindex=True,
+            previous_state = {
+                name: getattr(self, name).copy()
+                for name in (
+                    "chunks",
+                    "indexed_files",
+                    "chunk_to_file",
+                    "file_to_chunk_indices",
+                    "file_indices",
+                    "file_embeddings",
+                    "file_metadata",
+                    "file_access_times",
+                    "file_index_times",
+                    "file_content_keys",
+                    "file_stat_keys",
+                )
+            }
+            previous_state.update(
+                index=self.index, _access_counter=self._access_counter
             )
-            succeeded = bool(result.get("success"))
-            if succeeded:
-                result["reindexed"] = True
-            return result
-        finally:
-            if not succeeded:
-                with self._state_lock:
-                    published_key = self.file_content_keys.get(file_path)
-                    if published_key is not None and published_key != previous_key:
-                        # A new generation of this file was published before
-                        # the failure: remove the partial index without
-                        # touching anything another writer did meanwhile.
-                        self.remove_document(file_path)
-                if result is not None:
-                    result["total_indexed_files"] = len(self.indexed_files)
-                    result["total_chunks"] = len(self.chunks)
+            # Keep remove+reindex under the same lock so readers never observe a
+            # gap where the document disappeared between generations. Query
+            # paths snapshot state quickly under this same lock and then do the
+            # expensive work outside it.
+            # Remove old version if it exists
+            if file_path in self.indexed_files:
+                self.log.info(f"Removing old version of {file_path}")
+                if not self.remove_document(file_path):
+                    return {
+                        "success": False,
+                        "error": "Failed to remove old version",
+                        "file_name": Path(file_path).name,
+                    }
+
+            # Index the new version
+            self.log.info(f"Indexing new version of {file_path}")
+            succeeded = False
+            result = None
+            try:
+                result = self.index_document(
+                    file_path,
+                    progress_callback=progress_callback,
+                    wait_callback=wait_callback,
+                )
+                succeeded = bool(result.get("success"))
+                if succeeded:
+                    result["reindexed"] = True
+                return result
+            finally:
+                if not succeeded:
+                    # Removal builds a fresh index, so the old generation is intact.
+                    for name, value in previous_state.items():
+                        setattr(self, name, value)
+                    if result is not None:
+                        result["total_indexed_files"] = len(self.indexed_files)
+                        result["total_chunks"] = len(self.chunks)
 
     def is_current(self, file_path: str) -> bool:
         """Whether *file_path* is indexed from the bytes it holds now.
@@ -3666,6 +3713,51 @@ These positions indicate where to split the text."""
         if indexed_key is None:
             return False
         return self._content_key(file_path) == indexed_key
+
+    def freshness(self, file_path: str) -> str:
+        """How *file_path* compares to the bytes it was indexed from; cheap to call.
+
+        Returns ``"current"``, ``"changed"``, ``"missing"``, ``"locked"`` (another
+        program holds it), ``"unreadable"`` or ``"not_indexed"``. Hashes only
+        when the file's size, mtime, inode or (POSIX) ctime moved since it was
+        indexed, or when it was written within 2s of that stat. On Windows, an
+        edit that later restores both size and mtime is caught by
+        :meth:`is_current`, not here.
+        """
+        file_path = str(Path(file_path).absolute())
+        with self._state_lock:
+            if file_path not in self.indexed_files:
+                return "not_indexed"
+            indexed_key = self.file_content_keys.get(file_path)
+            recorded = self.file_stat_keys.get(file_path)
+        taken_at = time.time_ns()
+        try:
+            stat_key = self._stat_key(file_path)
+        except FileNotFoundError:
+            return "missing"
+        except OSError:
+            stat_key = None
+        if (
+            stat_key is not None
+            and recorded is not None
+            and recorded[0] == stat_key
+            and recorded[1] - stat_key[1] >= _RACY_STAT_NS
+        ):
+            return "current"
+        if indexed_key is None:
+            return "changed"
+        try:
+            key = self._content_key(file_path, raise_locked=True)
+        except PermissionError:
+            return "locked"
+        if key.endswith("_notfound"):
+            return "unreadable" if os.path.lexists(file_path) else "missing"
+        if key != indexed_key:
+            return "changed"
+        with self._state_lock:
+            if stat_key is not None and self._indexed_from(file_path, key):
+                self.file_stat_keys[file_path] = (stat_key, taken_at)
+        return "current"
 
     def _indexed_from(self, file_path: str, content_key: str) -> bool:
         """Whether *file_path* is indexed from the bytes *content_key* names.
@@ -3811,7 +3903,6 @@ These positions indicate where to split the text."""
         wait_callback: Optional[Callable[[int], None]] = None,
         heartbeat: Optional[Callable[[], None]] = None,
         display_name: Optional[str] = None,
-        force_reindex: bool = False,
     ) -> Dict[str, Any]:
         """Index a document for retrieval; see :meth:`_index_document`.
 
@@ -3822,19 +3913,13 @@ These positions indicate where to split the text."""
         ``display_name`` is the name the user knows the file by, when
         ``file_path`` is a copy. The returned ``file_name`` and ``error`` use
         it in place of the copy's path.
-
-        ``force_reindex`` rebuilds an already-indexed document in place: the
-        heavy work runs without the index lock and the publish step swaps
-        the old generation atomically. Used by :meth:`reindex_document`.
         """
         if display_name:
             self.log.info(f"Indexing {display_name} (copy at {file_path})")
         previous = getattr(_HEARTBEAT, "fn", None)
         _HEARTBEAT.fn = heartbeat
         try:
-            stats = self._index_document(
-                file_path, progress_callback, wait_callback, force_reindex
-            )
+            stats = self._index_document(file_path, progress_callback, wait_callback)
         finally:
             _HEARTBEAT.fn = previous
         if display_name:
@@ -3850,7 +3935,6 @@ These positions indicate where to split the text."""
         file_path: str,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         wait_callback: Optional[Callable[[int], None]] = None,
-        force_reindex: bool = False,
     ) -> Dict[str, Any]:
         """
         Index a document for retrieval.
@@ -3971,26 +4055,23 @@ These positions indicate where to split the text."""
         stats["file_type"] = file_type
         stats["file_name"] = Path(file_path).name
 
+        replacing = False
         with self._state_lock:
             was_indexed = file_path in self.indexed_files
-        if was_indexed and not force_reindex:
+        if was_indexed:
             try:
                 current_key = self._content_key(file_path, raise_locked=True)
             except PermissionError as e:
                 return self._document_locked(stats, file_path, e)
             with self._state_lock:
-                changed = not self._indexed_from(file_path, current_key)
-            if changed:
+                replacing = not self._indexed_from(file_path, current_key)
+            if replacing:
+                # Built without the lock; the old text serves until the swap.
                 self.log.info(f"{file_path} changed since it was indexed; re-indexing")
-                return self.reindex_document(
-                    file_path, progress_callback, wait_callback
-                )
 
         with self._state_lock:
-            # Check if already indexed. A forced re-index skips this: its
-            # publish step swaps the old generation atomically, so the old
-            # version stays searchable while the new one builds (#6911).
-            if file_path in self.indexed_files and not force_reindex:
+            # Check if already indexed
+            if file_path in self.indexed_files and not replacing:
                 if self.config.show_stats:
                     print(f"📋 Document already indexed: {Path(file_path).name}")
                 self.log.info(f"Document already indexed: {file_path}")
@@ -4002,7 +4083,7 @@ These positions indicate where to split the text."""
                 return stats
 
             # Pre-flight: check capacity before investing in indexing
-            if not self._has_indexing_capacity():
+            if not replacing and not self._has_indexing_capacity():
                 msg = (
                     f"Memory limit reached: {len(self.indexed_files)} files "
                     f"(max: {self.config.max_indexed_files}), "
@@ -4018,6 +4099,7 @@ These positions indicate where to split the text."""
                 return stats
 
         # Check cache - the cache key is based on file content hash
+        taken = self._taken_stat(file_path)
         try:
             content_key = self._content_key(file_path, raise_locked=True)
         except PermissionError as e:
@@ -4143,6 +4225,7 @@ These positions indicate where to split the text."""
 
                     self.indexed_files.add(file_path)
                     self.file_content_keys[file_path] = content_key
+                    self._record_stat(file_path, taken)
 
                     # Track access time for LRU (was missing — pre-existing bug)
                     current_time = time.time()
@@ -4165,6 +4248,8 @@ These positions indicate where to split the text."""
                 stats["total_indexed_files"] = len(self.indexed_files)
                 stats["total_chunks"] = len(self.chunks)
                 stats["from_cache"] = True
+                if replacing:
+                    stats["reindexed"] = True
                 if evicted:
                     stats["evicted"] = evicted
                 if not limits_ok:
@@ -4244,7 +4329,7 @@ These positions indicate where to split the text."""
             )
 
             with self._state_lock:
-                if self._indexed_from(file_path, content_key) and not force_reindex:
+                if self._indexed_from(file_path, content_key):
                     if self.config.show_stats:
                         print(f"📋 Document already indexed: {Path(file_path).name}")
                     self.log.info(f"Document already indexed: {file_path}")
@@ -4338,6 +4423,7 @@ These positions indicate where to split the text."""
 
                 self.indexed_files.add(file_path)
                 self.file_content_keys[file_path] = content_key
+                self._record_stat(file_path, taken)
 
                 # Track index time for LRU
                 current_time = time.time()
@@ -4371,6 +4457,8 @@ These positions indicate where to split the text."""
 
             # Update final stats
             stats["success"] = True
+            if replacing:
+                stats["reindexed"] = True
             stats["num_chunks"] = len(new_chunks)
             stats["total_indexed_files"] = len(self.indexed_files)
             stats["total_chunks"] = len(self.chunks)

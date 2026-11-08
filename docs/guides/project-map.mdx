@@ -209,6 +209,28 @@ the tests that cover the change; and check the deliverable against the task's
 and project's rules before finishing. It is general practice, not any one
 repository's rules, and is left out in fast mode.
 
+### Trusting a folder
+
+A cloned repository can carry its own `CLAUDE.md`, `AGENTS.md` and
+`.claude/skills`, so under `auto` GAIA asks once per folder before putting them
+in a prompt, as Claude Code does. The question names the files it would read.
+The terminal UI, the Agent UI and `gaia chat` show it the first time a session
+with a Claude model starts in that folder; the answer is kept in
+`~/.gaia/project_trust.json`, beside `config.json`, and applies to every later
+session there.
+
+- **Trust:** the folder behaves as before.
+- **Don't trust:** the folder is treated as `off`: its files stay out of the
+  prompt, and GAIA does not ask again.
+- **Nobody to ask** (`gaia -p`, a pipe, a script): an unanswered folder is not
+  loaded and nothing waits. `--full-access`, and Full access in the apps, count
+  as trusting every folder without asking.
+- **`project_context full`** is your own choice, so it never asks, and
+  **`off`** never loads. Only `auto` consults the saved answers.
+
+A folder with none of these files is never asked about. To forget an answer,
+delete its entry from `project_trust.json`, or the whole file.
+
 ## Caching
 
 The map is built once per root and reused. It is rebuilt when a fingerprint over

@@ -58,6 +58,8 @@ class Check:
     # replaced with the release tag.
     remedy_args: str = ""
     why: str = ""
+    # Only runs of these events count. Empty: any event.
+    events: tuple[str, ...] = ()
 
     @property
     def label(self) -> str:
@@ -81,6 +83,13 @@ _NPU_WHY = (
     "and the gaia-agent sidecar, on Windows and Linux Strix Halo (#6632)"
 )
 
+# Which test_unit.yml runs count. Pull requests and the merge queue select tests
+# on every system, and a push to main selects them on Windows and macOS. An RC
+# report, which never dispatches, still reads push runs; a final needs the full
+# suite everywhere, which only a dispatched or nightly run is.
+UNIT_RC_EVENTS = ("push", "workflow_dispatch", "schedule")
+UNIT_FULL_SUITE_EVENTS = ("workflow_dispatch", "schedule")
+
 # Read once on an RC and reported; never dispatched, waited for, or blocking.
 # test_unit.yml is split so the summary says whether the Linux suite passed.
 # Each workflow must accept workflow_dispatch: the report prints that command.
@@ -93,6 +102,7 @@ RC_REPORTED = (
             "the full unit suite on the OS the release is built on, and every "
             "module imports on the oldest Python the wheel declares"
         ),
+        events=UNIT_RC_EVENTS,
     ),
     Check(
         "test_unit.yml",
@@ -101,6 +111,7 @@ RC_REPORTED = (
             "Unit Tests (Windows, py3.12)",
             "Offline Integration Tests",
         ),
+        events=UNIT_RC_EVENTS,
     ),
     Check("test_gaia_cli_linux.yml"),
     Check("release_train_dryrun.yml", remedy_args="-f rc_tag={tag}", why=_DRY_RUN_WHY),
@@ -112,7 +123,7 @@ RC_REPORTED = (
 # it on the candidate's commit before tagging the final there.
 FINAL_REQUIRED = (
     Check("lint.yml"),
-    Check("test_unit.yml"),
+    Check("test_unit.yml", events=UNIT_FULL_SUITE_EVENTS),
     Check("test_gaia_cli_linux.yml"),
     Check(
         "release_train_dryrun.yml",
@@ -180,6 +191,8 @@ def judge(
     get_jobs: Callable[[int], list[dict]] | None = None,
 ) -> Verdict:
     """Decide one check's state from its workflow's runs on the commit."""
+    if check.events:
+        runs = [r for r in runs if r.get("event") in check.events]
     if not runs:
         return _missing(check, repo, tag)
     if not check.jobs:

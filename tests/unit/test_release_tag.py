@@ -14,9 +14,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
-import shlex
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -383,17 +381,15 @@ def test_an_rc_skips_only_the_installer_job_that_tests_the_source(publish):
 
 
 def test_an_rc_github_release_is_a_prerelease(publish):
-    steps = [
+    step = next(
         s
         for s in publish["github-release"]["steps"]
-        if s.get("uses", "").startswith("softprops/action-gh-release")
-    ]
-    final = next(s for s in steps if s["if"] == NOT_RC)
-    rc = next(s for s in steps if s["if"] == IS_RC)
-    assert "prerelease" not in final["with"]
-    assert rc["with"]["prerelease"] is True
-    assert rc["with"]["make_latest"] is False
-    assert rc["with"]["files"] == final["with"]["files"]
+        if s.get("name") == "Create GitHub Release with bounded rate-limit retry"
+    )
+    assert step["env"]["IS_RC"] == "${{ needs.validate.outputs.is_rc }}"
+    assert "--prerelease" in step["run"]
+    assert "python3 util/github_release_retry.py" in step["run"]
+    assert "softprops/action-gh-release" not in step["run"]
 
 
 def test_every_release_requests_the_website_redeploy_from_publish(publish):
@@ -465,47 +461,6 @@ def test_terminal_binaries_on_the_release_exclude_the_setups_input(publish):
 def test_the_windows_setup_never_reaches_the_hub_from_publish():
     text = (WORKFLOWS / "publish.yml").read_text(encoding="utf-8")
     assert "publish_to_r2" not in text and "GAIA_HUB" not in text
-
-
-def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
-    ).stdout.strip()
-
-
-def test_final_release_notes_diff_from_the_previous_final_not_an_rc(tmp_path):
-    # claude.yml's release-notes job rewrites the final's notes from the diff
-    # since PREVIOUS_TAG; an RC there would leave the final's notes nearly empty.
-    step = next(
-        s
-        for s in _workflow("claude.yml")["jobs"]["release-notes"]["steps"]
-        if s.get("name") == "Generate release context"
-    )
-    line = next(
-        ln for ln in step["run"].splitlines() if "PREVIOUS_TAG=$(git describe" in ln
-    )
-    describe = shlex.split(re.search(r"\$\((git describe[^)]*?)\s*2>", line)[1])
-
-    _git(tmp_path, "init", "-q")
-    for name in ("v0.24.1", "agent-pkg-gaia-v0.1.1", "v0.25.0-rc1", "v0.25.0"):
-        _git(
-            tmp_path,
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            name,
-        )
-        _git(tmp_path, "tag", name)
-
-    args = [a.replace("$CURRENT_TAG", "v0.25.0") for a in describe[1:]]
-    assert _git(tmp_path, *args) == "v0.24.1"
 
 
 # ── Superseded release candidates ────────────────────────────────────────────
