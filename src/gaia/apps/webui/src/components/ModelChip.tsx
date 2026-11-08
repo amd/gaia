@@ -91,6 +91,7 @@ export function ModelChip() {
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
     const [groups, setGroups] = useState<ProviderModels[] | null>(null);
+    const [showAllFireworksModels, setShowAllFireworksModels] = useState(false);
     const [unavailable, setUnavailable] = useState(0);
     const [error, setError] = useState<string | null>(null);
     const [pendingCloud, setPendingCloud] = useState<{ model: string; provider: ProviderInfo } | null>(null);
@@ -150,6 +151,7 @@ export function ModelChip() {
     useEffect(() => {
         if (open) {
             setPendingCloud(null);
+            setShowAllFireworksModels(false);
             setActiveRow(null);
             setInfoRow(null);
             void load();
@@ -392,7 +394,9 @@ export function ModelChip() {
                         {!groupError && models.length === 0 && provider.models_discovered !== false && (
                             <div className="popover-message">No models yet.</div>
                         )}
-                        {models.map((m) => {
+                        {(provider.id === 'fireworks' && !showAllFireworksModels && models.some((m) => m.rank !== null)
+                            ? models.filter((m) => m.rank !== null || sameModelId(queued ?? active?.model, m.id))
+                            : models).map((m) => {
                             const current = sameModelId(queued ?? active?.model, m.id);
                             const needsDownload = !provider.remote && modelState(m) === 'not_downloaded';
                             const modelName = rowLabels[provider.id][m.id];
@@ -467,6 +471,19 @@ export function ModelChip() {
                                 </Fragment>
                             );
                         })}
+                        {provider.id === 'fireworks' && !showAllFireworksModels && models.some((m) => m.rank !== null)
+                            && models.some((m) => m.rank === null && !sameModelId(queued ?? active?.model, m.id)) && (
+                            <button
+                                type="button"
+                                className="popover-item"
+                                onClick={() => setShowAllFireworksModels(true)}
+                            >
+                                <span className="popover-item-check" />
+                                <span className="popover-item-body">
+                                    <span className="popover-item-title">{t('settings.model.showAll')}</span>
+                                </span>
+                            </button>
+                        )}
                     </div>
                 ))}
                 </div>

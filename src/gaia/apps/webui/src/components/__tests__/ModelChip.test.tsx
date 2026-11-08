@@ -56,7 +56,7 @@ beforeEach(() => {
 });
 
 async function openPicker() {
-    fireEvent.click(screen.getByRole('button', { name: /Gemma|kimi|Model/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Gemma|kimi|auto|Model/ }));
     return screen.findByRole('dialog', { name: 'Choose a model' });
 }
 
@@ -89,6 +89,50 @@ describe('ModelChip', () => {
         render(<ModelChip />);
         const chip = screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF · Fireworks AI/ });
         expect(chip.getAttribute('title')).toBe('Sent to Fireworks AI.');
+    });
+
+    it('collapses unranked Fireworks variants until the user asks to see all', async () => {
+        const fireworks: ProviderInfo = { ...FIREWORKS, models_discovered: true };
+        mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, fireworks], active: LOCAL_ACTIVE, lemonade_error: null });
+        mockedApi.listProviderModels.mockImplementation(async (id) => (id === 'fireworks'
+            ? {
+                provider: 'fireworks',
+                models: [
+                    model('fireworks.recommended', { rank: 1, note: 'best overall' }),
+                    model('fireworks.auto'),
+                    model('fireworks.spot'),
+                ],
+            }
+            : { provider: 'local', models: [model('Gemma-4-E4B-it-GGUF')] }));
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        expect(within(dialog).getByRole('option', { name: /recommended/ })).toBeInTheDocument();
+        expect(within(dialog).queryByRole('option', { name: /fireworks\.auto/ })).not.toBeInTheDocument();
+        expect(within(dialog).getByRole('button', { name: 'Show all models' })).toBeInTheDocument();
+
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Show all models' }));
+        expect(await within(dialog).findByRole('option', { name: /^auto$/ })).toBeInTheDocument();
+        expect(within(dialog).getByRole('option', { name: /^spot$/ })).toBeInTheDocument();
+    });
+
+    it('keeps the active unranked Fireworks model visible while collapsed', async () => {
+        const activeCloud = { ...CLOUD_ACTIVE, model: 'fireworks.auto' };
+        useModelStore.setState({ active: activeCloud });
+        const fireworks: ProviderInfo = { ...FIREWORKS, models_discovered: true };
+        mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, fireworks], active: activeCloud, lemonade_error: null });
+        mockedApi.listProviderModels.mockImplementation(async (id) => (id === 'fireworks'
+            ? {
+                provider: 'fireworks',
+                models: [model('fireworks.recommended', { rank: 1 }), model('fireworks.auto'), model('fireworks.other')],
+            }
+            : { provider: 'local', models: [model('Gemma-4-E4B-it-GGUF')] }));
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        expect(within(dialog).getByRole('option', { name: /^recommended$/ })).toBeInTheDocument();
+        expect(within(dialog).getByRole('option', { name: /^auto$/ })).toBeInTheDocument();
+        expect(within(dialog).queryByRole('option', { name: /^other$/ })).not.toBeInTheDocument();
     });
 
     it('shows the model name in the tooltip without Markdown backticks', () => {
