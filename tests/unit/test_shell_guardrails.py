@@ -200,6 +200,31 @@ class TestGitSubcommands:
         assert validate("git show HEAD") is None
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo gh issue close 1",
+        "sudo -u root gh pr merge 1",
+        "doas gh issue close 1",
+        "env GAIA_TEST=1 gh pr merge 1",
+        "env -- gh issue close 1",
+        "timeout 5 gh pr merge 1",
+        "setsid gh issue close 1",
+        "nohup gh pr merge 1",
+        "time gh issue close 1",
+        "nice -n 10 gh pr merge 1",
+        "exec gh issue close 1",
+        "command gh pr merge 1",
+        "xargs -n 1 gh issue close 1",
+    ],
+)
+def test_a_launcher_cannot_downgrade_an_irreversible_gh_command(command):
+    """A known wrapper carries the inner command's never-offered tier (#6905)."""
+    result = validate(command)
+    assert result is not None
+    assert result["tier"] == TIER_REFUSE
+
+
 # ---------------------------------------------------------------------------
 # Git global options that precede the subcommand
 # ---------------------------------------------------------------------------

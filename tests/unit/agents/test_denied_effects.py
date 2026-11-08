@@ -482,6 +482,8 @@ def test_a_delete_whose_target_the_code_computes_is_treated_as_overlapping(victi
     for code in [
         "import shutil, sys\nshutil.rmtree(sys.argv[1])",
         "import os\nos.remove(input('path? '))",
+        "from pathlib import Path\nPath(input('path? ')).unlink()",
+        "import os\ngetattr(os, 'remove')(input('path? '))",
         "import shutil, base64\nshutil.rmtree(base64.b64decode('eA==').decode())",
     ]:
         assert ledger.conflict("run_python", {"code": code}) is not None, code

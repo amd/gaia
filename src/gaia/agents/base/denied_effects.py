@@ -186,7 +186,22 @@ _NEUTRAL_PROGRAMS = frozenset(
 
 #: Prefixes that run the next word as the program.
 _WRAPPERS = frozenset(
-    {"sudo", "time", "nice", "nohup", "exec", "command", "call", "start", "&", "."}
+    {
+        "sudo",
+        "time",
+        "nice",
+        "nohup",
+        "exec",
+        "command",
+        "call",
+        "start",
+        "setsid",
+        "doas",
+        "timeout",
+        "xargs",
+        "&",
+        ".",
+    }
 )
 #: ``<runner> run <program>`` / ``<runner> exec <program>`` wrappers.
 _RUN_WRAPPERS = {

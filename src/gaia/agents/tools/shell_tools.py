@@ -1174,6 +1174,96 @@ def _is_granted_binary(token: str, granted: frozenset) -> bool:
 #: Another name for a program the rules below already cover.
 _PROGRAM_ALIASES = {"pwsh": "powershell"}
 
+#: Launchers that can hide a policy-governed command behind their own argv.
+#: The wrapper itself is still confirm-only when the inner command is harmless;
+#: a refused inner command must keep its stronger refusal tier.
+_POLICY_WRAPPERS = frozenset(
+    {
+        "sudo",
+        "doas",
+        "env",
+        "timeout",
+        "setsid",
+        "nohup",
+        "time",
+        "nice",
+        "exec",
+        "command",
+        "xargs",
+    }
+)
+_POLICY_WRAPPER_VALUE_FLAGS = frozenset(
+    {
+        "-u",
+        "--user",
+        "-g",
+        "--group",
+        "-C",
+        "--chdir",
+        "--signal",
+        "-s",
+        "-n",
+        "--adjustment",
+        "-a",
+        "--argv0",
+        "-I",
+        "--replace",
+        "-E",
+        "--eof",
+        "-P",
+        "--max-procs",
+        "--max-args",
+        "--max-chars",
+        "-d",
+        "--delimiter",
+    }
+)
+
+
+def _wrapped_policy_argv(argv: list) -> Optional[list]:
+    """Return the inner command hidden by a small, understood launcher.
+
+    This is deliberately a narrow parser. Unknown wrapper grammar is left to
+    the ordinary confirmation path rather than guessed, but common spellings
+    must not turn ``gh issue close`` or a denied delete into an ordinary prompt.
+    """
+    if not argv:
+        return None
+    program = _interpreter_name(argv[0])
+    if program not in _POLICY_WRAPPERS:
+        return None
+    index = 1
+    if program == "env":
+        while index < len(argv):
+            token = argv[index]
+            if _ENV_ASSIGNMENT.fullmatch(token):
+                index += 1
+                continue
+            if token in ("-u", "--unset", "-C", "--chdir"):
+                index += 2
+                continue
+            if token in ("-S", "--split-string") or token.startswith(
+                ("-S", "--split-string=")
+            ):
+                return None  # its value is a second command line
+            if token == "--":
+                index += 1
+                break
+            if token.startswith("-"):
+                index += 1
+                continue
+            break
+    else:
+        while index < len(argv) and argv[index].startswith("-"):
+            token = argv[index]
+            index += 1
+            if token in _POLICY_WRAPPER_VALUE_FLAGS and index < len(argv):
+                index += 1
+        if program == "timeout" and index < len(argv):
+            # timeout's first operand after its flags is its duration.
+            index += 1
+    return argv[index:] or None
+
 
 def _program_behind(token: str) -> Optional[str]:
     """The bare program *token* names when it spells one another way, else None.
@@ -4321,6 +4411,17 @@ class ShellToolsMixin:
         """
         if bypass_gates:
             return ShellToolsMixin._validate_bypass_command(cmd_base)
+
+        wrapped = _wrapped_policy_argv(cmd_parts)
+        if wrapped:
+            # A wrapper is not permission to bypass the inner policy. Preserve
+            # a hard refusal (including never-offered and destructive calls);
+            # harmless inner calls still follow the wrapper's ordinary prompt.
+            inner = ShellToolsMixin._validate_command(
+                wrapped[0], wrapped, command, granted_binaries=granted_binaries
+            )
+            if inner is not None and inner.get("tier") == TIER_REFUSE:
+                return inner
 
         program = _program_behind(cmd_base)
         if program is not None:
