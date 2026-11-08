@@ -186,37 +186,6 @@ _NEUTRAL_PROGRAMS = frozenset(
     }
 )
 
-#: Prefixes that run the next word as the program.
-_WRAPPERS = frozenset(
-    {
-        "sudo",
-        "time",
-        "nice",
-        "nohup",
-        "exec",
-        "command",
-        "call",
-        "start",
-        "setsid",
-        "doas",
-        "timeout",
-        "xargs",
-        "&",
-        ".",
-    }
-)
-#: ``<runner> run <program>`` / ``<runner> exec <program>`` wrappers.
-_RUN_WRAPPERS = {
-    "uv": {"run"},
-    "poetry": {"run"},
-    "pipenv": {"run"},
-    "pdm": {"run"},
-    "hatch": {"run"},
-    "conda": {"run"},
-    "pnpm": {"exec", "dlx"},
-    "yarn": {"dlx", "exec"},
-}
-_DIRECT_WRAPPERS = frozenset({"npx", "uvx", "pipx", "bunx"})
 
 _SHELLS = frozenset({"bash", "sh", "zsh", "dash", "cmd", "powershell", "pwsh"})
 _SHELL_COMMAND_FLAGS = frozenset({"-c", "/c", "/k", "-command", "-commandwithargs"})
@@ -667,7 +636,7 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
     tokens = list(argv)
     while tokens and _ASSIGNMENT_RE.match(tokens[0]):
         tokens.pop(0)
-    tokens = unwrap_command_argv(tokens)
+    tokens = unwrap_command_argv(tokens, ledger=True)
     if not tokens:
         return set()
     program, rest = _program(tokens[0]), tokens[1:]

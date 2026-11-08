@@ -236,6 +236,9 @@ def test_a_launcher_cannot_downgrade_an_irreversible_gh_command(command):
         "timeout --kill-after=5 10 gh issue close 1",
         "xargs -n 1 gh issue close 1",
         "xargs -L 1 gh pr merge 1",
+        "conda run -n myenv gh issue close 1",
+        "conda run --name=myenv gh pr merge 1",
+        "conda run -p /env gh issue close 1",
     ],
 )
 def test_launcher_flags_do_not_hide_the_irreversible_inner_command(command):

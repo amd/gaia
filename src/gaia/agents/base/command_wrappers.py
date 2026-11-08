@@ -36,6 +36,10 @@ _POLICY_WRAPPERS = frozenset(
         "xargs",
     }
 )
+# These prefixes are understood by the denied-effect ledger only.  They are
+# shell/platform syntax rather than safe policy launchers: the shell policy
+# must not unwrap them and accidentally change an ordinary prompt.
+_LEDGER_ONLY_WRAPPERS = frozenset({"call", "start", "&", "."})
 _DIRECT_WRAPPERS = frozenset({"npx", "uvx", "pipx", "bunx"})
 _RUN_WRAPPERS = {
     "uv": {"run"},
@@ -47,6 +51,12 @@ _RUN_WRAPPERS = {
     "pnpm": {"exec", "dlx"},
     "yarn": {"dlx", "exec"},
 }
+_RUN_VALUE_FLAGS = {
+    "conda": frozenset({"-n", "--name", "-p", "--prefix"}),
+}
+# Offline analysis handles xargs/parallel separately because their command is
+# supplied through stdin; unwrapping xargs first would hide that uncertainty.
+OFFLINE_WRAPPERS = (_POLICY_WRAPPERS - {"xargs"}) | _LEDGER_ONLY_WRAPPERS
 
 # Flags whose next token is an operand for each launcher.  Keep these separate:
 # ``sudo -n`` and ``sudo -E`` take no value, while ``nice -n 5`` does.
@@ -203,24 +213,67 @@ def wrapped_command_argv(argv: Sequence[str]) -> Optional[List[str]]:
         verbs = _RUN_WRAPPERS.get(program)
         if verbs and len(values) > 1 and values[1].lower() in verbs:
             index = 2
-            while index < len(values) and values[index].startswith("-"):
-                index += 1
+            value_flags = _RUN_VALUE_FLAGS.get(program, frozenset())
+            while index < len(values):
+                token = values[index]
+                if token == "--":
+                    index += 1
+                    break
+                if token in value_flags:
+                    index += 2
+                    continue
+                if any(token.startswith(flag + "=") for flag in value_flags):
+                    index += 1
+                    continue
+                if token.startswith("-"):
+                    index += 1
+                    continue
+                break
         else:
             return None
     return values[index:] if index is not None and index < len(values) else None
 
 
-def unwrap_command_argv(argv: Sequence[str]) -> List[str]:
+def _ledger_wrapper_argv(argv: Sequence[str]) -> Optional[List[str]]:
+    """Return an inner command for a platform prefix used by effect tracking."""
+    if not argv:
+        return None
+    program = _program(argv[0])
+    if program in _LEDGER_ONLY_WRAPPERS:
+        return list(argv[1:]) or None
+    if program != "conda" or len(argv) < 2 or argv[1].lower() != "run":
+        return None
+    index = 2
+    while index < len(argv):
+        token = argv[index]
+        if token == "--":
+            return list(argv[index + 1 :]) or None
+        if token in {"-n", "--name", "-p", "--prefix"}:
+            index += 2
+            continue
+        if token.startswith("--name=") or token.startswith("--prefix="):
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        return list(argv[index:])
+    return None
+
+
+def unwrap_command_argv(argv: Sequence[str], *, ledger: bool = False) -> List[str]:
     """Remove nested known launchers and return the innermost command argv."""
     current = list(argv)
     # A depth cap keeps malformed input from turning policy inspection into an
     # unbounded loop; an unresolved remainder is safer than guessing further.
     for _ in range(16):
         inner = wrapped_command_argv(current)
+        if ledger and inner is None:
+            inner = _ledger_wrapper_argv(current)
         if not inner:
             return current
         current = inner
     return current
 
 
-__all__ = ["wrapped_command_argv", "unwrap_command_argv"]
+__all__ = ["OFFLINE_WRAPPERS", "wrapped_command_argv", "unwrap_command_argv"]

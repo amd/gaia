@@ -129,6 +129,28 @@ def test_pipeline_helpers_and_cd_are_never_the_denied_effect(tmp_path):
     assert effects == {Effect(COMMAND, TEST_SUITE)}
 
 
+@pytest.mark.parametrize(
+    "wrapped_delete",
+    [
+        "call del victim.txt",
+        "start del victim.txt",
+        "& rm -rf victim.txt",
+        ". rm -rf victim.txt",
+        "conda run -n myenv rm -rf victim.txt",
+        "conda run --name=myenv rm -rf victim.txt",
+        "conda run -p C:/env rm -rf victim.txt",
+    ],
+)
+def test_wrapped_deletes_remain_overlapping_after_a_refusal(wrapped_delete, tmp_path):
+    assert _overlaps(
+        "run_shell_command",
+        _shell("rm -rf victim.txt"),
+        "run_shell_command",
+        _shell(wrapped_delete),
+        tmp_path,
+    )
+
+
 def test_a_url_inside_file_content_is_not_a_request(tmp_path):
     effects = effects_of_call(
         "write_file",
