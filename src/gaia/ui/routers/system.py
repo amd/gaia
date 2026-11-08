@@ -1253,9 +1253,11 @@ async def update_settings(
         if result["policy"] is local_only.NetworkPolicy.LOCAL_AI_ONLY:
             # Preserve a local custom model; only a cloud selection would keep
             # the UI pointing at a model the shared cleanup has removed.
+            from .._chat_helpers import _ui_cloud_provider
+
             custom = (db.get_setting("custom_model") or "").strip()
             if custom and (
-                cloud_model_provider(custom) or custom.lower().startswith("claude")
+                _ui_cloud_provider(custom) or custom.lower().startswith("claude")
             ):
                 db.set_setting("custom_model", None)
         logger.info("Network policy set: %s", result["policy"].value)
