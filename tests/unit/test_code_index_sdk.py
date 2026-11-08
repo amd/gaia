@@ -622,11 +622,8 @@ class TestFailLoudly:
 
 
 # ---------------------------------------------------------------------------
-# Test: batch-embedding race — backend returns 0/short vectors with NO
-# exception (e.g. the embedding model is still warming up). Previously this
-# silently degraded to a ~25x-slower one-by-one fallback (or, for the
-# query-encode path used by search(), silently returned an empty result
-# indistinguishable from "no matches found").
+# Test: batch-embedding race — backend returns no vectors with NO exception
+# (the embedding model is still warming up), and a backend that is down.
 # ---------------------------------------------------------------------------
 
 
@@ -646,8 +643,8 @@ class TestBatchEmbeddingRace:
         return mock_enc
 
     def test_encode_texts_retries_batch_before_failing(self, tmp_path):
-        """A short-without-exception response must be retried as a whole
-        batch (the 'not ready yet' race) — not immediately treated as final.
+        """A batch that comes back with no vectors and no error (the model is
+        still loading) gets the warm-up waits before it fails.
         """
         skip_if_unavailable()
         import numpy as np
@@ -660,8 +657,7 @@ class TestBatchEmbeddingRace:
             with pytest.raises(RuntimeError, match="Embedding backend returned"):
                 sdk._encode_texts(["hello world"])
 
-        # 1 initial + 2 retries = 3 calls to the same batch, never falls
-        # back to a silent partial/empty result.
+        # The warm-up tries, all on the same batch, then a loud failure.
         assert mock_enc.embeddings.call_count == 3
 
     def test_encode_texts_recovers_if_batch_becomes_ready_on_retry(self, tmp_path):
@@ -756,7 +752,9 @@ class TestBatchEmbeddingRace:
             _write_py(tmp_path, f"m{n}.py", f"def f{n}():\n    return {n}\n")
 
         mock_enc = MagicMock()
-        mock_enc.embeddings.side_effect = ConnectionError("connection refused")
+        mock_enc.embeddings.side_effect = ConnectionError(
+            "The local model server isn't answering: connection refused."
+        )
         sdk._embedder = mock_enc
 
         with (
@@ -767,6 +765,7 @@ class TestBatchEmbeddingRace:
                 sdk.index_repository()
 
         assert sdk.config.embedding_model in str(exc.value)
+        assert ".." not in str(exc.value)
         assert mock_enc.embeddings.call_count == 1
         sleep.assert_not_called()
 

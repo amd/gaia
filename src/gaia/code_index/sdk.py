@@ -448,6 +448,8 @@ class CodeIndexSDK:
                 f"{describe_client_hint('load', self.config.embedding_model).instruction}"
             )
 
+        # Embedding raises rather than dropping a chunk, so this is now a guard;
+        # chunks_dropped stays in IndexResult for the callers that report it.
         # A file that lost even one chunk to a failed embedding must NOT have
         # its hash recorded: the hash marks it "indexed", every later run
         # would skip it as unchanged, and the missing chunks would stay
@@ -929,20 +931,23 @@ class CodeIndexSDK:
         or a wrong model name.
         """
         model = self.config.embedding_model
-        for attempt in range(1, _EMBED_WARMUP_ATTEMPTS + 1):
+        attempt = 1
+        while True:
             try:
                 vectors = self._embed_batch_call(batch)
             except Exception as e:  # noqa: BLE001 — re-raised with the remedy
+                reason = str(e).rstrip(". ") or type(e).__name__
                 raise RuntimeError(
                     f"Embedding a batch of {len(batch)} chunk(s) with {model!r} "
-                    f"failed: {e}. Check that Lemonade Server is reachable and "
-                    f"the model is loaded. "
+                    f"failed: {reason}. Check that Lemonade Server is reachable "
+                    f"and that {model!r} is loaded. "
                     f"{describe_client_hint('load', model).instruction}"
                 ) from e
             if not any(vectors) and attempt < _EMBED_WARMUP_ATTEMPTS:
+                attempt += 1
                 self.log.warning(
                     f"No embeddings back from {model!r}: it is still loading; "
-                    f"try {attempt + 1}/{_EMBED_WARMUP_ATTEMPTS} in "
+                    f"try {attempt}/{_EMBED_WARMUP_ATTEMPTS} in "
                     f"{_EMBED_WARMUP_PAUSE_S}s."
                 )
                 time.sleep(_EMBED_WARMUP_PAUSE_S)
@@ -956,7 +961,6 @@ class CodeIndexSDK:
                     "was kept."
                 )
             return vectors
-        raise AssertionError("unreachable")  # the loop returns or raises
 
     def _encode_texts(self, texts: List[str]):
         """Encode texts using Lemonade embeddings. Returns numpy array.
