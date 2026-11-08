@@ -24,7 +24,12 @@ and explicitly loads a model before inspecting the loaded-entry schema.
 
 import pytest
 
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, LemonadeClient
+from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_NAME,
+    GPU_CTX_SIZE,
+    LemonadeClient,
+    _model_ids_match,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -58,12 +63,24 @@ def test_loaded_model_entry_carries_the_fields_callers_read(require_lemonade):
     acceptable -- but at least one must be there.
     """
     client = LemonadeClient()
-    client.load_model(DEFAULT_MODEL_NAME)
+    client.load_model(DEFAULT_MODEL_NAME, ctx_size=GPU_CTX_SIZE)
     health = client.health_check()
     models = health["all_models_loaded"]
     assert models, "Lemonade reported no loaded model after a successful load"
 
-    entry = models[0]
+    entry = next(
+        (
+            candidate
+            for candidate in models
+            if _model_ids_match(candidate.get("id"), DEFAULT_MODEL_NAME)
+            or _model_ids_match(candidate.get("model_name"), DEFAULT_MODEL_NAME)
+        ),
+        None,
+    )
+    assert entry is not None, (
+        f"Lemonade did not report the loaded model {DEFAULT_MODEL_NAME!r}; "
+        f"got {[candidate.get('id') or candidate.get('model_name') for candidate in models]}"
+    )
     assert "id" in entry or "model_name" in entry, (
         f"neither 'id' nor 'model_name' present; _ensure_model_loaded matches on "
         f"these and would reload on every call. Got: {sorted(entry)}"
@@ -79,12 +96,6 @@ def test_loaded_model_entry_carries_the_fields_callers_read(require_lemonade):
         f"the context size and the preflight gates on it."
     )
 
-    launch = [str(flag) for flag in (entry.get("launch_command") or [])]
-    args = (entry["recipe_options"].get("llamacpp_args") or "").split()
-    assert "--parallel" in launch or "-np" in launch or "--parallel" in args or "-np" in args, (
-        "The loaded chat model does not expose a multi-slot launch setting; "
-        f"side requests would silently fall back to one slot. Got: {entry}"
-    )
     assert client.slot_count(DEFAULT_MODEL_NAME) >= 2, (
         "The live loaded chat model reports fewer than two slots; side requests "
         "would contend with the conversation slot."
