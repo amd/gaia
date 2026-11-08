@@ -312,6 +312,29 @@ func TestSelectedAgentStaysVisibleInALongList(t *testing.T) {
 	}
 }
 
+// The warning lines come after the rows, and the panel keeps only its tail
+// when it is too short, so a long warning must not push the selected row out.
+func TestASelectedRowStaysVisibleBesideInstallWarnings(t *testing.T) {
+	writeCorruptInstall(t, "broken")
+	client := &stubLister{catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{
+		{ID: "gaia", Name: "GAIA"}, {ID: "alpha", Name: "Alpha"}, {ID: "bravo", Name: "Bravo"},
+		{ID: "charlie", Name: "Charlie"}, {ID: "delta", Name: "Delta"}, {ID: "echo", Name: "Echo"},
+	}}}
+	const width, height = 40, 14
+
+	view := ansi.Strip(loadSync(New(client, width, height)).View())
+
+	if !strings.Contains(view, "› gaia") {
+		t.Fatalf("the selected row was cropped off the panel:\n%s", view)
+	}
+	if !strings.Contains(view, "! ") {
+		t.Fatalf("the install warning is missing:\n%s", view)
+	}
+	if n := len(strings.Split(view, "\n")); n > height {
+		t.Fatalf("the panel is %d lines, taller than its %d-line window:\n%s", n, height, view)
+	}
+}
+
 // writeCorruptInstall leaves an install record GAIA cannot read, the way an
 // interrupted install or a damaged disk does.
 func writeCorruptInstall(t *testing.T, id string) {

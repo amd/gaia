@@ -245,6 +245,22 @@ func (m Model) View() string {
 	w := max(1, m.width-4)
 	title := lipgloss.NewStyle().Bold(true).Foreground(theme.AccentBright)
 	lines := []string{title.Render("Installed agents"), ""}
+	budget := max(1, m.height-4)
+
+	// Laid out before the rows, which get only the room these leave: the tail
+	// crop below would otherwise cut the selected row off a short panel.
+	var warnLines []string
+	if len(m.warnings) > 0 && !m.loading {
+		warn := lipgloss.NewStyle().Foreground(theme.Warning)
+		warnLines = append(warnLines, "")
+		for _, msg := range m.warnings {
+			for _, l := range strings.Split(ansi.Wrap("! "+msg, w, ""), "\n") {
+				warnLines = append(warnLines, warn.Render(l))
+			}
+		}
+		// The title, its gap and the selected row stay on screen regardless.
+		warnLines = warnLines[:min(len(warnLines), max(0, budget-3))]
+	}
 
 	switch {
 	case m.loading:
@@ -280,7 +296,7 @@ func (m Model) View() string {
 		}
 		// Scroll the rows around the selection: the height crop below keeps
 		// only the tail, which would drop a selection near the top.
-		avail := max(1, m.height-6)
+		avail := max(1, m.height-6-len(warnLines))
 		start, end := m.selected, m.selected+1
 		used := len(rowLines[m.selected])
 		for start > 0 && used+len(rowLines[start-1]) <= avail {
@@ -296,13 +312,7 @@ func (m Model) View() string {
 		}
 	}
 
-	if len(m.warnings) > 0 && !m.loading {
-		warn := lipgloss.NewStyle().Foreground(theme.Warning)
-		lines = append(lines, "")
-		for _, msg := range m.warnings {
-			lines = append(lines, warn.Render("! "+msg))
-		}
-	}
+	lines = append(lines, warnLines...)
 
 	hint := "↑/↓ choose · enter switch · r refresh · esc close"
 	if w < 65 {
@@ -316,7 +326,6 @@ func (m Model) View() string {
 	for _, line := range lines {
 		wrapped = append(wrapped, strings.Split(ansi.Wrap(line, w, ""), "\n")...)
 	}
-	budget := max(1, m.height-4)
 	if len(wrapped) > budget {
 		wrapped = append(wrapped[:1], wrapped[len(wrapped)-budget+1:]...)
 	}
