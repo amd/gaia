@@ -597,7 +597,6 @@ async def search_files(
         """Blocking filesystem scan -- runs in a thread. Returns ``truncated``."""
         seen_paths: set = set()
         start_time = _time.monotonic()
-        deadline = start_time + SEARCH_TIME_BUDGET_SEC
         visited = 0
         truncated = False
 
@@ -688,6 +687,10 @@ async def search_files(
             )
             if is_within_document_roots(directory)
         ]
+        # The budget clock starts here, after the location setup above: on a
+        # loaded runner that setup could otherwise consume the whole budget
+        # before the first scan, returning an empty result (#6974).
+        deadline = _time.monotonic() + SEARCH_TIME_BUDGET_SEC
         for loc in priority_dirs:
             if len(matching_files) >= max_results:
                 break
