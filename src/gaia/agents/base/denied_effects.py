@@ -30,6 +30,8 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
+from gaia.agents.base.command_wrappers import unwrap_command_argv
+
 logger = logging.getLogger(__name__)
 
 COMMAND = "command"
@@ -665,30 +667,7 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
     tokens = list(argv)
     while tokens and _ASSIGNMENT_RE.match(tokens[0]):
         tokens.pop(0)
-    while tokens:
-        program = _program(tokens[0])
-        if program in _WRAPPERS or program == "env":
-            tokens.pop(0)
-            while tokens and (
-                _ASSIGNMENT_RE.match(tokens[0]) or tokens[0].startswith("-")
-            ):
-                tokens.pop(0)
-            continue
-        if program in _DIRECT_WRAPPERS:
-            tokens.pop(0)
-            while tokens and tokens[0].startswith("-"):
-                tokens.pop(0)
-            continue
-        verbs = _RUN_WRAPPERS.get(program)
-        if verbs and len(tokens) > 1 and tokens[1].lower() in verbs:
-            tokens = tokens[2:]
-            while tokens and tokens[0].startswith("-"):
-                # ``conda run -n env`` takes a value.
-                tokens = (
-                    tokens[2:] if tokens[0] in ("-n", "--name", "-p") else tokens[1:]
-                )
-            continue
-        break
+    tokens = unwrap_command_argv(tokens)
     if not tokens:
         return set()
     program, rest = _program(tokens[0]), tokens[1:]

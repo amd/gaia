@@ -225,6 +225,40 @@ def test_a_launcher_cannot_downgrade_an_irreversible_gh_command(command):
     assert result["tier"] == TIER_REFUSE
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo -E gh pr merge 1",
+        "sudo -n gh issue close 1",
+        "sudo -s gh pr merge 1",
+        "sudo -P gh issue close 1",
+        "timeout -k 5 10 gh pr merge 1",
+        "timeout --kill-after=5 10 gh issue close 1",
+        "xargs -n 1 gh issue close 1",
+        "xargs -L 1 gh pr merge 1",
+    ],
+)
+def test_launcher_flags_do_not_hide_the_irreversible_inner_command(command):
+    """Each launcher skips its own operands before applying the refusal tier."""
+    result = validate(command)
+    assert result is not None
+    assert result["tier"] == TIER_REFUSE
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo -E echo gh pr merge 1",
+        "timeout -k 5 10 echo gh issue close 1",
+        "xargs -n 1 echo gh pr merge 1",
+    ],
+)
+def test_launcher_flags_do_not_refuse_harmless_text(command):
+    """Wrapper parsing must not mistake text in a harmless command for gh."""
+    result = validate(command)
+    assert result is None or result["tier"] != TIER_REFUSE
+
+
 # ---------------------------------------------------------------------------
 # Git global options that precede the subcommand
 # ---------------------------------------------------------------------------

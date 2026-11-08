@@ -309,6 +309,25 @@ def test_a_denied_mkdir_with_a_quoted_windows_path_blocks_the_folder(tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo -E rm -rf victim_rm",
+        "timeout 5 rm -rf victim_rm",
+        "timeout -k 5 10 rm -rf victim_rm",
+        "xargs -n 1 rm -rf victim_rm",
+        "xargs -L 1 rm -rf victim_rm",
+    ],
+)
+def test_wrapped_deletes_are_recorded_with_their_inner_operands(command, tmp_path):
+    effects = effects_of_shell_command(command, str(tmp_path))
+    expected = os.path.normcase(str(tmp_path / "victim_rm"))
+    assert any(
+        effect.kind == PATH and os.path.normcase(effect.target) == expected
+        for effect in effects
+    )
+
+
 def test_a_denied_file_is_denied_through_the_shell_too(tmp_path):
     denied = {"file_path": "notes/todo.txt", "content": "x"}
     assert _overlaps(
