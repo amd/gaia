@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp } from '../stores/notificationStore';
+import { useNotificationStore, PATH_ACCESS_TOOL, PROJECT_TRUST_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import type { StreamEvent, AgentStep } from '../types';
 
@@ -29,10 +29,14 @@ export function showPermissionRequest(event: StreamEvent, sessionId: string): vo
         agentId: sessionId,
         sessionId,
         agentName: 'GAIA',
-        title: isPathAccess ? pathAccessTitle(event.args, followUp) : `Allow ${toolLabel}?`,
+        title: isPathAccess
+            ? pathAccessTitle(event.args, followUp)
+            : toolName === PROJECT_TRUST_TOOL ? "Trust this folder's instructions and skills?" : `Allow ${toolLabel}?`,
         message: isPathAccess
             ? pathAccessQuestion(event.args, followUp)
-            : `GAIA needs your OK before ${toolLabel}.`,
+            : toolName === PROJECT_TRUST_TOOL
+                ? "GAIA would put this folder's CLAUDE.md, AGENTS.md and skills in the model's prompt, now and every time you work in it."
+                : `GAIA needs your OK before ${toolLabel}.`,
         timestamp: Date.now(),
         read: false,
         dismissed: false,
