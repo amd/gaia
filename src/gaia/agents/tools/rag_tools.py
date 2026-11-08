@@ -1771,10 +1771,17 @@ class RAGToolsMixin:
                 left_out = _bring_current(self, self.rag, indexed)
                 if left_out and len(left_out) == len(indexed):
                     return _left_out_result(left_out)
-                searched = list(_served_chunks(self.rag, left_out))
+                with self.rag._state_lock:  # pylint: disable=protected-access
+                    searched = [
+                        (index, chunk)
+                        for index, chunk in enumerate(self.rag.chunks)
+                        if self.rag.chunk_to_file.get(index) not in left_out
+                    ]
 
-                # Search through chunks for pattern
+                # Search through chunks for pattern. Keep the global chunk index
+                # so exact matches retain their source file and PDF page.
                 matching_chunks = []
+                matching_details = []
                 pattern_lower = pattern.lower()
 
                 if debug_info:
@@ -1783,9 +1790,10 @@ class RAGToolsMixin:
                         f"[DEBUG] search_indexed_chunks: Searching for '{pattern}' in {len(searched)} chunks"
                     )
 
-                for i, chunk in enumerate(searched):
+                for index, chunk in searched:
                     if pattern_lower in chunk.lower():
                         matching_chunks.append(chunk)
+                        matching_details.append((index, chunk))
 
                         # Capture debug info for first few matches
                         if debug_info and len(debug_info["chunks_with_matches"]) < 5:
@@ -1829,15 +1837,33 @@ class RAGToolsMixin:
                     return result
 
                 # Limit results
-                limited_matches = matching_chunks[:10]
+                limited_details = matching_details[:10]
+                limited_matches = [chunk for _, chunk in limited_details]
+                formatted_matches = []
+                for index, chunk in limited_details:
+                    source_file = self.rag.chunk_to_file.get(index)
+                    entry = {"content": chunk}
+                    if source_file:
+                        entry["source_file"] = str(Path(source_file).resolve())
+                        page = extract_page_from_chunk(
+                            chunk, index, self.rag.chunks, self.rag.chunk_to_file
+                        )
+                        if page is not None:
+                            entry["page"] = page
+                    formatted_matches.append(entry)
 
                 result = {
                     "status": "success",
                     "message": f"Found {len(matching_chunks)} matches for '{pattern}'",
                     "matches": limited_matches,
+                    "match_details": formatted_matches,
                     "count": len(matching_chunks),
                     "showing": len(limited_matches),
-                    "instruction": "Use these exact matches to answer the user's question.",
+                    "instruction": (
+                        "Use these exact matches to answer the user's question. "
+                        "Cite each match using its source_file and page when present; "
+                        "do not invent a page number when the field is absent."
+                    ),
                 }
                 if left_out:
                     result["files_left_out"] = _public(list(left_out.values()))
