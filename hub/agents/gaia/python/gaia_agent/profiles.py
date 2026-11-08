@@ -32,10 +32,8 @@ from typing import Dict, FrozenSet, Tuple
 
 # Named tool-registration groups. Each maps to the exact ordered sequence of
 # mixin registrar method names ``_register_tools()`` used to call inline for
-# that combination — preserved verbatim (including the historical duplicate
-# ``register_file_tools``/``register_file_search_tools`` calls that "full"
-# picks up from both "doc_rag" and "file_fs", since both groups are idempotent
-# registrations into the same tool registry).
+# that combination. Overlapping generic file tools reuse their canonical
+# implementation when a composing mixin has already registered it.
 TOOL_GROUP_REGISTRARS: Dict[str, Tuple[str, ...]] = {
     "doc_rag": (
         "register_rag_tools",

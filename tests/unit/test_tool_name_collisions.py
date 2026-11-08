@@ -123,3 +123,32 @@ def test_an_agent_whose_tools_collide_fails_to_build():
 
     with pytest.raises(DuplicateToolError, match="'read_file'"):
         _CollidingAgent(skip_lemonade=True, silent_mode=True)
+
+
+def test_file_search_reuses_file_io_tools_when_registered_first():
+    from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+    from gaia.agents.tools.file_tools import FileSearchToolsMixin
+
+    host = type("Host", (FileIOToolsMixin, FileSearchToolsMixin), {})()
+    with tool_build():
+        host.register_file_io_tools()
+        host.register_file_search_tools()
+
+    for name in ("read_file", "write_file", "edit_file"):
+        assert _TOOL_REGISTRY[name]["function"].__module__ == (
+            "gaia.agents.tools.file_io_tools"
+        )
+
+
+def test_file_search_reuses_filesystem_browser_when_registered_first():
+    from gaia.agents.tools.file_tools import FileSearchToolsMixin
+    from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
+
+    host = type("Host", (FileSystemToolsMixin, FileSearchToolsMixin), {})()
+    with tool_build():
+        host.register_filesystem_tools()
+        host.register_file_search_tools()
+
+    assert _TOOL_REGISTRY["browse_directory"]["function"].__module__ == (
+        "gaia.agents.tools.filesystem_tools"
+    )

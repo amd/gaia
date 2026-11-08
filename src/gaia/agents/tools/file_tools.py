@@ -68,6 +68,31 @@ from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
 
+
+def _canonical_tool_already_registered(tool_name: str, module_name: str) -> bool:
+    """Return whether a canonical implementation already owns *tool_name*.
+
+    File-search is composed with the file-I/O and filesystem mixins in several
+    profiles. Those mixins provide the authoritative implementations for the
+    overlapping generic tools; checking the registry before defining another
+    closure makes the result independent of registrar order.
+    """
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+
+    entry = _TOOL_REGISTRY.get(tool_name)
+    function = entry.get("function") if entry else None
+    return getattr(function, "__module__", None) == module_name
+
+
+def _tool_or_reuse(tool_name: str, canonical_module: str, **kwargs):
+    """Register a tool unless its canonical sibling is already registered."""
+    from gaia.agents.base.tools import tool
+
+    if _canonical_tool_already_registered(tool_name, canonical_module):
+        return lambda function: function
+    return tool(**kwargs)
+
+
 #: Root-level operating-system trees a deep search walks last, so they cannot
 #: spend the budget before user folders. Applied only at a filesystem root,
 #: never to a named folder such as ``~/Library``.
@@ -1098,8 +1123,13 @@ class FileSearchToolsMixin:
                     "operation": "search_directory",
                 }
 
-        # Shares its name with the FileSystemToolsMixin and FileIOToolsMixin read_file.
-        @tool(atomic=True, override=True)
+        # FileIOToolsMixin is canonical whenever this profile also has file I/O.
+        # Keep FileSearchToolsMixin's version for doc-only profiles, but reuse
+        # the already-registered implementation when composition order puts the
+        # canonical mixin first.
+        @_tool_or_reuse(
+            "read_file", "gaia.agents.tools.file_io_tools", atomic=True, override=True
+        )
         def read_file(
             file_path: str, offset: int = 0, limit: Optional[int] = None
         ) -> Dict[str, Any]:
@@ -1531,8 +1561,8 @@ class FileSearchToolsMixin:
         def _workspace_target(args: Dict[str, Any]) -> Path:
             return _resolve_target(args["file_path"], None, _workspace_default(self))
 
-        @tool(
-            atomic=True,
+        @_tool_or_reuse(
+            "write_file", "gaia.agents.tools.file_io_tools", atomic=True,
             preflight=read_first_preflight(self, _workspace_target, "overwriting"),
         )
         def write_file(
@@ -1897,8 +1927,8 @@ class FileSearchToolsMixin:
 
         # --- New tool definitions ---
 
-        @tool(
-            atomic=True,
+        @_tool_or_reuse(
+            "edit_file", "gaia.agents.tools.file_io_tools", atomic=True,
             preflight=read_first_preflight(self, _workspace_target),
         )
         def edit_file(
@@ -2100,8 +2130,12 @@ class FileSearchToolsMixin:
                     "operation": "edit_file",
                 }
 
-        # Shares its name with FileSystemToolsMixin.browse_directory.
-        @tool(atomic=True, override=True)
+        # FileSystemToolsMixin is canonical whenever filesystem navigation is
+        # composed. Doc-only profiles still use this implementation.
+        @_tool_or_reuse(
+            "browse_directory", "gaia.agents.tools.filesystem_tools",
+            atomic=True, override=True
+        )
         def browse_directory(
             directory_path: str = None, show_hidden: bool = False, sort_by: str = "name"
         ) -> Dict[str, Any]:
