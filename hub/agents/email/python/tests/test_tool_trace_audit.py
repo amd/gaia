@@ -20,6 +20,12 @@ NON_TOOL_HELPERS = {
     "execute_snooze_impl",
 }
 
+PUBLIC_WRAPPERS = {
+    "get_briefing",
+    "check_suspicious_mail",
+    "detect_meeting_request",
+}
+
 
 def _impl_nodes() -> dict[str, tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef]]:
     result = {}
@@ -44,6 +50,28 @@ def _owns_trace(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
         )
         for child in ast.walk(node)
     )
+
+
+def _public_wrapper_nodes() -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    result = {}
+    for path in sorted(TOOLS_ROOT.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name in PUBLIC_WRAPPERS
+            ):
+                result[node.name] = node
+    return result
+
+
+def test_every_public_wrapper_owns_its_trace():
+    wrappers = _public_wrapper_nodes()
+    assert set(wrappers) == PUBLIC_WRAPPERS
+    missing = sorted(name for name, node in wrappers.items() if not _owns_trace(node))
+    assert (
+        not missing
+    ), "Public wrapper tools must own their log_tool_call trace: " + ", ".join(missing)
 
 
 def test_every_shared_helper_is_traced_or_explicitly_non_tool():

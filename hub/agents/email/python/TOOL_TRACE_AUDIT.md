@@ -50,7 +50,9 @@ are not themselves registered Agent tools:
 | `schedule_tools.py` | `execute_scheduled_send_impl`, `execute_snooze_impl` | daemon/email scheduler | They run as unattended background jobs, not Agent tool invocations. |
 
 The nested calls those helpers make are still covered by the trace owners
-listed above where applicable. This classification is intentionally explicit:
+listed above where applicable. The public wrappers listed above are also
+checked directly for their own trace, so a refactor cannot silently remove the
+outer operation from the audit. This classification is intentionally explicit:
 if a future refactor registers one of the non-tool helpers as an Agent tool,
 the audit test will require either a helper-owned trace or a documented public
 wrapper trace.
