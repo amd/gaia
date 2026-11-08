@@ -64,12 +64,17 @@ class _FakeHandler:
         self.active_relay_response = None
         self.done_calls = 0
         self.relay_question = None
+        self.step_away_result = False
+        self.retake_result = True
 
     def _emit(self, event):
         self.events.append(event)
 
     def set_relay_question(self, request_id):
         self.relay_question = request_id
+
+    def set_relay_confirmation(self, *_args):
+        pass
 
     def record_tool_started(self, tool_name):
         self.turn_ledger.tool_started(tool_name)
@@ -84,10 +89,22 @@ class _FakeHandler:
         self.done_calls += 1
 
     def step_away_from_model(self):
-        return False
+        return self.step_away_result
 
     def come_back_to_model(self):
-        raise AssertionError("never stepped away, so never comes back")
+        if self.retake_result is False:
+            self._emit(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        "This chat ended while your approved step was waiting for the model, "
+                        "so it didn't run. Send your message again to retry."
+                    ),
+                    "fatal": True,
+                }
+            )
+            self.cancelled.set()
+        return self.retake_result
 
 
 class _RaisingIterator:
@@ -820,6 +837,72 @@ class TestSidecarHTTPErrorDetail:
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
         assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
+
+
+# --- Model-retake failure after an answered prompt (#6019) -------------------
+
+
+class TestModelRetakeFailure:
+    def test_retake_failure_preserves_named_terminal_error(self):
+        handler = _FakeHandler()
+        handler.step_away_result = True
+        handler.retake_result = False
+        proxy = _ScriptedProxy(
+            _events(
+                {
+                    "type": "needs_confirmation",
+                    "confirm_id": "confirm-retake",
+                    "action": "send_message",
+                    "summary": "Send it?",
+                },
+                {"type": "token", "delta": "discarded"},
+                {"type": "final", "answer": "must not be discarded"},
+            )
+        )
+
+        relay.relay_query(
+            handler,
+            proxy,
+            query="q",
+            context=[],
+            run_id="rid-retake",
+            answers_confirmations=True,
+        )
+
+        errors = [e for e in handler.events if e.get("type") == "agent_error"]
+        assert errors == [
+            {
+                "type": "agent_error",
+                "content": (
+                    "This chat ended while your approved step was waiting for the model, "
+                    "so it didn't run. Send your message again to retry."
+                ),
+                "fatal": True,
+            }
+        ]
+        assert not [
+            e
+            for e in handler.events
+            if e.get("type") == "status" and e.get("message") == "Cancelled."
+        ]
+        assert not [e for e in handler.events if e.get("type") == "answer"]
+        assert proxy.cancel_calls == ["rid-retake"]
+
+    def test_user_stop_during_retake_stays_a_quiet_cancel(self):
+        handler = _FakeHandler()
+        handler.step_away_result = True
+        handler.retake_result = None
+        handler.cancelled.set()
+        proxy = _ScriptedProxy(_events({"type": "token", "delta": "discarded"}))
+
+        relay.relay_query(handler, proxy, query="q", context=[], run_id="rid-stop")
+
+        assert not [e for e in handler.events if e.get("type") == "agent_error"]
+        assert any(
+            e.get("type") == "status" and e.get("message") == "Cancelled."
+            for e in handler.events
+        )
+        assert proxy.cancel_calls == ["rid-stop"]
 
 
 # --- Orphaned-generation cleanup (#2158) -------------------------------------
