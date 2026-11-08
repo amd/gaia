@@ -1569,7 +1569,9 @@ class FileSearchToolsMixin:
             return _resolve_target(args["file_path"], None, _workspace_default(self))
 
         @_tool_or_reuse(
-            "write_file", "gaia.agents.tools.file_io_tools", atomic=True,
+            "write_file",
+            "gaia.agents.tools.file_io_tools",
+            atomic=True,
             preflight=read_first_preflight(self, _workspace_target, "overwriting"),
         )
         def write_file(
@@ -1935,7 +1937,9 @@ class FileSearchToolsMixin:
         # --- New tool definitions ---
 
         @_tool_or_reuse(
-            "edit_file", "gaia.agents.tools.file_io_tools", atomic=True,
+            "edit_file",
+            "gaia.agents.tools.file_io_tools",
+            atomic=True,
             preflight=read_first_preflight(self, _workspace_target),
         )
         def edit_file(
