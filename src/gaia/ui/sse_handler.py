@@ -2308,7 +2308,7 @@ class SSEOutputHandler(OutputHandler):
                 self._emit({"type": "agent_error", "content": str(exc), "fatal": True})
                 self.cancelled.set()
                 return False
-        return not self.cancelled.is_set()
+        return None if self.cancelled.is_set() else True
 
     def _clear_pending_confirmation(self) -> None:
         """Drop the live prompt's slot so a later answer cannot resolve it."""
