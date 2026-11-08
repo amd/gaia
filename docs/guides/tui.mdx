@@ -53,7 +53,7 @@ it runs) — so there is nothing to unzip and nothing to `chmod`.
 
 | Platform | File | How to install | Installs to |
 | --- | --- | --- | --- |
-| Windows x64 | `gaia-<version>-win-x64-setup.exe` | double-click, tick **GAIA Terminal UI** | `%LOCALAPPDATA%\Programs\GAIA Terminal Hub` |
+| Windows x64 | `gaia-<version>-win-x64-setup.exe` | double-click, tick **GAIA Terminal UI** | `%LOCALAPPDATA%\Programs\gaia-tui` |
 | macOS Apple silicon | `gaia-<version>-darwin-arm64.pkg` | double-click | `/usr/local/bin` |
 | macOS Intel | `gaia-<version>-darwin-x64.pkg` | double-click | `/usr/local/bin` |
 | Linux x64 (Debian/Ubuntu) | `gaia_<version>_amd64.deb` | `sudo dpkg -i gaia_<version>_amd64.deb` | `/usr/bin` |
@@ -696,6 +696,8 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/full-access off` | Turn full access off for this session |
 | `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |
 | `/full-access never` | Stop it coming back on future launches |
+| `/read-aloud` | Read the last reply aloud through Lemonade's voice model, played by the PC's own player. Run it again, or `/read-aloud stop`, to stop. Works while the agent is still answering |
+| `/voice` | Show the read-aloud voice, speed and auto-read, and list the voices (American or British English, female or male). `/voice bm_george` picks one, `/voice speed 125` sets the speed in percent (50–200), `/voice auto on` reads each finished reply. Saved to `~/.gaia/config.json`, shared with the [Agent UI](/guides/agent-ui#settings) |
 | `/cost` | What this session has spent — time, steps, tool calls, tokens, dollars |
 | `/cost help` | Where the rates come from, and how to set your own |
 | `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
@@ -799,9 +801,10 @@ A few stay refused with no prompt: a PowerShell `-EncodedCommand` or a line
 with invisible or line-break characters (the prompt couldn't show what runs), a
 line whose quoting GAIA can't split the way the shell would, a line its checks
 don't cover that also deletes or discards work (`git push --force`, `git reset
---hard`, `git clean`, `rm` outside the project), and folders no approval can
-open (credential folders, the system temp folder, a whole drive or your home
-folder). The agent
+--hard`, `git clean`, `rm` outside the project), a granted CLI's actions that
+end someone else's work (`gh issue close`, `gh pr merge`), and folders no
+approval can open (credential folders, the system temp folder, a whole drive or
+your home folder). The agent
 says what it would have run, so you can run it yourself.
 
 | Key | What it does |

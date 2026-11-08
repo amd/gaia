@@ -1013,9 +1013,14 @@ class Scheduler:
             Task dict with status info.
 
         Raises:
-            ValueError: If name is duplicate, interval is invalid, or ``tz``
-                is not a known time zone.
+            ValueError: If name is duplicate or contains "/", interval is
+                invalid, or ``tz`` is not a known time zone.
         """
+        if "/" in name:
+            raise ValueError(
+                f"Schedule name '{name}' can't contain '/'. "
+                "Use another character, such as '-' or '&', and try again."
+            )
         config = parse_schedule_input(interval)
         if config.interval_seconds <= 0:
             raise ValueError(config.description)

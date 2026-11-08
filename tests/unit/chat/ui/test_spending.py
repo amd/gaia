@@ -123,6 +123,118 @@ def test_the_total_is_per_month(db):
     assert spending.month_report(db, month="1999-01")["turns"] == 0
 
 
+# ── This chat and today ───────────────────────────────────────────────────
+
+# 08:00 UTC is local midnight for a viewer at UTC-8.
+SINCE = "2026-11-05T08:00:00.000Z"
+
+
+def _answer(db, session_id, cost, at, remote=True):
+    summary = {"cost": cost, "model": {"remote": remote, "name": "DeepSeek"}}
+    msg_id = db.add_message(session_id, "assistant", "a", turn_summary=summary)
+    db._conn.execute("UPDATE messages SET created_at = ? WHERE id = ?", (at, msg_id))
+    db._conn.commit()
+    return msg_id
+
+
+def _estimate(usd):
+    return {"kind": "estimate", "usd": usd}
+
+
+def test_chat_and_today_totals_come_from_each_answers_cost(db):
+    chat = db.create_session(title="a")["id"]
+    other = db.create_session(title="b")["id"]
+    first = _answer(db, chat, _estimate(0.01), "2026-11-05T09:00:00+00:00")
+    _answer(db, chat, _estimate(0.02), "2026-11-05T10:00:00+00:00")
+    _answer(db, other, _estimate(0.5), "2026-11-05T11:00:00+00:00")
+    # Yesterday evening locally: in this chat's total, not today's.
+    _answer(db, chat, _estimate(1.0), "2026-11-05T07:59:00+00:00")
+    report = spending.chat_spend(db, chat, FLASH, SINCE)
+    assert report["paid"] is True
+    assert report["chat"]["usd"] == pytest.approx(1.03)
+    assert report["chat"]["answers"] == 3
+    assert report["today"]["usd"] == pytest.approx(0.53)
+    assert report["today"]["chats"] == 2
+    items = report["chat"]["items"]
+    assert [i["usd"] for i in items] == [1.0, 0.01, 0.02]
+    assert items[1]["message_id"] == first
+
+
+def test_local_answers_are_left_out_and_a_local_model_is_not_paid(db):
+    chat = db.create_session(title="a")["id"]
+    _answer(db, chat, {"kind": "local"}, "2026-11-05T09:00:00+00:00", remote=False)
+    report = spending.chat_spend(db, chat, "Gemma-4-E4B-it-GGUF", SINCE)
+    assert report["paid"] is False
+    assert report["chat"] == {
+        "usd": 0,
+        "answers": 0,
+        "unpriced_answers": 0,
+        "items": [],
+    }
+    assert report["today"]["answers"] == 0
+
+
+def test_a_stopped_cloud_answer_is_counted_apart_not_as_zero(db):
+    chat = db.create_session(title="a")["id"]
+    _answer(db, chat, {"kind": "unreported"}, "2026-11-05T09:00:00+00:00")
+    _answer(db, chat, _estimate(0.02), "2026-11-05T09:01:00+00:00")
+    report = spending.chat_spend(db, chat, FLASH, SINCE)
+    assert report["chat"]["usd"] == pytest.approx(0.02)
+    assert report["chat"]["answers"] == 2
+    assert report["chat"]["unpriced_answers"] == 1
+    assert report["chat"]["items"][0]["usd"] is None
+
+
+def test_a_gateway_model_has_no_price_so_is_not_paid(db):
+    chat = db.create_session(title="a")["id"]
+    assert spending.chat_spend(db, chat, "amd.gpt-oss-120b", SINCE)["paid"] is False
+
+
+def test_old_sqlite_timestamps_are_read_as_utc(db):
+    chat = db.create_session(title="a")["id"]
+    _answer(db, chat, _estimate(0.04), "2026-11-05 08:30:00")
+    _answer(db, chat, _estimate(0.08), "2026-11-05 07:30:00")
+    assert spending.chat_spend(db, chat, FLASH, SINCE)["today"]["usd"] == pytest.approx(
+        0.04
+    )
+
+
+def test_answers_are_listed_by_time_across_timestamp_formats(db):
+    chat = db.create_session(title="a")["id"]
+    # As text, the space in the old format sorts before the newer "T" row.
+    _answer(db, chat, _estimate(0.02), "2026-11-05T09:00:00+00:00")
+    _answer(db, chat, _estimate(0.01), "2026-11-05 10:00:00")
+    items = spending.chat_spend(db, chat, FLASH, SINCE)["chat"]["items"]
+    assert [i["usd"] for i in items] == [0.02, 0.01]
+
+
+def test_chat_spending_route(client, db):
+    chat = db.create_session(title="a")["id"]
+    _answer(db, chat, _estimate(0.03), "2026-11-05T09:00:00+00:00")
+    body = client.get(
+        f"/api/spending/chat/{chat}", params={"since": SINCE, "model": FLASH}
+    ).json()
+    assert body["chat"]["usd"] == pytest.approx(0.03)
+    assert body["today"]["since"] == "2026-11-05T08:00:00+00:00"
+    assert (
+        client.get("/api/spending/chat/nope", params={"since": SINCE}).status_code
+        == 404
+    )
+    bad = client.get(f"/api/spending/chat/{chat}", params={"since": "yesterday"})
+    assert bad.status_code == 422
+    assert "ISO timestamp" in bad.json()["detail"]
+
+
+def test_an_unreadable_answer_cost_fails_loudly(client, db):
+    chat = db.create_session(title="a")["id"]
+    msg = _answer(db, chat, _estimate(0.03), "2026-11-05T09:00:00+00:00")
+    db._conn.execute("UPDATE messages SET turn_summary = '{' WHERE id = ?", (msg,))
+    db._conn.commit()
+    resp = client.get(f"/api/spending/chat/{chat}", params={"since": SINCE})
+    assert resp.status_code == 500
+    assert f"Message {msg}" in resp.json()["detail"]
+
+
 # ── Limit ─────────────────────────────────────────────────────────────────
 
 

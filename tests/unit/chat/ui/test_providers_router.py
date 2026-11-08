@@ -452,10 +452,20 @@ def test_stored_key_with_no_provider_registered_is_connected_at_startup(
     assert KEY not in resp.text
 
 
-def test_a_stored_key_wins_over_the_environment(
+def test_a_saved_key_wins_over_a_process_environment_key(
     client, lemonade, keys, replay, monkeypatch
 ):
     monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    keys["stored"]["fireworks"] = KEY
+    fw = client.get("/api/providers").json()["providers"][1]
+    assert replay == [KEY]
+    assert fw["key_source"] == "lemonade"
+    assert fw["key_from_gaia_env"] is False
+
+
+def test_a_stored_key_is_used_when_no_process_environment_key_exists(
+    client, lemonade, keys, replay
+):
     keys["stored"]["fireworks"] = KEY
     fw = client.get("/api/providers").json()["providers"][1]
     assert replay == [KEY]
@@ -970,6 +980,32 @@ def test_a_stored_key_is_checked_when_no_models_come_back(
     client.post("/api/providers/fireworks/connect", json={})
     assert model_list["keys_checked"] == [KEY]
     assert model_list["restarts"] == [1]
+
+
+def test_reconnect_outage_replays_a_saved_key_and_keeps_it(
+    client, lemonade, keys, model_list, monkeypatch
+):
+    from gaia.llm import fireworks_known_models as known
+
+    monkeypatch.setenv("FIREWORKS_API_KEY", ENV_KEY)
+    keys["stored"]["fireworks"] = KEY
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    model_list["check"] = _list_failing()
+
+    def serve_known_models(_):
+        model_list["restarts"].append(1)
+        lemonade.cloud["fireworks"]["models_discovered"] = True
+
+    monkeypatch.setattr(known, "use_known_models", serve_known_models)
+
+    resp = client.post("/api/providers/fireworks/connect", json={})
+
+    assert resp.status_code == 200, resp.text
+    assert model_list["keys_checked"] == [KEY]
+    assert model_list["restarts"] == [1]
+    assert keys["remembered"] == [("fireworks", KEY)]
+    assert keys["stored"]["fireworks"] == KEY
+    assert ENV_KEY not in resp.text
 
 
 def test_connect_drops_a_key_that_discovers_no_models(
@@ -2129,6 +2165,38 @@ def test_connect_is_refused_under_local_only_before_any_lemonade_call(
     assert lemonade.calls == []  # no install, no cloud/auth
     assert keys["remembered"] == []
     assert KEY not in resp.text
+
+
+def test_cloud_provider_views_are_marked_and_do_not_list_models_under_local_only(
+    client, lemonade, keys, local_only_on
+):
+    body = client.get("/api/providers").json()
+    fireworks = next(p for p in body["providers"] if p["id"] == "fireworks")
+    assert fireworks["blocked"] is True
+    assert "Local only" in fireworks["blocked_reason"]
+    models = client.get("/api/providers/fireworks/models").json()
+    assert models == {
+        "provider": "fireworks",
+        "models": [],
+        "blocked": True,
+        "blocked_reason": "Local only is on; turn it off in Settings to use cloud models.",
+    }
+    assert lemonade.paths("GET") == ["system-info", "system-info"]
+    assert keys["ensure"] == []
+
+
+def test_local_only_provider_list_never_replays_a_saved_key(
+    client, lemonade, keys, local_only_on
+):
+    keys["stored"]["fireworks"] = KEY
+
+    body = client.get("/api/providers").json()
+
+    fireworks = next(p for p in body["providers"] if p["id"] == "fireworks")
+    assert fireworks["blocked"] is True
+    assert keys["ensure"] == []
+    assert "install" not in lemonade.paths("POST")
+    assert "cloud/auth" not in lemonade.paths("POST")
 
 
 def test_selecting_a_cloud_model_is_refused_under_local_only(

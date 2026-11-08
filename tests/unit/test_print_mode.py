@@ -669,12 +669,81 @@ def test_memory_is_drained_even_when_the_turn_raises(stub_env):
     assert _agent().drained
 
 
-def test_missing_flagship_wheel_is_an_actionable_runtime_error(
-    stub_env, monkeypatch, capsys
-):
+class _Outcome:
+    def __init__(
+        self, terminal_type, final_answer=None, error_detail=None, failed=False
+    ):
+        self.terminal_type = terminal_type
+        self.final_answer = final_answer
+        self.error_detail = error_detail
+        self.failed = failed
+
+
+@pytest.fixture
+def relay(stub_env, monkeypatch):
+    """No importable agent, as in the frozen app: the turn goes to the sidecar."""
     monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)
+
+    class Calls(list):
+        outcome = _Outcome("final", final_answer="pong from the binary")
+
+    calls = Calls()
+
+    def run_query(agent_id, query, **kwargs):
+        calls.append((agent_id, query, kwargs))
+        return calls.outcome
+
+    monkeypatch.setattr("gaia.daemon.agent_query.run_query", run_query)
+    return calls
+
+
+def test_without_the_agent_package_the_turn_runs_on_the_agent_binary(
+    relay, capsys, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    assert print_mode.run("q", model="m", output_format="json") == 0
+    record = json.loads(capsys.readouterr().out)
+    assert record["result"] == "pong from the binary" and not record["is_error"]
+    [(agent_id, query, kwargs)] = relay
+    assert (agent_id, query, kwargs["model"]) == ("gaia", "q", "m")
+    # The agent works in the caller's folder, as an in-process -p would.
+    assert kwargs["working_directory"] == str(tmp_path)
+    assert kwargs["allowed_paths"] == [str(tmp_path)]
+
+
+def test_a_relayed_turn_leaves_the_model_server_to_the_daemon(relay, stub_env):
+    """The daemon brings up the model server for its agent, as it does for the
+    Agent UI; starting one here would race it."""
+    assert print_mode.run("q", model="m") == 0
+    stub_env.assert_not_called()
+
+
+def test_a_relayed_answer_reporting_a_failed_model_call_is_an_error(relay, capsys):
+    relay.outcome = _Outcome(
+        "final", final_answer="Couldn't reach the local LLM.", failed=True
+    )
     assert print_mode.run("q", model="m") == 1
-    assert "re-run `gaia -p`" in capsys.readouterr().err
+    assert "Couldn't reach the local LLM" in capsys.readouterr().err
+
+
+def test_a_relayed_turn_that_errors_exits_1_with_the_reason(relay, capsys):
+    relay.outcome = _Outcome("error", error_detail="model failed to load")
+    assert print_mode.run("q", model="m") == 1
+    assert "model failed to load" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "flags, named",
+    [
+        ({"skip_permissions": True}, "--dangerously-skip-permissions"),
+        ({"full_access": True}, "--full-access"),
+        ({"base_url": "http://h:1/api/v1"}, "--base-url"),
+    ],
+)
+def test_flags_the_agent_binary_cannot_honour_are_refused(relay, capsys, flags, named):
+    assert print_mode.run("q", model="m", **flags) == 1
+    assert named in capsys.readouterr().err
+    assert relay == []
 
 
 # ---------------------------------------------------------------------------

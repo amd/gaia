@@ -50,7 +50,8 @@ def test_removal_preserves_user_data(tmp_path, action, sudo_user):
     assert not calls.exists(), "Maintainer script invoked per-user cleanup"
     if action == "purge":
         assert "Per-user data remains in ~/.gaia" in result.stdout
-        assert "gaia uninstall --purge" in result.stdout
+        # The app's own gaia is already removed, so it names no command.
+        assert "delete that folder to remove it" in result.stdout
 
 
 def _run_script(
@@ -211,7 +212,15 @@ def test_postrm_purge_removes_only_our_memlock_dropins(tmp_path):
         target.write_text(text)
     script = tmp_path / "postrm"
     script.write_text(POSTRM.read_text().replace("/etc/", str(root / "etc") + "/"))
+    # The runner's real cache refreshes scan /usr/share and can outlast the timeout.
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for name in ("update-desktop-database", "gtk-update-icon-cache"):
+        command = fake_bin / name
+        command.write_text("#!/bin/sh\nexit 0\n")
+        command.chmod(0o755)
+    env = {**os.environ, "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"]}
     for action, ours_kept in (("remove", True), ("purge", False)):
-        subprocess.run(["/bin/sh", str(script), action], check=True, timeout=5)
+        subprocess.run(["/bin/sh", str(script), action], env=env, check=True, timeout=5)
         assert (root / ours.lstrip("/")).exists() == ours_kept
     assert (root / theirs.lstrip("/")).read_text() == "admin's own setting"

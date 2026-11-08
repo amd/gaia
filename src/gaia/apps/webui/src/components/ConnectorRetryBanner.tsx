@@ -19,7 +19,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { CheckCircle2, RefreshCw } from 'lucide-react';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
-import type { ConnectorRow } from '../types';
+import type { ConnectorListEntry } from '../types';
 import { detectProvider } from './email/EmailConnectCta';
 import './ConnectorRetryBanner.css';
 
@@ -33,10 +33,10 @@ import './ConnectorRetryBanner.css';
  */
 export function referencedProviderConnected(
     content: string,
-    connectors: ConnectorRow[],
+    connectors: ConnectorListEntry[],
 ): boolean {
     const isConfigured = (id: string) =>
-        connectors.some((c) => c.id === id && c.configured);
+        connectors.some((c) => c.id === id && !('error' in c) && c.configured);
     const provider = detectProvider(content);
     if (provider === 'google') return isConfigured('google');
     if (provider === 'microsoft') return isConfigured('microsoft');
@@ -50,9 +50,9 @@ export function referencedProviderConnected(
  * Google, then Microsoft, then Microsoft 365 (the connectors' canonical
  * display order).
  */
-export function connectedProviderLabel(content: string, connectors: ConnectorRow[]): string {
+export function connectedProviderLabel(content: string, connectors: ConnectorListEntry[]): string {
     const isConfigured = (id: string) =>
-        connectors.some((c) => c.id === id && c.configured);
+        connectors.some((c) => c.id === id && !('error' in c) && c.configured);
     const provider = detectProvider(content);
     if (provider === 'google') return 'Google';
     if (provider === 'microsoft') return 'Microsoft';
@@ -74,7 +74,7 @@ export function ConnectorRetryBanner({
     /** Re-run the previous question. */
     onRetry: () => void;
 }) {
-    const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
+    const [connectors, setConnectors] = useState<ConnectorListEntry[]>([]);
     const [dismissed, setDismissed] = useState(false);
 
     const refresh = useCallback(() => {

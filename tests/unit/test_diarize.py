@@ -79,6 +79,41 @@ class TestInstallFailures:
         assert "pip install" in str(e.value)
         assert "sherpa-onnx" in str(e.value)
 
+    def test_an_environment_without_pip_installs_with_uv(self):
+        """GAIA's installer builds its venv with uv, which has no pip in it.
+
+        Regression: every installed copy failed first-run speaker
+        identification with "No module named pip".
+        """
+        with (
+            patch.object(diarize, "_package_installed", side_effect=[False, True]),
+            patch("gaia.agents.install_hints._pip_available", return_value=False),
+            patch("gaia.agents.install_hints._find_uv", return_value=("uv", "uv")),
+            patch("subprocess.run") as run,
+        ):
+            diarize._ensure_package(lambda _m: None)
+
+        assert run.call_args.args[0] == [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            sys.executable,
+            "--quiet",
+            "sherpa-onnx",
+        ]
+
+    def test_no_way_to_install_is_reported(self):
+        with (
+            patch.object(diarize, "_package_installed", return_value=False),
+            patch("gaia.agents.install_hints._pip_available", return_value=False),
+            patch("gaia.agents.install_hints._find_uv", return_value=None),
+            patch("subprocess.run") as run,
+        ):
+            with pytest.raises(DiarizationError, match="uv"):
+                diarize._ensure_package(lambda _m: None)
+        run.assert_not_called()
+
     def test_install_that_does_not_take_is_reported(self):
         """pip returning 0 while the module still cannot be imported."""
         with patch.object(diarize, "_package_installed", return_value=False):

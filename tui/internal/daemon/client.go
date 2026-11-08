@@ -357,10 +357,9 @@ func (c *Client) checkUnderLock(ctx context.Context) (*Instance, error) {
 
 // installGaiaHint is the one place the install commands are written, so the
 // "never installed" and "installed-but-gone" messages cannot drift apart.
-const installGaiaHint = "Install GAIA with `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
-	"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), or `pip install amd-gaia` " +
-	"into the Python environment on your PATH, then retry. " +
-	"From a clone of the repo, `pip install -e .` works too"
+const installGaiaHint = "Reinstall GAIA from https://amd-gaia.ai/#install, which puts `gaia` " +
+	"beside gaia-tui, or run `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
+	"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), then retry"
 
 // gaiaDaemonStart builds the default launcher command.
 func gaiaDaemonStart(ctx context.Context) (*exec.Cmd, error) {
