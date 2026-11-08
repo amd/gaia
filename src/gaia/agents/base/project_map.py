@@ -980,24 +980,13 @@ class ProjectMapMixin:
 
         Not when tools are pre-approved: that would answer for them.
         """
-        from gaia.agents.base.console import (
-            TerminalConfirmationMixin,
-            terminal_is_interactive,
-        )
+        from gaia.agents.base.console import someone_can_answer
 
         console = getattr(self, "console", None)
         pre_approved = getattr(console, "auto_approve_confirmations_enabled", None)
         if callable(pre_approved) and pre_approved():
             return False
-        if getattr(console, "background_mode", False) is True:
-            return False
-        if getattr(console, "nobody_answers", False) is True:
-            return False
-        if getattr(console, "blocking_confirmation", False):
-            return True
-        return isinstance(console, TerminalConfirmationMixin) and (
-            terminal_is_interactive()
-        )
+        return someone_can_answer(console)
 
     def _ask_project_trust(self) -> None:
         """Ask once per session and folder whether to read its guidance.
