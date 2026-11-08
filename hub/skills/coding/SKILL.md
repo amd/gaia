@@ -141,10 +141,10 @@ You have `git`. Reads — `status`, `diff`, `log`, `show`, `branch` — run stra
 through, and you should use them constantly: `git diff` before you report a
 change is the cheapest possible check that the diff is only what you meant.
 
-`add`, `commit`, `checkout`, `switch`, and `restore` each stop and show the user
-the exact command before running. That is not a formality to click past — write
-the commit message as if it is the only thing the reviewer reads, because for a
-squashed PR it is.
+`add`, `commit`, `checkout`, `switch`, and `restore` each stop and ask you to
+approve the exact command before running. That is not a formality to click past
+— write the commit message as if it is the only thing the reviewer reads,
+because for a squashed PR it is.
 
 `stash list` and `stash show` are reads. `stash push`, `stash save`, `stash
 apply`, and `stash pop` require approval; bare `stash`, `stash drop`, and
@@ -164,7 +164,8 @@ to try:
   `merge --continue`, `rebase --continue`, or the corresponding abort command
   after resolving it themselves.
 - For `rm`, `mv`, `reset`, `clean`, `gc`, and `tag`, ask the user to perform the
-  exact change. Never substitute a shell command or a different Git spelling.
+  exact change. Never substitute a shell command or a different Git
+  spelling; every `tag` form, including listing tags, is refused.
 
 Publishing and history-rewriting are the user's to run, and destroying
 uncommitted work has no undo anywhere. When the work is committed and wants

@@ -6,8 +6,8 @@ from pathlib import Path
 
 from gaia.skills.binaries import (
     ALLOW,
-    CONFIRM,
     BINARY_POLICIES,
+    CONFIRM,
     REFUSE,
     classify_invocation,
 )
@@ -106,10 +106,14 @@ def test_coding_skill_explains_continue_and_abort_boundaries():
 
 def test_coding_skill_discloses_the_full_supported_git_surface():
     text = SKILL.read_text(encoding="utf-8")
-    surface = _section(text, "You have `git`.", "\n\n## Keep the diff")
+    surface = _section(
+        text,
+        "The supported Git surface is deliberately smaller:",
+        "\n\nPrompt-sensitive Git guidance",
+    )
     documented = _backticked_commands(surface)
 
-    # A policy entry is the entire supported surface. Requiring backticked
+    # The policy entry is the entire supported surface. Requiring backticked
     # tokens prevents ordinary prose such as "add" or "format" from masking a
     # deleted command list.
     assert set(BINARY_POLICIES["git"].subcommands) <= documented
