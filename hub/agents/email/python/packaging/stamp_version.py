@@ -167,11 +167,13 @@ def build_rules() -> list[Rule]:
         # rendered copy instead of the mutable GitHub main blob. The tag is created
         # at release time on the stamped commit, so the links resolve once the
         # release that ships them is published.
+        # The `v` is optional: 0.6.0 shipped as agent-pkg-email-0.6.0, so the
+        # rule matches both forms and stamping keeps the form already in the file.
         *(
             Rule(
                 f"npm {name} pinned doc links",
                 NPM_ROOT / name,
-                re.compile(r"(/amd/gaia/blob/agent-pkg-email-v)([^\"/\s)]+)(/)"),
+                re.compile(r"(/amd/gaia/blob/agent-pkg-email-v?)([^\"/\s)]+)(/)"),
                 "pinned doc link version",
             )
             for name in ("README.md", "CHANGELOG.md", "EVALUATION.md")

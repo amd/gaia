@@ -197,6 +197,59 @@ def test_check_fails_when_a_target_drifts(tree, rel, marker, bad):
     assert any("9.9.9" in m for m in result.mismatches)
 
 
+def _to_no_v_form(tree: Path) -> None:
+    """Rewrite every pinned doc link in the tree to the no-v tag form
+    (agent-pkg-email-1.2.3), the form the 0.6.0 release actually used."""
+    for name in ("README.md", "CHANGELOG.md", "EVALUATION.md"):
+        path = tree / "hub/agents/email/npm" / name
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "agent-pkg-email-v1.2.3", "agent-pkg-email-1.2.3"
+            ),
+            encoding="utf-8",
+        )
+
+
+def test_check_matches_no_v_pinned_links(tree):
+    """Pinned doc links in the no-v tag form must be recognised by the stamp
+    rule, not skipped with a warning (the 0.6.0 release tagged without the v)."""
+    _to_no_v_form(tree)
+    result = stamp.process("1.2.3", check_only=True)
+    assert result.mismatches == []
+    assert {
+        "npm README.md pinned doc links",
+        "npm CHANGELOG.md pinned doc links",
+        "npm EVALUATION.md pinned doc links",
+    } <= set(result.already_ok)
+    assert not any("pinned doc links" in s for s in result.skipped)
+
+
+def test_check_fails_when_no_v_pinned_link_drifts(tree):
+    _to_no_v_form(tree)
+    target = tree / "hub/agents/email/npm/README.md"
+    target.write_text(
+        target.read_text(encoding="utf-8").replace(
+            "agent-pkg-email-1.2.3", "agent-pkg-email-9.9.9"
+        ),
+        encoding="utf-8",
+    )
+    assert stamp.main(["--check"]) == 1
+    result = stamp.process("1.2.3", check_only=True)
+    assert any("9.9.9" in m for m in result.mismatches)
+
+
+def test_stamp_keeps_no_v_form(tree):
+    """Stamping preserves the tag form in the file: no-v links stay no-v."""
+    _to_no_v_form(tree)
+    vpy = tree / "hub/agents/email/python/gaia_agent_email/version.py"
+    vpy.write_text('AGENT_VERSION = "2.0.0"\nAPI_VERSION = "9.9.9"\n', encoding="utf-8")
+    assert stamp.main([]) == 0
+    readme = (tree / "hub/agents/email/npm/README.md").read_text(encoding="utf-8")
+    assert "agent-pkg-email-2.0.0/" in readme
+    assert "agent-pkg-email-v2.0.0" not in readme
+    assert stamp.main(["--check"]) == 0
+
+
 def test_stamp_syncs_every_target(tree):
     # Start from an all-0.9.0 tree, then bump the source to 2.0.0 and stamp.
     for f in tree.rglob("*"):
