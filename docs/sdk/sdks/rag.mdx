@@ -198,7 +198,8 @@ call before every query (it hashes only when the file's size or timestamps
 moved). If replacement fails, the call reports the error and the previously
 indexed version remains available for queries. The agent's document search
 tools run this check themselves, so they never answer from an edited file's
-old text.
+old text. `reindex_document(path)`, which the file watcher calls, takes the same
+path: searches keep answering from the old version while the new one embeds.
 
 Embedding dominates indexing time, so a thousand-page PDF on a CPU embedder
 takes minutes. Pass `progress_callback=lambda done, total: ...` to
