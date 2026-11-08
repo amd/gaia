@@ -64,6 +64,9 @@ type loadedMsg struct {
 	rows         []row
 	onlyFlagship bool
 	err          error
+	// warnings name installed agents this panel cannot list (a corrupt
+	// install record), so one never just disappears from it.
+	warnings []string
 }
 
 // Model lists installed agents and lets the user select one. It never
@@ -78,6 +81,7 @@ type Model struct {
 	onlyFlagship bool
 	loading      bool
 	loadErr      string
+	warnings     []string
 
 	selected      int
 	width, height int
@@ -132,20 +136,21 @@ func (m Model) load() tea.Cmd {
 	ctx := m.ctx
 	gen := m.gen
 	return func() tea.Msg {
+		_, warnings := catalog.LocalInstalls()
 		cat, err := c.Catalog(ctx, false, true, false)
 		if err != nil {
-			return loadedMsg{gen: gen, err: err}
+			return loadedMsg{gen: gen, err: err, warnings: warnings}
 		}
 		// Zero agents (a fresh pip install the daemon is up for another
 		// reason) has no other agent to switch to either — same message as
 		// the flagship-only case.
 		if len(cat.Agents) == 0 || (len(cat.Agents) == 1 && cat.Agents[0].ID == catalog.FlagshipID) {
-			return loadedMsg{gen: gen, onlyFlagship: true}
+			return loadedMsg{gen: gen, onlyFlagship: true, warnings: warnings}
 		}
 
 		runtimes, err := c.Agents(ctx, false)
 		if err != nil {
-			return loadedMsg{gen: gen, err: err}
+			return loadedMsg{gen: gen, err: err, warnings: warnings}
 		}
 		running := make(map[string]bool, len(runtimes))
 		for _, rt := range runtimes {
@@ -171,7 +176,7 @@ func (m Model) load() tea.Cmd {
 			}
 			return rows[i].id < rows[j].id
 		})
-		return loadedMsg{gen: gen, rows: rows}
+		return loadedMsg{gen: gen, rows: rows, warnings: warnings}
 	}
 }
 
@@ -191,6 +196,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.rows = v.rows
 		m.onlyFlagship = v.onlyFlagship
+		m.warnings = v.warnings
 		if v.err != nil {
 			m.loadErr = "Could not list installed agents: " + v.err.Error()
 		} else {
@@ -287,6 +293,14 @@ func (m Model) View() string {
 		}
 		for _, rl := range rowLines[start:end] {
 			lines = append(lines, rl...)
+		}
+	}
+
+	if len(m.warnings) > 0 && !m.loading {
+		warn := lipgloss.NewStyle().Foreground(theme.Warning)
+		lines = append(lines, "")
+		for _, msg := range m.warnings {
+			lines = append(lines, warn.Render("! "+msg))
 		}
 	}
 
