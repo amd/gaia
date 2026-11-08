@@ -167,13 +167,17 @@ class EmailJobScheduler:
                     job["job_id"],
                 )
             elif outcome == "failed":
-                error = str(job.get("error") or "job stopped renewing its lease while firing")
+                current = schedule_store.get_job(db, job_id=job["job_id"]) or job
+                error = str(
+                    current.get("error")
+                    or "job stopped renewing its lease while firing"
+                )
                 log.error(
                     "email scheduler: job %s stopped renewing its lease while "
                     "firing; marked it failed instead of running it twice",
                     job["job_id"],
                 )
-                self._notify_failed(job, error)
+                self._notify_failed(current, error)
                 failed.append(job["job_id"])
         return failed
 
@@ -235,6 +239,12 @@ class EmailJobScheduler:
                     executor(job, db)
             except Exception as exc:
                 msg = f"{type(exc).__name__}: {exc}"
+                current = schedule_store.get_job(db, job_id=job_id)
+                recovered_holder = bool(
+                    current
+                    and current["status"] == schedule_store.STATUS_FAILED
+                    and current.get("superseded_claim") == claim_id
+                )
                 recorded = schedule_store.mark_failed(
                     db, job_id=job_id, claim_id=claim_id, error=msg
                 )
@@ -245,7 +255,7 @@ class EmailJobScheduler:
                     job_id,
                     msg,
                 )
-                if recorded:
+                if recorded and not recovered_holder:
                     self._notify_failed(job, msg)
                 failed.append(job_id)
                 continue

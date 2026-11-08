@@ -23,18 +23,52 @@ def _db(tmp_path: object) -> _DB:
     return db
 
 
-def test_daemon_executor_failure_persists_then_notifies(tmp_path):
+def test_daemon_recovered_holder_failure_does_not_notify_twice(tmp_path):
     db = _db(tmp_path)
     job_id = store.register_job(
-        db, source="email:schedule_store", kind=KIND_ONE_SHOT,
-        fire_at=1.0, payload={"subject": "Q3"},
+        db,
+        source="email:schedule_store",
+        kind=KIND_ONE_SHOT,
+        fire_at=1.0,
+        payload={"kind": "scheduled_send", "payload": {"subject": "Q3"}},
     )
+
+    def late_failure(_job, clock_db):
+        current = store.get_job(clock_db, job_id=job_id)
+        assert current is not None
+        assert store.recover_claim(clock_db, current, now=1000.0) == "failed"
+        raise RuntimeError("late failure")
+
     clock = DaemonClock(
-        str(tmp_path / "clock.db"),
-        executors={KIND_ONE_SHOT: lambda _job, _db: (_ for _ in ()).throw(RuntimeError("boom"))},
+        str(tmp_path / "clock.db"), executors={KIND_ONE_SHOT: late_failure}
     )
     with patch("gaia.schedule.sinks.dispatch") as dispatch:
         assert clock.fire_due(now=2.0) == {"fired": [], "failed": [job_id]}
-    dispatch.assert_called_once()
-    assert "boom" in dispatch.call_args.args[2]
+    dispatch.assert_not_called()
+    assert store.get_job(db, job_id=job_id)["status"] == "failed"
+    assert "late failure" in store.get_job(db, job_id=job_id)["error"]
+
+
+def test_daemon_executor_failure_persists_then_notifies(tmp_path):
+    db = _db(tmp_path)
+    job_id = store.register_job(
+        db,
+        source="email:schedule_store",
+        kind=KIND_ONE_SHOT,
+        fire_at=1.0,
+        payload={"subject": "Q3"},
+    )
+    clock = DaemonClock(
+        str(tmp_path / "clock.db"),
+        executors={
+            KIND_ONE_SHOT: lambda _job, _db: (_ for _ in ()).throw(RuntimeError("boom"))
+        },
+    )
+    with patch("gaia.schedule.sinks.dispatch") as dispatch:
+        assert clock.fire_due(now=2.0) == {"fired": [], "failed": [job_id]}
+    dispatch.assert_called_once_with(
+        "notification",
+        {"title": "Scheduled email failed"},
+        "GAIA could not send a scheduled email (Q3). RuntimeError: boom",
+    )
     assert store.get_job(db, job_id=job_id)["status"] == "failed"

@@ -19,6 +19,7 @@ if str(_REPO_ROOT) not in sys.path:
 from gaia_agent_email import schedule_store  # noqa: E402
 from gaia_agent_email.failure_notify import notify_scheduled_failure  # noqa: E402
 from gaia_agent_email.scheduler import EmailJobScheduler  # noqa: E402
+
 from gaia.database.mixin import DatabaseMixin  # noqa: E402
 
 
@@ -40,7 +41,25 @@ def test_failure_notice_uses_existing_notification_sink():
     dispatch.assert_called_once_with(
         "notification",
         {"title": "Scheduled email failed"},
-        "GAIA could not complete scheduled_send failed (Q3). RuntimeError: provider down",
+        "GAIA could not send a scheduled email (Q3). RuntimeError: provider down",
+    )
+
+
+def test_failure_notice_reads_subject_from_migrated_daemon_payload():
+    job = {
+        "job_id": "j1",
+        "kind": "one_shot",
+        "payload": {
+            "kind": "scheduled_send",
+            "payload": {"subject": "Q3"},
+        },
+    }
+    with patch("gaia.schedule.sinks.dispatch") as dispatch:
+        notify_scheduled_failure(job, "provider down", source="daemon")
+    dispatch.assert_called_once_with(
+        "notification",
+        {"title": "Scheduled email failed"},
+        "GAIA could not send a scheduled email (Q3). provider down",
     )
 
 
@@ -50,6 +69,33 @@ def test_notification_failure_never_escapes():
         notify_scheduled_failure(job, "provider down", source="test")
 
 
+def test_recovered_holder_failure_does_not_notify_twice(tmp_path):
+    db = _db(tmp_path)
+    job_id = schedule_store.create_job(
+        db, kind="scheduled_send", due_at=1.0, payload={"subject": "Q3"}
+    )
+
+    def late_failure(_job, scheduler_db):
+        current = schedule_store.get_job(scheduler_db, job_id=job_id)
+        assert current is not None
+        assert (
+            schedule_store.recover_claim(scheduler_db, current, now=1000.0) == "failed"
+        )
+        raise RuntimeError("late failure")
+
+    scheduler = EmailJobScheduler(
+        str(tmp_path / "state.db"), executors={"scheduled_send": late_failure}
+    )
+    with patch("gaia_agent_email.scheduler.notify_scheduled_failure") as notify:
+        assert scheduler.fire_due_jobs(now=2.0) == {
+            "fired": [],
+            "failed": [job_id],
+        }
+    notify.assert_not_called()
+    assert schedule_store.get_job(db, job_id=job_id)["status"] == "failed"
+    assert "late failure" in schedule_store.get_job(db, job_id=job_id)["error"]
+
+
 def test_executor_failure_persists_then_notifies(tmp_path):
     db = _db(tmp_path)
     job_id = schedule_store.create_job(
@@ -57,7 +103,11 @@ def test_executor_failure_persists_then_notifies(tmp_path):
     )
     scheduler = EmailJobScheduler(
         str(tmp_path / "state.db"),
-        executors={"scheduled_send": lambda _job, _db: (_ for _ in ()).throw(RuntimeError("boom"))},
+        executors={
+            "scheduled_send": lambda _job, _db: (_ for _ in ()).throw(
+                RuntimeError("boom")
+            )
+        },
     )
     with patch("gaia_agent_email.scheduler.notify_scheduled_failure") as notify:
         assert scheduler.fire_due_jobs(now=2.0) == {"fired": [], "failed": [job_id]}

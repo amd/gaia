@@ -17,19 +17,20 @@ from gaia.logger import get_logger
 log = get_logger(__name__)
 
 
-def notify_scheduled_failure(job: Mapping[str, Any], error: str, *, source: str) -> None:
+def notify_scheduled_failure(
+    job: Mapping[str, Any], error: str, *, source: str
+) -> None:
     """Tell the user about one failed unattended email job.
 
     ``source`` distinguishes the standalone email polling driver from daemon
     recovery in logs. Importing the sink lazily keeps the email sidecar usable
     in minimal/frozen environments where the core schedule package is absent.
     """
-    kind = str(job.get("kind") or "scheduled email")
-    subject = str((job.get("payload") or {}).get("subject") or "")
-    detail = f"{kind} failed"
-    if subject:
-        detail += f" ({subject})"
-    message = f"GAIA could not complete {detail}. {error}"
+    payload = job.get("payload") or {}
+    nested_payload = payload.get("payload") or {}
+    subject = str(payload.get("subject") or nested_payload.get("subject") or "")
+    detail = f"a scheduled email ({subject})" if subject else "a scheduled email"
+    message = f"GAIA could not send {detail}. {error}"
     try:
         from gaia.schedule import sinks
 
