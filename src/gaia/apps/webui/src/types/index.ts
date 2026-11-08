@@ -469,6 +469,8 @@ export interface Message {
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */
     turnSummary?: TurnSummary;
+    /** Notices from adding indexed files to the document library. */
+    libraryNotices?: string[];
 }
 
 /** What one turn used, wrote, and sent off this PC (`done.turn_summary`). */
