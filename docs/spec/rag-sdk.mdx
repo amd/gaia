@@ -172,7 +172,13 @@ class RAGSDK:
         progress_callback: Optional[Callable[[int, int], None]] = None,
         wait_callback: Optional[Callable[[int], None]] = None,
     ) -> Dict[str, Any]:
-        """Reindex a document (remove old chunks and add new ones)."""
+        """
+        Re-index a document that may have changed (the file watcher's path).
+        Same as index_document() on an edited file: built without the index
+        lock, so searches keep answering from the old version until the swap,
+        and the old version stays if it fails. Unchanged bytes are not
+        re-embedded and return "already_indexed": True.
+        """
         ...
 
     def is_current(self, file_path: str) -> bool:
