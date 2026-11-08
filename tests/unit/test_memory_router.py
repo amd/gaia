@@ -2319,6 +2319,117 @@ class TestStreamInferenceModel:
         assert '"type": "error"' in resp.text
         assert "choose a local chat model" in resp.text
 
+    def test_a_discovered_cloud_default_model_is_refused_not_called(
+        self, client, tmp_path
+    ):
+        # A gateway GAIA only learns about at runtime has no known prefix.
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models(
+            {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+        )
+        try:
+            resp, create = self._stream(
+                client, tmp_path, default_model="opencode.big-model"
+            )
+        finally:
+            lc.record_cloud_models({"data": []})
+
+        create.assert_not_called()
+        assert '"type": "error"' in resp.text
+        assert "choose a local chat model" in resp.text
+
+    def test_a_discovered_cloud_default_is_refused_on_a_cold_catalog(
+        self, client, tmp_path
+    ):
+        from gaia.llm import lemonade_client as lc
+
+        payload = {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+
+        def read(self, show_all=False, timeout=None):
+            lc.record_cloud_models(payload)
+            return payload
+
+        lc.record_cloud_models({"data": []})
+        try:
+            with patch.object(
+                lc.LemonadeClient, "list_models", autospec=True, side_effect=read
+            ):
+                resp, create = self._stream(
+                    client, tmp_path, default_model="opencode.big-model"
+                )
+        finally:
+            lc.record_cloud_models({"data": []})
+
+        create.assert_not_called()
+        assert "choose a local chat model" in resp.text
+
+    def test_an_unreadable_catalog_refuses_rather_than_guessing_local(
+        self, client, tmp_path
+    ):
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models({"data": []})
+        with patch.object(
+            lc.LemonadeClient,
+            "list_models",
+            side_effect=lc.LemonadeClientError("connection refused"),
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model="opencode.big-model"
+            )
+
+        create.assert_not_called()
+        assert '"type": "error"' in resp.text
+        assert "couldn't confirm" in resp.text
+        assert "connection refused" not in resp.text
+
+    def test_a_router_default_model_is_refused_not_called(self, client, tmp_path):
+        from gaia.llm import lemonade_client as lc
+
+        payload = {"data": [{"id": "smart-router", "recipe": "collection.router"}]}
+        lc.record_cloud_models({"data": []})
+        with patch.object(lc.LemonadeClient, "list_models", return_value=payload):
+            resp, create = self._stream(client, tmp_path, default_model="smart-router")
+
+        create.assert_not_called()
+        assert "choose a local chat model" in resp.text
+
+    def test_a_malformed_catalog_refuses_rather_than_guessing_local(
+        self, client, tmp_path
+    ):
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models({"data": []})
+        with patch.object(lc.LemonadeClient, "list_models", return_value=[]):
+            resp, create = self._stream(client, tmp_path, default_model="smart-router")
+
+        create.assert_not_called()
+        assert '"type": "error"' in resp.text
+        assert "couldn't confirm" in resp.text
+
+    @pytest.mark.parametrize("default_model", ["", "   "])
+    def test_an_empty_default_model_fails_closed(self, client, tmp_path, default_model):
+        resp, create = self._stream(client, tmp_path, default_model=default_model)
+
+        create.assert_not_called()
+        assert "choose a local chat model" in resp.text
+
+    def test_a_local_lemonade_default_still_runs(self, client, tmp_path):
+        from gaia.llm import lemonade_client as lc
+
+        with patch.object(
+            lc.LemonadeClient,
+            "list_models",
+            side_effect=AssertionError("catalog read for a known local model"),
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model=lc.DEFAULT_MODEL_NAME
+            )
+
+        create.assert_called_once_with(model=lc.DEFAULT_MODEL_NAME)
+        assert '"type": "error"' not in resp.text
+
     def test_a_cut_off_reply_still_streams_its_complete_insights(
         self, client, tmp_path
     ):

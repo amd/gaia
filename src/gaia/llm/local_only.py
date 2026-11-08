@@ -332,6 +332,11 @@ def is_local_recipe(recipe: Optional[str]) -> bool:
     return bool(recipe) and recipe in LOCAL_RECIPES
 
 
+def recipes_confirm_local(recipes: List[Optional[str]]) -> bool:
+    """True when *recipes* is non-empty and every one runs on this machine."""
+    return bool(recipes) and all(is_local_recipe(r) for r in recipes)
+
+
 def assert_model_permitted(
     model: Optional[str], recipes_of: Callable[[str], List[Optional[str]]]
 ) -> None:
@@ -357,7 +362,7 @@ def assert_model_permitted(
             f"confirm that '{model}' isn't a cloud model ({e}). Start Lemonade and "
             f"retry. {SETTINGS_HINT}"
         ) from e
-    if recipes and all(is_local_recipe(r) for r in recipes):
+    if recipes_confirm_local(recipes):
         return
     remote = [r for r in recipes if not is_local_recipe(r)]
     if not recipes:
