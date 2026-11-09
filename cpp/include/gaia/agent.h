@@ -371,6 +371,10 @@ private:
     /// Call an MCP tool with automatic reconnect on connection failure.
     json callMcpTool(const std::string& serverName, const std::string& toolName, const json& args);
 
+    /// Generic tools for MCP resources / prompts, registered once a server offers them.
+    void registerMcpResourceTools();
+    void registerMcpPromptTools();
+
     /// Attempt to reconnect to a previously registered MCP server using its stored config.
     bool reconnectMcpServer(const std::string& name);
 

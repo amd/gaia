@@ -1125,6 +1125,7 @@ bool MCPClient::connect() {
 
         auto result = response.value("result", json::object());
         serverInfo_ = result.value("serverInfo", json::object());
+        capabilities_ = result.value("capabilities", json::object());
 
         transport_->sendNotification("notifications/initialized");
 
@@ -1157,13 +1158,8 @@ std::vector<MCPToolSchema> MCPClient::listTools(bool refresh) {
         return cachedTools_.value();
     }
 
-    json response = transport_->sendRequest("tools/list");
-
-    if (response.contains("error")) {
-        return {};
-    }
-
-    auto result = response.value("result", json::object());
+    // A server that can't list its tools is broken, not tool-less.
+    auto result = request("tools/list", json::object());
     auto toolsData = result.value("tools", json::array());
 
     std::vector<MCPToolSchema> tools;
@@ -1214,6 +1210,55 @@ json MCPClient::callTool(const std::string& toolName, const json& arguments) {
     }
 
     return result;
+}
+
+json MCPClient::request(const std::string& method, const json& params) {
+    if (!isConnected()) {
+        throw std::runtime_error("Not connected to MCP server '" + name_ + "'");
+    }
+    json response = transport_->sendRequest(method, params);
+    if (response.contains("error")) {
+        const json& e = response["error"];
+        throw std::runtime_error("MCP server '" + name_ + "' refused " + method + ": " +
+                                 (e.is_object() ? e.value("message", e.dump()) : e.dump()));
+    }
+    return response.value("result", json::object());
+}
+
+json MCPClient::listResources() {
+    json all = json::array();
+    std::string cursor;
+    for (int page = 0; page < 100; ++page) {
+        json params = json::object();
+        if (!cursor.empty()) params["cursor"] = cursor;
+        json r = request("resources/list", params);
+        for (auto& item : r.value("resources", json::array())) all.push_back(item);
+        cursor = r.value("nextCursor", "");
+        if (cursor.empty()) break;
+    }
+    return all;
+}
+
+json MCPClient::readResource(const std::string& uri) {
+    return request("resources/read", {{"uri", uri}}).value("contents", json::array());
+}
+
+json MCPClient::listPrompts() {
+    json all = json::array();
+    std::string cursor;
+    for (int page = 0; page < 100; ++page) {
+        json params = json::object();
+        if (!cursor.empty()) params["cursor"] = cursor;
+        json r = request("prompts/list", params);
+        for (auto& item : r.value("prompts", json::array())) all.push_back(item);
+        cursor = r.value("nextCursor", "");
+        if (cursor.empty()) break;
+    }
+    return all;
+}
+
+json MCPClient::getPrompt(const std::string& name, const json& arguments) {
+    return request("prompts/get", {{"name", name}, {"arguments", arguments}});
 }
 
 } // namespace gaia
