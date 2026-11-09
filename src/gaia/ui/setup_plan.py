@@ -834,13 +834,18 @@ def _job_model(job: str) -> Optional[str]:
     from gaia.llm.lemonade_client import (
         DEFAULT_EMBEDDING_MODEL,
         cloud_model_provider,
+        is_cloud_model,
         resolve_chat_model,
         resolve_default_vision_model,
     )
 
     if job == model_choice.ROLE_CHAT:
         model = resolve_chat_model()
-        cloud = model.startswith("claude-") or cloud_model_provider(model)
+        cloud = (
+            model.startswith("claude-")
+            or cloud_model_provider(model)
+            or is_cloud_model(model)
+        )
         return None if cloud else model
     if job == model_choice.ROLE_VISION:
         return resolve_default_vision_model()

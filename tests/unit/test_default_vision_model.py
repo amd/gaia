@@ -52,6 +52,22 @@ def test_a_last_chat_with_vision_reads_images(config):
     assert lc.resolve_default_vision_model() == lc.LARGE_DEFAULT_MODEL_NAME
 
 
+def test_discovered_cloud_chat_does_not_turn_off_npu_vision(config, monkeypatch):
+    """A catalog-only gateway model must not be mistaken for an NPU model."""
+    from gaia.llm.lemonade_client import record_cloud_models
+
+    record_cloud_models({"data": [{"id": "opencode.big-model", "recipe": "cloud"}]})
+    try:
+        config(lc.DEFAULT_MODEL_NAME, last_model="opencode.big-model")
+        # The NPU probe must not decide a hosted chat's vision policy.
+        monkeypatch.setattr(
+            lc, "runs_on_npu", lambda _model: pytest.fail("NPU probe for cloud")
+        )
+        assert lc.resolve_default_vision_model() == lc.DEFAULT_MODEL_NAME
+    finally:
+        record_cloud_models({"data": []})
+
+
 def test_a_resident_tested_vision_model_is_used(monkeypatch):
     monkeypatch.setattr(
         lc.LemonadeClient,

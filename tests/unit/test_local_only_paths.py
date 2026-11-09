@@ -334,6 +334,47 @@ def test_local_saved_models_are_kept(local_only_on):
     assert saved["default_model"] == "Qwen3.6-35B-A3B-GGUF"
 
 
+def test_switching_on_clears_runtime_discovered_cloud_defaults(local_only_on):
+    from gaia import config as config_mod
+    from gaia.llm.lemonade_client import record_cloud_models
+
+    config_mod.GAIA_CONFIG_FILE.write_text(
+        json.dumps(
+            {
+                "default_model": "opencode.big-model",
+                "last_model": "opencode.big-model",
+                "last_provider": "local",
+            }
+        ),
+        encoding="utf-8",
+    )
+    record_cloud_models({"data": [{"id": "opencode.big-model", "recipe": "cloud"}]})
+    try:
+        assert local_only.clear_saved_cloud_models() == [
+            ("default_model", "opencode.big-model"),
+            ("last_model", "opencode.big-model"),
+        ]
+        saved = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
+        assert saved["default_model"] is None
+        assert saved["last_model"] is None
+        assert saved["last_provider"] is None
+    finally:
+        record_cloud_models({"data": []})
+
+
+def test_dotted_local_model_survives_cloud_cleanup(local_only_on):
+    from gaia import config as config_mod
+    from gaia.llm.lemonade_client import record_cloud_models
+
+    config_mod.GAIA_CONFIG_FILE.write_text(
+        json.dumps({"default_model": "Qwen3.6-35B-A3B-GGUF"}), encoding="utf-8"
+    )
+    record_cloud_models({"data": []})
+    assert local_only.clear_saved_cloud_models() == []
+    saved = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
+    assert saved["default_model"] == "Qwen3.6-35B-A3B-GGUF"
+
+
 # ── Review round: model switch, SDK sub-resources, keys, bench gateway ──────
 
 

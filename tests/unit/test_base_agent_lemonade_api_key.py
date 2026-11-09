@@ -193,6 +193,30 @@ def test_cloud_startup_checks_server_without_loading_local_chat(monkeypatch, mod
     local_init.assert_not_called()
 
 
+def test_catalog_discovered_cloud_agent_skips_local_preload(monkeypatch):
+    from gaia.agents.base.agent import Agent
+    from gaia.llm.lemonade_client import record_cloud_models
+
+    class CloudAgent(Agent):
+        def _register_tools(self):
+            return None
+
+    health = MagicMock(return_value={"status": "ok"})
+    local_init = MagicMock()
+    monkeypatch.setattr("gaia.llm.lemonade_client.LemonadeClient.health_check", health)
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready", local_init
+    )
+    record_cloud_models({"data": [{"id": "opencode.big-model", "recipe": "cloud"}]})
+    try:
+        agent = CloudAgent(model_id="opencode.big-model", silent_mode=True)
+        assert agent.model_id == "opencode.big-model"
+        health.assert_called_once()
+        local_init.assert_not_called()
+    finally:
+        record_cloud_models({"data": []})
+
+
 def test_local_agent_hands_its_model_to_ensure_ready(monkeypatch):
     """A cloud ``default_model`` must not decide preload for a local agent."""
     from gaia.agents.base.agent import Agent

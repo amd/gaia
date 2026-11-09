@@ -355,12 +355,20 @@ def _agent_turn_problem(model_id: str) -> Optional[str]:
 
 def _agent_turn_failure(model_id: str) -> str:
     """The Test step's sentence for a failed chat on *model_id*."""
-    from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        cloud_model_provider,
+        is_cloud_model,
+    )
     from gaia.ui.routers.providers import display_name
     from gaia.ui.warmup import _device_for
 
     name = display_name(model_id)
-    if model_id.startswith("claude-") or cloud_model_provider(model_id):
+    if (
+        model_id.startswith("claude-")
+        or cloud_model_provider(model_id)
+        or is_cloud_model(model_id)
+    ):
         what = f"GAIA's test chat on {name}, which runs in the cloud, got no answer."
     else:
         device = _device_for(LemonadeClient(verbose=False), model_id)
@@ -1832,7 +1840,7 @@ class SetupRunner:
     def _test_agent(self, run: SetupRun) -> Optional[str]:
         """One real turn through the agent, on the model chat will open on:
         every model loading doesn't prove GAIA answers on that one."""
-        from gaia.llm.lemonade_client import cloud_model_provider
+        from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
 
         started = time.monotonic()
         from gaia.config import GaiaConfigError
@@ -1846,7 +1854,11 @@ class SetupRunner:
             model, unknown = "", str(e)
         else:
             unknown = None
-        cloud = model.startswith("claude-") or bool(cloud_model_provider(model))
+        cloud = (
+            model.startswith("claude-")
+            or bool(cloud_model_provider(model))
+            or is_cloud_model(model)
+        )
         problem = unknown
         if problem is None and run.skip_chat_model and not cloud:
             # A cloud setup chats on the cloud model connecting saved.

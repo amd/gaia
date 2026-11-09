@@ -309,7 +309,7 @@ def clear_saved_cloud_models() -> List[Tuple[str, str]]:
         GaiaConfigError: config.json exists but can't be read or written.
     """
     from gaia.config import GaiaConfig
-    from gaia.llm.lemonade_client import cloud_model_provider
+    from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
 
     cfg = GaiaConfig.load()
     cleared = []
@@ -318,7 +318,9 @@ def clear_saved_cloud_models() -> List[Tuple[str, str]]:
         is_claude = model.lower().startswith("claude") or (
             key == "last_model" and (cfg.last_provider or "").lower() == "claude"
         )
-        if model and (cloud_model_provider(model) or is_claude):
+        if model and (
+            cloud_model_provider(model) or is_cloud_model(model) or is_claude
+        ):
             setattr(cfg, key, None)
             cleared.append((key, model))
     if any(key == "last_model" for key, _ in cleared):

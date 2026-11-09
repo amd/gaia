@@ -267,6 +267,40 @@ def test_a_model_setup_cant_name_fails_the_chat_test_with_its_reason(sidecar):
     assert proxy.bodies == []
 
 
+def test_discovered_cloud_setup_runs_final_agent_test(monkeypatch):
+    from gaia.llm.lemonade_client import record_cloud_models
+
+    seen = []
+    monkeypatch.setattr(sr, "_agent_turn_problem", lambda model: seen.append(model))
+    record_cloud_models({"data": [{"id": "opencode.big-model", "recipe": "cloud"}]})
+    try:
+        runner = sr.SetupRunner()
+        run = sr.SetupRun(
+            skip_chat_model=True, chat_model_for=lambda _run: "opencode.big-model"
+        )
+        assert runner._test_agent(run) is None
+        assert seen == ["opencode.big-model"]
+        assert run.tests[("agent", "opencode.big-model")]["state"] == "passed"
+    finally:
+        record_cloud_models({"data": []})
+
+
+def test_discovered_cloud_chat_failure_never_claims_local_hardware(monkeypatch):
+    from gaia.llm.lemonade_client import record_cloud_models
+    from gaia.ui import warmup
+
+    record_cloud_models({"data": [{"id": "opencode.big-model", "recipe": "cloud"}]})
+    monkeypatch.setattr(
+        warmup, "_device_for", lambda *_a: pytest.fail("cloud needs no device")
+    )
+    try:
+        message = sr._agent_turn_failure("opencode.big-model")
+        assert "runs in the cloud" in message
+        assert "loads on this PC" not in message
+    finally:
+        record_cloud_models({"data": []})
+
+
 @pytest.mark.parametrize(
     "device, where",
     [("cpu", "this PC's CPU"), ("gpu", "this PC's GPU"), (None, "this PC,")],

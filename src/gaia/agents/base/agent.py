@@ -2967,6 +2967,7 @@ Do NOT wrap conversational replies in JSON.
                 LemonadeClient,
                 LemonadeUnresponsiveError,
                 cloud_model_provider,
+                is_cloud_model,
                 resolve_ctx_size,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
@@ -2975,7 +2976,7 @@ Do NOT wrap conversational replies in JSON.
             req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
             required_min_device = req.min_device if req is not None else None
 
-            if cloud_model_provider(model_id):
+            if cloud_model_provider(model_id) or is_cloud_model(model_id):
                 # The local manager preloads a chat model even on an idle server.
                 probe_client = LemonadeClient(base_url=base_url, verbose=False)
                 # Ask the daemon for GAIA's engine, never probe the default port.

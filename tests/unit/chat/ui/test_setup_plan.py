@@ -108,6 +108,22 @@ def _plan_ids(plan):
     return [m["id"] for m in plan["models"]]
 
 
+def test_runtime_cloud_chat_is_not_planned_as_a_local_download(monkeypatch):
+    from gaia.installer import model_choice
+    from gaia.llm.lemonade_client import record_cloud_models
+
+    monkeypatch.setattr(sp, "_lemonade", lambda: {"mode": "gaia", "url": None})
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.resolve_chat_model", lambda: "opencode.big-model"
+    )
+    record_cloud_models({"data": [{"id": "opencode.big-model", "recipe": "cloud"}]})
+    try:
+        assert sp._job_model(model_choice.ROLE_CHAT) is None
+        assert sp.model_need(model_choice.ROLE_CHAT)["needed"] is False
+    finally:
+        record_cloud_models({"data": []})
+
+
 def test_cold_pc_names_the_starting_model_and_says_the_pick_comes_later(no_server):
     plan = sp.build_plan()
     assert plan["lemonade"]["reachable"] is False

@@ -546,7 +546,11 @@ def resolve_default_vision_model() -> Optional[str]:
     config = GaiaConfig.load()
     model = resolve_default_chat_model()
     current = config.last_model or model
-    cloud = current.startswith("claude-") or bool(cloud_model_provider(current))
+    cloud = (
+        current.startswith("claude-")
+        or bool(cloud_model_provider(current))
+        or is_cloud_model(current)
+    )
     if not cloud and runs_on_npu(current):
         return None
     chosen = config.vision_model
