@@ -510,7 +510,8 @@ def _classify_remote(remote_url: str) -> str:
     # Personal GitHub indicators — parse the hostname to avoid substring spoofing
     try:
         hostname = urlparse(remote_url).hostname or ""
-    except Exception:
+    except ValueError as e:
+        logger.debug("Could not parse git remote %r: %s", remote_url, e)
         hostname = ""
     if hostname == "github.com" or hostname.endswith(".github.com"):
         return "unclassified"
@@ -2604,7 +2605,8 @@ class SystemDiscovery:
                 for pattern, tool_name in tool_patterns.items():
                     if pattern in content_lower and tool_name not in found_tools:
                         found_tools.add(tool_name)
-            except Exception:
+            except Exception as e:
+                logger.debug("Could not read shell config %s: %s", shell_file, e)
                 continue
 
         if found_tools:
@@ -2716,8 +2718,12 @@ class SystemDiscovery:
                                             if pname and pname not in project_names:
                                                 project_names.append(pname)
                                             break
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.warning(
+                                        "Could not read project manifest %s: %s",
+                                        fpath,
+                                        e,
+                                    )
                             elif fname == "Cargo.toml":
                                 try:
                                     content = fpath.read_text(
@@ -2731,8 +2737,12 @@ class SystemDiscovery:
                                             if pname and pname not in project_names:
                                                 project_names.append(pname)
                                             break
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.warning(
+                                        "Could not read project manifest %s: %s",
+                                        fpath,
+                                        e,
+                                    )
                     if len(manifests_found) >= 30:  # cap to avoid huge scans
                         break
             except (PermissionError, OSError):
@@ -3326,7 +3336,8 @@ class SystemDiscovery:
                         # Decode ROT13-encoded path
                         try:
                             decoded = codecs.decode(name, "rot_13")
-                        except Exception:
+                        except Exception as e:
+                            logger.debug("Skipping UserAssist entry %r: %s", name, e)
                             continue
 
                         # Extract exe filename from the decoded path
@@ -3342,7 +3353,10 @@ class SystemDiscovery:
                                 run_count = int.from_bytes(
                                     data[4:8], byteorder="little"
                                 )
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(
+                                    "Skipping UserAssist entry %s: %s", basename, e
+                                )
                                 continue
                         else:
                             continue
