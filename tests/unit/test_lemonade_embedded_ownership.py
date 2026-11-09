@@ -667,6 +667,49 @@ class TestOneStartAtATime:
         assert json.loads(manager.state_path.read_text())["pid"] == 9999
 
 
+class TestStartupExitMessage:
+    """A lemond that quits during start is reported with its own error."""
+
+    def _exits_writing(self, manager, monkeypatch, output: bytes):
+        monkeypatch.setattr(manager, "is_installed", lambda: True)
+        monkeypatch.setattr(manager, "write_config", lambda: None)
+        monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: None)
+        monkeypatch.setattr(
+            EmbeddedLemonade, "_kill_tree", staticmethod(lambda p: None)
+        )
+        monkeypatch.setattr(embedded_mod, "_port_free", lambda port: True)
+
+        def fake_popen(argv, **kwargs):
+            kwargs["stdout"].write(output)
+            kwargs["stdout"].flush()
+            return SimpleNamespace(
+                pid=7001, poll=lambda: 1, returncode=1, wait=lambda timeout=None: 1
+            )
+
+        monkeypatch.setattr(embedded_mod.subprocess, "Popen", fake_popen)
+
+    def test_quotes_lemonds_error_from_this_start_only(self, manager, monkeypatch):
+        manager.root.mkdir(parents=True, exist_ok=True)
+        manager.log_path.write_bytes(b"[Error] (Old) from a previous run\n")
+        self._exits_writing(
+            manager,
+            monkeypatch,
+            b"[Info] (main) Starting Lemonade Server...\n"
+            b"[Error] (Server) Failed to open config.json: Permission denied\n",
+        )
+        with pytest.raises(EmbeddedLemonadeError) as err:
+            manager.start(port=50557)
+        msg = str(err.value)
+        assert "Permission denied" in msg
+        assert "previous run" not in msg
+        assert "exit code 1" in msg
+
+    def test_silent_exit_points_at_the_loader(self, manager, monkeypatch):
+        self._exits_writing(manager, monkeypatch, b"")
+        with pytest.raises(EmbeddedLemonadeError, match="wrote nothing"):
+            manager.start(port=50558)
+
+
 class TestUnload:
     def test_unload_posts_to_gaias_server_with_its_key(self, manager, monkeypatch):
         _record(manager)

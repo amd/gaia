@@ -429,6 +429,27 @@ def _exit_details(pid: int) -> Tuple[Optional[int], Optional[float]]:
     return None, None
 
 
+#: Lines of lemond's own output quoted when it exits during start.
+_STARTUP_ERROR_LINES = 6
+_STARTUP_ERROR_RE = re.compile(
+    r"\[(?:error|critical|fatal)\]|error|failed|cannot|not found|denied|abort",
+    re.IGNORECASE,
+)
+
+
+def _startup_output(log_path: Path, offset: int, known: Tuple[str, ...]) -> str:
+    """What lemond wrote to *log_path* after *offset*, trimmed to its errors."""
+    with open(log_path, "rb") as fh:
+        fh.seek(offset)
+        text = fh.read(256 * 1024).decode("utf-8", errors="replace")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    errors = [line for line in lines if _STARTUP_ERROR_RE.search(line)]
+    picked = (errors or lines)[-_STARTUP_ERROR_LINES:]
+    from gaia.llm.failure_record import redact
+
+    return redact("\n".join(picked), known)
+
+
 def _describe_exit_code(code: Optional[int]) -> str:
     if code is None:
         return "exit code unavailable"
@@ -2078,6 +2099,7 @@ class EmbeddedLemonade:
 
         self.root.mkdir(parents=True, exist_ok=True)
         with open(self.log_path, "ab") as logfile:
+            self._spawn_log_offset = logfile.tell()
             process = popen_outliving_job(
                 argv,
                 env=env,
@@ -2130,11 +2152,7 @@ class EmbeddedLemonade:
                     taken = False
                 if taken:
                     raise _PortTaken(port)
-                raise EmbeddedLemonadeError(
-                    f"Embedded Lemonade exited immediately (code "
-                    f"{process.returncode}) on port {port}. Read "
-                    f"{self.log_path} for the daemon's own error, then retry."
-                )
+                raise EmbeddedLemonadeError(self._exit_message(process, port, api_key))
             if self._health(port, api_key) is not None:
                 return
             time.sleep(0.25)
@@ -2143,6 +2161,26 @@ class EmbeddedLemonade:
             f"{port} within {timeout:.0f}s. Read {self.log_path} for what "
             f"it was doing, then retry."
         )
+
+    def _exit_message(self, process: subprocess.Popen, port: int, api_key: str) -> str:
+        """Why lemond quit during start, quoting its own last errors."""
+        head = (
+            f"Embedded Lemonade exited immediately "
+            f"({_describe_exit_code(process.returncode)}) on port {port}."
+        )
+        try:
+            said = _startup_output(
+                self.log_path, getattr(self, "_spawn_log_offset", 0), (api_key,)
+            )
+        except OSError as e:
+            return f"{head} Its log {self.log_path} could not be read ({e})."
+        if not said:
+            return (
+                f"{head} It wrote nothing to {self.log_path} before exiting, "
+                f"so it likely could not load at all: run {self.daemon_path} "
+                f"--version in a terminal to see the loader's error."
+            )
+        return f"{head} Lemonade said:\n{said}\nFull log: {self.log_path}"
 
     def _discard(self, process: subprocess.Popen) -> None:
         """Kill a start that failed and forget it, unless another took over."""

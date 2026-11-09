@@ -320,3 +320,35 @@ def test_load_dotenv_is_only_called_from_gaia_env():
         "Call gaia.env.load_env() instead of load_dotenv() so GAIA_NO_DOTENV "
         f"is honored: {offenders}"
     )
+
+
+from gaia.env import child_env  # noqa: E402
+
+
+class TestFrozenLoaderPaths:
+    """A frozen GAIA must not hand its bundled libraries to the programs it starts."""
+
+    def test_restores_the_users_library_path(self, monkeypatch):
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/home/u/.gaia/app-core/_internal")
+        monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/opt/rocm/lib")
+        env = child_env()
+        assert env["LD_LIBRARY_PATH"] == "/opt/rocm/lib"
+        assert "LD_LIBRARY_PATH_ORIG" not in env
+
+    def test_drops_the_bundle_path_when_the_user_had_none(self, monkeypatch):
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/home/u/.gaia/app-core/_internal")
+        monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
+        assert "LD_LIBRARY_PATH" not in child_env()
+
+    def test_source_runs_keep_the_path(self, monkeypatch):
+        monkeypatch.delattr(sys, "frozen", raising=False)
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/rocm/lib")
+        assert child_env()["LD_LIBRARY_PATH"] == "/opt/rocm/lib"
+
+    def test_an_explicit_path_still_wins(self, monkeypatch):
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/bundle")
+        env = child_env({"LD_LIBRARY_PATH": "/caller"})
+        assert env["LD_LIBRARY_PATH"] == "/caller"

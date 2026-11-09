@@ -201,6 +201,26 @@ def _configured_deny() -> set:
     return {part.upper() for part in re.split(r"[,\s]+", raw) if part}
 
 
+#: Library search paths a frozen (PyInstaller) GAIA points at its own bundle.
+_FROZEN_LOADER_VARS = ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "LIBPATH")
+
+
+def _unfreeze_loader_paths(env: Dict[str, str]) -> None:
+    """Give a child the library path the user had, not the frozen bundle's.
+
+    Otherwise a child such as lemond loads the bundle's older libstdc++ and
+    exits before it starts.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    for name in _FROZEN_LOADER_VARS:
+        original = env.pop(f"{name}_ORIG", None)
+        if original is not None:
+            env[name] = original
+        else:
+            env.pop(name, None)
+
+
 def child_env(
     extra: Optional[Mapping[str, str]] = None, deny: Iterable[str] = ()
 ) -> Dict[str, str]:
@@ -217,6 +237,7 @@ def child_env(
         for name, value in os.environ.items()
         if not is_internal_secret(name) and name.upper() not in blocked
     }
+    _unfreeze_loader_paths(env)
     if extra:
         env.update(extra)
     return env
