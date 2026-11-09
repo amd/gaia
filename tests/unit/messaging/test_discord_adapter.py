@@ -1327,14 +1327,15 @@ def test_a_reaction_alone_posts_no_reply():
     assert state.read_status().open_messages == []
 
 
-def test_a_bad_reaction_marker_is_dropped_not_shown():
+def test_a_shortcode_marker_reacts_and_is_never_shown():
     ad, clock = make()
     ad.on_ready()
-    ad.handle_message(message(clock, "hi"))
+    msg = message(clock, "hi")
+    ad.handle_message(msg)
     ad._on_agent_event(
         {"type": "final", "answer": "Hey!\n[react: thumbsup]"}, ad._agent().turns[-1]
     )
-    assert ad.transport.reactions == []
+    assert ad.transport.reactions == [(msg.id, "👍")]
     assert ad.transport.sent[-1]["text"] == "Hey!"
 
 
@@ -1393,3 +1394,52 @@ def test_a_message_gaia_starts_keeps_its_emoji():
     )
     assert ad.transport.reactions == []
     assert ad.transport.sent[-1]["text"] == "Reminder\nTime to stretch \U0001f9d8"
+
+
+def test_a_message_gaia_starts_is_not_told_to_react():
+    ad, clock = make()
+    ad.on_ready()
+    channel = message(clock, "hi").channel_id
+    ad._start_turn(channel, "", "remind me to stretch", None, heading="Reminder")
+    assert "[react:" not in ad._agent().turns[-1].text
+
+
+def test_a_marker_alone_on_a_message_gaia_starts_posts_no_stray_tag():
+    ad, clock = make()
+    ad.on_ready()
+    channel = message(clock, "hi").channel_id
+    ad._start_turn(channel, "", "daily summary", None, heading="Daily")
+    ad._on_agent_event(
+        {"type": "final", "answer": "Quiet day.\n[react: 🎉]"}, ad._agent().turns[-1]
+    )
+    assert ad.transport.reactions == []
+    assert ad.transport.sent[-1]["text"] == "Daily\nQuiet day."
+
+
+def test_a_garbled_marker_alone_acknowledges_instead_of_no_answer():
+    ad, clock = make()
+    ad.on_ready()
+    msg = message(clock, "ok cool")
+    ad.handle_message(msg)
+    sent_before = len(ad.transport.sent)
+    ad._on_agent_event(
+        {"type": "final", "answer": "[react: :ok:]"}, ad._agent().turns[-1]
+    )
+    assert ad.transport.reactions == [(msg.id, "👍")]
+    assert len(ad.transport.sent) == sent_before
+
+
+def test_messages_answered_together_get_the_reaction_on_the_latest():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "first"))  # running
+    ad._agent().ahead = 1
+    clock.now += 0.001
+    ad.handle_message(message(clock, "the build passed"))
+    clock.now += 0.001
+    latest = message(clock, "and the release is out!")
+    ad.handle_message(latest)
+    ad._on_agent_event(
+        {"type": "final", "answer": "Huge day.\n[react: 🎉]"}, ad._agent().turns[-1]
+    )
+    assert ad.transport.reactions == [(latest.id, "🎉")]

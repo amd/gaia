@@ -1043,7 +1043,7 @@ class DiscordAdapter:
         if not msg.attachments and _is_stop_word(msg.content):
             self._stop_work(msg.channel_id)
             return
-        if self._fold_into_waiting(question):
+        if self._fold_into_waiting(question, msg.id):
             return
         self._start_turn(msg.channel_id, msg.id, question, "-# Thinking…")
 
@@ -1102,9 +1102,10 @@ class DiscordAdapter:
             self._agent().cancel()
         self._send(channel_id, "-# Stopped." if stopped else "-# Nothing is running.")
 
-    def _fold_into_waiting(self, question: str) -> bool:
+    def _fold_into_waiting(self, question: str, message_id: str) -> bool:
         """Add *question* to the message still waiting, so both are answered
-        together: a quick follow-up often corrects the one before it."""
+        together: a quick follow-up often corrects the one before it. A
+        reaction then lands on *message_id*, the latest of them."""
         with self._lock:
             waiting = self._waiting
             if waiting is None:
@@ -1115,6 +1116,7 @@ class DiscordAdapter:
                 self._waiting = None
                 return False
             questions.append(question)
+            target.message_id = message_id
         self._update(
             target,
             f"-# Queued — I'll answer your {len(questions)} messages together "
@@ -1144,7 +1146,7 @@ class DiscordAdapter:
             target.reply_id = self._send(channel_id, placeholder, buttons=STOP_BUTTONS)
             self._track(channel_id, target.reply_id, OPEN_PLACEHOLDER)
         turn = Turn(
-            text=_turn_text([question]),
+            text=_turn_text([question], typed=bool(message_id)),
             context=target,
             sender=self.config.owner_id,
         )
@@ -1561,6 +1563,9 @@ class DiscordAdapter:
                 target.reply_id = ""
             return
         answer = answer or target.text
+        if not target.message_id:
+            # Nothing to react to: a stray marker is neither news nor a reply.
+            answer = split_reaction(answer)[1]
         # A failure is shown as it is: it is not an alert's news, nor silence.
         if target.answer_filter is not None and not failed:
             kept = target.answer_filter(answer)
@@ -1692,14 +1697,16 @@ class _DiscordSink:
         return _agent_env()
 
 
-def _turn_text(questions: List[str]) -> str:
+def _turn_text(questions: List[str], typed: bool = True) -> str:
+    """The agent's turn; only a typed message has a message to react to."""
+    style = f"\n\n({CHAT_STYLE_NOTE})" if typed else ""
     if len(questions) == 1:
-        return f"{questions[0]}\n\n{DISCORD_REPLY_NOTE}\n\n({CHAT_STYLE_NOTE})"
+        return f"{questions[0]}\n\n{DISCORD_REPLY_NOTE}{style}"
     joined = "\n\n".join(questions)
     return (
         f"{joined}\n\n(The user sent these {len(questions)} messages in a row; "
         "answer them together in one reply. A later one can change or cancel an "
-        f"earlier one.)\n\n{DISCORD_REPLY_NOTE}\n\n({CHAT_STYLE_NOTE})"
+        f"earlier one.)\n\n{DISCORD_REPLY_NOTE}{style}"
     )
 
 

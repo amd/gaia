@@ -51,10 +51,36 @@ _PROSE_PICTO = f"(?:{_PICTO}\ufe0f|{_DEFAULT_EMOJI})"
 _PROSE_EMOJI = re.compile(
     f"{_PROSE_PICTO}{_MOD}(?:\u200d{_PICTO}{_MOD})*|[\U0001f1e6-\U0001f1ff]{{2}}"
 )
-_CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
-_SPACE_BEFORE_PUNCT = re.compile(r"[ \t]+([.,!?;:])")
-_RUN_OF_SPACES = re.compile(r"[ \t]{2,}")
-_REACT_LINE = re.compile(r"^\s*\[react:\s*(?P<emoji>[^\]\s]+)\s*\]\s*$", re.I)
+_ONLY_EMOJI = re.compile(f"(?:[ \t]|{_PROSE_EMOJI.pattern})+")
+# Code (an unclosed fence runs to the end) and links are left as written.
+_KEEP = re.compile(r"```.*?(?:```|\Z)|`[^`\n]*`|https?://\S+", re.S)
+# Where a line's content starts: indent, quote marks, a list marker.
+_LINE_LEAD = re.compile(r"[ \t]*(?:>[ \t]*)*(?P<bullet>(?:[-*+]|\d+[.)])[ \t]+)?")
+_REACT_LINE = re.compile(r"^\s*\[react:[ \t]*(?P<emoji>[^\]\n]*?)[ \t]*\]\s*$", re.I)
+
+#: What a reaction marker that names no emoji gets: it still asked to acknowledge.
+ACKNOWLEDGE = "\U0001f44d"
+_SHORTCODES = {
+    "+1": "\U0001f44d",
+    "thumbsup": "\U0001f44d",
+    "thumbs_up": "\U0001f44d",
+    "heart": "\u2764\ufe0f",
+    "red_heart": "\u2764\ufe0f",
+    "tada": "\U0001f389",
+    "party": "\U0001f389",
+    "joy": "\U0001f602",
+    "laughing": "\U0001f606",
+    "smile": "\U0001f604",
+    "slightly_smiling_face": "\U0001f642",
+    "pray": "\U0001f64f",
+    "clap": "\U0001f44f",
+    "fire": "\U0001f525",
+    "wave": "\U0001f44b",
+    "eyes": "\U0001f440",
+    "100": "\U0001f4af",
+    "white_check_mark": "\u2705",
+    "check": "\u2705",
+}
 
 
 def is_single_emoji(text: str) -> bool:
@@ -65,16 +91,87 @@ def split_reaction(answer: str) -> Tuple[Optional[str], str]:
     """Return ``(emoji, text)``: the reaction asked for and the reply without it.
 
     Only a last line is a reaction, so a ``[react: ...]`` quoted mid-answer
-    stays text. A marker naming something that is not one emoji is removed
-    and ignored: it would otherwise reach the user as a stray tag.
+    stays text. A marker is always removed, since it would otherwise reach the
+    user as a stray tag: a shortcode (``:tada:``) becomes its emoji, and one
+    that names nothing readable becomes :data:`ACKNOWLEDGE`.
     """
     lines = answer.rstrip().split("\n")
     match = _REACT_LINE.match(lines[-1]) if lines else None
     if not match:
         return None, answer
     text = "\n".join(lines[:-1]).rstrip()
-    emoji = match.group("emoji")
-    return (emoji if is_single_emoji(emoji) else None), text
+    named = match.group("emoji").strip()
+    if is_single_emoji(named):
+        return named, text
+    code = re.sub(r"[\s-]+", "_", named.strip(":").lower())
+    return _SHORTCODES.get(code, ACKNOWLEDGE), text
+
+
+def _strip_line(
+    line: str,
+    kept: List[Tuple[int, int]],
+    at: int,
+    found: List[str],
+    column: bool,
+) -> Optional[str]:
+    """*line* without its prose emoji (appended to *found*), or None to drop it."""
+    if line.lstrip().startswith("|"):
+        return line
+    hits = [
+        m
+        for m in _PROSE_EMOJI.finditer(line)
+        if not any(a <= at + m.start() < b for a, b in kept)
+    ]
+    if not hits:
+        return line
+    if _ONLY_EMOJI.fullmatch(line) and len(hits) == len(_PROSE_EMOJI.findall(line)):
+        found.extend(m.group(0) for m in hits)
+        return None
+    opening = _LINE_LEAD.match(line)
+    lead = opening.end()
+    marks = column or bool(opening.group("bullet"))
+    out, end = [], 0
+    for m in hits:
+        start, stop = m.span()
+        if start < end:
+            continue
+        opens = not _PROSE_EMOJI.sub("", line[lead:start]).strip()
+        if marks and opens:
+            # A mark opening a list item, or a column of them, is a bullet.
+            continue
+        found.append(m.group(0))
+        before = line[end:start]
+        if opens:
+            rest = line[stop:]
+            out.append(before)
+            end = stop + len(rest) - len(rest.lstrip(" \t"))
+            continue
+        prefix = before.rstrip(" \t")
+        spaced = prefix != before or (
+            not before and bool(out) and out[-1].endswith((" ", "\t"))
+        )
+        rest = line[stop:]
+        trail = len(rest) - len(rest.lstrip(" \t"))
+        nxt = rest[trail : trail + 1]
+        if not nxt or nxt in ".,!?;:":
+            if not before and out:
+                out[-1] = out[-1].rstrip(" \t")
+            out.append(prefix)
+            end = stop + trail
+        elif spaced and trail and not before:
+            # The space before this emoji is already out: drop the one after.
+            end = stop + trail
+        elif spaced and trail:
+            # An emoji between a word and a capital was that sentence's full
+            # stop; after a one-letter word ("I <heart> it") it was a verb.
+            stop_here = nxt.isupper() and re.search(r"\w\w$", prefix)
+            out.append(prefix + "." if stop_here else prefix)
+            end = stop
+        else:
+            out.append(before)
+            end = stop
+    out.append(line[end:])
+    return "".join(out)
 
 
 def take_reaction(answer: str) -> Tuple[Optional[str], str]:
@@ -82,31 +179,21 @@ def take_reaction(answer: str) -> Tuple[Optional[str], str]:
 
     On a surface with reactions the emoji belongs on the user's message, not
     in the reply text. An explicit ``[react: ...]`` wins; otherwise the first
-    emoji the reply used becomes the reaction. Code is left as written.
+    emoji the reply used becomes the reaction. Code, links, table rows and an
+    emoji that marks a list item are left as written, and so is spacing that
+    no removed emoji touched.
     """
     emoji, text = split_reaction(answer)
+    kept = [m.span() for m in _KEEP.finditer(text)]
     found: List[str] = []
-
-    def strip(segment: str) -> str:
-        def drop(match: "re.Match[str]") -> str:
-            found.append(match.group(0).strip())
-            return ""
-
-        # An emoji between a word and a capital was that sentence's full stop;
-        # a one-letter word before it ("I <heart> Python") is the sentence's verb.
-        segment = re.sub(
-            rf"(?<=\w\w)[ \t]*(?:{_PROSE_EMOJI.pattern})(?=[ \t]+[A-Z])",
-            lambda m: drop(m) + ".",
-            segment,
-        )
-        segment = _SPACE_BEFORE_PUNCT.sub(r"\1", _PROSE_EMOJI.sub(drop, segment))
-        return _RUN_OF_SPACES.sub(" ", segment)
-
-    parts, end = [], 0
-    for code in _CODE.finditer(text):
-        parts.append(strip(text[end : code.start()]))
-        parts.append(code.group(0))
-        end = code.end()
-    parts.append(strip(text[end:]))
-    cleaned = "\n".join(line.rstrip() for line in "".join(parts).split("\n"))
-    return emoji or (found[0] if found else None), cleaned.strip()
+    rows = text.split("\n")
+    column = (
+        sum(bool(_PROSE_EMOJI.match(r, _LINE_LEAD.match(r).end())) for r in rows) > 1
+    )
+    lines, at = [], 0
+    for line in rows:
+        cleaned = _strip_line(line, kept, at, found, column)
+        if cleaned is not None:
+            lines.append(cleaned)
+        at += len(line) + 1
+    return emoji or (found[0] if found else None), "\n".join(lines).strip("\n").rstrip()
