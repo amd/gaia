@@ -56,6 +56,13 @@ def test_base_agent_rejects_the_flag_before_initializing_lemonade():
     client.assert_not_called()
 
 
+def test_create_session_rejects_the_flag_instead_of_running_locally():
+    from gaia.chat.sdk import AgentSession
+
+    with pytest.raises(TypeError, match="use_chatgpt"):
+        AgentSession().create_session("s", use_chatgpt=True)
+
+
 def test_cli_initialization_no_longer_accepts_the_flag():
     from gaia.cli import initialize_lemonade_for_agent
 

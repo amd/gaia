@@ -1601,6 +1601,20 @@ class SimpleChat:
         return self._sdk.get_formatted_history()
 
 
+_SESSION_OVERRIDE_KEYS = frozenset(
+    {
+        "model",
+        "max_tokens",
+        "system_prompt",
+        "max_history_length",
+        "show_stats",
+        "logging_level",
+        "use_claude",
+        "assistant_name",
+    }
+)
+
+
 class AgentSession:
     """
     Session-based chat interface for managing multiple separate conversations.
@@ -1646,6 +1660,13 @@ class AgentSession:
         Returns:
             AgentSDK instance for the session
         """
+        unknown = sorted(set(config_kwargs) - _SESSION_OVERRIDE_KEYS)
+        if unknown:
+            raise TypeError(
+                f"create_session() got unexpected keyword argument(s): "
+                f"{', '.join(unknown)}. Allowed: "
+                f"{', '.join(sorted(_SESSION_OVERRIDE_KEYS))}."
+            )
         if config is None:
             # Create config from defaults with overrides
             config = AgentConfig(
