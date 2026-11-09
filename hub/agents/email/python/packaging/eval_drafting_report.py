@@ -17,9 +17,9 @@ a HARD FAILURE (exit 1), never a skip report and never an invented pass. The
 subscription (``CLAUDE_CODE_OAUTH_TOKEN`` or the ``claude`` CLI login) is used
 first, then ``ANTHROPIC_API_KEY`` — ``gaia.eval.claude_credential`` owns the
 order. A token with no ``claude`` CLI on PATH raises rather than counting. The
-workflows that run this (release_agent_email.yml, test_email_agent_eval.yml,
-email_scorecard_refresh.yml) inject them from the matching secrets and never run
-on fork PRs, so a credential is always present in a legitimate run.
+workflow that runs this (email_scorecard_refresh.yml) injects them from the
+matching secrets and never runs on fork PRs, so a credential is always present
+in a legitimate run.
 
 Config comes from the environment (shell-agnostic):
   EMAIL_EVAL_MODEL         Lemonade model id (required)
@@ -77,8 +77,7 @@ def main() -> int:
             "eval cannot be scored.\n"
             f"{MISSING_CREDENTIAL_ERROR}"
             "  Where: the 'Voice-drafting quality eval' step in "
-            ".github/workflows/{release_agent_email,test_email_agent_eval,"
-            "email_scorecard_refresh}.yml.",
+            ".github/workflows/email_scorecard_refresh.yml.",
             file=sys.stderr,
         )
         return 1

@@ -199,18 +199,28 @@ const ROUTES: Record<string, unknown> = {
         files: [], totals: { files: 0, additions: 0, deletions: 0, uncounted: 0 }, turns: 0, pending: false, untracked: [], incomplete: false,
     },
     [`GET /sessions/${ANSWER_SESSION}/outputs`]: { session_id: ANSWER_SESSION, items: [] },
+    [`GET /sessions/${ANSWER_SESSION}/capabilities`]: {
+        session_id: ANSWER_SESSION, agent_type: 'gaia', skills: [],
+        tools: [
+            { name: 'read_file', description: 'Read a file from disk.', category: 'file_io' },
+            { name: 'fetch_page', description: 'Fetch a web page.', category: 'browser' },
+        ],
+    },
     'GET /chat/permissions': { default_mode: 'ask', sessions: [] },
     [`GET /chat/permissions/${ANSWER_SESSION}`]: { session_id: ANSWER_SESSION, mode: 'ask', grants: [] },
     'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null, publicIp: null },
     'GET /mcp/status': { servers: [] },
     'GET /schedules': SCHEDULES,
     'GET /documents': DOCUMENTS,
-    'GET /agents': { agents: [] },
+    // Installed, so no screen shows the "GAIA agent isn't installed" notice unless its test asks.
+    'GET /agents': { agents: [{ id: 'gaia', name: 'GAIA', description: '', source: 'installed', conversation_starters: [], models: [] }], total: 1 },
     'GET /connectors': { connectors: [] },
     'GET /memory/settings': { memory_enabled: true },
     'GET /skills': { skills: [] },
     'GET /system/resources': RESOURCES,
     'GET /system/model-server': { reachable: true, error: null, base_url: 'http://127.0.0.1:13305', port: 13305, owner: 'gaia' },
+    'GET /speech/model': { downloaded: true, size_gb: 0.3 },
+    'GET /spending/prices/fireworks': { provider: 'fireworks', models: [], source: null, note: null },
     'GET /speech/settings': {
         voice: 'bf_emma', speed: 125, auto: true, min_speed: 50, max_speed: 200,
         voices: [
@@ -230,7 +240,18 @@ const ROUTES: Record<string, unknown> = {
  * its test by name instead of rendering whatever an empty body produces.
  */
 /** Server-sent event streams the app subscribes to; each opens quiet. */
-const STREAMS = new Set(['GET /sessions/events']);
+const STREAMS = new Set(['GET /sessions/events', 'GET /connectors/events']);
+
+/** A tenth of a second of silence: what POST /speech answers when a reply is read aloud. */
+function silentWav(): Buffer {
+    const rate = 8000, samples = 800;
+    const wav = Buffer.alloc(44 + samples * 2);
+    wav.write('RIFF', 0); wav.writeUInt32LE(36 + samples * 2, 4); wav.write('WAVE', 8);
+    wav.write('fmt ', 12); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(rate, 24); wav.writeUInt32LE(rate * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write('data', 36); wav.writeUInt32LE(samples * 2, 40);
+    return wav;
+}
 
 export async function mockApi(page: Page): Promise<string[]> {
     const unhandled: string[] = [];
@@ -242,6 +263,10 @@ export async function mockApi(page: Page): Promise<string[]> {
             await route.fulfill({ status: 200, contentType: 'text/event-stream', body: ': no events\n\n' });
             return;
         }
+        if (key === 'POST /speech') {
+            await route.fulfill({ status: 200, contentType: 'audio/wav', body: silentWav() });
+            return;
+        }
         if (!(key in ROUTES)) {
             unhandled.push(key);
             await route.fulfill({ status: 501, contentType: 'application/json', body: JSON.stringify({ detail: `no fixture for ${key}` }) });
@@ -250,6 +275,11 @@ export async function mockApi(page: Page): Promise<string[]> {
         await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ROUTES[key]) });
     });
     return unhandled;
+}
+
+/** No flagship agent installed, so the app shows its "GAIA agent isn't installed" notice. */
+export async function withoutFlagship(page: Page): Promise<void> {
+    await page.route('**/api/agents', (route) => route.fulfill({ json: { agents: [], total: 0 } }));
 }
 
 const modelRow = (id: string, over: Record<string, unknown>) => ({

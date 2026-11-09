@@ -336,8 +336,7 @@ keep every tool in full. If the embedder is unreachable, the session offers ever
 and logs a warning. Precedence is `GAIA_DYNAMIC_TOOLS`, then an explicit
 `GaiaAgentConfig(dynamic_tools=...)`, then `dynamic_tools` in `~/.gaia/config.json`. A
 plain `ChatAgent` stays off unless you set it. When the environment variable is set, the
-Settings toggle shows the effective value and disables itself. See the
-[Dynamic Tool Loader plan](/plans/tool-loader) for the design.
+Settings toggle shows the effective value and disables itself.
 
 The environment variable is read by the process that runs the agent. `gaia eval agent`
 drives the agent through the Agent UI backend, so for an eval run set it on the backend,

@@ -802,25 +802,6 @@ class TestConsolidateEndpoint:
 class TestRebuildEmbeddingsEndpoint:
     """Test POST /api/memory/rebuild-embeddings endpoint."""
 
-    def test_rebuild_embeddings_returns_500_when_backfill_not_implemented(
-        self, client, test_store
-    ):
-        """POST /api/memory/rebuild-embeddings returns 500 when store lacks backfill_embeddings.
-
-        Unlike consolidate/reconcile which return 503 (no agent) or 501 (not
-        implemented), rebuild-embeddings always tries the LemonadeProvider path
-        and returns 500 for any error — including a missing store method.
-        """
-        if hasattr(test_store, "backfill_embeddings"):
-            pytest.skip("MemoryStore now implements backfill_embeddings")
-        mock_provider = MagicMock()
-        mock_provider.embed.return_value = [[0.1] * 768]
-        with patch(
-            "gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider
-        ):
-            resp = client.post("/api/memory/rebuild-embeddings")
-        assert resp.status_code == 500
-
     def test_rebuild_embeddings_returns_200_when_implemented(self, client, test_store):
         """POST /api/memory/rebuild-embeddings returns 200 with mock method."""
         test_store.backfill_embeddings = lambda *args, **kwargs: {
@@ -1194,14 +1175,19 @@ class TestReconcileEndpoint:
 class TestEmbeddingCoverageEndpoint:
     """Test GET /api/memory/embedding-coverage endpoint."""
 
-    def test_embedding_coverage_returns_501_when_not_implemented(
-        self, client, test_store
-    ):
-        """GET /api/memory/embedding-coverage returns 501 without store method."""
-        if hasattr(test_store, "get_embedding_coverage"):
-            pytest.skip("MemoryStore now implements get_embedding_coverage")
+    def test_embedding_coverage_counts_real_store_items(self, client, test_store):
+        """GET /api/memory/embedding-coverage reports the store's own counts."""
+        _create_knowledge(client, "Embedded on create")
+        test_store.store(category="fact", content="Stored without a vector")
+
         resp = client.get("/api/memory/embedding-coverage")
-        assert resp.status_code == 501
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "total_items": 2,
+            "with_embedding": 1,
+            "without_embedding": 1,
+            "coverage_pct": 50.0,
+        }
 
     def test_embedding_coverage_returns_200_when_implemented(self, client, test_store):
         """GET /api/memory/embedding-coverage returns 200 with mock method."""
