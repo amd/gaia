@@ -108,7 +108,7 @@ RED in both = pre-existing (report, don't block); GREEN-base → RED-patch = a r
 Exercise cross-component behaviour through the **real CLI a user runs** — never by importing modules (CLAUDE.md "Testing Philosophy"). If Phase 0 flagged an LLM-affecting change, run the eval here:
 
 1. **Start the eval backend first** — `python -m gaia.ui.server --port 4200 --host 127.0.0.1` (background) — and confirm it answers before running the eval. `gaia eval agent` targets `localhost:4200`; with nothing listening, every scenario returns `INFRA_ERROR` and looks (wrongly) like a model failure.
-2. Run the eval, then diff its scorecard against the committed baseline. `--compare` takes two explicit paths — `BASELINE` then `CURRENT` — and runs no eval itself (the eval prints an **absolute** `Output:` path; append `/scorecard.json` to it for the CURRENT arg):
+2. Run the eval, then diff its scorecard against the committed baseline. If another session's eval holds the machine, `gaia eval` refuses to start: queue it with `python util/machine_turn.py -- gaia eval agent …` (Phase 6b) rather than waiting by hand. `--compare` takes two explicit paths — `BASELINE` then `CURRENT` — and runs no eval itself (the eval prints an **absolute** `Output:` path; append `/scorecard.json` to it for the CURRENT arg):
 
    ```bash
    gaia eval agent --category <cat>   # prints an absolute path, e.g. Output: /…/gaia/eval/results/<run-id>/
@@ -149,6 +149,47 @@ The judge does not rubber-stamp the executor's report.
    Write it per [CLAUDE.md → How You Communicate](../../../CLAUDE.md#how-you-communicate):
    open with the verdict in one plain sentence ("the fix works on Strix Halo, but the NPU
    path was never exercised"), then the table and `file:line` detail beneath it.
+
+## Phase 6b — File the findings, fix them in parallel, verify one at a time
+
+A finding the judge confirmed is a bug to fix, not a line in a report. Run this after
+Phase 6, for every confirmed finding, unless the user said report-only.
+
+1. **Group by root cause.** Two symptoms of one cause are one finding. Rank them: a bug
+   that blocks a user (setup stops, no way forward) comes first.
+2. **File one issue per root cause** on `amd/gaia`. Search first
+   (`gh issue list -R amd/gaia --state all --search "<2-3 key terms>"`); if one matches,
+   comment there instead. Write it per [Filing issues](../../../CLAUDE.md#filing-issues)
+   and the `github-issue-response` skill: what the user sees, the repro from the cold
+   state, the evidence (log lines, screenshot), the ref it was found on. A security
+   finding never gets a public issue: use the private advisory path in CLAUDE.md.
+3. **Start one fix session per issue, in parallel**, each in its own worktree
+   (`start_session`, `use_worktree: true`). The brief names the issue, the repro, the
+   evidence path on this machine, and what done looks like. Done means: a test that fails
+   before the fix, the fix, the repro passing, and a PR that says `Closes #N`. Sessions
+   that would touch the same files run one after another, not in parallel.
+4. **Code and unit tests run in parallel; anything that loads a model takes turns.**
+   One Lemonade and one GPU serve the whole machine. Two sessions reproducing at once
+   evict each other's models and both results are wrong. So each session wraps every
+   repro, real-world check and eval that loads a model in the machine's lock:
+
+   ```bash
+   python util/machine_turn.py --label "#<issue> repro" -- <command>
+   ```
+
+   It waits for whoever holds the lock (including a `gaia eval` from another session),
+   then runs the command alone. Never set `GAIA_EVAL_NO_LOCK` yourself to skip the queue.
+   Unit tests, lint and code review need no turn.
+5. **Each session proves its own fix the way this skill does.** That means the repro
+   from the user's cold state, and evidence matched to the surface (an Agent UI
+   screenshot for a UI bug). When the bug sits in a packaged artifact (the frozen
+   `gaia`, an installer), the proof runs on that artifact, never on a source checkout.
+6. **Close the gap that let it through.** Each fix PR also adds or changes the test or
+   CI step that would have caught it, and the PR says which one.
+7. **Track them here.** List each issue, its session and its PR in this run's report.
+   When the sessions finish, check each PR's diff and evidence yourself: a session's
+   report is a claim. The run is done when every finding has a merged fix, or an open PR
+   the user knows about.
 
 ## Phase 7 — Cleanup
 
