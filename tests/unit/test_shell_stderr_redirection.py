@@ -196,7 +196,7 @@ def test_a_refused_stderr_redirect_is_told_the_form_that_works(workdir):
     assert "2>/dev/null" in said, said
 
 
-@pytest.mark.parametrize("spelling", ["2>nul", "2>NUL"])
+@pytest.mark.parametrize("spelling", ["2>nul", "2>NUL", "2>$null", "2>$NULL"])
 def test_cmds_null_device_is_the_same_request_as_dev_null(spelling):
     """On Windows a model drops stderr the way cmd.exe does; it writes nothing."""
     from gaia.agents.tools.shell_tools import _parse_line
@@ -211,6 +211,25 @@ def test_a_file_named_like_nul_is_still_refused():
     from gaia.agents.tools.shell_tools import _parse_line
 
     assert _parse_line("git status 2>nul.txt")[1]["status"] == "error"
+
+
+@pytest.mark.parametrize("spelling", ["2>$nullx", "2>$nul", "2>nulll", "2>$env:x"])
+def test_only_the_exact_null_spellings_are_lifted(spelling):
+    from gaia.agents.tools.shell_tools import _parse_line
+
+    assert _parse_line(f"git status {spelling}")[1]["status"] == "error"
+
+
+def test_a_read_only_chain_ending_in_powershell_null_needs_no_prompt():
+    """`2>$null` is how a model on Windows silences a read; it must not ask."""
+    from gaia.agents.tools.shell_tools import _parse_line
+
+    steps, error = _parse_line("git log --oneline 2>$null; git remote -v 2>$null")
+    assert error is None, error
+    assert [s.segments for s in steps] == [
+        [["git", "log", "--oneline"]],
+        [["git", "remote", "-v"]],
+    ]
 
 
 def test_cd_slash_d_is_a_plain_cd():

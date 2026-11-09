@@ -897,11 +897,12 @@ def test_anything_outside_the_grant_still_asks(command):
     assert _needs_modal(_Gated("gh"), command) is True
 
 
-def test_an_agent_with_no_grant_is_unchanged():
-    """The gate must behave byte-identically for every existing agent."""
+def test_an_agent_with_no_grant_asks_for_everything_but_a_plain_read():
+    """With no grant, only a line that just reads inside the allowed folders
+    runs unasked (see test_shell_read_only_unasked.py)."""
     host = _Gated()  # no binaries granted
     assert _needs_modal(host, "gh issue list") is True
-    assert _needs_modal(host, "ls -la") is True
+    assert _needs_modal(host, "rm notes.txt") is True
     assert host._tool_requires_confirmation("run_shell_command") is True
     assert host._tool_requires_confirmation("write_file") is True
     assert host._tool_requires_confirmation("search_web") is False
@@ -1113,7 +1114,7 @@ def test_a_call_outside_the_policy_is_asked_with_its_risk_note():
 def test_a_permitted_ungranted_call_still_reaches_the_prompt():
     """The reordering must not swallow the modal for calls that can run."""
     agent = _ExecutingAgent()
-    agent._execute_tool("run_shell_command", {"command": "pwd"})
+    agent._execute_tool("run_shell_command", {"command": "git status"})
     assert [name for name, _ in agent.console.asked] == ["run_shell_command"]
 
 

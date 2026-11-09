@@ -21,7 +21,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.agents.base.call_risk import (
     DESTRUCTIVE,
@@ -1224,9 +1224,10 @@ _DROP_STDERR = "2>/dev/null"
 _WINDOWS_NULL = "2>nul"
 
 #: A standalone token, whitespace or an end on either side, so ``2>&1x`` and
-#: ``2>/dev/null.bak`` are not one of these.
+#: ``2>/dev/null.bak`` are not one of these. ``2>$null`` is PowerShell's
+#: spelling of the same discard.
 _STDERR_REDIRECTION = re.compile(
-    r"(?<![^\s])(?:2>&1|2>/dev/null|2>[nN][uU][lL])(?![^\s])"
+    r"(?<![^\s])(?:2>&1|2>/dev/null|2>[nN][uU][lL]|2>\$[nN][uU][lL][lL])(?![^\s])"
 )
 
 
@@ -2754,6 +2755,114 @@ def _posix_pipe_positions(text: str) -> list:
 _CMD_PLAIN_LINE = re.compile(r"[A-Za-z0-9 ._\\/:-]*")
 
 
+#: git reads that never start a program a repository's own config can name.
+#: ``status`` runs core.fsmonitor; anything that renders a diff can run
+#: diff.external or a textconv driver, so those still ask.
+_GIT_UNASKED_SUBCOMMANDS = frozenset(
+    {"log", "branch", "remote", "rev-parse", "shortlog", "rev-list"}
+)
+
+#: Repository-local settings that never name a program. A repo whose own
+#: config sets anything else (gpg.program, log.showSignature, core.fsmonitor,
+#: an include, an alias...) still asks before git runs in it.
+_GIT_PLAIN_CONFIG_KEY = re.compile(
+    r"^(?:core\.(?:repositoryformatversion|filemode|bare|logallrefupdates"
+    r"|symlinks|ignorecase|precomposeunicode|autocrlf|eol|longpaths)"
+    r"|remote\.[^\n]*\.(?:url|pushurl|fetch|prune|tagopt)"
+    r"|branch\.[^\n]*\.(?:remote|merge|rebase|pushremote|description"
+    r"|vscode-merge-base)"
+    r"|extensions\.worktreeconfig|lfs\.repositoryformatversion|rerere\.enabled"
+    r"|user\.(?:name|email)|init\.defaultbranch|pull\.rebase|fetch\.prune"
+    r"|gui\.wmstate|gui\.geometry)$"
+)
+_GIT_CONFIG_SECTION = re.compile(r'^\s*\[\s*([A-Za-z0-9.-]+)(?:\s+"([^"]*)")?\s*\]')
+_GIT_CONFIG_KEY = re.compile(r"^\s*([A-Za-z][A-Za-z0-9-]*)\s*(?:=|$)")
+
+
+def _git_dirs(start: str) -> Optional[List[Path]]:
+    """The git dirs whose ``config`` a git run in *start* reads, or None if odd."""
+    here = Path(start).resolve()
+    for folder in (here, *here.parents):
+        dot = folder / ".git"
+        if dot.is_dir():
+            return [dot]
+        if (folder / "HEAD").is_file() and (folder / "objects").is_dir():
+            # A bare repository: git reads this folder's own config.
+            return None
+        if dot.is_file():
+            text = dot.read_text(encoding="utf-8", errors="replace").strip()
+            if not text.startswith("gitdir:"):
+                return None
+            gitdir = (folder / text[len("gitdir:") :].strip()).resolve()
+            dirs = [gitdir]
+            common = gitdir / "commondir"
+            if common.is_file():
+                dirs.append((gitdir / common.read_text().strip()).resolve())
+            return dirs
+    return []
+
+
+def _git_repo_config_is_plain(start: str) -> bool:
+    """Whether the repository around *start* configures no program for git."""
+    dirs = _git_dirs(start)
+    if dirs is None:
+        return False
+    for gitdir in dirs:
+        for name in ("config", "config.worktree"):
+            path = gitdir / name
+            if not path.is_file():
+                continue
+            section = ""
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.split("#", 1)[0].split(";", 1)[0]
+                if not line.strip():
+                    continue
+                header = _GIT_CONFIG_SECTION.match(line)
+                if header:
+                    if line[header.end() :].strip():
+                        # `[log] showSignature = true` is one line to git.
+                        return False
+                    name_, sub = header.group(1), header.group(2)
+                    section = f"{name_}.{sub}" if sub is not None else name_
+                    continue
+                key = _GIT_CONFIG_KEY.match(line)
+                if not key or not _GIT_PLAIN_CONFIG_KEY.match(
+                    f"{section}.{key.group(1)}".lower()
+                ):
+                    return False
+    return True
+
+
+_GIT_DIFF_FLAG = re.compile(
+    r"^(?:-p|-u|-G.*|-S.*|--patch.*|--stat.*|--numstat|--shortstat|--dirstat.*"
+    r"|--summary|--ext-diff|--textconv|--word-diff.*|--color-words.*|--raw"
+    r"|--name-only|--name-status|--check|--follow|--cc|-c|-m|--diff-merges.*)$"
+)
+
+
+def _git_may_run_repo_programs(segment: list, cwd: str) -> bool:
+    """Whether this git call, run in *cwd*, could start a program a repo names."""
+    if (_program_behind(segment[0]) or segment[0]).lower() != "git":
+        return False
+    argv, _ = _git_policy_argv(segment)
+    if not argv or len(argv) < 2 or argv[1] not in _GIT_UNASKED_SUBCOMMANDS:
+        return True
+    # `git remote show` contacts the remote; only listing stays local.
+    if argv[1] == "remote" and any(w not in ("-v", "--verbose") for w in argv[2:]):
+        return True
+    if any(_GIT_DIFF_FLAG.match(token) for token in segment[1:]):
+        return True
+    # Only `-C <dir>` may sit before the subcommand; it moves the repo read.
+    globals_ = segment[1 : len(segment) - len(argv) + 1]
+    where = Path(cwd)
+    while globals_:
+        if globals_[0] != "-C" or len(globals_) < 2:
+            return True
+        where = where / globals_[1]
+        globals_ = globals_[2:]
+    return not _git_repo_config_is_plain(str(where))
+
+
 def _pipe_dialect() -> str:
     """Whose pipe rules a step follows: cmd.exe's on Windows, sh's elsewhere."""
     return "cmd" if os.name == "nt" else "posix"
@@ -3454,6 +3563,9 @@ class ShellToolsMixin:
             # two predicates to disagree about whether the call was consented to.
             return True
 
+        if self._read_only_line_runs_unasked(tool_args or {}):
+            return True
+
         granted = skill_granted_binaries(self)
         if not granted:
             return False
@@ -3676,6 +3788,64 @@ class ShellToolsMixin:
                 ):
                     return False
         return True
+
+    def _read_only_line_runs_unasked(self, tool_args: Dict[str, Any]) -> bool:
+        """Whether this call only reads, inside the allowed folders, so nobody is asked.
+
+        Asking before ``git log`` or ``ls`` teaches people to click Allow without
+        reading. A line qualifies only when every command on it passes the
+        read-only allowlist with nothing to confirm, ``cd`` aside, and the
+        folders it reaches pass the same path checks as any run; anything the
+        shell itself could rewrite (``$``, backticks, globs, braces, and on
+        Windows a piped line that is not plain text) still asks.
+        """
+        command = tool_args.get("command")
+        if not isinstance(command, str) or not command.strip():
+            return False
+        bare, _ = _take_stderr_redirections(command)
+        if any(char in bare for char in "$`{*?["):
+            return False
+        lowered = bare.lower()
+        if "powershell" in lowered or "pwsh" in lowered:
+            return False
+        steps, parse_error = _parse_line(command, bypass_gates=False)
+        if parse_error is not None or not steps:
+            return False
+        located = self._call_cwd(tool_args.get("working_directory"))
+        if located is None:
+            return False
+        cwd = located[0]
+        for step in steps:
+            if step.is_cd:
+                if len(step.segments[0]) != 2:
+                    return False
+                cwd = os.path.join(cwd, _expand_home(step.cd_target) or "")
+                continue
+            if (
+                _pipe_dialect() == "cmd"
+                and len(step.segments) > 1
+                and not _CMD_PLAIN_LINE.fullmatch(
+                    _take_stderr_redirections(step.text)[0]
+                )
+            ):
+                return False
+            for segment in step.segments:
+                if (
+                    not segment
+                    or _interpreter_name(segment[0]) == "powershell"
+                    or _git_may_run_repo_programs(segment, cwd)
+                    or self._validate_command(
+                        segment[0].lower(),
+                        segment,
+                        shlex.join(segment),
+                        granted_binaries=frozenset(),
+                        bypass_gates=False,
+                    )
+                    is not None
+                ):
+                    return False
+        error, _ = self._line_verdict(command, tool_args.get("working_directory"))
+        return error is None
 
     def _line_verdict(self, command: str, working_directory: Any = None) -> tuple:
         """``(error, steps)`` for this call, path scope included.
