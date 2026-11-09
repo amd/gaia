@@ -2414,6 +2414,15 @@ def _names_another_server(text: str) -> bool:
     return "://" in text or text.startswith("//")
 
 
+#: ``HOST/OWNER/REPO`` and ``host:port/...``: gh reads both as another server.
+_HOST_SHAPED = re.compile(r"[^/\s]*[.:][^/\s]*/[^/\s]+/\S+|[\w.-]+:\d+(?:/\S*)?")
+
+
+def _positional_names_another_server(text: str) -> bool:
+    """A bare operand that sends the request elsewhere (``gh repo view h/o/r``)."""
+    return _names_another_server(text) or bool(_HOST_SHAPED.fullmatch(text))
+
+
 def _off_github(policy: "BinaryPolicy", subcommand: str, what: str) -> str:
     return (
         f"'{policy.binary} {subcommand} {what}' is not allowed: it can send the "
@@ -2632,7 +2641,12 @@ def classify_invocation(
         token = rest[cursor]
         cursor += 1
         if not token.startswith("-") or token == "-":
-            if policy.github_only and _names_another_server(token):
+            if policy.github_only and (
+                _positional_names_another_server(token)
+                # gh reads the first part of any x/y/z as a host (localhost/o/r);
+                # only `gh api` takes a longer path, and it is always github.com.
+                or (subcommand != "api" and token.count("/") > 1)
+            ):
                 return _refuse(_off_github(policy, subcommand, token))
             denial = _denied_operand(rule, policy.binary, token)
             if denial is not None:

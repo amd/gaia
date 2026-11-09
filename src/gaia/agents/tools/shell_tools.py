@@ -3469,6 +3469,9 @@ class ShellToolsMixin:
         # what nobody approved; a lone command runs as argv and cannot.
         if _pipe_dialect() == "cmd" and any(len(st.segments) > 1 for st in steps):
             return False
+        # cmd.exe reads ^ and % where GAIA's quote model does not.
+        if _pipe_dialect() == "cmd" and any(char in command for char in "^%"):
+            return False
 
         from gaia.skills.binaries import (
             BINARY_POLICIES,
@@ -3476,6 +3479,15 @@ class ShellToolsMixin:
             policy_argv,
             validate_invocation,
         )
+
+        # gh and gaia reads never need PYTHONPATH, a proxy, a CA file or a
+        # config folder, and each changes what they run or where (and to whom)
+        # their request goes. A skill's own CLI, like pytest, may take one.
+        skill_granted = skill_granted_binaries(self) - READS_WITHOUT_A_SKILL
+        for step in steps:
+            for raw, env in zip(step.segments, step.envs or ()):
+                if env and normalize_binary(raw[0]) not in skill_granted:
+                    return False
 
         for segment in map(policy_argv, (s for step in steps for s in step.segments)):
             binary = normalize_binary(segment[0])
@@ -5228,7 +5240,9 @@ class ShellToolsMixin:
                             step,
                             step_cwd,
                             max(deadline - time.monotonic(), 0),
-                            granted,
+                            # A gh read runs with nobody asked, so it runs as argv
+                            # like a skill grant: cmd.exe never re-reads its line.
+                            shell_granted_binaries(self),
                             # Waiting in short slices is what lets a Stop kill
                             # the command while it is still running, rather
                             # than half an hour later when its budget expires.
