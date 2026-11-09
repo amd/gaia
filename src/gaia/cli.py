@@ -2175,6 +2175,7 @@ Use `gaia download --agent talk` to download the local Kokoro TTS model.
     yt_parser.add_argument(
         "--download-transcript",
         metavar="URL",
+        required=True,
         help="Download transcript from a YouTube URL",
     )
     yt_parser.add_argument(
@@ -3128,45 +3129,6 @@ afterwards (or `swebench <run_dir>` does, later).
     )
     tasks_controls_parser.add_argument(
         "--out", default=None, help="Also write the controls and their verdicts here"
-    )
-
-    # Add new subparser for generating summary reports from evaluation directories
-    report_parser = subparsers.add_parser(
-        "report",
-        help="Generate summary report from evaluation results directory",
-        parents=[parent_parser],
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Generate report from evaluation directory
-  gaia report -d ./output/eval
-
-  # Generate report with custom output filename
-  gaia report -d ./output/eval -o Model_Comparison_Report.md
-
-  # Generate report and display summary only
-  gaia report -d ./output/eval --summary-only
-        """,
-    )
-
-    report_parser.add_argument(
-        "-d",
-        "--eval-dir",
-        type=str,
-        default="./output/evaluations",
-        help="Directory containing .eval.json files to analyze (default: ./output/evaluations)",
-    )
-    report_parser.add_argument(
-        "-o",
-        "--output-file",
-        type=str,
-        default="LLM_Evaluation_Report.md",
-        help="Output filename for the markdown report (default: LLM_Evaluation_Report.md)",
-    )
-    report_parser.add_argument(
-        "--summary-only",
-        action="store_true",
-        help="Only display summary to console, don't save report file",
     )
 
     perf_vis_parser = subparsers.add_parser(
@@ -6554,10 +6516,9 @@ Let me know your answer!
 
         sys.exit(_run_uninstall(args))
 
-    # Log error for unknown action
     log.error(f"Unknown action specified: {args.action}")
-    parser.print_help()
-    return
+    parser.print_help(sys.stderr)
+    sys.exit(1)
 
 
 def kill_stray_daemons() -> int:
