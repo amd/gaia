@@ -70,7 +70,7 @@ Any [`AgentConfig`](/cpp/api-reference) field is accepted. `provider` (`lemonade
 
 ### MCP servers
 
-`--mcp-config FILE` connects every server in an `mcp.json` (`mcpServers` object). Both transports work: `command`/`args` for stdio, and `url` (or `"type": "http"`) for Streamable HTTP, such as Lemonade's own MCP server. Header values may reference variables, for example `"Authorization": "Bearer ${LEMONADE_API_KEY}"`; an unset variable is an error. A server that fails to connect stops the agent. A server's tools become the agent's tools; when it also offers resources or prompts, the agent gets `list_mcp_resources` / `read_mcp_resource` and `list_mcp_prompts` / `get_mcp_prompt`, which name the server.
+`--mcp-config FILE` connects every server in an `mcp.json` (`mcpServers` object). Both transports work: `command`/`args` for stdio, and `url` (or `"type": "http"`) for Streamable HTTP, such as Lemonade's own MCP server. Header values may reference variables, for example `"Authorization": "Bearer ${LEMONADE_API_KEY}"`; an unset variable is an error. An env or header value can also be `{"$keyring": "gaia.connections:<connector>:<KEY>"}`, the reference `gaia connectors` writes: `gaia-cpp` reads the secret from the OS keyring (Windows Credential Manager, macOS Keychain, or the Secret Service through `secret-tool` on Linux) and keeps it in memory only. A missing secret, or a keyring that can't be reached, stops the agent with the reason. A server that fails to connect stops the agent. A server's tools become the agent's tools; when it also offers resources or prompts, the agent gets `list_mcp_resources` / `read_mcp_resource` and `list_mcp_prompts` / `get_mcp_prompt`, which name the server.
 
 ### Where the agent may work
 

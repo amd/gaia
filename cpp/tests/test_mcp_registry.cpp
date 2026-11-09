@@ -5,6 +5,7 @@
 #include <gaia/agent.h>
 #include <gaia/mcp_client.h>
 #include <gaia/mcp_registry.h>
+#include <gaia/keyring.h>
 
 #include <atomic>
 #include <cstdlib>
@@ -665,4 +666,26 @@ TEST_F(MCPRegistryTest, AgentConnectByIdReturnsFalseWhenTheServerFailsToLaunch) 
     Agent agent;
 
     EXPECT_FALSE(agent.connectMcpServerById("ghost", registry));
+}
+
+TEST_F(MCPRegistryTest, KeyringReferencesResolveFromTheOsKeyring) {
+    setKeyringBackendForTesting([](const std::string& service, const std::string& user)
+                                    -> std::optional<std::string> {
+        if (service == "gaia.connections" && user == "github:GITHUB_TOKEN") return "ghp_secret";
+        return std::nullopt;
+    });
+    MCPRegistry registry = over(writeFile("mcp_servers.json", R"({
+      "mcpServers": {
+        "github": {"command": "npx", "env": {"GITHUB_TOKEN": {"$keyring": "gaia.connections:github:GITHUB_TOKEN"}}},
+        "gone":   {"command": "npx", "env": {"TOKEN": {"$keyring": "gaia.connections:gone:TOKEN"}}}
+      }
+    })"));
+    EXPECT_EQ(registry.require("github")["env"]["GITHUB_TOKEN"], "ghp_secret");
+    try {
+        registry.require("gone");
+        FAIL() << "expected MCPRegistryError";
+    } catch (const MCPRegistryError& e) {
+        EXPECT_TRUE(contains(e.what(), "Reconnect the connector"));
+    }
+    setKeyringBackendForTesting({});
 }
