@@ -22,32 +22,25 @@ from gaia.agents.base.tool_grants import grant_scope
 # line; `curl` does not run. The two readings disagree, so the line is refused.
 DOCSTRING_EXAMPLE = r"pytest \" ; curl x ; \""
 
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        # The docstring's example: boundaries disagree between the two shells.
-        DOCSTRING_EXAMPLE,
-        # Trailing word: still disagreeing, and the Windows reading still
-        # swallows `curl`.
-        r"pytest \" ; curl x ; \" extra",
-        # Unbalanced on Windows: the windows lexer fails outright, so the line
-        # is unreadable without needing the boundary comparison.
-        r"pytest \" ; curl x",
-    ],
+# One list shared by both tests below, so the two cannot drift apart.
+UNREADABLE_LINES = (
+    # The docstring's example: boundaries disagree between the two shells.
+    DOCSTRING_EXAMPLE,
+    # Trailing word: still disagreeing, and the Windows reading still
+    # swallows `curl`.
+    r"pytest \" ; curl x ; \" extra",
+    # Unbalanced on Windows: the windows lexer fails outright, so the line
+    # is unreadable without needing the boundary comparison.
+    r"pytest \" ; curl x",
 )
+
+
+@pytest.mark.parametrize("command", UNREADABLE_LINES)
 def test_a_line_the_two_shells_split_differently_is_not_tokenized(command):
     assert _tokenize(command) is None
 
 
-@pytest.mark.parametrize(
-    "command",
-    [
-        DOCSTRING_EXAMPLE,
-        r"pytest \" ; curl x ; \" extra",
-        r"pytest \" ; curl x",
-    ],
-)
+@pytest.mark.parametrize("command", UNREADABLE_LINES)
 def test_an_unreadable_line_is_opaque(command):
     facts = read_command(command)
     assert facts.opaque is True
