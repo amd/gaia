@@ -251,6 +251,22 @@ public:
     /// @throws std::runtime_error if not connected.
     json callTool(const std::string& toolName, const json& arguments);
 
+    /// What the server declared in `initialize` (tools, resources, prompts…).
+    const json& capabilities() const { return capabilities_; }
+
+    /// resources/list — every entry ({uri, name, description, mimeType}),
+    /// following pagination. Throws on a JSON-RPC error or when not connected.
+    json listResources();
+
+    /// resources/read — the `contents` array for `uri`. Throws on error.
+    json readResource(const std::string& uri);
+
+    /// prompts/list — every prompt ({name, description, arguments}). Throws on error.
+    json listPrompts();
+
+    /// prompts/get — {description, messages} with `arguments` filled in. Throws on error.
+    json getPrompt(const std::string& name, const json& arguments = json::object());
+
     /// Get the server name.
     const std::string& name() const { return name_; }
 
@@ -262,6 +278,11 @@ private:
     std::unique_ptr<MCPTransport> transport_;
     bool debug_;
     json serverInfo_;
+    json capabilities_ = json::object();
+
+    /// Send a request and return its `result`; throws naming the server and
+    /// method when not connected or the server answers with an error.
+    json request(const std::string& method, const json& params);
     std::optional<std::vector<MCPToolSchema>> cachedTools_;
     std::string lastError_;
 };

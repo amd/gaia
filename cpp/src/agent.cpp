@@ -969,7 +969,10 @@ bool Agent::connectMcpServer(const std::string& name, const json& config) {
         console_->printInfo("Connected to MCP server '" + name + "' with " +
                            std::to_string(mcpTools.size()) + " tools");
 
+        const json caps = client->capabilities();
         mcpClients_.emplace(name, std::move(client));
+        if (caps.contains("resources")) registerMcpResourceTools();
+        if (caps.contains("prompts")) registerMcpPromptTools();
 
         // Rebuild system prompt to include new tools
         rebuildSystemPrompt();
@@ -1066,6 +1069,99 @@ void Agent::disconnectAllMcp() {
         client->disconnect();
     }
     mcpClients_.clear();
+}
+
+// Resources and prompts are read through generic tools that name the server, so
+// a server with hundreds of resources adds two tools, not hundreds.
+void Agent::registerMcpResourceTools() {
+    if (tools_.hasTool("list_mcp_resources")) return;
+    auto serverArg = [this](const json& a) -> MCPClient* {
+        auto it = mcpClients_.find(a.value("server", ""));
+        return it == mcpClients_.end() ? nullptr : it->second.get();
+    };
+    auto servers = [this] {
+        std::string s;
+        for (const auto& [n, c] : mcpClients_) {
+            if (c->capabilities().contains("resources")) s += (s.empty() ? "" : ", ") + n;
+        }
+        return s;
+    };
+
+    ToolInfo list;
+    list.name = "list_mcp_resources";
+    list.description = "List the documents and data (resources) a connected MCP server offers.";
+    list.parameters = {{"server", ToolParamType::STRING, true, "MCP server name."}};
+    list.policy = ToolPolicy::ALLOW;
+    list.callback = [serverArg, servers](const json& a) -> json {
+        MCPClient* c = serverArg(a);
+        if (!c) return {{"status", "error"}, {"error", "No such MCP server. Servers with resources: " + servers()}};
+        try {
+            return {{"status", "success"}, {"resources", c->listResources()}};
+        } catch (const std::exception& e) {
+            return {{"status", "error"}, {"error", e.what()}};
+        }
+    };
+    tools_.registerTool(std::move(list));
+
+    ToolInfo read;
+    read.name = "read_mcp_resource";
+    read.description = "Read one resource (by its uri from list_mcp_resources) from an MCP server.";
+    read.parameters = {{"server", ToolParamType::STRING, true, "MCP server name."},
+                       {"uri", ToolParamType::STRING, true, "Resource uri."}};
+    read.policy = ToolPolicy::ALLOW;
+    read.callback = [serverArg, servers](const json& a) -> json {
+        MCPClient* c = serverArg(a);
+        if (!c) return {{"status", "error"}, {"error", "No such MCP server. Servers with resources: " + servers()}};
+        try {
+            return {{"status", "success"}, {"contents", c->readResource(a.value("uri", ""))}};
+        } catch (const std::exception& e) {
+            return {{"status", "error"}, {"error", e.what()}};
+        }
+    };
+    tools_.registerTool(std::move(read));
+}
+
+void Agent::registerMcpPromptTools() {
+    if (tools_.hasTool("list_mcp_prompts")) return;
+    auto serverArg = [this](const json& a) -> MCPClient* {
+        auto it = mcpClients_.find(a.value("server", ""));
+        return it == mcpClients_.end() ? nullptr : it->second.get();
+    };
+
+    ToolInfo list;
+    list.name = "list_mcp_prompts";
+    list.description = "List the prompt templates a connected MCP server offers.";
+    list.parameters = {{"server", ToolParamType::STRING, true, "MCP server name."}};
+    list.policy = ToolPolicy::ALLOW;
+    list.callback = [serverArg](const json& a) -> json {
+        MCPClient* c = serverArg(a);
+        if (!c) return {{"status", "error"}, {"error", "No such MCP server: " + a.value("server", "")}};
+        try {
+            return {{"status", "success"}, {"prompts", c->listPrompts()}};
+        } catch (const std::exception& e) {
+            return {{"status", "error"}, {"error", e.what()}};
+        }
+    };
+    tools_.registerTool(std::move(list));
+
+    ToolInfo get;
+    get.name = "get_mcp_prompt";
+    get.description = "Fill in an MCP server's prompt template and return its messages.";
+    get.parameters = {{"server", ToolParamType::STRING, true, "MCP server name."},
+                      {"name", ToolParamType::STRING, true, "Prompt name."},
+                      {"arguments", ToolParamType::OBJECT, false, "Values for the prompt's arguments."}};
+    get.policy = ToolPolicy::ALLOW;
+    get.callback = [serverArg](const json& a) -> json {
+        MCPClient* c = serverArg(a);
+        if (!c) return {{"status", "error"}, {"error", "No such MCP server: " + a.value("server", "")}};
+        try {
+            return {{"status", "success"},
+                    {"prompt", c->getPrompt(a.value("name", ""), a.value("arguments", json::object()))}};
+        } catch (const std::exception& e) {
+            return {{"status", "error"}, {"error", e.what()}};
+        }
+    };
+    tools_.registerTool(std::move(get));
 }
 
 // ---- Main Execution Loop ----

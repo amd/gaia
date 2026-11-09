@@ -620,3 +620,75 @@ TEST(MCPConfirmationTest, ProvenReadOnlyMcpToolRunsUnprompted) {
     EXPECT_EQ(prompts, 0) << "read-only MCP tool should not prompt";
     EXPECT_EQ(result["status"], "success");
 }
+
+// ---- resources / prompts ----
+
+namespace {
+
+/// Transport that answers each method from a script; records what was asked.
+class ScriptedTransport : public MCPTransport {
+public:
+    std::vector<std::pair<std::string, json>> calls;
+    bool connect() override { return true; }
+    void disconnect() override {}
+    bool isConnected() const override { return true; }
+    void sendNotification(const std::string&, const json& = json::object()) override {}
+    json sendRequest(const std::string& method, const json& params = json::object()) override {
+        calls.emplace_back(method, params);
+        auto ok = [](json r) { return json{{"jsonrpc", "2.0"}, {"id", 1}, {"result", r}}; };
+        if (method == "initialize") {
+            return ok({{"protocolVersion", "2025-06-18"},
+                       {"capabilities", {{"tools", json::object()}, {"resources", json::object()},
+                                         {"prompts", json::object()}}},
+                       {"serverInfo", {{"name", "scripted"}}}});
+        }
+        if (method == "resources/list") {
+            if (!params.contains("cursor")) {
+                return ok({{"resources", json::array({{{"uri", "file:///a.md"}, {"name", "a"}}})},
+                           {"nextCursor", "p2"}});
+            }
+            return ok({{"resources", json::array({{{"uri", "file:///b.md"}, {"name", "b"}}})}});
+        }
+        if (method == "resources/read") {
+            return ok({{"contents", json::array({{{"uri", params["uri"]}, {"text", "hello"}}})}});
+        }
+        if (method == "prompts/list") {
+            return ok({{"prompts", json::array({{{"name", "summarize"}}})}});
+        }
+        if (method == "prompts/get") {
+            return ok({{"messages", json::array({{{"role", "user"},
+                                                  {"content", {{"type", "text"},
+                                                               {"text", "Summarize " + params["arguments"].value("topic", "")}}}}})}});
+        }
+        return json{{"jsonrpc", "2.0"}, {"id", 1}, {"error", {{"code", -32601}, {"message", "no " + method}}}};
+    }
+};
+
+}  // namespace
+
+TEST(MCPResourcesTest, ListFollowsPaginationAndReadReturnsContents) {
+    auto t = std::make_unique<ScriptedTransport>();
+    MCPClient client("s", std::move(t));
+    ASSERT_TRUE(client.connect());
+    EXPECT_TRUE(client.capabilities().contains("resources"));
+    json all = client.listResources();
+    ASSERT_EQ(all.size(), 2u);
+    EXPECT_EQ(all[1]["uri"], "file:///b.md");
+    json contents = client.readResource("file:///a.md");
+    EXPECT_EQ(contents[0]["text"], "hello");
+}
+
+TEST(MCPResourcesTest, PromptsFillArguments) {
+    MCPClient client("s", std::make_unique<ScriptedTransport>());
+    ASSERT_TRUE(client.connect());
+    EXPECT_EQ(client.listPrompts().size(), 1u);
+    json p = client.getPrompt("summarize", {{"topic", "Q3"}});
+    EXPECT_EQ(p["messages"][0]["content"]["text"], "Summarize Q3");
+}
+
+TEST(MCPResourcesTest, ServerErrorsThrowInsteadOfLookingEmpty) {
+    // tools/list is not scripted: a server that can't list tools is broken, not tool-less.
+    MCPClient client("s", std::make_unique<ScriptedTransport>());
+    ASSERT_TRUE(client.connect());
+    EXPECT_THROW(client.listTools(), std::runtime_error);
+}
