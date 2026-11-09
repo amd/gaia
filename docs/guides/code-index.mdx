@@ -12,7 +12,7 @@ icon: "folder-magnifying-glass"
   **Looking for the API?** See the [Code Index SDK Reference](/sdk/sdks/code-index) for `CodeIndexSDK`, `CodeIndexConfig`, and `CodeIndexToolsMixin`.
 </Note>
 
-GAIA's Code Index gives you fast semantic search over a repository without sending source to the cloud. It parses files into symbol-level chunks, embeds them via Lemonade Server on AMD NPU/GPU hardware, and stores them in a local FAISS index for sub-second queries.
+GAIA's Code Index gives you fast semantic search over a repository without sending source to the cloud. It parses files into symbol-level chunks, embeds them via Lemonade Server on your GPU (CPU fallback), and stores them in a local FAISS index for sub-second queries.
 
 The index is exposed two ways:
 
@@ -26,7 +26,7 @@ The index is exposed two ways:
 | Aspect | Details |
 |--------|---------|
 | **Languages parsed** | Python (AST), JavaScript, TypeScript, Go, Rust, Java, C, C++, Verilog, SystemVerilog, VHDL |
-| **Embeddings** | Local AMD NPU/GPU via Lemonade Server (`user.embeddinggemma-300m-GGUF` — EmbeddingGemma 300M, 768-dim — by default) |
+| **Embeddings** | Local GPU (CPU fallback) via Lemonade Server (`user.embeddinggemma-300m-GGUF` — EmbeddingGemma 300M, 768-dim — by default) |
 | **Vector store** | FAISS `IndexFlatL2` |
 | **Cache** | `~/.gaia/code_index/<repo-hash>/` (atomic writes; incremental on file-hash) |
 | **Privacy** | All processing local; sensitive files (`.env`, `.pem`, `.key`, …) auto-excluded |
