@@ -53,7 +53,6 @@ export function GoBackOffer({ className }: { className?: string }) {
         <section className={className ? `setup-card ${className}` : 'setup-card'} aria-label={title}>
             <h3 className="mc-job-title">{title}</h3>
             <p>{t('setup.goBack.lead', { version: last.version, date })}</p>
-            <p className="setup-hint">{t('setup.goBack.note', { version: last.version, current: update.currentVersion ?? '' })}</p>
             {downloading || restarting ? (
                 <p className="setup-hint" role="status">
                     <Loader2 size={13} className="spin" aria-hidden="true" />{' '}
@@ -78,6 +77,10 @@ export function GoBackOffer({ className }: { className?: string }) {
                 </div>
             )}
             {error && <p className="setup-error" role="alert">{error}</p>}
+            <details className="dl-details">
+                <summary>{t('setup.progress.details')}</summary>
+                <p className="setup-hint">{t('setup.goBack.note', { version: last.version, current: update.currentVersion ?? '' })}</p>
+            </details>
         </section>
     );
 }

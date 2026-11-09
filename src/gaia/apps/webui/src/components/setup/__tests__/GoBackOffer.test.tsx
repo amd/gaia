@@ -60,10 +60,13 @@ describe('GoBackOffer', () => {
         expect(offer).toHaveTextContent(`GAIA 0.26.0-rc.12 finished setup on this PC on ${date}.`);
     });
 
-    it('says what happens to chats, settings and the newer version', async () => {
+    it('keeps what happens to chats, settings and the newer version behind Details', async () => {
         render(<GoBackOffer />);
         await goBack();
-        const offer = screen.getByRole('region', { name: 'Go back to a version that worked' });
+        const details = screen.getByText('Details').closest('details')!;
+        expect(details.open).toBe(false);
+        fireEvent.click(screen.getByText('Details'));
+        const offer = details;
         expect(offer).toHaveTextContent('Your chats, memory and settings stay as they are.');
         expect(offer).toHaveTextContent('GAIA 0.26.0-rc.13 stays available');
         expect(offer).toHaveTextContent('Settings → General → Updates');
