@@ -92,6 +92,14 @@ struct GAIA_API HttpClientConfig {
     /// https only: verify the server certificate.
     bool verifyTls = true;
 
+    /// GET only: follow 3xx redirects (across hosts too). Off by default so an
+    /// API client never sends its headers somewhere it did not name.
+    bool followRedirects = false;
+
+    /// Return 3xx responses (Location in headers) instead of throwing, so a
+    /// caller can vet each redirect target itself.
+    bool returnRedirects = false;
+
     /// https only: custom CA bundle path (empty → system trust store).
     std::string caCertPath;
 
@@ -162,6 +170,7 @@ public:
 
     /// Add or replace a header sent on every request.
     void setDefaultHeader(const std::string& name, const std::string& value);
+    void removeDefaultHeader(const std::string& name);
 
     bool debug() const;
     void setDebug(bool enabled);

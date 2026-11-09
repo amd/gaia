@@ -304,7 +304,8 @@ struct HttpClient::Impl {
         response.body    = result->body;
         response.headers = convertHeaders(result->headers);
 
-        if (!response.ok()) {
+        const bool redirect = response.status >= 300 && response.status < 400;
+        if (!response.ok() && !(redirect && config.returnRedirects)) {
             throw HttpError(std::string(method) + " " + t.url + " returned HTTP " +
                                 std::to_string(response.status) +
                                 (response.body.empty()
@@ -376,6 +377,12 @@ void HttpClient::setDefaultHeader(const std::string& name, const std::string& va
     headers.emplace(name, value);
 }
 
+void HttpClient::removeDefaultHeader(const std::string& name) {
+    auto& headers = impl_->config.defaultHeaders;
+    auto existing = findHeader(headers, name);
+    if (existing != headers.end()) headers.erase(existing);
+}
+
 bool HttpClient::debug() const { return impl_->config.debug; }
 
 void HttpClient::setDebug(bool enabled) { impl_->config.debug = enabled; }
@@ -401,6 +408,7 @@ HttpResponse HttpClient::get(const std::string& path, const HttpHeaders& headers
             cli.set_ca_cert_path(impl_->config.caCertPath);
         }
         applyTimeouts(cli, connectSec, readSec);
+        cli.set_follow_location(impl_->config.followRedirects);
         result = cli.Get(t.path, hdrs);
 #else
         impl_->throwTlsUnavailable(t);
@@ -408,6 +416,7 @@ HttpResponse HttpClient::get(const std::string& path, const HttpHeaders& headers
     } else {
         httplib::Client cli(t.host, t.port);
         applyTimeouts(cli, connectSec, readSec);
+        cli.set_follow_location(impl_->config.followRedirects);
         result = cli.Get(t.path, hdrs);
     }
     return impl_->finish("GET", t, result, connectSec, readSec);

@@ -381,7 +381,7 @@ NativeToolCalls nativeToolCallsFromString(const std::string& s);
 struct AgentConfig {
     std::string baseUrl = defaultBaseUrl();
     std::string modelId = "Qwen3-4B-GGUF";
-    int maxSteps = 20;
+    int maxSteps = 50;
     int maxPlanIterations = 3;
     int maxConsecutiveRepeats = 4;
     int maxHistoryMessages = 40; // Max messages kept between processQuery() calls (0 = unlimited)
@@ -424,6 +424,30 @@ struct AgentConfig {
     /// native tool calling entirely, set nativeToolCalls = NativeToolCalls::Never.
     std::string toolChoice = "auto";
 
+    /// Bearer key for the LLM endpoint (Lemonade with an API key, Fireworks,
+    /// any hosted OpenAI-compatible server). Held in memory only: toJson()
+    /// never writes it. Empty resolves apiKeyEnv, then GAIA_API_KEY, then
+    /// LEMONADE_API_KEY (loopback endpoints only) at Agent construction.
+    std::string apiKey;
+
+    /// Name of an environment variable holding the key. A config file names
+    /// the variable instead of carrying the secret; an unset variable that is
+    /// named here is a startup error, never an anonymous request.
+    std::string apiKeyEnv;
+
+    /// Extra attempts for a model call that failed transiently (connection
+    /// error, HTTP 408/409/425/429/5xx), with exponential backoff (2, 4, 8 s,
+    /// capped at 30). Other failures are not retried.
+    int llmRetries = 3;
+
+    /// Tool output longer than this is clipped in the conversation; the full
+    /// text stays readable through the read_tool_output tool.
+    int maxToolResultChars = 16000;
+
+    /// Tell the model how many steps remain as the budget runs low, and ask
+    /// for a tool-free closing answer when it runs out.
+    bool stepBudgetNotices = true;
+
     /// Resolve the Auto policy against ``modelId``.
     bool useNativeToolCalls() const;
 
@@ -438,8 +462,14 @@ struct AgentConfig {
     /// Throws std::runtime_error on file/parse error, std::invalid_argument on invalid values.
     static AgentConfig fromJsonFile(const std::string& path);
 
-    /// Serialize all fields to JSON (round-trips through fromJson).
+    /// Serialize all fields to JSON (round-trips through fromJson). Never
+    /// includes apiKey.
     json toJson() const;
 };
+
+/// The key an agent sends: apiKey, else the variable apiKeyEnv names (unset or
+/// empty throws), else GAIA_API_KEY, else LEMONADE_API_KEY when baseUrl is a
+/// loopback address, else "".
+std::string resolveApiKey(const AgentConfig& config);
 
 } // namespace gaia

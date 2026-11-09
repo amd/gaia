@@ -85,6 +85,10 @@ public:
     static std::string validateArgsAgainstSchema(const std::vector<ToolParameter>& params,
                                                  const json& args);
 
+    /// Turn whole-string numbers and "true"/"false" into the declared type.
+    /// Anything else is returned unchanged for validation to judge.
+    static json coerceArgsToSchema(const std::vector<ToolParameter>& params, const json& args);
+
     // ---- Enable / disable ----
 
     /// Enable or disable a tool by name.

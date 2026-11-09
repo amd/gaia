@@ -78,7 +78,8 @@ TEST(AgentTest, Construction) {
     EXPECT_TRUE(agent.tools().hasTool("echo"));
     EXPECT_TRUE(agent.tools().hasTool("add"));
     EXPECT_TRUE(agent.tools().hasTool("fail"));
-    EXPECT_EQ(agent.tools().size(), 3u);
+    EXPECT_TRUE(agent.tools().hasTool("read_tool_output"));
+    EXPECT_EQ(agent.tools().size(), 4u);
 }
 
 TEST(AgentTest, SystemPromptComposition) {

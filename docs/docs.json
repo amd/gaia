@@ -53,6 +53,7 @@
               {
                 "group": "User Guides",
                 "pages": [
+                  "cpp/gaia-agent",
                   "cpp/bash-agent",
                   "cpp/health-agent",
                   "cpp/wifi-agent",

@@ -1,0 +1,350 @@
+// Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+//
+// Agent-loop behaviour that keeps a turn alive: endpoint auth, transient
+// retries, context-overflow recovery, clipped-but-readable tool output,
+// reasoning stripping, step-budget notices and the closing answer.
+
+#include <gtest/gtest.h>
+
+#include <gaia/agent.h>
+#include <gaia/tool_registry.h>
+#include <gaia/web_tools.h>
+
+#include <string>
+#include <vector>
+
+#include "support/mock_llm_server.h"
+
+using namespace gaia;
+
+namespace {
+
+constexpr const char* kModel = "Gemma-4-E4B-it-GGUF";  // native tool calling
+
+class ResilienceAgent : public Agent {
+public:
+    using Agent::Agent;
+    std::vector<std::string> executed;
+    std::string bigOutput = std::string(50000, 'x');
+
+    void initForTest() { init(); }
+
+protected:
+    void registerTools() override {
+        toolRegistry().registerTool(
+            "add", "Add two numbers",
+            [this](const json& args) -> json {
+                executed.push_back("add");
+                return json{{"sum", args.value("a", 0) + args.value("b", 0)}};
+            },
+            {{"a", ToolParamType::INTEGER, true, "First"},
+             {"b", ToolParamType::INTEGER, false, "Second"}});
+        toolRegistry().registerTool(
+            "big", "Return a large output",
+            [this](const json&) -> json {
+                executed.push_back("big");
+                return json{{"text", "HEAD" + bigOutput + "TAIL"}};
+            },
+            {});
+        toolRegistry().registerTool(
+            "soft_fail", "Fail with ok:false",
+            [this](const json&) -> json {
+                executed.push_back("soft_fail");
+                return json{{"ok", false}, {"error", "disk full"}};
+            },
+            {});
+    }
+    std::string getSystemPrompt() const override { return "test"; }
+};
+
+AgentConfig cfgFor(const bench::MockLlmServer& mock) {
+    AgentConfig cfg;
+    cfg.baseUrl = mock.baseUrl();
+    cfg.modelId = kModel;
+    cfg.maxSteps = 10;
+    cfg.silentMode = true;
+    cfg.streaming = false;
+    cfg.llmRetries = 0;
+    return cfg;
+}
+
+std::string call(const std::string& id, const std::string& name, const std::string& argsJson) {
+    json args = argsJson;  // arguments travel as a JSON-encoded string
+    return json{{"choices",
+                 json::array({{{"message",
+                                {{"role", "assistant"},
+                                 {"content", nullptr},
+                                 {"tool_calls",
+                                  json::array({{{"id", id},
+                                                {"type", "function"},
+                                                {"function", {{"name", name}, {"arguments", args}}}}})}}}}})}}
+        .dump();
+}
+
+std::string answer(const std::string& text) {
+    return json{{"choices", json::array({{{"message", {{"role", "assistant"}, {"content", text}}}}})}}
+        .dump();
+}
+
+}  // namespace
+
+TEST(AgentResilience, ApiKeyIsSentAsBearer) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("hi"));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.apiKey = "sk-test-123";
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    agent.processQuery("hello");
+    ASSERT_FALSE(mock.receivedAuthorization().empty());
+    EXPECT_EQ(mock.receivedAuthorization()[0], "Bearer sk-test-123");
+}
+
+TEST(AgentResilience, NoKeySendsNoAuthorization) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("hi"));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.apiKeyEnv = "";
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    if (!getEnvVar("GAIA_API_KEY").empty() || !getEnvVar("LEMONADE_API_KEY").empty()) {
+        GTEST_SKIP() << "a key in the environment would be sent";
+    }
+    agent.processQuery("hello");
+    EXPECT_EQ(mock.receivedAuthorization()[0], "");
+}
+
+TEST(AgentResilience, TransientFailureIsRetried) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(R"({"error":"overloaded"})", 503);
+    mock.pushResponse(answer("recovered"));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.llmRetries = 1;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["result"], "recovered");
+    EXPECT_EQ(r["status"], "success");
+    EXPECT_EQ(mock.requestCount(), 2);
+}
+
+TEST(AgentResilience, ClientErrorIsNotRetried) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(R"({"error":{"message":"bad model"}})", 400);
+    AgentConfig cfg = cfgFor(mock);
+    cfg.llmRetries = 3;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["status"], "error");
+    EXPECT_EQ(mock.requestCount(), 1);
+}
+
+TEST(AgentResilience, LargeOutputIsClippedAndReadable) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(call("c1", "big", "{}"));
+    mock.pushResponse(call("c2", "read_tool_output", R"({"output_id":1,"offset":0,"length":20})"));
+    mock.pushResponse(answer("done"));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.maxToolResultChars = 2000;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["result"], "done");
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 3u);
+    const json second = json::parse(bodies[1]);
+    const std::string clipped = second["messages"].back()["content"];
+    EXPECT_LT(clipped.size(), 2600u);
+    EXPECT_NE(clipped.find("read_tool_output"), std::string::npos);
+    EXPECT_NE(clipped.find("TAIL"), std::string::npos) << "the tail must survive the clip";
+    bool offered = false;
+    for (const auto& t : second["tools"]) offered |= t["function"]["name"] == "read_tool_output";
+    EXPECT_TRUE(offered);
+
+    const json third = json::parse(bodies[2]);
+    const json readBack = json::parse(third["messages"].back()["content"].get<std::string>());
+    EXPECT_EQ(readBack["status"], "success");
+    EXPECT_EQ(readBack["text"].get<std::string>().size(), 20u);
+    EXPECT_GT(readBack["total"].get<int>(), 50000);
+}
+
+TEST(AgentResilience, ContextOverflowElidesOldOutputAndRetries) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(call("c1", "big", "{}"));
+    mock.pushResponse(call("c2", "big", "{}"));
+    mock.pushResponse(call("c3", "big", "{}"));
+    mock.pushResponse(R"({"error":{"message":"request exceeds the available context size"}})", 400);
+    mock.pushResponse(answer("fits now"));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.maxToolResultChars = 3000;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["result"], "fits now");
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 5u);
+    const json retry = json::parse(bodies[4]);
+    int stubs = 0;
+    for (const auto& m : retry["messages"]) {
+        if (m["role"] == "tool" &&
+            m["content"].get<std::string>().find("removed to fit the context window") !=
+                std::string::npos) {
+            ++stubs;
+        }
+    }
+    EXPECT_EQ(stubs, 1) << "all but the two newest outputs are elided";
+}
+
+TEST(AgentResilience, ReasoningIsStrippedFromTheAnswer) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("<think>let me see</think>\n\nThe answer is 4."));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    EXPECT_EQ(agent.processQuery("2+2")["result"], "The answer is 4.");
+}
+
+TEST(AgentResilience, StripReasoningHandlesStrayAndUnclosedTags) {
+    EXPECT_EQ(stripReasoning("plan</think>answer"), "answer");
+    EXPECT_EQ(stripReasoning("a<think>b</think>c<think>d</think>e"), "ace");
+    EXPECT_EQ(stripReasoning("answer<think>never closed"), "answer");
+    EXPECT_EQ(stripReasoning("no tags"), "no tags");
+}
+
+TEST(AgentResilience, StepBudgetNoticeAndClosingAnswer) {
+    bench::MockLlmServer mock;
+    for (int i = 0; i < 6; ++i) {
+        mock.pushResponse(call("c" + std::to_string(i), "add",
+                               R"({"a":)" + std::to_string(i) + R"(,"b":1})"));
+    }
+    mock.pushResponse(answer("Did 6 additions; the rest is unfinished."));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.maxSteps = 6;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+
+    EXPECT_EQ(r["result"], "Did 6 additions; the rest is unfinished.");
+    EXPECT_EQ(r["status"], "error") << "running out of steps is not success";
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 7u);
+    EXPECT_NE(bodies[3].find("[Step budget] 3 steps remain"), std::string::npos);
+    const json closing = json::parse(bodies.back());
+    EXPECT_EQ(closing["tool_choice"], "none") << "tools stay declared, but none may be called";
+    EXPECT_NE(closing["messages"].back()["content"].get<std::string>().find("[Step limit reached]"),
+              std::string::npos);
+}
+
+TEST(AgentResilience, StringNumbersAreCoerced) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(call("c1", "add", R"({"a":"5","b":"7"})"));
+    mock.pushResponse(answer("12"));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    agent.processQuery("go");
+    ASSERT_EQ(agent.executed.size(), 1u);
+    const json second = json::parse(mock.receivedBodies()[1]);
+    EXPECT_NE(second["messages"].back()["content"].get<std::string>().find("\"sum\":12"),
+              std::string::npos);
+}
+
+TEST(AgentResilience, OkFalseCountsAsAToolError) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(call("c1", "soft_fail", "{}"));
+    mock.pushResponse(answer("could not"));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["tool_errors"], 1);
+}
+
+TEST(AgentResilience, ClippingNeverSplitsUtf8) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(call("c1", "big", "{}"));
+    mock.pushResponse(answer("ok"));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.maxToolResultChars = 1001;
+    ResilienceAgent agent(cfg);
+    std::string euros;
+    for (int i = 0; i < 20000; ++i) euros += "\xE2\x82\xAC";  // three-byte characters
+    agent.bigOutput = euros;
+    agent.initForTest();
+    json r;
+    ASSERT_NO_THROW(r = agent.processQuery("go"));
+    EXPECT_EQ(r["result"], "ok") << "the clipped request must still serialize";
+}
+
+TEST(WebToolsTest, HtmlToTextKeepsTextDropsScripts) {
+    const std::string html =
+        "<html><head><title>T</title><style>p{}</style></head><body>"
+        "<script>alert(1)</script><h1>Title</h1><p>One &amp; two</p>"
+        "<table><tr><td>a</td><td>b</td></tr></table></body></html>";
+    const std::string text = WebTools::htmlToText(html);
+    EXPECT_NE(text.find("Title"), std::string::npos);
+    EXPECT_NE(text.find("One & two"), std::string::npos);
+    EXPECT_EQ(text.find("alert"), std::string::npos);
+    EXPECT_EQ(text.find("p{}"), std::string::npos);
+}
+
+TEST(WebToolsTest, RejectsNonHttpUrls) {
+    ToolRegistry reg;
+    WebTools::registerAll(reg);
+    reg.setConfirmCallback([](const std::string&, const json&) { return ToolConfirmResult::ALLOW_ONCE; });
+    json r = reg.executeTool("web_fetch", json{{"url", "file:///etc/passwd"}});
+    EXPECT_EQ(r["status"], "error");
+}
+
+TEST(ToolRegistryCoercion, OnlyWholeValuesAreCoerced) {
+    std::vector<ToolParameter> params = {{"n", ToolParamType::INTEGER, true, ""},
+                                         {"f", ToolParamType::NUMBER, true, ""},
+                                         {"b", ToolParamType::BOOLEAN, true, ""}};
+    json out = ToolRegistry::coerceArgsToSchema(params, json{{"n", "12"}, {"f", "2.5"}, {"b", "TRUE"}});
+    EXPECT_EQ(out["n"], 12);
+    EXPECT_DOUBLE_EQ(out["f"].get<double>(), 2.5);
+    EXPECT_EQ(out["b"], true);
+    json bad = ToolRegistry::coerceArgsToSchema(params, json{{"n", "12abc"}, {"f", "x"}, {"b", "yes"}});
+    EXPECT_EQ(bad["n"], "12abc");
+    EXPECT_EQ(bad["f"], "x");
+    EXPECT_EQ(bad["b"], "yes");
+}
+
+TEST(WebToolsTest, RefusesLocalAndPrivateAddresses) {
+    ToolRegistry reg;
+    WebTools::registerAll(reg);
+    reg.setConfirmCallback([](const std::string&, const json&) { return ToolConfirmResult::ALLOW_ONCE; });
+    for (const char* url : {"http://127.0.0.1:13305/api/v1/models", "http://localhost/",
+                            "http://169.254.169.254/latest/meta-data/", "http://10.1.2.3/",
+                            "http://[::1]:8080/"}) {
+        json r = reg.executeTool("web_fetch", json{{"url", url}});
+        EXPECT_EQ(r["status"], "error") << url;
+        EXPECT_NE(r["error"].get<std::string>().find("Refused"), std::string::npos) << url << r.dump();
+    }
+}
+
+TEST(AgentResilience, EmptyReplyIsRetriedOnce) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("<think>long reasoning cut off by max_tokens"));
+    mock.pushResponse(answer("Here it is."));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["result"], "Here it is.");
+    EXPECT_EQ(r["status"], "success");
+}
+
+TEST(AgentResilience, MalformedArgumentsAreNotReplayed) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(call("c1", "add", "{\"a\":"));
+    mock.pushResponse(answer("ok"));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    agent.processQuery("go");
+    const json second = json::parse(mock.receivedBodies()[1]);
+    for (const auto& m : second["messages"]) {
+        if (m.contains("tool_calls")) {
+            EXPECT_EQ(m["tool_calls"][0]["function"]["arguments"], "{}");
+        }
+    }
+}

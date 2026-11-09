@@ -41,6 +41,9 @@ namespace gaia {
 ///   - processQuery() main loop
 ///   - JSON parsing with multi-strategy fallback
 ///   - Error recovery with loop detection
+/// Drop <think>…</think> reasoning (and a stray leading </think>) from a reply.
+GAIA_API std::string stripReasoning(const std::string& text);
+
 class GAIA_API Agent {
 public:
     explicit Agent(const AgentConfig& config = {});
@@ -277,6 +280,7 @@ protected:
     /// This exists because virtual dispatch doesn't work from base constructors in C++.
     void init() {
         registerTools();
+        registerBuiltinTools();
         systemPromptDirty_ = true;
     }
 
@@ -321,8 +325,27 @@ private:
     /// Send messages to the LLM and get a response with usage stats.
     /// Uses OpenAI-compatible chat completions API.
     /// @param cfg  Config snapshot from the current processQuery() call.
+    /// @param allowTools  false sends no tool schemas (the closing answer).
     LlmResult callLlm(const std::vector<Message>& messages, const std::string& systemPrompt,
-                      const AgentConfig& cfg);
+                      const AgentConfig& cfg, bool allowTools = true);
+
+    /// callLlm with cfg.llmRetries extra attempts on transient failures, and
+    /// one retry after eliding old tool output when the context overflows.
+    LlmResult callLlmResilient(std::vector<Message>& messages, const std::string& systemPrompt,
+                               const AgentConfig& cfg, bool allowTools = true);
+
+    // ---- Tool output store ----
+
+    /// Registers read_tool_output (every agent, as in Python), before any server thread can read the registry.
+    void registerBuiltinTools();
+
+    /// Serialize a tool result for the conversation, keeping the full text in
+    /// the output store when it has to be clipped.
+    std::string recordToolOutput(const json& toolResult, int maxChars);
+
+    /// Replace older tool outputs in `messages` with a pointer to the store,
+    /// keeping the newest `keepRecent`. Returns the characters freed.
+    size_t elideOldToolOutputs(std::vector<Message>& messages, size_t keepRecent);
 
     // ---- Execution Helpers ----
 
@@ -377,6 +400,11 @@ private:
 
     std::vector<std::string> errorHistory_;
     std::vector<Message> conversationHistory_;
+
+    // Full text of recent tool outputs, by id, for read_tool_output.
+    mutable std::mutex toolOutputsMutex_;
+    std::map<int, std::string> toolOutputs_;
+    int nextToolOutputId_ = 1;
 
     // Security: persistent allowed-tools store (shared with tools_)
     std::shared_ptr<AllowedToolsStore> allowedToolsStore_;
