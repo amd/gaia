@@ -593,11 +593,15 @@ def _read_int(path: Path) -> Optional[int]:
         return None
 
 
-def _runtime_suspended(dev: Path) -> bool:
+def _runtime_status(dev: Path) -> Optional[str]:
     try:
-        return (dev / "power" / "runtime_status").read_text().strip() == "suspended"
+        return (dev / "power" / "runtime_status").read_text().strip()
     except OSError:
-        return False
+        return None
+
+
+def _runtime_suspended(dev: Path) -> bool:
+    return _runtime_status(dev) == "suspended"
 
 
 def sysfs_gpus(root: Path = _DRM) -> List[Tuple[Path, str]]:
@@ -753,11 +757,7 @@ def _settle_s(dev: Path) -> float:
 
 
 def _npu_asleep(dev: Path) -> bool:
-    try:
-        status = (dev / "power" / "runtime_status").read_text().strip()
-    except OSError:
-        return False
-    return status in ("suspended", "suspending")
+    return _runtime_status(dev) in ("suspended", "suspending")
 
 
 @dataclass
