@@ -305,6 +305,13 @@ protected:
     /// computed an undeclared name is a wiring bug, not a reason to guess.
     virtual std::optional<std::string> selectSkillSet() const { return std::nullopt; }
 
+    /// Review a final answer before it is accepted. Return a note to send it
+    /// back to the model once (e.g. "it says report.md was saved, but there is
+    /// no such file"); nullopt accepts it. Called at most once per query.
+    virtual std::optional<std::string> reviewFinalAnswer(const std::string& /*answer*/) {
+        return std::nullopt;
+    }
+
 private:
     /// Unified entry point for all processQuery overloads. Owns the full
     /// conversation turn: concurrency guard, empty-input validation,

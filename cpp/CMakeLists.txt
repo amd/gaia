@@ -473,6 +473,9 @@ if(GAIA_BUILD_TESTS)
         tests/test_skill_library.cpp
         tests/test_workspace.cpp
         tests/test_document_index.cpp
+        tests/test_gaia_agent.cpp
+        agents/gaia/gaia_agent.cpp
+        agents/bash/bash_tools.cpp
         tests/test_console.cpp
         tests/test_http_client.cpp
         tests/test_lemonade_client.cpp

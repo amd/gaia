@@ -1368,6 +1368,19 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     bool emptyNudged = false;
     int malformedStreak = 0;
     std::string stopReason;  // why the loop ended without an answer: loop | empty
+    bool answerReviewed = false;
+    // One chance for the agent to send a final answer back (reviewFinalAnswer).
+    auto reviewOnce = [&](const std::string& answer) -> std::optional<Message> {
+        if (answerReviewed || stepsTaken >= stepsLimit) return std::nullopt;
+        answerReviewed = true;
+        std::optional<std::string> note = reviewFinalAnswer(answer);
+        if (!note) return std::nullopt;
+        console_->printWarning("Answer sent back: " + *note);
+        Message m;
+        m.role = MessageRole::USER;
+        m.content = "[Check before answering] " + *note;
+        return m;
+    };
 
     while (stepsTaken < stepsLimit && finalAnswer.empty()) {
         // ---- Cancel check ----
@@ -1623,6 +1636,10 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
         // ---- Handle final answer ----
         if (parsed.answer.has_value()) {
+            if (auto pushback = reviewOnce(parsed.answer.value())) {
+                messages.push_back(*pushback);
+                continue;
+            }
             finalAnswer = parsed.answer.value();
             if (!config_.streaming || config_.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
@@ -1697,6 +1714,10 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
         // No tool call and no answer — treat response as conversational
         if (!parsed.toolName.has_value() && !parsed.answer.has_value()) {
+            if (auto pushback = reviewOnce(response)) {
+                messages.push_back(*pushback);
+                continue;
+            }
             finalAnswer = response;
             if (!config_.streaming || config_.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
