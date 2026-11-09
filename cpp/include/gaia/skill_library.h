@@ -68,6 +68,19 @@ public:
     /// list_skills and load_skill.
     void registerTools(ToolRegistry& registry);
 
+    /// The user root (~/.gaia/skills, or $GAIA_HOME/skills).
+    static std::string userRoot();
+
+    /// Copy the skill folder `source` (holding SKILL.md) into `destRoot`,
+    /// replacing an installed copy of the same name. The skill must validate
+    /// and its folder must be named after it. Returns the installed folder.
+    /// Throws SkillError / std::runtime_error naming what was wrong.
+    static std::string installFromFolder(const std::string& source,
+                                         const std::string& destRoot = userRoot());
+
+    /// Remove an installed skill from `root`. Returns false when absent.
+    static bool removeInstalled(const std::string& name, const std::string& root = userRoot());
+
     // ---- SkillLoader (manifest skill sets) ----
     bool loadSkill(const std::string& name) override;
     bool unloadSkill(const std::string& name) override;
