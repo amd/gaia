@@ -31,7 +31,7 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillNotFoundError, SkillValidationError
@@ -1485,8 +1485,3 @@ def example_tool(text: str) -> dict:
     """Replace this with what your tool does."""
     return {"echo": text}
 '''
-
-
-def resolve_manager(agent_skill_dirs: Optional[list] = None) -> SkillManager:
-    """Build a manager for embedders that need the CLI's root configuration."""
-    return SkillManager(agent_skill_dirs=agent_skill_dirs or [])
