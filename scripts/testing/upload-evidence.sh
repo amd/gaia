@@ -14,9 +14,10 @@
 #                      e.g. 20261109T153012Z-3f2a, so reruns never overwrite.
 #
 # Every file passes a secret scan first (scan_evidence.py, using the patterns of
-# gaia.llm.failure_record). One hit refuses the whole batch and uploads nothing;
-# there is no flag to skip it. Images and video are not scanned: each gets a
-# reminder to review it by eye.
+# gaia.llm.failure_record). One hit, or any non-media file that isn't UTF-8 text
+# (an archive, gzip, UTF-16), refuses the whole batch and uploads nothing; there
+# is no flag to skip it. Real images and video (checked by magic bytes, not just
+# extension) are not scanned: each gets a reminder to review it by eye.
 #
 # Credentials stay in your machine-local rclone config — remote 'gaia' by default
 # (override with R2_REMOTE). One-time setup: scripts/video-demo/R2-SETUP.md
@@ -70,11 +71,9 @@ fi
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n')"
 KEY_PREFIX="testing/${REF}/${RUN_ID}"
 
+# Each URL prints as soon as its file is up, so a batch cut short shows what landed.
 for f in "$@"; do
-  rclone copyto "${f}" "${REMOTE}:${BUCKET}/${KEY_PREFIX}/$(basename "${f}")" \
-    --s3-no-check-bucket
-done
-
-for f in "$@"; do
-  echo "${PUBLIC_BASE}/${KEY_PREFIX}/$(basename "${f}")"
+  name="$(basename "${f}")"
+  rclone copyto --s3-no-check-bucket -- "${f}" "${REMOTE}:${BUCKET}/${KEY_PREFIX}/${name}"
+  echo "${PUBLIC_BASE}/${KEY_PREFIX}/${name}"
 done

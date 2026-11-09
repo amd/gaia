@@ -162,14 +162,19 @@ scripts/testing/upload-evidence.sh pr-1234 chat.png run.log
   (`pr-1234`, `issue-2369`); `<run-id>` is the UTC time plus 4 random hex digits,
   so a rerun never overwrites earlier evidence. File names must be letters,
   digits, `.`, `_` or `-`.
-- **Secret scan:** every file except images and video is checked against the
-  patterns GAIA redacts from failure records (`_SECRET_PATTERNS` in
-  `src/gaia/llm/failure_record.py`: bearer tokens, `sk-`/`ghp_`-style keys,
-  `NAME_API_KEY=` assignments, PEM private keys, passwords in URLs). One hit
-  uploads nothing and names the file and pattern. There is no skip flag: remove
-  the secret and rerun. Add a pattern there and both the scan and redaction get it.
-- **Images and video** are not scanned. The helper names each one so you check it
-  by eye for keys, tokens, emails, and personal data before it goes public.
+- **Secret scan:** every file except images and video must be UTF-8 text, and is
+  checked against the patterns GAIA redacts from failure records
+  (`_NAMED_SECRET_PATTERNS` in `src/gaia/llm/failure_record.py`: bearer tokens,
+  `sk-`/`ghp_`-style keys, `NAME_API_KEY=` assignments, PEM private keys,
+  passwords in URLs). A file that isn't UTF-8 text — a `.zip`, a `.gz`, a UTF-16
+  log such as Windows PowerShell 5.1's `>` writes — can't be scanned, so it is
+  refused: upload it unpacked or re-saved as UTF-8. One hit or refusal uploads
+  nothing and names the file and pattern. There is no skip flag: fix the file and
+  rerun. Add a pattern there and both the scan and redaction get it.
+- **Images and video** (recognised by their content, not just the extension, so a
+  log renamed `.png` is still scanned) are not scanned. The helper names each one
+  so you check it by eye for keys, tokens, emails, and personal data. Each URL
+  prints as soon as its file is uploaded.
 - **Needs** rclone with the `gaia` remote above (or set `R2_REMOTE`), and this
   repo's Python environment for the scan. Credentials stay in your rclone config;
   CI does not use this helper.

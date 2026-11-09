@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: MIT
 """scripts/testing/upload-evidence.sh, run against a stub rclone that records calls."""
 
+import gzip
 import os
 import re
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -23,7 +25,9 @@ FAKE_SECRETS = {
     "openai": "sk-" + "FAKE" * 6,
     "assignment": "ANTHROPIC_API_KEY=" + "not-a-real-key",
     "pem": "-----BEGIN "
-    + "PRIVATE KEY-----\nNOT-A-REAL-KEY\n-----END PRIVATE KEY-----",
+    + "PRIVATE KEY-----\n"
+    + "NOTAREALKEY" * 3
+    + "\n-----END PRIVATE KEY-----",
 }
 URL_RE = re.compile(
     r"^https://assets\.amd-gaia\.ai/testing/pr-1/\d{8}T\d{6}Z-[0-9a-f]{4}/(\S+)$"
@@ -40,12 +44,14 @@ def run(tmp_path):
         "#!/usr/bin/env bash\n"
         'echo "$*" >> "$RCLONE_LOG"\n'
         'if [ "$1" = listremotes ] && [ -n "$STUB_REMOTES" ]; then '
-        'echo "$STUB_REMOTES"; fi\n',
+        'echo "$STUB_REMOTES"; fi\n'
+        'if [ -n "$STUB_FAIL" ]; then '
+        'case "$*" in *"$STUB_FAIL"*) exit 1 ;; esac; fi\n',
         newline="\n",
     )
     stub.chmod(0o755)
 
-    def _run(*files, remotes="gaia:", with_rclone=True):
+    def _run(*files, remotes="gaia:", with_rclone=True, fail_on=""):
         path = [os.path.dirname(sys.executable), os.environ["PATH"]]
         if with_rclone:
             path.insert(0, str(stub_dir))
@@ -54,6 +60,7 @@ def run(tmp_path):
             PATH=os.pathsep.join(path),
             RCLONE_LOG=str(log),
             STUB_REMOTES=remotes,
+            STUB_FAIL=fail_on,
         )
         env.pop("R2_REMOTE", None)
         proc = subprocess.run(
@@ -80,6 +87,10 @@ def _uploads(calls):
     return [c for c in calls if c.startswith(("copy", "copyto", "sync", "move"))]
 
 
+def _blocked(proc):
+    return [line for line in proc.stderr.splitlines() if line.startswith("blocked")]
+
+
 def test_a_file_with_a_fake_key_blocks_the_batch_and_nothing_uploads(run, tmp_path):
     clean = _file(tmp_path, "clean.txt", "agent answered in 3.2s\n")
     leaky = [
@@ -90,9 +101,9 @@ def test_a_file_with_a_fake_key_blocks_the_batch_and_nothing_uploads(run, tmp_pa
     proc, calls = run(clean, *leaky)
 
     assert proc.returncode != 0
-    blocked = [line for line in proc.stderr.splitlines() if line.startswith("blocked")]
+    blocked = _blocked(proc)
     for kind in FAKE_SECRETS:
-        assert any(f"{kind}.log matches secret pattern" in b for b in blocked), kind
+        assert any(f"{kind}.log contains a " in b for b in blocked), kind
     assert "clean.txt" not in proc.stderr
     assert "nothing was uploaded" in proc.stderr
     for secret in FAKE_SECRETS.values():
@@ -102,8 +113,34 @@ def test_a_file_with_a_fake_key_blocks_the_batch_and_nothing_uploads(run, tmp_pa
     assert "assets.amd-gaia.ai" not in proc.stdout
 
 
+def test_files_that_cannot_be_read_as_text_are_refused(run, tmp_path):
+    leak = f"env dump\n{FAKE_SECRETS['github']}\n"
+    clean = _file(tmp_path, "clean.md", "café answered ✓\n")
+    zipped = tmp_path / "trace.zip"
+    with zipfile.ZipFile(zipped, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("trace.log", leak)
+    gzipped = tmp_path / "run.log.gz"
+    gzipped.write_bytes(gzip.compress(leak.encode()))
+    utf16 = tmp_path / "ps51.log"
+    utf16.write_bytes(leak.encode("utf-16"))
+    utf16le = tmp_path / "nobom.log"
+    utf16le.write_bytes(leak.encode("utf-16-le"))
+    renamed = _file(tmp_path, "notes.png", leak)
+
+    proc, calls = run(clean, zipped, gzipped, utf16, utf16le, renamed)
+
+    assert proc.returncode != 0
+    blocked = _blocked(proc)
+    for name in ("trace.zip", "run.log.gz", "ps51.log", "nobom.log"):
+        assert any(name in b and "not UTF-8 text" in b for b in blocked), name
+    assert any("notes.png contains a " in b for b in blocked)
+    assert "clean.md" not in proc.stderr
+    assert "review by eye" not in proc.stderr
+    assert _uploads(calls) == []
+
+
 def test_clean_files_upload_and_print_one_public_url_each(run, tmp_path):
-    log = _file(tmp_path, "run.log", "loaded model, answered, exited 0\n")
+    log = _file(tmp_path, "run.log", "loaded model, answered ✓, exited 0\n")
     shot = tmp_path / "chat.png"
     shot.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
 
@@ -117,9 +154,20 @@ def test_clean_files_upload_and_print_one_public_url_each(run, tmp_path):
     uploads = _uploads(calls)
     assert len(uploads) == 2
     for upload, name in zip(uploads, ["run.log", "chat.png"]):
-        assert upload.startswith("copyto ")
-        assert upload.endswith(f"gaia:amd-gaia/{prefix}/{name} --s3-no-check-bucket")
+        assert upload.startswith("copyto --s3-no-check-bucket -- ")
+        assert upload.endswith(f"{name} gaia:amd-gaia/{prefix}/{name}")
     assert "review by eye before sharing" in proc.stderr and "chat.png" in proc.stderr
+
+
+def test_a_failed_upload_still_shows_the_urls_already_uploaded(run, tmp_path):
+    first = _file(tmp_path, "first.log", "ok\n")
+    second = _file(tmp_path, "second.log", "ok\n")
+
+    proc, calls = run(first, second, fail_on="second.log")
+
+    assert proc.returncode != 0
+    assert [URL_RE.match(u).group(1) for u in proc.stdout.split()] == ["first.log"]
+    assert len(_uploads(calls)) == 2
 
 
 def test_missing_remote_is_an_actionable_error_and_nothing_uploads(run, tmp_path):

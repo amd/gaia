@@ -341,18 +341,34 @@ def test_url_passwords_and_any_spelling_of_home_are_redacted(home):
     assert json.dumps(tmp)[1:-1].lower() not in out.lower()
 
 
+# Assembled at runtime so no key-shaped literal sits in the repo.
+_PEM_BEGIN = "-----BEGIN " + "RSA PRIVATE KEY-----"
+_PEM_END = "-----END " + "RSA PRIVATE KEY-----"
+_PEM_BODY = "NOTAREALKEY" * 3
+
+
 def test_private_keys_are_redacted_whole_even_when_truncated():
-    body = "NOT-A-REAL-KEY-BODY"
-    pem = f"-----BEGIN RSA PRIVATE KEY-----\n{body}\n-----END RSA PRIVATE KEY-----"
+    pem = f"{_PEM_BEGIN}\n{_PEM_BODY}\nNOTAREALKEYTOO\n{_PEM_END}"
     out = fr.redact(f"before\n{pem}\nafter")
-    assert body not in out and "before" in out and "after" in out
-    assert body not in fr.redact(f"tail\n-----BEGIN PRIVATE KEY-----\n{body}")
+    assert _PEM_BODY not in out and "NOTAREALKEYTOO" not in out
+    assert "before" in out and "after" in out
+    assert _PEM_BODY not in fr.redact(f"tail\n{_PEM_BEGIN}\n{_PEM_BODY}")
+    encrypted = f"{_PEM_BEGIN}\nProc-Type: 4,ENCRYPTED\n\n{_PEM_BODY}\n{_PEM_END}"
+    assert _PEM_BODY not in fr.redact(encrypted)
 
 
-def test_find_secrets_names_patterns_never_values():
-    assert fr.find_secrets("agent answered in 3.2s; basic") == []
-    found = fr.find_secrets(f"Authorization: Bearer {KEY}")
-    assert found and all(KEY not in p for p in found)
+def test_a_quoted_pem_header_alone_is_not_wiped_to_the_end():
+    text = f"error: expected {_PEM_BEGIN}\nthen the rest of the log\n"
+    assert fr.redact(text) == text
+    assert fr.matched_pattern_names(text) == []
+
+
+def test_matched_pattern_names_name_patterns_never_values():
+    assert fr.matched_pattern_names("agent answered in 3.2s; basic") == []
+    found = fr.matched_pattern_names(f"Authorization: Bearer {KEY}")
+    assert found and all(KEY not in name for name in found)
+    pem = f"{_PEM_BEGIN}\n{_PEM_BODY}\n{_PEM_END}"
+    assert fr.matched_pattern_names(pem) == ["PEM private key"]
 
 
 def test_probe_ignores_proxies_and_redirects(monkeypatch):

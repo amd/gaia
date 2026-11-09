@@ -60,22 +60,37 @@ _SECRET_KEY_RE = re.compile(
     r"|auth(?:orization)?|credentials?|cookie)$",
     re.IGNORECASE,
 )
-_SECRET_PATTERNS = (
-    re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{6,}"),
-    re.compile(
-        r"(?i)\b((?:[a-z]+[_-])?(?:api[_-]?key|token|secret|password|passwd))"
-        r"([\"']?\s*[:=]\s*[\"']?)[^\s\"',;&]+"
+_NAMED_SECRET_PATTERNS = (
+    (
+        "bearer/basic auth header",
+        re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{6,}"),
     ),
-    re.compile(r"\b(?:sk|pk|ghp|gho|ghs|xox[abp])[-_][A-Za-z0-9_-]{12,}"),
-    re.compile(r"\bfw_[A-Za-z0-9]{16,}"),
-    # user:password in a URL.
-    re.compile(r"(?<=://)[^/\s:@]+:[^/\s@]+(?=@)"),
-    # A PEM private key, to its END line or, if truncated, to the end of the text.
-    re.compile(
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?"
-        r"(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"
+    (
+        "key/token/password assignment",
+        re.compile(
+            r"(?i)\b((?:[a-z]+[_-])?(?:api[_-]?key|token|secret|password|passwd))"
+            r"([\"']?\s*[:=]\s*[\"']?)[^\s\"',;&]+"
+        ),
+    ),
+    (
+        "provider key prefix (sk-, ghp_, xoxb-...)",
+        re.compile(r"\b(?:sk|pk|ghp|gho|ghs|xox[abp])[-_][A-Za-z0-9_-]{12,}"),
+    ),
+    ("Fireworks key", re.compile(r"\bfw_[A-Za-z0-9]{16,}")),
+    ("password in a URL", re.compile(r"(?<=://)[^/\s:@]+:[^/\s@]+(?=@)")),
+    # Needs a base64 line after the header, so a message quoting only the
+    # header isn't wiped; runs to the END line or, if truncated, the text's end.
+    (
+        "PEM private key",
+        re.compile(
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----[ \t]*\r?\n"
+            r"(?:[\w-]+:[^\n]*\r?\n|[ \t]*\r?\n)*"
+            r"[A-Za-z0-9+/]{16,}={0,2}[ \t]*(?:\r?\n|\Z)[\s\S]*?"
+            r"(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"
+        ),
     ),
 )
+_SECRET_PATTERNS = tuple(pattern for _, pattern in _NAMED_SECRET_PATTERNS)
 
 
 def failures_dir() -> Path:
@@ -117,9 +132,9 @@ def redact(text: str, known: Iterable[str] = ()) -> str:
     return home.sub("~", text) if home else text
 
 
-def find_secrets(text: str) -> List[str]:
-    """The secret patterns *text* matches, as regex source; never the secret."""
-    return [p.pattern for p in _SECRET_PATTERNS if p.search(text)]
+def matched_pattern_names(text: str) -> List[str]:
+    """Names of the secret patterns *text* matches; never the matched value."""
+    return [name for name, p in _NAMED_SECRET_PATTERNS if p.search(text)]
 
 
 def redact_value(value: Any, known: Iterable[str] = ()) -> Any:

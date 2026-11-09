@@ -182,7 +182,7 @@ If the run died mid-deploy, also check for a corrupt/partial model cache before 
   # → prints https://assets.amd-gaia.ai/testing/<pr-or-issue>/<run-id>/NN_step.png, one URL per file
   ```
 
-  Always upload through this helper, never a bare `rclone copy`: it secret-scans every non-image file and uploads nothing if one matches, and names each image for you to review by eye (layout and patterns: `scripts/video-demo/R2-SETUP.md`).
+  Always upload through this helper, never a bare `rclone copy`: it secret-scans every non-image file, refuses any that is not UTF-8 text (zip, gz, UTF-16), and uploads nothing if one fails, and names each image for you to review by eye (layout and patterns: `scripts/video-demo/R2-SETUP.md`).
 
   Credentials are **machine-local only** — an rclone remote named `gaia` in the user's `rclone.conf` (one-time setup: `scripts/video-demo/R2-SETUP.md`); they are gated by a secret key and must **never** be committed, echoed, or pasted into an issue/PR. No `gaia` remote on this machine → use the evidence branch alone and say so in the report. **The bucket is world-readable** (`assets.amd-gaia.ai`), so the sanitize Hard rule is a hard gate before every upload — an artifact you wouldn't post publicly does not go to R2.
 - **Video artifacts** (Agent UI journeys, demos): record with Playwright's built-in video capture or a screen recorder, compress with `scripts/video-demo/compress-video.sh|.ps1`, then upload/link exactly like screenshots (same bucket, same sanitize gate). Prefixes: test-evidence video goes with its run under `testing/<pr-or-issue>/<run-id>/`; demos go under the top-level `demos/<name>/`. A demo that isn't tied to a PR is shared on a GitHub **issue** — demos don't need to live in the repo.
