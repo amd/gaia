@@ -78,7 +78,7 @@ For working on the TUI itself. Needs `git`, [Go](https://go.dev/dl/), and
 ```bash
 git clone https://github.com/amd/gaia.git
 cd gaia && uv venv && uv pip install -e .
-cd tui && make build                # -> tui/bin/gaia-tui
+cd tui && make build                # -> tui/bin/gaia-tui (.exe on Windows)
 cp bin/gaia-tui ~/.local/bin/       # somewhere on your PATH
 ```
 

@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 
@@ -18,26 +17,13 @@ import (
 
 // fakeDaemon is an httptest server that answers the daemon's Agent Hub control
 // plane, paired with an instance.json in an isolated GAIA_DAEMON_HOME.
-//
-// It records every install request body, which is what lets the trust-gate test
-// assert the thing that matters: that nothing retried with trusted=true on the
-// user's behalf.
 type fakeDaemon struct {
 	t   *testing.T
 	srv *httptest.Server
 
 	mu sync.Mutex
-	// installBodies is one entry per POST .../install, in order.
-	installBodies []map[string]any
-	// uninstalled is one entry per DELETE, in order.
-	uninstalled []string
 	// catalogBody is served from GET /daemon/v1/catalog.
 	catalogBody map[string]any
-	// progress is the queue of install-status bodies; the last one repeats.
-	progress []map[string]any
-	// installedAfterTrust flips the catalog entry to installed once a trusted
-	// install has been accepted.
-	trustedAccepted bool
 
 	// missingRoutes are paths this daemon does not have — a build older than the
 	// client talking to it. They answer the way a web framework answers an
@@ -82,10 +68,6 @@ func newFakeDaemon(t *testing.T) *fakeDaemon {
 
 	f := &fakeDaemon{t: t}
 	f.catalogBody = emailCatalog(false)
-	f.progress = []map[string]any{
-		{"agent_id": "email", "status": "running", "phase": "download", "percent": 42.0, "version": "0.5.0"},
-		{"agent_id": "email", "status": "completed", "phase": "completed", "percent": 100.0, "version": "0.5.0"},
-	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
 
@@ -156,9 +138,6 @@ func (f *fakeDaemon) handle(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == daemon.APIPrefix+"/catalog":
 		f.mu.Lock()
 		body := f.catalogBody
-		if f.trustedAccepted {
-			body = emailCatalog(true)
-		}
 		f.mu.Unlock()
 		writeJSON(w, body)
 
@@ -167,78 +146,14 @@ func (f *fakeDaemon) handle(w http.ResponseWriter, r *http.Request) {
 			{"agent_id": "email", "state": "stopped"},
 		}})
 
-	case strings.HasSuffix(r.URL.Path, "/install"):
-		f.handleInstall(w, r)
-
-	case strings.HasSuffix(r.URL.Path, "/install-status"):
-		f.mu.Lock()
-		body := f.progress[0]
-		if len(f.progress) > 1 {
-			f.progress = f.progress[1:]
-		}
-		f.mu.Unlock()
-		writeJSON(w, body)
-
-	case r.Method == http.MethodDelete:
-		id := strings.TrimPrefix(r.URL.Path, daemon.APIPrefix+"/agents/")
-		f.mu.Lock()
-		f.uninstalled = append(f.uninstalled, id)
-		f.mu.Unlock()
-		writeJSON(w, map[string]any{"agent_id": id, "status": "uninstalled"})
-
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		writeJSON(w, map[string]any{"detail": "no route " + r.URL.Path})
 	}
 }
 
-func (f *fakeDaemon) handleInstall(w http.ResponseWriter, r *http.Request) {
-	var body map[string]any
-	_ = json.NewDecoder(r.Body).Decode(&body)
-
-	f.mu.Lock()
-	f.installBodies = append(f.installBodies, body)
-	trusted := body["trusted"] == true
-	if trusted {
-		f.trustedAccepted = true
-	}
-	f.mu.Unlock()
-
-	// Mirrors the real daemon for a non-verified agent: an install without an
-	// explicit opt-in is a 403 naming --trust.
-	if !trusted {
-		w.WriteHeader(http.StatusForbidden)
-		writeJSON(w, map[string]any{"detail": "installing 'email' runs code AMD has not verified. " +
-			"From the CLI: `gaia hub install email --trust`."})
-		return
-	}
-	w.WriteHeader(http.StatusAccepted)
-	writeJSON(w, map[string]any{"agent_id": "email", "status": "queued", "version": "0.5.0"})
-}
-
-func (f *fakeDaemon) installCallCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.installBodies)
-}
-
-func (f *fakeDaemon) installBody(i int) map[string]any {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if i >= len(f.installBodies) {
-		f.t.Fatalf("no install call #%d (saw %d)", i, len(f.installBodies))
-	}
-	return f.installBodies[i]
-}
-
-func (f *fakeDaemon) uninstallCalls() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.uninstalled...)
-}
-
 // emailCatalog is a GET /daemon/v1/catalog body with one supervised,
-// non-verified agent — the real shape as of the install routes landing.
+// non-verified agent.
 func emailCatalog(installed bool) map[string]any {
 	entry := map[string]any{
 		"id":                  "email",

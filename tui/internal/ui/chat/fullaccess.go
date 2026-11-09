@@ -184,12 +184,6 @@ func (m ChatModel) applyLaunchFullAccess() ChatModel {
 	return m
 }
 
-// fullAccessHelpLine documents the command wherever the TUI lists what it can do.
-func fullAccessHelpLine() string {
-	return "/full-access — let the agent run tools without asking (off by default);\n" +
-		"              add `always` to keep it on for every session, `never` to stop"
-}
-
 // isFullAccessCommand reports whether a composed line is one of the full-access
 // forms, so the composer never sends it to the agent as a question.
 //
