@@ -1667,6 +1667,11 @@ class AgentSession:
                 f"{', '.join(unknown)}. Allowed: "
                 f"{', '.join(sorted(_SESSION_OVERRIDE_KEYS))}."
             )
+        if config is not None and config_kwargs:
+            raise TypeError(
+                "create_session() takes either config or keyword overrides, "
+                f"not both (got config and {', '.join(sorted(config_kwargs))})."
+            )
         if config is None:
             # Create config from defaults with overrides
             config = AgentConfig(

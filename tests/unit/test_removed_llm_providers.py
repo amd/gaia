@@ -63,6 +63,13 @@ def test_create_session_rejects_the_flag_instead_of_running_locally():
         AgentSession().create_session("s", use_chatgpt=True)
 
 
+def test_create_session_rejects_overrides_it_would_ignore():
+    from gaia.chat.sdk import AgentConfig, AgentSession
+
+    with pytest.raises(TypeError, match="not both"):
+        AgentSession().create_session("s", config=AgentConfig(), model="m")
+
+
 def test_cli_initialization_no_longer_accepts_the_flag():
     from gaia.cli import initialize_lemonade_for_agent
 
