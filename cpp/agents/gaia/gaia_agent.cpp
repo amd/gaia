@@ -30,6 +30,10 @@ GaiaAgent::GaiaAgent(const AgentConfig& config, Options options)
         skills_ = std::make_unique<SkillLibrary>();
         setSkillLoader(skills_.get());
     }
+    if (options_.memory) {
+        memory_ = std::make_unique<MemoryStore>(
+            options_.memoryPath.empty() ? MemoryStore::defaultPath() : options_.memoryPath);
+    }
     if (options_.documents) {
         EmbedFunction embed;
         if (!options_.embeddingModel.empty()) {
@@ -76,6 +80,7 @@ void GaiaAgent::registerTools() {
                                                 : std::function<std::string(const std::string&)>());
     }
     if (skills_ && !skills_->skills().empty()) skills_->registerTools(toolRegistry());
+    if (memory_) memory_->registerTools(toolRegistry());
 }
 
 std::string GaiaAgent::getSystemPrompt() const {
@@ -98,7 +103,8 @@ std::string GaiaAgent::getSystemPrompt() const {
 
 ## Final answer
 Lead with the result. Name the files you created or changed. Cite where facts came from (file and page, sheet or line) when the user asked about documents. State plainly anything you could not do or verify. Keep it concise.)" + systemContext() +
-           (skills_ ? "\n" + skills_->renderPrompt() : std::string());
+           (skills_ ? "\n" + skills_->renderPrompt() : std::string()) +
+           (memory_ ? "\n" + memory_->promptBlock() : std::string());
 }
 
 std::string GaiaAgent::systemContext() const {

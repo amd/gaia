@@ -89,6 +89,7 @@ struct Cli {
     bool skipPermissions = false;
     bool noWeb = false;
     bool noSkills = false;
+    bool noMemory = false;
     bool fullAccess = false;
     std::vector<std::string> allowDirs;
     bool debug = false;
@@ -126,6 +127,7 @@ void printUsage() {
         "                            ~/.config/gaia-cpp/config.json when present)\n"
         "  --no-web                  Leave out web_fetch\n"
         "  --no-skills               Leave out installed SKILL.md skills\n"
+        "  --no-memory               Don't remember or recall facts across sessions\n"
         "  --allow-dir DIR           Also let the tools use DIR (repeatable). By default\n"
         "                            they are confined to the working directory\n"
         "  --full-access             Let the tools reach any path the user can\n"
@@ -195,6 +197,7 @@ Cli parseArgs(int argc, char** argv) {
         else if (a == "--config") cli.configFile = need(i, a);
         else if (a == "--no-web") cli.noWeb = true;
         else if (a == "--no-skills") cli.noSkills = true;
+        else if (a == "--no-memory") cli.noMemory = true;
         else if (a == "--allow-dir") cli.allowDirs.push_back(need(i, a));
         else if (a == "--full-access") cli.fullAccess = true;
         else if (a == "--dangerously-skip-permissions") cli.skipPermissions = true;
@@ -359,6 +362,7 @@ gaia::GaiaAgent::Options agentOptions(const Cli& cli, const Settings& settings) 
     o.embeddingModel = settings.embeddingModel;
     o.webTools = !cli.noWeb;
     o.skills = !cli.noSkills;
+    o.memory = !cli.noMemory;
     o.fullAccess = cli.fullAccess;
     std::error_code ec;
     o.workspaceRoots.push_back(fs::current_path(ec).string());

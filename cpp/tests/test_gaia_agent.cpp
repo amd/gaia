@@ -38,6 +38,7 @@ GaiaAgent::Options optionsFor(const Workdir& w) {
     o.skills = false;
     o.webTools = false;
     o.workspaceRoots = {w.path.string()};
+    o.memoryPath = ":memory:";
     return o;
 }
 
