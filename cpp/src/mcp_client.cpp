@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "gaia/mcp_client.h"
+#include "gaia/keyring.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -1048,6 +1049,16 @@ MCPClient MCPClient::fromConfig(const std::string& name, const json& config,
                                             "': \"headers\" must be an object of strings");
             }
             for (const auto& kv : config["headers"].items()) {
+                const json& hv = kv.value();
+                if (hv.is_object() && hv.contains("$keyring") && hv["$keyring"].is_string()) {
+                    try {
+                        headers[kv.key()] = resolveKeyringReference(hv["$keyring"].get<std::string>());
+                    } catch (const std::exception& e) {
+                        throw std::invalid_argument("MCP server '" + name + "' header \"" +
+                                                    kv.key() + "\": " + e.what());
+                    }
+                    continue;
+                }
                 if (!kv.value().is_string()) {
                     throw std::invalid_argument("MCP server '" + name + "': headers[\"" +
                                                 kv.key() + "\"] must be a string");
@@ -1077,7 +1088,22 @@ MCPClient MCPClient::fromConfig(const std::string& name, const json& config,
     std::map<std::string, std::string> envVars;
     if (config.contains("env") && config["env"].is_object()) {
         for (const auto& kv : config["env"].items()) {
-            envVars[kv.key()] = kv.value().get<std::string>();
+            const json& v = kv.value();
+            if (v.is_string()) {
+                envVars[kv.key()] = v.get<std::string>();
+            } else if (v.is_number() || v.is_boolean()) {
+                envVars[kv.key()] = v.dump();
+            } else if (v.is_object() && v.contains("$keyring") && v["$keyring"].is_string()) {
+                try {
+                    envVars[kv.key()] = resolveKeyringReference(v["$keyring"].get<std::string>());
+                } catch (const std::exception& e) {
+                    throw std::invalid_argument("MCP server '" + name + "' env \"" + kv.key() +
+                                                "\": " + e.what());
+                }
+            } else {
+                throw std::invalid_argument("MCP server '" + name + "': env[\"" + kv.key() +
+                                            "\"] must be a string or a {\"$keyring\": ...} reference");
+            }
         }
     }
 

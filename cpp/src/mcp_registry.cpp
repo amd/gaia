@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "gaia/mcp_registry.h"
+#include "gaia/keyring.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -45,6 +46,23 @@ std::string pythonStr(const json& value) {
 
 /// Validate a Streamable HTTP entry. `${VAR}` in header values is left as-is:
 /// MCPClient::fromConfig() expands it at connect time, so a reconnect re-reads it.
+// A {"$keyring": "<service>:<name>"} value, read from the OS keyring. The
+// secret stays in memory: it is never written back to any config.
+std::string keyringValue(const std::string& id, const std::string& key, const json& ref,
+                         const std::string& where) {
+    if (!ref.is_string()) {
+        throw MCPRegistryError("MCP server '" + id + "': the $keyring reference for \"" + key +
+                               "\" must be a string" + where + ".");
+    }
+    try {
+        return resolveKeyringReference(ref.get<std::string>());
+    } catch (const std::exception& e) {
+        throw MCPRegistryError("MCP server '" + id + "' keeps \"" + key +
+                               "\" in the OS keyring" + where + ", and it couldn't be read: " +
+                               e.what());
+    }
+}
+
 json normalizeHttpEntry(const std::string& id, const json& entry, const std::string& where) {
     const bool urlOk = entry.contains("url") && entry["url"].is_string() &&
                        (entry["url"].get<std::string>().rfind("http://", 0) == 0 ||
@@ -69,13 +87,7 @@ json normalizeHttpEntry(const std::string& id, const json& entry, const std::str
             if (value.is_string()) {
                 headers[kv.key()] = value;
             } else if (value.is_object() && value.contains("$keyring")) {
-                throw MCPRegistryError(
-                    "MCP server '" + id + "' keeps its \"" + kv.key() +
-                    "\" header in the OS keyring (reference " + value["$keyring"].dump() +
-                    ")" + where + ", and this runtime has no keychain support — passing the "
-                    "reference through would hand the server a bogus credential. Use "
-                    "\"${ENV_VAR}\" in the header value instead, or launch this server from "
-                    "the Python runtime, which resolves keyring references.");
+                headers[kv.key()] = keyringValue(id, kv.key(), value["$keyring"], where);
             } else {
                 throw MCPRegistryError(
                     "MCP server '" + id + "': headers[\"" + kv.key() +
@@ -350,12 +362,7 @@ json MCPRegistry::normalizeEntry(const std::string& id, const json& entry) const
                 // Env values are strings to the OS; accept both spellings.
                 env[kv.key()] = pythonStr(value);
             } else if (value.is_object() && value.contains("$keyring")) {
-                throw MCPRegistryError(
-                    "MCP server '" + id + "' keeps its \"" + kv.key() +
-                    "\" value in the OS keyring (reference " + value["$keyring"].dump() +
-                    ")" + where + ", and this runtime has no keychain support — passing the "
-                    "reference through would hand the server a bogus credential. Launch this "
-                    "server from the Python runtime, which resolves keyring references.");
+                env[kv.key()] = keyringValue(id, kv.key(), value["$keyring"], where);
             } else {
                 throw MCPRegistryError(
                     "MCP server '" + id + "': env[\"" + kv.key() +

@@ -282,6 +282,7 @@ add_library(gaia_core
     src/document_index.cpp
     src/memory_store.cpp
     src/media_tools.cpp
+    src/keyring.cpp
 )
 
 # SQLite is compiled straight into gaia_core. Consuming the OBJECT library via
@@ -368,7 +369,7 @@ if(UNIX)
     target_link_libraries(gaia_core PRIVATE ${CMAKE_DL_LIBS})
 endif()
 if(WIN32)
-    target_link_libraries(gaia_core PRIVATE ws2_32)
+    target_link_libraries(gaia_core PRIVATE ws2_32 advapi32)
 endif()
 
 # FTXUI (TUI console — optional)
