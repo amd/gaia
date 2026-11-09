@@ -2791,6 +2791,20 @@
         "title": "Id",
         "type": "integer"
       },
+      "library_notices": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Library Notices"
+      },
       "rag_sources": {
         "anyOf": [
           {
@@ -3251,6 +3265,51 @@
       "mode"
     ],
     "title": "PermissionModeRequest",
+    "type": "object"
+  },
+  "PolicyNotice": {
+    "description": "Structured Local only notice translated by the Agent UI.",
+    "properties": {
+      "code": {
+        "title": "Code",
+        "type": "string"
+      },
+      "reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Reason"
+      },
+      "severity": {
+        "enum": [
+          "info",
+          "warning"
+        ],
+        "title": "Severity",
+        "type": "string"
+      },
+      "url": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Url"
+      }
+    },
+    "required": [
+      "code",
+      "severity"
+    ],
+    "title": "PolicyNotice",
     "type": "object"
   },
   "PreflightReport": {
@@ -4290,6 +4349,29 @@
             "type": "null"
           }
         ]
+      },
+      "network_policy": {
+        "default": "cloud_allowed",
+        "enum": [
+          "cloud_allowed",
+          "local_ai_only"
+        ],
+        "title": "Network Policy",
+        "type": "string"
+      },
+      "policy_notices": {
+        "items": {
+          "$ref": "#/components/schemas/PolicyNotice"
+        },
+        "title": "Policy Notices",
+        "type": "array"
+      },
+      "policy_warnings": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Policy Warnings",
+        "type": "array"
       }
     },
     "title": "SettingsResponse",
@@ -4346,6 +4428,22 @@
         ],
         "description": "Dynamic tool loading: send the tool list in short form and full docs only as needed, to cut first-turn TTFT without breaking the prompt cache. Applies to new chats. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.",
         "title": "Dynamic Tools"
+      },
+      "network_policy": {
+        "anyOf": [
+          {
+            "enum": [
+              "cloud_allowed",
+              "local_ai_only"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Whether GAIA may use cloud AI models. Setting local_ai_only blocks cloud models, clears saved cloud model choices, and removes cloud keys from GAIA's running Lemonade server. Omit to leave the policy unchanged.",
+        "title": "Network Policy"
       }
     },
     "title": "SettingsUpdateRequest",
@@ -4452,6 +4550,148 @@
       "score"
     ],
     "title": "SourceInfo",
+    "type": "object"
+  },
+  "SpeakRequest": {
+    "properties": {
+      "speed": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Speed"
+      },
+      "text": {
+        "maxLength": 1000,
+        "minLength": 1,
+        "title": "Text",
+        "type": "string"
+      },
+      "voice": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Voice"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "title": "SpeakRequest",
+    "type": "object"
+  },
+  "SpeechModel": {
+    "description": "Whether the voice model is on this PC, so a first read can say it downloads.",
+    "properties": {
+      "downloaded": {
+        "title": "Downloaded",
+        "type": "boolean"
+      },
+      "size_gb": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Size Gb"
+      }
+    },
+    "required": [
+      "downloaded"
+    ],
+    "title": "SpeechModel",
+    "type": "object"
+  },
+  "SpeechSettings": {
+    "properties": {
+      "auto": {
+        "title": "Auto",
+        "type": "boolean"
+      },
+      "max_speed": {
+        "default": 200,
+        "title": "Max Speed",
+        "type": "integer"
+      },
+      "min_speed": {
+        "default": 50,
+        "title": "Min Speed",
+        "type": "integer"
+      },
+      "speed": {
+        "title": "Speed",
+        "type": "integer"
+      },
+      "voice": {
+        "title": "Voice",
+        "type": "string"
+      },
+      "voices": {
+        "items": {
+          "$ref": "#/components/schemas/Voice"
+        },
+        "title": "Voices",
+        "type": "array"
+      }
+    },
+    "required": [
+      "voice",
+      "speed",
+      "auto",
+      "voices"
+    ],
+    "title": "SpeechSettings",
+    "type": "object"
+  },
+  "SpeechSettingsUpdate": {
+    "properties": {
+      "auto": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Auto"
+      },
+      "speed": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Speed"
+      },
+      "voice": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Voice"
+      }
+    },
+    "title": "SpeechSettingsUpdate",
     "type": "object"
   },
   "StartAgentServerRequest": {
@@ -5551,6 +5791,39 @@
       }
     },
     "title": "VisionModelRequest",
+    "type": "object"
+  },
+  "Voice": {
+    "properties": {
+      "accent": {
+        "title": "Accent",
+        "type": "string"
+      },
+      "gender": {
+        "title": "Gender",
+        "type": "string"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "quality": {
+        "title": "Quality",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "accent",
+      "gender",
+      "quality"
+    ],
+    "title": "Voice",
     "type": "object"
   },
   "WarmUpStatus": {

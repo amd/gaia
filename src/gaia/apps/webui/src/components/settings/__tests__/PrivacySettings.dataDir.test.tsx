@@ -7,7 +7,10 @@ import { PrivacySettings } from '../PrivacySettings';
 import { useChatStore } from '../../../stores/chatStore';
 import type { SystemStatus } from '../../../types';
 
-vi.mock('../../../services/api');
+vi.mock('../../../services/api', async (importActual) => ({
+    ...(await importActual<typeof import('../../../services/api')>()),
+    getSettings: vi.fn().mockResolvedValue({ network_policy: 'cloud_allowed' }),
+}));
 vi.mock('../UndoHistorySettings', () => ({ UndoHistorySettings: () => null }));
 
 describe('PrivacySettings data folder', () => {

@@ -414,10 +414,6 @@ func (c *Catalog) Warnings() []string {
 	return append([]string(nil), c.warnings...)
 }
 
-func (c *Catalog) warn(format string, args ...any) {
-	c.warnings = append(c.warnings, fmt.Sprintf(format, args...))
-}
-
 // LocalInstalls reads the ~/.gaia/agents/*/.installed sentinels — the local
 // record of what is installed. It needs no daemon and no network, which is what
 // makes `gaia tui status` answerable without a network.

@@ -43,6 +43,13 @@ class TestDeriveNarration:
         [
             # Curated override for a phrase the generic deriver reads badly.
             ("list_skills", {}, "Checking your installed skills"),
+            # The trust prompt asks; nothing is read until the user says yes.
+            ("trust_project_folder", {}, "Asking to trust this folder"),
+            (
+                "trust_project_folder",
+                {"folder": "/w/repo", "files": ["CLAUDE.md"]},
+                "Asking to trust this folder: /w/repo",
+            ),
             # Generic verb_object conjugation + salient argument.
             ("load_skill", {"name": "github-triage"}, "Loading skill: github-triage"),
             ("read_file", {"file_path": "src/app.py"}, "Reading file: src/app.py"),

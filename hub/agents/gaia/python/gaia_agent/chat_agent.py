@@ -338,7 +338,8 @@ def _python_script_run_context(
     needs ``src/`` on the path, which this does not add.
     """
     script = Path(script).resolve()
-    env = child_env()
+    # The frozen interpreter is this bundle relaunched, and needs its libraries.
+    env = child_env(same_bundle=True)
     # The tools decode the output as UTF-8; the locale codec can't print a ✓.
     env["PYTHONIOENCODING"] = "utf-8"
     if project_dir is None:
@@ -2541,7 +2542,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "allowed project.",
                         "has_errors": True,
                     }
-                env = child_env()
+                env = child_env(same_bundle=True)
                 env["PYTHONIOENCODING"] = "utf-8"
                 if project:
                     existing = env.get("PYTHONPATH")
@@ -3111,6 +3112,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
                     result = subprocess.run(
                         ["wmctrl", "-l"],
+                        env=child_env(),
                         capture_output=True,
                         stdin=subprocess.DEVNULL,
                         text=True,
@@ -3156,8 +3158,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         def text_to_speech(
             text: str,
             output_path: str = "",
-            voice: str = "af_bella",
-            speed: float = 1.0,
+            voice: str = "",
+            speed: Optional[float] = None,
         ) -> dict:
             """Turn text into one WAV audio file with an installed local TTS model.
 
@@ -3171,8 +3173,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 text: Text to speak.
                 output_path: Optional WAV destination. Empty uses GAIA's audio folder.
                 voice: Kokoro voice, such as af_bella, am_michael, bf_emma, or
-                    bm_george.
-                speed: Speech rate from 0.5 to 2.0; 1.0 is normal.
+                    bm_george. Omit to use the voice the user chose for
+                    reading aloud.
+                speed: Speech rate from 0.5 to 2.0; 1.0 is normal. Omit to use
+                    the user's chosen speed.
 
             Returns:
                 status, output_path, audio_path, duration_seconds, voice, model,
@@ -3183,11 +3187,26 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             import gaia.config as gaia_config
             from gaia.audio.lemonade_tts import (
                 DEFAULT_TTS_MODEL,
+                DEFAULT_VOICE,
                 KOKORO_VOICES,
                 LemonadeTTSClient,
                 LemonadeTTSError,
             )
+            from gaia.config import (
+                READ_ALOUD_MAX_SPEED,
+                READ_ALOUD_MIN_SPEED,
+                GaiaConfig,
+                GaiaConfigError,
+            )
 
+            # The same voice and speed the Agent UI and TUI read replies in.
+            try:
+                saved = GaiaConfig.load()
+            except GaiaConfigError as exc:
+                return {"status": "error", "error": str(exc)}
+            voice = voice or saved.read_aloud_voice or DEFAULT_VOICE
+            if speed is None:
+                speed = saved.read_aloud_speed / 100
             if voice not in KOKORO_VOICES:
                 return {
                     "status": "error",
@@ -3196,10 +3215,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         f"{', '.join(KOKORO_VOICES)}."
                     ),
                 }
-            if not 0.5 <= speed <= 2.0:
+            low, high = READ_ALOUD_MIN_SPEED / 100, READ_ALOUD_MAX_SPEED / 100
+            if not low <= speed <= high:
                 return {
                     "status": "error",
-                    "error": "speed must be between 0.5 and 2.0.",
+                    "error": f"speed must be between {low} and {high}.",
                 }
             if not text or not text.strip():
                 return {"status": "error", "error": "text to speak must not be empty."}
@@ -3490,7 +3510,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         if has_perplexity:
             from gaia.mcp.external_services import get_perplexity_service
 
-            @tool
+            # Replaces BrowserToolsMixin.search_web while a Perplexity key is set.
+            @tool(override=True)
             def search_web(query: str) -> dict:
                 """Search the web for current information using Perplexity AI.
 

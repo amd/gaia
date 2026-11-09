@@ -2,17 +2,20 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Activity, Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X, Clock } from 'lucide-react';
-import { MessageBubble, isErrorContent, turnEnding } from './MessageBubble';
+import { Activity, Edit3, Download, Upload, ArrowDown, FolderSearch, Clock } from 'lucide-react';
+import { MessageBubble, cleanToolCallContent, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep } from '../utils/streamSteps';
 import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
+import { useReadAloudStore } from '../stores/readAloudStore';
+import { readsAloudWhenDone } from '../utils/autoReadAloud';
+import { useReadAloudSettings } from '../hooks/useReadAloudSettings';
 import { RecordingProgress } from './RecordingProgress';
 import { ensureModel, modelKnownReady } from '../stores/modelNeededStore';
-import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
-import type { GaiaNotification } from '../types/agent';
+import { useNotificationStore, selectSessionPermissionPrompt } from '../stores/notificationStore';
+import { policyAlertNotification, showPermissionRequest, toolResultUpdates } from '../utils/toolEvents';
 import * as api from '../services/api';
 import { isStarting } from '../services/statusPoll';
 import { refreshActiveRuns } from '../services/activeRuns';
@@ -40,6 +43,7 @@ import * as messageQueue from '../utils/messageQueue';
 import type { QueuedMessage } from '../utils/messageQueue';
 import { SessionPanel, SessionPanelToggle } from './session-panel/SessionPanel';
 import { PrivateChatButton } from './PrivateChatButton';
+import { SessionDocsBar } from './SessionDocsBar';
 import { ResourceMonitor } from './ResourceMonitor';
 import { OfflineNotice } from './session-panel/OfflineNotice';
 import { ExportErrorBar } from './ExportErrorBar';
@@ -82,6 +86,14 @@ function HistoryNotice({ text }: { text: string }) {
     return <div className="history-notice" role="note">{text}</div>;
 }
 
+function LibraryNotices({ notices }: { notices: string[] }) {
+    return (
+        <div className="library-notices" role="note">
+            {notices.map((notice, index) => <div key={`${index}-${notice}`} dir="auto">{notice}</div>)}
+        </div>
+    );
+}
+
 interface ChatViewProps {
     sessionId: string;
 }
@@ -106,7 +118,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
         agentSteps, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps,
         cards, appendCard, clearCards,
-        documents, setDocuments, setShowDocLibrary, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
+        setDocuments, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
         systemStatus,
     } = useChatStore();
 
@@ -124,8 +136,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const hasOpenPrompt = useNotificationStore((s) => selectSessionPermissionPrompt(sessionId)(s) !== null);
 
     const session = sessions.find((s) => s.id === sessionId);
-    const sessionDocIds = new Set(session?.document_ids ?? []);
-    const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
     const [input, setInput] = useChatDraft(sessionId, session?.private);
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
@@ -133,7 +143,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [showScrollBtn, setShowScrollBtn] = useState(false);
     // Store agent steps snapshot for completed messages
     const attach = useAttachments();
-    const [docsExpanded, setDocsExpanded] = useState(false);
     const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
     const { policyToast, showPolicyToast, dismissPolicyToast } = usePolicyToast();
     const [pendingReceiptScroll, setPendingReceiptScroll] = useState<string | null>(null);
@@ -158,6 +167,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     useEffect(() => {
         if (cards.length > 0) lastCardsRef.current = [...cards];
     }, [cards]);
+    // Auto-read needs the saved choice before the first reply finishes.
+    useReadAloudSettings();
     useEffect(() => {
         if (!isStreaming && prevStreamingRef.current) {
             setStreamEnding(true);
@@ -488,8 +499,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         return () => window.removeEventListener('keydown', handler);
     }, [isStreaming, handleStop]);
 
-    // Send message
-    const sendMessage = useCallback(async (overrideText?: string, options?: SendOptions) => {
+    /** With no text, sends the composer's draft and empties the box; given text is sent as is and the box is left alone. */
+    const sendMessage = useCallback(async (givenText?: string, options?: SendOptions) => {
         // attach=true re-subscribes to a run already in flight server-side
         // (revisiting a backgrounded session, #1580). It reuses the entire
         // stream-event handling below but skips composing/sending a new turn:
@@ -499,8 +510,18 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const fromQueue = options?.queued === true;
         // reconnect=N re-attaches a stream that went silent, replacing the dead one still marked live.
         const reconnect = reattach ? options?.reconnect ?? 0 : 0;
-        const text = (overrideText || input).trim();
-        const hasAttachments = !fromQueue && attach.hasUploaded;
+        const fromComposer = !reattach && givenText === undefined;
+        const text = (fromComposer ? input : givenText ?? '').trim();
+        const hasAttachments = fromComposer && attach.hasUploaded;
+        const hasImage = fromComposer && attach.hasImage;
+        const takeDraft = () => {
+            if (!fromComposer) return text;
+            const composed = attach.compose(text);
+            setInput('');
+            attach.clear();
+            inputRef.current?.focus();
+            return composed;
+        };
 
         // User just sent a message — re-pin scroll to the bottom so the
         // new message and streaming response are visible.
@@ -520,10 +541,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             if (isStreaming && !reconnect) return;
         } else if (!fromQueue && (text || hasAttachments) && !isInitializing && (isStreaming || comparingRef.current || waiting)) {
             // Its own turn by default: a model handed a message mid-turn may finish without answering it.
-            setQueue((q) => messageQueue.enqueue(q, attach.compose(text), 'queued'));
-            setInput('');
-            attach.clear();
-            inputRef.current?.focus();
+            const queued = takeDraft();
+            setQueue((q) => messageQueue.enqueue(q, queued, 'queued'));
             return;
         } else if ((!text && !hasAttachments) || isStreaming || isInitializing) {
             notTaken({ kind: 'busy' });
@@ -534,11 +553,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
 
         // Asked here so a send that was going to be queued or refused asks nothing.
-        if (!reattach && !fromQueue && !(modelKnownReady('chat') && (!attach.hasImage || modelKnownReady('vision')))) {
+        if (!reattach && !fromQueue && !(modelKnownReady('chat') && (!hasImage || modelKnownReady('vision')))) {
             if (checkingModelRef.current) return;
             checkingModelRef.current = true;
             try {
-                if (!(await ensureModel('chat')) || (attach.hasImage && !(await ensureModel('vision')))) return;
+                if (!(await ensureModel('chat')) || (hasImage && !(await ensureModel('vision')))) return;
             } finally {
                 checkingModelRef.current = false;
             }
@@ -548,15 +567,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
         let messageText = text;
         let optimisticUser: Message | null = null;
         if (!reattach) {
-            messageText = fromQueue ? text : attach.compose(text);
+            messageText = takeDraft();
 
             log.chat.info(`Sending message to session=${sessionId}`, { length: messageText.length, preview: messageText.slice(0, 80) });
-
-            if (!fromQueue) {
-                setInput('');
-                inputRef.current?.focus();
-                attach.clear();
-            }
 
             closeForNewTurn();
 
@@ -784,49 +797,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     useNotificationStore.getState().dismissSessionPrompts(sessionId);
                 }
                 if (event.type === 'permission_request') {
-                    const toolName = event.tool || '';
-                    const toolLabel = event.tool_label || toolName;
-                    const { addNotification: addNotif, notifications } = useNotificationStore.getState();
-                    // A re-attach replays the run: keep an answered prompt as it is, and
-                    // bring back one still waiting that earlier replayed steps hid.
-                    const known = event.confirm_id ? notifications.find((n) => n.id === event.confirm_id) : undefined;
-                    if (known) {
-                        if (!known.response && known.dismissed) {
-                            useNotificationStore.setState((st) => ({
-                                notifications: st.notifications.map((n) => (n.id === known.id ? { ...n, dismissed: false } : n)),
-                            }));
-                        }
-                        return;
-                    }
-                    const isPathAccess = toolName === PATH_ACCESS_TOOL;
-                    const followUp = isPathAccess && isPathAccessFollowUp(notifications, sessionId, event.args);
-                    addNotif({
-                        id: event.confirm_id ?? `perm-${Date.now()}`,
-                        type: 'permission_request',
-                        agentId: sessionId,
-                        sessionId,
-                        agentName: 'GAIA',
-                        title: isPathAccess ? pathAccessTitle(event.args, followUp) : `Allow ${toolLabel}?`,
-                        message: isPathAccess
-                            ? pathAccessQuestion(event.args, followUp)
-                            : `GAIA needs your OK before ${toolLabel}.`,
-                        timestamp: Date.now(),
-                        read: false,
-                        dismissed: false,
-                        priority: 'high',
-                        tool: toolName,
-                        toolArgs: event.args as Record<string, unknown> | undefined,
-                        confirmId: event.confirm_id,
-                        alwaysScope: typeof event.always_scope === 'string' ? event.always_scope : undefined,
-                        alwaysLabel: typeof event.always_label === 'string' && event.always_label ? event.always_label : undefined,
-                        toolLabel: event.tool_label || undefined,
-                        risk: typeof event.risk === 'string' ? event.risk : undefined,
-                        // A relayed agent sends a summary of the call instead of its args.
-                        summary: typeof event.summary === 'string' && event.summary ? event.summary : undefined,
-                        pathFollowUp: followUp || undefined,
-                        // No timeout from the backend means it waits; don't invent one.
-                        timeoutSeconds: event.timeout_seconds,
-                    });
+                    showPermissionRequest(event, sessionId);
                     return;
                 }
 
@@ -874,34 +845,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
 
                 if (event.type === 'policy_alert') {
-                    const toolName = event.tool || 'unknown tool';
-                    const reason =
-                        event.reason ||
-                        event.message ||
-                        event.content ||
-                        'Tool execution was blocked by governance policy.';
-                    const notification: GaiaNotification = {
-                        id: event.receipt_id ?? `policy-${Date.now()}-${stepIdRef.current + 1}`,
-                        type: 'policy_alert',
-                        agentId: sessionId,
-                        agentName: 'GAIA',
-                        title: `Blocked: ${toolName} is restricted by policy.`,
-                        message: reason,
-                        timestamp: Date.now(),
-                        read: false,
-                        dismissed: false,
-                        priority: 'critical',
-                        tool: toolName,
-                        decision: event.decision || 'BLOCK',
-                        reason,
-                        ruleIds: event.rule_ids ?? [],
-                        policyVersion: event.policy_version,
-                        receiptId: event.receipt_id,
-                    };
+                    const notification = policyAlertNotification(event, sessionId, `policy-${Date.now()}-${stepIdRef.current + 1}`);
                     addNotification(notification);
                     const step = agentEventToStep(event, stepIdRef);
                     if (step) addAgentStep(step);
-                    showPolicyToast({ tool: toolName, receiptId: event.receipt_id });
+                    showPolicyToast({ tool: notification.tool, receiptId: event.receipt_id });
                     return;
                 }
 
@@ -922,48 +870,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (typeof event.render === 'string' && event.render.length > 0) {
                         appendCard({ render: event.render, data: event.data });
                     }
-                    const updates: Partial<AgentStep> = {
-                        result: event.summary || event.title || 'Done',
-                        active: false,
-                        success: event.success !== false,
-                        latencyMs: event.latency_ms,
-                    };
-                    // Pass through structured command output if available
-                    if (event.command_output) {
-                        updates.commandOutput = {
-                            command: event.command_output.command,
-                            stdout: event.command_output.stdout,
-                            stderr: event.command_output.stderr,
-                            returnCode: event.command_output.return_code,
-                            expectedExit: event.command_output.expected_exit,
-                            cwd: event.command_output.cwd,
-                            durationSeconds: event.command_output.duration_seconds,
-                            truncated: event.command_output.truncated,
-                        };
-                    }
-                    if (event.mcp_output?.text) updates.mcpOutput = event.mcp_output;
-                    // Pass through retrieval chunks if available
-                    if (event.result_data?.chunks && event.result_data.chunks.length > 0) {
-                        updates.retrievalChunks = event.result_data.chunks.map((c) => ({
-                            id: c.id,
-                            source: c.source,
-                            sourcePath: c.sourcePath,
-                            page: c.page,
-                            score: c.score,
-                            preview: c.preview,
-                            content: c.content,
-                        }));
-                    }
-                    // Pass through file list if available
-                    if (event.result_data?.type === 'file_list' &&
-                        (event.result_data as any).files?.length > 0) {
-                        updates.fileList = {
-                            files: (event.result_data as any).files,
-                            total: (event.result_data as any).total ??
-                                (event.result_data as any).files.length,
-                        };
-                    }
-                    updateLastToolStep(updates);
+                    updateLastToolStep(toolResultUpdates(event));
                     return;
                 }
                 // Tool args update the last TOOL step with detail
@@ -1116,10 +1023,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         cards: cardsSnapshot.length > 0 ? cardsSnapshot : undefined,
                         stopState,
                         historyNotice,
+                        libraryNotices: event.library_notices,
                         failure: event.failed ? event.failure : undefined,
                     };
                     if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
                     addMessage(assistantMsg);
+                    const readAloud = useReadAloudStore.getState();
+                    if (readAloud.settings?.auto && readsAloudWhenDone(assistantMsg)) {
+                        void readAloud.read(`${sessionId}:${assistantMsg.id}`, cleanToolCallContent(content));
+                    }
                 }
 
                 setStreaming(false);
@@ -1528,26 +1440,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     }, [sessionId, updateSessionInList]);
 
-    /** Detach a document from this session via the context bar (does not delete from library). */
-    const handleRemoveDocument = useCallback(async (e: React.MouseEvent, docId: string) => {
-        e.stopPropagation(); // Don't trigger the context bar click
-        const doc = documents.find((d) => d.id === docId);
-        log.doc.info(`Detaching document from session: ${doc?.filename || docId}`);
-        try {
-            await api.detachDocument(sessionId, docId);
-            // Read fresh state after await to avoid stale-closure bugs when
-            // the user removes multiple documents in quick succession.
-            const freshSession = useChatStore.getState().sessions.find(s => s.id === sessionId);
-            const remaining = (freshSession?.document_ids ?? []).filter(id => id !== docId);
-            updateSessionInList(sessionId, { document_ids: remaining });
-            // Auto-collapse when 3 or fewer session docs remain after removal
-            if (remaining.length <= 3) setDocsExpanded(false);
-            log.doc.info(`Detached document from session: ${doc?.filename || docId}`);
-        } catch (err) {
-            log.doc.error(`Failed to detach document: ${doc?.filename || docId}`, err);
-        }
-    }, [documents, sessionId, updateSessionInList]);
-
     // Drag & drop: see addDroppedFiles.
     const handleDrop = useCallback(async (e: React.DragEvent) => {
         e.preventDefault();
@@ -1658,51 +1550,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
             {showResources && <ResourceMonitor onClose={closeResources} />}
 
-            {sessionDocs.length > 0 && (() => {
-                const sorted = [...sessionDocs].sort((a, b) => {
-                    const aTime = a.last_accessed_at || a.indexed_at || '';
-                    const bTime = b.last_accessed_at || b.indexed_at || '';
-                    return bTime.localeCompare(aTime);
-                });
-                const visibleDocs = docsExpanded ? sorted : sorted.slice(0, 3);
-                const hiddenCount = sorted.length - 3;
-                return (
-                    <div
-                        className={`doc-context-bar${docsExpanded ? ' doc-context-expanded' : ''}`}
-                        aria-label={`${sessionDocs.length} indexed document${sessionDocs.length !== 1 ? 's' : ''}`}
-                    >
-                        <CheckCircle2 size={12} className="doc-context-icon" aria-hidden="true" />
-                        <button type="button" className="doc-context-label" onClick={() => setShowDocLibrary(true)} title="Manage documents">
-                            {sessionDocs.length} indexed
-                        </button>
-                        <div className={`doc-context-pills${docsExpanded ? ' doc-context-pills-expanded' : ''}`}>
-                            {visibleDocs.map((d) => (
-                                <span key={d.id} className="doc-pill" title={d.filepath || d.filename}>
-                                    <FileText size={9} className="doc-pill-icon" aria-hidden="true" />
-                                    <span className="doc-pill-name" dir="auto">{d.filename}</span>
-                                    <button
-                                        className="doc-pill-remove"
-                                        onClick={(e) => handleRemoveDocument(e, d.id)}
-                                        aria-label={`Remove ${d.filename} from this chat`}
-                                    >
-                                        <X size={10} />
-                                    </button>
-                                </span>
-                            ))}
-                            {!docsExpanded && hiddenCount > 0 && (
-                                <button className="doc-pill-more" onClick={(e) => { e.stopPropagation(); setDocsExpanded(true); }}>
-                                    +{hiddenCount} more
-                                </button>
-                            )}
-                            {docsExpanded && hiddenCount > 0 && (
-                                <button className="doc-pill-collapse" onClick={(e) => { e.stopPropagation(); setDocsExpanded(false); }}>
-                                    show less
-                                </button>
-                            )}
-                        </div>
-                    </div>
-                );
-            })()}
+            <SessionDocsBar sessionId={sessionId} />
 
             <div className="messages-scroll" ref={messagesScrollRef} {...followListProps}>
                 <div className="messages-column">
@@ -1744,6 +1592,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 data-role={msg.role}
                             >
                                 {notice && <HistoryNotice text={notice} />}
+                                {msg.libraryNotices && msg.libraryNotices.length > 0 && (
+                                    <LibraryNotices notices={msg.libraryNotices} />
+                                )}
                                 <MessageBubble
                                     message={msg}
                                     agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}

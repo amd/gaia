@@ -440,6 +440,20 @@ TIER_REFUSE = "refuse"
 # other than what it reads as — and for destructive or never-grantable targets.
 TIER_CONFIRM_ONCE = "confirm_once"
 
+#: Closes the hint of a command refused on its text. The agent relays tool
+#: text, so it must rule out an approval that is never coming.
+NOT_APPROVABLE = (
+    "Nothing ran, and no approval can change that: GAIA will not run this "
+    "command as written, so never ask the user to approve it."
+)
+
+#: The hint for an action GAIA is not permitted to take at all.
+REFUSED_HINT = (
+    "Tell the user GAIA is not permitted to do this, and give them the exact "
+    "command so they can run it themselves if they want to. Do not reach the "
+    "same result another way."
+)
+
 #: The risk notes a CONFIRM_ONCE prompt carries, chosen by what tripped it.
 NOTE_UNINSPECTABLE = (
     "Can run any code with your permissions — GAIA can't inspect this command."
@@ -611,6 +625,16 @@ def _confirm_once(error: Dict[str, Any], note: str) -> Dict[str, Any]:
             "they decline, do not reach the same result another way."
         ),
     }
+
+
+def _not_approvable(error: Dict[str, Any]) -> Dict[str, Any]:
+    """*error* with :data:`NOT_APPROVABLE` closing its hint, when no prompt may run it."""
+    if _reaches_the_prompt(error):
+        return error
+    hint = str(error.get("hint") or "").strip()
+    if NOT_APPROVABLE in hint:
+        return error
+    return {**error, "hint": f"{hint} {NOT_APPROVABLE}".strip()}
 
 
 def _reaches_the_prompt(error: Optional[Dict[str, Any]]) -> bool:
@@ -3129,7 +3153,7 @@ class ShellToolsMixin:
         """
         error, steps = self._shell_command_refusal(command)
         if error is not None:
-            error = {**error, **NOT_EXECUTED}
+            error = {**_not_approvable(error), **NOT_EXECUTED}
         return error, steps
 
     def _shell_command_refusal(self, command: str) -> tuple:
@@ -4401,24 +4425,15 @@ class ShellToolsMixin:
                 hint = "Do not retry this command or reload the skill."
             elif granted_decision.outcome == REFUSE:
                 # Outside what GAIA's checks cover, grant or no grant. The user
-                # may still approve it once, unless it destroys work.
+                # may still approve it once, unless it destroys or ends work.
                 logger.debug("%r is outside the %s policy", command, binary)
                 refusal = {
                     "status": "error",
                     "error": granted_decision.message,
                     "has_errors": True,
                 }
-                if _destroys(policy_parts):
-                    return {
-                        **refusal,
-                        "tier": TIER_REFUSE,
-                        "hint": (
-                            "GAIA will not run this, even with the user's "
-                            "approval: it deletes or discards work. Tell the "
-                            "user the exact command so they can run it "
-                            "themselves if they want to."
-                        ),
-                    }
+                if _destroys(policy_parts) or granted_decision.never_offered:
+                    return {**refusal, "tier": TIER_REFUSE, "hint": REFUSED_HINT}
                 return _confirm_once(refusal, _policy_note(policy, policy_parts))
             else:
                 # Only the missing grant is in the way, and a grant is only

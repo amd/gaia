@@ -692,13 +692,10 @@ def _title_model_for(session_model: str) -> Optional[str]:
     """
     if not _is_guard_model(session_model):
         return session_model
-    from gaia.llm.lemonade_client import (
-        cloud_model_provider,
-        resolve_default_chat_model,
-    )
+    from gaia.llm.lemonade_client import resolve_default_chat_model
 
     title_model = resolve_default_chat_model()
-    if cloud_model_provider(title_model) and not cloud_model_provider(session_model):
+    if _ui_cloud_provider(title_model) and not _ui_cloud_provider(session_model):
         logger.info(
             "Auto-title: %s is a safety classifier and the default model %s is "
             "a cloud model; keeping the chat's title",
@@ -802,7 +799,6 @@ async def _generate_session_title(
         LemonadeClient,
         LemonadeClientError,
         _model_ids_match,
-        cloud_model_provider,
         find_model_requirement,
         no_thinking_kwargs,
     )
@@ -827,7 +823,7 @@ async def _generate_session_title(
         # A thinking model would spend all 24 tokens reasoning and title nothing.
         kwargs = dict(no_thinking_kwargs(model_id))
         mr = find_model_requirement(model_id)
-        local = not cloud_model_provider(model_id)
+        local = not _ui_cloud_provider(model_id)
         if local and not kwargs and model_id.upper().endswith("GGUF"):
             # Gemma 4 registers no switch, yet reasons on a short question ("hi");
             # llama.cpp ignores the field in a template that has no such switch.
@@ -929,8 +925,6 @@ async def _title_when_model_free(
     base_url: str, model_id: str, user_msg: str, assistant_msg: str, latest_msg: str
 ) -> Optional[str]:
     """:func:`_generate_session_title`, waiting out a model another request holds."""
-    from gaia.llm.lemonade_client import cloud_model_provider
-
     request = dict(
         base_url=base_url,
         model_id=model_id,
@@ -939,7 +933,7 @@ async def _title_when_model_free(
         latest_msg=latest_msg,
     )
     tries = _TITLE_BUSY_TRIES
-    if not cloud_model_provider(model_id) and not await _has_side_slot(
+    if not _ui_cloud_provider(model_id) and not await _has_side_slot(
         base_url, model_id
     ):
         tries = 1
@@ -1039,10 +1033,10 @@ async def _maybe_update_session_title(
     if not title_model:
         return
 
-    from gaia.llm.lemonade_client import cloud_model_provider, resolve_lemonade_base_url
+    from gaia.llm.lemonade_client import resolve_lemonade_base_url
     from gaia.llm.lemonade_manager import LemonadeManager
 
-    if at_turn_start and not cloud_model_provider(title_model):
+    if at_turn_start and not _ui_cloud_provider(title_model):
         return
     # Use the same Lemonade endpoint the chat just used.
     base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
@@ -1327,6 +1321,45 @@ def _ui_cloud_provider(model_id: str) -> str | None:
 
     metadata = {"recipe": "cloud"} if is_cloud_model(model_id) else None
     return cloud_model_provider(model_id, metadata)
+
+
+def _runs_on_this_pc(model_id: Optional[str]) -> bool:
+    """True only when *model_id* is confirmed to run locally; for data that stays here.
+
+    A model GAIA declares in ``MODELS`` (exact id) is local without a network
+    call. Every other id must pass the Local only rule: each catalog entry it
+    names has a known local recipe, so an unlisted id, a ``collection.*`` router
+    or an id also listed as cloud all count as leaving the PC.
+
+    Raises:
+        LemonadeClientError: the catalog couldn't be read, or wasn't a model list.
+    """
+    from gaia.llm.lemonade_client import MODELS, LemonadeClient, LemonadeClientError
+    from gaia.llm.local_only import recipes_confirm_local, recipes_in_catalog
+
+    model_id = (model_id or "").strip()
+    if not model_id or model_id.lower().startswith("claude"):
+        return False
+    if _ui_cloud_provider(model_id):
+        return False
+    if any(req.model_id == model_id for req in MODELS.values()):
+        return True
+
+    def fetch_catalog() -> dict:
+        catalog = LemonadeClient(verbose=False).list_models(show_all=True)
+        data = catalog.get("data") if isinstance(catalog, dict) else None
+        if not isinstance(data, list) or not all(isinstance(e, dict) for e in data):
+            raise LemonadeClientError(
+                "Lemonade's model list came back in an unexpected shape, so GAIA "
+                f"can't confirm '{model_id}' runs on this PC. Restart Lemonade in "
+                "Settings > Setup and try again."
+            )
+        return catalog
+
+    if not recipes_confirm_local(recipes_in_catalog(model_id, {}, fetch_catalog)):
+        return False
+    # Reading the catalog records the cloud ids it lists.
+    return not _ui_cloud_provider(model_id)
 
 
 def session_inference_location(
@@ -3149,7 +3182,6 @@ async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str
 
     from gaia.llm.lemonade_client import (
         _model_ids_match,
-        cloud_model_provider,
         lemonade_auth_headers,
         resolve_lemonade_api_key,
         resolve_lemonade_base_url,
@@ -3182,7 +3214,7 @@ async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str
             f"its health check (HTTP {resp.status_code}). "
             f"{server_down_advice(base_url)}"
         )
-    if not model_id or cloud_model_provider(model_id):
+    if not model_id or _ui_cloud_provider(model_id):
         return None
     loaded = health.get("all_models_loaded") or []
     if any(
@@ -3422,6 +3454,7 @@ def _done_event(
     failed: bool = False,
     failure: Optional[str] = None,
     documents_added: Optional[list] = None,
+    library_notices: Optional[list[str]] = None,
 ) -> dict:
     """Build the closing ``done`` SSE payload for a persisted turn.
 
@@ -3445,6 +3478,8 @@ def _done_event(
         event["turn_summary"] = turn_summary
     if documents_added:
         event["documents_added"] = documents_added
+    if library_notices:
+        event["library_notices"] = library_notices
     return event
 
 
@@ -3588,7 +3623,6 @@ def _preflight_load(
         from gaia.llm.lemonade_choice import is_users_server
         from gaia.llm.lemonade_client import (
             _model_ids_match,
-            cloud_model_provider,
             lemonade_auth_headers,
             resolve_ctx_size,
             resolve_lemonade_api_key,
@@ -3618,7 +3652,7 @@ def _preflight_load(
             _model_ids_match(m.get("model_name"), model_id)
             and m.get("recipe") == "cloud"
             for m in chat_models
-        ) or cloud_model_provider(model_id, None):
+        ) or _ui_cloud_provider(model_id):
             return
         # The window the agent itself will require; loading smaller makes it reload.
         required_ctx = resolve_ctx_size(model_id)
@@ -5165,7 +5199,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             db, request.session_id, sse_handler
         )
         if library_notices:
-            # One step: consecutive status steps overwrite each other in the chat.
+            # Live status makes the outcome visible before the turn closes; the
+            # same notices travel on `done` and the saved reply for reloads.
             notice = " ".join(library_notices)
             yield _sse({"type": "status", "status": "warning", "message": notice})
 
@@ -5299,6 +5334,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 inference_stats=inference_stats,
                 model_messages=model_messages,
                 turn_summary=turn_summary,
+                library_notices=library_notices,
                 ends_turn=True,
                 stopped=turn_cancelled,
             )
@@ -5334,6 +5370,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     else None
                 ),
                 documents_added=documents_added,
+                library_notices=library_notices,
             )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
@@ -5401,6 +5438,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     agent_steps=steps_to_persist,
                     model_messages=result_holder.get("model_messages"),
                     turn_summary=turn_summary,
+                    library_notices=library_notices,
                     ends_turn=True,
                     stopped=turn_cancelled,
                 )
@@ -5411,6 +5449,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     turn_summary=turn_summary,
                     failed=failed,
                     documents_added=documents_added,
+                    library_notices=library_notices,
                 )
                 link_warning = (
                     turn_box["recording"].link_message(msg_id)

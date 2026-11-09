@@ -27,6 +27,8 @@ from fastapi.responses import FileResponse
 from starlette.requests import ClientDisconnect
 
 from gaia.audio.media import MEDIA_EXTENSIONS, prune_older_than
+from gaia.env import child_env
+from gaia.upload_names import upload_copy_name
 from gaia.utils.user_folders import documents_dir
 
 from .. import generated_media
@@ -183,8 +185,9 @@ async def upload_file(file: UploadFile = File(...)):
     """Upload a file to the server.
 
     Accepts multipart form data with a ``file`` field.  The file is saved
-    to ``<GAIA_HOME>/chat/uploads/`` with a UUID-based filename to prevent
-    collisions.  The original extension is preserved.
+    to ``<GAIA_HOME>/chat/uploads/`` under ``<id>_<name><ext>``: the random ID
+    prevents collisions, and the name lets answers cite the file as the user
+    knows it.
 
     Constraints:
     - Maximum file size: 20 MB
@@ -236,8 +239,8 @@ async def upload_file(file: UploadFile = File(...)):
     upload_root = uploads_dir()
     upload_root.mkdir(parents=True, exist_ok=True)
 
-    # Generate unique filename preserving original extension
-    unique_name = f"{uuid.uuid4()}{ext}"
+    # Unique copy name: random ID, sanitized original name, original extension
+    unique_name = upload_copy_name(original_name, ext)
     dest_path = upload_root / unique_name
 
     # Write file to disk
@@ -468,7 +471,7 @@ async def open_file_or_folder(request: OpenFileRequest):
                 subprocess.Popen(["open", str(target)])
         else:
             target = resolved if resolved.is_dir() else resolved.parent
-            subprocess.Popen(["xdg-open", str(target)])
+            subprocess.Popen(["xdg-open", str(target)], env=child_env())
 
         return {"status": "ok", "path": str(resolved)}
     except Exception as e:
@@ -501,7 +504,7 @@ def _launch_file(resolved: Path) -> dict:
         elif platform.system() == "Darwin":
             subprocess.Popen(["open", str(resolved)])
         else:
-            subprocess.Popen(["xdg-open", str(resolved)])
+            subprocess.Popen(["xdg-open", str(resolved)], env=child_env())
     except OSError as e:
         logger.error("Failed to open file %s: %s", resolved, e)
         raise HTTPException(

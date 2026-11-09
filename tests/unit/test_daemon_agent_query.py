@@ -39,7 +39,7 @@ def test_run_query_passes_configured_read_timeout(monkeypatch):
     monkeypatch.setattr(agent_query, "_consume", lambda *_args: "final")
     monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "900")
 
-    renderer = SimpleNamespace(final_answer=None, error_detail=None)
+    renderer = SimpleNamespace(final_answer=None, final_failed=False, error_detail=None)
     outcome = agent_query.run_query("email", "triage", renderer=renderer)
 
     assert outcome.exit_code == 0
