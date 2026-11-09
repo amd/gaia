@@ -776,8 +776,10 @@ class TestDeveloperBinariesRefusedByDefault:
         # gh reads change nothing, so they need no skill (READS_WITHOUT_A_SKILL);
         # what the read-only policy does not cover is still asked about.
         assert check("gh issue list", bypass=False) is None
-        result = check("gh pr merge 1", bypass=False)
+        result = check("gh workflow run deploy", bypass=False)
         assert result["tier"] == TIER_CONFIRM_ONCE
+        # gh pr merge is refused outright now, which approval cannot open.
+        assert check("gh pr merge 1", bypass=False)["tier"] == TIER_REFUSE
 
 
 class TestBypassIsStillASet:
