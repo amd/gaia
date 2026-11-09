@@ -527,31 +527,6 @@ describe("AgentProcessManager", () => {
       });
     });
 
-    describe("restartAgent", () => {
-      it("should stop and then start the agent", async () => {
-        jest.useFakeTimers();
-        const { manager } = createManager();
-        const { mockChild: firstChild } = await startMockAgent(manager);
-
-        // Set up a new mock child for the restart
-        const secondChild = mockCreateChildProcess();
-        mockSpawnHolder.returnValue = secondChild;
-
-        const restartPromise = manager.restartAgent("test-agent");
-
-        // Let the old process exit
-        firstChild.exitCode = 0;
-        firstChild.emit("exit", 0, null);
-
-        const result = await restartPromise;
-
-        expect(result).toEqual({ pid: secondChild.pid });
-        expect(manager.processes["test-agent"]).toBeDefined();
-        expect(manager.processes["test-agent"].process).toBe(secondChild);
-
-        jest.useRealTimers();
-      });
-    });
   });
 
   // ── 3. stdout handling ────────────────────────────────────────────────
@@ -1162,28 +1137,6 @@ describe("AgentProcessManager", () => {
       expect(manager.manifest).toEqual({ manifest_version: 1, agents: [] });
     });
 
-    it("should reload manifest on reloadManifest()", () => {
-      const { manager } = createManager();
-
-      const updatedManifest = {
-        manifest_version: 1,
-        agents: [{ id: "new-agent", name: "New", binaries: {} }],
-      };
-      mockFsImpl.readFileSync.mockReturnValue(JSON.stringify(updatedManifest));
-
-      const result = manager.reloadManifest();
-
-      expect(result.agents).toHaveLength(1);
-      expect(result.agents[0].id).toBe("new-agent");
-      expect(manager.manifest).toBe(result);
-    });
-
-    it("should return manifest via getManifest()", () => {
-      const { manager } = createManager();
-      const manifest = manager.getManifest();
-      expect(manifest).toBe(manager.manifest);
-    });
-
     it("should load config from tray-config.json", () => {
       const { manager } = createManager();
       expect(manager.config.agents["test-agent"].autoStart).toBe(true);
@@ -1305,37 +1258,6 @@ describe("AgentProcessManager", () => {
       expect(status.running).toBe(false);
     });
 
-    it("should return statuses for all agents in manifest", async () => {
-      const { manager } = createManager();
-      await startMockAgent(manager, "test-agent");
-
-      const allStatuses = manager.getAllAgentStatuses();
-
-      expect(allStatuses["test-agent"]).toBeDefined();
-      expect(allStatuses["test-agent"].running).toBe(true);
-      expect(allStatuses["second-agent"]).toBeDefined();
-      expect(allStatuses["second-agent"].running).toBe(false);
-    });
-
-    it("should include running agents not in manifest in getAllAgentStatuses", async () => {
-      const { manager } = createManager();
-
-      // Manually insert a rogue process entry
-      manager.processes["rogue-agent"] = {
-        process: { pid: 999 },
-        startedAt: Date.now(),
-        stderrBuffer: [],
-        stdoutBuffer: "",
-        rpcIdCounter: 1,
-        pendingRpc: {},
-        healthTimer: null,
-        stopping: false,
-      };
-
-      const allStatuses = manager.getAllAgentStatuses();
-      expect(allStatuses["rogue-agent"]).toBeDefined();
-      expect(allStatuses["rogue-agent"].running).toBe(true);
-    });
   });
 
   // ── 10. Bad agent ids ─────────────────────────────────────────────────
@@ -1380,15 +1302,6 @@ describe("AgentProcessManager", () => {
       );
 
       await expect(manager.startAgent("test-agent")).rejects.toThrow(/Agent binary not found/);
-      expect(spawn).not.toHaveBeenCalled();
-    });
-
-    it("restartAgent of an unknown id rejects without spawning", async () => {
-      const { manager } = createManager();
-
-      await expect(manager.restartAgent("no-such-agent")).rejects.toThrow(
-        /not found in manifest/
-      );
       expect(spawn).not.toHaveBeenCalled();
     });
 

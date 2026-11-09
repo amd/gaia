@@ -283,15 +283,6 @@ class AgentProcessManager extends EventEmitter {
     console.log(`[agent-mgr] Agent ${agentId} stopped`);
   }
 
-  /**
-   * Restart an agent (stop + start).
-   * @param {string} agentId
-   */
-  async restartAgent(agentId) {
-    await this.stopAgent(agentId);
-    return this.startAgent(agentId);
-  }
-
   // ── Public API: Monitoring ───────────────────────────────────────────
 
   /**
@@ -331,30 +322,6 @@ class AgentProcessManager extends EventEmitter {
       uptime,
       memoryMB,
     };
-  }
-
-  /**
-   * Get statuses for all known agents.
-   * @returns {Record<string, object>}
-   */
-  getAllAgentStatuses() {
-    const result = {};
-
-    // Include agents from manifest
-    if (this.manifest && this.manifest.agents) {
-      for (const agent of this.manifest.agents) {
-        result[agent.id] = this.getAgentStatus(agent.id);
-      }
-    }
-
-    // Include any running agents not in manifest (shouldn't happen, but safety)
-    for (const agentId of Object.keys(this.processes)) {
-      if (!result[agentId]) {
-        result[agentId] = this.getAgentStatus(agentId);
-      }
-    }
-
-    return result;
   }
 
   // ── Public API: I/O ──────────────────────────────────────────────────
@@ -432,19 +399,6 @@ class AgentProcessManager extends EventEmitter {
     );
     this._shuttingDown = true;
     await Promise.all(agentIds.map((id) => this.stopAgent(id)));
-  }
-
-  // ── Public API: Manifest ─────────────────────────────────────────────
-
-  /** @returns {object | null} The agent manifest */
-  getManifest() {
-    return this.manifest;
-  }
-
-  /** Reload the manifest from disk. */
-  reloadManifest() {
-    this.manifest = this._loadManifest();
-    return this.manifest;
   }
 
   // ── Private: stdout handling (JSON-RPC) ──────────────────────────────
