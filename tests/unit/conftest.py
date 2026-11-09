@@ -114,16 +114,8 @@ def _isolate_gaia_config(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _stub_daemon_scheduler_notifications(request, monkeypatch):
-    """Keep daemon scheduler tests from opening real desktop notifications."""
-    test_name = Path(str(getattr(request, "fspath", ""))).name
-    if test_name not in {
-        "test_daemon_scheduler.py",
-        "test_daemon_scheduler_stale_firing.py",
-    }:
-        yield
-        return
-
+def _stub_daemon_scheduler_notifications(monkeypatch):
+    """Keep unit tests from opening real desktop notifications."""
     from gaia.schedule import sinks
 
     monkeypatch.setattr(sinks, "dispatch", lambda *args, **kwargs: None)
