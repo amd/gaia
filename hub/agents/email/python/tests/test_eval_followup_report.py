@@ -194,8 +194,9 @@ def test_falsy_gate_returns_0(monkeypatch, gate):
     assert mod.main([]) == 0
 
 
-def test_skipped_gate_variant_returns_0(monkeypatch):
-    # summarize_followups' loud skip: no case carried a verdict.
+def test_skipped_gate_variant_returns_1(monkeypatch):
+    # summarize_followups' loud skip: no case carried a verdict. Nothing was
+    # scored, so the eval proved nothing — report mode must not hide that.
     gate = {
         "skipped": True,
         "reason": (
@@ -207,7 +208,34 @@ def test_skipped_gate_variant_returns_0(monkeypatch):
     }
     _install_fakes(monkeypatch, _summary(gate))
 
-    assert mod.main([]) == 0
+    assert mod.main([]) == 1
+    assert not _report_path().exists()
+
+
+def test_zero_verdicts_return_1_even_in_report_mode(monkeypatch):
+    # Every case errored: `predicted` is None for all of them. The gate would
+    # report itself "skipped" and exit 0, which reads as a green CI step for a
+    # run that scored nothing.
+    fake_generate = MagicMock(
+        return_value=[
+            {"case_id": "fu-001", "predicted": None, "error": "import failed"},
+            {"case_id": "fu-002", "predicted": None, "error": "import failed"},
+        ]
+    )
+    gate = {
+        "skipped": True,
+        "reason": "no case carried a follow-up verdict",
+        "enforce": False,
+        "should_fail": False,
+    }
+    fakes = _install_fakes(monkeypatch, _summary(gate))
+    monkeypatch.setattr(mod, "generate_detections", fake_generate)
+
+    assert mod.main([]) == 1
+
+    # Fails at generation, before scoring — there is nothing to score.
+    assert fakes[2].called is False
+    assert not _report_path().exists()
 
 
 def test_out_dir_is_overridable(monkeypatch):

@@ -109,6 +109,20 @@ def main(argv: list[str] | None = None) -> int:
     produced = sum(1 for g in generations if g.get("predicted") is not None)
     print(f"[FOLLOWUP-EVAL] detected for {produced}/{len(generations)} cases")
 
+    if produced == 0:
+        # A total generation outage is NOT a tolerable report-mode breach: with
+        # nothing detected there is nothing to score, so the eval cannot prove
+        # the detector is any good. Fail loudly regardless of the manifest's
+        # enforce flag — same contract as eval_briefing_report.py:90-104.
+        print(
+            f"[FOLLOWUP-EVAL] ERROR: 0/{len(generations)} cases produced a verdict "
+            f"from {corpus_path} — nothing to score. Check the email agent is "
+            "installed and the corpus loads. Failing the build; a zero-case run "
+            "must never pass as a report.",
+            file=sys.stderr,
+        )
+        return 1
+
     corpus = load_followup_corpus(corpus_path)
     results = score_generations(corpus, generations, model_id=model)
     summary = summarize_followups(
@@ -145,6 +159,19 @@ def main(argv: list[str] | None = None) -> int:
         f"skipped={gate.get('skipped', False)}"
     )
     print("====================================================================\n")
+
+    if gate.get("skipped"):
+        # No case carried a follow-up verdict even though detections were
+        # produced. Like a total outage, the eval could not prove anything —
+        # fail loudly regardless of enforce and do NOT emit a report the
+        # scorecard would treat as a real scored run.
+        print(
+            "[FOLLOWUP-EVAL] ERROR: no case carried a verdict — "
+            f"{gate.get('reason', 'the follow-up gate could not be evaluated')}."
+            " Failing the build regardless of report mode (no silent skip).",
+            file=sys.stderr,
+        )
+        return 1
 
     (out / "followups_report.json").write_text(
         json.dumps(

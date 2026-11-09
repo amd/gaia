@@ -511,6 +511,10 @@ jobs:
       # =================================================================
       - name: Follow-up detection eval (report mode)
         timeout-minutes: 25
+        # always(): this step is offline and deterministic, so a missing judge
+        # credential or a failed Lemonade eval above must not be able to skip
+        # it and leave the summary showing "no verdict produced".
+        if: always()
         run: |
           python hub/agents/email/python/packaging/eval_followup_report.py
           if ($LASTEXITCODE -ne 0) { throw "follow-up eval failed" }
