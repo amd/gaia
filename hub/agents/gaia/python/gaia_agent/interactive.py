@@ -274,6 +274,20 @@ def interactive_mode(agent: ChatAgent):
                             print(f"  📄 Indexing: {doc_file.name}...")
                             # Directly call the RAG index method
                             try:
+                                # Granting follows links and bypasses the scope
+                                # check, so leave out a link (its target is not
+                                # in the folder) and a secret such as
+                                # credentials.json.
+                                if (
+                                    doc_file.is_symlink()
+                                    or agent.path_validator.is_read_blocked(
+                                        str(doc_file)
+                                    )[0]
+                                ):
+                                    print(
+                                        "    ⏭️  Skipped: symbolic link or protected file"
+                                    )
+                                    continue
                                 # Naming the folder is the grant to read its files.
                                 if doc_file.is_file():
                                     agent.path_validator.add_allowed_path(

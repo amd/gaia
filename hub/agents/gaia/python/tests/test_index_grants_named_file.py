@@ -103,6 +103,38 @@ def test_index_of_a_folder_grants_the_files_it_finds(outside, monkeypatch):
     assert str((outside / "report.pdf").absolute()) in agent.rag.indexed_files
 
 
+def test_index_of_a_folder_skips_protected_files(outside, monkeypatch, capsys):
+    secret = outside / "credentials.json"
+    secret.write_text("{}")
+    agent = _agent(PathValidator())
+
+    _run(agent, monkeypatch, f"/index {outside}")
+
+    assert str(secret.absolute()) not in agent.rag.indexed_files
+    assert not agent.path_validator.is_path_allowed(str(secret))
+    assert str((outside / "report.pdf").absolute()) in agent.rag.indexed_files
+    assert "Skipped" in capsys.readouterr().out
+
+
+def test_index_of_a_folder_skips_symlinks(outside, tmp_path, monkeypatch):
+    target_dir = tmp_path / "private"
+    target_dir.mkdir()
+    target = target_dir / "target.pdf"
+    target.write_bytes(b"%PDF-1.4\n")
+    link = outside / "link.pdf"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not available")
+    agent = _agent(PathValidator())
+
+    _run(agent, monkeypatch, f"/index {outside}")
+
+    assert str(link.absolute()) not in agent.rag.indexed_files
+    assert not agent.path_validator.is_path_allowed(str(target))
+    assert str((outside / "report.pdf").absolute()) in agent.rag.indexed_files
+
+
 def _resume(tmp_path, validator, docs):
     """``ChatAgent.load_session`` on a stub that holds the given session."""
     session = SimpleNamespace(
