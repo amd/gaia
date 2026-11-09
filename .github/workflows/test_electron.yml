@@ -47,13 +47,13 @@ jobs:
           cache-dependency-path: tests/electron/package.json
 
       - name: Install test dependencies
+        working-directory: tests/electron
         run: |
-          cd tests/electron
           npm ci
 
       - name: Run Electron framework unit tests
+        working-directory: tests/electron
         run: |
-          cd tests/electron
           npm test
 
       # node:test files (`.mjs`) for modules that don't fit Jest's CJS
@@ -97,30 +97,30 @@ jobs:
           cache-dependency-path: src/gaia/apps/webui/package-lock.json
 
       - name: Install dependencies
+        working-directory: src/gaia/apps/webui
         run: |
-          cd src/gaia/apps/webui
           npm ci
 
       # Also runs src/types/apiContract.ts, the hand-written vs generated API type drift guard.
       - name: Type-check
+        working-directory: src/gaia/apps/webui
         run: |
-          cd src/gaia/apps/webui
           npx tsc --noEmit
 
       - name: Run Vitest component tests
+        working-directory: src/gaia/apps/webui
         run: |
-          cd src/gaia/apps/webui
           npm test
 
       - name: Check right-to-left layout
+        working-directory: src/gaia/apps/webui
         run: |
-          cd src/gaia/apps/webui
           npx playwright install --with-deps chromium
           npm run test:rtl
 
       - name: Check auto-scroll in a real browser
+        working-directory: src/gaia/apps/webui
         run: |
-          cd src/gaia/apps/webui
           npm run test:scroll
 
   test-apps-integration:
@@ -139,13 +139,13 @@ jobs:
           cache-dependency-path: tests/electron/package.json
 
       - name: Install test dependencies
+        working-directory: tests/electron
         run: |
-          cd tests/electron
           npm ci
 
       - name: Run Agent UI tests
+        working-directory: tests/electron
         run: |
-          cd tests/electron
           # Agent UI service tests: process manager, notification service
           # --forceExit needed because AgentProcessManager health-check intervals
           # survive Jest teardown in mocked environments (tests pass correctly)
