@@ -2796,6 +2796,8 @@ _SWITCH_WITH_VALUE = re.compile(r"/[A-Za-z?]+:")
 _WINDOWS_SWITCH = re.compile(r"/[A-Za-z?]+")
 #: ``D:x`` is relative to drive D's own current folder, not to this one.
 _DRIVE_RELATIVE = re.compile(r"[A-Za-z]:(?![\\/])")
+#: ``dir`` switches that only change how the listing looks; ``/s`` walks.
+_DIR_DISPLAY_SWITCHES = frozenset({"/b", "/w", "/l", "/n", "/q"})
 
 
 def _segment_runs_unasked(segment: list) -> bool:
@@ -2808,6 +2810,8 @@ def _segment_runs_unasked(segment: list) -> bool:
     for word in segment[1:]:
         if word.startswith("-") and not _UNASKED_FLAG.fullmatch(word):
             return False
+        if name == "dir" and word.lower() in _DIR_DISPLAY_SWITCHES:
+            continue
         if _WINDOWS_SWITCH.fullmatch(word) or _SWITCH_WITH_VALUE.match(word):
             return False
         if _DRIVE_RELATIVE.match(word) or ".." in re.split(r"[\\/]", word):

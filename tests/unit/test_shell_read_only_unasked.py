@@ -191,7 +191,8 @@ def test_a_listed_name_given_as_a_path_still_asks(host, tmp_path):
 
 
 @pytest.mark.parametrize(
-    "command", ["ls -la", "head -n 5 notes.txt", "grep -rn TODO .", "dir"]
+    "command",
+    ["ls -la", "head -n 5 notes.txt", "grep -rn TODO .", "dir", "dir /b notes.txt"],
 )
 def test_plain_reads_with_options_run_unasked(host, tmp_path, command):
     (tmp_path / "notes.txt").write_text("hi\n")
@@ -278,7 +279,8 @@ def test_home_and_tree_sizes_still_ask(host, tmp_path, command):
     [
         "findstr /si SECRET notes.txt",
         "findstr -s -i SECRET notes.txt",
-        "dir /b",
+        "dir /b /s",
+        "dir /a:h",
         "ls out/..",
         "cd out/.. && ls",
         "cd .. && ls",
