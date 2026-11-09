@@ -134,3 +134,23 @@ def test_decoration_moves_to_the_reaction(text, expected):
     from gaia.messaging.expression import take_reaction
 
     assert take_reaction(text) == ("🎉", expected)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Build: ✅\nLint: ❌\nTests: ✅",
+        "All 12 tests pass ✅",
+        "Heads up ⚠️ this deletes the folder.",
+        "Status: 🟢 up, 🔴 down",
+    ],
+)
+def test_status_marks_stay_wherever_they_sit(text):
+    from gaia.messaging.expression import take_reaction
+
+    assert take_reaction(text) == (None, text)
+
+
+@pytest.mark.parametrize("marker", ["none", "None", "no reaction", ":none:", "-"])
+def test_a_marker_saying_no_reaction_reacts_with_nothing(marker):
+    assert split_reaction(f"Here you go.\n[react: {marker}]") == (None, "Here you go.")

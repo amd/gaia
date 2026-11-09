@@ -58,6 +58,14 @@ _KEEP = re.compile(r"```.*?(?:```|\Z)|`[^`\n]*`|https?://\S+", re.S)
 _LINE_LEAD = re.compile(r"[ \t]*(?:>[ \t]*)*(?P<bullet>(?:[-*+]|\d+[.)])[ \t]+)?")
 _REACT_LINE = re.compile(r"^\s*\[react:[ \t]*(?P<emoji>[^\]\n]*?)[ \t]*\]\s*$", re.I)
 
+#: Status marks: what they say is the reply's content, so they stay in it.
+_STATUS_MARKS = frozenset(
+    "\u2705\u274c\u274e\u26a0\u2714\u2716\u2b55"
+    "\U0001f7e2\U0001f7e1\U0001f7e0\U0001f534\U0001f7e9\U0001f7e5"
+)
+#: Words a model writes in a marker to mean no reaction at all.
+_NO_REACTION = frozenset({"", "none", "no", "nothing", "no reaction", "n/a", "-"})
+
 #: What a reaction marker that names no emoji gets: it still asked to acknowledge.
 ACKNOWLEDGE = "\U0001f44d"
 _SHORTCODES = {
@@ -101,6 +109,8 @@ def split_reaction(answer: str) -> Tuple[Optional[str], str]:
         return None, answer
     text = "\n".join(lines[:-1]).rstrip()
     named = match.group("emoji").strip()
+    if named.lower().strip(":").replace("_", " ") in _NO_REACTION:
+        return None, text
     if is_single_emoji(named):
         return named, text
     code = re.sub(r"[\s-]+", "_", named.strip(":").lower())
@@ -121,6 +131,7 @@ def _strip_line(
         m
         for m in _PROSE_EMOJI.finditer(line)
         if not any(a <= at + m.start() < b for a, b in kept)
+        and m.group(0)[0] not in _STATUS_MARKS
     ]
     if not hits:
         return line
