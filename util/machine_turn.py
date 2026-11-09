@@ -97,7 +97,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         print(f"[machine_turn] your turn: {label}", flush=True)
         env = {**os.environ, BYPASS_ENV: "1"}
-        return subprocess.run(command, env=env, check=False).returncode
+        # The queued command is an eval or repro that may run for hours.
+        done = subprocess.run(  # lint-ok: no timeout on purpose, see above
+            command, env=env, check=False
+        )
+        return done.returncode
     finally:
         HOLDER_FILE.unlink(missing_ok=True)
         unlock(fd)
