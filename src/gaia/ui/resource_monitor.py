@@ -702,6 +702,11 @@ def linux_npus(root: Path = Path("/")) -> List[Tuple[str, Path, Path]]:
 def _open_npu(node: Path) -> int:
     try:
         return os.open(node, os.O_RDWR | getattr(os, "O_CLOEXEC", 0))
+    except PermissionError as e:
+        from gaia.llm.npu_linux import access_problem
+
+        problem = access_problem(node)
+        raise ResourceProbeError(f"{problem.title} {problem.fix}") from e
     except OSError as e:
         raise ResourceProbeError(f"Can't open {node}: {e.strerror or e}") from e
 
@@ -717,7 +722,8 @@ def amdxdna_busy_percent(fd: int) -> float:
     try:
         fcntl.ioctl(fd, _IOCTL_GET_INFO, arg, True)
     except OSError as e:
-        if e.errno in (errno.EOPNOTSUPP, errno.EINVAL, errno.ENOTTY):
+        # ENODEV is amd_pmf not running; the others are a kernel without the query.
+        if e.errno in (errno.EOPNOTSUPP, errno.EINVAL, errno.ENOTTY, errno.ENODEV):
             raise ResourceProbeError(_NO_USAGE) from e
         raise ResourceProbeError(
             f"The NPU driver couldn't report usage: {e.strerror or e}"
@@ -734,8 +740,30 @@ def amdxdna_busy_percent(fd: int) -> float:
     return float(min(100, max(columns)))
 
 
+def _autosuspend_s(dev: Path) -> float:
+    ms = _read_int(dev / "power" / "autosuspend_delay_ms")
+    return max(0, ms) / 1000 if ms is not None else 0.0
+
+
+@dataclass
+class _Npu:
+    name: str
+    dev: Path
+    fd: int
+    # How long after a query the NPU may stay awake only because of it.
+    settle_s: float
+    last_query: Optional[float] = None
+    last_percent: float = 0.0
+
+
 class AmdxdnaNpus:
-    """Each NPU's busiest column, read once a sample through its /dev node."""
+    """Each NPU's busiest column, read through its /dev node.
+
+    Every query wakes the NPU and restarts its autosuspend timer, so a query
+    each second would keep an idle NPU awake. An idle one is asked again only
+    once that timer has run out: asleep by then, it reads 0 and stays asleep;
+    still awake, something else holds it and it is safe to ask.
+    """
 
     def __init__(
         self,
@@ -743,32 +771,52 @@ class AmdxdnaNpus:
         open_node: Callable[[Path], int] = _open_npu,
         busy: Callable[[int], float] = amdxdna_busy_percent,
         close_fd: Callable[[int], None] = os.close,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._busy = busy
         self._close_fd = close_fd
-        self._npus: List[Tuple[str, Path, int]] = []
+        self._clock = clock
+        self._npus: List[_Npu] = []
         try:
             for name, dev, node in found:
-                fd = open_node(node)
-                self._npus.append((name, dev, fd))
-                # Once at start, even if asleep, so an unsupported driver says so now.
-                busy(fd)
+                npu = _Npu(name, dev, open_node(node), _autosuspend_s(dev) + 1.0)
+                self._npus.append(npu)
+                # An awake NPU is asked now, so an unsupported driver says so at once.
+                if not _runtime_suspended(dev):
+                    self._query(npu)
         except BaseException:
             self.close()
             raise
 
+    def _query(self, npu: _Npu) -> float:
+        npu.last_percent = self._busy(npu.fd)
+        npu.last_query = self._clock()
+        return npu.last_percent
+
+    def _read(self, npu: _Npu) -> float:
+        if _runtime_suspended(npu.dev):
+            return 0.0
+        idle = npu.last_query is not None and npu.last_percent == 0.0
+        if idle and self._clock() - npu.last_query < npu.settle_s:
+            return 0.0
+        return self._query(npu)
+
     def sample(self) -> List[DeviceSample]:
-        out = []
-        for name, dev, fd in self._npus:
-            # The query wakes a sleeping NPU; asleep means idle.
-            percent = 0.0 if _runtime_suspended(dev) else self._busy(fd)
-            out.append(DeviceSample(f"npu_{name}", f"AMD NPU ({name})", "npu", percent))
-        return out
+        return [
+            DeviceSample(f"npu_{n.name}", f"AMD NPU ({n.name})", "npu", self._read(n))
+            for n in self._npus
+        ]
 
     def close(self) -> None:
         npus, self._npus = self._npus, []
-        for _, _, fd in npus:
-            self._close_fd(fd)
+        for npu in npus:
+            # Close them all; callers close from error paths, so log, don't raise.
+            try:
+                self._close_fd(npu.fd)
+            except OSError as e:
+                logger.warning(
+                    "Resource monitor: closing NPU %s failed: %s", npu.name, e
+                )
 
 
 class PosixProbe:
@@ -932,7 +980,9 @@ def to_payload(history: List[Sample], interval_s: float) -> dict:
     latest = history[-1]
     total = latest.memory_total_bytes
     devices = []
-    for i, dev in enumerate(latest.devices):
+    for dev in latest.devices:
+        # By key: GPUs and NPUs fail apart, so a device's position can shift.
+        past = [{d.key: d for d in s.devices}.get(dev.key) for s in history]
         devices.append(
             {
                 "id": dev.key,
@@ -940,10 +990,7 @@ def to_payload(history: List[Sample], interval_s: float) -> dict:
                 "kind": dev.kind,
                 "percent": round(dev.percent, 1),
                 "memory_used_bytes": dev.memory_used_bytes,
-                "history": [
-                    round(s.devices[i].percent, 1) if i < len(s.devices) else 0.0
-                    for s in history
-                ],
+                "history": [round(d.percent, 1) if d else 0.0 for d in past],
             }
         )
     networks = []

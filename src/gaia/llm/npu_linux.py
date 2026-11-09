@@ -166,6 +166,15 @@ def _access_problem(node: Path, group: Optional[str]) -> NpuProblem:
     )
 
 
+def access_problem(node: Path) -> NpuProblem:
+    """Why this account can't open *node*, with the group that grants it."""
+    try:
+        group = _group_name(node.stat().st_gid)
+    except OSError:
+        group = None
+    return _access_problem(node, group)
+
+
 def _memlock_problem(limit: str) -> NpuProblem:
     """Too little locked memory: fixable from GAIA, waiting for a restart, or
     still low after one, which only the NPU guide's steps can untangle."""
@@ -333,11 +342,7 @@ def host_problems(
     if not present:
         found.append(_device_problem())
     elif not any(_can_open(node) for node in present):
-        try:
-            group = _group_name(present[0].stat().st_gid)
-        except OSError:
-            group = None
-        found.append(_access_problem(present[0], group))
+        found.append(access_problem(present[0]))
     hard = _own_memlock_hard() if memlock_hard is _READ else memlock_hard
     if hard is not None and hard < memlock_needed_bytes():
         found.append(_memlock_problem(_limit_text(hard)))
