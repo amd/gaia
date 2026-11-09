@@ -73,7 +73,6 @@ jest.mock("os", () => ({
 
 // ── Electron mock is handled by moduleNameMapper in jest config ─────────────
 
-const { BrowserWindow, ipcMain } = require("electron");
 const { spawn } = require("child_process");
 
 // ── Load the module under test ──────────────────────────────────────────────
@@ -144,12 +143,8 @@ function setupFsMocks({ manifest, config } = {}) {
   });
 }
 
-/** Create a fresh manager. Resets ipcMain handlers and spawn mock. */
+/** Create a fresh manager. Resets the spawn mock. */
 function createManager(options = {}) {
-  // Clear any previous ipcMain handlers
-  ipcMain._handlers.clear();
-
-  const mainWindow = options.mainWindow || new BrowserWindow();
   setupFsMocks(options);
 
   // Reset spawn to return fresh mock processes
@@ -158,7 +153,7 @@ function createManager(options = {}) {
 
   // The real tree helpers read the OS process table; these stand in for
   // them (tests/electron/process-tree.test.cjs covers them for real).
-  const manager = new AgentProcessManager(mainWindow, {
+  const manager = new AgentProcessManager({
     listDescendants: jest.fn(async () => ({ descendants: [], skipped: [] })),
     killTree: jest.fn(async (proc) => {
       if (proc.exitCode === null) proc.kill();
@@ -166,7 +161,7 @@ function createManager(options = {}) {
     }),
   });
   _activeManagers.push(manager);
-  return { manager, mainWindow };
+  return { manager };
 }
 
 /**
@@ -261,55 +256,26 @@ describe("AgentProcessManager", () => {
       expect(manager.config.agents["test-agent"].autoStart).toBe(true);
     });
 
-    it("should register all IPC handlers on construction", () => {
-      const { manager } = createManager();
-      const expectedChannels = [
-        "agent:start",
-        "agent:stop",
-        "agent:restart",
-        "agent:status",
-        "agent:status-all",
-        "agent:send-rpc",
-        "agent:get-manifest",
-        "agent:install",
-        "agent:uninstall",
-      ];
-
-      for (const channel of expectedChannels) {
-        expect(ipcMain._handlers.has(channel)).toBe(true);
-      }
-    });
-
-    it("should store mainWindow reference", () => {
-      const mainWindow = new BrowserWindow();
-      const { manager } = createManager({ mainWindow });
-      expect(manager.mainWindow).toBe(mainWindow);
-    });
-
     it("should initialize empty _crashTimes", () => {
       const { manager } = createManager();
       expect(manager._crashTimes).toEqual({});
     });
 
     it("should fall back to empty manifest if no file exists", () => {
-      ipcMain._handlers.clear();
       mockFsImpl.existsSync.mockReturnValue(false);
       mockFsImpl.readFileSync.mockImplementation(() => {
         throw new Error("ENOENT");
       });
 
-      const mainWindow = new BrowserWindow();
-      const manager = new AgentProcessManager(mainWindow);
+      const manager = new AgentProcessManager();
 
       expect(manager.manifest).toEqual({ manifest_version: 1, agents: [] });
     });
 
     it("should fall back to default config if file does not exist", () => {
-      ipcMain._handlers.clear();
       mockFsImpl.existsSync.mockReturnValue(false);
 
-      const mainWindow = new BrowserWindow();
-      const manager = new AgentProcessManager(mainWindow);
+      const manager = new AgentProcessManager();
 
       expect(manager.config).toEqual({ agents: {}, tray: {} });
     });
@@ -354,7 +320,7 @@ describe("AgentProcessManager", () => {
       });
 
       it("should emit running status change on start", async () => {
-        const { manager, mainWindow } = createManager();
+        const { manager } = createManager();
         const statusEvents = [];
         manager.on("status-change", (e) => statusEvents.push(e));
 
@@ -592,19 +558,14 @@ describe("AgentProcessManager", () => {
 
   describe("stdout handling", () => {
     it("should parse newline-delimited JSON-RPC messages", async () => {
-      const { manager, mainWindow } = createManager({ config: NO_RESTART_CONFIG });
+      const { manager } = createManager({ config: NO_RESTART_CONFIG });
       const { mockChild } = await startMockAgent(manager);
+      const handled = jest.spyOn(manager, "_handleJsonRpcMessage");
 
       const msg = { jsonrpc: "2.0", method: "notification/send", params: { text: "hello" } };
       mockChild.stdout.emit("data", Buffer.from(JSON.stringify(msg) + "\n"));
 
-      expect(mainWindow.webContents.send).toHaveBeenCalledWith(
-        "agent:stdout",
-        expect.objectContaining({
-          agentId: "test-agent",
-          message: msg,
-        })
-      );
+      expect(handled).toHaveBeenCalledWith("test-agent", msg);
     });
 
     it("should resolve pending RPC on matching response id", async () => {
@@ -646,8 +607,9 @@ describe("AgentProcessManager", () => {
     });
 
     it("should handle multiple messages in a single data chunk", async () => {
-      const { manager, mainWindow } = createManager();
+      const { manager } = createManager();
       const { mockChild } = await startMockAgent(manager);
+      const handled = jest.spyOn(manager, "_handleJsonRpcMessage");
 
       const msg1 = { jsonrpc: "2.0", method: "notif1", params: {} };
       const msg2 = { jsonrpc: "2.0", method: "notif2", params: {} };
@@ -655,16 +617,13 @@ describe("AgentProcessManager", () => {
 
       mockChild.stdout.emit("data", Buffer.from(combined));
 
-      const calls = mainWindow.webContents.send.mock.calls.filter(
-        (c) => c[0] === "agent:stdout"
-      );
-      // One call from startAgent (status-change), then two stdout calls
-      expect(calls).toHaveLength(2);
+      expect(handled).toHaveBeenCalledTimes(2);
     });
 
     it("should buffer partial messages across data events", async () => {
-      const { manager, mainWindow } = createManager();
+      const { manager } = createManager();
       const { mockChild } = await startMockAgent(manager);
+      const handled = jest.spyOn(manager, "_handleJsonRpcMessage");
 
       const fullMsg = JSON.stringify({ jsonrpc: "2.0", method: "partial-test", params: {} });
       const half1 = fullMsg.slice(0, Math.floor(fullMsg.length / 2));
@@ -672,18 +631,12 @@ describe("AgentProcessManager", () => {
 
       // Send first half — should not emit
       mockChild.stdout.emit("data", Buffer.from(half1));
-      const callsBefore = mainWindow.webContents.send.mock.calls.filter(
-        (c) => c[0] === "agent:stdout"
-      );
-      expect(callsBefore).toHaveLength(0);
+      expect(handled).not.toHaveBeenCalled();
 
       // Send second half — now it should emit
       mockChild.stdout.emit("data", Buffer.from(half2));
-      const callsAfter = mainWindow.webContents.send.mock.calls.filter(
-        (c) => c[0] === "agent:stdout"
-      );
-      expect(callsAfter).toHaveLength(1);
-      expect(callsAfter[0][1].message.method).toBe("partial-test");
+      expect(handled).toHaveBeenCalledTimes(1);
+      expect(handled.mock.calls[0][1].method).toBe("partial-test");
     });
 
     it("should discard buffer on overflow (> 1MB)", async () => {
@@ -700,29 +653,23 @@ describe("AgentProcessManager", () => {
     });
 
     it("should silently skip non-JSON lines", async () => {
-      const { manager, mainWindow } = createManager();
+      const { manager } = createManager();
       const { mockChild } = await startMockAgent(manager);
+      const handled = jest.spyOn(manager, "_handleJsonRpcMessage");
 
-      // Send non-JSON output
       mockChild.stdout.emit("data", Buffer.from("this is not json\n"));
 
-      // Should not forward non-JSON to renderer as stdout message
-      const stdoutCalls = mainWindow.webContents.send.mock.calls.filter(
-        (c) => c[0] === "agent:stdout"
-      );
-      expect(stdoutCalls).toHaveLength(0);
+      expect(handled).not.toHaveBeenCalled();
     });
 
     it("should skip empty lines", async () => {
-      const { manager, mainWindow } = createManager();
+      const { manager } = createManager();
       const { mockChild } = await startMockAgent(manager);
+      const handled = jest.spyOn(manager, "_handleJsonRpcMessage");
 
       mockChild.stdout.emit("data", Buffer.from("\n\n\n"));
 
-      const stdoutCalls = mainWindow.webContents.send.mock.calls.filter(
-        (c) => c[0] === "agent:stdout"
-      );
-      expect(stdoutCalls).toHaveLength(0);
+      expect(handled).not.toHaveBeenCalled();
     });
 
     it("should emit agent-notification event for notification/send method", async () => {
@@ -774,20 +721,6 @@ describe("AgentProcessManager", () => {
       const entry = manager.processes["test-agent"];
       expect(entry.stderrBuffer).toContain("line one");
       expect(entry.stderrBuffer).toContain("line two");
-    });
-
-    it("should forward stderr lines to renderer", async () => {
-      const { manager, mainWindow } = createManager();
-      const { mockChild } = await startMockAgent(manager);
-
-      mockChild.stderr.emit("data", Buffer.from("error message\n"));
-
-      const stderrCalls = mainWindow.webContents.send.mock.calls.filter(
-        (c) => c[0] === "agent:stderr"
-      );
-      expect(stderrCalls).toHaveLength(1);
-      expect(stderrCalls[0][1].agentId).toBe("test-agent");
-      expect(stderrCalls[0][1].line).toBe("error message");
     });
 
     it("should enforce circular buffer limit of 10000 lines", async () => {
@@ -842,44 +775,37 @@ describe("AgentProcessManager", () => {
   describe("Process exit handling", () => {
     it("should skip crash handler when stopping flag is true (intentional stop)", async () => {
       jest.useFakeTimers();
-      const { manager, mainWindow } = createManager();
+      const { manager } = createManager();
       const { mockChild } = await startMockAgent(manager);
-
-      // Clear sends so far
-      mainWindow.webContents.send.mockClear();
+      const crashHandler = jest.spyOn(manager, "_logCrash");
 
       const stopPromise = manager.stopAgent("test-agent");
 
-      // Simulate exit during intentional stop
-      mockChild.exitCode = 0;
-      mockChild.emit("exit", 0, null);
+      // A non-zero exit during an intentional stop is not a crash.
+      mockChild.exitCode = 1;
+      mockChild.emit("exit", 1, null);
 
       await stopPromise;
 
-      // Should NOT have sent agent:crashed since it was intentional
-      const crashCalls = mainWindow.webContents.send.mock.calls.filter(
-        (c) => c[0] === "agent:crashed"
-      );
-      expect(crashCalls).toHaveLength(0);
+      expect(crashHandler).not.toHaveBeenCalled();
 
       jest.useRealTimers();
     });
 
-    it("should send agent:crashed to renderer on unexpected exit", async () => {
-      const { manager, mainWindow } = createManager({ config: NO_RESTART_CONFIG });
+    it("should report stopped on unexpected exit", async () => {
+      const { manager } = createManager({ config: NO_RESTART_CONFIG });
       const { mockChild } = await startMockAgent(manager);
-
-      mainWindow.webContents.send.mockClear();
+      const statusEvents = [];
+      manager.on("status-change", (e) => statusEvents.push(e));
 
       // Unexpected crash
       mockChild.emit("exit", 1, null);
 
-      const crashCalls = mainWindow.webContents.send.mock.calls.filter(
-        (c) => c[0] === "agent:crashed"
+      expect(statusEvents).toHaveLength(1);
+      expect(statusEvents[0]).toEqual(
+        expect.objectContaining({ agentId: "test-agent", status: "stopped" })
       );
-      expect(crashCalls).toHaveLength(1);
-      expect(crashCalls[0][1].agentId).toBe("test-agent");
-      expect(crashCalls[0][1].exitCode).toBe(1);
+      expect(manager.processes["test-agent"]).toBeUndefined();
     });
 
     it("should log crash for non-zero exit code", async () => {
@@ -998,18 +924,16 @@ describe("AgentProcessManager", () => {
     });
 
     it("should emit error status on spawn error", async () => {
-      const { manager, mainWindow } = createManager();
+      const { manager } = createManager();
       const { mockChild } = await startMockAgent(manager);
-
-      mainWindow.webContents.send.mockClear();
+      const statusEvents = [];
+      manager.on("status-change", (e) => statusEvents.push(e));
 
       mockChild.emit("error", new Error("ENOENT"));
 
-      const statusCalls = mainWindow.webContents.send.mock.calls.filter(
-        (c) => c[0] === "agent:status-change" && c[1].status === "error"
-      );
-      expect(statusCalls).toHaveLength(1);
-      expect(statusCalls[0][1].detail).toBe("ENOENT");
+      const errors = statusEvents.filter((e) => e.status === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0].detail).toBe("ENOENT");
     });
   });
 
@@ -1221,22 +1145,18 @@ describe("AgentProcessManager", () => {
     });
 
     it("should return empty manifest if no file found", () => {
-      ipcMain._handlers.clear();
       mockFsImpl.existsSync.mockReturnValue(false);
 
-      const mainWindow = new BrowserWindow();
-      const manager = new AgentProcessManager(mainWindow);
+      const manager = new AgentProcessManager();
 
       expect(manager.manifest).toEqual({ manifest_version: 1, agents: [] });
     });
 
     it("should handle malformed manifest JSON gracefully", () => {
-      ipcMain._handlers.clear();
       mockFsImpl.existsSync.mockReturnValue(true);
       mockFsImpl.readFileSync.mockReturnValue("not valid json {{{");
 
-      const mainWindow = new BrowserWindow();
-      const manager = new AgentProcessManager(mainWindow);
+      const manager = new AgentProcessManager();
 
       // Should fall back to empty manifest
       expect(manager.manifest).toEqual({ manifest_version: 1, agents: [] });
@@ -1270,7 +1190,6 @@ describe("AgentProcessManager", () => {
     });
 
     it("should return default config on read error", () => {
-      ipcMain._handlers.clear();
       mockFsImpl.existsSync.mockImplementation((p) => {
         if (typeof p === "string" && p.includes("tray-config.json")) return true;
         return false;
@@ -1279,8 +1198,7 @@ describe("AgentProcessManager", () => {
         throw new Error("read error");
       });
 
-      const mainWindow = new BrowserWindow();
-      const manager = new AgentProcessManager(mainWindow);
+      const manager = new AgentProcessManager();
 
       expect(manager.config).toEqual({ agents: {}, tray: {} });
     });
@@ -1420,15 +1338,15 @@ describe("AgentProcessManager", () => {
     });
   });
 
-  // ── 10. IPC handlers ──────────────────────────────────────────────────
+  // ── 10. Bad agent ids ─────────────────────────────────────────────────
 
-  describe("IPC handlers", () => {
-    it("agent:start spawns the manifest binary and returns its pid", async () => {
+  describe("Bad agent ids", () => {
+    it("startAgent spawns the manifest binary and returns its pid", async () => {
       const { manager } = createManager();
       const mockChild = mockCreateChildProcess();
       mockSpawnHolder.returnValue = mockChild;
 
-      const result = await ipcMain.simulateInvoke("agent:start", "test-agent");
+      const result = await manager.startAgent("test-agent");
 
       expect(result).toEqual({ pid: mockChild.pid });
       expect(spawn).toHaveBeenCalledTimes(1);
@@ -1441,331 +1359,63 @@ describe("AgentProcessManager", () => {
       expect(manager.getAgentStatus("test-agent").running).toBe(true);
     });
 
-    it("agent:stop sends shutdown to a running agent and clears it", async () => {
+    it.each([
+      ["an unknown id", "no-such-agent"],
+      ["a path-traversal id", "../test-agent"],
+      ["an empty id", ""],
+      ["null", null],
+      ["a number", 42],
+      ["an object", { id: "test-agent" }],
+    ])("startAgent with %s rejects without spawning", async (_label, agentId) => {
       const { manager } = createManager();
-      const { mockChild } = await startMockAgent(manager);
-      mockChild.stdin.write.mockImplementation(() => {
-        mockChild.exitCode = 0;
-        setImmediate(() => mockChild.emit("exit", 0, null));
-      });
 
-      await ipcMain.simulateInvoke("agent:stop", "test-agent");
-
-      const sent = JSON.parse(mockChild.stdin.write.mock.calls[0][0].trim());
-      expect(sent.method).toBe("shutdown");
-      expect(manager.getAgentStatus("test-agent").running).toBe(false);
+      await expect(manager.startAgent(agentId)).rejects.toThrow(/not found in manifest/);
+      expect(spawn).not.toHaveBeenCalled();
     });
 
-    describe("rejects bad input from the renderer", () => {
-      it.each([
-        ["an unknown id", "no-such-agent"],
-        ["a path-traversal id", "../test-agent"],
-        ["an empty id", ""],
-        ["null", null],
-        ["a number", 42],
-        ["an object", { id: "test-agent" }],
-      ])("agent:start with %s rejects without spawning", async (_label, agentId) => {
-        createManager();
-
-        await expect(ipcMain.simulateInvoke("agent:start", agentId)).rejects.toThrow(
-          /not found in manifest/
-        );
-        expect(spawn).not.toHaveBeenCalled();
-      });
-
-      it("agent:start rejects without spawning when the binary is missing", async () => {
-        createManager();
-        mockFsImpl.existsSync.mockImplementation(
-          (p) => typeof p === "string" && !p.includes(path.join("agents", "test-agent"))
-        );
-
-        await expect(ipcMain.simulateInvoke("agent:start", "test-agent")).rejects.toThrow(
-          /Agent binary not found/
-        );
-        expect(spawn).not.toHaveBeenCalled();
-      });
-
-      it("agent:restart of an unknown id rejects without spawning", async () => {
-        createManager();
-
-        await expect(
-          ipcMain.simulateInvoke("agent:restart", "no-such-agent")
-        ).rejects.toThrow(/not found in manifest/);
-        expect(spawn).not.toHaveBeenCalled();
-      });
-
-      it("agent:stop of an agent that is not running is a no-op", async () => {
-        const { manager } = createManager();
-        const { mockChild } = await startMockAgent(manager, "second-agent");
-
-        await expect(
-          ipcMain.simulateInvoke("agent:stop", "test-agent")
-        ).resolves.toBeUndefined();
-        expect(mockChild.stdin.write).not.toHaveBeenCalled();
-        expect(manager.getAgentStatus("second-agent").running).toBe(true);
-      });
-
-      it("agent:status of an unknown id reports not installed and not running", async () => {
-        createManager();
-
-        const result = await ipcMain.simulateInvoke("agent:status", "no-such-agent");
-        expect(result).toEqual({ installed: false, running: false });
-      });
-
-      it("agent:send-rpc to an agent that is not running rejects", async () => {
-        createManager();
-
-        await expect(
-          ipcMain.simulateInvoke("agent:send-rpc", "test-agent", "ping", {})
-        ).rejects.toThrow(/is not running/);
-      });
-
-      it.each([[""], ["   "], [null], [undefined], [42]])(
-        "agent:install with id %p rejects before contacting the backend",
-        async (agentId) => {
-          ipcMain._handlers.clear();
-          _activeManagers.push(
-            new AgentProcessManager(new BrowserWindow(), { getBackendPort: () => 4321 })
-          );
-          global.fetch = jest.fn();
-
-          await expect(
-            ipcMain.simulateInvoke("agent:install", agentId)
-          ).rejects.toThrow(/requires a non-empty agent id/);
-          expect(global.fetch).not.toHaveBeenCalled();
-
-          delete global.fetch;
-        }
+    it("startAgent rejects without spawning when the binary is missing", async () => {
+      const { manager } = createManager();
+      mockFsImpl.existsSync.mockImplementation(
+        (p) => typeof p === "string" && !p.includes(path.join("agents", "test-agent"))
       );
 
-      it.each([[""], ["   "], [null], [undefined], [42]])(
-        "agent:uninstall with id %p rejects before contacting the backend",
-        async (agentId) => {
-          ipcMain._handlers.clear();
-          _activeManagers.push(
-            new AgentProcessManager(new BrowserWindow(), { getBackendPort: () => 4321 })
-          );
-          global.fetch = jest.fn();
+      await expect(manager.startAgent("test-agent")).rejects.toThrow(/Agent binary not found/);
+      expect(spawn).not.toHaveBeenCalled();
+    });
 
-          await expect(
-            ipcMain.simulateInvoke("agent:uninstall", agentId)
-          ).rejects.toThrow(/requires a non-empty agent id/);
-          expect(global.fetch).not.toHaveBeenCalled();
+    it("restartAgent of an unknown id rejects without spawning", async () => {
+      const { manager } = createManager();
 
-          delete global.fetch;
-        }
+      await expect(manager.restartAgent("no-such-agent")).rejects.toThrow(
+        /not found in manifest/
       );
+      expect(spawn).not.toHaveBeenCalled();
+    });
 
-      it("agent:uninstall encodes the id so it cannot escape the agent route", async () => {
-        ipcMain._handlers.clear();
-        _activeManagers.push(
-          new AgentProcessManager(new BrowserWindow(), { getBackendPort: () => 4321 })
-        );
-        global.fetch = jest.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+    it("stopAgent of an agent that is not running is a no-op", async () => {
+      const { manager } = createManager();
+      const { mockChild } = await startMockAgent(manager, "second-agent");
 
-        await ipcMain.simulateInvoke("agent:uninstall", "../sessions/x");
+      await expect(manager.stopAgent("test-agent")).resolves.toBeUndefined();
+      expect(mockChild.stdin.write).not.toHaveBeenCalled();
+      expect(manager.getAgentStatus("second-agent").running).toBe(true);
+    });
 
-        expect(global.fetch.mock.calls[0][0]).toBe(
-          "http://127.0.0.1:4321/api/agents/..%2Fsessions%2Fx"
-        );
+    it("getAgentStatus of an unknown id reports not installed and not running", () => {
+      const { manager } = createManager();
 
-        delete global.fetch;
-      });
-
-      it.each([
-        [404, /"ghost" is not installed/],
-        [400, /Cannot uninstall "ghost": builtin agents cannot be removed/],
-        [500, /Uninstall of "ghost" failed \(HTTP 500\)/],
-      ])("agent:uninstall surfaces a backend %i as a rejection", async (status, err) => {
-        ipcMain._handlers.clear();
-        _activeManagers.push(
-          new AgentProcessManager(new BrowserWindow(), { getBackendPort: () => 4321 })
-        );
-        global.fetch = jest.fn(async () => ({
-          ok: false,
-          status,
-          json: async () => ({ detail: "builtin agents cannot be removed" }),
-        }));
-
-        await expect(ipcMain.simulateInvoke("agent:uninstall", "ghost")).rejects.toThrow(err);
-
-        delete global.fetch;
-      });
-
-      it("agent:install surfaces a concurrent install (409) as a rejection", async () => {
-        ipcMain._handlers.clear();
-        _activeManagers.push(
-          new AgentProcessManager(new BrowserWindow(), { getBackendPort: () => 4321 })
-        );
-        global.fetch = jest.fn(async () => ({
-          ok: false,
-          status: 409,
-          json: async () => ({ detail: "busy" }),
-        }));
-
-        await expect(ipcMain.simulateInvoke("agent:install", "test-agent")).rejects.toThrow(
-          /already in progress/
-        );
-        expect(global.fetch).toHaveBeenCalledTimes(1);
-
-        delete global.fetch;
+      expect(manager.getAgentStatus("no-such-agent")).toEqual({
+        installed: false,
+        running: false,
       });
     });
 
-    it("should register agent:status handler that calls getAgentStatus", async () => {
+    it("sendJsonRpc to an agent that is not running rejects", async () => {
       const { manager } = createManager();
 
-      const result = await ipcMain.simulateInvoke("agent:status", "test-agent");
-      expect(result).toHaveProperty("running");
-      expect(result).toHaveProperty("installed");
-    });
-
-    it("should register agent:status-all handler that calls getAllAgentStatuses", async () => {
-      const { manager } = createManager();
-
-      const result = await ipcMain.simulateInvoke("agent:status-all");
-      expect(result).toHaveProperty("test-agent");
-      expect(result).toHaveProperty("second-agent");
-    });
-
-    it("should register agent:send-rpc handler that calls sendJsonRpc", async () => {
-      const { manager } = createManager();
-      const spy = jest.spyOn(manager, "sendJsonRpc").mockResolvedValue({ ok: true });
-
-      const result = await ipcMain.simulateInvoke(
-        "agent:send-rpc",
-        "test-agent",
-        "my-method",
-        { param: 1 }
+      await expect(manager.sendJsonRpc("test-agent", "ping", {})).rejects.toThrow(
+        /is not running/
       );
-      expect(spy).toHaveBeenCalledWith("test-agent", "my-method", { param: 1 });
-      expect(result).toEqual({ ok: true });
-    });
-
-    it("should register agent:get-manifest handler that returns manifest", async () => {
-      const { manager } = createManager();
-
-      const result = await ipcMain.simulateInvoke("agent:get-manifest");
-      expect(result).toEqual(SAMPLE_MANIFEST);
-    });
-
-    it("should redirect agent:install to the backend install runtime and resolve on completion", async () => {
-      ipcMain._handlers.clear();
-      const mainWindow = new BrowserWindow();
-      const manager = new AgentProcessManager(mainWindow, {
-        getBackendPort: () => 4321,
-      });
-      _activeManagers.push(manager);
-
-      const calls = [];
-      global.fetch = jest.fn(async (url, opts) => {
-        calls.push({ url, opts });
-        if (url.endsWith("/api/agents/install")) {
-          return {
-            ok: true,
-            status: 202,
-            json: async () => ({ id: "test-agent", status: "queued" }),
-          };
-        }
-        if (url.includes("/install-status")) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              id: "test-agent",
-              status: "completed",
-              phase: "done",
-              percent: 100,
-              version: "1.2.3",
-              error: null,
-            }),
-          };
-        }
-        throw new Error(`unexpected url ${url}`);
-      });
-
-      const result = await ipcMain.simulateInvoke("agent:install", "test-agent");
-      expect(result).toMatchObject({ id: "test-agent", status: "completed" });
-
-      // POST hits the real backend route with the required UI header + body shape.
-      const post = calls.find((c) => c.url.endsWith("/api/agents/install"));
-      expect(post.url).toBe("http://127.0.0.1:4321/api/agents/install");
-      expect(post.opts.method).toBe("POST");
-      expect(post.opts.headers["X-Gaia-UI"]).toBe("1");
-      expect(JSON.parse(post.opts.body)).toEqual({
-        id: "test-agent",
-        trust_native: false,
-        version: null,
-      });
-
-      delete global.fetch;
-    });
-
-    it("should surface a failed backend install as a thrown error", async () => {
-      ipcMain._handlers.clear();
-      const manager = new AgentProcessManager(new BrowserWindow(), {
-        getBackendPort: () => 4321,
-      });
-      _activeManagers.push(manager);
-
-      global.fetch = jest.fn(async (url) => {
-        if (url.endsWith("/api/agents/install")) {
-          return { ok: true, status: 202, json: async () => ({ status: "queued" }) };
-        }
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            status: "failed",
-            phase: "failed",
-            percent: 0,
-            error: "checksum mismatch",
-          }),
-        };
-      });
-
-      await expect(
-        ipcMain.simulateInvoke("agent:install", "bad-agent")
-      ).rejects.toThrow(/checksum mismatch/);
-
-      delete global.fetch;
-    });
-
-    it("should fail loudly on install when no backend port is available", async () => {
-      ipcMain._handlers.clear();
-      const manager = new AgentProcessManager(new BrowserWindow());
-      _activeManagers.push(manager);
-
-      await expect(
-        ipcMain.simulateInvoke("agent:install", "test-agent")
-      ).rejects.toThrow(/backend is not running/i);
-    });
-
-    it("should redirect agent:uninstall to the backend DELETE route", async () => {
-      ipcMain._handlers.clear();
-      const manager = new AgentProcessManager(new BrowserWindow(), {
-        getBackendPort: () => 4321,
-      });
-      _activeManagers.push(manager);
-
-      const calls = [];
-      global.fetch = jest.fn(async (url, opts) => {
-        calls.push({ url, opts });
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ id: "test-agent", status: "uninstalled" }),
-        };
-      });
-
-      const result = await ipcMain.simulateInvoke("agent:uninstall", "test-agent");
-      expect(result).toMatchObject({ id: "test-agent", status: "uninstalled" });
-
-      expect(calls[0].url).toBe("http://127.0.0.1:4321/api/agents/test-agent");
-      expect(calls[0].opts.method).toBe("DELETE");
-      expect(calls[0].opts.headers["X-Gaia-UI"]).toBe("1");
-
-      delete global.fetch;
     });
   });
 
@@ -1862,23 +1512,6 @@ describe("AgentProcessManager", () => {
   // ── 12. Edge cases ────────────────────────────────────────────────────
 
   describe("Edge cases", () => {
-    it("should not crash _sendToRenderer if mainWindow is destroyed", async () => {
-      const { manager, mainWindow } = createManager();
-      mainWindow.close(); // sets _isDestroyed = true
-
-      // Should not throw
-      manager._emitStatusChange("test-agent", "stopped");
-    });
-
-    it("should not crash _sendToRenderer if mainWindow is null", () => {
-      ipcMain._handlers.clear();
-      setupFsMocks();
-      const manager = new AgentProcessManager(null);
-
-      // Should not throw
-      manager._emitStatusChange("test-agent", "stopped");
-    });
-
     it("should reject all pending RPCs on process cleanup", async () => {
       const { manager } = createManager({ config: NO_RESTART_CONFIG });
       const { mockChild } = await startMockAgent(manager);
@@ -2045,21 +1678,6 @@ describe("AgentProcessManager", () => {
           status: "running",
           detail: "started successfully",
           timestamp: expect.any(Number),
-        })
-      );
-    });
-
-    it("should send status-change to renderer via webContents.send", async () => {
-      const { manager, mainWindow } = createManager();
-
-      manager._emitStatusChange("test-agent", "error", "something failed");
-
-      expect(mainWindow.webContents.send).toHaveBeenCalledWith(
-        "agent:status-change",
-        expect.objectContaining({
-          agentId: "test-agent",
-          status: "error",
-          detail: "something failed",
         })
       );
     });
