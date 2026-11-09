@@ -7,6 +7,8 @@ A tested vision model already loaded, else the default chat model when it has
 vision, else Gemma.
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 from gaia.config import GaiaConfig
@@ -65,6 +67,15 @@ def test_discovered_cloud_chat_does_not_turn_off_npu_vision(
         return catalog
 
     monkeypatch.setattr(lc.LemonadeClient, "list_models", list_models)
+    monkeypatch.setattr(
+        lc,
+        "find_model_requirement",
+        lambda model: (
+            SimpleNamespace(feature_tier="full")
+            if model == "user.Llama-3.2-3B-GGUF"
+            else lc.MODELS.get(model)
+        ),
+    )
     record_cloud_models(catalog if warm_cache else {"data": []})
     try:
         config(lc.DEFAULT_MODEL_NAME, last_model="opencode.big-model")

@@ -135,6 +135,38 @@ def test_runtime_cloud_chat_is_not_planned_as_a_local_download(monkeypatch, warm
         record_cloud_models({"data": []})
 
 
+def test_registered_dotted_local_chat_model_does_not_need_catalog(
+    no_server, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from gaia.installer import model_choice
+    from gaia.llm import lemonade_client as lc
+
+    monkeypatch.setattr(
+        lc,
+        "resolve_chat_model",
+        lambda: "user.Llama-3.2-3B-GGUF",
+    )
+    monkeypatch.setattr(
+        lc,
+        "find_model_requirement",
+        lambda model: (
+            SimpleNamespace(feature_tier="full")
+            if model == "user.Llama-3.2-3B-GGUF"
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        lc.LemonadeClient,
+        "list_models",
+        lambda self, **kwargs: pytest.fail("catalog should not be queried"),
+    )
+
+    assert sp._job_model(model_choice.ROLE_CHAT) == "user.Llama-3.2-3B-GGUF"
+    assert sp.model_need(model_choice.ROLE_CHAT)["needed"] is False
+
+
 def test_cold_pc_names_the_starting_model_and_says_the_pick_comes_later(no_server):
     plan = sp.build_plan()
     assert plan["lemonade"]["reachable"] is False

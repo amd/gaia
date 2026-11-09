@@ -3383,7 +3383,10 @@ def is_cloud_model_with_catalog(
     """
     if cloud_model_provider(model_id) or is_cloud_model(model_id):
         return True
-    if not may_be_cloud_model(model_id):
+    # A user-added model is local by declaration even when its id contains a
+    # dot. Do not ask a stopped Lemonade server to classify it as a gateway
+    # model; callers must retain the normal local startup/setup path.
+    if not may_be_cloud_model(model_id) or find_model_requirement(model_id) is not None:
         return False
     return LemonadeClient(base_url=base_url, verbose=False)._is_cloud_model(model_id)
 
