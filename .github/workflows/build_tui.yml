@@ -39,6 +39,13 @@ on:
       - '.github/workflows/build_tui.yml'
       - '.github/workflows/tui_installers.yml'
       - '.github/workflows/windows_setup.yml'
+      # The frozen gaia core both installer jobs pack beside gaia-tui.
+      - '.github/workflows/build_core.yml'
+      - 'installer/core/**'
+      # build_core.yml builds the Agent UI into the core.
+      - 'src/gaia/apps/webui/**'
+      - 'hub/agents/gaia/python/packaging/check_bundle_licenses.py'
+      - 'hub/agents/gaia/python/packaging/check_glibc.py'
       # The installer jobs it calls read the flagship's pins and version.
       - 'hub/agents/gaia/npm/binaries.lock.json'
       - 'hub/agents/gaia/python/gaia-agent.yaml'
@@ -78,6 +85,13 @@ on:
       - '.github/workflows/build_tui.yml'
       - '.github/workflows/tui_installers.yml'
       - '.github/workflows/windows_setup.yml'
+      # The frozen gaia core both installer jobs pack beside gaia-tui.
+      - '.github/workflows/build_core.yml'
+      - 'installer/core/**'
+      # build_core.yml builds the Agent UI into the core.
+      - 'src/gaia/apps/webui/**'
+      - 'hub/agents/gaia/python/packaging/check_bundle_licenses.py'
+      - 'hub/agents/gaia/python/packaging/check_glibc.py'
       # The installer jobs it calls read the flagship's pins and version.
       - 'hub/agents/gaia/npm/binaries.lock.json'
       - 'hub/agents/gaia/python/gaia-agent.yaml'

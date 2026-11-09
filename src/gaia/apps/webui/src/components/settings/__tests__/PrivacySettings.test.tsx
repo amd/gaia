@@ -26,11 +26,37 @@ const TAXES = chat('taxes', 'Taxes');
 beforeEach(() => {
     vi.clearAllMocks();
     mockedApi.deleteSession.mockResolvedValue(undefined);
+    mockedApi.getSettings.mockResolvedValue({ network_policy: 'cloud_allowed' } as never);
+    mockedApi.updateSettings.mockResolvedValue({ network_policy: 'local_ai_only', policy_warnings: [] } as never);
     useChatStore.setState({ sessions: [TRIP, TAXES] });
 });
 
 afterEach(() => {
     vi.useRealTimers();
+});
+
+describe('PrivacySettings local only', () => {
+    it('shows the policy and switches it on from Settings', async () => {
+        render(<PrivacySettings />);
+        const toggle = await screen.findByRole('switch', { name: 'Local only' });
+        expect(toggle).toHaveAttribute('aria-checked', 'false');
+
+        fireEvent.click(toggle);
+
+        await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledWith({ network_policy: 'local_ai_only' }));
+        expect(await screen.findByRole('status')).toHaveTextContent('Cloud models are unavailable');
+    });
+
+    it('returns to the server policy when switching on fails', async () => {
+        mockedApi.updateSettings.mockRejectedValueOnce(new Error('policy file is read-only'));
+        render(<PrivacySettings />);
+        const toggle = await screen.findByRole('switch', { name: 'Local only' });
+
+        fireEvent.click(toggle);
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('policy file is read-only');
+        expect(toggle).toHaveAttribute('aria-checked', 'false');
+    });
 });
 
 describe('PrivacySettings delete all chats', () => {
@@ -88,5 +114,22 @@ describe('PrivacySettings delete all chats', () => {
         );
         expect(screen.queryByRole('status')).not.toBeInTheDocument();
         expect(useChatStore.getState().sessions).toEqual([TRIP, TAXES]);
+    });
+});
+
+describe('PrivacySettings troubleshooting report', () => {
+    it('says nothing is sent and offers to save a report', async () => {
+        mockedApi.createSetupReport.mockResolvedValue({ name: 'diagnostics-20261104-192300.tgz', path: 'C:\Users\you\.gaia\diagnostics-20261104-192300.tgz', size_bytes: 900 });
+        mockedApi.fetchSetupReport.mockResolvedValue(new Blob(['x']));
+        URL.createObjectURL = vi.fn(() => 'blob:report');
+        URL.revokeObjectURL = vi.fn();
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        render(<PrivacySettings />);
+        expect(screen.getByRole('region', { name: 'Troubleshooting report' })).toHaveTextContent('Nothing is sent anywhere.');
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: 'Save a troubleshooting report' }));
+        });
+        expect(mockedApi.createSetupReport).toHaveBeenCalledTimes(1);
+        await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('diagnostics-20261104-192300.tgz'));
     });
 });

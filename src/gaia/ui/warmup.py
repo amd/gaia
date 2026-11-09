@@ -363,7 +363,6 @@ def _warm_new_chat_prefix(
                 library_paths=[],
                 allowed=chat._compute_allowed_paths([]),
                 session_id="warm-up",
-                dynamic_tools=db.get_setting("dynamic_tools", "false") == "true",
                 memory_incognito=chat._memory_off(session, db),
             ),
         )

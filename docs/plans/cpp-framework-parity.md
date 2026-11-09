@@ -341,7 +341,8 @@ still green. *Unblocks: P1.2, P4.1.*
 **P1.2 — Embeddings API on `LemonadeClient`**
 `std::vector<std::vector<float>> embeddings(const std::vector<std::string>& texts, const std::string& model, int timeoutSec)`
 against `POST /api/v1/embeddings`. Port the Python batching semantics: `MAX_EMBED_CHARS`
-truncation, per-batch retry, one-by-one fallback on batch failure. Plus `DEFAULT_EMBEDDING_MODEL`
+truncation, one call per batch that raises on any failure or short batch, and a bounded wait
+only while the model is still loading (no vectors back). Plus `DEFAULT_EMBEDDING_MODEL`
 and the `user.`-prefix registration rule for embedder pulls. Integration test against live
 Lemonade behind `GAIA_BUILD_INTEGRATION_TESTS`. *Unblocks: P2.2, P2.3.*
 

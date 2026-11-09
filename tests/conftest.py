@@ -20,6 +20,7 @@ Current fixtures:
   (used by tests/unit/connectors/ to avoid SecretService prerequisite on Linux CI)
 - ui_api_client: Function-scoped TestClient against gaia.ui.server.create_app()
 - mock_lemonade_client: Shared mock for LemonadeClient (requires pytest-mock)
+- reload_module: importlib.reload a module for one test, restoring its originals after
 
 Current options:
 - --hybrid: Run tests with hybrid configuration (cloud + local models)
@@ -28,6 +29,7 @@ To add new fixtures for other test suites, define them in this file and they'll
 be automatically available to all test files.
 """
 
+import importlib
 import os
 import subprocess
 import sys
@@ -327,6 +329,35 @@ def require_lemonade(lemonade_available):
 def mock_lemonade_client(mocker):
     """Shared mock for LemonadeClient — avoids duplicating patch targets across test files."""
     return mocker.patch("gaia.llm.lemonade_client.LemonadeClient")
+
+
+@pytest.fixture
+def reload_module():
+    """Reload a module for this test only, then put its original objects back.
+
+    A reload re-executes the module into the same namespace, so its classes and
+    constants are replaced by new objects while every ``from mod import X`` made
+    earlier keeps the old ones; ``except mod.SomeError`` then stops matching on
+    later tests in the worker. Reloading again does not help, since it mints a
+    third set, so teardown restores the saved namespace instead.
+    """
+    saved = {}
+
+    def _reload(module):
+        if module.__name__ not in saved:
+            saved[module.__name__] = (module, dict(module.__dict__))
+        return importlib.reload(module)
+
+    yield _reload
+
+    for name, (module, namespace) in saved.items():
+        module.__dict__.clear()
+        module.__dict__.update(namespace)
+        sys.modules[name] = module
+        parent_name, _, attr = name.rpartition(".")
+        parent = sys.modules.get(parent_name)
+        if parent is not None:
+            setattr(parent, attr, module)
 
 
 @pytest.fixture(scope="function")

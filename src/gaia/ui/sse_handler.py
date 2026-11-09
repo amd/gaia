@@ -20,7 +20,6 @@ import time
 import uuid
 from collections import deque
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterator, List, Optional
 
 from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, call_risk
@@ -49,6 +48,7 @@ from gaia.ui.event_narration import (
     tool_phrase,
 )
 from gaia.ui.turn_summary import TurnLedger, search_hits
+from gaia.upload_names import display_file_name, upload_original_name
 from gaia.utils.json_string import (
     JsonStringStreamDecoder,
     extract_json_string_field,
@@ -835,6 +835,9 @@ class SSEOutputHandler(OutputHandler):
         event.update(_mcp_identity(tool_name))
         self._emit(event)
 
+    def print_skill_use(self, name: str, loaded: List[str], how: str):
+        self._emit({"type": "skill_use", "skill": name, "how": how, "loaded": loaded})
+
     def print_tool_complete(self):
         self._tool_start_time = None  # Reset in case tool_result was skipped
         success, self._last_tool_success = self._last_tool_success, True
@@ -975,7 +978,7 @@ class SSEOutputHandler(OutputHandler):
                             {
                                 "id": c.get("chunk_id", 0),
                                 "source": (
-                                    Path(c["source_file"]).name
+                                    display_file_name(c["source_file"])
                                     if c.get("source_file")
                                     else None
                                 ),
@@ -1922,6 +1925,7 @@ class SSEOutputHandler(OutputHandler):
         """
         if timeout is _USE_HANDLER_TIMEOUT:
             timeout = self.confirm_timeout_seconds
+        self._answered_prompt = None
         noted, self._noted_call = self._noted_call, None
         call_args = noted[1] if noted is not None and noted[0] == tool_name else None
 
@@ -2105,6 +2109,8 @@ class SSEOutputHandler(OutputHandler):
         result = self._confirm_result
         timed_out = self._confirm_timed_out
         self._clear_pending_confirmation()
+        if not timed_out:
+            self.note_prompt_answered(tool_name)
         if timed_out:
             # The client's own clock ran out and it said so: a timeout, never
             # "the user denied it".
@@ -2746,7 +2752,8 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         if data.get("already_indexed"):
             return f"Already indexed ({chunks} chunks)"
         if filename:
-            return f"Indexed {filename} ({chunks} chunks)"
+            shown = upload_original_name(filename) or filename
+            return f"Indexed {shown} ({chunks} chunks)"
         return f"Indexed document ({chunks} chunks)"
 
     # File read results
@@ -2786,7 +2793,10 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
     # Status-based results
     if "status" in data:
         status = data["status"]
-        msg = data.get("message", data.get("error", data.get("display_message", "")))
+        # Written for the user; message may be written for the model.
+        if data.get("display_message"):
+            return str(data["display_message"])[:200]
+        msg = data.get("message", data.get("error", ""))
         if msg:
             return f"{status}: {str(msg)[:200]}"
         # A bare "success" tells the user nothing. Report what came back

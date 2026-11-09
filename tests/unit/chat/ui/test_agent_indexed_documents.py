@@ -22,6 +22,7 @@ from gaia.ui.email_sidecar.relay import _dispatch_one
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
 from gaia.ui.turn_summary import TurnLedger
+from gaia.ui.utils import message_to_response
 
 
 @pytest.fixture(autouse=True)
@@ -239,6 +240,28 @@ def test_a_file_the_library_cannot_hold_is_named_with_the_reason(home, db):
     [notice] = added.notices
     assert "run.exe" in notice and "couldn't be added to your documents" in notice
     assert ".exe" in notice
+
+
+def test_library_notices_travel_on_done_events_and_persisted_messages(home, db):
+    session = db.create_session()
+    notices = [
+        "run.exe couldn't be added to your documents (.exe files are not supported)."
+    ]
+    msg_id = db.add_message(
+        session["id"],
+        "assistant",
+        "I indexed the remaining files.",
+        library_notices=notices,
+    )
+
+    [saved] = db.get_messages(session["id"])
+    assert saved["library_notices"] == notices
+    assert (
+        _done_event(1, "ok", False, library_notices=notices)["library_notices"]
+        == notices
+    )
+    assert message_to_response(saved).library_notices == notices
+    assert msg_id == saved["id"]
 
 
 def test_the_turn_hands_the_chat_its_new_documents(home, db):

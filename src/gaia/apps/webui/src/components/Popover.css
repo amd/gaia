@@ -61,6 +61,12 @@
     white-space: nowrap;
 }
 
+/* Keep Latin model names readable in the RTL picker: ellipsis removes the end. */
+html[dir='rtl'] .popover-item-title.is-model {
+    direction: ltr;
+    text-align: left;
+}
+
 .popover-item-note {
     color: var(--text-secondary);
     font-size: var(--fs-label);

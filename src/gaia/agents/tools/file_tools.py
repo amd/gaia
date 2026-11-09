@@ -38,6 +38,7 @@ from gaia.agents.tools.file_edit import (
     file_read_record,
     read_first_preflight,
     stamp_of,
+    turn_of,
 )
 from gaia.agents.tools.path_access import (
     missing_file_error,
@@ -66,6 +67,38 @@ from gaia.security import BackupError
 from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
+
+
+def _canonical_tool_already_registered(tool_name: str, module_name: str) -> bool:
+    """Return whether a canonical implementation already owns *tool_name*.
+
+    File-search is composed with the file-I/O and filesystem mixins in several
+    profiles. Those mixins provide the authoritative implementations for the
+    overlapping generic tools; checking the registry before defining another
+    closure makes the result independent of registrar order.
+    """
+    from gaia.agents.base.tools import _BUILD_NAMES, _TOOL_REGISTRY
+
+    # The process-wide registry outlives an Agent.  Only reuse a canonical
+    # implementation that was registered earlier in this same build; an entry
+    # left by a different Agent belongs to that Agent's workspace and policy.
+    build = _BUILD_NAMES.get()
+    if build is None or tool_name not in build:
+        return False
+
+    entry = _TOOL_REGISTRY.get(tool_name)
+    function = entry.get("function") if entry else None
+    return getattr(function, "__module__", None) == module_name
+
+
+def _tool_or_reuse(tool_name: str, canonical_module: str, **kwargs):
+    """Register a tool unless its canonical sibling is already registered."""
+    from gaia.agents.base.tools import tool
+
+    if _canonical_tool_already_registered(tool_name, canonical_module):
+        return lambda function: function
+    return tool(**kwargs)
+
 
 #: Root-level operating-system trees a deep search walks last, so they cannot
 #: spend the budget before user folders. Applied only at a filesystem root,
@@ -1097,8 +1130,12 @@ class FileSearchToolsMixin:
                     "operation": "search_directory",
                 }
 
-        @tool(
-            atomic=True,
+        # FileIOToolsMixin is canonical whenever this profile also has file I/O.
+        # Keep FileSearchToolsMixin's version for doc-only profiles, but reuse
+        # the already-registered implementation when composition order puts the
+        # canonical mixin first.
+        @_tool_or_reuse(
+            "read_file", "gaia.agents.tools.file_io_tools", atomic=True, override=True
         )
         def read_file(
             file_path: str, offset: int = 0, limit: Optional[int] = None
@@ -1531,7 +1568,9 @@ class FileSearchToolsMixin:
         def _workspace_target(args: Dict[str, Any]) -> Path:
             return _resolve_target(args["file_path"], None, _workspace_default(self))
 
-        @tool(
+        @_tool_or_reuse(
+            "write_file",
+            "gaia.agents.tools.file_io_tools",
             atomic=True,
             preflight=read_first_preflight(self, _workspace_target, "overwriting"),
         )
@@ -1897,7 +1936,9 @@ class FileSearchToolsMixin:
 
         # --- New tool definitions ---
 
-        @tool(
+        @_tool_or_reuse(
+            "edit_file",
+            "gaia.agents.tools.file_io_tools",
             atomic=True,
             preflight=read_first_preflight(self, _workspace_target),
         )
@@ -1914,7 +1955,8 @@ class FileSearchToolsMixin:
             old_content must match exactly one location. Zero or several matches
             are errors that carry the file's current content, so a retry does not
             need a separate read. new_content replaces old_content only; to
-            rewrite the whole file, use write_file.
+            rewrite the whole file, use write_file. Repeating an edit already
+            applied this turn is refused.
 
             Security checks performed:
             1. Path allowlist validation (PathValidator)
@@ -1976,7 +2018,9 @@ class FileSearchToolsMixin:
                     }
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(resolved_path)
+                refusal = reads.refusal(resolved_path) or reads.repeat_refusal(
+                    resolved_path, old_content, new_content, turn_of(self)
+                )
                 if refusal is not None:
                     return {**refusal, "operation": "edit_file"}
 
@@ -2042,6 +2086,7 @@ class FileSearchToolsMixin:
                 # Write updated content
                 _write_exact(resolved_path, updated_content)
                 reads.note(resolved_path)
+                reads.note_edit(resolved_path, old_content, new_content, turn_of(self))
 
                 # Audit the edit
                 edit_size = len(updated_content.encode("utf-8"))
@@ -2096,9 +2141,10 @@ class FileSearchToolsMixin:
                     "operation": "edit_file",
                 }
 
-        @tool(
-            atomic=True,
-        )
+        # Shares its name with FileSystemToolsMixin.browse_directory. Keep the
+        # historical FileSearch schema here; changing the owner changes the
+        # model-facing arguments and needs a separate eval-backed change.
+        @tool(atomic=True, override=True)
         def browse_directory(
             directory_path: str = None, show_hidden: bool = False, sort_by: str = "name"
         ) -> Dict[str, Any]:

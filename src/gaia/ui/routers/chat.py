@@ -954,12 +954,26 @@ async def retry_with(
 
     The answer is held until ``/api/chat/retry-with/choose`` keeps one.
     """
-    from gaia.llm.lemonade_client import cloud_model_provider, resolve_ctx_size
+    from gaia.llm.lemonade_client import LemonadeClientError, resolve_ctx_size
+
+    from .._chat_helpers import _runs_on_this_pc
 
     sid = request.session_id
     if not db.get_session(sid):
         raise HTTPException(status_code=404, detail="Session not found")
-    if cloud_model_provider(request.model, None):
+    try:
+        local = await asyncio.to_thread(_runs_on_this_pc, request.model)
+    except LemonadeClientError as exc:
+        logger.error(
+            "Retry with: couldn't check %s runs locally: %s", request.model, exc
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Retry with… couldn't confirm the model runs on this PC because "
+            "Lemonade's model list didn't load. Check that Lemonade is running in "
+            "Settings > Setup, then try again.",
+        ) from exc
+    if not local:
         raise HTTPException(
             status_code=400,
             detail="Retry with… compares models on this PC; pick a local model.",

@@ -29,7 +29,7 @@ Two ways in:
 ## 1. Install
 
 ```bash
-npx @amd-gaia/gaia          # no install step; fetches what it needs on first run
+npx @amd-gaia/gaia          # no npm install step; needs the gaia Python CLI (see §5)
 npm install @amd-gaia/gaia  # when you want the programmatic exports
 ```
 
@@ -93,10 +93,10 @@ env var, or option that relaxes it.
 - Bytes are hashed **in memory and compared before anything is written** to the
   cache path. A mismatch raises `IntegrityError` naming expected vs actual and
   leaves nothing on disk.
-- A **placeholder hash blocks the fetch before any network call** — between
-  releases every `sha256` in the lock is `PENDING-replace-with-real-sha256`, and
-  a value that is all zeros or contains `PENDING` (case-insensitive) is treated
-  as a placeholder. You get a `PlatformError`, not a download.
+- A **placeholder hash blocks the fetch before any network call** — a value
+  that is all zeros or contains `PENDING` (case-insensitive) is treated as a
+  placeholder. A published package always carries real hashes, so you only meet
+  this with a hand-edited lock. You get a `PlatformError`, not a download.
 - A cache hit **re-hashes the on-disk file**. A cached binary whose bytes drifted
   is re-downloaded, not reused.
 
@@ -127,7 +127,14 @@ platform and the supported set. It is not silently skipped, and the TUI is never
 launched with no agent behind it. `npx @amd-gaia/gaia version` prints the matrix
 for the version you have.
 
-## 5. Prerequisite — a local Lemonade server
+## 5. Prerequisites — the `gaia` CLI and a local Lemonade server
+
+The terminal UI starts the GAIA daemon from the **Python `gaia` CLI**, which this
+package does not install. It must be on `PATH` and be **0.26.0 or newer**: without
+it the daemon never comes up, and an older one starts but cannot run this agent
+(see [Gotchas](#gotchas--read-before-debugging)). Install it with
+`curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
+`irm https://amd-gaia.ai/install.ps1 | iex`).
 
 The agent thinks with a model hosted by **Lemonade Server**, which this package
 does not install. Required before any query succeeds:
@@ -378,7 +385,7 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Thirteen of the agent's 102 tools mutate the machine and need explicit approval
+Thirteen of the agent's 105 tools mutate the machine and need explicit approval
 before they run. (Gemma 4 E4B, on the GPU or the NPU, gets fewer: it is not
 offered the scratchpad, email, image-generation or skill-hub tools, so
 `install_skill` and `remove_skill` never reach it.) Ten sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
@@ -688,8 +695,9 @@ There is no silent null.
   The nine gated tools are unreachable **over `/query`** — the agent itself can
   run them on a transport that can prompt (SPEC §5.5).
 - **A placeholder hash in `binaries.lock.json` blocks the fetch before any
-  network call.** Between releases that is the *expected* state — it is not a
-  broken install, and there is no override.
+  network call.** Neither a published package nor the lock on `main` carries
+  one, so it means the lock was edited by hand — it is not a broken download,
+  and there is no override.
 - **No `linux-arm64` / `win32-arm64` sidecar.** The TUI has both. A `PlatformError`
   on those hosts is the design, not a missing artifact.
 - **A `401` from `/v1/gaia/*` is the caller-auth token, not a bug.** The sidecar
@@ -707,7 +715,7 @@ There is no silent null.
   temp dir) is dropped, and a **shared** bin directory is moved to the end
   instead of removed, so the `python3` / `lemonade-server` / real `gaia` beside
   it stay reachable. If the Python CLI isn't installed anywhere, the daemon never
-  comes up. It must also be **0.25.4+**: an older core's daemon starts fine but
+  comes up. It must also be **0.26.0+**: an older core's daemon starts fine but
   cannot run this agent, which reads as a UI with a dead agent rather than as
   a version problem.
 - **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact
@@ -738,7 +746,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.27","agentVersion":"0.3.4"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.27","agentVersion":"0.3.5"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \
