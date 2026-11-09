@@ -81,6 +81,7 @@ void GaiaAgent::registerTools() {
     }
     if (skills_ && !skills_->skills().empty()) skills_->registerTools(toolRegistry());
     if (memory_) memory_->registerTools(toolRegistry());
+    if (options_.vision) registerVisionTool(ws);
 }
 
 std::string GaiaAgent::getSystemPrompt() const {
@@ -141,6 +142,56 @@ std::string GaiaAgent::systemContext() const {
     }
 #endif
     return out.str();
+}
+
+void GaiaAgent::registerVisionTool(std::shared_ptr<const Workspace> ws) {
+    visionClient_ = std::make_unique<LemonadeClient>();
+    ToolInfo info;
+    info.name = "analyze_image";
+    info.description =
+        "Look at an image file (PNG, JPEG, GIF, WebP, BMP) and answer a question about it: "
+        "read text, charts, tables, screenshots or photos. Needs a model that accepts images.";
+    info.parameters = {{"path", ToolParamType::STRING, true, "Image file."},
+                       {"question", ToolParamType::STRING, true, "What to find out from it."}};
+    info.policy = ToolPolicy::ALLOW;
+    info.callback = [this, ws](const json& args) -> json {
+        const std::string path = args.value("path", "");
+        if (ws) {
+            const std::string why = ws->checkPath(path);
+            if (!why.empty()) return {{"status", "error"}, {"error", why}};
+        }
+        std::optional<Image> img;
+        try {
+            img = Image::fromFile(path);
+        } catch (const std::exception& e) {
+            return {{"status", "error"}, {"error", e.what()}};
+        }
+        const AgentConfig c = this->config();
+        const std::string model = options_.visionModel.empty() ? c.modelId : options_.visionModel;
+        visionClient_->setBaseUrl(c.baseUrl);
+        visionClient_->setApiKey(c.apiKey);
+        Message m = Message::fromUser(args.value("question", ""), {*img});
+        json body = {{"model", model},
+                     {"max_tokens", 2048},
+                     {"temperature", 0.1},
+                     {"messages", json::array({m.toJson()})}};
+        try {
+            const json resp = json::parse(visionClient_->chatCompletions(body));
+            const json& msg = resp.at("choices").at(0).at("message");
+            const std::string text = msg.value("content", "");
+            if (text.empty()) {
+                return {{"status", "error"},
+                        {"error", "The model " + model + " returned no description; it may not accept "
+                                  "images. Set --vision-model to a model that does."}};
+            }
+            return {{"status", "success"}, {"model", model}, {"answer", stripReasoning(text)}};
+        } catch (const std::exception& e) {
+            return {{"status", "error"},
+                    {"error", "Image analysis with " + model + " failed: " + e.what() +
+                              ". If the model doesn't accept images, set --vision-model."}};
+        }
+    };
+    toolRegistry().registerTool(std::move(info));
 }
 
 std::vector<std::string> GaiaAgent::claimedFiles(const std::string& answer) {

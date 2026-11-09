@@ -77,6 +77,7 @@ struct Cli {
     std::string cwd;
     std::string mcpConfig;
     std::string embeddingModel;
+    std::string visionModel;
     std::string configFile;
     std::string host = "127.0.0.1";
     std::string serveKeyEnv;
@@ -121,6 +122,7 @@ void printUsage() {
         "  --cwd DIR                 Work in DIR\n"
         "  --max-steps N             Step budget (default 50)\n"
         "  --mcp-config FILE         Connect the MCP servers in FILE (mcp.json)\n"
+        "  --vision-model ID         Model analyze_image uses (default: the main model)\n"
         "  --embedding-model ID      Embedding model for document search (default with\n"
         "                            --provider fireworks; otherwise keyword search)\n"
         "  --config FILE             Settings file (default $GAIA_CPP_CONFIG, else\n"
@@ -194,6 +196,7 @@ Cli parseArgs(int argc, char** argv) {
         else if (a == "--cwd") cli.cwd = need(i, a);
         else if (a == "--mcp-config") cli.mcpConfig = need(i, a);
         else if (a == "--embedding-model") cli.embeddingModel = need(i, a);
+        else if (a == "--vision-model") cli.visionModel = need(i, a);
         else if (a == "--config") cli.configFile = need(i, a);
         else if (a == "--no-web") cli.noWeb = true;
         else if (a == "--no-skills") cli.noSkills = true;
@@ -360,6 +363,7 @@ std::string readAll(std::istream& in) {
 gaia::GaiaAgent::Options agentOptions(const Cli& cli, const Settings& settings) {
     gaia::GaiaAgent::Options o;
     o.embeddingModel = settings.embeddingModel;
+    o.visionModel = cli.visionModel;
     o.webTools = !cli.noWeb;
     o.skills = !cli.noSkills;
     o.memory = !cli.noMemory;
