@@ -17,9 +17,9 @@ import pytest
 
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui.database import ChatDatabase
-from gaia.ui.sidecar import daemon_client
 from gaia.ui.models import ChatRequest
 from gaia.ui.run_manager import RunManager
+from gaia.ui.sidecar import daemon_client
 
 pytestmark = pytest.mark.asyncio
 

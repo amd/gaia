@@ -54,6 +54,8 @@ from gaia.stream_timeout import (
     STREAM_TIMEOUT_ENV,
     stream_timeout_from_env,
 )
+from gaia.ui.memory_settings import memory_enabled
+from gaia.ui.security import FLAGSHIP_AGENT_ID
 from gaia.ui.sidecar.profiles import (
     _NO_PROFILE,
     SIDECAR_AGENT_IDS,
@@ -74,8 +76,6 @@ from gaia.ui.sidecar.profiles import (
     turns_supported,
     working_directory_supported,
 )
-from gaia.ui.memory_settings import memory_enabled
-from gaia.ui.security import FLAGSHIP_AGENT_ID
 from gaia.ui.turn_changes import TurnRecording
 from gaia.utils import awake_clock as _awake_clock
 from gaia.utils.awake_clock import AwakeClockError

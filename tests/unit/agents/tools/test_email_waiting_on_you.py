@@ -563,4 +563,3 @@ def test_the_scan_never_writes(api):
     detect_waiting_on_you(fake.backend(), now_ms=NOW_MS)
     assert fake.requests
     assert {r.method for r in fake.requests} == {"GET"}
-

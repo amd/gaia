@@ -8,7 +8,6 @@ Since #2142 the GAIA daemon owns fetch/spawn/health/tree-kill
 pieces here (proxy, relay, profiles, grants).
 """
 
-from gaia.ui.sidecar.daemon_client import SidecarHandle
 from gaia.daemon.sidecars.errors import (
     BinaryNotFoundError,
     HealthTimeoutError,
@@ -20,6 +19,7 @@ from gaia.daemon.sidecars.errors import (
     SidecarSpawnError,
     VersionMismatchError,
 )
+from gaia.ui.sidecar.daemon_client import SidecarHandle
 from gaia.ui.sidecar.proxy import SidecarProxy
 
 __all__ = [

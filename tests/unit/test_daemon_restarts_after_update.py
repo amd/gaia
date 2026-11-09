@@ -850,8 +850,8 @@ def test_an_agent_ui_chat_shows_why_the_update_is_not_running_yet(monkeypatch):
     from types import SimpleNamespace
 
     from gaia.ui import _chat_helpers as helpers
-    from gaia.ui.sidecar import daemon_client
     from gaia.ui.models import ChatRequest
+    from gaia.ui.sidecar import daemon_client
     from gaia.ui.sse_handler import SSEOutputHandler
 
     class _Done:

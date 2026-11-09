@@ -18,9 +18,9 @@ from gaia.connectors import registry as connector_registry
 from gaia.connectors.catalog import mcp_servers as mcp_catalog
 from gaia.connectors.registry import ConnectorRegistry
 from gaia.mcp.client.mcp_client import MCPTool
+from gaia.ui.models import AgentStepResponse
 from gaia.ui.sidecar import relay
 from gaia.ui.sidecar.profiles import GAIA_PROFILE
-from gaia.ui.models import AgentStepResponse
 from gaia.ui.sse_handler import _MCP_OUTPUT_CHAR_CAP, SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
 

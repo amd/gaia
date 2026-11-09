@@ -15,7 +15,6 @@ from typing import Optional
 
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import (
-    agent_import_error_message,
     gaia_extras_install_args,
     pip_install_hint,
 )

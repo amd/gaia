@@ -46,9 +46,9 @@ from gaia.agents.base.tool_grants import (
     PROJECT_TRUST_PROMPT_TOOL,
 )
 from gaia.logger import get_logger
+from gaia.ui.event_narration import derive_narration
 from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.sidecar.profiles import GAIA_PROFILE, RelayProfile
-from gaia.ui.event_narration import derive_narration
 from gaia.ui.sse_handler import (
     SSEOutputHandler,
     _format_tool_args,

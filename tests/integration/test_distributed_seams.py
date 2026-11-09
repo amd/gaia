@@ -166,7 +166,6 @@ def test_terminal_types_identical_across_relay_translator_harness():
     else a front-door and the sidecar disagree on what "done" looks like."""
     from gaia.daemon.relay import TERMINAL_TYPES as relay_terminal
     from gaia.eval.sidecar_harness import TERMINAL_TYPES as harness_terminal
-
     from gaia.ui.sse_translation import TERMINAL_TYPES as sidecar_terminal
 
     assert relay_terminal == harness_terminal == frozenset({"final", "error"})

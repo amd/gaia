@@ -14,8 +14,8 @@ from fastapi.testclient import TestClient
 
 from gaia.agents.base.tools import describe_registry
 from gaia.ui import _chat_helpers, session_capabilities, session_environment
-from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.server import create_app
+from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
 
 
 def _doc_tool():
