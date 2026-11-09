@@ -76,6 +76,7 @@ struct Cli {
     std::string nativeTools;
     std::string cwd;
     std::string mcpConfig;
+    std::string embeddingModel;
     std::string configFile;
     std::string host = "127.0.0.1";
     std::string serveKeyEnv;
@@ -119,6 +120,8 @@ void printUsage() {
         "  --cwd DIR                 Work in DIR\n"
         "  --max-steps N             Step budget (default 50)\n"
         "  --mcp-config FILE         Connect the MCP servers in FILE (mcp.json)\n"
+        "  --embedding-model ID      Embedding model for document search (default with\n"
+        "                            --provider fireworks; otherwise keyword search)\n"
         "  --config FILE             Settings file (default $GAIA_CPP_CONFIG, else\n"
         "                            ~/.config/gaia-cpp/config.json when present)\n"
         "  --no-web                  Leave out web_fetch\n"
@@ -188,6 +191,7 @@ Cli parseArgs(int argc, char** argv) {
         else if (a == "--max-steps") cli.maxSteps = toInt(a, need(i, a));
         else if (a == "--cwd") cli.cwd = need(i, a);
         else if (a == "--mcp-config") cli.mcpConfig = need(i, a);
+        else if (a == "--embedding-model") cli.embeddingModel = need(i, a);
         else if (a == "--config") cli.configFile = need(i, a);
         else if (a == "--no-web") cli.noWeb = true;
         else if (a == "--no-skills") cli.noSkills = true;
@@ -231,6 +235,7 @@ void applyProvider(gaia::json& merged, const std::string& provider, const std::s
         merged["apiKeyEnv"] = "FIREWORKS_API_KEY";
         merged["nativeToolCalls"] = "always";
         merged["contextSize"] = 131072;
+        merged["embeddingModel"] = "nomic-ai/nomic-embed-text-v1.5";
     } else if (provider != "lemonade") {
         throw std::runtime_error(where + ": provider must be lemonade or fireworks, got '" +
                                  provider + "'");
@@ -241,6 +246,7 @@ void applyProvider(gaia::json& merged, const std::string& provider, const std::s
 struct Settings {
     gaia::AgentConfig cfg;
     std::string mcpConfig;
+    std::string embeddingModel;  // empty = keyword-only document retrieval
 };
 
 Settings buildSettings(const Cli& cli) {
@@ -301,8 +307,13 @@ Settings buildSettings(const Cli& cli) {
     if (cli.maxSteps > 0) merged["maxSteps"] = cli.maxSteps;
     if (cli.temperature) merged["temperature"] = *cli.temperature;
     if (!cli.mcpConfig.empty()) mcpConfig = cli.mcpConfig;
+    if (!cli.embeddingModel.empty()) merged["embeddingModel"] = cli.embeddingModel;
 
     Settings s;
+    if (merged.contains("embeddingModel")) {
+        s.embeddingModel = merged["embeddingModel"].get<std::string>();
+        merged.erase("embeddingModel");
+    }
     s.cfg = gaia::AgentConfig::fromJson(merged);
     s.cfg.debug = cli.debug;
     s.mcpConfig = mcpConfig;
@@ -343,8 +354,9 @@ std::string readAll(std::istream& in) {
 }
 
 // The working directory first (relative paths resolve there), then --allow-dir.
-gaia::GaiaAgent::Options agentOptions(const Cli& cli) {
+gaia::GaiaAgent::Options agentOptions(const Cli& cli, const Settings& settings) {
     gaia::GaiaAgent::Options o;
+    o.embeddingModel = settings.embeddingModel;
     o.webTools = !cli.noWeb;
     o.skills = !cli.noSkills;
     o.fullAccess = cli.fullAccess;
@@ -387,7 +399,7 @@ int runPrint(const Cli& cli) {
     const Settings settings = buildSettings(cli);
     gaia::AgentConfig cfg = settings.cfg;
     cfg.silentMode = true;  // stdout carries only the answer
-    gaia::GaiaAgent agent(cfg, agentOptions(cli));
+    gaia::GaiaAgent agent(cfg, agentOptions(cli, settings));
     pinConfig(agent, cfg);
     agent.setOutputHandler(std::make_unique<gaia::CleanConsole>());
     agent.setToolConfirmCallback([skip = cli.skipPermissions](const std::string& tool, const gaia::json&) {
@@ -441,7 +453,7 @@ int runServe(const Cli& cli) {
     const Settings settings = buildSettings(cli);
     gaia::AgentConfig cfg = settings.cfg;
     cfg.silentMode = true;
-    gaia::GaiaAgent agent(cfg, agentOptions(cli));
+    gaia::GaiaAgent agent(cfg, agentOptions(cli, settings));
     pinConfig(agent, cfg);
     agent.setOutputHandler(std::make_unique<gaia::CleanConsole>());
     // No person at the keyboard: the client that started the server owns safety.
@@ -494,7 +506,7 @@ int runServe(const Cli& cli) {
 
 int runInteractive(const Cli& cli) {
     const Settings settings = buildSettings(cli);
-    gaia::GaiaAgent agent(settings.cfg, agentOptions(cli));
+    gaia::GaiaAgent agent(settings.cfg, agentOptions(cli, settings));
     pinConfig(agent, settings.cfg);
     if (cli.skipPermissions) {
         agent.setToolConfirmCallback([](const std::string&, const gaia::json&) {

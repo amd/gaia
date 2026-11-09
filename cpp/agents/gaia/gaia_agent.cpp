@@ -28,18 +28,33 @@ GaiaAgent::GaiaAgent(const AgentConfig& config, Options options)
         skills_ = std::make_unique<SkillLibrary>();
         setSkillLoader(skills_.get());
     }
+    if (options_.documents) {
+        EmbedFunction embed;
+        if (!options_.embeddingModel.empty()) {
+            embedClient_ = std::make_unique<LemonadeClient>();
+            // Follow the agent's endpoint and key as they are when the call is made.
+            embed = [this](const std::vector<std::string>& texts) {
+                const AgentConfig c = this->config();
+                embedClient_->setBaseUrl(c.baseUrl);
+                embedClient_->setApiKey(c.apiKey);
+                return embedClient_->embeddings(options_.embeddingModel, texts);
+            };
+        }
+        docs_ = std::make_unique<DocumentIndex>(embed, options_.embeddingModel);
+    }
     init();
 }
 
 GaiaAgent::~GaiaAgent() = default;
 
 void GaiaAgent::registerTools() {
+    std::shared_ptr<const Workspace> ws;
     if (options_.fullAccess) {
         FileIOTools::registerAll(toolRegistry());
         GitTools::registerAll(toolRegistry());
         BashTools::registerAll(toolRegistry());
     } else {
-        auto ws = std::make_shared<const Workspace>(options_.workspaceRoots);
+        ws = std::make_shared<const Workspace>(options_.workspaceRoots);
         auto& reg = toolRegistry();
         reg.registerTool(Workspace::confine(FileIOTools::fileRead(), ws, {"path"}));
         reg.registerTool(Workspace::confine(FileIOTools::fileWrite(), ws, {"path"}));
@@ -53,6 +68,11 @@ void GaiaAgent::registerTools() {
         reg.registerTool(BashTools::envInspect());
     }
     if (options_.webTools) WebTools::registerAll(toolRegistry());
+    if (docs_) {
+        docs_->registerTools(toolRegistry(), ws ? std::function<std::string(const std::string&)>(
+                                                      [ws](const std::string& p) { return ws->checkPath(p); })
+                                                : std::function<std::string(const std::string&)>());
+    }
     if (skills_ && !skills_->skills().empty()) skills_->registerTools(toolRegistry());
 }
 

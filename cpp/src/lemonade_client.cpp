@@ -317,6 +317,41 @@ json LemonadeClient::setParams(const json& params) {
     return json::parse(body);
 }
 
+std::vector<std::vector<float>> LemonadeClient::embeddings(const std::string& model,
+                                                           const std::vector<std::string>& inputs,
+                                                           size_t batchSize) {
+    if (model.empty()) throw std::invalid_argument("embeddings: no embedding model named");
+    if (batchSize == 0) batchSize = 1;
+    std::vector<std::vector<float>> out;
+    out.reserve(inputs.size());
+    for (size_t start = 0; start < inputs.size(); start += batchSize) {
+        const size_t end = std::min(inputs.size(), start + batchSize);
+        json body = {{"model", model},
+                     {"input", std::vector<std::string>(inputs.begin() + start, inputs.begin() + end)}};
+        const std::string raw = httpPost("/embeddings", body.dump(-1, ' ', false,
+                                                                  json::error_handler_t::replace), 120);
+        throwIfErrorBody(raw);
+        const json resp = json::parse(raw);
+        if (!resp.contains("data") || !resp["data"].is_array() ||
+            resp["data"].size() != end - start) {
+            throw std::runtime_error("Embeddings from " + baseUrl_ + " with model " + model +
+                                     " returned " +
+                                     (resp.contains("data") ? std::to_string(resp["data"].size())
+                                                            : std::string("no")) +
+                                     " vectors for " + std::to_string(end - start) +
+                                     " inputs. Check that the model is an embedding model.");
+        }
+        std::vector<std::vector<float>> batch(end - start);
+        for (const auto& item : resp["data"]) {
+            const size_t idx = item.value("index", static_cast<size_t>(0));
+            if (idx >= batch.size()) throw std::runtime_error("Embeddings response index out of range");
+            batch[idx] = item.at("embedding").get<std::vector<float>>();
+        }
+        for (auto& v : batch) out.push_back(std::move(v));
+    }
+    return out;
+}
+
 json LemonadeClient::loadModel(const std::string& modelName, int ctxSize, int timeoutSec) {
     json payload = {{"model_name", modelName}};
     if (ctxSize > 0) {

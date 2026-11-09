@@ -12,6 +12,8 @@
 #include <vector>
 
 #include <gaia/agent.h>
+#include <gaia/document_index.h>
+#include <gaia/lemonade_client.h>
 #include <gaia/skill_library.h>
 
 namespace gaia {
@@ -25,7 +27,11 @@ public:
         // with fullAccess, which lets the tools reach anywhere the user can.
         std::vector<std::string> workspaceRoots;
         bool fullAccess = false;
+        bool documents = true;       // index_document / query_documents
+        std::string embeddingModel;  // empty = keyword-only retrieval
     };
+
+    DocumentIndex* documents() { return docs_.get(); }
 
     explicit GaiaAgent(const AgentConfig& config);
     GaiaAgent(const AgentConfig& config, Options options);
@@ -41,6 +47,8 @@ private:
 
     Options options_;
     std::unique_ptr<SkillLibrary> skills_;
+    std::unique_ptr<LemonadeClient> embedClient_;
+    std::unique_ptr<DocumentIndex> docs_;
 };
 
 } // namespace gaia
