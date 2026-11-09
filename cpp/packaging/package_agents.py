@@ -46,7 +46,7 @@ TARGET_BY_ID: Dict[str, str] = {
     "security-demo": "security_demo",
     "vlm": "vlm_agent",
     "bash": "gaia-bash",
-    "gaia": "gaia-cpp",
+    "gaia": "gaiacpp",
 }
 
 # Matrix platform triples -> executable suffix.

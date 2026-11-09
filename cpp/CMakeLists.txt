@@ -413,25 +413,25 @@ if(GAIA_BUILD_BASH_AGENT)
 endif()
 
 # ---------------------------------------------------------------------------
-# gaia-cpp: the general-purpose GAIA agent (headless, serve, interactive)
+# gaiacpp: the general-purpose GAIA agent (headless, serve, interactive)
 # ---------------------------------------------------------------------------
-option(GAIA_BUILD_GAIA_AGENT "Build the gaia-cpp agent" ON)
+option(GAIA_BUILD_GAIA_AGENT "Build the gaiacpp agent" ON)
 if(GAIA_BUILD_GAIA_AGENT)
-    add_executable(gaia-cpp
+    add_executable(gaiacpp
         agents/gaia/main.cpp
         agents/gaia/gaia_agent.cpp
         agents/bash/bash_tools.cpp
     )
-    target_compile_definitions(gaia-cpp PRIVATE GAIA_CPP_VERSION="${PROJECT_VERSION}")
-    target_link_libraries(gaia-cpp PRIVATE gaia::gaia_core)
+    target_compile_definitions(gaiacpp PRIVATE GAIACPP_VERSION="${PROJECT_VERSION}")
+    target_link_libraries(gaiacpp PRIVATE gaia::gaia_core)
     if(WIN32)
-        target_link_libraries(gaia-cpp PRIVATE psapi)
+        target_link_libraries(gaiacpp PRIVATE psapi)
     endif()
     # Release archives must run on older distros than the build host (Lemonade
     # ships to Ubuntu 24.04, Debian 13, Fedora): carry the C++ runtime inside.
-    option(GAIA_STATIC_CXX_RUNTIME "Link libstdc++/libgcc statically into gaia-cpp" OFF)
+    option(GAIA_STATIC_CXX_RUNTIME "Link libstdc++/libgcc statically into gaiacpp" OFF)
     if(GAIA_STATIC_CXX_RUNTIME AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        target_link_options(gaia-cpp PRIVATE -static-libstdc++ -static-libgcc)
+        target_link_options(gaiacpp PRIVATE -static-libstdc++ -static-libgcc)
     endif()
 endif()
 

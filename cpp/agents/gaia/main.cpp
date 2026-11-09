@@ -1,11 +1,11 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
-// gaia-cpp — the native GAIA agent.
+// gaiacpp — the native GAIA agent.
 //
-//   gaia-cpp                                  Interactive session
-//   gaia-cpp -p "prompt" [--output-format json]   One headless run (prompt from stdin when omitted)
-//   gaia-cpp serve [--host H] [--port N]      OpenAI-compatible server (for Lemonade / apps)
+//   gaiacpp                                  Interactive session
+//   gaiacpp -p "prompt" [--output-format json]   One headless run (prompt from stdin when omitted)
+//   gaiacpp serve [--host H] [--port N]      OpenAI-compatible server (for Lemonade / apps)
 
 #include <atomic>
 #include <chrono>
@@ -37,8 +37,8 @@
 #include <sys/resource.h>
 #endif
 
-#ifndef GAIA_CPP_VERSION
-#define GAIA_CPP_VERSION "0.0.0-dev"
+#ifndef GAIACPP_VERSION
+#define GAIACPP_VERSION "0.0.0-dev"
 #endif
 
 namespace fs = std::filesystem;
@@ -102,14 +102,14 @@ struct Cli {
 
 void printUsage() {
     std::cout <<
-        "gaia-cpp " GAIA_CPP_VERSION " — GAIA agent (native)\n\n"
+        "gaiacpp " GAIACPP_VERSION " — GAIA agent (native)\n\n"
         "Usage:\n"
-        "  gaia-cpp [options]                    Interactive session\n"
-        "  gaia-cpp -p [PROMPT] [options]        One headless run; PROMPT or stdin\n"
-        "  gaia-cpp serve [options]              OpenAI-compatible server\n"
-        "  gaia-cpp skills list|install DIR|NAME[@VER] [--allow-experimental]|remove NAME\n"
+        "  gaiacpp [options]                    Interactive session\n"
+        "  gaiacpp -p [PROMPT] [options]        One headless run; PROMPT or stdin\n"
+        "  gaiacpp serve [options]              OpenAI-compatible server\n"
+        "  gaiacpp skills list|install DIR|NAME[@VER] [--allow-experimental]|remove NAME\n"
         "                                        Manage installed skills (hub or folder)\n"
-        "  gaia-cpp models list|pull NAME        Lemonade models\n\n"
+        "  gaiacpp models list|pull NAME        Lemonade models\n\n"
         "Model:\n"
         "  -m, --model ID            Model id (env GAIA_MODEL_ID)\n"
         "  --base-url URL            OpenAI-compatible endpoint (env GAIA_BASE_URL,\n"
@@ -133,8 +133,8 @@ void printUsage() {
         "  --image-model ID          Image model for generate_image (e.g. SDXL-Turbo on Lemonade)\n"
         "  --embedding-model ID      Embedding model for document search (default with\n"
         "                            --provider fireworks; otherwise keyword search)\n"
-        "  --config FILE             Settings file (default $GAIA_CPP_CONFIG, else\n"
-        "                            ~/.config/gaia-cpp/config.json when present)\n"
+        "  --config FILE             Settings file (default $GAIACPP_CONFIG, else\n"
+        "                            ~/.config/gaiacpp/config.json when present)\n"
         "  --no-web                  Leave out web_fetch\n"
         "  --no-skills               Leave out installed SKILL.md skills\n"
         "  --no-memory               Don't remember or recall facts across sessions\n"
@@ -158,7 +158,7 @@ void printUsage() {
 }
 
 [[noreturn]] void usageError(const std::string& msg) {
-    std::cerr << "gaia-cpp: " << msg << "\nRun 'gaia-cpp --help' for usage.\n";
+    std::cerr << "gaiacpp: " << msg << "\nRun 'gaiacpp --help' for usage.\n";
     std::exit(2);
 }
 
@@ -182,7 +182,7 @@ Cli parseArgs(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "-h" || a == "--help") { printUsage(); std::exit(0); }
-        else if (a == "-v" || a == "--version") { std::cout << "gaia-cpp " GAIA_CPP_VERSION "\n"; std::exit(0); }
+        else if (a == "-v" || a == "--version") { std::cout << "gaiacpp " GAIACPP_VERSION "\n"; std::exit(0); }
         else if (a == "serve" && i == 1) cli.mode = Cli::Mode::Serve;
         else if (a == "-p" || a == "--print") {
             cli.mode = Cli::Mode::Print;
@@ -231,11 +231,11 @@ Cli parseArgs(int argc, char** argv) {
 }
 
 fs::path defaultConfigPath() {
-    const std::string env = gaia::getEnvVar("GAIA_CPP_CONFIG");
+    const std::string env = gaia::getEnvVar("GAIACPP_CONFIG");
     if (!env.empty()) return env;
 #ifdef _WIN32
     const std::string base = gaia::getEnvVar("APPDATA");
-    return base.empty() ? fs::path() : fs::path(base) / "gaia-cpp" / "config.json";
+    return base.empty() ? fs::path() : fs::path(base) / "gaiacpp" / "config.json";
 #else
     std::string base = gaia::getEnvVar("XDG_CONFIG_HOME");
     if (base.empty()) {
@@ -243,7 +243,7 @@ fs::path defaultConfigPath() {
         if (home.empty()) return {};
         base = home + "/.config";
     }
-    return fs::path(base) / "gaia-cpp" / "config.json";
+    return fs::path(base) / "gaiacpp" / "config.json";
 #endif
 }
 
@@ -436,7 +436,7 @@ int runPrint(const Cli& cli) {
     agent.setOutputHandler(std::make_unique<gaia::CleanConsole>());
     agent.setToolConfirmCallback([skip = cli.skipPermissions](const std::string& tool, const gaia::json&) {
         if (!skip) {
-            std::cerr << "[gaia-cpp] denied " << tool
+            std::cerr << "[gaiacpp] denied " << tool
                       << " (headless run; pass --dangerously-skip-permissions to allow)\n";
         }
         return skip ? gaia::ToolConfirmResult::ALLOW_ONCE : gaia::ToolConfirmResult::DENY;
@@ -499,7 +499,7 @@ int runServe(const Cli& cli) {
     opts.port = cli.port;
     opts.allowedOrigins = cli.allowedOrigins;
     opts.exposeToolRoutes = cli.exposeToolRoutes;
-    opts.agentVersion = GAIA_CPP_VERSION;
+    opts.agentVersion = GAIACPP_VERSION;
     if (!cli.serveKeyEnv.empty()) {
         opts.apiKey = gaia::getEnvVar(cli.serveKeyEnv.c_str());
         if (opts.apiKey.empty()) {
@@ -519,9 +519,9 @@ int runServe(const Cli& cli) {
         if (!server.isRunning()) return;
         const std::string url = "http://" + cli.host + ":" + std::to_string(server.port());
         std::cout << gaia::json{{"event", "ready"}, {"url", url}, {"model", cfg.modelId},
-                                {"version", GAIA_CPP_VERSION}}.dump()
+                                {"version", GAIACPP_VERSION}}.dump()
                   << std::endl;
-        std::cerr << "gaia-cpp " GAIA_CPP_VERSION " serving " << cfg.modelId << " on " << url
+        std::cerr << "gaiacpp " GAIACPP_VERSION " serving " << cfg.modelId << " on " << url
                   << " (Ctrl+C to stop)\n";
     });
     try {
@@ -554,7 +554,7 @@ int runInteractive(const Cli& cli) {
 
 } // namespace
 
-// gaia-cpp skills list | install <folder> | remove <name>
+// gaiacpp skills list | install <folder> | remove <name>
 int runSkills(int argc, char** argv) {
     const std::string sub = argc > 2 ? argv[2] : "list";
     if (sub == "list") {
@@ -591,24 +591,24 @@ int runSkills(int argc, char** argv) {
         const std::string name = fs::path(where).filename().string();
         std::cout << "Installed " << name << " (" << tier << ") in " << where << "\n";
         if (!lib.skills().at(name).isInstructionOnly()) {
-            std::cout << "Note: its Python tools need the Python GAIA runtime; gaia-cpp uses its "
+            std::cout << "Note: its Python tools need the Python GAIA runtime; gaiacpp uses its "
                          "instructions only.\n";
         }
         return 0;
     }
     if (sub == "remove" && argc > 3) {
         if (!gaia::SkillLibrary::removeInstalled(argv[3])) {
-            std::cerr << "gaia-cpp: no installed skill named " << argv[3] << " in "
+            std::cerr << "gaiacpp: no installed skill named " << argv[3] << " in "
                       << gaia::SkillLibrary::userRoot() << "\n";
             return 1;
         }
         std::cout << "Removed " << argv[3] << "\n";
         return 0;
     }
-    usageError("usage: gaia-cpp skills list | install <folder> | remove <name>");
+    usageError("usage: gaiacpp skills list | install <folder> | remove <name>");
 }
 
-// gaia-cpp models list | pull <name> [--checkpoint C --recipe R]   (Lemonade)
+// gaiacpp models list | pull <name> [--checkpoint C --recipe R]   (Lemonade)
 int runModels(int argc, char** argv) {
     const std::string sub = argc > 2 ? argv[2] : "list";
     gaia::AgentConfig base;
@@ -634,7 +634,7 @@ int runModels(int argc, char** argv) {
         std::cout << "Downloaded " << argv[3] << "\n";
         return 0;
     }
-    usageError("usage: gaia-cpp models list | pull <name> [--checkpoint C --recipe R]");
+    usageError("usage: gaiacpp models list | pull <name> [--checkpoint C --recipe R]");
 }
 
 int main(int argc, char** argv) {
@@ -655,7 +655,7 @@ int main(int argc, char** argv) {
             case Cli::Mode::Interactive: return runInteractive(cli);
         }
     } catch (const std::exception& e) {
-        std::cerr << "gaia-cpp: " << e.what() << "\n";
+        std::cerr << "gaiacpp: " << e.what() << "\n";
         return 1;
     }
     return 1;

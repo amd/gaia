@@ -142,7 +142,7 @@ jobs:
           --agents-dir cpp/agents
           --out dist
 
-      - name: Package gaia-cpp for Lemonade (${{ matrix.lemonade_os }}-${{ matrix.lemonade_arch }})
+      - name: Package gaiacpp for Lemonade (${{ matrix.lemonade_os }}-${{ matrix.lemonade_arch }})
         run: >-
           python cpp/packaging/package_lemonade.py
           --build-dir cpp/build

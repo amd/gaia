@@ -285,7 +285,7 @@ std::string SkillLibrary::installFromHub(const std::string& name, const std::str
         throw SkillError("Not a skill name: '" + name + "'");
     }
     if (version.find_first_of("^~*<>= ,") != std::string::npos) {
-        throw SkillError("gaia-cpp installs exact versions only (e.g. " + name +
+        throw SkillError("gaiacpp installs exact versions only (e.g. " + name +
                          "@1.0.3); got the range '" + version + "'.");
     }
     HttpClientConfig hc;
