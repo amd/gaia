@@ -145,15 +145,15 @@ Retrieval-quality benchmarks (precision/recall against curated queries) are trac
 
 ## Real-world benchmark
 
-Indexing the gaia repo itself against Lemonade Server's `user.embeddinggemma-300m-GGUF` embedding model:
+Indexing the gaia repo itself against Lemonade Server's `user.embeddinggemma-300m-GGUF` embedding model. The repo grows with every release, so treat the counts as a snapshot and re-run the snippet below for your checkout:
 
 | Metric | Value |
 |--------|-------|
-| Source files discovered | 973 |
-| Semantic chunks indexed | 23,974 |
+| Source files discovered | ~2,500 (2,544 in November 2026) |
+| Semantic chunks indexed | ~75,000 (75,112 in November 2026) |
 | Languages parsed | Python, JavaScript, TypeScript, Go, Rust, Java, C/C++ |
 | Embedding model | `user.embeddinggemma-300m-GGUF` (via Lemonade Server) |
-| Wall-clock (remote, ngrok) | ~51 min |
+| Wall-clock (remote, ngrok) | ~51 min, measured when the repo had 973 files and 23,974 chunks; expect longer now |
 
 ```python
 from gaia.code_index.sdk import CodeIndexConfig, CodeIndexSDK
@@ -162,7 +162,7 @@ sdk = CodeIndexSDK(CodeIndexConfig(repo_path=".", embedding_model="user.embeddin
 sdk.index_repository()
 ```
 
-The 51-minute figure is **network-bound** (embeddings sent to a remote Lemonade Server over an ngrok tunnel). On a local Ryzen AI setup the embedding step runs on the NPU and is substantially faster. For retrieval-quality metrics see [#868](https://github.com/amd/gaia/issues/868).
+The 51-minute figure predates the repo's growth and is **network-bound** (embeddings sent to a remote Lemonade Server over an ngrok tunnel). On a local Ryzen AI setup the embedding step runs on the NPU and is substantially faster. For retrieval-quality metrics see [#868](https://github.com/amd/gaia/issues/868).
 
 ## Roadmap
 
