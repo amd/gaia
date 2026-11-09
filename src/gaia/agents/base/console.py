@@ -1178,7 +1178,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                     return obj.item()
                 if isinstance(obj, np.ndarray):
                     return obj.tolist()
-            except Exception:
+            except ImportError:
                 pass
 
             for caster in (float, int, str):
