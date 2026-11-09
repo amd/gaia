@@ -102,12 +102,12 @@ def test_search_reranks_three_times_the_final_result_limit():
     assert result["scores"] == [0.9, 0.8]
 
 
-def test_reranking_normalizes_scores_to_retrieval_range():
+def test_reranking_sorts_results_by_score_and_normalizes_to_retrieval_range():
     client = MagicMock()
     client.rerank.return_value = {
         "results": [
-            {"index": 1, "relevance_score": 10.0},
             {"index": 0, "relevance_score": 0.0},
+            {"index": 1, "relevance_score": 10.0},
         ]
     }
     order, scores = _rag(client)._rerank_candidates(

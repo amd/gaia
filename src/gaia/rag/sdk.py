@@ -4720,8 +4720,7 @@ These positions indicate where to split the text."""
             results = response.get("results")
             if not isinstance(results, list):
                 raise ValueError("response has no results list")
-            order: List[int] = []
-            scores: List[float] = []
+            ranked: List[Tuple[int, float]] = []
             seen = set()
             for item in results:
                 index = item.get("index") if isinstance(item, dict) else None
@@ -4738,15 +4737,18 @@ These positions indicate where to split the text."""
                 ):
                     raise ValueError("response contains an invalid rerank result")
                 seen.add(index)
-                order.append(index)
+                ranked.append((index, float(score)))
+            if len(ranked) != len(candidate_chunks):
+                raise ValueError("response does not score every candidate")
+            ranked.sort(key=lambda result: result[1], reverse=True)
+            order = [index for index, _ in ranked]
+            scores = []
+            for _, logit in ranked:
                 # Stable sigmoid: math.exp overflows on large negative logits.
-                logit = float(score)
                 if logit >= 0:
                     scores.append(1.0 / (1.0 + math.exp(-logit)))
                 else:
                     scores.append(math.exp(logit) / (1.0 + math.exp(logit)))
-            if len(order) != len(candidate_chunks):
-                raise ValueError("response does not score every candidate")
             return order, scores
         except Exception as error:
             raise RuntimeError(
