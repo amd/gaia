@@ -2964,6 +2964,7 @@ Do NOT wrap conversational replies in JSON.
         # startup an ambiguous model also needs a catalog lookup before preload.
         from gaia.llm.lemonade_client import (
             cloud_model_provider,
+            find_model_requirement,
             is_cloud_model,
             may_be_cloud_model,
         )
@@ -2977,6 +2978,7 @@ Do NOT wrap conversational replies in JSON.
         if not (use_claude or skip_lemonade):
             from gaia.llm.lemonade_client import (
                 LemonadeClient,
+                LemonadeClientError,
                 LemonadeUnresponsiveError,
                 resolve_ctx_size,
             )
@@ -2988,10 +2990,21 @@ Do NOT wrap conversational replies in JSON.
 
             probe_client = None
             if not model_is_cloud and may_be_cloud_model(model_id):
-                # Cold CLI/agent processes have never listed the gateway catalog.
-                # The client reports failures rather than loading an unknown id.
-                probe_client = LemonadeClient(base_url=base_url, verbose=False)
-                model_is_cloud = probe_client._is_cloud_model(model_id)
+                # Built-in gateway namespaces do not need a server probe. For
+                # a known local dotted id, a catalog failure falls through to
+                # the normal local ensure_ready path, which starts Lemonade.
+                # An unregistered ambiguous id still fails loudly instead of
+                # risking a gateway model taking a local preload path.
+                if cloud_model_provider(model_id):
+                    model_is_cloud = True
+                else:
+                    probe_client = LemonadeClient(base_url=base_url, verbose=False)
+                    try:
+                        model_is_cloud = probe_client._is_cloud_model(model_id)
+                    except LemonadeClientError:
+                        if find_model_requirement(model_id) is None:
+                            raise
+                        model_is_cloud = False
 
             if model_is_cloud:
                 # The local manager preloads a chat model even on an idle server.

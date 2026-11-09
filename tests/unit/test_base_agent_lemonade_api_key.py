@@ -13,6 +13,7 @@ it unauthenticated would 401 against any remote authenticated Lemonade.
 """
 
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -264,6 +265,44 @@ def test_cold_cloud_catalog_failure_never_falls_through_to_local_preload(monkeyp
     with pytest.raises(LemonadeClientError, match="opencode.big-model"):
         CloudAgent(model_id="opencode.big-model", silent_mode=True)
     preload.assert_not_called()
+
+
+def test_known_dotted_local_model_starts_before_catalog_classification(monkeypatch):
+    """A registered dotted local id can start Lemonade before catalog lookup."""
+    from gaia.agents.base.agent import Agent
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        LemonadeClientError,
+        record_cloud_models,
+    )
+
+    class LocalAgent(Agent):
+        def _register_tools(self):
+            return None
+
+    local_init = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready", local_init
+    )
+    monkeypatch.setattr(
+        LemonadeClient,
+        "_is_cloud_model",
+        lambda self, _model: (_ for _ in ()).throw(
+            LemonadeClientError("catalog unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.find_model_requirement",
+        lambda _model: SimpleNamespace(feature_tier="full"),
+    )
+    record_cloud_models({"data": []})
+    try:
+        LocalAgent(model_id="user.Llama-3.2-3B-GGUF", silent_mode=True)
+        assert local_init.call_count == 1
+        assert local_init.call_args.kwargs["model"] == "user.Llama-3.2-3B-GGUF"
+        assert "preload" not in local_init.call_args.kwargs
+    finally:
+        record_cloud_models({"data": []})
 
 
 def test_local_agent_hands_its_model_to_ensure_ready(monkeypatch):

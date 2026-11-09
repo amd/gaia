@@ -318,28 +318,42 @@ def clear_saved_cloud_models() -> List[Tuple[str, str]]:
     )
 
     cfg = GaiaConfig.load()
-    # A CLI policy switch starts in a fresh process, before any model listing.
-    # Query Lemonade once for any ambiguous saved id, before writing cleanup.
-    # A failed query must be reported by apply_policy, not silently treated as local.
-    if any(
-        may_be_cloud_model((getattr(cfg, key) or "").strip())
-        and not is_cloud_model((getattr(cfg, key) or "").strip())
-        and not cloud_model_provider((getattr(cfg, key) or "").strip())
-        for key in SAVED_MODEL_KEYS
-    ):
-        LemonadeClient(verbose=False).list_models()
-
     cleared = []
+    ambiguous = []
+
+    # Clear ids whose cloud status is certain without contacting Lemonade first.
+    # A stopped server must not prevent Local only from removing known gateway
+    # defaults. Only ambiguous dotted ids need the catalog query below.
     for key in SAVED_MODEL_KEYS:
         model = (getattr(cfg, key) or "").strip()
         is_claude = model.lower().startswith("claude") or (
             key == "last_model" and (cfg.last_provider or "").lower() == "claude"
         )
-        if model and (
-            cloud_model_provider(model) or is_cloud_model(model) or is_claude
-        ):
+        if not model:
+            continue
+        if cloud_model_provider(model) or is_cloud_model(model) or is_claude:
             setattr(cfg, key, None)
             cleared.append((key, model))
+        elif may_be_cloud_model(model) and not is_cloud_model(model):
+            ambiguous.append((key, model))
+
+    if any(key == "last_model" for key, _ in cleared):
+        cfg.last_provider = None
+    if ambiguous and cleared:
+        # Preserve cleanup whose cloud status was already certain even if the
+        # catalog query below fails.
+        cfg.save()
+
+    if ambiguous:
+        # A CLI policy switch starts in a fresh process, before any model
+        # listing. A failed query is reported by apply_policy, but the known
+        # cloud cleanup above is still persisted before the failure surfaces.
+        LemonadeClient(verbose=False).list_models()
+        for key, model in ambiguous:
+            if is_cloud_model(model):
+                setattr(cfg, key, None)
+                cleared.append((key, model))
+
     if any(key == "last_model" for key, _ in cleared):
         cfg.last_provider = None
     if cleared:
