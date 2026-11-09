@@ -147,6 +147,33 @@ wrangler r2 object put amd-gaia/videos/video.mp4 --file=video.mp4
 2. Click "Upload"
 3. Drag and drop file
 
+## Upload Test Evidence for a PR
+
+The bucket is public, so screenshots, logs, and traces for a PR go up through one
+helper that refuses anything containing a credential:
+
+```bash
+scripts/testing/upload-evidence.sh pr-1234 chat.png run.log
+# https://assets.amd-gaia.ai/testing/pr-1234/20261109T153012Z-3f2a/chat.png
+# https://assets.amd-gaia.ai/testing/pr-1234/20261109T153012Z-3f2a/run.log
+```
+
+- **Key layout:** `testing/<ref>/<run-id>/<file>`. `<ref>` is your PR or issue
+  (`pr-1234`, `issue-2369`); `<run-id>` is the UTC time plus 4 random hex digits,
+  so a rerun never overwrites earlier evidence. File names must be letters,
+  digits, `.`, `_` or `-`.
+- **Secret scan:** every file except images and video is checked against the
+  patterns GAIA redacts from failure records (`_SECRET_PATTERNS` in
+  `src/gaia/llm/failure_record.py`: bearer tokens, `sk-`/`ghp_`-style keys,
+  `NAME_API_KEY=` assignments, PEM private keys, passwords in URLs). One hit
+  uploads nothing and names the file and pattern. There is no skip flag: remove
+  the secret and rerun. Add a pattern there and both the scan and redaction get it.
+- **Images and video** are not scanned. The helper names each one so you check it
+  by eye for keys, tokens, emails, and personal data before it goes public.
+- **Needs** rclone with the `gaia` remote above (or set `R2_REMOTE`), and this
+  repo's Python environment for the scan. Credentials stay in your rclone config;
+  CI does not use this helper.
+
 ## Embed in Mintlify
 
 Add to your MDX documentation:

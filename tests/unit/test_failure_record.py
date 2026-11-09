@@ -341,6 +341,20 @@ def test_url_passwords_and_any_spelling_of_home_are_redacted(home):
     assert json.dumps(tmp)[1:-1].lower() not in out.lower()
 
 
+def test_private_keys_are_redacted_whole_even_when_truncated():
+    body = "NOT-A-REAL-KEY-BODY"
+    pem = f"-----BEGIN RSA PRIVATE KEY-----\n{body}\n-----END RSA PRIVATE KEY-----"
+    out = fr.redact(f"before\n{pem}\nafter")
+    assert body not in out and "before" in out and "after" in out
+    assert body not in fr.redact(f"tail\n-----BEGIN PRIVATE KEY-----\n{body}")
+
+
+def test_find_secrets_names_patterns_never_values():
+    assert fr.find_secrets("agent answered in 3.2s; basic") == []
+    found = fr.find_secrets(f"Authorization: Bearer {KEY}")
+    assert found and all(KEY not in p for p in found)
+
+
 def test_probe_ignores_proxies_and_redirects(monkeypatch):
     seen = {}
 

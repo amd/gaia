@@ -70,6 +70,11 @@ _SECRET_PATTERNS = (
     re.compile(r"\bfw_[A-Za-z0-9]{16,}"),
     # user:password in a URL.
     re.compile(r"(?<=://)[^/\s:@]+:[^/\s@]+(?=@)"),
+    # A PEM private key, to its END line or, if truncated, to the end of the text.
+    re.compile(
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?"
+        r"(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"
+    ),
 )
 
 
@@ -110,6 +115,11 @@ def redact(text: str, known: Iterable[str] = ()) -> str:
             text = pattern.sub(REDACTED, text)
     home = _home_pattern()
     return home.sub("~", text) if home else text
+
+
+def find_secrets(text: str) -> List[str]:
+    """The secret patterns *text* matches, as regex source; never the secret."""
+    return [p.pattern for p in _SECRET_PATTERNS if p.search(text)]
 
 
 def redact_value(value: Any, known: Iterable[str] = ()) -> Any:
