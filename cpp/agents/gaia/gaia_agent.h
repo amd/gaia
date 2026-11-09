@@ -17,6 +17,7 @@
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
 #include <gaia/skill_library.h>
+#include <gaia/workspace.h>
 
 namespace gaia {
 
@@ -33,6 +34,8 @@ public:
         std::string embeddingModel;  // empty = keyword-only retrieval
         bool memory = true;          // remember / recall across sessions
         std::string memoryPath;      // empty = MemoryStore::defaultPath()
+        bool vision = true;          // analyze_image
+        std::string visionModel;     // empty = the agent's own model
     };
 
     DocumentIndex* documents() { return docs_.get(); }
@@ -61,6 +64,9 @@ private:
     std::unique_ptr<LemonadeClient> embedClient_;
     std::unique_ptr<DocumentIndex> docs_;
     std::unique_ptr<MemoryStore> memory_;
+    std::unique_ptr<LemonadeClient> visionClient_;
+
+    void registerVisionTool(std::shared_ptr<const Workspace> ws);
 };
 
 } // namespace gaia
