@@ -336,6 +336,8 @@ class TestFrozenLoaderPaths:
         env = gaia_env.child_env()
         assert env["LD_LIBRARY_PATH"] == "/opt/rocm/lib"
         assert "LD_LIBRARY_PATH_ORIG" not in env
+        # A gaia the child starts sets up its own bundle instead of reusing ours.
+        assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
 
     def test_drops_the_bundle_path_when_the_user_had_none(
         self, frozen_linux, monkeypatch
@@ -349,6 +351,7 @@ class TestFrozenLoaderPaths:
         monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/opt/rocm/lib")
         env = gaia_env.child_env(same_bundle=True)
         assert env["LD_LIBRARY_PATH"] == "/bundle"
+        assert "PYINSTALLER_RESET_ENVIRONMENT" not in env
         assert env["LD_LIBRARY_PATH_ORIG"] == "/opt/rocm/lib"
 
     def test_an_explicit_path_still_wins(self, frozen_linux, monkeypatch):

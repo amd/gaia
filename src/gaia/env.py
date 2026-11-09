@@ -216,6 +216,8 @@ def unfreeze_loader_paths(env: Dict[str, str]) -> Dict[str, str]:
         env["LD_LIBRARY_PATH"] = original
     else:
         env.pop("LD_LIBRARY_PATH", None)
+    # A `gaia` the child runs must set up its own bundle, not reuse ours.
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
     return env
 
 

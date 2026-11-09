@@ -432,6 +432,7 @@ def _exit_details(pid: int) -> Tuple[Optional[int], Optional[float]]:
 #: Lines of lemond's own output quoted when it exits during start.
 _STARTUP_ERROR_LINES = 6
 _STARTUP_TAIL_BYTES = 256 * 1024
+_STARTUP_LINE_CHARS = 500
 #: lemond's own error levels, and the dynamic loader's refusals.
 _STARTUP_ERROR_RE = re.compile(
     r"\[(?:error|critical|fatal)\]|error while loading shared libraries"
@@ -452,7 +453,9 @@ def _startup_output(log_path: Path, offset: int, known: Tuple[str, ...]) -> str:
     errors = [line for line in lines if _STARTUP_ERROR_RE.search(line)]
     if not errors:
         errors = [line for line in lines if _STARTUP_WARNING_RE.search(line)]
-    picked = (errors or lines)[-_STARTUP_ERROR_LINES:]
+    picked = [
+        line[:_STARTUP_LINE_CHARS] for line in (errors or lines)[-_STARTUP_ERROR_LINES:]
+    ]
     from gaia.llm.failure_record import redact
 
     return redact("\n".join(picked), known)
@@ -2179,9 +2182,7 @@ class EmbeddedLemonade:
             f"({_describe_exit_code(process.returncode)}) on port {port}."
         )
         try:
-            said = _startup_output(
-                self.log_path, self._spawn_log_offset, (api_key,)
-            )
+            said = _startup_output(self.log_path, self._spawn_log_offset, (api_key,))
         except OSError as e:
             return f"{head} Its log {self.log_path} could not be read ({e})."
         if not said:
