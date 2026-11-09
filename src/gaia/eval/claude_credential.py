@@ -61,8 +61,8 @@ MISSING_CREDENTIAL_ERROR = (
     "       export ANTHROPIC_API_KEY=sk-ant-...\n"
     "  3. The same ANTHROPIC_API_KEY=... line in a .env file in the working\n"
     "     directory.\n"
-    "In CI, add the matching repository secret — see the judge-credential "
-    "preflight in .github/workflows/test_email_agent_eval.yml.\n"
+    "In CI, add the matching repository secret — see "
+    ".github/actions/claude-credential/action.yml.\n"
 )
 
 TOKEN_WITHOUT_CLI_ERROR = (
