@@ -9,6 +9,7 @@
 #include <fstream>
 #include <algorithm>
 #include <regex>
+#include <set>
 #include <sstream>
 
 #include <gaia/file_tools.h>
@@ -84,6 +85,9 @@ void GaiaAgent::registerTools() {
     }
     if (skills_ && !skills_->skills().empty()) skills_->registerTools(toolRegistry());
     if (memory_) memory_->registerTools(toolRegistry());
+    toolRegistry().setPreCheck([this](const ToolInfo& tool, const json& args) {
+        return switchRefusal(tool, args);
+    });
     if (code_) registerCodeTools(ws);
     if (options_.vision) registerVisionTool(ws);
     {
@@ -131,7 +135,26 @@ std::string GaiaAgent::getSystemPrompt() const {
 ## Final answer
 Lead with the result. Name the files you created or changed. Cite where facts came from (file and page, sheet or line) when the user asked about documents. State plainly anything you could not do or verify. Keep it concise.)" + systemContext() +
            (skills_ ? "\n" + skills_->renderPrompt() : std::string()) +
-           (memory_ ? "\n" + memory_->promptBlock() : std::string());
+           (memory_ && !memoryOff() ? "\n" + memory_->promptBlock() : std::string());
+}
+
+std::optional<json> GaiaAgent::switchRefusal(const ToolInfo& tool, const json& args) const {
+    auto refuse = [](const std::string& why) {
+        return json{{"status", "error"}, {"error", why}, {"executed", false}};
+    };
+    if (options_.internetOff && options_.internetOff->load()) {
+        const std::string why = internetRefusal(tool, args);
+        if (!why.empty()) return refuse(why);
+    }
+    static const std::set<std::string> reads = {"recall"};
+    static const std::set<std::string> writes = {"remember", "update_memory", "forget"};
+    if (memoryOff() && (reads.count(tool.name) || writes.count(tool.name))) {
+        return refuse("Memory is off for this chat: nothing is read from or saved to it.");
+    }
+    if (options_.memoryPrivate && options_.memoryPrivate->load() && writes.count(tool.name)) {
+        return refuse("This chat is private: nothing from it is saved to memory.");
+    }
+    return std::nullopt;
 }
 
 std::string GaiaAgent::systemContext() const {
@@ -151,7 +174,13 @@ std::string GaiaAgent::systemContext() const {
                "folder. If a file the user needs isn't in these folders, say so.\n";
     }
 #ifdef _WIN32
-    out << "- OS: Windows. bash_execute runs bash when one is installed, else cmd.exe.\n";
+    if (BashTools::detectShell().empty()) {
+        out << "- OS: Windows. bash_execute runs cmd.exe: use dir, type, findstr, where and cd, "
+               "not ls, cat, grep or pwd.\n";
+    } else {
+        out << "- OS: Windows. bash_execute runs Git Bash: POSIX commands work, and C:\\ paths "
+               "are written C:/... or /c/...\n";
+    }
 #elif defined(__APPLE__)
     out << "- OS: macOS.\n";
 #else

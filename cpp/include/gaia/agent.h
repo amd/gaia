@@ -132,6 +132,10 @@ public:
     /// tool is never lowered back to ALLOW.
     void setDefaultPolicy(ToolPolicy policy);
 
+    /// Where "always allow" answers are kept (default: ~/.gaia/security/).
+    void setAllowedToolsStore(std::shared_ptr<AllowedToolsStore> store);
+    std::shared_ptr<AllowedToolsStore> allowedToolsStore() const { return allowedToolsStore_; }
+
     /// Get the output handler.
     OutputHandler& console() { return *console_; }
 
@@ -168,8 +172,12 @@ public:
     /// The flag is automatically reset at the start of the next processQuery().
     void requestCancel() { cancelled_.store(true); }
 
+    /// Also stop when `check` returns true. Unlike requestCancel(), it isn't
+    /// reset when a run starts, so a Stop that lands just before one holds.
+    void setCancelCheck(std::function<bool()> check) { cancelCheck_ = std::move(check); }
+
     /// Check whether a cancel has been requested.
-    bool isCancelled() const { return cancelled_.load(); }
+    bool isCancelled() const { return cancelRequested(); }
 
     /// Get a mutable reference to the tool registry (for subclass tool registration).
     ToolRegistry& toolRegistry() { return tools_; }
@@ -412,6 +420,8 @@ private:
     // Cancel flag — set by requestCancel(), checked between loop steps.
     // Reset at the start of each processQuery().
     std::atomic<bool> cancelled_{false};
+    std::function<bool()> cancelCheck_;
+    bool cancelRequested() const { return cancelled_.load() || (cancelCheck_ && cancelCheck_()); }
 
     AgentState executionState_ = AgentState::PLANNING;
     json currentPlan_;

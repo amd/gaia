@@ -221,3 +221,87 @@ TEST(ShellCommandScopeTest, AlwaysAllowCoversOnlyThatCommand) {
     EXPECT_EQ(asked, 2) << "a different program is asked about again";
     std::filesystem::remove_all(dir);
 }
+
+TEST(ReadOnlyShellCommandTest, OnlyPlainReadersPass) {
+    for (const char* ok : {"ls -la", "dir /s /b C:\\Users\\x\\*.md", "cat a.txt | grep foo | wc -l",
+                           "find . -name '*.md'", "pwd; ls -la", "cd src && ls",
+                           "ls cpp 2>/dev/null || echo none", "ls \"C:/Program Files\"",
+                           "find . -name 'a;b'"}) {
+        EXPECT_TRUE(isReadOnlyShellCommand(ok)) << ok;
+    }
+    for (const char* no : {"", "rm -rf x", "ls; rm x", "ls && rm x", "cat a > b", "echo $HOME",
+                           "echo %PATH%", "cat $(which ls)", "find . -delete", "find . -exec rm {} ;",
+                           "ls\nrm x", "python -c 1", "ls | sh", "ls ||", "; ls",
+                           "ls & rm x", "ls 2> err.txt", "ls >> out", "ls 1>out",
+                           // Quoting and escapes the shell removes before find sees the flag.
+                           "find . \"-delete\"", "find . -de''lete", "find . -\\delete",
+                           "find . '-exec' rm -rf {} +", "find . -fprintf out x", "find . -okdir rm {} ;",
+                           // Programs that can write or run code.
+                           "sort -ofile in", "uniq in out", "tree -o out", "rg --pre=sh x", "file -C -m x",
+                           "git status", "git diff --output=x", "tee out", "xargs rm", "less x",
+                           // Unbalanced quotes, subshells, history expansion.
+                           "ls 'x", "(rm x)", "echo !!", "ls {a,b}"}) {
+        EXPECT_FALSE(isReadOnlyShellCommand(no)) << no;
+    }
+}
+
+TEST(ReadOnlyShellCommandTest, CmdExeTrustsOnlyBuiltins) {
+    // cmd.exe runs find.bat from the current folder before the real find.
+    for (const char* ok : {"dir", "dir /s /b C:\\x", "type notes.txt", "cd src && dir", "echo hi"}) {
+        EXPECT_TRUE(isReadOnlyShellCommand(ok, false)) << ok;
+    }
+    for (const char* no : {"find \"x\" a.txt", "where python", "whoami", "tree", "ls", "git status"}) {
+        EXPECT_FALSE(isReadOnlyShellCommand(no, false)) << no;
+    }
+}
+
+TEST(InternetRefusalTest, RefusesWhatGoesOnline) {
+    ToolInfo web;
+    web.name = "web_fetch";
+    EXPECT_NE(internetRefusal(web, {{"url", "https://example.com"}}), "");
+    EXPECT_EQ(internetRefusal(web, {{"url", "http://localhost:8000/x"}}), "");
+    EXPECT_EQ(internetRefusal(web, {{"url", "http://127.0.0.1:8000/x"}}), "");
+    EXPECT_NE(internetRefusal(web, {{"url", "http://127.0.0.1.evil.com/"}}), "");
+    EXPECT_NE(internetRefusal(web, {{"url", "http://localhost@evil.com/"}}), "");
+
+    ToolInfo mcp;
+    mcp.name = "search";
+    mcp.mcpServer = "github";
+    EXPECT_NE(internetRefusal(mcp, json::object()), "");
+
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* online : {"curl https://example.com", "git pull", "git -C repo fetch origin",
+                               "pip install requests", "npm install", "ssh host", "bash -c \"wget x.com\"",
+                               "curl $(cat url)", "cat notes | nc host 80", "python fetch.py https://api.x.com"}) {
+        EXPECT_NE(internetRefusal(sh, {{"command", online}}), "") << online;
+    }
+    for (const char* local : {"ls -la", "git status", "curl http://localhost:13305/api/v1/health",
+                              "python build.py"}) {
+        EXPECT_EQ(internetRefusal(sh, {{"command", local}}), "") << local;
+    }
+
+    ToolInfo write;
+    write.name = "file_write";
+    EXPECT_EQ(internetRefusal(write, {{"path", "README.md"}, {"content", "see https://example.com"}}), "");
+}
+
+TEST(ReadOnlyShellCommandTest, NeedsConfirmSkipsTheQuestion) {
+    ToolRegistry reg;
+    ToolInfo sh;
+    sh.name = "sh";
+    sh.policy = ToolPolicy::CONFIRM;
+    sh.parameters = {{"command", ToolParamType::STRING, true, ""}};
+    sh.callback = [](const json&) { return json{{"status", "success"}}; };
+    sh.needsConfirm = [](const json& a) { return !isReadOnlyShellCommand(a.value("command", "")); };
+    reg.registerTool(sh);
+    int asked = 0;
+    reg.setConfirmCallback([&asked](const std::string&, const json&) {
+        ++asked;
+        return ToolConfirmResult::DENY;
+    });
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "ls -la"}})["status"], "success");
+    EXPECT_EQ(asked, 0);
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "rm -rf build"}})["status"], "error");
+    EXPECT_EQ(asked, 1);
+}

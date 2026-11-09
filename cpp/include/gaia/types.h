@@ -290,6 +290,10 @@ struct ToolInfo {
     /// tool. A shell tool returns the program ("pytest"), so one approval never
     /// becomes permission to run anything.
     std::function<std::string(const json& args)> grantScope;
+
+    /// For a CONFIRM tool: false lets this one call run without asking (a
+    /// read-only shell command). Unset = every call asks.
+    std::function<bool(const json& args)> needsConfirm;
 };
 
 // ---- LLM Usage Statistics ----

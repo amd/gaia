@@ -420,10 +420,22 @@ if(GAIA_BUILD_GAIA_AGENT)
     add_executable(gaiacpp
         agents/gaia/main.cpp
         agents/gaia/gaia_agent.cpp
+        agents/gaia/sidecar.cpp
         agents/bash/bash_tools.cpp
     )
     target_compile_definitions(gaiacpp PRIVATE GAIACPP_VERSION="${PROJECT_VERSION}")
     target_link_libraries(gaiacpp PRIVATE gaia::gaia_core)
+    if(httplib_FOUND)
+        target_link_libraries(gaiacpp PRIVATE httplib::httplib)
+    else()
+        target_include_directories(gaiacpp SYSTEM PRIVATE
+            $<TARGET_PROPERTY:httplib::httplib,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
+    # httplib's classes must match gaia_core's build of them (ODR).
+    if(OpenSSL_FOUND)
+        target_compile_definitions(gaiacpp PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+        target_link_libraries(gaiacpp PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    endif()
     if(WIN32)
         target_link_libraries(gaiacpp PRIVATE psapi)
     endif()

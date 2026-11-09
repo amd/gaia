@@ -19,6 +19,8 @@
 #include <gaia/skill_library.h>
 #include <gaia/workspace.h>
 
+#include <atomic>
+
 namespace gaia {
 
 class GaiaAgent : public Agent {
@@ -40,6 +42,10 @@ public:
         std::string audioBaseUrl;    // empty = the agent's endpoint
         std::string imageModel;      // empty = no generate_image
         bool screenshots = false;    // take_screenshot (off unless asked: privacy)
+        // Read on every call, so a chat can flip them mid-turn. Unset = on.
+        std::shared_ptr<std::atomic<bool>> internetOff;    // nothing that goes online runs
+        std::shared_ptr<std::atomic<bool>> memoryOff;      // memory neither read nor written
+        std::shared_ptr<std::atomic<bool>> memoryPrivate;  // memory read, nothing saved
     };
 
     DocumentIndex* documents() { return docs_.get(); }
@@ -62,6 +68,10 @@ public:
 private:
     /// OS, working directory and date, appended to the system prompt.
     std::string systemContext() const;
+
+    /// The chat's switches, checked before a tool can ask for approval.
+    std::optional<json> switchRefusal(const ToolInfo& tool, const json& args) const;
+    bool memoryOff() const { return options_.memoryOff && options_.memoryOff->load(); }
 
     Options options_;
     std::unique_ptr<SkillLibrary> skills_;

@@ -8,6 +8,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
 #include <vector>
@@ -37,6 +38,20 @@ GAIA_API bool isSafeShellArg(const std::string& arg);
 /// substitutes or redirects — so approving one command never approves another.
 GAIA_API std::string shellCommandScope(const std::string& command);
 
+/// True for a command that only reads: programs from a short list (ls, cat,
+/// grep, find without -exec/-delete...), piped or chained, with quotes
+/// removed as the shell would, no expansion and no redirection except
+/// discarding output. Under cmd.exe (`posixShell` false) only the built-ins
+/// dir, type, cd and echo. Anything uncertain is false.
+GAIA_API bool isReadOnlyShellCommand(const std::string& command, bool posixShell = true);
+
+struct ToolInfo;
+
+/// Why `tool` must not run while the internet is off for a chat, or "" when
+/// the call stays on this PC: web_fetch to another host, any MCP tool, a shell
+/// command that goes online, or a fetch of a remote URL.
+GAIA_API std::string internetRefusal(const ToolInfo& tool, const json& args);
+
 /// Create a terminal-based confirm callback. Prompts on stderr, reads stdin.
 /// Auto-installed by Agent for interactive (non-silent) agents.
 GAIA_API ToolConfirmCallback makeStdinConfirmCallback();
@@ -57,7 +72,8 @@ public:
     /// Construct with the default config directory (~/.gaia/security/).
     AllowedToolsStore();
 
-    /// Construct with an explicit directory path (for testing).
+    /// Construct with an explicit directory path. An empty path keeps the
+    /// answers in memory only (one chat's "always").
     explicit AllowedToolsStore(const std::string& dir);
 
     /// Check whether toolName has been permanently allowed.
@@ -78,6 +94,7 @@ public:
 private:
     std::string filePath_;
     std::set<std::string> allowed_;
+    mutable std::mutex mu_;
 
     void load();
     void save() const;

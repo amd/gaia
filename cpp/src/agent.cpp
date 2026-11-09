@@ -125,7 +125,7 @@ Agent::Agent(const AgentConfig& config)
 
     config_.apiKey = resolveApiKey(config_);
     lemonade_.setApiKey(config_.apiKey);
-    lemonade_.setAbortCheck([this] { return cancelled_.load(); });
+    lemonade_.setAbortCheck([this] { return cancelRequested(); });
 
     // Create console based on config
     if (config_.silentMode) {
@@ -223,6 +223,12 @@ void Agent::setToolConfirmCallback(ToolConfirmCallback cb) {
 
 void Agent::setDefaultPolicy(ToolPolicy policy) {
     tools_.setDefaultPolicy(policy);
+}
+
+void Agent::setAllowedToolsStore(std::shared_ptr<AllowedToolsStore> store) {
+    if (!store) throw std::invalid_argument("setAllowedToolsStore needs a store");
+    allowedToolsStore_ = std::move(store);
+    tools_.setAllowedToolsStore(allowedToolsStore_);
 }
 
 // ---------------------------------------------------------------------------
@@ -780,7 +786,7 @@ Agent::LlmResult Agent::callLlmResilient(std::vector<Message>& messages,
             r.content = stripReasoning(r.content);
             return r;
         } catch (const std::exception& e) {
-            if (cancelled_.load()) throw;
+            if (cancelRequested()) throw;
             if (!shrunk && isContextOverflow(e)) {
                 shrunk = true;
                 if (elideOldToolOutputs(messages, 2) > 0) {
@@ -798,10 +804,10 @@ Agent::LlmResult Agent::callLlmResilient(std::vector<Message>& messages,
                                    "); retry " + std::to_string(attempt) + "/" +
                                    std::to_string(cfg.llmRetries) + " in " +
                                    std::to_string(waitSec) + "s");
-            for (int i = 0; i < waitSec * 10 && !cancelled_.load(); ++i) {
+            for (int i = 0; i < waitSec * 10 && !cancelRequested(); ++i) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
-            if (cancelled_.load()) throw;
+            if (cancelRequested()) throw;
         }
     }
 }
@@ -1415,7 +1421,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     turnToolCalls_.clear();
 
     // Reset cancel flag at the start of each query.
-    cancelled_.store(false);
+    cancelled_.store(false);  // cancelCheck_ is the caller's and stays
 
     // Snapshot config at start of query for thread-safe consistency throughout.
     AgentConfig cfg;
@@ -1489,7 +1495,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
     while (stepsTaken < stepsLimit && finalAnswer.empty()) {
         // ---- Cancel check ----
-        if (cancelled_.load()) {
+        if (cancelRequested()) {
             console_->printWarning("Cancelled by user");
             finalAnswer = "[Cancelled after " + std::to_string(stepsTaken) + " step(s)]";
             break;
@@ -1546,7 +1552,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             llmResult = callLlmResilient(messages, turnSystemPrompt, cfg);
         } catch (const std::exception& e) {
             if (!cfg.streaming) console_->stopProgress();
-            if (cancelled_.load()) {
+            if (cancelRequested()) {
                 console_->printWarning("Cancelled by user");
                 finalAnswer = "[Cancelled after " + std::to_string(stepsTaken) + " step(s)]";
                 break;
@@ -1633,7 +1639,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             bool loopDetected = false;
             for (size_t i = 0; i < llmResult.toolCalls.size(); ++i) {
                 const auto& tc = llmResult.toolCalls[i];
-                if (cancelled_.load()) break;
+                if (cancelRequested()) break;
 
                 const json& toolArgs = decodedArgs[i];
 
@@ -1830,7 +1836,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
 
     // Out of steps, stopped in a loop, or no reply: one tool-free call for an honest wrap-up.
-    if (finalAnswer.empty() && !cancelled_.load()) {
+    if (finalAnswer.empty() && !cancelRequested()) {
         if (stopReason.empty()) stopReason = "cap";
         const char* why = stopReason == "loop"  ? "[Stopped: repeated tool calls]"
                           : stopReason == "empty" ? "[Stopped: empty replies]"
@@ -1879,7 +1885,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         }
         failed = true;  // the task is unfinished
     }
-    if (finalAnswer.empty() && cancelled_.load()) {
+    if (finalAnswer.empty() && cancelRequested()) {
         finalAnswer = "[Cancelled after " + std::to_string(stepsTaken) + " step(s)]";
     }
 
@@ -1917,7 +1923,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         {"result", finalAnswer},
         {"steps_taken", stepsTaken},
         {"steps_limit", stepsLimit},
-        {"status", cancelled_.load() ? "cancelled" : (failed ? "error" : "success")},
+        {"status", cancelRequested() ? "cancelled" : (failed ? "error" : "success")},
         {"tool_errors", errorCount}
     };
     if (totalUsage.totalTokens > 0) {
