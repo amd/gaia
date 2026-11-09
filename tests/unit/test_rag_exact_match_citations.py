@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Exact RAG matches retain enough provenance to cite the source page."""
 
+import threading
 from types import SimpleNamespace
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -27,7 +28,7 @@ def test_exact_matches_include_source_and_page(tmp_path):
         indexed_files={str(document)},
         chunk_to_file={0: str(document), 1: str(document)},
         file_to_chunk_indices={str(document): [0, 1]},
-        _state_lock=__import__("threading").RLock(),
+        _state_lock=threading.RLock(),
         freshness=lambda _path: "unchanged",
     )
 
@@ -53,6 +54,38 @@ def test_exact_matches_include_source_and_page(tmp_path):
     assert "source_file" in result["instruction"]
 
 
+def test_exact_match_in_a_cross_page_chunk_uses_the_matching_page(tmp_path):
+    document = tmp_path / "cross_page.pdf"
+    document.write_bytes(b"placeholder")
+    chunk = "Tail of page one. [Page 2] The target is copper-heron-64."
+    rag = SimpleNamespace(
+        chunks=[chunk],
+        indexed_files={str(document)},
+        chunk_to_file={0: str(document)},
+        file_to_chunk_indices={str(document): [0]},
+        _state_lock=threading.RLock(),
+        freshness=lambda _path: "unchanged",
+    )
+
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        _Host(rag).register_rag_tools()
+        result = _TOOL_REGISTRY["search_indexed_chunks"]["function"](
+            pattern="copper-heron-64"
+        )
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+    assert result["match_details"] == [
+        {
+            "content": "[Page 2] The target is copper-heron-64.",
+            "source_file": str(document.resolve()),
+            "page": 2,
+        }
+    ]
+
+
 def test_exact_matches_without_page_do_not_invent_one(tmp_path):
     document = tmp_path / "notes.md"
     document.write_text("The passphrase is copper-heron-64.", encoding="utf-8")
@@ -61,7 +94,7 @@ def test_exact_matches_without_page_do_not_invent_one(tmp_path):
         indexed_files={str(document)},
         chunk_to_file={0: str(document)},
         file_to_chunk_indices={str(document): [0]},
-        _state_lock=__import__("threading").RLock(),
+        _state_lock=threading.RLock(),
         freshness=lambda _path: "unchanged",
     )
 
