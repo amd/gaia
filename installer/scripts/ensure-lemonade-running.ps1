@@ -358,7 +358,7 @@ if ($JobScoped) {
         # user-model via LemonadeClient), so skip the built-in pull/load path.
         if ($NoModel) {
             Write-Host "=========================================="
-            Write-Host "✅ LEMONADE SERVER READY (no model preloaded)"
+            Write-Host "[OK] LEMONADE SERVER READY (no model preloaded)"
             Write-Host "=========================================="
             Write-Host "Port: $Port"
             Write-Host "Process ID: $($serverProcess.Id)"
@@ -456,7 +456,7 @@ if ($JobScoped) {
         Start-Sleep -Seconds $InitWaitTime
 
         Write-Host "=========================================="
-        Write-Host "✅ LEMONADE SERVER READY"
+        Write-Host "[OK] LEMONADE SERVER READY"
         Write-Host "=========================================="
         Write-Host "Model: $ModelName"
         Write-Host "Port: $Port"
@@ -468,7 +468,7 @@ if ($JobScoped) {
     } catch {
         Write-Host ""
         Write-Host "=========================================="
-        Write-Host "❌ LEMONADE SERVER SETUP FAILED"
+        Write-Host "[FAIL] LEMONADE SERVER SETUP FAILED"
         Write-Host "=========================================="
         Write-Host "Error: $_"
         exit 1
