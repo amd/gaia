@@ -377,7 +377,7 @@ fedora_engine() {
   tag="$(rel "d['tag']")"
   cp "${REPO}/installer/scripts/install.sh" "${WORK}/install.sh"
   docker exec gaia-fedora dnf install -y --setopt=install_weak_deps=False \
-    tar gzip findutils which procps-ng libatomic openssl-libs vulkan-loader mesa-vulkan-drivers >/dev/null \
+    tar gzip findutils which procps-ng libatomic openssl-libs libdrm libzstd zlib-ng-compat libstdc++ libgomp vulkan-loader mesa-vulkan-drivers >/dev/null \
     || die "could not prepare the Fedora container"
   docker exec -e HOME=/root -e GAIA_RELEASE_TAG="${tag}" gaia-fedora sh /work/install.sh \
     || die "install.sh failed in the Fedora container"
