@@ -2664,3 +2664,62 @@ def test_github_triage_offers_no_approval_path_for_a_refused_command():
             assert re.search(
                 r"\b(?:nothing|no|never|cannot)\b", sentence, re.I
             ), sentence
+
+
+def test_a_gh_read_with_no_skill_is_handed_argv_not_a_shell_string():
+    """It runs with nobody asked, so cmd.exe must never re-read its line."""
+    call = _run_capturing_subprocess(_Gated(), 'gh issue list --search "x|echo pwned"')
+    assert call["shell"] is False
+    assert "x|echo pwned" in call["args"], call["args"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'gh issue list ^"x & type nul > pwned.txt & rem ^"',
+        "gh issue list --search %USERPROFILE%",
+    ],
+)
+def test_a_gh_read_cmd_could_reread_still_asks_on_cmd(monkeypatch, command):
+    monkeypatch.setattr("gaia.agents.tools.shell_tools._pipe_dialect", lambda: "cmd")
+    assert _needs_modal(_Gated(), command) is True
+    assert _needs_modal(_Gated("gh"), command) is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # These change what a read runs or where its request goes.
+        "PYTHONPATH=. gaia automation list",
+        "PYTHONWARNINGS=ignore::mod.X gaia automation list",
+        "HTTPS_PROXY=http://127.0.0.1:8899 gh api user",
+        "XDG_CONFIG_HOME=. gh issue list",
+    ],
+)
+def test_a_read_with_a_setting_in_front_still_asks(command):
+    assert _needs_modal(_Gated(), command) is True
+    assert _needs_modal(_Gated("gh"), command) is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh repo view 127.0.0.1/o/r",
+        "gh repo view 127.0.0.1:8443/o/r",
+        "gh repo view evil.example/o/r",
+        "gh repo view localhost:8443",
+        "gh repo view localhost/o/r",
+        "gh repo view intranet/o/r",
+        "gh repo view 2130706433/o/r",
+    ],
+)
+def test_a_repo_named_on_another_host_still_asks(command):
+    assert _needs_modal(_Gated(), command) is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["gh repo view amd/gaia", "gh api repos/amd/gaia/contents/docs/a.md"],
+)
+def test_a_github_repo_or_api_path_still_reads_unasked(command):
+    assert _needs_modal(_Gated(), command) is False
