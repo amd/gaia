@@ -97,6 +97,17 @@ std::string Workspace::checkCommand(const std::string& command) const {
          it != std::sregex_iterator(); ++it) {
         std::string token = (*it)[1].str();
         if (token.rfind("//", 0) == 0) continue;  // the tail of a URL (https://…)
+        if (token == "/") {
+            // The root only as a standalone word (find / …), not a regex
+            // delimiter such as awk's gsub(/ /, …).
+            const size_t at = static_cast<size_t>((*it).position(1));
+            const char before = at == 0 ? ' ' : command[at - 1];
+            const char after = at + 1 < command.size() ? command[at + 1] : ' ';
+            const bool word = std::isspace(static_cast<unsigned char>(before)) &&
+                              (std::isspace(static_cast<unsigned char>(after)) ||
+                               std::string(";|&>").find(after) != std::string::npos);
+            if (!word) continue;
+        }
         const std::string expanded = expandHome(token);
         if (contains(expanded)) continue;
         const std::string abs = normalized(expanded);
