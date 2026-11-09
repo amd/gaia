@@ -11,28 +11,36 @@
     },
     {
       "parameters": {
+        "method": "GET",
+        "url": "http://localhost:8765/health",
+        "options": {}
+      },
+      "id": "health-check-node",
+      "name": "Check MCP Health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
         "method": "POST",
-        "url": "http://localhost:8765/jira",
+        "url": "http://localhost:8765/chat",
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
             {
               "name": "query",
-              "value": "show my assigned issues"
-            },
-            {
-              "name": "operation",
-              "value": "query"
+              "value": "What are three good uses for a local AI assistant?"
             }
           ]
         },
         "options": {}
       },
-      "id": "jira-query-node",
-      "name": "Query Jira Issues",
+      "id": "chat-node",
+      "name": "Ask GAIA",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [450, 200]
+      "position": [650, 200]
     },
     {
       "parameters": {
@@ -43,7 +51,7 @@
           "parameters": [
             {
               "name": "query",
-              "value": "Summarize the following Jira issues: {{ $json.result }}"
+              "value": "=Summarize this in one sentence: {{ $json.result }}"
             }
           ]
         },
@@ -53,77 +61,57 @@
       "name": "Summarize with LLM",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [650, 200]
-    },
-    {
-      "parameters": {
-        "method": "GET",
-        "url": "http://localhost:8765/health",
-        "options": {}
-      },
-      "id": "health-check-node",
-      "name": "Check MCP Health",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [450, 400]
+      "position": [850, 200]
     },
     {
       "parameters": {
         "method": "POST",
         "url": "http://localhost:8765/",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"n8n-{{ $workflow.id }}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"gaia.jira\",\n    \"arguments\": {\n      \"query\": \"create issue: Test from n8n\",\n      \"operation\": \"create\"\n    }\n  }\n}"
+        "jsonBody": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"n8n-example\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"gaia.query\",\n    \"arguments\": {\n      \"query\": \"Say hello from n8n in five words.\"\n    }\n  }\n}",
+        "options": {}
       },
-      "id": "jsonrpc-create-issue",
-      "name": "Create Issue via JSON-RPC",
+      "id": "jsonrpc-query-node",
+      "name": "Query via JSON-RPC",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [650, 400]
     }
   ],
   "connections": {
-    "trigger-node": {
+    "When clicking \"Test workflow\"": {
       "main": [
         [
           {
-            "node": "jira-query-node",
+            "node": "Check MCP Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check MCP Health": {
+      "main": [
+        [
+          {
+            "node": "Ask GAIA",
             "type": "main",
             "index": 0
           },
           {
-            "node": "health-check-node",
+            "node": "Query via JSON-RPC",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "jira-query-node": {
+    "Ask GAIA": {
       "main": [
         [
           {
-            "node": "llm-summarize-node",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "health-check-node": {
-      "main": [
-        [
-          {
-            "node": "jsonrpc-create-issue",
+            "node": "Summarize with LLM",
             "type": "main",
             "index": 0
           }

@@ -152,16 +152,6 @@ def credential(name: str) -> Optional[str]:
     return os.environ.get(name) or _working_dir_credentials.get(name)
 
 
-def working_dir_credential_file(name: str) -> Optional[str]:
-    """The working-directory ``.env`` that supplied *name*, when it was one.
-
-    None when the environment holds *name*, since that value is the one used.
-    """
-    if os.environ.get(name):
-        return None
-    return _working_dir_credential_files.get(name)
-
-
 def working_dir_credential(name: str) -> Optional[str]:
     """*name* as a working-directory ``.env`` supplied it, else None."""
     return _working_dir_credentials.get(name)

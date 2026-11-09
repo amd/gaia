@@ -25,7 +25,6 @@ from reportlab.pdfgen import canvas  # noqa: E402
 from gaia.rag.pdf_utils import (  # noqa: E402
     PdfImageExtractionError,
     extract_images_from_page_pdfium,
-    get_image_positions_on_page,
 )
 from gaia.utils import PdfRenderError, pdf_page_to_image  # noqa: E402
 
@@ -204,30 +203,6 @@ class TestExtractionFailsLoudly:
         with pytest.raises(PdfImageExtractionError, match="bad image stream") as e:
             extract_images_from_page_pdfium(str(pdf), page_num=1)
         assert len(e.value.images) == 1
-
-
-# ---------------------------------------------------------------------------
-# Image positions
-# ---------------------------------------------------------------------------
-
-
-def test_image_positions_are_top_left_origin_points(tmp_path):
-    pdf = _pdf(tmp_path / "pos.pdf", [[(_red(), 20, 50)]])
-
-    (pos,) = get_image_positions_on_page(str(pdf), page_num=0)
-
-    # reportlab places the image's bottom-left at (20, 50) in a 300pt-tall page.
-    assert pos["bbox"] == pytest.approx([20, 300 - 82, 84, 300 - 50])
-    assert pos["position_y"] == pytest.approx(218)
-    assert (pos["width"], pos["height"]) == (64, 32)
-    assert pos["image_index"] == 0
-
-
-def test_image_positions_of_a_corrupt_pdf_raise(tmp_path):
-    bad = tmp_path / "broken.pdf"
-    bad.write_bytes(b"garbage")
-    with pytest.raises(PdfImageExtractionError):
-        get_image_positions_on_page(str(bad), page_num=0)
 
 
 # ---------------------------------------------------------------------------

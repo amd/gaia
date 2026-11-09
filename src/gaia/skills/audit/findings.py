@@ -182,10 +182,6 @@ class AuditReport:
             if any(f.severity == severity for f in self.findings)
         }
 
-    def findings_by_category(self, category: str) -> tuple[Finding, ...]:
-        """Every finding in one category, in discovery order."""
-        return tuple(f for f in self.findings if f.category == category)
-
     @property
     def rule_ids(self) -> list[str]:
         """Distinct rule ids in first-seen order."""
