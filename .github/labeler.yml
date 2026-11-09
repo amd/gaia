@@ -12,7 +12,7 @@ documentation:
 # C++ agent framework changes
 cpp:
   - changed-files:
-    - any-glob-to-any-file: ['cpp/**/*', 'docs/guides/cpp.mdx', '.github/workflows/build_cpp.yml']
+    - any-glob-to-any-file: ['cpp/**/*', 'docs/cpp/**/*', '.github/workflows/build_cpp.yml']
 
 # Agent system changes (base agent or multiple agents)
 agents:
@@ -22,32 +22,32 @@ agents:
 # Agent SDK changes
 chat:
   - changed-files:
-    - any-glob-to-any-file: ['src/gaia/chat/**/*', 'docs/guides/chat.md', 'docs/sdk/sdks/chat.md']
+    - any-glob-to-any-file: ['src/gaia/chat/**/*', 'docs/guides/chat.mdx', 'docs/sdk/sdks/chat.mdx']
 
 # MCP changes
 mcp:
   - changed-files:
-    - any-glob-to-any-file: ['src/gaia/mcp/**/*', 'docs/guides/mcp.md', 'docs/spec/mcp-*']
+    - any-glob-to-any-file: ['src/gaia/mcp/**/*', 'docs/guides/mcp/**/*', 'docs/spec/mcp-*']
 
 # RAG changes
 rag:
   - changed-files:
-    - any-glob-to-any-file: ['src/gaia/rag/**/*', 'docs/sdk/sdks/rag.md', 'docs/spec/rag-*']
+    - any-glob-to-any-file: ['src/gaia/rag/**/*', 'docs/sdk/sdks/rag.mdx', 'docs/spec/rag-*']
 
 # LLM backend changes
 llm:
   - changed-files:
-    - any-glob-to-any-file: ['src/gaia/llm/**/*', 'docs/sdk/sdks/llm.md', 'docs/spec/llm-*']
+    - any-glob-to-any-file: ['src/gaia/llm/**/*', 'docs/sdk/sdks/llm.mdx', 'docs/spec/llm-*']
 
 # Audio changes (ASR/TTS)
 audio:
   - changed-files:
-    - any-glob-to-any-file: ['src/gaia/audio/**/*', 'docs/sdk/sdks/audio.md']
+    - any-glob-to-any-file: ['src/gaia/audio/**/*', 'docs/sdk/sdks/audio.mdx']
 
 # Talk agent changes
 talk:
   - changed-files:
-    - any-glob-to-any-file: ['src/gaia/talk/**/*', 'docs/guides/talk.md', 'docs/sdk/agents/talk.md']
+    - any-glob-to-any-file: ['src/gaia/talk/**/*', 'docs/guides/talk.mdx', 'docs/sdk/agents/talk.mdx']
 
 # ---------------------------------------------------------------------------
 # GAIA Terminal UI: Go TUI, daemon supervisor, and the agent sidecar contract
@@ -72,7 +72,7 @@ sidecar:
 # Evaluation framework changes
 eval:
   - changed-files:
-    - any-glob-to-any-file: ['src/gaia/eval/**/*', 'docs/reference/eval.md']
+    - any-glob-to-any-file: ['src/gaia/eval/**/*', 'docs/reference/eval.mdx']
 
 # Test changes
 tests:
@@ -82,17 +82,17 @@ tests:
 # DevOps changes (.github, CI/CD, config files)
 devops:
   - changed-files:
-    - any-glob-to-any-file: ['.github/**/*', 'CLAUDE.md', '.gitignore', '.editorconfig']
+    - any-glob-to-any-file: ['.github/**/*', 'CLAUDE.md', '.gitignore']
 
 # CLI changes
 cli:
   - changed-files:
-    - any-glob-to-any-file: ['src/gaia/cli.py', 'docs/reference/cli.md']
+    - any-glob-to-any-file: ['src/gaia/cli.py', 'docs/reference/cli.mdx']
 
 # Installer changes
 installer:
   - changed-files:
-    - any-glob-to-any-file: ['installer/**/*', 'docs/deployment/installer.md']
+    - any-glob-to-any-file: ['installer/**/*']
 
 # Electron app changes
 electron:
@@ -107,12 +107,12 @@ website:
 # Dependencies
 dependencies:
   - changed-files:
-    - any-glob-to-any-file: ['setup.py', 'pyproject.toml', 'requirements*.txt', 'uv.lock', 'package.json', 'package-lock.json']
+    - any-glob-to-any-file: ['setup.py', 'pyproject.toml', 'uv.lock', 'package.json', 'package-lock.json']
 
 # Security-sensitive changes
 security:
   - changed-files:
-    - any-glob-to-any-file: ['docs/sdk/security.md', 'src/gaia/**/security.py', '.github/workflows/test_security.yml']
+    - any-glob-to-any-file: ['docs/sdk/security.mdx', 'src/gaia/**/security.py', '.github/workflows/test_security.yml']
 
 # Performance-critical changes
 performance:

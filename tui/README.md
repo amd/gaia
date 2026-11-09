@@ -185,7 +185,7 @@ fine.
 
 ## Choosing an AI provider
 
-Press **p** during setup, or enter **`/provider`** in chat, to choose **Local**,
+With the flagship agent, press **p** during setup, or enter **`/provider`** in chat, to choose **Local**,
 **Fireworks AI**, or **AMD LLM Gateway** through Lemonade 11.8.1+. Paste a key into
 the masked field; once it connects it is kept in the OS credential store and
 handed back to Lemonade after a restart. Provider settings are shared with

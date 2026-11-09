@@ -379,9 +379,9 @@ def main(argv=None) -> int:
         print(
             f"ERROR: --require-ctx-match is set but the candidate SCORECARD.md "
             f"at {candidate_path} records no 'recipe.environment.ctx_size'.\n"
-            f"  Re-generate the card from a benchmark run made with an explicit "
-            f"ctx pin (gaia eval benchmark --ctx-size ...) so the release "
-            f"states the window it was measured under (#1892)."
+            f"  Re-generate the card from an eval run made with an explicit "
+            f"context size (set GAIA_CTX_SIZE) so the release states the "
+            f"window it was measured under (#1892)."
         )
         return 1
 

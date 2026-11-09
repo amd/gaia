@@ -133,7 +133,8 @@
 #     The email agent had a macos-15-intel smoke leg to catch that. Add the same here if
 #     Intel-Mac backward-compat becomes a real support burden; today darwin-x64
 #     is best-effort and its absence/breakage fails loudly at install.
-#   * the whole-package zip (disabled upstream — exceeded the edge upload limit).
+#   * the whole-package zip (removed from the email release — exceeded the edge
+#     upload limit).
 #
 # Carried over from email (same topology): the `scorecard-gate` job (hosted —
 # parses the committed hub/agents/gaia/npm/SCORECARD.md, bars from the

@@ -695,6 +695,11 @@ There is no silent null.
 - **A terminal `error` whose `detail` starts "Local Lemonade Server is not
   reachable"** means Lemonade isn't running or isn't reachable — not a bug in
   this package. Start it, or set `LEMONADE_BASE_URL`.
+- **`final.answer` can end with "I haven't confirmed this works — …".** The
+  agent adds that one line when a check failed or was blocked, or a change was
+  never checked. Show it to the user; do not read it as an error, and do not
+  strip it from the `context` you replay. A turn that was confirmed, or needed no
+  check, has no such line.
 - **`needs_confirmation` is followed by a refusal and the run ends.** See §8.
   The nine gated tools are unreachable **over `/query`** — the agent itself can
   run them on a transport that can prompt (SPEC §5.5).

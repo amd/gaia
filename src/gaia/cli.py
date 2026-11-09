@@ -10702,7 +10702,7 @@ def handle_mcp_list(args):
         print(
             '   {"mcpServers": {"time": {"command": "uvx", "args": ["mcp-server-time"]}}}'
         )
-        print("See https://amd-gaia.ai/docs/guides/mcp/client for details.")
+        print("See https://amd-gaia.ai/docs/sdk/sdks/mcp for details.")
         return
 
     print(f"📋 Configured MCP Servers ({len(servers)}):")
