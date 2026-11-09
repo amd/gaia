@@ -8,6 +8,7 @@ description: "Faster first replies, long recordings and video links, read aloud,
 ## Breaking Changes
 
 - **Dynamic tool loading is on by default, and its old settings are gone** — `GAIA_DYNAMIC_TOOLS_TAU` and `GAIA_DYNAMIC_TOOLS_MAX` no longer do anything, and a choice made under the old Beta toggle is not carried over. Turn it off with `gaia config set dynamic_tools false` or Settings → Advanced. (PR [#6449](https://github.com/amd/gaia/pull/6449))
+- **The `use_chatgpt` and `use_openai` arguments are gone** — they only raised an error since the OpenAI and LiteLLM adapters were removed, and now Python reports an unexpected argument. Delete the argument and pick the model through Lemonade. `provider="openai"` and `--use-chatgpt` still explain the move. ([#7023](https://github.com/amd/gaia/issues/7023))
 
 ## What's New
 

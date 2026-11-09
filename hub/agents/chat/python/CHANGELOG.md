@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `ChatAgentLiteConfig` no longer has a `use_chatgpt` field (#7023); passing it
+  raises `TypeError`. Configure the model in Lemonade instead.
 - **Deprecated: `ChatAgent` moved into the flagship package (#6099).** Import
   it from `gaia_agent.chat_agent`; `gaia_agent_chat.agent` and the other
   submodules keep working for one release as aliases of their new homes in

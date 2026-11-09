@@ -17,9 +17,7 @@ from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE, create_client
     [
         {"provider": "openai"},
         {"provider": "LITELLM"},
-        {"use_openai": True},
-        {"provider": "lemonade", "use_openai": True},
-        {"use_claude": True, "use_openai": True},
+        {"provider": "openai", "use_claude": True},
     ],
 )
 def test_retired_selection_fails_before_provider_import(kwargs):
@@ -30,14 +28,19 @@ def test_retired_selection_fails_before_provider_import(kwargs):
     load.assert_not_called()
 
 
-def test_agent_sdk_legacy_config_has_migration_error():
-    from gaia.chat.sdk import AgentConfig, AgentSDK
-
-    with pytest.raises(ValueError, match="discarded tool calls"):
-        AgentSDK(AgentConfig(use_chatgpt=True))
+def test_factory_no_longer_accepts_the_boolean_flag():
+    with pytest.raises(TypeError, match="use_openai"):
+        create_client(use_openai=True)
 
 
-def test_base_agent_rejects_before_initializing_lemonade():
+def test_agent_sdk_config_no_longer_has_the_flag():
+    from gaia.chat.sdk import AgentConfig
+
+    with pytest.raises(TypeError, match="use_chatgpt"):
+        AgentConfig(use_chatgpt=True)
+
+
+def test_base_agent_rejects_the_flag_before_initializing_lemonade():
     from gaia.agents.base.agent import Agent
 
     class TestAgent(Agent):
@@ -48,15 +51,15 @@ def test_base_agent_rejects_before_initializing_lemonade():
             pass
 
     with patch("gaia.llm.lemonade_client.LemonadeClient") as client:
-        with pytest.raises(ValueError, match="discarded tool calls"):
+        with pytest.raises(TypeError, match="use_chatgpt"):
             TestAgent(use_chatgpt=True)
     client.assert_not_called()
 
 
-def test_cli_initialization_cannot_silently_accept_removed_backend():
+def test_cli_initialization_no_longer_accepts_the_flag():
     from gaia.cli import initialize_lemonade_for_agent
 
-    with pytest.raises(ValueError, match="discarded tool calls"):
+    with pytest.raises(TypeError, match="use_chatgpt"):
         initialize_lemonade_for_agent("chat", use_chatgpt=True)
 
 
@@ -71,6 +74,7 @@ def test_real_cli_returns_actionable_migration_error():
         timeout=30,
     )
     assert result.returncode == 2
+    assert "--use-chatgpt was removed" in result.stderr
     assert "discarded tool calls" in result.stderr
     assert "gateway-migration" in result.stderr
 
@@ -86,13 +90,13 @@ def test_supported_provider_forwards_endpoint_and_model():
 
 
 @pytest.mark.parametrize("surface", ["audio", "talk"])
-def test_voice_sdk_rejects_legacy_backend(surface):
-    with pytest.raises(ValueError, match="discarded tool calls"):
+def test_voice_sdk_no_longer_accepts_the_flag(surface):
+    with pytest.raises(TypeError, match="use_chatgpt"):
         if surface == "audio":
             from gaia.audio.audio_client import AudioClient
 
             AudioClient(use_chatgpt=True)
         else:
-            from gaia.talk.sdk import TalkConfig, TalkSDK
+            from gaia.talk.sdk import TalkConfig
 
-            TalkSDK(TalkConfig(use_chatgpt=True))
+            TalkConfig(use_chatgpt=True)

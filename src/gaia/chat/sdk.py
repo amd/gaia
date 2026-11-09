@@ -68,9 +68,8 @@ class AgentConfig:
     show_stats: bool = False
     logging_level: str = "INFO"
     use_claude: bool = False  # Use Claude API
-    use_chatgpt: bool = False  # Removed; True raises migration guidance
     use_local_llm: bool = (
-        True  # Use local LLM (computed as not use_claude and not use_chatgpt if not explicitly set)
+        True  # Use local LLM (computed as not use_claude if not explicitly set)
     )
     claude_model: str = "claude-sonnet-5"  # Claude model when use_claude=True
     base_url: Optional[str] = (
@@ -141,7 +140,6 @@ class AgentSDK:
         # Initialize LLM client - factory auto-detects provider and validates
         self.llm_client = create_client(
             use_claude=self.config.use_claude,
-            use_openai=self.config.use_chatgpt,
             model=(
                 self.config.claude_model
                 if self.config.use_claude
@@ -1669,9 +1667,6 @@ class AgentSession:
                 ),
                 use_claude=config_kwargs.get(
                     "use_claude", self.default_config.use_claude
-                ),
-                use_chatgpt=config_kwargs.get(
-                    "use_chatgpt", self.default_config.use_chatgpt
                 ),
                 assistant_name=config_kwargs.get(
                     "assistant_name", self.default_config.assistant_name

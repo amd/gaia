@@ -395,7 +395,6 @@ class ChatAgentConfig:
 
     # LLM settings
     use_claude: bool = False
-    use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-5"
     base_url: Optional[str] = None
     model_id: Optional[str] = None  # None = use default model (Gemma)
@@ -802,7 +801,6 @@ class ChatAgent(
         # Call parent constructor
         super().__init__(
             use_claude=config.use_claude,
-            use_chatgpt=config.use_chatgpt,
             claude_model=config.claude_model,
             # Unset lets the base resolve the port only after starting the server.
             base_url=config.base_url,
@@ -1525,7 +1523,6 @@ class ChatAgent(
             return resolve_inference_location(
                 chat.effective_model,
                 use_claude=bool(chat.config.use_claude),
-                use_openai=bool(getattr(chat.config, "use_chatgpt", False)),
                 cloud_provider_lookup=lookup if callable(lookup) else None,
             )
         # Pre-client: read the config the client is about to be built from —
@@ -1541,7 +1538,6 @@ class ChatAgent(
         return resolve_inference_location(
             model or resolve_default_chat_model(),
             use_claude=use_claude,
-            use_openai=bool(getattr(config, "use_chatgpt", False)),
         )
 
     def _no_documents_message(self) -> str:

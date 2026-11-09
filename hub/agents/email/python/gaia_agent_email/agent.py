@@ -16,7 +16,7 @@ Architectural commitments (mapped to plan's Acceptance Criteria):
         with the generic base set by ``Agent.confirmation_required_tools()``).
 - AC3 — Local-LLM only: ``EmailAgentConfig`` has no field that can route
         to a cloud LLM; ``base_url`` is allowlisted at startup; this
-        class never passes ``use_claude=True`` / ``use_chatgpt=True`` to
+        class never passes ``use_claude=True`` to
         the parent ``Agent``.
 - AC4 — Eval seam: backends are injectable via config; the eval harness
         passes ``FakeGmailBackend(mbox_path)`` to bypass live Gmail.

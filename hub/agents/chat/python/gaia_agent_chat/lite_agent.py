@@ -14,7 +14,6 @@ logger = get_logger(__name__)
 @dataclass
 class ChatAgentLiteConfig:
     use_claude: bool = False
-    use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: Optional[str] = None
     model_id: Optional[str] = None
@@ -43,7 +42,6 @@ class ChatAgentLite(
         # Avoid initializing local Lemonade during unit tests
         super().__init__(
             use_claude=config.use_claude,
-            use_chatgpt=config.use_chatgpt,
             claude_model=config.claude_model,
             base_url=config.base_url,
             model_id=config.model_id,
